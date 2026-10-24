@@ -9,6 +9,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { ThreadRow } from "../ThreadRow";
+import { createThreadRowPointerDragPreview } from "../thread-row-drag-preview";
 import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
@@ -245,13 +246,38 @@ describe("ThreadRow chip flow", () => {
     expect(flow?.contains(addReaction)).toBe(false);
   });
 
-  it("keeps the add-reaction trigger left of the overflow action", () => {
-    const { container } = renderRow();
+  // The pin must not move when the row is hovered, so it sits in a fixed
+  // slot at the end of the title line: reaction · pin · time-or-kebab.
+  // Nothing right of the pin may change on hover, which is why the
+  // timestamp and the kebab share one lane rather than the kebab
+  // painting over the time from an absolutely positioned cluster.
+  it.each([
+    ["pinned", "1024", "thread-row__pin"],
+    ["unpinned", undefined, "thread-row__pin-button"],
+  ])("orders a %s row's title-line actions reaction, pin, time lane", (_label, pinnedRank, pinClass) => {
+    const { container } = renderRow({
+      thread: { ...baseThread, pinnedRank },
+      onSetThreadPin: vi.fn(async () => undefined),
+    });
+    const header = container.querySelector(".thread-row__header");
     const actions = container.querySelector(".thread-row__actions");
-    expect(actions).not.toBeNull();
+    expect(actions?.parentElement).toBe(header);
     const actionChildren = Array.from(actions!.children) as HTMLElement[];
+    expect(actionChildren.map((child) => child.className.split(" ")[0])).toEqual([
+      "thread-row__chip",
+      pinClass,
+      "thread-row__time-lane",
+    ]);
     expect(actionChildren[0]).toHaveClass("thread-row__chip--add-reaction");
-    expect(actionChildren[1]).toHaveClass("thread-row__overflow-button");
+    const lane = actionChildren[2]!;
+    expect(Array.from(lane.children).map((child) => child.className)).toEqual([
+      "thread-row__time",
+      "thread-row__overflow-button",
+    ]);
+    // The title and its marks stay in the heading; no control rides there.
+    expect(
+      container.querySelector(".thread-row__heading")?.querySelector("button, [role='button']"),
+    ).toBeNull();
   });
 
   it("uses span[role=button] for the binding chip (not nested <button>)", () => {
@@ -362,7 +388,7 @@ describe("ThreadRow chip flow", () => {
     expect(onUnbindMessagingBinding).not.toHaveBeenCalled();
   });
 
-  it("unpins from the always-visible in-title pin without selecting the row", () => {
+  it("unpins from the always-visible title-line pin without selecting the row", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const { onSelectThread } = renderRow({
       thread: {
@@ -374,13 +400,13 @@ describe("ThreadRow chip flow", () => {
     });
 
     // A pinned row shows exactly ONE pin affordance: the always-visible
-    // in-title pin, which is the unpin control (the title line is a
+    // title-line pin, which is the unpin control (the title line is a
     // sibling of the open-thread overlay, so a real button there is
-    // valid). The hover cluster's pin button must NOT also render — it
-    // was a double affordance.
+    // valid). The hover pin button must NOT also render — it was a
+    // double affordance.
     const pin = screen.getByRole("button", { name: "Unpin thread" });
     expect(pin.tagName).toBe("BUTTON");
-    expect(pin).toHaveClass("thread-row__heading-pin");
+    expect(pin).toHaveClass("thread-row__pin");
     expect(document.querySelector(".thread-row__pin-button")).toBeNull();
     expect(document.querySelector(".thread-row__chip--pin")).toBeNull();
     // The pinned STATE stays in the row's accessible name so screen
@@ -410,8 +436,8 @@ describe("ThreadRow chip flow", () => {
 
     const pin = screen.getByRole("button", { name: "Pin thread" });
     expect(pin).toHaveClass("thread-row__pin-button");
-    // No pinned-state control on an unpinned row's title line.
-    expect(document.querySelector(".thread-row__heading-pin")).toBeNull();
+    // No pinned-state mark on an unpinned row's title line.
+    expect(document.querySelector(".thread-row__pin")).toBeNull();
 
     fireEvent.click(pin);
     expect(onSetThreadPin).toHaveBeenCalledWith(
@@ -629,47 +655,36 @@ describe("ThreadRow chip flow", () => {
   });
 
   it("uses a full card without action controls for the drag preview", () => {
-    vi.useFakeTimers();
+    const { container } = renderRow({ compact: true, pointerDraggable: true });
+    const shell = container.querySelector(".thread-row-shell") as HTMLElement;
+
+    const preview = createThreadRowPointerDragPreview(shell, { x: 12, y: 18 });
     try {
-      const { container } = renderRow({
-        compact: true,
-        draggable: true,
-      });
-      const shell = container.querySelector(".thread-row-shell") as HTMLElement;
-      const dataTransfer = {
-        setDragImage: vi.fn(),
-      };
-
-      fireEvent.dragStart(shell, {
-        clientX: 12,
-        clientY: 18,
-        dataTransfer,
-      });
-
       const dragImage = document.body.querySelector(".thread-row--drag-image");
       expect(dragImage).not.toBeNull();
       expect(dragImage).not.toHaveClass("thread-row--compact");
-      expect(dragImage?.querySelector(".thread-row__actions")).toBeNull();
       expect(
         dragImage?.querySelector(".thread-row__chip--add-reaction"),
       ).toBeNull();
+      expect(dragImage?.querySelector(".thread-row__pin-button")).toBeNull();
       expect(dragImage?.querySelector(".thread-row__overflow-button")).toBeNull();
-      expect(dataTransfer.setDragImage).toHaveBeenCalledWith(
-        dragImage,
-        expect.any(Number),
-        expect.any(Number),
-      );
+      // The timestamp shares the actions with those controls and stays.
+      expect(dragImage?.querySelector(".thread-row__time")).not.toBeNull();
     } finally {
-      vi.runOnlyPendingTimers();
-      vi.useRealTimers();
+      preview?.remove();
     }
   });
 
-  it("marks the active drop edge on the row shell", () => {
-    const { container } = renderRow({ dropIndicator: "after" });
-    expect(container.querySelector(".thread-row-shell")).toHaveClass(
-      "is-drop-target-after",
-    );
+  it("keeps a project header's compact geometry on its held card", () => {
+    const { container } = renderRow({ compact: true });
+    const shell = container.querySelector(".thread-row-shell") as HTMLElement;
+
+    const preview = createThreadRowPointerDragPreview(shell, { x: 12, y: 18 }, { compact: true });
+    try {
+      expect(document.body.querySelector(".thread-row--drag-image")).toHaveClass("thread-row--compact");
+    } finally {
+      preview?.remove();
+    }
   });
 
   it("still selects the thread when the row body (outside chips) is clicked", () => {

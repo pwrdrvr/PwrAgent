@@ -461,7 +461,7 @@ export function FederationSettings(props: FederationSettingsProps) {
     ].find((endpoint) => !isFederationGatewayEndpointUrl(endpoint));
     if (invalidEndpoint) {
       setActionError(
-        `Endpoint "${invalidEndpoint}" must be a ws://, wss://, or ssh:// URL without an embedded password.`,
+        `Endpoint "${invalidEndpoint}" must be a ws://, wss://, or ssh:// URL with a valid hostname and no embedded password.`,
       );
       return false;
     }
@@ -1293,6 +1293,7 @@ export function FederationSettings(props: FederationSettingsProps) {
                   {peer.receiverPermissions && (
                     <span>
                       Remote shells: {peer.receiverPermissions.remoteShells ? "allowed" : "blocked"}
+                      {" · "}Port forwarding: {peer.receiverPermissions.portForwarding === undefined ? "unknown" : peer.receiverPermissions.portForwarding ? "allowed" : "blocked"}
                       {" · "}Incoming files: {peer.receiverPermissions.filePush ? "allowed" : "blocked"}
                     </span>
                   )}
@@ -1865,6 +1866,8 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_grouping: "reorder and collapse sub-threads",
   thread_detail: "read transcripts",
   turn_control: "prompt, steer, and interrupt",
+  durable_turn_requests_v1: "reconcile durable prompt receipts",
+  durable_steer_requests_v1: "reconcile durable steering receipts",
   scheduled_actions: "schedule and manage messages",
   pending_request_control: "handle approvals and questions",
   environment_actions: "run environments and scripts",
@@ -1874,6 +1877,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   pwrsnap_connection: "read PwrSnap availability",
   gateway_relay: "reach sibling instances",
   remote_pty: "remote terminal protocol",
+  service_forward_v1: "port forwarding",
   file_push: "file push protocol",
   thread_handoff: "transfer existing threads",
   file_pull: "File pull",
@@ -1883,6 +1887,11 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   transport_brotli: "",
   shutdown_notice: "receive shutdown notices",
   navigation_directory_set_events: "announce directory changes",
+  thread_todos: "To-dos and tracked reviews",
+  operator_requests: "operator request queue",
+  operator_questions: "dismiss async questions",
+  thread_mcp_connections: "Thread MCP connections",
+  turn_queue_reorder: "reorder queued messages",
 };
 
 function formatFederationCapabilities(

@@ -1,0 +1,593 @@
+import { threadTodoThreadKey } from "@pwragent/shared";
+import {
+  useEffect,
+  useId,
+  useState,
+  type ComponentType,
+  type KeyboardEvent,
+} from "react";
+import type { FederationRemoteTarget, ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
+import {
+  THREAD_TODO_RESOLUTION_RESULTS,
+  codexAsyncQuestionItemId,
+  operatorTodoItemKey,
+  threadTodoItemProgress,
+} from "@pwragent/shared";
+import {
+  HandoffIcon,
+  MergeIcon,
+  ReviewIcon,
+  type IconProps,
+} from "../../icons";
+import { OperatorWaitRow } from "../operator-requests/OperatorWaitRow";
+import { isBlockingWait, type OperatorWait } from "../operator-requests/operator-waits";
+import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
+import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
+import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
+import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
+
+export type ThreadTodoScope = "thread" | "project" | "all";
+
+const SCOPES: Array<{ id: ThreadTodoScope; label: string }> = [
+  { id: "thread", label: "Thread" },
+  { id: "project", label: "Project" },
+  { id: "all", label: "All" },
+];
+
+const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> = {
+  reminder: undefined,
+  review: ReviewIcon,
+  merge: MergeIcon,
+  handoff: HandoffIcon,
+};
+
+/** Presentation identity only: card project keys stay owner-local for mutations. */
+function projectGroupKey(key: string | undefined, owner?: FederationRemoteTarget): string {
+  return JSON.stringify([owner?.instanceId ?? null, key ?? null]);
+}
+
+/** Results an operator's own resolve wrote; those can be taken back. */
+const RESOLUTION_RESULTS: ReadonlySet<string> = new Set(
+  Object.values(THREAD_TODO_RESOLUTION_RESULTS),
+);
+
+/**
+ * The lens the operator last picked. Module scope, so switching threads
+ * keeps it; a reload starts again from Project.
+ */
+let rememberedScope: ThreadTodoScope = "project";
+
+/** A row in the panel: something a thread waits on, or a to-do card. */
+type PanelItem =
+  | { type: "wait"; key: string; wait: OperatorWait }
+  | { type: "todo"; key: string; todo: ThreadTodo };
+
+type TodoGroup = {
+  key: string;
+  title: string;
+  items: PanelItem[];
+  /** A wait in the group pauses a turn. */
+  paused: boolean;
+};
+
+export type ThreadTodosPanelProps = {
+  view: ThreadTodosView;
+  /** UX may supply any combination of questions, approvals, reviews, and cards. */
+  filter?: ThreadTodoFilter;
+  /** `backend:threadId` of the thread on screen. */
+  threadKey: string;
+  threadRunning?: boolean;
+  /** Directory key of that thread's project, when it has one. */
+  projectKey?: string;
+  /** Owner of the selected project; absent for this instance. */
+  projectOwner?: FederationRemoteTarget;
+  onStartReview: (todo: ThreadTodo, options?: ThreadTodoResolveOptions) => void;
+  onDoHere?: (
+    todo: ThreadTodo,
+    options?: ThreadTodoDoHereOptions,
+  ) => void | Promise<unknown>;
+  /** Answers a question in the thread on screen, through its composer. */
+  onAnswerQuestion?: (text: string) => Promise<boolean>;
+  /** Answers the composer took in that thread, by question item id. */
+  sentQuestionAnswers?: ReadonlyMap<string, string>;
+};
+
+/**
+ * To-dos under three lenses: this thread, this project, and every thread.
+ * A card for another project shows in both projects' lens. This thread's
+ * open cards render whole, with their actions; every other card is a row
+ * that opens its thread.
+ *
+ * What threads are waiting on (approvals, MCP input, questionnaires, async
+ * questions) lists first in each group, most urgent first. Each lens counts
+ * its open items and, in a filled pill, the ones not yet seen. Rows on screen
+ * in a focused window are marked seen; the cookie stays on a row for as long
+ * as the panel is open, so the operator can still tell what was new.
+ */
+export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
+  const { view, threadKey, projectKey } = props;
+  const [scope, setScopeState] = useState<ThreadTodoScope>(rememberedScope);
+  const [showResolved, setShowResolved] = useState(false);
+  const [actionError, setActionError] = useState<string>();
+  const [resolved, setResolved] = useState<ThreadTodo[]>();
+  const controlId = useId();
+  const coverageTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const listResolved = view.listResolved;
+  const scopes = projectKey ? SCOPES : SCOPES.filter((entry) => entry.id !== "project");
+  const activeScope = scope === "project" && !projectKey ? "thread" : scope;
+  const setScope = (next: ThreadTodoScope): void => {
+    rememberedScope = next;
+    setScopeState(next);
+  };
+
+  useEffect(() => {
+    if (!showResolved || !listResolved) return;
+    let cancelled = false;
+    setActionError(undefined);
+    void listResolved().then((todos) => {
+      if (!cancelled) setResolved(todos);
+    }).catch((error: unknown) => {
+      if (!cancelled) {
+        setActionError(String(error));
+        setResolved([]);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [showResolved, listResolved, view.revision]);
+
+  const threadProjectForKey = view.threadProjectForKey;
+  const todoInScope = (todo: ThreadTodo, lens: ThreadTodoScope): boolean => {
+    switch (lens) {
+      case "thread":
+        return threadTodoThreadKey(todo) === threadKey;
+      case "project":
+        return projectKey !== undefined
+          && todo.federationTarget?.instanceId === props.projectOwner?.instanceId
+          && (todo.sourceProject?.key === projectKey
+            || todo.targetProject?.key === projectKey);
+      case "all":
+        return true;
+    }
+  };
+  const waitInScope = (wait: OperatorWait, lens: ThreadTodoScope): boolean => {
+    switch (lens) {
+      case "thread":
+        return wait.threadKey === threadKey;
+      case "project":
+        return projectKey !== undefined
+          && wait.federationTarget?.instanceId === props.projectOwner?.instanceId
+          && threadProjectForKey(wait.threadKey)?.key === projectKey;
+      case "all":
+        return true;
+    }
+  };
+  const openItemsIn = (lens: ThreadTodoScope): PanelItem[] => [
+    ...view.waits
+      .filter((wait) => waitInScope(wait, lens) && operatorWaitMatchesFilter(wait, props.filter))
+      .map((wait): PanelItem => ({ type: "wait", key: wait.key, wait })),
+    ...view.open
+      .filter((todo) => todoInScope(todo, lens) && threadTodoMatchesFilter(todo, props.filter))
+      .map((todo): PanelItem => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo })),
+  ];
+  const items: PanelItem[] | undefined = showResolved
+    ? resolved
+      ?.filter((todo) => todoInScope(todo, activeScope) && threadTodoMatchesFilter(todo, props.filter))
+      .map((todo) => ({ type: "todo", key: operatorTodoItemKey(todo.id), todo }))
+    : openItemsIn(activeScope);
+  const groups = items ? groupItems(items, activeScope, props) : undefined;
+
+  // Rows on screen in a focused window are seen. The panel is mounted only
+  // while the rail shows it, so being rendered here is being on screen.
+  const unseenKeys = showResolved || !items
+    ? []
+    : items.filter((item) => !view.seenKeys.has(item.key)).map((item) => item.key);
+  const unseenSignature = unseenKeys.join("\n");
+  const [freshKeys, setFreshKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const markSeen = view.markSeen;
+  useEffect(() => {
+    if (!unseenSignature) return;
+    const keys = unseenSignature.split("\n");
+    const mark = (): void => {
+      if (!document.hasFocus()) return;
+      setFreshKeys((current) =>
+        keys.every((key) => current.has(key)) ? current : new Set([...current, ...keys]));
+      markSeen(keys);
+    };
+    mark();
+    window.addEventListener("focus", mark);
+    return () => window.removeEventListener("focus", mark);
+  }, [unseenSignature, markSeen]);
+  const isUnread = (key: string): boolean => !view.seenKeys.has(key) || freshKeys.has(key);
+
+  const handleScopeKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const index = scopes.findIndex((entry) => entry.id === activeScope);
+    const step = event.key === "ArrowRight" ? 1 : -1;
+    const next = scopes[(index + step + scopes.length) % scopes.length]!.id;
+    setScope(next);
+    document.getElementById(`${controlId}-${next}`)?.focus();
+  };
+
+  const lensCounts = Object.fromEntries(SCOPES.map((entry) => {
+    const lensItems = openItemsIn(entry.id);
+    return [entry.id, {
+      open: lensItems.length,
+      unread: lensItems.filter((item) => !view.seenKeys.has(item.key)).length,
+    }];
+  })) as Record<ThreadTodoScope, { open: number; unread: number }>;
+
+  const emptyText = showResolved
+    ? "No resolved to-dos."
+    : activeScope === "thread"
+      ? "No to-dos for this thread."
+      : activeScope === "project"
+        ? "No to-dos for this project."
+        : "Nothing to do.";
+  const unavailableInstances = [...new Map(
+    view.unavailableInstances?.map((instance) => [instance.instanceId, instance]),
+  ).values()].sort((left, right) => left.label.localeCompare(right.label));
+  const hasDisconnected = unavailableInstances.some((instance) => instance.reason === "disconnected");
+  const hasUnsupported = unavailableInstances.some((instance) => instance.reason === "unsupported");
+  const coverageNote = hasDisconnected && hasUnsupported
+    ? "Some instances are disconnected or do not support to-dos."
+    : hasDisconnected
+      ? "Some instances are disconnected."
+      : "Some instances do not support to-dos.";
+  const coverageDetails = unavailableInstances.map((instance) =>
+    `${instance.label} — ${instance.reason === "disconnected" ? "Disconnected" : "To-dos unavailable; update PwrAgent on this instance"}`,
+  ).join("\n");
+
+  return (
+    <section className="context-panel__section thread-todos-panel">
+      <h3>To-dos</h3>
+      {actionError || view.queueError ? <p className="thread-todo-card__error" role="alert">{actionError ?? view.queueError}</p> : null}
+      <div className="thread-todos-panel__controls">
+        <div
+          aria-label="To-do scope"
+          aria-orientation="horizontal"
+          className="subagent-lens-switch"
+          role="tablist"
+          onKeyDown={handleScopeKeyDown}
+        >
+          {scopes.map((entry) => (
+            <button
+              aria-controls={`${controlId}-panel`}
+              aria-label={`${entry.label}, ${lensCounts[entry.id].open} open${
+                lensCounts[entry.id].unread > 0 ? `, ${lensCounts[entry.id].unread} unread` : ""
+              }`}
+              aria-selected={activeScope === entry.id}
+              className="subagent-lens-switch__button"
+              id={`${controlId}-${entry.id}`}
+              key={entry.id}
+              role="tab"
+              tabIndex={activeScope === entry.id ? 0 : -1}
+              type="button"
+              onClick={() => setScope(entry.id)}
+            >
+              <span>{entry.label}</span>
+              {/* Filled when something is unread, plain otherwise, as on the
+                  rail tab: the rail is too narrow for both counts. */}
+              {lensCounts[entry.id].unread > 0 ? (
+                <span className="thread-todos-panel__unread-count">
+                  {lensCounts[entry.id].unread}
+                </span>
+              ) : (
+                <span className="subagent-lens-switch__count">{lensCounts[entry.id].open}</span>
+              )}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          className={`thread-todos-panel__resolved-toggle${showResolved ? " is-active" : ""}`}
+          aria-pressed={showResolved}
+          onClick={() => setShowResolved((current) => !current)}
+        >
+          Resolved
+        </button>
+      </div>
+      <div
+        aria-labelledby={`${controlId}-${activeScope}`}
+        id={`${controlId}-panel`}
+        role="tabpanel"
+      >
+        {!groups ? (
+          <p className="context-empty">Loading to-dos…</p>
+        ) : groups.length === 0 ? (
+          <p className="context-empty">{emptyText}</p>
+        ) : (
+          groups.map((group) => (
+            <section
+              key={group.key}
+              className="thread-todos-panel__group"
+              aria-label={group.title}
+            >
+              <h4 className="thread-todos-panel__group-title">
+                <span className="thread-todos-panel__group-name">{group.title}</span>
+                <span className="thread-todos-panel__group-count">{group.items.length}</span>
+                {group.paused ? (
+                  <span className="thread-todos-panel__group-paused">turn paused</span>
+                ) : null}
+              </h4>
+              <ul className="thread-todos-panel__list">
+                {group.items.map((item) => {
+                  if (item.type === "wait") {
+                    const { wait } = item;
+                    const mine = wait.threadKey === threadKey;
+                    const asked = wait.question;
+                    const answerOffscreen = view.answerQuestion;
+                    // The thread on screen answers through its composer, which
+                    // also draws the reply in its transcript. Any other local
+                    // thread answers through its owner's turn FIFO.
+                    const answerQuestion = !asked
+                      ? undefined
+                      : mine
+                        ? props.onAnswerQuestion
+                        : answerOffscreen
+                          ? (text: string) => answerOffscreen(wait, text)
+                          : undefined;
+                    // Any reply closes all of a message's questions. The
+                    // composer's answers include the panel's for its thread.
+                    const questionSent = asked?.questions.some((_, index) => {
+                      const itemId = codexAsyncQuestionItemId(asked.messageId, index);
+                      return mine
+                        ? props.sentQuestionAnswers?.has(itemId)
+                        : view.sentQuestionAnswers?.has(`${wait.threadKey}\0${itemId}`);
+                    }) ?? false;
+                    return (
+                      <li key={item.key}>
+                        <OperatorWaitRow
+                          wait={wait}
+                          current={mine}
+                          unread={isUnread(item.key)}
+                          threadName={activeScope === "all" && !mine
+                            ? view.threadTitleForKey(wait.threadKey)
+                            : undefined}
+                          respond={view.respond}
+                          dismissQuestion={(target) => {
+                            const question = target.question;
+                            return question ? view.dismissQuestion(question) : Promise.resolve();
+                          }}
+                          openWait={view.openWait}
+                          answerQuestion={answerQuestion}
+                          questionSent={questionSent}
+                        />
+                      </li>
+                    );
+                  }
+                  const { todo } = item;
+                  const mine = threadTodoThreadKey(todo) === threadKey;
+                  return (
+                    <li key={todo.id}>
+                      {mine && todo.status === "open" ? (
+                        <ThreadTodoCard
+                          todo={todo}
+                          running={view.runningIds.has(todo.id)}
+                          threadRunning={props.threadRunning}
+                          mergeMethods={view.mergeMethods}
+                          instances={view.instances}
+                          projectMenu={view.projectMenu}
+                          onResolve={(target, status, resolution, options) => {
+                            setActionError(undefined);
+                            void view.resolve(target, status, resolution, options).catch(
+                              (error: unknown) => {
+                                setActionError(String(error));
+                              },
+                            );
+                          }}
+                          onRun={(target, options) => {
+                            setActionError(undefined);
+                            void view.run(target, options).catch((error: unknown) => {
+                              setActionError(String(error));
+                            });
+                          }}
+                          onStartReview={props.onStartReview}
+                          onDoHere={props.onDoHere}
+                          onSetItemChecked={(target, item, checked) => {
+                            setActionError(undefined);
+                            void view.setItemChecked(target, item.id, checked).catch(
+                              (error: unknown) => {
+                                setActionError(String(error));
+                              },
+                            );
+                          }}
+                        />
+                      ) : (
+                        <TodoRow
+                          todo={todo}
+                          current={mine}
+                          scope={activeScope}
+                          projectKey={projectKey}
+                          unread={todo.status === "open" && isUnread(item.key)}
+                          view={view}
+                        />
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))
+        )}
+      </div>
+      {unavailableInstances.length > 0 ? (
+        <footer className="thread-todos-panel__footnote">
+          <button
+            type="button"
+            className="thread-todos-panel__coverage-note"
+            aria-label={`${coverageNote} Show affected instances`}
+            aria-describedby={coverageTooltip.visible ? coverageTooltip.tooltipId : undefined}
+            {...tooltipHandlers(coverageTooltip, coverageDetails)}
+            onClick={(event) => coverageTooltip.show(event.currentTarget, coverageDetails)}
+          >
+            {coverageNote}
+          </button>
+          {coverageTooltip.tooltipNode}
+        </footer>
+      ) : null}
+    </section>
+  );
+}
+
+function TodoRow(props: {
+  todo: ThreadTodo;
+  current: boolean;
+  scope: ThreadTodoScope;
+  projectKey?: string;
+  unread?: boolean;
+  view: ThreadTodosView;
+}) {
+  const { todo, view } = props;
+  const KindIcon = KIND_ICONS[todo.kind];
+  const resolution = todo.status === "open"
+    ? undefined
+    : todo.result ?? (todo.status === "done" ? "Done" : "Dismissed");
+  const route = describeRoute(todo, props.scope, props.projectKey);
+  const progress = threadTodoItemProgress(todo);
+  // Grouped by project, the thread is not in the heading: say it here.
+  const threadName = props.scope === "all" && !props.current ? view.threadTitle(todo) : undefined;
+  const main = (
+    <>
+      <span className="thread-todo-card__kind" aria-hidden="true">
+        {KindIcon ? <KindIcon size={13} /> : <span className="thread-todo-card__ring" />}
+      </span>
+      <span className="thread-todos-panel__row-title">{todo.title}</span>
+      {progress ? (
+        <span className="thread-todo-card__progress">
+          {progress.checked} of {progress.total}
+        </span>
+      ) : null}
+      <span className="thread-todo-card__age">
+        {formatTodoAge(todo.resolvedAt ?? todo.createdAt)}
+      </span>
+    </>
+  );
+  const meta = [threadName, route].filter(Boolean).join(" · ");
+  return (
+    <div
+      className="thread-todos-panel__row"
+      data-status={todo.status}
+      data-unread={props.unread ? "true" : undefined}
+    >
+      {props.unread ? <span className="thread-todos-panel__unread" aria-hidden="true" /> : null}
+      {props.current ? (
+        <div className="thread-todos-panel__row-main">{main}</div>
+      ) : (
+        <button
+          type="button"
+          className="thread-todos-panel__row-main"
+          aria-label={`Open thread: ${todo.title}, in ${view.threadTitle(todo)}${
+            progress ? `, ${progress.checked} of ${progress.total} steps checked` : ""
+          }${props.unread ? ", unread" : ""}`}
+          onClick={() => view.openThread(todo)}
+        >
+          {main}
+        </button>
+      )}
+      {meta ? <p className="thread-todos-panel__row-route">{meta}</p> : null}
+      {resolution ? (
+        <p className="thread-todos-panel__row-meta">
+          <span>{resolution}</span>
+          {todo.startedThread ? (
+            <button
+              type="button"
+              className="thread-todos-panel__row-link"
+              onClick={() => view.openStartedThread(todo)}
+            >
+              Open thread
+            </button>
+          ) : null}
+          {/* A merge or a started thread happened; only a resolve can be
+              taken back, as the stack's Undo does. A handled review is
+              reopened through one of its findings, in the transcript. */}
+          {!todo.startedThread
+            && (!todo.result || RESOLUTION_RESULTS.has(todo.result))
+            && !(todo.reviewId && todo.status === "done") ? (
+            <button
+              type="button"
+              className="thread-todos-panel__row-link"
+              onClick={() => {
+                void view.resolve(todo, "open").catch((error: unknown) => {
+                  console.warn("Reopening a to-do failed.", error);
+                });
+              }}
+            >
+              Reopen
+            </button>
+          ) : null}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Where a card came from and where it points, in the words of the lens it
+ * shows in. In Project, the project is given, so only the other end is
+ * named. In All, both ends are.
+ */
+function describeRoute(
+  todo: ThreadTodo,
+  scope: ThreadTodoScope,
+  projectKey: string | undefined,
+): string | undefined {
+  const target = todo.targetProject;
+  if (!target) return undefined;
+  const source = todo.sourceProject;
+  if (scope === "project") {
+    return target.key === projectKey
+      ? source ? `From ${source.label}` : undefined
+      : `For ${target.label}`;
+  }
+  return source ? `${source.label} → ${target.label}` : `For ${target.label}`;
+}
+
+function groupItems(
+  items: PanelItem[],
+  scope: ThreadTodoScope,
+  props: ThreadTodosPanelProps,
+): TodoGroup[] {
+  const { view } = props;
+  const groups = new Map<string, TodoGroup>();
+  for (const item of items) {
+    // All groups by the project an item came from; the narrower lenses by
+    // thread, since one project's threads are what the operator moves between.
+    let key: string;
+    let title: string;
+    if (item.type === "wait") {
+      const project = view.threadProjectForKey(item.wait.threadKey);
+      key = scope === "all" ? projectGroupKey(project?.key, item.wait.federationTarget) : item.wait.threadKey;
+      title = scope === "all"
+        ? project?.label ?? "No project"
+        : view.threadTitleForKey(item.wait.threadKey);
+    } else {
+      key = scope === "all"
+        ? projectGroupKey(item.todo.sourceProject?.key, item.todo.federationTarget)
+        : threadTodoThreadKey(item.todo);
+      title = scope === "all"
+        ? item.todo.sourceProject?.label ?? "No project"
+        : view.threadTitle(item.todo);
+    }
+    // All groups by project, where one paused thread is not the group's turn.
+    const paused = scope !== "all" && item.type === "wait" && isBlockingWait(item.wait);
+    const group = groups.get(key);
+    if (group) {
+      group.items.push(item);
+      group.paused ||= paused;
+    } else {
+      groups.set(key, { key, title, items: [item], paused });
+    }
+  }
+  const first = scope === "all"
+    ? props.projectKey === undefined ? undefined : projectGroupKey(props.projectKey, props.projectOwner)
+    : props.threadKey;
+  const ordered = [...groups.values()];
+  const current = ordered.findIndex((group) => group.key === first);
+  if (current > 0) {
+    ordered.unshift(...ordered.splice(current, 1));
+  }
+  return ordered;
+}

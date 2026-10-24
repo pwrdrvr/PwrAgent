@@ -339,9 +339,9 @@ describe("PwrGitConnectionPrompt", () => {
     expect(screen.getByText("Connected · PwrGit isn’t open")).toBeTruthy();
   });
 
-  it("never shows a failed status read, and retries until one succeeds", async () => {
-    // What a dead broker owner produced on the card: Electron's IPC wrapper
-    // around a refused temp socket, printed verbatim beside "Checking…".
+  it("explains repeated broker failures and clears the explanation after recovery", async () => {
+    // Older owners can still return a raw socket error through Electron IPC.
+    // The card explains the interruption without exposing that path.
     const refused = new Error(
       "Error invoking remote method 'mcp-connection:pwrgit-status': "
         + "Error: connect ECONNREFUSED /tmp/pwa-mcp-fixture/bridge.sock",
@@ -363,18 +363,48 @@ describe("PwrGitConnectionPrompt", () => {
       await act(async () => undefined);
       expect(readPwrGitConnectionStatus).toHaveBeenCalledTimes(1);
       expect(screen.getByText("Checking…")).toBeTruthy();
-      expect(screen.queryByText(/check right now/)).toBeNull();
+      expect(screen.queryByText(/Retrying automatically/)).toBeNull();
 
       await act(async () => await vi.advanceTimersByTimeAsync(2_000));
       expect(readPwrGitConnectionStatus).toHaveBeenCalledTimes(2);
       expect(screen.getByText("Can’t check right now")).toBeTruthy();
+      expect(screen.getByText("MCP connections are temporarily unavailable. Retrying automatically…")).toBeTruthy();
 
       await act(async () => await vi.advanceTimersByTimeAsync(5_000));
       expect(readPwrGitConnectionStatus).toHaveBeenCalledTimes(3);
       expect(screen.getByRole("button", { name: "Get PwrGit" })).toBeTruthy();
       expect(screen.queryByText(/check right now/)).toBeNull();
+      expect(screen.queryByText(/Retrying automatically/)).toBeNull();
       expect(screen.queryByText(/ECONNREFUSED|remote method/)).toBeNull();
       expect(screen.queryByRole("status")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("names the PwrAgent profile and suspends stale controls until checks recover", async () => {
+    const message = "MCP connections for PwrAgent profile \"dev\" are temporarily unavailable: its managing instance is not responding.";
+    const readPwrGitConnectionStatus = vi.fn<() => Promise<PwrGitConnectionStatus>>()
+      .mockResolvedValueOnce(status({ configured: true }))
+      .mockRejectedValueOnce(new Error(`Error invoking remote method 'mcp-connection:pwrgit-status': Error: ${message}`))
+      .mockRejectedValueOnce(new Error(message))
+      .mockResolvedValue(status({ configured: true }));
+    vi.useFakeTimers();
+    try {
+      render(
+        <PwrGitConnectionPrompt backend="codex" desktopApi={{ readPwrGitConnectionStatus }}
+          enabled={true} onEnabledChange={vi.fn()} />,
+      );
+      await act(async () => undefined);
+      expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("true");
+      await act(async () => window.dispatchEvent(new Event("focus")));
+      expect(screen.queryByText(/Retrying automatically/)).toBeNull();
+      await act(async () => await vi.advanceTimersByTimeAsync(2_000));
+      expect(screen.getByText("MCP unavailable for PwrAgent profile \"dev\". Retrying automatically…")).toBeTruthy();
+      expect(screen.queryByRole("switch")).toBeNull();
+      await act(async () => await vi.advanceTimersByTimeAsync(5_000));
+      expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe("true");
+      expect(screen.queryByText(/Retrying automatically/)).toBeNull();
     } finally {
       vi.useRealTimers();
     }

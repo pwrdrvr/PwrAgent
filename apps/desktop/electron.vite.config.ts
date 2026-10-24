@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "electron-vite";
 import type { Plugin } from "vite";
+import { inlineWorkerDebugCode } from "./scripts/inline-worker-debug-code.mjs";
 
 /**
  * Dev-only: bridge the renderer to the standalone `react-devtools` app.
@@ -108,6 +109,7 @@ function reactDevtoolsBridge(): Plugin {
 // keep process.env.NODE_ENV as a runtime reference — and in the packaged .app
 // it's undefined, so isDevelopment checks resolve to true.
 export default defineConfig(({ command }) => {
+  const workerDebug = inlineWorkerDebugCode();
   const isBuild = command === "build";
   const productionDefine = isBuild
     ? { "process.env.NODE_ENV": JSON.stringify("production") }
@@ -212,8 +214,11 @@ export default defineConfig(({ command }) => {
     },
     renderer: {
       plugins: devtoolsBridgeEnabled
-        ? [react(), reactDevtoolsBridge()]
-        : [react()],
+        ? [react(), reactDevtoolsBridge(), workerDebug.renderer]
+        : [react(), workerDebug.renderer],
+      worker: {
+        plugins: () => [workerDebug.worker],
+      },
       optimizeDeps: {
         esbuildOptions: {
           minify: true,

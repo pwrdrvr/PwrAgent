@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { McpDiscovery, mcpDiscoveryContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
+import { MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS } from "./mcp-connection-timeouts";
 import {
   auth,
   discoverOAuthServerInfo,
@@ -68,7 +70,8 @@ export class McpOAuthSessionCoordinator {
    */
   private revocationEpoch = 0;
   private loadPromise?: Promise<void>;
-  private refreshPromise?: Promise<void>;
+  private refreshAttempt = 0;
+  private refreshStart?: { promise: Promise<void>; controller: AbortController; waiters: number };
   private authorizationAttempt = 0;
   /**
    * The attempt currently inside `authorize`, or 0 when none is.
@@ -268,6 +271,14 @@ export class McpOAuthSessionCoordinator {
 
   authorizedFetch(): FetchLike {
     return async (url, init) => {
+      // SDK v1 only supplies a session-wide fetch signal. Bind each POST to
+      // its caller too, without closing the shared transport or notification GET.
+      const discovery = mcpDiscoveryContext.getStore();
+      const requestSignal = discovery?.signal ?? mcpRequestSignalContext.getStore();
+      if (requestSignal && init?.method === "POST") {
+        init = { ...init, signal: AbortSignal.any([requestSignal, ...(init.signal ? [init.signal] : [])]) };
+      }
+      init?.signal?.throwIfAborted();
       const initial = await this.tokenSnapshot();
       const response = await this.fetchProtectedResource(
         url,
@@ -277,7 +288,7 @@ export class McpOAuthSessionCoordinator {
       if (response.status !== 401) return response;
       await response.body?.cancel().catch(() => undefined);
       try {
-        await this.refresh(initial.generation);
+        await this.refresh(initial.generation, init?.signal ?? undefined);
       } catch (error) {
         if (
           !(error instanceof McpReauthorizationRequiredError)
@@ -343,17 +354,39 @@ export class McpOAuthSessionCoordinator {
     return true;
   }
 
-  private async refresh(expectedGeneration: number): Promise<void> {
+  private async refresh(expectedGeneration: number, signal?: AbortSignal): Promise<void> {
     await this.ensureLoaded();
+    signal?.throwIfAborted();
     if (this.generation !== expectedGeneration) return;
-    if (this.refreshPromise) return await this.refreshPromise;
-    this.refreshPromise = this.refreshNow(expectedGeneration).finally(() => {
-      this.refreshPromise = undefined;
-    });
-    return await this.refreshPromise;
+    let start = this.refreshStart;
+    if (!start) {
+      const controller = new AbortController();
+      const discovery = new McpDiscovery(this.connectionId, Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, controller.signal, {
+        parentDiscoveryId: mcpDiscoveryContext.getStore()?.id, operation: "auth/refresh",
+      });
+      const entry = { controller, waiters: 0, promise: undefined as unknown as Promise<void> };
+      const attempt = ++this.refreshAttempt;
+      entry.promise = discovery.phase("auth/refresh", async () => await this.refreshNow(expectedGeneration, discovery, attempt), undefined, true).finally(() => {
+        discovery.close();
+        if (this.refreshStart === entry) this.refreshStart = undefined;
+      });
+      start = entry;
+      this.refreshStart = entry;
+    }
+    start.waiters += 1;
+    try {
+      await waitForMcp(start.promise, signal ?? new AbortController().signal);
+    } finally {
+      start.waiters -= 1;
+      if (start.waiters === 0 && this.refreshStart === start) {
+        this.refreshStart = undefined;
+        start.controller.abort(new DOMException("All MCP refresh waiters left.", "AbortError"));
+        if (this.runtimeState === "refreshing") this.setState(this.credential?.tokens?.access_token ? "ready" : "disconnected");
+      }
+    }
   }
 
-  private async refreshNow(expectedGeneration: number): Promise<void> {
+  private async refreshNow(expectedGeneration: number, discovery: McpDiscovery, attempt: number): Promise<void> {
     if (this.generation !== expectedGeneration) return;
     const current = this.credential;
     if (!current?.tokens?.refresh_token) {
@@ -373,15 +406,19 @@ export class McpOAuthSessionCoordinator {
       onRedirect: async () => {
         throw new McpReauthorizationRequiredError();
       },
-      onCommit: async (credential) =>
-        await this.commitCredential(credential, epoch),
+      onCommit: async (credential) => {
+        discovery.remaining();
+        await this.commitCredential(credential, epoch);
+      },
       retainRefreshToken: true,
     });
     try {
       const result = await this.authFn(provider, {
         serverUrl: this.serverUrl,
         scope: this.scope,
-        fetchFn: this.fetchFn,
+        fetchFn: async (url, init) => await this.fetchFn(url, {
+          ...init, signal: AbortSignal.any([discovery.signal, ...(init?.signal ? [init.signal] : [])]),
+        }),
       });
       if (result !== "AUTHORIZED") {
         throw new McpReauthorizationRequiredError();
@@ -392,6 +429,12 @@ export class McpOAuthSessionCoordinator {
       if (this.revocationEpoch !== epoch) return;
       this.setState("ready");
     } catch (error) {
+      if (discovery.signal.aborted) {
+        if (this.refreshAttempt === attempt && this.revocationEpoch === epoch && this.runtimeState === "refreshing") {
+          this.setState(this.credential?.tokens?.access_token ? "ready" : "disconnected");
+        }
+        throw error;
+      }
       if (isAuthorizationFailure(error)) {
         if (this.revocationEpoch !== epoch) return;
         const durable = await this.vault.read(
@@ -437,6 +480,10 @@ export class McpOAuthSessionCoordinator {
     try {
       response = await this.fetchWithToken(url, init, accessToken);
     } catch (error) {
+      // Closing a Streamable HTTP client aborts its notification GET. A
+      // cancelled session or tool request says nothing about server health,
+      // and must not overwrite a failure reported by another request either.
+      if (init?.signal?.aborted) throw error;
       const detail = errorMessage(error);
       this.setState("temporarily_unavailable", detail);
       throw new Error(detail, { cause: error });

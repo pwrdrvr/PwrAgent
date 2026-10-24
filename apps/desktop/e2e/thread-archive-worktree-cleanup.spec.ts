@@ -129,18 +129,6 @@ async function createArchiveWorktreeFixture(): Promise<{
             },
           },
           {
-            id: "thread-list-archive-cleanup",
-            kind: "response",
-            method: "thread/list",
-            result: [thread],
-          },
-          {
-            id: "thread-list-pre-archive-refresh",
-            kind: "response",
-            method: "thread/list",
-            result: [thread],
-          },
-          {
             id: "thread-archive-1",
             kind: "response",
             method: "thread/archive",
@@ -154,6 +142,16 @@ async function createArchiveWorktreeFixture(): Promise<{
             kind: "response",
             method: "thread/list",
             result: [],
+          },
+          // Codex moves an archived thread into the archived listing. The
+          // cleanup finds its target there, however many active reads ran.
+          {
+            id: "thread-list-archived-post-archive",
+            afterResponseId: "thread-archive-1",
+            archived: true,
+            kind: "response",
+            method: "thread/list",
+            result: [thread],
           },
         ],
       },
@@ -180,6 +178,11 @@ test("archiving a replay-backed thread removes its real Git worktree", async () 
   });
 
   try {
+    // The row proves the active listing reached the renderer, so every read
+    // after the archive sees the thread only in the archived listing.
+    await expect(
+      app.window.getByRole("button", { name: /Archive worktree cleanup/i }),
+    ).toBeVisible();
     // The archive response owns the Git cleanup. A first Windows Job-wrapper
     // launch can still be compiling after the UI optimistically hides the row.
     const response = await app.window.evaluate(async () => {

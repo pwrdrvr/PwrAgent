@@ -2,6 +2,7 @@ import { usageActivityCoverage, usageChartStep, type UsageActivityRollup } from 
 import type { OwnedUsageRow } from "./usage-activity-summary";
 import { formatUsedPercent as usagePercent } from "../../lib/backend-status-format";
 import { projectLimit, type LimitProjection, type LimitSeries } from "./usage-limits";
+import { usageAccountKey, usageProviderLabel } from "./usage-activity-accounts";
 
 export const usageMoney = (micros: number) => new Intl.NumberFormat(undefined, {
   style: "currency", currency: "USD", minimumFractionDigits: 2,
@@ -68,6 +69,7 @@ export function usageNotCountedReason(row: OwnedUsageRow, from: number, to: numb
 
 const ROLLUP_LABELS: Record<string, string> = {
   "token-miser": "Token Miser", "token-miser-focused": "Token Miser, focused", "title-helper": "Title helper",
+  "queued-message-titles": "Queued message titles",
 };
 /** "Token Miser · 42 runs" for a summed background-helper line. */
 export function usageRollupLabel(rollup: UsageActivityRollup): string {
@@ -77,21 +79,31 @@ export function usageRollupLabel(rollup: UsageActivityRollup): string {
 /** Threads beyond this many share the chart's "Other" series. */
 export const USAGE_SERIES = 5;
 
-/** What the chart stacks spend by. */
-export type UsageDimension = "thread" | "model" | "provider" | "instance";
+/** How long a custom range waits for typing to pause before it reads. */
+export const USAGE_CUSTOM_RANGE_DEBOUNCE_MS = 400;
 
-const PROVIDER_LABELS: Record<string, string> = {
-  openai: "OpenAI", xai: "xAI", anthropic: "Anthropic", google: "Google", moonshot: "Moonshot", qwen: "Qwen",
-};
+/** What the chart stacks spend by. */
+export type UsageDimension = "thread" | "model" | "provider" | "account" | "instance";
 
 /** A row's model, provider or owning instance, as the legend names it. */
 export function usageDimensionValue(row: OwnedUsageRow, dimension: Exclude<UsageDimension, "thread">): string {
+  if (dimension === "account") return usageAccountKey(row);
   if (dimension === "instance") return row.owner;
-  if (dimension === "provider") return PROVIDER_LABELS[row.line.provider] ?? row.line.provider;
+  if (dimension === "provider") return usageProviderLabel(row.line.provider);
   return row.line.modelLabel ?? row.line.model ?? "Unknown model";
 }
 
-export type UsageBucket = { from: number; to: number; cost: number; rows: number; series: number[]; other: number };
+/**
+ * One thread, model, provider or instance in a bucket: its priced spend, its
+ * completed turns, the threads those turns belong to, and their instances.
+ * `series` is its chart color; a member without one stacks as Other.
+ */
+export type UsageBucketMember = { key: string; series?: number; cost: number; rows: number; threads: number; owners: string[] };
+export type UsageBucket = {
+  from: number; to: number; cost: number; rows: number; series: number[]; other: number;
+  /** Everything stacked in the bucket, the most expensive first. */
+  members: UsageBucketMember[];
+};
 
 /** The local clock boundary at or before `at` for a bar of `step`. */
 function alignDown(at: number, step: number): number {
@@ -151,12 +163,19 @@ const pricedCost = ({ line }: OwnedUsageRow) => line.priceStatus === "priced" &&
 /**
  * Whole contained turns are placed at completion; these are not spend-rate
  * buckets. `seriesOf` names a row's chart series (0 to USAGE_SERIES - 1);
- * rows it leaves out stack as Other.
+ * rows it leaves out stack as Other. `memberOf` names the thread, model,
+ * provider or instance a row stacks under, and the thread it belongs to.
  */
 export function usageCompletionBuckets(rows: OwnedUsageRow[], from: number, to: number,
-  seriesOf: (row: OwnedUsageRow) => number | undefined = () => undefined): UsageBucket[] {
+  seriesOf: (row: OwnedUsageRow) => number | undefined = () => undefined,
+  memberOf: (row: OwnedUsageRow) => { key: string; thread: string } = (row) => {
+    const thread = JSON.stringify([row.owner, row.line.backend, row.line.threadId]);
+    return { key: thread, thread };
+  }): UsageBucket[] {
   const bounds = usageBucketBounds(from, to);
-  const buckets = bounds.map((bound) => ({ ...bound, cost: 0, rows: 0, series: Array<number>(USAGE_SERIES).fill(0), other: 0 }));
+  const buckets = bounds.map((bound) => ({ ...bound, cost: 0, rows: 0, series: Array<number>(USAGE_SERIES).fill(0), other: 0,
+    members: [] as UsageBucketMember[] }));
+  const members = bounds.map(() => new Map<string, UsageBucketMember & { threadKeys: Set<string>; ownerNames: Set<string> }>());
   for (const row of rows) {
     const index = bucketIndex(row.line.completedAt, bounds);
     if (index === undefined) continue;
@@ -167,7 +186,22 @@ export function usageCompletionBuckets(rows: OwnedUsageRow[], from: number, to: 
     const series = seriesOf(row);
     if (series === undefined) bucket.other += cost;
     else bucket.series[series] += cost;
+    const { key, thread } = memberOf(row);
+    let member = members[index].get(key);
+    if (!member) {
+      member = { key, series, cost: 0, rows: 0, threads: 0, owners: [], threadKeys: new Set(), ownerNames: new Set() };
+      members[index].set(key, member);
+    }
+    member.cost += cost;
+    member.rows += 1;
+    member.threadKeys.add(thread);
+    member.ownerNames.add(row.owner);
   }
+  buckets.forEach((bucket, index) => {
+    bucket.members = [...members[index].values()]
+      .map(({ threadKeys, ownerNames, ...member }) => ({ ...member, threads: threadKeys.size, owners: [...ownerNames] }))
+      .sort((a, b) => b.cost - a.cost);
+  });
   return buckets;
 }
 

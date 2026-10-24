@@ -101,23 +101,27 @@ function readPackage(pkg) {
   return pkg
 }
 
-function blockGitFetcher() {
-  return async () => {
-    throw new Error('Blocked pnpm git dependency fetch')
-  }
+function updateConfig(config) {
+  // pnpm 12 reads overrides from the workspace YAML rather than package.json.
+  scanField(config, 'overrides', 'pnpm-workspace.yaml')
+  return config
 }
 
 module.exports = {
   hooks: {
     readPackage,
-    fetchers: {
-      git: blockGitFetcher,
-      gitHostedTarball: blockGitFetcher,
-    },
+    updateConfig,
   },
+  fetchers: [{
+    canFetch: (_pkgId, resolution) =>
+      resolution.type === 'git' || isGitSpec(resolution.tarball),
+    fetch: async () => {
+      throw new Error('Blocked pnpm git dependency fetch')
+    },
+  }],
 }
 
-// Exported for tests only. pnpm reads `hooks` and ignores everything else.
+// Exported for tests only. pnpm ignores this testing-only export.
 module.exports.__testing = {
   isGitSpec,
   isFirstParty,

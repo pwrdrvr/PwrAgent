@@ -1,3 +1,5 @@
+import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,9 +12,10 @@ import type {
   ThreadSubAgentSummary,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
-import { buildFederatedThreadRef, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildTurnUsageActivityEntryFromLine, DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { runGitCommand } from "../app-server/git-executable";
 import { CodexEnvironmentHydrationStore } from "../app-server/codex-environment-hydration-store";
 import { ensureStarMapIntakeLaunchpad } from "../app-server/star-map-intake";
 import { AutomationStore } from "../automations/automation-store";
@@ -41,6 +44,25 @@ import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-sto
 import { StateDb } from "../state/state-db";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
 
+// Keep real subprocesses by default. Only the repeated idle observations below
+// replay an already verified Git result; callback callers still use real execFile.
+const execFileAsync = vi.hoisted(() => vi.fn<typeof import("node:child_process").execFile.__promisify__>());
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const { promisify } = await import("node:util");
+  execFileAsync.mockImplementation(promisify(actual.execFile));
+  return { ...actual, execFile: Object.assign(actual.execFile.bind(null), {
+    [promisify.custom]: execFileAsync,
+  }) };
+});
+
+// Record a missing fixture seam without launching the SDK's real Git probes.
+const sdkGetSessionInfo = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@anthropic-ai/claude-agent-sdk")>(),
+  getSessionInfo: sdkGetSessionInfo,
+}));
+
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
 let tempDir: string;
@@ -66,12 +88,238 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  execFileAsync.mockClear();
   delete process.env[SQLITE_WRITE_METRICS_ENV];
   stateDb.close();
   rmSync(tempDir, { recursive: true, force: true });
+  try { expect(sdkGetSessionInfo).not.toHaveBeenCalled(); }
+  finally { sdkGetSessionInfo.mockClear(); }
 });
 
 describe("sqlite write metrics", () => {
+  it("budgets Claude branch adoption and unchanged Git monitoring", async () => {
+    const cwd = path.join(tempDir, "repo");
+    mkdirSync(cwd);
+    const config = path.join(tempDir, "gitconfig");
+    writeFileSync(config, "");
+    const git = (args: string[]) => runGitCommand(cwd, [
+      "-c", "core.hooksPath=" + path.join(tempDir, "empty-hooks"),
+      "-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
+      "-c", "user.email=fixture@example.invalid", ...args,
+    ], { env: { ...process.env, GIT_CONFIG_GLOBAL: config, GIT_CONFIG_NOSYSTEM: "1" } });
+    await git(["init", "-b", "main"]);
+    await git(["commit", "--allow-empty", "-m", "init"]);
+    await git(["switch", "--detach", "HEAD"]);
+    const threadId = "a1111111-1111-4111-8111-111111111111";
+    const identity = { backend: "claude" as const, threadId };
+    const sessions = new ClaudeSessionStore(path.join(tempDir, "claude"));
+    await sessions.save({ cwd, thread: {
+      id: threadId, source: "claude", title: "Branch budget", titleSource: "explicit", projectKey: cwd,
+      linkedDirectories: [{ id: cwd, path: cwd, label: "repo", kind: "local" }],
+    } });
+    await store.setThreadExpectedBranch({ ...identity, branch: "HEAD" });
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null, claudeBackendOptions: { store: sessions },
+    });
+    const start = (turnId: string) => registry.publishLocalEvent({ backend: "claude", notification: {
+      method: "turn/started", params: { threadId, turnId, turn: { id: turnId, status: "in_progress" } },
+    } });
+    const complete = (turnId: string) => registry.publishLocalEvent({ backend: "claude", notification: {
+      method: "turn/completed", params: { threadId, turnId, turn: { id: turnId, status: "completed", output: [] } },
+    } });
+    try {
+      await registry.listThreads({ backend: "claude" });
+      await start("changed");
+      await git(["switch", "-c", "fix/agent-branch"]);
+      const adopted = await measureSqliteWrites(() => complete("changed"));
+      expect(await store.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: "fix/agent-branch", observedGitBranch: "fix/agent-branch",
+      });
+      expectSqliteWriteBudget({ scenario: "provider-branch-adoption",
+        note: "One turn-end branch change: 1 commit, ~16.5 KB WAL; ~1.65 MB/day at 100 changes/day; unchanged turns write zero.", writes: adopted.writes });
+
+      await git(["switch", "-c", "fix/external-branch"]);
+      const observed = await measureSqliteWrites(() => registry.refreshThreadDirectoryRelationship(identity));
+      expect(await store.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: "fix/agent-branch", observedGitBranch: "fix/external-branch",
+      });
+      expectSqliteWriteBudget({ scenario: "provider-branch-observation",
+        note: "One hover/timer branch change preserves the expected named branch: 1 commit, ~16.5 KB WAL; ~1.65 MB/day at 100 changes/day; idle writes zero.", writes: observed.writes });
+
+      const idleEvents: AgentEvent[] = [];
+      registry.onEvent((event) => { idleEvents.push(event); });
+      const probeStart = execFileAsync.mock.calls.length;
+      const idle = await measureSqliteWrites(async () => {
+        // One real unchanged observation covers the Git integration. Repeating
+        // the same subprocess 100 times tests process startup cost, while this
+        // budget needs 100 passes through the registry and the real SQLite store.
+        await registry.refreshThreadDirectoryRelationship(identity);
+        expect(execFileAsync.mock.calls.slice(probeStart)).toEqual([
+          ["git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { env: expect.any(Object) }],
+        ]);
+        const observation = await execFileAsync.mock.results.at(-1)!.value;
+        expect(observation.stdout.trim()).toBe("fix/external-branch");
+        const run = execFileAsync.getMockImplementation()!;
+        try {
+          execFileAsync.mockResolvedValue(observation);
+          for (let index = 1; index < 100; index++) await registry.refreshThreadDirectoryRelationship(identity);
+        } finally {
+          execFileAsync.mockImplementation(run);
+        }
+      });
+      expect(execFileAsync.mock.calls.slice(probeStart)).toEqual(Array.from({ length: 100 }, () => [
+        "git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], { env: expect.any(Object) },
+      ]));
+      expect(await store.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: "fix/agent-branch", observedGitBranch: "fix/external-branch",
+      });
+      expect(idleEvents).toEqual([]);
+      expectSqliteWriteBudget({ scenario: "provider-branch-unchanged-refreshes",
+        note: "100 unchanged hover/timer observations; zero commits, 0 MB/day while idle", writes: idle.writes });
+      await git(["switch", "fix/agent-branch"]);
+      await registry.refreshThreadDirectoryRelationship(identity);
+      // This probe is real again: the fixture must observe the switch back.
+      expect(await store.getThreadOverlayState(identity)).toMatchObject({
+        gitBranch: "fix/agent-branch", observedGitBranch: "fix/agent-branch",
+      });
+      await start("unchanged");
+      const unchangedTurn = await measureSqliteWrites(() => complete("unchanged"));
+      expectSqliteWriteBudget({ scenario: "provider-branch-unchanged-turn",
+        note: "one turn ending on the same branch; zero commits", writes: unchangedTurn.writes });
+    } finally { await registry.close(); }
+  });
+
+  it("steers Claude once per request and dispatches queued input only after completion", async () => {
+    const finish = Promise.withResolvers<void>();
+    const prompts: SDKUserMessage[] = [];
+    const queries: Array<{ resume?: string }> = [];
+    const events: AgentEvent[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        getSessionInfo: async () => undefined,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+        query: ({ prompt, options = {} }) => {
+          const first = queries.length === 0;
+          queries.push(options);
+          if (typeof prompt === "string") throw new Error("Expected streaming input");
+          const input = prompt[Symbol.asyncIterator]();
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            prompts.push((await input.next()).value);
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            if (first) {
+              await finish.promise;
+              prompts.push((await input.next()).value);
+            }
+            yield { type: "result", subtype: "success", is_error: false,
+              user_message_uuid: prompts.at(-1)?.uuid,
+            } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: () => { finish.resolve(); } }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    registry.onEvent((event) => { events.push(event); });
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" });
+      const identity = { backend: "claude" as const, threadId };
+      const started = await registry.startTurn({ ...identity, input: [{ type: "text", text: "Start" }] });
+      await vi.waitFor(() => expect(prompts).toHaveLength(1));
+      // Keep terminal accounting and setup outside the per-steer write budget.
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "backend/providerStatus/updated")).toBe(true));
+      expect(await registry.submitTurn({ ...identity, input: [{ type: "text", text: "Next queued task" }] }))
+        .toMatchObject({ status: "queued" });
+      const request = { ...identity, expectedTurnId: started.turnId, requestId: "steer-fixture",
+        input: [{ type: "text" as const, text: "Focus on the PR" }] };
+      const origin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", title: "Sender" } };
+      const { writes } = await measureSqliteWrites(async () => {
+        expect(await registry.steerTurn(request, origin)).toMatchObject({ disposition: "steered", turnId: started.turnId });
+        expect(await registry.steerTurn(request, origin)).toMatchObject({ disposition: "steered", turnId: started.turnId });
+      });
+      expectSqliteWriteBudget({ scenario: "claude-steer", note: "one steer with agent origin plus one idempotent retry; no timer writes", writes });
+      expect(queries).toHaveLength(1);
+      expect(prompts).toHaveLength(1);
+      finish.resolve();
+      await vi.waitFor(() => expect(events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(2));
+      expect(queries).toHaveLength(2);
+      expect(queries[1].resume).toBe(threadId);
+      expect(prompts.map((prompt) => prompt.message.content)).toEqual([
+        [{ type: "text", text: "Start" }], [{ type: "text", text: "Focus on the PR" }], [{ type: "text", text: "Next queued task" }],
+      ]);
+      expect(prompts[1].priority).toBe("now");
+      const replay = await registry.readThread(identity);
+      expect(replay.replay.messages.find((message) => message.text === "Focus on the PR")?.origin).toEqual(origin);
+      expect(registry.getActiveTurnForThread(identity)).toBeUndefined();
+    } finally { finish.resolve(); await registry.close(); }
+  });
+
+  it("budgets Claude result accounting independently of context updates and preserves provider pricing", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const internal = registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+      flushLiveThreadUsageLines(): Promise<void>;
+    };
+    const target = { backend: "claude" as const, threadId: "claude-usage-fixture" };
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 100; index += 1) {
+          await internal.emit({ backend: "claude", notification: {
+            method: "thread/contextWindow/updated", params: {
+              threadId: target.threadId, turnId: "turn", usedTokens: 1000 + index, modelContextWindow: 200_000,
+            },
+          } });
+        }
+        await internal.emit({ backend: "claude", notification: {
+          method: "thread/tokenUsage/updated", params: {
+            threadId: target.threadId, turnId: "turn", model: "claude-opus-5-5",
+            tokenUsage: { last: { inputTokens: 350, cachedInputTokens: 200, cacheWriteInputTokens: 50, outputTokens: 20, totalTokens: 370 }, claudeCostUSD: 0.123456 },
+          },
+        } });
+        await internal.flushLiveThreadUsageLines();
+      });
+      const pricing = await store.readThreadPricing(target);
+      expect(pricing.lines).toHaveLength(1);
+      expect(pricing.lines[0]).toMatchObject({
+        provider: "anthropic", pricingBasis: "provider-reported", priceStatus: "priced",
+        totalCostMicros: 123456, inputTokens: 350, cachedInputTokens: 200, cacheWriteInputTokens: 50,
+        outputTokens: 20, turnUsageAttributed: true,
+      });
+      const entry = buildTurnUsageActivityEntryFromLine({ line: pricing.lines[0], turn: { id: "turn", status: "completed" } });
+      expect(entry?.details.find((detail) => detail.id.endsWith("-cost"))?.label).toContain("provider estimate");
+      expect(entry?.details.some((detail) => detail.id.endsWith("-input-cost") || detail.id.endsWith("-output-cost"))).toBe(false);
+      expectSqliteWriteBudget({ scenario: "claude-result-usage", note: "100 context updates plus one result usage event and ledger flush; context does not write SQLite; 1 commit/turn, measured 65,920 bytes: ~6.6 MB/day at 100 turns/day, zero idle writes", writes });
+    } finally { await registry.close(); }
+  });
+
+  it("budgets Claude creation and operator mode changes without repeat-selection writes", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(tempDir, "claude")),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+      },
+    });
+    try {
+      const { result, writes: creation } = await measureSqliteWrites(async () =>
+        await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" }));
+      expectSqliteWriteBudget({ scenario: "claude-thread-creation", note: "one thread creation through the registry; SDK transcripts and resume metadata use files", writes: creation });
+      const target = { backend: "claude" as const, threadId: result.threadId, executionMode: "auto" as const };
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.setThreadExecutionMode(target);
+        for (let i = 0; i < 100; i++) await registry.setThreadExecutionMode(target);
+      });
+      expectSqliteWriteBudget({ scenario: "claude-permission-selection", note: "one operator mode selection; 100 duplicate selections add no writes", writes });
+    } finally { await registry.close(); }
+  });
+
   it("keeps 24 hourly inactive-thread sweeps read-only", async () => {
     const thread: AppServerThreadSummary = {
       id: "recently-restored", title: "Restored thread", titleSource: "explicit", source: "codex", threadStatus: "notLoaded",
@@ -2848,7 +3096,7 @@ describe("sqlite write metrics", () => {
     });
   });
 
-  it("serves one non-owner MCP broker request without sqlite writes", async () => {
+  it("serves 100 non-owner MCP broker requests without sqlite writes", async () => {
     const instances = new AppRuntimeInstanceStore(stateDb);
     const discovery = new McpConnectionBrokerDiscovery({
       filePath: path.join(tempDir, "mcp-broker.json"),
@@ -2899,12 +3147,13 @@ describe("sqlite write metrics", () => {
         effectiveMessagingEnabled: false,
       });
       await viewer.start();
-      const { result, writes } = await measureSqliteWrites(async () =>
-        await viewer.listConnections(),
-      );
-      expect(result.map((connection) => connection.id)).toContain("pwrsnap");
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let request = 0; request < 100; request++) {
+          expect((await viewer.listConnections()).map((connection) => connection.id)).toContain("pwrsnap");
+        }
+      });
       expectSqliteWriteBudget({
-        note: "serve one non-owner MCP broker list request",
+        note: "serve 100 non-owner MCP broker list requests: read-only, 0 MB/day of SQLite writes",
         scenario: "mcp-broker-request",
         writes,
       });

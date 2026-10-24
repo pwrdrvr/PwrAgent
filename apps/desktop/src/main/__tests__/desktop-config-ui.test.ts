@@ -48,6 +48,47 @@ describe("desktop config provider model defaults", () => {
     });
   });
 
+  it("round-trips a provider's access default, alone or beside a model", () => {
+    const written = applyTomlEdits("", desktopSettingsPatchToEdits({
+      models: {
+        providerDefaults: {
+          claude: { reasoningEffortsByModel: {}, executionMode: "full-access" },
+          codex: {
+            model: "gpt-5.6-sol",
+            reasoningEffortsByModel: {},
+            executionMode: "default",
+          },
+        },
+      },
+    }));
+
+    expect(written).toContain('execution_mode = "full-access"');
+    expect(parseDesktopSettingsToml(written, "test.toml").models).toEqual({
+      providerDefaults: {
+        claude: { reasoningEffortsByModel: {}, executionMode: "full-access" },
+        codex: {
+          model: "gpt-5.6-sol",
+          reasoningEffortsByModel: {},
+          executionMode: "default",
+        },
+      },
+    });
+  });
+
+  it("reads an unknown access value as unset", () => {
+    const parsed = parseDesktopSettingsToml([
+      "[[models.provider_defaults]]",
+      'provider = "claude"',
+      'execution_mode = "yolo"',
+      'model = "opus"',
+      "",
+    ].join("\n"), "test.toml");
+
+    expect(parsed.models?.providerDefaults).toEqual({
+      claude: { model: "opus", reasoningEffortsByModel: {} },
+    });
+  });
+
   it("keeps unavailable preferences and replaces the full defaults array", () => {
     const existing = applyTomlEdits(
       "",
@@ -214,6 +255,79 @@ describe("desktop config [ui] section", () => {
 
     // All four reverted to defaults → the section carries no values.
     expect(config.ui).toBeUndefined();
+  });
+});
+
+describe("desktop config [ui.logs] section", () => {
+  it("round-trips the Logs window preferences", () => {
+    const edits = desktopSettingsPatchToEdits({
+      ui: {
+        logs: {
+          wrap: false,
+          searchMode: "highlight",
+          contextLines: 3,
+          includeDiagnostics: false,
+          levels: ["warn", "error"],
+        },
+      },
+    });
+    const written = applyTomlEdits("", edits);
+
+    expect(written).toContain("[ui.logs]");
+    expect(parseDesktopSettingsToml(written, "test.toml").ui).toEqual({
+      logs: {
+        wrap: false,
+        searchMode: "highlight",
+        contextLines: 3,
+        includeDiagnostics: false,
+        levels: ["error", "warn"],
+      },
+    });
+  });
+
+  it("ignores unknown values and keeps the valid ones", () => {
+    const config = parseDesktopSettingsToml(
+      [
+        "[ui.logs]",
+        'search_mode = "regex"',
+        "context_lines = 2",
+        'levels = ["error", "debug"]',
+        "wrap = false",
+        "",
+      ].join("\n"),
+      "test.toml",
+    );
+
+    expect(config.ui).toEqual({ logs: { wrap: false, levels: ["error"] } });
+  });
+
+  it("deletes default-valued keys, leaving no [ui] values", () => {
+    const existing = [
+      "[ui.logs]",
+      "wrap = false",
+      'search_mode = "highlight"',
+      "context_lines = 1",
+      "include_diagnostics = false",
+      'levels = ["error"]',
+      "",
+    ].join("\n");
+    const edits = desktopSettingsPatchToEdits(
+      {
+        ui: {
+          logs: {
+            wrap: true,
+            searchMode: "filter",
+            contextLines: 0,
+            includeDiagnostics: true,
+            levels: ["info", "warn", "error"],
+          },
+        },
+      },
+      parseTomlTables(existing, "test.toml"),
+    );
+    const written = applyTomlEdits(existing, edits);
+
+    expect(parseDesktopSettingsToml(written, "test.toml").ui).toBeUndefined();
   });
 });
 

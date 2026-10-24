@@ -6,9 +6,10 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
   static latest: ArchiveCleanupTransport;
   activeIds = ["active", "transition"];
   archivedIds = ["archive-one", "archive-two", "archive-three"];
-  readonly listings: Array<{ archived: boolean; cursor?: string }> = [];
+  readonly listings: Array<{ archived: boolean; cursor?: string; sortKey?: string }> = [];
   private readonly heldKinds = new Set<boolean>();
   private readonly replies: Array<{ archived: boolean; reply: () => void }> = [];
+  private readonly listingWaiters: Array<{ archived: boolean; resolve: () => void }> = [];
   private messageHandler: (message: string) => void = () => {};
 
   constructor() {
@@ -30,6 +31,14 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
     this.heldKinds.add(archived);
   }
 
+  /** Resolves once a `thread/list` of this kind has reached the transport.
+   * The client issues it after work no clock can complete (the registry's
+   * environment probes stat the host filesystem). */
+  whenListing(archived: boolean): Promise<void> {
+    if (this.listings.some((listing) => listing.archived === archived)) return Promise.resolve();
+    return new Promise((resolve) => { this.listingWaiters.push({ archived, resolve }); });
+  }
+
   releaseListings(archived?: boolean): void {
     const held = this.replies.splice(0);
     for (const response of held) {
@@ -42,7 +51,7 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
     const request = JSON.parse(message) as {
       id?: number;
       method?: string;
-      params?: { archived?: boolean; cursor?: string };
+      params?: { archived?: boolean; cursor?: string; sortKey?: string };
     };
     if (request.id === undefined) return;
     let result: unknown = {};
@@ -51,7 +60,11 @@ export class ArchiveCleanupTransport implements JsonRpcTransport {
     } else if (request.method === "thread/list") {
       const archived = request.params?.archived === true;
       const cursor = request.params?.cursor;
-      this.listings.push({ archived, cursor });
+      this.listings.push({ archived, cursor, sortKey: request.params?.sortKey });
+      for (const waiter of this.listingWaiters.splice(0)) {
+        if (waiter.archived === archived) waiter.resolve();
+        else this.listingWaiters.push(waiter);
+      }
       const page = cursor ? Number(cursor) : 0;
       const ids = archived ? this.archivedIds.slice(page, page + 1) : this.activeIds;
       result = {

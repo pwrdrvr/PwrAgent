@@ -21,3 +21,9 @@ declare module "*.png" {
   const url: string;
   export default url;
 }
+
+// Vite bundles the module, and everything it imports, into a blob-URL worker.
+declare module "*?worker&inline" {
+  const WorkerConstructor: new () => Worker;
+  export default WorkerConstructor;
+}

@@ -523,6 +523,27 @@ describe("GithubPrFetcher", () => {
   }
 
   describe("primeBranchLookup (batched in-process discovery)", () => {
+    it("rejects unrelated fork results from both fresh and primed branch lookups", async () => {
+      const unrelatedPr = {
+        ...primedPr,
+        number: 99,
+        sourceRepository: { provider: "github.com", org: "unrelated", repo: "PwrAgent" },
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/99",
+      };
+      const { fetcher } = buildFetcher({ branchResults: () => [unrelatedPr, primedPr] });
+      const onProviderFailure = vi.fn();
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/repo", branch: "feat/x", onProviderFailure,
+      })).resolves.toEqual([primedPr]);
+      fetcher.primeBranchLookup([{ cwd: "/repo", branch: "feat/x", prs: [unrelatedPr, primedPr] }]);
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/repo", branch: "feat/x", onProviderFailure,
+      })).resolves.toEqual([primedPr]);
+      await expect(fetcher.fetchOpenPullRequests({ cwd: "/repo", branches: ["feat/x"] }))
+        .resolves.toEqual([primedPr]);
+      expect(onProviderFailure).not.toHaveBeenCalled();
+    });
+
     it("answers from the primed value without another GraphQL request", async () => {
       const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
       fetcher.primeBranchLookup([
@@ -712,6 +733,40 @@ describe("GithubPrFetcher", () => {
   });
 
   describe("fetchAllPullRequestsForBranch (single thread, all states)", () => {
+    it("reports an unanswered branch instead of confirming no PRs", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher();
+      fetchPullRequestsForBranches.mockResolvedValueOnce(new Map());
+      const onProviderFailure = vi.fn();
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/tmp/repo", branch: "feat/x", onProviderFailure,
+      })).resolves.toEqual([]);
+      expect(onProviderFailure).toHaveBeenCalledOnce();
+    });
+
+    it("accepts an explicitly answered empty branch", async () => {
+      const { fetcher } = buildFetcher();
+      const onProviderFailure = vi.fn();
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/tmp/repo", branch: "feat/x", onProviderFailure,
+      })).resolves.toEqual([]);
+      expect(onProviderFailure).not.toHaveBeenCalled();
+    });
+
+    it("retains successful siblings while reporting a partially unanswered lookup", async () => {
+      const { fetcher, fetchPullRequestsForBranches } = buildFetcher({ repos: [
+        { host: "github.com", owner: "operator", repo: "PwrAgent" },
+        { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+      ] });
+      fetchPullRequestsForBranches.mockResolvedValueOnce(new Map([
+        ["pwrdrvr/pwragent#feat/x", [primedPr]],
+      ]));
+      const onProviderFailure = vi.fn();
+      await expect(fetcher.fetchAllPullRequestsForBranch({
+        cwd: "/tmp/repo", branch: "feat/x", onProviderFailure,
+      })).resolves.toEqual([primedPr]);
+      expect(onProviderFailure).toHaveBeenCalledOnce();
+    });
+
     it("uses the in-process all-state branch query", async () => {
       const { fetcher, fetchPullRequestsForBranches } = buildFetcher({
         branchResults: () => [mergedPr],

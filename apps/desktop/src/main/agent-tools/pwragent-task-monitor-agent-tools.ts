@@ -18,7 +18,7 @@ import {
 import { AgentToolRouter } from "./agent-tool-router.js";
 
 export const TASK_MONITOR_CREATE_TOOL_DESCRIPTION =
-  "Create a PwrAgent monitor thread for long tasks or repeated status checks. Use it immediately when the user explicitly requests a Job Monitor. Otherwise, delegate a repeatable check after about 30 seconds of parent polling. A successful response means the monitor thread and turn have started. Do not inspect the monitor thread, poll, or sleep in the parent after success. End the parent turn when no unrelated work remains. Monitor completion wakes the parent by default. Do not use this for an attached PR when PR automation can wake the thread. Use check_thread_pull_request_status and follow prAutomation.guidance. Use watch_thread_pull_request for one-time PR success or failure notifications. Give the monitor the target, exact check, interval, success and failure conditions, and log steps. Do not pass local tool session IDs. A monitor cannot access parent streams, input, or exit status. Delegate a local command before it starts so the monitor can run and capture it. For an active command, provide durable process, log, or status files. Use pollIntervalSeconds for polling and heartbeats. The default is 30 seconds. Omit preferredModel and preferredReasoningEffort unless the user or project instructions require an override. Do not use backend spawn tools for this workflow.";
+  "Create a PwrAgent monitor thread for long tasks or repeated status checks. Use it immediately when the user explicitly requests a Job Monitor. Otherwise, delegate a repeatable check after about 30 seconds of parent polling. A successful response means the monitor thread and turn have started. Do not inspect the monitor thread, poll, or sleep in the parent after success. End the parent turn when no unrelated work remains. Monitor completion wakes the parent by default. Do not use this for an attached PR when PR automation can wake the thread. Use check_thread_pull_request_status and follow prAutomation.guidance. Use watch_thread_pull_request for one-time PR success or failure notifications. Give the monitor the target, exact check, interval, success and failure conditions, and log steps. Do not pass local tool session IDs. A monitor cannot access parent streams, input, or exit status. Delegate a local command before it starts so the monitor can run and capture it. For an active command, provide durable process, log, or status files. Use pollIntervalSeconds for polling and heartbeats. The default is 30 seconds. Omit preferredModel and preferredReasoningEffort. Never pass the parent's own model or effort. A monitor runs the operator's Task monitors setting. PwrAgent ignores a heavier model or an effort above medium. Do not use backend spawn tools for this workflow.";
 
 export const TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA = {
   type: "object",
@@ -47,12 +47,12 @@ export const TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA = {
     preferredModel: {
       type: "string",
       description:
-        "Optional override. Omit it to use the monitor default. Set it only when the user or project instructions require an override.",
+        "Optional. Omit it to use the operator's Task monitors model. Only a lightweight model, such as a Luna or mini model, is accepted. PwrAgent ignores any other model.",
     },
     preferredReasoningEffort: {
       type: "string",
       description:
-        "Optional override. Omit it to use the monitor default. Set it only when the user or project instructions require an override.",
+        "Optional. Omit it to use the operator's Task monitors effort. Only medium or lower is accepted. PwrAgent ignores a higher effort.",
     },
     finalHandoffPrompt: {
       type: "string",
@@ -133,6 +133,7 @@ export function buildPwrAgentTaskMonitorToolDefinitions(
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "create_monitor_delegation",
+      annotations: { readOnlyHint: false },
       description: TASK_MONITOR_CREATE_TOOL_DESCRIPTION,
       inputSchema: TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA,
       deferLoading: false,
@@ -165,6 +166,7 @@ export function buildPwrAgentTaskMonitorToolDefinitions(
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "cancel_monitor_delegation",
+      annotations: { readOnlyHint: false },
       description: TASK_MONITOR_CANCEL_TOOL_DESCRIPTION,
       inputSchema: TASK_MONITOR_CANCEL_TOOL_INPUT_SCHEMA,
       deferLoading: false,
@@ -199,6 +201,7 @@ export function buildPwrAgentTaskMonitorToolDefinitions(
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "inject_progress",
+      annotations: { readOnlyHint: false },
       description: TASK_MONITOR_PROGRESS_TOOL_DESCRIPTION,
       inputSchema: TASK_MONITOR_PROGRESS_TOOL_INPUT_SCHEMA,
       deferLoading: false,
@@ -230,6 +233,7 @@ export function buildPwrAgentTaskMonitorToolDefinitions(
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "complete_monitoring",
+      annotations: { readOnlyHint: false },
       description: TASK_MONITOR_COMPLETE_TOOL_DESCRIPTION,
       inputSchema: TASK_MONITOR_COMPLETE_TOOL_INPUT_SCHEMA,
       deferLoading: false,

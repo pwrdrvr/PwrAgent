@@ -1,3 +1,4 @@
+import { buildForgeReadToolDefinitions, type ForgeReadHandler } from "./pwragent-forge-agent-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
 import type {
   AgentToolCatalogId,
@@ -10,7 +11,7 @@ import {
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-agent-tools.js";
 import {
-  buildPwrAgentAppToolRouter,
+  buildPwrAgentAppToolDefinitions,
   type PwrAgentAppManagementHandler,
 } from "./pwragent-app-agent-tools.js";
 import {
@@ -41,6 +42,11 @@ import {
   buildPwrAgentStarMapToolRouter,
   type PwrAgentStarMapHandler,
 } from "./pwragent-star-map-agent-tools.js";
+import {
+  buildPwrAgentThreadTodoToolRouter,
+  type PwrAgentThreadTodoHandler,
+} from "./pwragent-thread-todo-agent-tools.js";
+import { buildPwrAgentToolGuideDefinition } from "./pwragent-tool-guide.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
@@ -63,10 +69,12 @@ export function resolveAgentToolCatalogs(params: {
   messagingHandler?: PwrAgentMessagingHandler;
   taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
+  forgeReadHandler?: ForgeReadHandler;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
   tokenMiserStore?: TokenMiserStore;
   tokenMiserFocused?: TokenMiserFocusedSummaries;
   starMapHandler?: PwrAgentStarMapHandler;
+  threadTodoHandler?: PwrAgentThreadTodoHandler;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
 }): ResolvedAgentToolCatalog[] {
@@ -74,9 +82,12 @@ export function resolveAgentToolCatalogs(params: {
     params.automationInspectionHandler,
   );
   const automationDynamicTools = automationRouter.buildDynamicToolSpecs();
-  const appRouter = buildPwrAgentAppToolRouter(params.appManagementHandler);
+  const appRouter = new AgentToolRouter([
+    ...buildPwrAgentAppToolDefinitions(params.appManagementHandler),
+    buildPwrAgentToolGuideDefinition(),
+  ]);
   const appDynamicTools = appRouter.buildDynamicToolSpecs();
-  const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler);
+  const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler, { additionalDefinitions: buildForgeReadToolDefinitions(params.forgeReadHandler) });
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
   const messagingRouter = buildPwrAgentMessagingToolRouter(params.messagingHandler);
   const messagingDynamicTools = messagingRouter.buildDynamicToolSpecs();
@@ -108,6 +119,10 @@ export function resolveAgentToolCatalogs(params: {
   const tokenMiserDynamicTools = tokenMiserRouter.buildDynamicToolSpecs();
   const starMapRouter = buildPwrAgentStarMapToolRouter(params.starMapHandler);
   const starMapDynamicTools = starMapRouter.buildDynamicToolSpecs();
+  const threadTodoRouter = buildPwrAgentThreadTodoToolRouter(
+    params.threadTodoHandler,
+  );
+  const threadTodoDynamicTools = threadTodoRouter.buildDynamicToolSpecs();
   return [
     {
       id: "automation_inspection",
@@ -202,6 +217,22 @@ export function resolveAgentToolCatalogs(params: {
           id: "star_map",
           namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: starMapDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "thread_todos",
+      dynamicTools: threadTodoDynamicTools,
+      router: threadTodoRouter,
+      summary: {
+        id: "thread_todos",
+        namespace: PWRAGENT_TOOL_NAMESPACE,
+        enabled: true,
+        toolCount: countDynamicTools(threadTodoDynamicTools),
+        fingerprint: buildCatalogFingerprint({
+          id: "thread_todos",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tools: threadTodoDynamicTools,
         }),
       },
     },

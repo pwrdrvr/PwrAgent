@@ -1,13 +1,27 @@
+import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
+import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
+import { ForgeCiClient } from "../pr-status/forge-ci-client";
+import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
+import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
+import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
+import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
+import { THREAD_DEPENDENCIES_CHANNEL, type ManageThreadDependenciesRequest, type ManageThreadDependenciesResponse, type ThreadDependencyCondition, type AppServerThreadTurnMetadata, type AppServerNotification } from "@pwragent/shared";
+import { ThreadDependencyStore } from "../state/thread-dependency-store";
+import { ThreadDependencyCoordinator, validateDependencyCreate, type DependencyThreadSnapshot } from "../app-server/thread-dependency-coordinator";
+import { getThreadTodoService, readThreadTodoPlacement } from "../thread-todos/thread-todo-runtime";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../../shared/ipc";
 import { archiveCandidateProtectionReason } from "../app-server/thread-archive-sweeper";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
+import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../../shared/ipc";
+import { readThreadFamilyPricing } from "../app-server/thread-family-pricing";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 import { showUsageActivityWindow } from "../usage-activity-window";
 import { primaryMainWindowWebContents } from "../primary-main-window";
 import { requestShowThread } from "../window-show-thread";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../../shared/navigation-diagnostic-cause";
 import { listingDiagnostics, listingRequestFields } from "../diagnostics/listing-diagnostics";
 import { summarizeThreadAgentChange, type PrActivitySnapshot } from "@pwragent/shared";
@@ -143,6 +157,7 @@ import {
   type FederationJumpSearchRequest,
   type FederationJumpSearchResponse,
   type RemoveRemoteThreadPinRequest,
+  type HasRemoteThreadPinRequest,
   type RemoveRemoteThreadPinResponse,
   type SetRemoteThreadLocalPinRequest,
   type SetRemoteThreadLocalPinResponse,
@@ -168,6 +183,8 @@ import {
   type SetThreadPinResponse,
   type SetThreadReactionRequest,
   type SetThreadReactionResponse,
+  type SetThreadLockRequest,
+  type SetThreadLockResponse,
   type SetThreadToolIncidentNoticeRequest,
   type SetThreadToolIncidentNoticeResponse,
   type AcknowledgeThreadEnvironmentFailureRequest,
@@ -178,6 +195,8 @@ import {
   type AcknowledgeThreadSpendAlertResponse,
   type SetNavigationBrowseModeRequest,
   type SetNavigationBrowseModeResponse,
+  type SetPinnedGroupCollapsedRequest,
+  type SetPinnedGroupCollapsedResponse,
   type ListThreadMigrationSourceThreadsRequest,
   type ListThreadMigrationSourceThreadsResponse,
   type ListThreadMigrationSourcesResponse,
@@ -200,6 +219,8 @@ import {
   type ListWorktreeUnpublishedCommitsResponse,
   type GetWorktreeUnpublishedCommitDiffRequest,
   type GetWorktreeUnpublishedCommitDiffResponse,
+  type ReadWorktreeImageRequest,
+  type ReadWorktreeImageResponse,
   type ResolveMissingCodexThreadsRequest,
   type ResolveMissingCodexThreadsResponse,
   type RestoreThreadRequest,
@@ -234,6 +255,7 @@ import {
   rankInboxThreadKeys,
 } from "@pwragent/shared";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
+import { readWorktreeImage } from "../app-server/worktree-image-reader";
 import {
   disposeDesktopBackendRegistry,
   getExistingDesktopBackendRegistry,
@@ -250,7 +272,7 @@ import {
   DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS,
   isFreshDirectoryGitStatusCacheEntry,
 } from "../app-server/directory-git-status-refresh-policy";
-import { getAppStateDb } from "../state/app-state";
+import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import {
   listModelSettingsRecents,
   recordModelSettingsRecent,
@@ -278,6 +300,8 @@ import {
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
+  THREAD_SEARCH_PROGRESS_CHANNEL,
+  THREAD_SEARCH_CANCEL_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
@@ -304,12 +328,14 @@ import {
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
   NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
   NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
+  NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
   FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL,
   NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+  NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
   NAVIGATION_DETACH_THREAD_PR_CHANNEL,
   NAVIGATION_PROBE_PR_POLLING_AFTER_RECONNECT_CHANNEL,
@@ -329,6 +355,7 @@ import {
   NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_THREAD_LOCK_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
@@ -348,6 +375,7 @@ import {
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_QUERY_PAGE_CHANNEL,
   NAVIGATION_QUERY_RELEASE_CHANNEL,
   NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL,
@@ -367,8 +395,9 @@ import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
-import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins } from "../app-server/navigation-viewer-pins";
+import { appendViewerNavigationPins, attachRemoteThreadsToLocalDirectories, findRemoteHomeDirectoryIndex, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
+import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import { getDesktopNavigationDetailService } from "../app-server/navigation-detail-service";
 import {
   isFederationPeerUnavailableError,
@@ -380,7 +409,11 @@ import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindin
 import { getDesktopAutomationService } from "../automations/desktop-automation-service";
 import { GitLabPrFetcher } from "../pr-status/gitlab-pr-fetcher";
 import { ForgePrFetcher, parseForgePrRefFromUrl as parsePrRefFromUrl, type ForgePrRef } from "../pr-status/forge-pr-fetcher";
-import { detectPullRequestsForThread } from "../pr-status/pr-detection";
+import {
+  detectPullRequestsForThread,
+  filterStoredDiscoveredPullRequests,
+  resolvePrLookupBranches,
+} from "../pr-status/pr-detection";
 import {
   GithubGraphqlPrClient,
   branchRefKey,
@@ -895,46 +928,6 @@ function reconcileRemoteLaunchpadBranch(
   return gitStatus?.currentBranch;
 }
 
-function normalizeLinkedDirectoryPathForMatch(
-  value: string | undefined,
-): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? path.resolve(trimmed).replace(/\\/g, "/") : undefined;
-}
-
-function linkedDirectoriesMatchForDetach(
-  left: Pick<LinkedDirectorySummary, "id" | "kind" | "path" | "worktreePath">,
-  right: Pick<LinkedDirectorySummary, "id" | "kind" | "path" | "worktreePath">,
-): boolean {
-  if (left.id === right.id) {
-    return true;
-  }
-  if (left.kind !== right.kind) {
-    return false;
-  }
-  return (
-    normalizeLinkedDirectoryPathForMatch(left.path) ===
-      normalizeLinkedDirectoryPathForMatch(right.path) &&
-    normalizeLinkedDirectoryPathForMatch(left.worktreePath) ===
-      normalizeLinkedDirectoryPathForMatch(right.worktreePath)
-  );
-}
-
-function countDistinctLinkedDirectories(
-  directories: LinkedDirectorySummary[],
-): number {
-  const seen = new Set<string>();
-  for (const directory of directories) {
-    const key = [
-      directory.kind,
-      normalizeLinkedDirectoryPathForMatch(directory.path),
-      normalizeLinkedDirectoryPathForMatch(directory.worktreePath),
-    ].join("\0");
-    seen.add(key);
-  }
-  return seen.size;
-}
-
 function getPullRequestLookupKey(
   request: Pick<
     RefreshThreadPullRequestsRequest,
@@ -1037,6 +1030,7 @@ function associatePrsWithLinkedDirectories(
 function stripPrLinkedDirectoryPaths(pr: PrSummary): PrSummary {
   const normalized = normalizePrSummary(pr);
   delete normalized.linkedDirectoryPaths;
+  delete normalized.explicitlyAttached;
   return normalized;
 }
 
@@ -1165,6 +1159,7 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       candidate.headSha === pr.headSha &&
       JSON.stringify(candidate.linkedDirectoryPaths ?? [])
         === JSON.stringify(pr.linkedDirectoryPaths ?? []) &&
+      candidate.explicitlyAttached === pr.explicitlyAttached &&
       JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
       // Hover-card fields. They belong here for the same reason as every field
       // above: this comparison decides whether a snapshot is republished, so a
@@ -1352,6 +1347,8 @@ function pullRequestStatusFreshness(
   };
 }
 
+const threadSearchControllers = new Map<number, AbortController>();
+
 class DesktopAppServerService {
   private focusedDiffService: FocusedDiffService | null = null;
   private prFetcher: ForgePrFetcher | undefined;
@@ -1419,6 +1416,7 @@ class DesktopAppServerService {
   private prAutoDispatchBudgetPausedAt: number | undefined;
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
+  private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
   private ownerNavigationActive = false;
   private ownerNavigationMetadataVersion = 0;
   private ownerNavigationMetadataRead: Promise<void> | undefined;
@@ -1580,101 +1578,15 @@ class DesktopAppServerService {
 
   async searchThreads(
     request: ThreadSearchRequest = {},
+    onProgress?: (response: ThreadSearchResponse) => void,
+    signal?: AbortSignal,
   ): Promise<ThreadSearchResponse> {
-    const local = await this.getThreadSearchService().search(request);
-    const federated = await getDesktopFederationRuntime().searchConnectedPeers({
-      query: local.query,
-      limit: request.limit,
-      backend: request.filters?.backend,
-    });
-    const remoteResults = federated.results
-      .filter((result) => isRemoteFederationTarget(result.ref.target))
-      .map((result) => ({
-        backend: result.thread.source,
-        threadId: result.thread.id,
-        identityKey: federatedThreadIdentityKey(result.ref),
-        title: result.thread.title,
-        titleSource: result.thread.titleSource,
-        summary: result.thread.summary,
-        projectKey: result.thread.projectKey,
-        createdAt: result.thread.createdAt,
-        updatedAt: result.thread.updatedAt,
-        archivedAt: result.thread.archivedAt,
-        linkedDirectories: result.thread.linkedDirectories,
-        source: result.thread.source,
-        gitBranch: result.thread.gitBranch,
-        model: result.thread.model,
-        score: result.score,
-        confidence: result.thread.title.trim().toLowerCase() ===
-          local.query.trim().toLowerCase()
-          ? "high" as const
-          : "medium" as const,
-        matchReasons: [
-          {
-            kind: result.thread.title.trim().toLowerCase() ===
-              local.query.trim().toLowerCase()
-              ? "exact_title" as const
-              : "title_token_overlap" as const,
-            field: "title",
-            value: result.thread.title,
-          },
-        ],
-        snippets: [
-          {
-            scope: "metadata" as const,
-            field: "title",
-            text: result.thread.title,
-          },
-          ...(result.thread.summary
-            ? [{
-                scope: "metadata" as const,
-                field: "summary",
-                text: result.thread.summary,
-              }]
-            : []),
-        ],
-        federation: {
-          ref: result.ref,
-          instanceLabel: result.instanceLabel,
-          peerStatus: result.peerStatus,
-        },
-      }));
-    const limit = Math.max(1, Math.min(request.limit ?? 20, 100));
-    const confidenceRank = { high: 3, medium: 2, low: 1 };
-    const results = [...local.results, ...remoteResults]
-      .sort(
-        (left, right) =>
-          confidenceRank[right.confidence] - confidenceRank[left.confidence],
-      )
-      .slice(0, limit);
-    return {
-      ...local,
-      results,
-      unavailableScopes: [
-        ...local.unavailableScopes,
-        ...federated.failures.map((failure) => ({
-          scope: "metadata" as const,
-          reason: "error" as const,
-          message: `${failure.instanceLabel}: ${failure.error}`,
-        })),
-      ],
-      remoteInstances: [
-        ...(federated.searchedInstances ?? []).map((instance) => ({
-          instanceId: instance.instanceId,
-          instanceLabel: instance.instanceLabel,
-          resultCount: instance.resultCount,
-        })),
-        ...federated.failures.map((failure) => ({
-          instanceId: failure.instanceId,
-          instanceLabel: failure.instanceLabel,
-          resultCount: 0,
-          failed: true,
-          error: failure.error,
-        })),
-      ],
-      truncated: local.truncated ||
-        local.results.length + remoteResults.length > results.length,
-    };
+    return await getDesktopFederationRuntime().searchThreadContent(
+      request,
+      async (localRequest, localSignal) => await this.getThreadSearchService().search(localRequest, localSignal),
+      onProgress,
+      signal,
+    );
   }
 
   async listSkills(
@@ -1785,6 +1697,14 @@ class DesktopAppServerService {
       return await getDesktopFederationRuntime().remoteBackend(federationTarget).readUsageActivity(remoteRequest);
     }
     return await getDesktopBackendRegistry().readUsageActivity(request);
+  }
+
+  async readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> {
+    return await readThreadFamilyPricing({
+      request,
+      loadIndex: () => loadLocalNavigationQueryIndex({ callerReason: "thread-family-pricing" }),
+      readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
+    });
   }
 
   async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
@@ -2080,6 +2000,11 @@ class DesktopAppServerService {
     rpcOptions?: { deadlineAt: number; signal: AbortSignal },
   ): Promise<NavigationQueryPage> {
     if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      // Owner resolution reads this machine's peers for its own viewer. It must
+      // never become a request this instance sends to an owner.
+      if (request.query.kind === "exact" && request.query.resolveFromOwners) {
+        throw new Error("Owner-resolved navigation is available only to this machine's viewer inventory.");
+      }
       const target = request.federationTarget;
       const runtime = getDesktopFederationRuntime();
       const ownerPage = await this.remoteNavigationPageBaselines.read(request, async (ownerRequest) => {
@@ -2137,13 +2062,19 @@ class DesktopAppServerService {
         });
         rpcOptions?.signal.throwIfAborted();
         if (request.inventory === "viewer") {
-          const pins = await loadViewerNavigationPins(getDesktopOverlayStore(),
-            getDesktopFederationRuntime().remoteThreadSummaries());
+          const summaries = getDesktopFederationRuntime().remoteThreadSummaries();
+          const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
           rpcOptions?.signal.throwIfAborted();
-          if (!pins.length) return index;
+          // Drafts name threads on any instance. Peer rows come from the cache
+          // that keeps pins current, so this read never waits on a peer.
+          const watched = request.query.kind === "exact" && request.query.resolveFromOwners
+            ? loadViewerWatchedNavigationRows(summaries, request.query.identities, pins) : [];
+          if (!pins.length && !watched.length) return index;
           const localInstanceId = (await getDesktopFederationRuntime().health()).instanceId;
           rpcOptions?.signal.throwIfAborted();
-          return appendViewerNavigationPins({ ...index, localInstanceId }, pins);
+          // Watched rows join local project groups as pins do, so a selected
+          // draft resolves its project. The index serves this one read only.
+          return appendViewerNavigationPins({ ...index, localInstanceId }, [...pins, ...watched]);
         }
         return index;
       },
@@ -2248,6 +2179,15 @@ class DesktopAppServerService {
     logDebug("setNavigationBrowseMode", { browseMode });
 
     return { browseMode };
+  }
+
+  async setPinnedGroupCollapsed(
+    request: SetPinnedGroupCollapsedRequest,
+  ): Promise<SetPinnedGroupCollapsedResponse> {
+    const collapsed = await this.getOverlayStore().setPinnedGroupCollapsed?.(
+      request.collapsed === true,
+    ) ?? request.collapsed === true;
+    return { collapsed };
   }
 
   private async readNavigationSnapshot(
@@ -2703,6 +2643,12 @@ class DesktopAppServerService {
     );
   }
 
+  async readWorktreeImage(
+    request: ReadWorktreeImageRequest,
+  ): Promise<ReadWorktreeImageResponse> {
+    return await readWorktreeImage(request);
+  }
+
   async getWorktreeUnpublishedCommitDiff(
     request: GetWorktreeUnpublishedCommitDiffRequest,
   ): Promise<GetWorktreeUnpublishedCommitDiffResponse> {
@@ -3135,7 +3081,12 @@ class DesktopAppServerService {
         const page = await this.getNavigationQueryPage({ protocol: 2, consumer: "main-sidebar", inventory: "owner",
           query: { kind: "directory-index", keys: directoryKeys }, pageSize: 100, cursor, deadlineAt,
         }, token);
-        if (page.coverage.state !== "complete" || page.unchanged) throw new Error("Directory metadata is incomplete. Retry after the owner finishes refreshing.");
+        // Coverage describes provider thread discovery, not whether a returned
+        // directory's path is usable. Probe only the requested owner members
+        // already present in this page, even while another provider is checking
+        // or degraded. Missing members schedule no work and are never inferred
+        // from caller-supplied keys.
+        if (page.unchanged) throw new Error("Directory refresh returned no metadata.");
         bytes += Buffer.byteLength(JSON.stringify(page), "utf8");
         if (bytes > 512 * 1024) throw new Error("Directory refresh metadata exceeds its bounded budget.");
         for (const directory of page.directories ?? []) {
@@ -3309,14 +3260,10 @@ class DesktopAppServerService {
       const registry = getDesktopBackendRegistry();
       for await (const entry of registry.readDirectoryStatusEntries([statusDirectory])) {
         const fetchedAt = Date.now();
-        let gitStatus = entry.gitStatus;
-        if (!gitStatus && request.gitStatusSourcePath) {
-          gitStatus = {
-            syncState: "status-unavailable",
-            statusUnavailableReason:
-              `Git branch information is unavailable for ${statusSourcePath}.`,
-          };
-        }
+        // Non-Git workspaces have no status; the reader reports actual probe
+        // failures as status-unavailable. An explicit source path is used for
+        // ordinary scratch-workspace subthreads too, so it does not imply Git.
+        const gitStatus = entry.gitStatus;
         try {
           await this.writeDirectoryGitStatusEntry({
             directory: cacheDirectory,
@@ -3890,6 +3837,69 @@ class DesktopAppServerService {
     return response;
   }
 
+  private forgeCiClient?: ForgeCiClient;
+
+  async readForgeForTool(operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext): Promise<unknown> {
+    const backend = args.backend ?? context.backend;
+    const threadId = args.threadId ?? context.threadId;
+    if (!isAppServerBackendKind(backend)) throw new ForgeReadError("invalid_arguments", "Unknown PwrAgent backend.");
+    const active = await this.listThreads({ backend });
+    const thread = active.threads.find((t) => t.id === threadId)
+      ?? (await this.listThreads({ backend, archived: true })).threads.find((t) => t.id === threadId);
+    if (!thread) throw new ForgeReadError("thread_not_found", "Thread is not owned by this instance.");
+    const overlay = await this.getOverlayStore().getThreadOverlayState({ backend, threadId });
+    const directories = resolveThreadPullRequestDirectoryPaths({ linkedDirectories: [...(thread.linkedDirectories ?? []), ...(overlay?.extraLinkedDirectories ?? [])] });
+    if (directories.length > 20) throw new ForgeReadError("scope_too_large", "Forge reads support up to 20 linked directories per thread.");
+    const remotes = (await Promise.all(directories.map((cwd) => readForgeRepositoryRemotes(cwd)))).flat();
+    const attached = overlay?.prs ?? [];
+    // Snapshot reads must not call rememberPrStatuses: it publishes transitions.
+    const observations = new Map<string, { pr: PrSummary; fetchedAt: number }>();
+    const persisted = this.prStatusRegistryLoaded ? [] : Object.values(await this.getOverlayStore().readPrStatusCache());
+    for (const entry of [...attached.map((pr) => ({ pr, fetchedAt: overlay?.prsFetchedAt ?? 0 })), ...persisted, ...this.prStatusRegistry.values()]) {
+      const key = getPrStatusKey(entry.pr);
+      if (!observations.has(key) || observations.get(key)!.fetchedAt < entry.fetchedAt) observations.set(key, { pr: entry.pr, fetchedAt: entry.fetchedAt });
+    }
+    const enabled = (provider: "github" | "gitlab") => getDesktopSettingsService().isForgeEnabled(provider);
+    this.forgeCiClient ??= new ForgeCiClient({ gitlab: this.getPrFetcher().gitlab, enabled, takeToken: () => this.takePrPollingToken("Agent CI read") });
+    const service = new ForgeReadService({
+      enabled, ci: this.forgeCiClient,
+      refresh: async (request, repositories) => {
+        context.signal?.throwIfAborted();
+        const urls = request.url ? [request.url] : attached.filter((pr) => {
+          const r = repositoryFromPr(pr.url);
+          return r && repositories.some((selected) => selected.provider === r.provider && selected.host === r.host && selected.owner === r.owner && selected.repo === r.repo)
+            && (!request.branch || pr.headRefName === request.branch);
+        }).map((pr) => pr.url);
+        if (urls.length > 20) throw new ForgeReadError("scope_too_large", "Select a PR/MR URL or branch to refresh at most 20 requests.");
+        const fetcher = this.getPrFetcher();
+        const availability = await fetcher.getProviderAvailability(directories, urls);
+        if (repositories.some((r) => !availability.some((a) => a.provider === r.host && a.available))) throw new ForgeReadError("unavailable", "A selected forge provider is unavailable. Check its CLI installation and host login in Settings → Git.");
+        let failed = false;
+        const results: PrSummary[] = [];
+        if (urls.length) {
+          for (const url of urls) {
+            context.signal?.throwIfAborted();
+            if (!this.takePrPollingToken("Agent explicit forge refresh")) throw new ForgeReadError("rate_limited", "The shared PR refresh budget is exhausted.");
+            const pr = await fetcher.fetchPullRequestByUrl({ cwd: directories[0] ?? os.homedir(), url, onProviderFailure: () => { failed = true; } });
+            if (!pr) failed = true;
+            else results.push(pr);
+          }
+        } else {
+          for (const cwd of directories) {
+            context.signal?.throwIfAborted();
+            if (!this.takePrPollingToken("Agent branch forge refresh")) throw new ForgeReadError("rate_limited", "The shared PR refresh budget is exhausted.");
+            results.push(...await fetcher.fetchAllPullRequestsForBranch({ allowPrimed: false, providers: [...new Set(repositories.map((r) => r.provider))], cwd, branch: request.branch ?? thread.observedGitBranch ?? thread.gitBranch ?? "HEAD", onProviderFailure: () => { failed = true; } }));
+          }
+        }
+        if (failed) throw new ForgeReadError("provider_error", "PR/MR refresh failed or was unavailable. Check the host's CLI login, read permissions and provider settings. Cached observations were not changed.");
+        return results;
+      },
+    });
+    const result = await service.execute(operation, args, { remotes, attached, observations: [...observations.values()], branch: thread.observedGitBranch ?? thread.gitBranch }, context.signal);
+    const prAutomation = await this.getThreadPullRequestAutomationStatus({ backend, threadId }, { backend: context.backend, threadId: context.threadId });
+    return { ...(result as Record<string, unknown>), backend, threadId, prAutomation };
+  }
+
   async checkThreadPullRequestStatusForTool(
     args: CheckThreadPullRequestStatusToolArgs,
     context?: PwrAgentThreadInspectionContext,
@@ -4293,9 +4303,11 @@ class DesktopAppServerService {
     });
     await this.loadPrStatusRegistry();
     await this.loadPrLookupRegistry();
+    const storedPrs = existing?.prs ?? [];
+    const retainedStoredPrs = await filterStoredDiscoveredPullRequests(storedPrs);
     const persistedPrs = this.mergePrHistory(
-      existing?.prs ?? [],
-      existing?.detachedPrs ?? [],
+      retainedStoredPrs,
+      await filterStoredDiscoveredPullRequests(existing?.detachedPrs ?? []),
     );
     this.rememberPrStatuses(
       persistedPrs,
@@ -4315,16 +4327,47 @@ class DesktopAppServerService {
         provider,
         branch,
         directoryPaths: lookupDirectoryPaths,
-        prs: existingPrs,
+        prs: existingPrs.filter((pr) => !pr.explicitlyAttached),
         fetchedAt: existing?.prsFetchedAt ?? 0,
       });
     }
     const lookupEntry = this.prLookupRegistry.get(lookupKey);
-    const currentLookupPrs = lookupEntry
+    const lookupPrs = lookupEntry
       ? this.canonicalizePrs(lookupEntry.prs)
       : existingLookupMatches
         ? existingPrs
         : [];
+    const currentLookupPrs = await filterStoredDiscoveredPullRequests(
+      associatePrsWithLinkedDirectories(lookupPrs, lookupDirectoryPaths),
+    );
+    // Legacy automatic matches may already be in an overlay even though the
+    // current default-branch lookup correctly answers []. Repair before a
+    // cache hit or terminal short-circuit can keep serving those attachments.
+    if (!prSummariesEqual(storedPrs, retainedStoredPrs)) {
+      await this.enqueuePullRequestOverlayWrite({
+        backend,
+        threadId: request.threadId,
+        write: async () => {
+          const latest = await overlay.getThreadOverlayState({ backend, threadId: request.threadId });
+          if (!latest) return;
+          const prs = await filterStoredDiscoveredPullRequests(latest.prs ?? []);
+          if (prSummariesEqual(latest.prs ?? [], prs)) return;
+          const updated = await overlay.setThreadPullRequests({
+            backend,
+            threadId: request.threadId,
+            prs,
+            fetchedAt: latest.prsFetchedAt ?? 0,
+            refreshKey: latest.prsRefreshKey,
+          });
+          await this.publishThreadPullRequestsUpdated({
+            backend,
+            threadId: request.threadId,
+            prs: this.canonicalizePrs(updated.prs ?? []),
+            detachedPrs: this.canonicalizePrs(updated.detachedPrs ?? []),
+          });
+        },
+      });
+    }
     let knownPrs = this.mergePrHistory(existingPrs, currentLookupPrs);
     const visibleKnownPrs = (): PrSummary[] =>
       filterDetachedPullRequests(knownPrs, existing?.detachedPrKeys);
@@ -4891,10 +4934,10 @@ class DesktopAppServerService {
               latest?.prs ?? [],
               latest?.detachedPrs ?? [],
             );
-            const previousPrs = this.mergePrHistory(
+            const previousPrs = await filterStoredDiscoveredPullRequests(this.mergePrHistory(
               subscriber.previousPrs,
               latestPrs,
-            );
+            ));
             const associatedPrs = associatePrsWithLinkedDirectories(
               params.prs,
               subscriber.linkedDirectoryPaths,
@@ -5275,6 +5318,7 @@ class DesktopAppServerService {
       return normalizePrSummary({
         ...canonical,
         linkedDirectoryPaths: normalized.linkedDirectoryPaths,
+        ...(normalized.explicitlyAttached ? { explicitlyAttached: true } : {}),
       });
     });
   }
@@ -5290,7 +5334,7 @@ class DesktopAppServerService {
     prs: PrSummary[],
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
-    return this.canonicalizePrs(prs);
+    return await filterStoredDiscoveredPullRequests(this.canonicalizePrs(prs));
   }
 
   private mergePrHistory(
@@ -5317,6 +5361,7 @@ class DesktopAppServerService {
             existing?.linkedDirectoryPaths,
             pr.linkedDirectoryPaths,
           ),
+          ...((existing?.explicitlyAttached || pr.explicitlyAttached) ? { explicitlyAttached: true } : {}),
         });
       }
     }
@@ -5940,6 +5985,8 @@ class DesktopAppServerService {
         if (repos.length === 0) {
           continue;
         }
+        const lookupBranches = await resolvePrLookupBranches({ cwd, branch });
+        if (!lookupBranches.includes(branch)) continue;
         wanted.set(dedupeKey, {
           cwd,
           branch,
@@ -6357,6 +6404,16 @@ class DesktopAppServerService {
     const canonical = this.canonicalizePrs(merged);
     this.recordPrCheck(canonical, "background poll");
     await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
+    // An unchanged accepted poll refreshes CI freshness without publishing a
+    // field-change event. Dependencies still need that observation for admission.
+    const freshPrUrls = canonical
+      .filter((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt)
+      .map((pr) => pr.url);
+    // Evaluation can start a continuation turn; the poll must not wait on it.
+    if (freshPrUrls.length > 0) {
+      void this.threadDependencyCoordinator?.handlePrEvent(freshPrUrls)
+        .catch((error) => appServerLog.warn("thread dependency evaluation failed", { error: String(error) }));
+    }
     if (changed.length === 0) {
       return [];
     }
@@ -6561,6 +6618,26 @@ class DesktopAppServerService {
     };
   }
 
+  async setThreadLock(
+    request: SetThreadLockRequest,
+  ): Promise<SetThreadLockResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .setThreadLock(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().setThreadLock({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      locked: request.locked,
+      ...(request.note !== undefined ? { note: request.note } : {}),
+    }, { source: "operator" });
+  }
+
   async setThreadPin(
     request: SetThreadPinRequest,
   ): Promise<SetThreadPinResponse> {
@@ -6763,6 +6840,11 @@ class DesktopAppServerService {
     });
 
     return { pinnedRanks };
+  }
+
+  async hasRemoteThreadPin(request: HasRemoteThreadPinRequest): Promise<boolean> {
+    validateRemoteThreadPinRef(request.ref);
+    return await this.getOverlayStore().hasRemoteThreadPin({ ref: request.ref });
   }
 
   async addRemoteThreadPin(
@@ -7198,46 +7280,16 @@ class DesktopAppServerService {
         .remoteBackend(federationTarget)
         .updateSubthreadOrder(ownerRequest);
     }
-    const backend = request.backend ?? "codex";
-    let children: { id: string; createdAt?: number }[] | undefined;
-    if (request.move || request.insertAfter) {
-      const index = await loadLocalNavigationQueryIndex({ backend, callerReason: "relative-child-move" });
-      if (index.coverage && index.coverage.state !== "complete") {
-        throw new Error("Wait for complete owner discovery before moving a child.");
-      }
-      if (!index.threads.some((thread) => thread.source === backend && thread.id === request.parentThreadId
-        && !thread.archivedAt && !thread.federation)) throw new Error("The owning group no longer exists.");
-      children = index.threads.filter((thread) => thread.source === backend
-        && thread.parentThreadId === request.parentThreadId
-        && (thread.parentThreadBackend ?? thread.source) === backend
-        && !thread.parentThreadInstanceId && !thread.archivedAt && !thread.federation && !thread.codexNativeSubAgent)
-        .map(({ id, createdAt }) => ({ id, createdAt }));
-    }
-    const threadIds = await this.getOverlayStore().updateSubthreadOrder({
-      backend,
-      parentThreadId: request.parentThreadId,
-      ...(request.move ? { move: request.move, children }
-        : request.insertAfter ? { insertAfter: request.insertAfter, children } : { threadIds: request.threadIds }),
-    });
-
+    const response = await updateLocalSubthreadOrder(request);
     logDebug("updateSubthreadOrder", {
-      backend,
+      backend: response.backend,
       parentThreadId: request.parentThreadId,
-      childCount: threadIds.length,
+      // A relative move answers no order; name what moved instead.
+      ...(response.threadIds
+        ? { childCount: response.threadIds.length }
+        : { movedThreadId: request.move?.threadId ?? request.insertAfter?.threadId }),
     });
-
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend,
-      notification: {
-        method: "thread/subthreadOrder/updated",
-        params: {
-          parentThreadId: request.parentThreadId,
-          ...(request.move || request.insertAfter ? {} : { threadIds }),
-        },
-      },
-    });
-
-    return { backend, parentThreadId: request.parentThreadId, ...(request.move || request.insertAfter ? {} : { threadIds }) };
+    return response;
   }
 
   async setSubthreadsCollapsed(
@@ -7787,68 +7839,31 @@ class DesktopAppServerService {
   async detachDirectoryFromThread(
     request: DetachDirectoryFromThreadRequest,
   ): Promise<DetachDirectoryFromThreadResponse> {
-    const backend = request.backend ?? "codex";
-    const overlay = await this.getOverlayStore().getThreadOverlayState({
-      backend,
-      threadId: request.threadId,
-    });
-    const currentDirectories = overlay?.extraLinkedDirectories ?? [];
-    const matched = currentDirectories.find((directory) =>
-      linkedDirectoriesMatchForDetach(directory, request.directory),
-    );
-    if (!matched) {
-      return {
-        ok: false,
-        backend,
-        threadId: request.threadId,
-        reason: "primary-directory",
-        message:
-          "Only secondary directories attached to this thread can be detached.",
-      };
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...ownerRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .detachDirectoryFromThread(ownerRequest);
     }
-    const fullThread = await this.listThreads({ backend })
-      .then((response) =>
-        response.threads.find((thread) => thread.id === request.threadId),
-      )
-      .catch(() => undefined);
-    const totalLinkedDirectories = countDistinctLinkedDirectories([
-      ...(fullThread?.linkedDirectories ?? []),
-      ...currentDirectories,
-    ]);
-    if (totalLinkedDirectories <= 1) {
-      return {
-        ok: false,
-        backend,
-        threadId: request.threadId,
-        reason: "last-directory",
-        message:
-          "Cannot detach the last linked directory from a thread.",
-      };
-    }
-
-    const next = await this.getOverlayStore().removeLinkedDirectory({
-      backend,
-      threadId: request.threadId,
-      directory: matched,
-    });
-
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend,
-      notification: {
-        method: "navigation/threadDirectories/updated",
-        params: {
-          reason: "selected-thread",
-          threadIds: [request.threadId],
-        },
+    return await detachOwnedThreadDirectory(request, {
+      overlayStore: this.getOverlayStore(),
+      readThread: async (backend, threadId) => {
+        const response = await this.listThreads({ backend });
+        return response.threads.find((thread) => thread.id === threadId);
+      },
+      publishUpdate: async (backend, threadId) => {
+        await getDesktopBackendRegistry().publishLocalEvent({
+          backend,
+          notification: {
+            method: "navigation/threadDirectories/updated",
+            params: { reason: "selected-thread", threadIds: [threadId] },
+          },
+        });
       },
     });
-
-    return {
-      ok: true,
-      backend,
-      threadId: request.threadId,
-      directories: next.extraLinkedDirectories,
-    };
   }
 
   async analyzeFocusedDiff(
@@ -7912,6 +7927,7 @@ class DesktopAppServerService {
     this.ownerNavigationMetadataAbort?.abort();
     this.focusedDiffService = null;
     this.prFetcher = undefined;
+    this.forgeCiClient = undefined;
     this.prPollingScheduler?.stop();
     this.prPollingScheduler = undefined;
     this.prPollingSettingsSyncGeneration += 1;
@@ -8023,6 +8039,155 @@ class DesktopAppServerService {
       });
     }
     return this.prStatusWatchCoordinator;
+  }
+
+  private getThreadDependencyCoordinator(): ThreadDependencyCoordinator {
+    if (!this.threadDependencyCoordinator) {
+      const store = new ThreadDependencyStore(getAppStateDb().raw);
+      this.threadDependencyCoordinator = new ThreadDependencyCoordinator({
+        store,
+        hasDeliveryReceipt: (dependency) => store.hasDeliveryReceipt(dependency),
+        operatorTodos: {
+          prepare: (dependency) => readThreadTodoPlacement(getDesktopBackendRegistry(), dependency),
+          raise: (card, placement) => getThreadTodoService().raiseForDependency({ ...card, ...placement }).todo,
+          publish: (todo) => getThreadTodoService().publish(todo),
+        },
+        readThread: (condition) => this.readDependencyThread(condition),
+        submit: (request) => getDesktopBackendRegistry().submitTurnIfIdle(request),
+        isConsumerBusy: (dependency) => Boolean(getDesktopBackendRegistry().getActiveTurnForThread(dependency)),
+        canDispatch: (dependency) => this.ownerNavigationActive
+          && (dependency.conditions.every((condition) => condition.when === "turn_completed") || this.backgroundPrPollingEnabled),
+        changed: async (dependency) => {
+          // Prerequisite threads list their dependents, so they refresh too.
+          const targets = new Map<string, { backend: AppServerBackendKind; threadId: string }>();
+          for (const target of [dependency, ...dependency.conditions]) {
+            targets.set(JSON.stringify([target.backend, target.threadId]), { backend: target.backend, threadId: target.threadId });
+          }
+          for (const target of targets.values()) {
+            await getDesktopBackendRegistry().publishLocalEvent({
+              backend: target.backend,
+              notification: { method: "thread/dependencies/updated", params: { threadId: target.threadId, dependencyId: dependency.id } },
+            });
+          }
+        },
+      });
+    }
+    return this.threadDependencyCoordinator;
+  }
+
+  private async readDependencyThread(condition: Pick<ThreadDependencyCondition, "backend" | "threadId"> & Partial<ThreadDependencyCondition>): Promise<DependencyThreadSnapshot> {
+    const registry = getDesktopBackendRegistry();
+    const turns = new Map<string, AppServerThreadTurnMetadata>();
+    // Use the provider protocol for validation and turn catch-up. PR event
+    // evaluation reads only PwrAgent's attachment/status stores.
+    if (!condition.when || condition.when === "turn_completed") {
+      let before: string | undefined;
+      for (let page = 0; page < 50; page++) {
+        const response = await registry.readThread({
+          backend: condition.backend, threadId: condition.threadId,
+          includeTurns: true, limit: 100, viewOnly: true, ...(before ? { before } : {}),
+        });
+        for (const entry of response.replay.entries) {
+          if (entry.turn) turns.set(entry.turn.id, entry.turn);
+        }
+        const pagination = response.replay.pagination;
+        if (!condition.turnId || turns.has(condition.turnId) || !pagination.hasPreviousPage
+          || !pagination.previousCursor || pagination.previousCursor === before) break;
+        before = pagination.previousCursor;
+      }
+    }
+    const overlay = await this.getOverlayStore().getThreadOverlayState(condition);
+    const prs = this.primaryAttachedPrsForThread({
+      ...condition, prs: await this.canonicalizeStoredPullRequests(overlay?.prs ?? []),
+    });
+    return {
+      activeTurnId: registry.getActiveTurnForThread(condition)?.turnId,
+      turns: [...turns.values()],
+      prs: prs.map((pr) => {
+        const current = this.prStatusRegistry.get(getPrStatusKey(pr));
+        return { pr: current?.pr ?? pr, fetchedAt: current?.fetchedAt ?? 0 };
+      }),
+    };
+  }
+
+  listActiveThreadDependencies(): ManageThreadDependenciesResponse {
+    // Before a profile's state opens there is nothing to list, not an error.
+    if (!getAppStateMode()) return { dependencies: [] };
+    return { dependencies: this.getThreadDependencyCoordinator().active() };
+  }
+
+  async manageThreadDependencies(request: ManageThreadDependenciesRequest): Promise<ManageThreadDependenciesResponse> {
+    if (!request || typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) {
+      throw new Error("A local backend and waiting threadId are required.");
+    }
+    if (Object.keys(request).some((key) => !["action", "backend", "threadId", "conditions", "mode", "onFailure", "continuation", "deliver", "handoff", "dependencyId"].includes(key))) throw new Error("Unknown dependency request field.");
+    if (request.action === "create") {
+      validateDependencyCreate(request);
+      // The resumed turn starts from this text alone, for the operator's
+      // dialog as for an agent's tool call.
+      if (typeof request.continuation !== "string" || !request.continuation.trim()) {
+        throw new Error("Write what this thread should do when the prerequisites are met.");
+      }
+      if (request.conditions?.some((condition) => !isAppServerBackendKind(condition?.backend))) throw new Error("Prerequisites must use known local backends.");
+      // Validate PR-only prerequisites through the protocol before
+      // registration; the coordinator already reads turn prerequisites.
+      for (const condition of request.conditions ?? []) {
+        if (condition.when !== "turn_completed") await this.readDependencyThread({ backend: condition.backend, threadId: condition.threadId });
+      }
+      if (request.conditions?.some((condition) => condition.when !== "turn_completed") && !this.backgroundPrPollingEnabled) {
+        throw new Error("Enable background PR polling before waiting for a PR prerequisite.");
+      }
+    }
+    return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() });
+  }
+
+  async reconcileThreadDependencies(): Promise<void> {
+    if (!getAppStateMode()) return;
+    await this.getThreadDependencyCoordinator().reconcile();
+  }
+
+  handleAgentEventForDependencies(event: AgentEvent): void {
+    if (!getAppStateMode()) return;
+    if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
+    const notification = event.notification as AppServerNotification;
+    let task: Promise<void> | undefined;
+    if (notification.method === "turn/completed" || notification.method === "turn/failed" || notification.method === "turn/cancelled") {
+      // Codex also completes interrupted turns through this method. Missing
+      // terminal metadata must reconcile through provider history, not imply success.
+      const turn = notification.params.turn;
+      const observedStatus = turn && typeof turn === "object" && "status" in turn ? turn.status : undefined;
+      const status = typeof observedStatus === "string" && ["completed", "failed", "cancelled", "interrupted"].includes(observedStatus)
+        ? observedStatus as AppServerThreadTurnMetadata["status"]
+        : notification.method === "turn/failed" ? "failed" : notification.method === "turn/cancelled" ? "cancelled" : undefined;
+      const turnId = notification.params.turnId;
+      task = this.getThreadDependencyCoordinator().handleThreadEvent(
+        { backend: event.backend, threadId: notification.params.threadId },
+        status && turnId ? { id: turnId, status } : undefined,
+        true,
+      );
+    } else if (notification.method === "thread/pullRequests/updated") {
+      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId });
+    } else if (notification.method === "thread/status/changed") {
+      const status = notification.params.status;
+      if (status && typeof status === "object" && "type" in status && status.type === "idle") {
+        task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+      }
+    } else if (notification.method === "thread/turnQueue/updated" && typeof notification.params.status === "string"
+      && ["cancelled", "terminal"].includes(notification.params.status)) {
+      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+    } else if (notification.method === "pullRequest/status/updated") {
+      const pr = notification.params.pr;
+      if (pr && typeof pr === "object" && "url" in pr && typeof pr.url === "string") {
+        task = this.getThreadDependencyCoordinator().handlePrEvent(pr.url);
+      }
+    } else if (notification.method === "thread/lock/updated" && !notification.params.lock) {
+      // A lock reads as busy at admission. Unlocking is the consumer's only
+      // availability signal when it stays idle.
+      task = this.getThreadDependencyCoordinator().handleThreadEvent({ backend: event.backend, threadId: notification.params.threadId }, undefined, true);
+    } else if (notification.method === "navigation/providerThreads/refreshed") {
+      task = this.getThreadDependencyCoordinator().reconcile();
+    }
+    void task?.catch((error) => appServerLog.warn("thread dependency evaluation failed", { error: String(error) }));
   }
 
   private getFocusedDiffService(): FocusedDiffService {
@@ -8224,6 +8389,7 @@ export const appServerService = new DesktopAppServerService();
 
 export async function startAppServerOwnerNavigation(): Promise<void> {
   await appServerService.startOwnerNavigation();
+  await appServerService.reconcileThreadDependencies();
 }
 const navigationAttentionViewLeases = new NavigationAttentionViewLeases((request) => appServerService.releaseNavigationAttentionView(request));
 
@@ -8272,7 +8438,14 @@ export function registerAppServerIpcHandlers(): void {
     invalidateNavigationEvent(event);
     appServerService.handleAgentEventForWorkingState(event);
     appServerService.handleAgentEventForPrAttachments(event);
+    appServerService.handleAgentEventForDependencies(event);
   });
+  const localForgeRead = (operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext) => appServerService.readForgeForTool(operation, args, context);
+  getDesktopBackendRegistry().setForgeReadHandlers(localForgeRead, createOwnerRoutedForgeReadHandler({
+    local: localForgeRead,
+    runtime: getDesktopFederationRuntime,
+    targetStore: getDesktopOverlayStore(),
+  }));
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>
       await appServerService.checkThreadPullRequestStatusForTool(args, context),
@@ -8287,6 +8460,19 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
     appServerService.isPullRequestLocallyMonitored(prKey)
   );
+  getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request) => {
+    try {
+      return { ok: true, data: { threadDependencies: await appServerService.manageThreadDependencies(request) } };
+    } catch (error) {
+      return { ok: false, error: { code: "invalid_arguments", message: error instanceof Error ? error.message : String(error) } };
+    }
+  });
+  ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
+  ipcMain.handle(THREAD_DEPENDENCIES_CHANNEL, async (event, request: ManageThreadDependenciesRequest) => {
+    if (isFederationWindowWebContents(event.sender)) throw new Error("Thread dependencies currently require a local window.");
+    if (request?.action === "active") return appServerService.listActiveThreadDependencies();
+    return await appServerService.manageThreadDependencies(request);
+  });
   getDesktopBackendRegistry().setThreadPullRequestWatchToolHandler(
     async (args) => await appServerService.watchThreadPullRequestForTool(args),
   );
@@ -8423,16 +8609,30 @@ export function registerAppServerIpcHandlers(): void {
       });
     }
   );
+  ipcMain.removeHandler(THREAD_SEARCH_CANCEL_CHANNEL);
+  ipcMain.handle(THREAD_SEARCH_CANCEL_CHANNEL, (event) => {
+    threadSearchControllers.get(event.sender.id)?.abort(new Error("Search cancelled."));
+  });
   ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
-  ipcMain.handle(
-    THREAD_SEARCH_CHANNEL,
-    async (
-      _event,
-      request?: ThreadSearchRequest,
-    ): Promise<ThreadSearchResponse> => {
-      return await appServerService.searchThreads(request);
-    },
-  );
+  ipcMain.handle(THREAD_SEARCH_CHANNEL, async (event, request: ThreadSearchRequest = {}, searchId?: number) => {
+    const sender = event.sender;
+    const senderId = sender.id;
+    threadSearchControllers.get(senderId)?.abort(new Error("Search replaced."));
+    const controller = new AbortController();
+    threadSearchControllers.set(senderId, controller);
+    const abort = (): void => controller.abort(new Error("Search window closed."));
+    sender.once("destroyed", abort);
+    try {
+      return await appServerService.searchThreads(request, (response) => {
+        if (!controller.signal.aborted && !sender.isDestroyed()) {
+          sender.send(THREAD_SEARCH_PROGRESS_CHANNEL, { searchId, response });
+        }
+      }, controller.signal);
+    } finally {
+      sender.removeListener("destroyed", abort);
+      if (threadSearchControllers.get(senderId) === controller) threadSearchControllers.delete(senderId);
+    }
+  });
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
   ipcMain.handle(
     APP_SERVER_READ_THREAD_CHANNEL,
@@ -8453,6 +8653,13 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.removeHandler(USAGE_ACTIVITY_READ_CHANNEL);
   ipcMain.handle(USAGE_ACTIVITY_READ_CHANNEL, async (_event, request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> =>
     await appServerService.readUsageActivity(request));
+  ipcMain.removeHandler(THREAD_FAMILY_PRICING_READ_CHANNEL);
+  ipcMain.handle(THREAD_FAMILY_PRICING_READ_CHANNEL, async (_event, request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> => {
+    if (typeof request?.backend !== "string" || typeof request?.threadId !== "string") {
+      throw new Error("Thread family pricing needs a backend and thread id.");
+    }
+    return await appServerService.readThreadFamilyPricing({ backend: request.backend, threadId: request.threadId });
+  });
   ipcMain.removeHandler(USAGE_ACTIVITY_ANALYZE_CHANNEL);
   ipcMain.handle(USAGE_ACTIVITY_ANALYZE_CHANNEL, async (_event, request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
     await appServerService.analyzeUsageActivity(request));
@@ -8694,6 +8901,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.setNavigationBrowseMode(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
+    async (
+      _event,
+      request: SetPinnedGroupCollapsedRequest,
+    ): Promise<SetPinnedGroupCollapsedResponse> => {
+      return await appServerService.setPinnedGroupCollapsed(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.handle(
     NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
@@ -8712,6 +8929,16 @@ export function registerAppServerIpcHandlers(): void {
       request: SetThreadReactionRequest,
     ): Promise<SetThreadReactionResponse> => {
       return await appServerService.setThreadReaction(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_LOCK_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_LOCK_CHANNEL,
+    async (
+      _event,
+      request: SetThreadLockRequest,
+    ): Promise<SetThreadLockResponse> => {
+      return await appServerService.setThreadLock(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL);
@@ -8798,6 +9025,12 @@ export function registerAppServerIpcHandlers(): void {
     },
   );
   ipcMain.removeHandler(NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL,
+    async (_event, request: HasRemoteThreadPinRequest): Promise<boolean> =>
+      await appServerService.hasRemoteThreadPin(request),
+  );
   ipcMain.handle(
     NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
     async (
@@ -9133,6 +9366,21 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.getWorktreeUnpublishedCommitDiff(request);
     },
   );
+  ipcMain.removeHandler(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL,
+    async (
+      event,
+      request: ReadWorktreeImageRequest,
+    ): Promise<ReadWorktreeImageResponse> => {
+      // Image bytes are read from this machine's disk only. A remote thread's
+      // worktree path names a directory on its owner, never on the viewer.
+      if (isFederationWindowWebContents(event?.sender)) {
+        throw new Error("Worktree image reads are not available for remote threads.");
+      }
+      return await appServerService.readWorktreeImage(request);
+    },
+  );
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.handle(
     NAVIGATION_GET_GH_STATUS_CHANNEL,
@@ -9400,15 +9648,23 @@ export function registerAppServerIpcHandlers(): void {
   ipcMain.handle(
     NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL,
     async (
-      _event,
+      event,
       request: DetachDirectoryFromThreadRequest,
     ): Promise<DetachDirectoryFromThreadResponse> => {
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(request.federationTarget && isRemoteFederationTarget(request.federationTarget))
+      ) {
+        throw new Error("Remote directory detachments must target the owning instance.");
+      }
       return await appServerService.detachDirectoryFromThread(request);
     },
   );
 }
 
 export async function disposeAppServerIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL);
+  ipcMain.removeHandler(THREAD_DEPENDENCIES_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_DIRECTORY_SEEN_CHANNEL);
   await navigationAttentionViewLeases.dispose();
@@ -9439,6 +9695,9 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
+  ipcMain.removeHandler(THREAD_SEARCH_CANCEL_CHANNEL);
+  for (const controller of threadSearchControllers.values()) controller.abort(new Error("Search service stopped."));
+  threadSearchControllers.clear();
   ipcMain.removeHandler(FOCUSED_DIFF_ANALYZE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SNAPSHOT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_QUERY_PAGE_CHANNEL);
@@ -9447,8 +9706,10 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_SELECTED_DETAIL_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_QUEUE_PROJECTION_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_BROWSE_MODE_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_MARK_THREAD_SEEN_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_REACTION_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_LOCK_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_AGENT_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL);
@@ -9461,6 +9722,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL);
+  ipcMain.removeHandler(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GLAB_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_GET_GH_STATUS_CHANNEL);
   ipcMain.removeHandler(NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL);
@@ -9485,6 +9747,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_ARCHIVE_SWEEP_STATUS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RUN_THREAD_ARCHIVE_SWEEP_CHANNEL);
   const registry = getExistingDesktopBackendRegistry();
+  registry?.setThreadDependencyToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
   registry?.setThreadPrimaryGitRepositoryReader(undefined);

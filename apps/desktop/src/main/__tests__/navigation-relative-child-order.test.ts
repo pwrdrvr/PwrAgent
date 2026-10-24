@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -83,3 +84,53 @@ it("inserts among unranked owner siblings without replacing their order with vis
       ...children.slice(1, 50).reverse().map((child) => child.id)]);
   } finally { db.close(); }
 });
+
+it("moves a child that runs on another provider than its parent", async () => {
+  const db = openInMemoryStateDb();
+  const store = new SqliteOverlayStore(db);
+  try {
+    await store.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
+    await store.setThreadParent({ backend: "codex", threadId: "steam", parentThreadId: "root" });
+    await store.setThreadParent({ backend: "claude", threadId: "design", parentThreadId: "root", parentThreadBackend: "codex" });
+    const children = [
+      { backend: "codex" as const, id: "gondola", createdAt: 3 },
+      { backend: "codex" as const, id: "steam", createdAt: 2 },
+      { backend: "claude" as const, id: "design", createdAt: 1 },
+    ];
+    // Lift the Claude child above a Codex sibling, then anchor a Codex move on it.
+    expect(await store.updateSubthreadOrder({ backend: "codex", parentThreadId: "root", children,
+      move: { threadId: "design", anchorThreadId: "gondola", placement: "before" } }))
+      .toEqual(["design", "gondola", "steam"]);
+    expect(await store.updateSubthreadOrder({ backend: "codex", parentThreadId: "root", children,
+      move: { threadId: "steam", anchorThreadId: "design", placement: "before" } }))
+      .toEqual(["steam", "design", "gondola"]);
+  } finally { db.close(); }
+});
+
+it("accepts a legacy cross-provider child the owner resolved, and refuses an id two providers share", async () => {
+  const db = openInMemoryStateDb();
+  const store = new SqliteOverlayStore(db);
+  try {
+    await store.setThreadParent({ backend: "codex", threadId: "gondola", parentThreadId: "root" });
+    await writeLegacyParentLink(store, "claude", "design", "root");
+    const children = [
+      { backend: "codex" as const, id: "gondola", createdAt: 2 },
+      { backend: "claude" as const, id: "design", createdAt: 1 },
+    ];
+    expect(await store.updateSubthreadOrder({ backend: "codex", parentThreadId: "root", children,
+      move: { threadId: "design", anchorThreadId: "gondola", placement: "before" } }))
+      .toEqual(["design", "gondola"]);
+    await store.setThreadParent({ backend: "codex", threadId: "design", parentThreadId: "root" });
+    await expect(store.updateSubthreadOrder({ backend: "codex", parentThreadId: "root",
+      children: [...children, { backend: "codex" as const, id: "design", createdAt: 0 }],
+      move: { threadId: "design", anchorThreadId: "gondola", placement: "after" } })).rejects.toThrow("no longer places");
+  } finally { db.close(); }
+});
+
+/** Rows written before links recorded the parent's provider name only its id. */
+async function writeLegacyParentLink(store: SqliteOverlayStore, backend: "claude", threadId: string, parentThreadId: string) {
+  await store.setThreadParent({ backend, threadId, parentThreadId, parentThreadBackend: "codex" });
+  const state = await store.getThreadOverlayState({ backend, threadId });
+  (store as unknown as { putThread(key: string, state: object): void })
+    .putThread(buildThreadIdentityKey(backend, threadId), { ...state, parentThreadBackend: undefined });
+}

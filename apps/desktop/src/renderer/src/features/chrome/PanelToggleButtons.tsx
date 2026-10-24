@@ -1,5 +1,9 @@
 import { type ReactElement } from "react";
-import { formatPrimaryAccel } from "../../lib/keyboard-accel";
+import {
+  chordLabelFor,
+  useKeybindings,
+  withChordHint,
+} from "../../lib/keybindings-store";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 /**
@@ -80,16 +84,18 @@ function LayoutChip({
       : open
         ? "Hide context rail"
         : "Show context rail";
-  // Display the chord for the current platform (⌘B / ⌘⌥B on macOS,
-  // Ctrl+B / Ctrl+Alt+B on Windows/Linux). The binding itself accepts
-  // either modifier — see isPrimaryAccel.
-  const chord = formatPrimaryAccel("B", { alt: kind !== "primary" });
+  // The operator's current chord, in this platform's notation (⌘B / ⌥⌘B on
+  // macOS, Ctrl+B / Ctrl+Alt+B on Windows/Linux by default).
+  const chord = chordLabelFor(
+    useKeybindings(),
+    kind === "primary" ? "layout.toggle_sidebar" : "layout.toggle_context_rail",
+  );
   // Custom viewport tooltip (not native `title`): it triggers instantly on
   // hover/focus over the whole button, clamps to the window so the chord hint
   // can't render off the right edge, and matches every other chrome control.
   // The disabled chip stays inert (`pointer-events: none`), so it just keeps
   // the aria-label for AT and shows no chord.
-  const tooltipText = disabled ? label : `${label}  (${chord})`;
+  const tooltipText = disabled ? label : withChordHint(label, chord);
   return (
     <>
       <button

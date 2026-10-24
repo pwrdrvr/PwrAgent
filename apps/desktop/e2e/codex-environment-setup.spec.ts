@@ -416,7 +416,7 @@ test("selected environments run setup and show transcript output", async () => {
 
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
     const launchpadTools = app.window.getByLabel("Composer tools");
-    await launchpadTools.getByRole("button", { name: "Environment", exact: true }).click();
+    await launchpadTools.getByRole("button", { name: /^Environment(?::|$)/, exact: true }).click();
     await app.window.getByRole("option", { name: "Fixture Env" }).click();
     await expect(launchpadTools.getByLabel("Run setup")).toHaveCount(0);
 
@@ -478,7 +478,7 @@ test("typing continues in the focused composer after environment setup completes
     await app.window.getByRole("tab", { name: "directories" }).click();
     await app.window.getByRole("button", { name: "Open new thread launchpad for FixtureRepo" }).click();
     await app.window.getByLabel("Composer tools")
-      .getByRole("button", { name: "Environment", exact: true }).click();
+      .getByRole("button", { name: /^Environment(?::|$)/, exact: true }).click();
     await app.window.getByRole("option", { name: "Fixture Env" }).click();
     await app.window.getByRole("textbox", { name: "New thread" }).fill("hello env");
     await app.window.getByRole("button", { name: "Start thread" }).click();
@@ -527,7 +527,7 @@ test("existing running thread keeps selected environment after pending state cle
     await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
 
     const environmentDropdown = app.window.getByRole("button", {
-      name: "Environment",
+      name: /^Environment(?::|$)/,
       exact: true,
     });
     await expect(environmentDropdown).toHaveAttribute("data-value", "");
@@ -557,18 +557,18 @@ test("thread environment Run command uses the current cwd after workspace handof
       app.window.getByRole("heading", { level: 2, name: "Existing directory thread" }),
     ).toBeVisible();
 
-    await app.window.getByRole("button", { name: "Environment", exact: true }).click();
+    await app.window.getByRole("button", { name: /^Environment(?::|$)/, exact: true }).click();
     await app.window.getByRole("option", { name: "Fixture Env" }).click();
     await expect(
-      app.window.getByRole("button", { name: "Environment", exact: true }),
+      app.window.getByRole("button", { name: /^Environment(?::|$)/, exact: true }),
     ).toContainText(
       "Fixture Env",
     );
-    await expect(app.window.getByLabel("Environment command")).toContainText(
+    await expect(app.window.getByLabel(/^Environment command(?::|$)/)).toContainText(
       "Capture CWD",
     );
 
-    await app.window.getByLabel("Workspace mode").click();
+    await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
     await app.window.getByRole("menuitem", { name: "Handoff to New Worktree" }).click();
     const dialog = app.window.getByRole("dialog", { name: "Handoff to New Worktree" });
     await expect(dialog).toBeVisible();
@@ -617,7 +617,7 @@ test("thread environment Run command uses the current cwd after workspace handof
       )
       .toBe(comparableCommandCwd(await realpath(worktreePath!)));
 
-    await app.window.getByLabel("Workspace mode").click();
+    await app.window.getByLabel(/^Workspace mode(?::|$)/).click();
     await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
     const returnDialog = app.window.getByRole("dialog", { name: "Handoff to Local" });
     await expect(returnDialog).toBeVisible();
@@ -696,17 +696,25 @@ test("directory launchpad keeps selected environment controls after restart", as
     });
     seededHomeRoot = undefined;
 
+    // The environment belongs to this directory's saved launchpad. Open it
+    // after discovery publishes the row instead of relying on startup's
+    // implicit selection while provider discovery is still in flight.
+    await secondApp.window.getByRole("tab", { name: "directories" }).click();
+    await secondApp.window
+      .getByRole("button", { name: "Open new thread launchpad for FixtureRepo" })
+      .click();
+
     const settings = secondApp.window.getByLabel("New thread settings");
     await expect(
       secondApp.window.getByRole("textbox", { name: "New thread" }),
     ).toBeVisible();
-    await expect(settings.getByLabel("Workspace mode")).toHaveAttribute(
+    await expect(settings.getByLabel(/^Workspace mode(?::|$)/)).toHaveAttribute(
       "data-value",
       "worktree",
     );
     const tools = secondApp.window.getByLabel("Composer tools");
     await expect(
-      tools.getByRole("button", { name: "Environment", exact: true }),
+      tools.getByRole("button", { name: /^Environment(?::|$)/, exact: true }),
     ).toContainText(
       "Fixture Env",
     );
@@ -744,7 +752,7 @@ test("directory launchpad opens without an environment picker when no environmen
     await expect(header.getByText("NoEnvRepo", { exact: true })).toBeVisible();
     await expect(app.window.getByRole("textbox", { name: "New thread" })).toBeVisible();
     await expect(
-      app.window.getByRole("button", { name: "Environment", exact: true }),
+      app.window.getByRole("button", { name: /^Environment(?::|$)/, exact: true }),
     ).toHaveCount(0);
     await expect(
       app.window.getByText(/Error invoking remote method|ENOTDIR/),

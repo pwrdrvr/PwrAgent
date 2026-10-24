@@ -5,6 +5,78 @@ packages:
   - packages/messaging/providers/*
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
+  # Explicit native-check migration pins, benchmarked before adoption.
+  - 'oxlint@1.87.0'
+  - 'oxlint-tsgolint@7.0.2003'
+  - 'oxc-parser@0.153.0'
+  - '@oxc-project/types@0.153.0'
+  - 'typescript@7.0.2'
+  - '@oxc-parser/binding-android-arm-eabi@0.153.0'
+  - '@oxc-parser/binding-android-arm64@0.153.0'
+  - '@oxc-parser/binding-darwin-arm64@0.153.0'
+  - '@oxc-parser/binding-darwin-x64@0.153.0'
+  - '@oxc-parser/binding-freebsd-x64@0.153.0'
+  - '@oxc-parser/binding-linux-arm-gnueabihf@0.153.0'
+  - '@oxc-parser/binding-linux-arm-musleabihf@0.153.0'
+  - '@oxc-parser/binding-linux-arm64-gnu@0.153.0'
+  - '@oxc-parser/binding-linux-arm64-musl@0.153.0'
+  - '@oxc-parser/binding-linux-ppc64-gnu@0.153.0'
+  - '@oxc-parser/binding-linux-riscv64-gnu@0.153.0'
+  - '@oxc-parser/binding-linux-riscv64-musl@0.153.0'
+  - '@oxc-parser/binding-linux-s390x-gnu@0.153.0'
+  - '@oxc-parser/binding-linux-x64-gnu@0.153.0'
+  - '@oxc-parser/binding-linux-x64-musl@0.153.0'
+  - '@oxc-parser/binding-openharmony-arm64@0.153.0'
+  - '@oxc-parser/binding-win32-arm64-msvc@0.153.0'
+  - '@oxc-parser/binding-win32-ia32-msvc@0.153.0'
+  - '@oxc-parser/binding-win32-x64-msvc@0.153.0'
+  - '@oxlint-tsgolint/darwin-arm64@7.0.2003'
+  - '@oxlint-tsgolint/darwin-x64@7.0.2003'
+  - '@oxlint-tsgolint/linux-arm64@7.0.2003'
+  - '@oxlint-tsgolint/linux-x64@7.0.2003'
+  - '@oxlint-tsgolint/win32-arm64@7.0.2003'
+  - '@oxlint-tsgolint/win32-x64@7.0.2003'
+  - '@oxlint/binding-android-arm-eabi@1.87.0'
+  - '@oxlint/binding-android-arm64@1.87.0'
+  - '@oxlint/binding-darwin-arm64@1.87.0'
+  - '@oxlint/binding-darwin-x64@1.87.0'
+  - '@oxlint/binding-freebsd-x64@1.87.0'
+  - '@oxlint/binding-linux-arm-gnueabihf@1.87.0'
+  - '@oxlint/binding-linux-arm-musleabihf@1.87.0'
+  - '@oxlint/binding-linux-arm64-gnu@1.87.0'
+  - '@oxlint/binding-linux-arm64-musl@1.87.0'
+  - '@oxlint/binding-linux-ppc64-gnu@1.87.0'
+  - '@oxlint/binding-linux-riscv64-gnu@1.87.0'
+  - '@oxlint/binding-linux-riscv64-musl@1.87.0'
+  - '@oxlint/binding-linux-s390x-gnu@1.87.0'
+  - '@oxlint/binding-linux-x64-gnu@1.87.0'
+  - '@oxlint/binding-linux-x64-musl@1.87.0'
+  - '@oxlint/binding-openharmony-arm64@1.87.0'
+  - '@oxlint/binding-win32-arm64-msvc@1.87.0'
+  - '@oxlint/binding-win32-ia32-msvc@1.87.0'
+  - '@oxlint/binding-win32-x64-msvc@1.87.0'
+  - '@typescript/typescript-aix-ppc64@7.0.2'
+  - '@typescript/typescript-darwin-arm64@7.0.2'
+  - '@typescript/typescript-darwin-x64@7.0.2'
+  - '@typescript/typescript-freebsd-arm64@7.0.2'
+  - '@typescript/typescript-freebsd-x64@7.0.2'
+  - '@typescript/typescript-linux-arm@7.0.2'
+  - '@typescript/typescript-linux-arm64@7.0.2'
+  - '@typescript/typescript-linux-loong64@7.0.2'
+  - '@typescript/typescript-linux-mips64el@7.0.2'
+  - '@typescript/typescript-linux-ppc64@7.0.2'
+  - '@typescript/typescript-linux-riscv64@7.0.2'
+  - '@typescript/typescript-linux-s390x@7.0.2'
+  - '@typescript/typescript-linux-x64@7.0.2'
+  - '@typescript/typescript-netbsd-arm64@7.0.2'
+  - '@typescript/typescript-netbsd-x64@7.0.2'
+  - '@typescript/typescript-openbsd-arm64@7.0.2'
+  - '@typescript/typescript-openbsd-x64@7.0.2'
+  - '@typescript/typescript-sunos-x64@7.0.2'
+  - '@typescript/typescript-win32-arm64@7.0.2'
+  - '@typescript/typescript-win32-x64@7.0.2'
+  # Library-owner-approved upgrade inside the seven-day maturity window.
+  - '@shutterstock/p-map-iterable@1.2.0'
   # Slack's 27 Aug 2026 Agent Sessions types are required for this integration.
   - '@slack/types@3.1.0'
   - '@slack/web-api@8.1.0'
@@ -13,6 +85,11 @@ minimumReleaseAgeExclude:
   - '@modelcontextprotocol/sdk@1.30.0'
   # Security fix; published inside the normal seven-day maturity window.
   - 'qs@6.16.0'
+  # Electron 44.4.5 (23 Sep 2026) carries upstream Chromium, V8, ANGLE, Dawn,
+  # and PDFium security backports; 41.x stopped receiving them on 25 Aug 2026.
+  - 'electron@44.4.5'
+  # GHSA-jr5w-w6x2-84p9 eMudhra fix; published 2026-10-21T03:31:39.419Z.
+  - 'electron@44.9.3'
   - '@pwrdrvr/agent-core'
   - '@pwrdrvr/agent-transport'
   - '@pwrdrvr/codex-discovery'
@@ -50,14 +127,54 @@ minimumReleaseAgeExclude:
   - protobufjs@7.6.5
   - tmp@0.2.7
   - ws@8.21.0
-globalPnpmfile: ''
+# Ignore user-level pnpmfiles so the project git policy and lockfile checksum
+# are identical for contributors and CI.
+globalPnpmfile: null
 ignoreScripts: false
-ignoredBuiltDependencies:
-  - electron-winstaller
-  - protobufjs
-onlyBuiltDependencies:
-  - dugite
-  - better-sqlite3
-  - electron
-  - esbuild
-  - node-pty
+allowBuilds:
+  # better-sqlite3 13 and node-pty ship Node-API prebuilds that load in Node
+  # and Electron alike. pnpm otherwise infers `node-gyp rebuild` from
+  # better-sqlite3's binding.gyp although the package declares
+  # `gypfile: false`, and node-pty's install script only falls back to
+  # node-gyp. Packaging stages the target's prebuilds in beforePack.
+  better-sqlite3: false
+  electron-winstaller: false
+  node-pty: false
+  protobufjs: false
+  dugite: true
+  electron: true
+  esbuild: true
+
+overrides:
+  "@babel/core": "7.29.6"
+  "@hono/node-server": "2.0.10"
+  "@types/node": "^24.12.4"
+  "axios": "^1.16.0"
+  "brace-expansion@1": "1.1.21"
+  "brace-expansion@2": "2.1.7"
+  "brace-expansion@5": "5.0.12"
+  "dompurify": "3.4.16"
+  "esbuild": "0.28.1"
+  "fast-uri": "3.1.8"
+  "form-data": "4.0.6"
+  "hono": "4.13.5"
+  "ip-address": "10.7.1"
+  "js-yaml": "4.3.2"
+  "postcss": "8.5.23"
+  "prosemirror-model": "1.25.9"
+  "prosemirror-view": "1.41.9"
+  "protobufjs": "7.6.5"
+  "qs": "6.16.0"
+  "rollup": "4.61.1"
+  "tar": "7.5.22"
+  "tmp": "0.2.7"
+  "undici@6": "6.28.1"
+  "undici@7": "7.29.1"
+  "ws": "8.22.0"
+
+patchedDependencies:
+  "@sigstore/core@4.0.1": "patches/@sigstore__core@4.0.1.patch"
+  "@tufjs/models@5.0.0": "patches/@tufjs__models@5.0.0.patch"
+  "khroma@2.1.0": "patches/khroma@2.1.0.patch"
+  "playwright@1.63.0": "patches/playwright@1.63.0.patch"
+  "playwright-core@1.63.0": "patches/playwright-core@1.63.0.patch"

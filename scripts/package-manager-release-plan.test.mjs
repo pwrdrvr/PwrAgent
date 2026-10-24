@@ -38,8 +38,16 @@ function apiFixture({ published = false, pending = false, hit = false, cacheRef 
     if (endpoint === `repos/${SOURCE_REPO}/releases/latest`) return structuredClone(current);
     if (endpoint === `repos/${SOURCE_REPO}/releases/tags/${previous.tag_name}`) return structuredClone(previous);
     if (endpoint.includes(`${SOURCE_REPO}/releases?`)) return [current, previous];
-    if (endpoint.includes(`${TAP_REPO}/contents`)) return { content: Buffer.from(`  version "${published ? "1.1.4" : "1.1.3"}"\n`).toString("base64") };
-    if (endpoint.includes(`${WINGET_REPO}/contents/${WINGET_PATH}`)) return [{ type: "dir", name: published ? "1.1.4" : "1.1.3" }];
+    if (/^repos\/[^/]+\/[^/?]+$/.test(endpoint)) return { full_name: endpoint.slice(6), private: false, default_branch: "main" };
+    if (endpoint.includes("/commits/")) return { sha: "a".repeat(40) };
+    const sourceRelease = published ? current : previous;
+    const encode = (content) => ({ encoding: "base64", content: Buffer.from(content).toString("base64") });
+    const files = metadataPackages(sourceRelease).files;
+    if (endpoint.includes(`${TAP_REPO}/contents`)) return encode(files["Casks/pwragent.rb"]);
+    if (endpoint.includes(`${WINGET_REPO}/contents/${WINGET_PATH}`)) {
+      if (endpoint.includes(".installer.yaml")) return encode(files[`${WINGET_PATH}/${sourceRelease.tag_name.slice(1)}/PwrDrvr.PwrAgent.installer.yaml`]);
+      return [{ type: "dir", name: sourceRelease.tag_name.slice(1) }];
+    }
     if (endpoint.startsWith("search/")) return { incomplete_results: false, total_count: pending ? 1 : 0, items: pending ? [{ html_url: "pending", title: "PwrAgent" }] : [] };
     if (endpoint.startsWith("repos/Homebrew/homebrew-")) return null;
     if (endpoint.startsWith("repos/actions/runner-images/releases")) return [
@@ -174,18 +182,17 @@ describe("metadata-only distribution planning", () => {
     const asset = current.assets[0];
     const key = assetKey(current.tag_name, asset);
     const plan = { assets: [{ asset, key, role: "current" }] };
-    const fetchAsset = vi.fn(async () => new Response("abc"));
-    vi.stubGlobal("fetch", fetchAsset);
-    await cachedAsset(plan, 0, resolve(dir, "first"), resolve(dir, "cache"));
-    await cachedAsset(plan, 0, resolve(dir, "second"), resolve(dir, "cache"));
-    expect(fetchAsset).toHaveBeenCalledTimes(1);
-    await cachedAsset({ assets: [{ asset, key, role: "previous" }] }, 0, resolve(dir, "baseline"), resolve(dir, "cache"));
+    const acquire = vi.fn(async (value, file) => writeFile(file, "abc"));
+    await cachedAsset(plan, 0, resolve(dir, "first"), resolve(dir, "cache"), acquire);
+    await cachedAsset(plan, 0, resolve(dir, "second"), resolve(dir, "cache"), acquire);
+    expect(acquire).toHaveBeenCalledTimes(1);
+    await cachedAsset({ assets: [{ asset, key, role: "previous" }] }, 0, resolve(dir, "baseline"), resolve(dir, "cache"), acquire);
     expect(await readFile(resolve(dir, "baseline/assets/previous", asset.name), "utf8")).toBe("abc");
-    expect(fetchAsset).toHaveBeenCalledTimes(1);
+    expect(acquire).toHaveBeenCalledTimes(1);
     await writeFile(resolve(dir, "cache", key, asset.name), "bad");
-    await expect(cachedAsset(plan, 0, resolve(dir, "bad"), resolve(dir, "cache"))).rejects.toThrow(/SHA-256/);
+    await expect(cachedAsset(plan, 0, resolve(dir, "bad"), resolve(dir, "cache"), acquire)).rejects.toThrow(/SHA-256/);
     await expect(readFile(resolve(dir, "bad/assets", asset.name))).rejects.toMatchObject({ code: "ENOENT" });
-    expect(fetchAsset).toHaveBeenCalledTimes(1);
+    expect(acquire).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -227,4 +234,17 @@ describe("WinGet installation-only mirror", () => {
     await writeFile(resolve(dir, "assets", current.assets[2].name), "bad");
     await expect(serveInstallers(dir, plan)).rejects.toThrow(/SHA-256/);
   });
+});
+
+
+it("Winget-only planning excludes Mac jobs/assets and Homebrew validator dependencies", async () => {
+  const api = apiFixture();
+  const reads = [];
+  const plan = await buildPlan({ ...event, families: ["winget"] }, (endpoint, ...args) => {
+    reads.push(endpoint);
+    return api(endpoint, ...args);
+  });
+  expect(plan.native.map((platform) => platform.family)).toEqual(["winget"]);
+  expect(plan.assets.every(({ asset }) => asset.name.endsWith(".exe") || asset.name.includes("windows-SHA256SUMS"))).toBe(true);
+  expect(reads.some((endpoint) => endpoint.startsWith("repos/Homebrew/brew/"))).toBe(false);
 });

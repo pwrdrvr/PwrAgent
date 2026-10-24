@@ -1,5 +1,5 @@
 import type { NativeVoiceNotification } from "./native-voice-protocol";
-import type { ThreadRealtimeStartParams } from "@pwrdrvr/codex-app-server-protocol/v2";
+import type { ThreadRealtimeStartParams, ThreadRealtimeAppendTextParams } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
   ListBackgroundTerminalsResponse,
   CodexBackgroundTerminal,
@@ -11,6 +11,7 @@ import type {
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import { normalizeAutoReviewNotification } from "./auto-review";
 import { rememberBoundedMap } from "../bounded-map";
+import { usageAccountKey } from "../usage-account-identity";
 import { nativeReviewTarget } from "../../shared/pull-request-review";
 import { ThreadListTextCache } from "./thread-list-text-cache";
 import { CODEX_SIGN_IN_REQUIRED, codexAuthState } from "../codex-auth-state";
@@ -119,6 +120,7 @@ import type {
   ThreadItemsListResponse as CodexThreadItemsListResponse,
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
+  ThreadReadResponse as CodexThreadReadResponse,
   ThreadResumeParams as CodexThreadResumeParams,
   ThreadSettingsUpdateParams as CodexThreadSettingsUpdateParams,
   ThreadStartParams as CodexThreadStartParams,
@@ -212,7 +214,6 @@ const CODEX_THREAD_TITLE_WORKSPACE_DIR = path.join(
 );
 const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> = {
   web_search: "disabled",
-  notify: [],
   include_permissions_instructions: false,
   include_apps_instructions: false,
   include_collaboration_mode_instructions: false,
@@ -230,7 +231,6 @@ const CODEX_THREAD_TITLE_CONFIG: NonNullable<CodexThreadStartParams["config"]> =
     deferred_executor: false,
     enable_fanout: false,
     goals: false,
-    hooks: false,
     image_generation: false,
     memories: false,
     multi_agent: false,
@@ -315,6 +315,8 @@ type CodexClientOptions = {
   authenticationRecovery?: boolean;
   /** The profile's helper model settings, read per helper turn. */
   readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
+  /** Captures the profile's explicit group or current protocol account. */
+  resolveUsageAccountKey?: () => Promise<string | undefined>;
   command?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
@@ -748,9 +750,15 @@ function buildCodexHelperConfig(
 ): NonNullable<CodexThreadStartParams["config"]> {
   return {
     ...baseConfig,
-    ...(disableExecution ? {
-      features: {
-        ...(asRecord(baseConfig.features) ?? {}),
+    // Legacy notifications are independent of features.hooks and can receive
+    // helper output. Keep both suppressions thread-local on the shared server.
+    notify: [],
+    // Apply to both config variants: trusted hooks run outside model-tool
+    // approval/sandbox handling, including before the helper's first turn.
+    features: {
+      ...(asRecord(baseConfig.features) ?? {}),
+      hooks: false,
+      ...(disableExecution ? {
         shell_tool: false,
         unified_exec: false,
         js_repl: false,
@@ -759,8 +767,8 @@ function buildCodexHelperConfig(
         multi_agent: false,
         multi_agent_v2: false,
         enable_fanout: false,
-      },
-    } : {}),
+      } : {}),
+    },
     ...(serverNames.length > 0 ? {
       mcp_servers: Object.fromEntries(
         serverNames.map((name) => [name, { enabled: false }]),
@@ -1891,8 +1899,11 @@ function extractAccountSummary(value: unknown): BackendAccountSummary {
   const account =
     asRecord(findFirstNestedValue(value, ["account"])) ?? asRecord(root.account) ?? undefined;
   const type = pickString(account ?? {}, ["type"]);
+  const routing = asRecord(root.workspaceRouting ?? root.workspace_routing);
+  const accountId = pickString(routing ?? {}, ["chatgptAccountId", "chatgpt_account_id"]);
   return {
     type: type === "apiKey" || type === "chatgpt" ? type : undefined,
+    ...(accountId ? { accountId } : {}),
     email: pickString(account ?? {}, ["email"]),
     planType: pickString(account ?? {}, ["planType", "plan_type"]),
     requiresOpenaiAuth: pickBoolean(root, ["requiresOpenaiAuth", "requires_openai_auth"]),
@@ -2029,7 +2040,7 @@ function isVisibleCodexThreadSource(thread: RawCodexThreadSummary): boolean {
   // PwrAgent-managed workers have an inspection-only transcript. Neither is a
   // durable navigation thread. Codex source-kind variants use camelCase while
   // the durable ThreadSource marker is the lowercase string "subagent".
-  return !sourceKind?.startsWith("subagent");
+  return sourceKind !== "guardian_review" && !sourceKind?.startsWith("subagent");
 }
 
 function filterVisibleCodexThreads(
@@ -4474,11 +4485,12 @@ function buildMcpToolCommandDetail(params: {
   };
 }
 
+/** Undefined when the call has neither arguments nor a result: there is nothing to expand. */
 function buildDynamicToolCommandDetail(params: {
   item: Record<string, unknown>;
   toolName: string;
   elapsedMs: number | undefined;
-}): AppServerThreadCommandDetail {
+}): AppServerThreadCommandDetail | undefined {
   const identifier = formatToolIdentifier(
     pickString(params.item, ["namespace", "toolNamespace", "tool_namespace"]),
     params.toolName,
@@ -4487,6 +4499,9 @@ function buildDynamicToolCommandDetail(params: {
   const output = formatDynamicToolOutput(
     params.item.contentItems ?? params.item.content_items,
   );
+  if (!output && (!args || Object.keys(args).length === 0)) {
+    return undefined;
+  }
   return {
     displayCommand: formatToolInvocation(identifier, args),
     rawCommand: identifier,
@@ -4810,7 +4825,7 @@ function summarizeActivityItems(
           ? buildMcpToolCommandDetail({ item, toolName, elapsedMs })
           : undefined;
       const dynamicCommandDetail =
-        normalizedItemType === "dynamictoolcall" && explicitTitle && toolName
+        normalizedItemType === "dynamictoolcall" && toolName
           ? buildDynamicToolCommandDetail({ item, toolName, elapsedMs })
           : undefined;
       const images =
@@ -6118,6 +6133,11 @@ function readCodexThreadSourceKind(
   if (!subAgentRecord) {
     return undefined;
   }
+  // thread/list can omit the durable guardian_review marker returned by
+  // thread/read. Its session source still identifies the approval helper.
+  if (subAgentRecord.other === "guardian") {
+    return "guardian_review";
+  }
   if (asRecord(subAgentRecord.thread_spawn) || asRecord(subAgentRecord.threadSpawn)) {
     return "subAgentThreadSpawn";
   }
@@ -6362,6 +6382,13 @@ function buildThreadDiscoveryPayloads(
 }
 
 const CODEX_NATIVE_SUBAGENT_DISCOVERY_LIMIT = 100;
+
+// Worktree safety inventories include every checkout user, including threads
+// excluded from navigation and older app-server/exec-created conversations.
+const CODEX_WORKTREE_SAFETY_SOURCE_KINDS: NonNullable<CodexThreadListParams["sourceKinds"]> = [
+  "cli", "vscode", "exec", "appServer", "subAgent", "subAgentReview",
+  "subAgentCompact", "subAgentThreadSpawn", "subAgentOther", "unknown",
+];
 
 function threadTitleSourcePriority(
   titleSource: AppServerThreadTitleSource
@@ -6889,6 +6916,8 @@ function buildThreadResumePayloads(params: {
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
     threadId: params.threadId,
+    // Transcript history is read separately through the paginated APIs.
+    excludeTurns: true,
   };
   if (compatibility.includePersistExtendedHistory) {
     base.persistExtendedHistory = false;
@@ -7578,10 +7607,12 @@ export class CodexAppServerClient {
   private pendingCloses = 0;
   private serverGeneration = 0;
   private readonly runningTurnIdsByThread = new Map<string, string>();
-  private readonly pricingSnapshotCache = new Map<string, { updatedAt?: number; tokens: ThreadUsageTokenBreakdown; serviceTier?: string }>();
+  private readonly liveUsageSnapshots = new Map<string, {
+    tokens: ThreadUsageTokenBreakdown;
+    model?: string;
+    serviceTier?: string;
+  }>();
   private readonly pricingSnapshotReads = new Map<string, Promise<ThreadPricingSnapshot>>();
-  private pricingSnapshotReaderQueue: Promise<void> = Promise.resolve();
-  private cancelPricingSnapshotReader?: () => Promise<void>;
   // Bumped whenever a turn may have ended (a terminal, a thread status change,
   // a helper turn's cleanup, or a close). History recovery waits on it rather
   // than on a clock when another turn still runs on this process.
@@ -7639,7 +7670,9 @@ export class CodexAppServerClient {
   >();
   private readonly threadListTextCache = new ThreadListTextCache();
   private readonly pendingThreadListings = new Map<string, Promise<AppServerThreadSummary[]>>();
-  private threadListingGeneration = 0;
+  private readonly pendingThreadInventories = new Map<string, Promise<RawCodexThreadSummary[]>>();
+  private activeThreadListingGeneration = 0;
+  private archivedThreadListingGeneration = 0;
   private readonly threadListingInvalidations = new WeakSet<AppServerNotification>();
   private readonly recordedThreadNames = new Map<string, string>();
   private readonly requestListeners = new Set<
@@ -7660,6 +7693,7 @@ export class CodexAppServerClient {
   private readonly pendingFirstTurnThreadResults = new Map<string, unknown>();
   private readonly pendingFirstTurnShellEnvironments = new Map<string, string | undefined>();
   private readonly helperThreadIds = new Set<string>();
+  private readonly pendingHelperThreadStarts = new Set<Promise<string | undefined>>();
   private readonly helperTurnWaiters = new Map<
     string,
     {
@@ -7743,6 +7777,20 @@ export class CodexAppServerClient {
           })
         : enrichThreadDirectory);
     this.rawConnection.setNotificationHandler(async (method, params) => {
+      if (method === "deprecationNotice") {
+        // Protocol migration guidance belongs in diagnostics, not thread UI.
+        const notice = asRecord(params) ?? {};
+        codexClientLog.warn("codex deprecation notice", {
+          summary: notice.summary,
+          details: notice.details,
+        });
+        return;
+      }
+      if (method === "thread/goal/updated" || method === "thread/goal/cleared") {
+        // Codex-native goals are not supported by this adapter. Do not forward
+        // their lifecycle as normalized PwrAgent thread-state notifications.
+        return;
+      }
       const isKnownCodexMethod = isKnownCodexNotificationMethod(method);
       // Realtime is routed to live voice below, never logged: its payloads
       // carry the operator's spoken words and session SDP, which stay memory
@@ -7811,6 +7859,16 @@ export class CodexAppServerClient {
       );
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
+      // Codex can send startup warnings before thread/start returns its ID.
+      // Wait only for startup notices, then suppress those belonging to the
+      // helper. Interactive turn traffic continues while the RPC is pending.
+      if (helperThreadId
+        && !this.helperThreadIds.has(helperThreadId)
+        && (normalized.method === "warning" || method === "thread/started")
+        && this.pendingHelperThreadStarts.size > 0) {
+        const startedHelperIds = await Promise.all([...this.pendingHelperThreadStarts]);
+        if (startedHelperIds.includes(helperThreadId)) return;
+      }
       if (helperThreadId && (normalized.method === "turn/started" || method === "thread/closed")) {
         this.threadsAwaitingFirstTurn.delete(helperThreadId);
         this.freshNativeVoiceThreads.delete(helperThreadId);
@@ -7826,6 +7884,22 @@ export class CodexAppServerClient {
           this.noteLiveTurnActivity();
         }
         return;
+      }
+
+      // Retain totals in the owning connection before listener work. Read-only
+      // pricing must not resume an already-owned thread to obtain them.
+      if (normalized.method === "thread/tokenUsage/updated") {
+        const usage = asRecord(normalized.params.tokenUsage) ?? {};
+        const total = readTokenUsageBreakdown(asRecord(usage.total) ?? {});
+        if (total) rememberBoundedMap(this.liveUsageSnapshots, normalized.params.threadId, {
+          tokens: total,
+          model: pickString(asRecord(normalized.params) ?? {}, ["model"]) ?? pickString(usage, ["model"]),
+          serviceTier: pickString(usage, ["serviceTier"]),
+        }, 1_000);
+      } else if (normalized.method === "thread/compacted" || normalized.method === "thread/rewound" || method === "thread/closed"
+        || ((normalized.method === "item/started" || normalized.method === "item/completed")
+          && normalizeItemType(pickString(asRecord(normalized.params.item) ?? {}, ["type"])) === "contextcompaction")) {
+        if (helperThreadId) this.liveUsageSnapshots.delete(helperThreadId);
       }
 
       const turnMetadata = extractRequestMetadata(normalized.params);
@@ -7913,10 +7987,6 @@ export class CodexAppServerClient {
     // A restart waiting out its backoff must not hold close open. Its
     // initialization sees the new close generation and gives up.
     this.cancelRestartBackoff?.();
-    // Snapshot resumes own a separate writer. Release its notification waiter
-    // and transport before the lifecycle barrier drains the admitted read.
-    const stoppedReader = this.cancelPricingSnapshotReader?.();
-    void stoppedReader?.catch(() => undefined);
     // Stop the transport now: pending RPC responses must not hold shutdown
     // (or a recovery waiting to drain those RPCs) until their timeouts expire.
     const stopped = this.stopTransport();
@@ -8082,6 +8152,7 @@ export class CodexAppServerClient {
     this.initialized = false;
     this.tokenMiserActivationNegotiated = false;
     this.runningTurnIdsByThread.clear();
+    this.liveUsageSnapshots.clear();
     this.initializationPromise = null;
     this.initializeResult = null;
     this.availableHelperModels = [];
@@ -8369,7 +8440,7 @@ export class CodexAppServerClient {
       await requestWithFallbacks({
         client: this.rawConnection,
         methods: ["thread/resume"],
-        payloads: [{ threadId: params.threadId }],
+        payloads: [{ threadId: params.threadId, excludeTurns: true } satisfies CodexThreadResumeParams],
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
       return { recovered: recoveryResult! };
@@ -8404,9 +8475,9 @@ export class CodexAppServerClient {
     this.ownedRealtimeThreads.delete(threadId);
   }
 
-  async appendRealtimeText(threadId: string, text: string): Promise<void> {
+  async appendRealtimeText(threadId: string, text: string, role: ThreadRealtimeAppendTextParams["role"] = "user"): Promise<void> {
     if (!this.initialized || this.pendingCloses > 0) throw new Error("Voice backend disconnected.");
-    await this.connection.request("thread/realtime/appendText", { threadId, text, role: "user" }, 10_000);
+    await this.connection.request("thread/realtime/appendText", { threadId, text, role } satisfies ThreadRealtimeAppendTextParams, 10_000);
   }
 
   onNotification(
@@ -8879,15 +8950,26 @@ export class CodexAppServerClient {
 
   /** Mutation fences also arrive locally through the registry, without a
    * notification on this connection. Existing readers keep their ownership;
-   * callers after the fence cannot join their pre-mutation physical read.
+   * callers after the fence cannot join the affected inventory's pre-mutation read.
    */
   invalidateThreadListings(notification?: AppServerNotification): void {
     if (notification) {
       if (this.threadListingInvalidations.has(notification)) return;
       this.threadListingInvalidations.add(notification);
     }
-    this.threadListingGeneration += 1;
-    this.pendingThreadListings.clear();
+    // These events change PwrAgent overlays, not Codex inventory or ordering.
+    // Navigation still rebuilds and rereads overlays; it may join the provider
+    // scan already in progress. Unknown and provider mutations remain fences.
+    if (notification && ["navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
+      "thread/pin/reordered", "thread/subAgents/updated"].includes(notification.method)) return;
+    this.activeThreadListingGeneration += 1;
+    // Turn/status and viewer overlay events do not change archived inventory.
+    // Keep its in-flight owner joinable while active navigation advances.
+    if (!notification || !["turn/started", "turn/completed", "turn/failed", "turn/cancelled",
+      "thread/status/changed", "navigation/thread/seen", "thread/pin/added", "thread/pin/removed",
+      "thread/pin/reordered"].includes(notification.method)) {
+      this.archivedThreadListingGeneration += 1;
+    }
   }
 
   async listThreads(params?: {
@@ -8906,7 +8988,7 @@ export class CodexAppServerClient {
     // through different cache keys. Share the complete listing, including
     // directory observations, until it settles. Never retain a completed scan.
     const key = JSON.stringify([
-      this.threadListingGeneration,
+      params?.archived ? this.archivedThreadListingGeneration : this.activeThreadListingGeneration,
       params?.archived === true, params?.enrichDirectories ?? true,
       params?.filter?.trim() || "", params?.limit, params?.maxPages,
       params?.skipArchivedMetadataRefresh === true, params?.deadlineAt,
@@ -8915,7 +8997,7 @@ export class CodexAppServerClient {
     const existing = this.pendingThreadListings.get(key);
     if (existing) {
       listingDiagnostics.link("provider", "coalesced", existing, { caller: diagnostics?.callerReason });
-      return await existing;
+      return structuredClone(await existing);
     }
     const pending = listingDiagnostics.trace("provider", { provider: "codex", caller: diagnostics?.callerReason, archived: params?.archived === true },
       () => this.loadThreadListing(params, diagnostics));
@@ -8927,47 +9009,56 @@ export class CodexAppServerClient {
     }
   }
 
-  private async loadThreadListing(
+  private async readThreadInventory(
     params: Parameters<CodexAppServerClient["listThreads"]>[0],
     diagnostics?: JsonRpcObserverDiagnostics,
-  ): Promise<AppServerThreadSummary[]> {
-    const requestParams = {
-      client: this.connection,
-      diagnostics,
-      methods: ["thread/list"] as CodexClientRequestMethod[],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-    };
-    if (params?.archived === true) {
-      const archivedThreads = await requestThreadListPages({
+  ): Promise<RawCodexThreadSummary[]> {
+    // Directory enrichment and archived metadata merging happen after the
+    // physical page walk. Different consumers can share that walk without
+    // sharing mutable results or weakening limits, deadlines or mutation fences.
+    const key = JSON.stringify([
+      params?.archived ? this.archivedThreadListingGeneration : this.activeThreadListingGeneration,
+      params?.archived === true, params?.filter?.trim() || "", params?.limit,
+      params?.maxPages, params?.deadlineAt, params?.requireComplete === true,
+    ]);
+    let pending = this.pendingThreadInventories.get(key);
+    const shared = pending !== undefined;
+    if (!pending) {
+      pending = requestThreadListPages({
         textCache: this.threadListTextCache,
-        archived: true,
+        archived: params?.archived === true,
         client: this.connection,
         diagnostics,
         filter: params?.filter,
         limit: params?.limit,
         maxPages: params?.maxPages,
         requireComplete: params?.requireComplete,
-        requestTimeoutMs: requestParams.timeoutMs,
+        requestTimeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         deadlineAt: params?.deadlineAt,
       });
+      this.pendingThreadInventories.set(key, pending);
+    }
+    try {
+      const rows = await pending;
+      return shared ? structuredClone(rows) : rows;
+    } finally {
+      if (this.pendingThreadInventories.get(key) === pending) this.pendingThreadInventories.delete(key);
+    }
+  }
+
+  private async loadThreadListing(
+    params: Parameters<CodexAppServerClient["listThreads"]>[0],
+    diagnostics?: JsonRpcObserverDiagnostics,
+  ): Promise<AppServerThreadSummary[]> {
+    if (params?.archived === true) {
+      const archivedThreads = await this.readThreadInventory(params, diagnostics);
       return await this.enrichThreads(filterVisibleCodexThreads(archivedThreads), {
         enrichDirectories: params?.enrichDirectories ?? true,
       });
     }
 
     const activeThreads = filterVisibleCodexThreads(
-      await requestThreadListPages({
-        textCache: this.threadListTextCache,
-        archived: false,
-        client: this.connection,
-        diagnostics,
-        filter: params?.filter,
-        limit: params?.limit,
-        maxPages: params?.maxPages,
-        requireComplete: params?.requireComplete,
-        requestTimeoutMs: requestParams.timeoutMs,
-        deadlineAt: params?.deadlineAt,
-      }),
+      await this.readThreadInventory(params, diagnostics),
     );
     const threads = params?.skipArchivedMetadataRefresh
       ? activeThreads
@@ -9128,6 +9219,63 @@ export class CodexAppServerClient {
     return await requestPromise;
   }
 
+  /** Archive safety reads own their cursor and pace each page and discovery
+   * separately. No navigation overlays, native-worker reconciliation or
+   * scheduled archived metadata walk belongs on this read-only path. */
+  async readArchiveCleanupThreadSummary(threadId: string, checkpoint: () => Promise<void>): Promise<AppServerThreadSummary> {
+    await this.ensureInitialized();
+    await checkpoint();
+    const result = await requestWithThreadMetadataReadRetry(async () =>
+      await this.connection.request("thread/read", { threadId, includeTurns: false },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    );
+    const rows = extractThreadsFromValue({ data: [asRecord(result)?.thread] }, this.threadListTextCache);
+    const raw = rows.find((row) => row.id === threadId);
+    if (!raw) throw new Error(`Thread metadata was not found: ${threadId}`);
+    const threads = await this.enrichRawThreadDirectories([raw], "thread-list", { checkpoint, strict: true, concurrency: 1 });
+    return threads[0]!;
+  }
+
+  async listArchiveCleanupThreadsPage(params: {
+    archived: boolean;
+    cursor?: string;
+    limit: number;
+    checkpoint: () => Promise<void>;
+    directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
+  }): Promise<{ threads: AppServerThreadSummary[]; nextCursor?: string }> {
+    await this.ensureInitialized();
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      diagnostics: { callerReason: "archive-cleanup" },
+      methods: ["thread/list"] as CodexClientRequestMethod[],
+      // A compatibility fallback that drops source/archived/page filters is
+      // an incomplete safety inventory, even if the provider accepts it.
+      payloads: [{
+        archived: params.archived, cursor: params.cursor, limit: params.limit,
+        // Title/turn updates must not move an existing checkout user across
+        // the cursor while the paced safety inventory is being read.
+        sortKey: "created_at", sourceKinds: CODEX_WORKTREE_SAFETY_SOURCE_KINDS, useStateDbOnly: true,
+      } satisfies CodexThreadListParams],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+    const page = extractThreadListPage(result, this.threadListTextCache);
+    if (page.threads.length > params.limit) throw new Error("Archive discovery exceeded the requested provider page budget.");
+    // Completed Guardian approval reviews remain unarchived with an inherited
+    // cwd. They are not independent checkout users. Keep active or uncertain
+    // reviews, every ordinary thread/worker, and archived ownership evidence.
+    const checkoutUsers = params.archived ? page.threads : page.threads.filter((thread) =>
+      thread.codexThreadSourceKind !== "guardian_review"
+      || (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded"),
+    );
+    const threads = await this.enrichRawThreadDirectories(checkoutUsers, "thread-list", {
+      checkpoint: params.checkpoint,
+      strict: true,
+      concurrency: 1,
+      directoryObservations: params.directoryObservations,
+    });
+    return { threads: hydrateMissingLinkedDirectoriesFromSiblingRepos(threads), nextCursor: page.nextCursor };
+  }
+
   private async enrichThreads(
     threads: RawCodexThreadSummary[],
     options: { enrichDirectories: boolean },
@@ -9173,13 +9321,17 @@ export class CodexAppServerClient {
   private async enrichRawThreadDirectories(
     threads: RawCodexThreadSummary[],
     caller: DirectoryEnrichmentCaller,
+    background?: {
+      checkpoint: () => Promise<void>; strict: boolean; concurrency: number;
+      directoryObservations?: Map<string, Promise<ThreadDirectoryEnrichment>>;
+    },
   ): Promise<EnrichedCodexThread[]> {
     const enrichedThreads: Array<EnrichedCodexThread | undefined> = [];
     // A listing can span many mapper batches and contain hundreds of threads
     // sharing one checkout. Validate each directory once for this observation,
     // including failures, rather than once for every row. The next listing
     // observes it again so external workspace changes remain visible.
-    const directories = new Map<string, Promise<ThreadDirectoryEnrichment>>();
+    const directories = background?.directoryObservations ?? new Map<string, Promise<ThreadDirectoryEnrichment>>();
 
     for await (const enrichedThread of new IterableMapper(
       threads.map((thread, index) => ({ index, thread })),
@@ -9193,12 +9345,14 @@ export class CodexAppServerClient {
           const directoryKey = projectKey ? path.resolve(projectKey) : "";
           let pending = directories.get(directoryKey);
           if (!pending) {
+            await background?.checkpoint();
             pending = this.threadDirectoryEnricher(projectKey, caller);
             directories.set(directoryKey, pending);
           }
           enrichment = await pending;
           if (projectKey) this.lastDirectoryEnrichment.set(path.resolve(projectKey), enrichment);
         } catch (error) {
+          if (background?.strict) throw error;
           codexClientLog.warn("thread directory enrichment failed", {
             threadId: thread.id,
             projectKey,
@@ -9227,7 +9381,7 @@ export class CodexAppServerClient {
         };
       },
       {
-        concurrency: THREAD_DIRECTORY_ENRICHMENT_CONCURRENCY,
+        concurrency: background?.concurrency ?? THREAD_DIRECTORY_ENRICHMENT_CONCURRENCY,
         maxUnread: THREAD_DIRECTORY_ENRICHMENT_MAX_UNREAD,
       },
     )) {
@@ -9540,69 +9694,49 @@ export class CodexAppServerClient {
       const thread = asRecord(asRecord(result)?.thread);
       if (thread?.id !== threadId) return {};
       const model = pickString(thread, ["model"]);
-      const updatedAt = pickNumber(thread, ["updatedAt"]);
-      const cached = this.pricingSnapshotCache.get(threadId);
-      if (cached && updatedAt !== undefined && cached.updatedAt === updatedAt) return {
-        model, tokens: cached.tokens, ...(cached.serviceTier ? { serviceTier: cached.serviceTier } : {}),
+      const live = this.liveUsageSnapshots.get(threadId);
+      if (live?.tokens) return {
+        model: model ?? live.model, tokens: live.tokens,
+        ...(live.serviceTier ? { serviceTier: live.serviceTier } : {}),
       };
 
-      // A resume emits saved cumulative usage, but also acquires the writer.
-      // Use a short-lived isolated process so the snapshot cannot become an
-      // observed turn charge or keep another app from opening the thread.
-      const closeGeneration = this.closeGeneration;
-      const read = this.pricingSnapshotReaderQueue.then(async () => {
-        if (this.pendingCloses > 0 || closeGeneration !== this.closeGeneration) return { model };
-        const reader = new CodexAppServerClient({ ...this.options, connectionObserver: undefined, authenticationRecovery: false });
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        let tokens: ThreadUsageTokenBreakdown | undefined;
-        let received = false;
-        let cancelled = false;
-        let readerClose: Promise<void> | undefined;
-        let finish!: () => void;
-        const receivedUsage = new Promise<void>((resolve) => { finish = resolve; });
-        const closeReader = () => readerClose ??= reader.close();
-        const cancelReader = () => {
-          cancelled = true;
-          if (timer) clearTimeout(timer);
-          finish();
-          return closeReader();
+      // account/usage/read supports thread estimates without loading a thread
+      // or acquiring its writer. Some billing routes/older servers supply no
+      // threadUsage; keep unknown counts unknown instead of resuming to get it.
+      try {
+        const usageResult = asRecord(await this.connection.request("account/usage/read", { threadId },
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
+        // A live notification may arrive while the read is in flight.
+        const latest = this.liveUsageSnapshots.get(threadId);
+        if (latest?.tokens) return {
+          model: model ?? latest.model, tokens: latest.tokens,
+          ...(latest.serviceTier ? { serviceTier: latest.serviceTier } : {}),
         };
-        this.cancelPricingSnapshotReader = cancelReader;
-        const unsubscribe = reader.onNotification((notification) => {
-          if (notification.method !== "thread/tokenUsage/updated" || notification.params.threadId !== threadId) return;
-          tokens = readTokenUsageBreakdown(asRecord(asRecord(notification.params.tokenUsage)?.total) ?? {});
-          received = true;
-          finish();
-        });
-        try {
-          await reader.ensureInitialized();
-          if (cancelled) return { model };
-          const resumed = asRecord(await reader.connection.request("thread/resume", { threadId, excludeTurns: true },
-            this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
-          if (!received && !cancelled) {
-            // Bound compatibility with servers that do not emit a snapshot.
-            // Supported servers satisfy this through the notification, not a delay.
-            timer = setTimeout(finish, this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
-            await receivedUsage;
+        const usage = asRecord(usageResult?.threadUsage);
+        if (usage?.threadId !== threadId || !Array.isArray(usage.groups) || usage.groups.length === 0) return { model };
+        const groups = usage.groups.map((group) => asRecord(group) ?? {});
+        const sum = (key: string): number | undefined => {
+          let total = 0;
+          for (const group of groups) {
+            const count = pickNumber(group, [key]);
+            if (count === undefined || !Number.isSafeInteger(count) || count < 0) return undefined;
+            total += count;
           }
-          if (cancelled) return { model };
-          const serviceTier = pickString(resumed ?? {}, ["serviceTier"]);
-          if (tokens && updatedAt !== undefined) rememberBoundedMap(this.pricingSnapshotCache, threadId, { updatedAt, tokens, serviceTier }, 1_000);
-          return { model: pickString(resumed ?? {}, ["model"]) ?? model, tokens, ...(serviceTier ? { serviceTier } : {}) };
-        } catch (error) {
-          // Another app may still own the writer. Keep counts unknown and
-          // let a later explicit panel read try again after that app closes.
-          codexClientLog.debug("historical pricing snapshot unavailable", { threadId, error: String(error) });
-          return { model };
-        } finally {
-          if (timer) clearTimeout(timer);
-          unsubscribe();
-          if (this.cancelPricingSnapshotReader === cancelReader) this.cancelPricingSnapshotReader = undefined;
-          await closeReader();
-        }
-      });
-      this.pricingSnapshotReaderQueue = read.then(() => undefined, () => undefined);
-      return await read;
+          return Number.isSafeInteger(total) ? total : undefined;
+        };
+        const tokens: ThreadUsageTokenBreakdown = {
+          inputTokens: sum("inputTokens"), cachedInputTokens: sum("cachedInputTokens"),
+          uncachedInputTokens: sum("netNewInputTokens"), outputTokens: sum("outputTokens"), totalTokens: sum("totalTokens"),
+        };
+        const estimatedCostMicros = pickNumber(usage, ["estimatedUsageUsdMicros"]);
+        return { model, tokens, pricingSource: "provider" as const,
+          ...(estimatedCostMicros !== undefined && Number.isSafeInteger(estimatedCostMicros) && estimatedCostMicros >= 0
+            ? { estimatedCostMicros } : {}),
+        };
+      } catch (error) {
+        codexClientLog.debug("historical pricing snapshot unavailable", { threadId, error: String(error) });
+        return { model };
+      }
     });
     this.pricingSnapshotReads.set(threadId, pending);
     try {
@@ -9632,6 +9766,18 @@ export class CodexAppServerClient {
     const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
     if (!entry || entry.type !== "activity") throw new Error("Activity details are no longer available. Reload the thread.");
     return entry;
+  }
+
+  async readThreadName(threadId: string): Promise<string | undefined> {
+    await this.ensureInitialized();
+    const result = await requestWithThreadMetadataReadRetry(async () =>
+      await this.connection.request("thread/read", { threadId, includeTurns: false },
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+    ) as CodexThreadReadResponse;
+    if (result.thread?.id !== threadId) throw new Error(`Thread metadata was not found: ${threadId}`);
+    // Undo needs the persisted name, before display-title normalization or
+    // preview fallback changes the value shown in thread summaries.
+    return typeof result.thread.name === "string" ? result.thread.name : undefined;
   }
 
   async readThreadSummary(threadId: string): Promise<AppServerThreadSummary> {
@@ -10388,6 +10534,9 @@ export class CodexAppServerClient {
     if (!helperModel) {
       return { status: "unavailable", reason: "codex_helper_no_available_model" };
     }
+    // Captured now, awaited with the result, so the helper turn does not wait on it.
+    const accountKeyRead = (this.options.resolveUsageAccountKey?.()
+      ?? this.readAccount().then((account) => usageAccountKey(account))).catch(() => undefined);
     const helperReasoningEffort = normalizeCodexReasoningEffort(
       selection.reasoningEffort,
     );
@@ -10414,7 +10563,7 @@ export class CodexAppServerClient {
         mcpServerNames,
         params.disableExecution,
       );
-      const threadStartResult = await requestWithFallbacks({
+      const threadStartResult = await this.startHelperThread({
         client: this.connection,
         methods: ["thread/start"],
         payloads: [
@@ -10487,7 +10636,6 @@ export class CodexAppServerClient {
           threadId: helperThreadId,
         });
       }
-      this.helperThreadIds.add(helperThreadId);
       this.helperThreadPredicates.set(helperThreadId, helperPredicate);
       if (params.onToolCall) {
         // Registered only after the attestation above proves this thread has
@@ -10530,9 +10678,11 @@ export class CodexAppServerClient {
       if (immediateObject) {
         helperTurnCompleted = true;
         const tokenUsage = readHelperTokenUsage(turnStartResult);
+        const accountKey = await accountKeyRead;
         return {
           status: "ok",
           object: immediateObject,
+          ...(accountKey ? { accountKey } : {}),
           helperThreadId,
           ...(helperTurnId ? { helperTurnId } : {}),
           model: helperModel,
@@ -10554,9 +10704,11 @@ export class CodexAppServerClient {
         timeoutMs: turnTimeoutMs,
       });
       helperTurnCompleted = true;
+      const accountKey = await accountKeyRead;
       return {
         status: "ok",
         object: helperResult.object,
+        ...(accountKey ? { accountKey } : {}),
         helperThreadId,
         helperTurnId,
         model: helperModel,
@@ -10609,6 +10761,26 @@ export class CodexAppServerClient {
         this.helperToolTurnThreadIds.delete(helperThreadId);
         this.noteLiveTurnActivity();
       }
+    }
+  }
+
+  private async startHelperThread(
+    params: Parameters<typeof requestWithFallbacks>[0],
+  ): Promise<unknown> {
+    let resolveStarted!: (threadId: string | undefined) => void;
+    const started = new Promise<string | undefined>((resolve) => { resolveStarted = resolve; });
+    this.pendingHelperThreadStarts.add(started);
+    let threadId: string | undefined;
+    try {
+      const result = await requestWithFallbacks(params);
+      threadId = extractThreadIdFromValue(result);
+      // Own notifications before instruction validation and MCP attestation
+      // await further RPCs. Tool handlers still require successful attestation.
+      if (threadId) this.helperThreadIds.add(threadId);
+      return result;
+    } finally {
+      resolveStarted(threadId);
+      this.pendingHelperThreadStarts.delete(started);
     }
   }
 
@@ -10946,6 +11118,10 @@ export class CodexAppServerClient {
 
   async compactThread(params: {
     threadId: string;
+    model?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    fastMode?: boolean;
   }): Promise<{ threadId: string; turnId: string; itemId?: string }> {
     await this.ensureInitialized();
     const connection = this.createThreadOperationConnection();
@@ -10953,14 +11129,21 @@ export class CodexAppServerClient {
     await requestWithFallbacks({
       client: connection,
       methods: ["thread/resume"],
-      payloads: buildThreadResumePayloads(
-        {
-          threadId: params.threadId,
-        },
-        this.getProtocolCompatibility(),
-      ),
+      payloads: buildThreadResumePayloads(params, this.getProtocolCompatibility()),
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-    }).catch(() => undefined);
+    });
+
+    // Rejoining a loaded thread can preserve its previous model. Compaction
+    // has no turn/start override, so apply the selection and await acceptance.
+    const settings = buildThreadSettingsUpdatePayload(params);
+    if (settings) {
+      await requestWithFallbacks({
+        client: connection,
+        methods: ["thread/settings/update"],
+        payloads: [settings],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+    }
 
     await requestWithFallbacks({
       client: connection,

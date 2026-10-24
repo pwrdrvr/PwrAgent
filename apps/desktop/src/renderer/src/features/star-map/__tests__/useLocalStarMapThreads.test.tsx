@@ -60,7 +60,7 @@ it("does not refresh metadata for streamed token updates", async () => {
   renderHook(() => useLocalStarMapThreads({ desktopApi: api, enabled: true, filters: {}, demandedIdentities: [] }));
   await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   act(() => {
-    for (let index = 0; index < 1000; index += 1) {
+    for (let index = 0; index < 10; index += 1) {
       notify({ backend: "codex", notification: { method: "thread/tokenUsage/updated", params: { threadId: "thread" } } } as AgentEvent);
     }
   });

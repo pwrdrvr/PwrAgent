@@ -230,15 +230,18 @@ describe("AcpRegistryService", () => {
     });
   });
 
-  it("bans Codex ACP even when a matching allowlist rule exists", () => {
+  it.each([
+    ["codex-acp", "@zed-industries/codex-acp@0.14.0"],
+    ["claude-acp", "@agentclientprotocol/claude-agent-acp@0.14.0"],
+  ])("bans %s even when a matching allowlist rule exists", (registryId, packageName) => {
     const service = new AcpRegistryService({
       allowlist: new AcpAgentAllowlist([
         {
-          id: "codex-rule",
-          registryId: "codex-acp",
+          id: "duplicate-provider-rule",
+          registryId,
           versions: ["0.14.0"],
           distributionKinds: ["npx"],
-          allowedPackageNames: ["@zed-industries/codex-acp@0.14.0"],
+          allowedPackageNames: [packageName],
         },
       ]),
     });
@@ -247,12 +250,12 @@ describe("AcpRegistryService", () => {
       agents: normalizeRegistry({
         agents: [
           {
-            id: "codex-acp",
-            name: "Codex CLI",
+            id: registryId,
+            name: "Duplicate provider",
             version: "0.14.0",
             distribution: {
               npx: {
-                package: "@zed-industries/codex-acp@0.14.0",
+                package: packageName,
               },
             },
           },
@@ -271,7 +274,7 @@ describe("AcpRegistryService", () => {
     const distribution = entry?.distributions[0];
     expect(distribution).toBeDefined();
     if (!entry || !distribution) {
-      throw new Error("expected Codex ACP registry entry");
+      throw new Error("expected duplicate provider registry entry");
     }
     expect(service.evaluateDistribution(entry, distribution)).toMatchObject({
       installable: false,

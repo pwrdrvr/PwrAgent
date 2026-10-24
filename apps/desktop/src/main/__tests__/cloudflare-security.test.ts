@@ -250,4 +250,17 @@ describe("Cloudflare sign-in (oauth) admission proof", () => {
     const smuggled = await encryptCloudflareBundle({ ...bundle, ...credentials }, "a-long-test-password");
     await expect(decryptCloudflareBundle(smuggled, "a-long-test-password")).rejects.toThrow("Could not open");
   });
+
+  it("carries the gateway's grant lifetime in a sign-in bundle and rejects an implausible one", async () => {
+    const bundle = {
+      version: 1 as const, gate: "oauth" as const, endpoint: "wss://federation.example.com", invite: "test-invite",
+      signInLifetimeMs: 336 * 3_600_000,
+    };
+    const encrypted = await encryptCloudflareBundle(bundle, "a-long-test-password");
+    expect(await decryptCloudflareBundle(encrypted, "a-long-test-password")).toEqual(bundle);
+    for (const signInLifetimeMs of [0, -1, Number.NaN, 400 * 24 * 3_600_000, "336h"]) {
+      const bad = await encryptCloudflareBundle({ ...bundle, signInLifetimeMs } as unknown as typeof bundle, "a-long-test-password");
+      await expect(decryptCloudflareBundle(bad, "a-long-test-password")).rejects.toThrow("Could not open");
+    }
+  });
 });

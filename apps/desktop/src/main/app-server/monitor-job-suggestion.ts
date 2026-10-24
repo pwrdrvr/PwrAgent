@@ -65,7 +65,8 @@ export const MONITOR_JOB_SUGGESTION =
   + "Give the monitor the target, check interval, completion conditions, and problems to watch for. "
   + "It will stop and report back when the task finishes or a specified problem occurs. "
   + "For an attached PR, first check PwrAgent's PR automation guidance and use watch_thread_pull_request when applicable. "
-  + "After the monitor or PR watch starts, end this turn if no unrelated work remains. "
+  + "For another thread's turn completion or PR prerequisite, use manage_thread_dependencies instead of polling or creating a monitor; it can wait before the PR exists. "
+  + "After the monitor, PR watch, or dependency starts, end this turn if no unrelated work remains. "
   + "A monitor cannot inherit a parent-local session or cell ID; give it durable process, log, or status identifiers. "
   + "This is an automatic reminder, sent at most once this turn.";
 
@@ -269,10 +270,21 @@ function pollingSignal(record: ThreadToolInvocationRecord): string | undefined {
   if (tool === "sleep" || tool.endsWith("__sleep")) return "sleep";
   const command = record.normalizedCommand ?? "";
   if (/^sleep\s+\d/.test(command)) return "sleep";
-  // Group only read-only status requests for the same target. Logs and mutations
-  // are investigation/work, not evidence of a polling loop.
+  // Group only repeated read-only status queries. Logs, mutations, and PR
+  // metadata reads are investigation/work, not evidence of a polling loop.
   const gh = command.match(/^gh\s+(run\s+view|pr\s+(?:view|checks))\s+(\d+|https:\/\/[^\s'"]+)/);
   if (!gh || /--log(?:-failed)?\b/.test(command)) return undefined;
-  const repo = command.match(/(?:--repo|-R)\s+([^\s'"]+)/)?.[1] ?? "";
-  return `gh:${gh[1]}:${repo}:${gh[2]}`;
+  if (gh[1] === "pr view") {
+    const json = command.match(/(?:^|\s)--json(?:=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s]+))/);
+    if (json) {
+      const fields = (json[1] ?? json[2] ?? json[3] ?? "").split(",");
+      if (!fields.some((field) => [
+        "statusCheckRollup", "mergeable", "mergeStateStatus", "state",
+        "mergedAt", "reviewDecision", "closed", "closedAt",
+      ].includes(field))) return undefined;
+    }
+  }
+  // Keep the requested fields and filters: checking CI, fetching a body for an
+  // edit, and verifying that edit must not become three checks of one PR.
+  return command;
 }

@@ -26,7 +26,7 @@ async function openRequestUserInputReplay() {
   ).toBeVisible();
 
   await app.window
-    .getByLabel("Reply")
+    .getByRole("textbox", { name: "Reply", exact: true })
     .fill("Ask the plan questionnaire.");
   await app.window.getByLabel("Plan mode").click();
   await app.window.getByRole("button", { name: "Send" }).click();

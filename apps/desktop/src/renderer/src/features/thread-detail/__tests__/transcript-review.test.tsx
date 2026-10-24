@@ -150,6 +150,50 @@ describe("TranscriptReview", () => {
     expect(text).not.toContain("[P2] [P2]");
   });
 
+  it("badges an unranked finding with its category, and draws no placeholder", async () => {
+    const location = {
+      absolute_file_path: "/repo/src/registry.ts",
+      line_range: { start: 4, end: 6 },
+    };
+    const copyRichText = vi.fn(
+      async (_payload: { html: string; text: string }) => undefined,
+    );
+    render(
+      <TranscriptReview
+        desktopApi={{ copyRichText, copyText: vi.fn(async () => undefined) }}
+        entry={{
+          type: "review",
+          id: "review-claude",
+          review: "",
+          reviewer: { backend: "claude" },
+          output: {
+            findings: [
+              { title: "Duplicate CSS rule", body: "Defined twice.", confidence_score: 0, category: "simplification", code_location: location },
+              { title: "Unlabelled finding", body: "No rank, no kind.", confidence_score: 0, code_location: location },
+            ],
+            overall_correctness: "patch is incorrect",
+            overall_explanation: "",
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Simplification")).toHaveClass("transcript-review__priority--category");
+    expect(screen.queryByText("P?")).not.toBeInTheDocument();
+    const heads = document.querySelectorAll(".transcript-review__finding-head");
+    expect(heads[0]).not.toHaveClass("transcript-review__finding-head--untagged");
+    expect(heads[1]).toHaveClass("transcript-review__finding-head--untagged");
+    expect(heads[1]?.textContent).toBe("Unlabelled finding");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy review with what was reviewed" }));
+    await waitFor(() => {
+      expect(copyRichText).toHaveBeenCalledTimes(1);
+    });
+    const text = copyRichText.mock.calls[0]?.[0].text ?? "";
+    expect(text).toContain("### 1. [Simplification] Duplicate CSS rule");
+    expect(text).toContain("### 2. Unlabelled finding");
+  });
+
   it("hides raw entered-review protocol text when it matches the display label", () => {
     render(
       <TranscriptReview
@@ -516,7 +560,7 @@ describe("TranscriptReview copy affordances", () => {
     await waitFor(() => {
       expect(copyRichText).toHaveBeenCalledTimes(1);
     });
-    const { html, text } = copyRichText.mock.calls[0]?.[0] as {
+    const { html, text } = copyRichText.mock.calls[0]![0] as {
       html: string;
       text: string;
     };
@@ -551,7 +595,7 @@ describe("TranscriptReview copy affordances", () => {
     await waitFor(() => {
       expect(copyRichText).toHaveBeenCalledTimes(1);
     });
-    const { text } = copyRichText.mock.calls[0]?.[0] as { text: string };
+    const { text } = copyRichText.mock.calls[0]![0] as { text: string };
     expect(text).toContain("### [P2] Keep the legacy icns out of the bundle");
     expect(text).toContain("`apps/desktop/electron-builder.yml:41`");
     expect(text).toContain(

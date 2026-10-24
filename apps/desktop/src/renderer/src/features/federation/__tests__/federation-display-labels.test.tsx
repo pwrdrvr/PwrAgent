@@ -37,7 +37,7 @@ describe("federation machine names", () => {
       local: { label: "Studio-Mac-Mini-M4 / default", shortLabel: federationLocalDisplayLabel(health) },
       targets: buildFederationThreadTargets(health), localHasProject: true, planRetarget: async () => undefined,
     }} onRetarget={() => undefined} />);
-    const chip = screen.getByRole("button", { name: "Machine" });
+    const chip = screen.getByRole("button", { name: /^Machine(?::|$)/ });
     expect(chip).toHaveTextContent("M4 Mini / default");
     fireEvent.click(chip);
     expect(screen.getByRole("option", { name: /M5 Max/ })).toBeInTheDocument();
@@ -76,7 +76,7 @@ describe("federation machine names", () => {
       targets: buildFederationThreadTargets(health).filter((target) => target.instanceId !== "max"),
       localHasProject: true, planRetarget: async () => undefined,
     }} onRetarget={onRetarget} />);
-    const chip = screen.getByRole("button", { name: "Machine" });
+    const chip = screen.getByRole("button", { name: /^Machine(?::|$)/ });
     expect(chip).toHaveTextContent("M5 Max");
     expect(chip).toHaveAttribute("aria-description", "Studio-MBP-M5-Max is offline");
     expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--offline");

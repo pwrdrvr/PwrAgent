@@ -38,6 +38,8 @@ const desktopConfigStoreMock = vi.hoisted(() => ({
       ? {
           appearance: {
             theme: "system",
+            darkTheme: "tangerine-dark",
+            lightTheme: "tangerine-light",
             density: "mission-control",
             sidebarTextSize: "md",
             transcriptTextSize: "md",
@@ -505,7 +507,10 @@ describe("settings ipc", () => {
     })).resolves.toMatchObject({
       snapshot: { models: { codex: { managedBuilds: { value: true } } } },
     });
-    expect(ensureManaged).toHaveBeenCalledExactlyOnceWith({ checkMode: "force" });
+    expect(ensureManaged).toHaveBeenCalledExactlyOnceWith({
+      channel: "latest",
+      checkMode: "force",
+    });
     await expect(service.resolveCodexCommand()).resolves.toMatchObject({
       command: "/managed/codex",
     });
@@ -524,6 +529,70 @@ describe("settings ipc", () => {
       command: "/local/codex",
     });
     expect(fs.readFileSync(configPath, "utf8")).toContain("managed_builds = false");
+  });
+
+  it("installs the PwrAgent Codex track a Settings write switches to", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const configPath = path.join(tempRoot, "config.toml");
+    fs.writeFileSync(configPath, "[models.codex]\nmanaged_builds = true\n");
+    const ensureManaged = vi.fn(async (options: { channel: string }) => {
+      const tag = options.channel === "prerelease"
+        ? "pwragent-v0.201.0-pwragent.1"
+        : "pwragent-v0.200.0-pwragent.1";
+      const version = tag.slice("pwragent-v".length);
+      return {
+        appServerCommand: `/managed/${tag}/codex-app-server`,
+        codeModeHostCommand: `/managed/${tag}/codex-code-mode-host`,
+        command: `/managed/${tag}/codex`,
+        metadata: {
+          asset: `pwragent-codex-${version}-windows-x86_64.zip`,
+          checkedAt: 1,
+          installedAt: 1,
+          repository: "pwrdrvr/codex",
+          schemaVersion: 1,
+          sha256: "a".repeat(64),
+          tag,
+          version,
+        },
+      };
+    });
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(),
+      },
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_WRITE_CONFIG_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service);
+
+    // The release check is an admitted discovery: the handler has to issue
+    // the permit for a track change, or the write would persist the track and
+    // leave the other track's build running until the next day's check.
+    await expect(handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.({}, {
+      patch: { models: { codex: { managedBuildChannel: "prerelease" } } },
+    })).resolves.toMatchObject({
+      snapshot: {
+        models: {
+          codex: { managedBuildChannel: { value: "prerelease" } },
+        },
+        runtime: {
+          tokenMiser: { managedCodex: { version: "0.201.0-pwragent.1" } },
+        },
+      },
+    });
+    expect(ensureManaged).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ channel: "prerelease", checkMode: "force" }),
+    );
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      'managed_build_channel = "prerelease"',
+    );
   });
 
   it("leaves the PwrAgent Codex build disabled when its Settings install fails", async () => {
@@ -546,7 +615,10 @@ describe("settings ipc", () => {
     await expect(handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.({}, {
       patch: { models: { codex: { managedBuilds: true } } },
     })).rejects.toThrow("managed Codex download failed");
-    expect(ensureManaged).toHaveBeenCalledExactlyOnceWith({ checkMode: "force" });
+    expect(ensureManaged).toHaveBeenCalledExactlyOnceWith({
+      channel: "latest",
+      checkMode: "force",
+    });
     expect(service.resolveManagedCodexEnabled()).toBe(false);
     expect(fs.existsSync(configPath)).toBe(false);
   });
@@ -1668,6 +1740,42 @@ describe("settings ipc", () => {
     }
   });
 
+  it("excludes a previously installed Claude ACP adapter from the settings catalog", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import("../state/app-state");
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    initializeAppState("bootstrap");
+    try {
+      const store = new AcpAgentStore(getAppStateDb());
+      store.upsertInstalledAgent({
+        backendId: "acp:claude-acp", registryId: "claude-acp", name: "Claude Agent",
+        distributionKind: "npx", distributionSource: "@agentclientprotocol/claude-agent-acp",
+        installStatus: "installed", authStatus: "authenticated", verificationStatus: "not-applicable",
+        allowlistRuleId: "legacy-claude-acp",
+        installedAt: 1, updatedAt: 1,
+      });
+      registerSettingsIpcHandlers(service);
+      const response = await handlers.get(ACP_AGENTS_LIST_CHANNEL)!({}, { refresh: false }) as {
+        entries: AcpAgentSettingsEntry[];
+      };
+      expect(response.entries.map((entry) => entry.registryId).sort()).toEqual(["gemini", "grok", "kimi", "qwen"]);
+      expect(localAcpDiscoveryMock.discoverLocalAcpAgentRecords).not.toHaveBeenCalled();
+      // Hiding a retired provider must not delete the user's persisted state.
+      expect(store.getInstalledAgent("acp:claude-acp")).toBeDefined();
+    } finally {
+      disposeAppState();
+    }
+  });
+
   it("never serves a vendor Grok update status for a PwrAgent build", async () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),
@@ -2702,7 +2810,7 @@ describe("settings ipc", () => {
       });
       registerSettingsIpcHandlers(service);
       const readState = async () =>
-        ((await handlers.get(PROVIDER_CATALOG_REFRESH_READ_CHANNEL)?.({})) as
+        ((await handlers.get(PROVIDER_CATALOG_REFRESH_READ_CHANNEL)!({})) as
           ReadProviderCatalogRefreshResponse).state;
 
       const started = (await handlers
@@ -2710,6 +2818,7 @@ describe("settings ipc", () => {
         ?.({})) as ProviderCatalogRefreshState;
       expect(started.providers.map((provider) => provider.id)).toEqual([
         "codex",
+        "claude",
         "gemini",
         "grok",
         "kimi",

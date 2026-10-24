@@ -24,6 +24,64 @@ function pending(id: string, status: string, target = db.raw, backend = "codex")
 }
 
 describe("thread listing overlay reads", () => {
+  it("preserves absent optional cleanup fields instead of manufacturing null tombstones", async () => {
+    await store.observeArchivedThreads([{ backend: "codex", threadId: "archived" }], 1000);
+    const identity = { backend: "codex" as const, threadId: "archived" };
+    const projected = (await store.getArchiveCleanupOverlayStates({ backend: "codex", threadIds: ["archived", "missing"] })).archived;
+    expect(projected).toMatchObject({ ...identity, extraLinkedDirectories: [] });
+    for (const field of ["archiveTombstonedAt", "parentThreadId", "parentThreadBackend", "parentThreadInstanceId"] as const) {
+      expect(projected?.[field]).toBeUndefined();
+      expect(Object.hasOwn(projected!, field)).toBe(false);
+    }
+    await store.setThreadArchiveTombstone({ ...identity, archivedAt: 2000 });
+    expect((await store.getArchiveCleanupOverlayStates({ backend: "codex", threadIds: ["archived"] })).archived?.archiveTombstonedAt).toBe(2000);
+    await store.setThreadArchiveTombstone({ ...identity, restoredAt: 3000 });
+    expect((await store.getArchiveCleanupOverlayStates({ backend: "codex", threadIds: ["archived"] })).archived?.archiveTombstonedAt).toBeUndefined();
+  });
+
+  it("budgets fresh listing projections without parsing transcript histories", async () => {
+    const ids = Array.from({ length: 1_000 }, (_, index) => String(index));
+    const history = "contrived history ".repeat(400);
+    db.raw.transaction(() => {
+      for (const id of ids) {
+        seed(id);
+        const payload = {
+          backend: "codex", threadId: id, model: "fixture-model", extraLinkedDirectories: [],
+          parentThreadId: "parent", parentThreadBackend: "acp:grok", parentThreadInstanceId: "peer",
+          worktreeSnapshots: [{ id: "snapshot", worktreePath: "/contrived/worktree" }],
+          handoffOrigin: { groupingMode: "subthread" }, subAgents: [], pinnedRank: "a",
+          immutableUsageActivities: [{ text: history }], managedReviewEntries: [{ text: history }],
+          permissionTransitionLog: [{ note: history }], messagingBindingTransitionLog: [{ note: history }],
+          turnFailureLog: [{ message: history }], questionnaireActivityLog: [{ text: history }],
+        };
+        db.raw.prepare("UPDATE threads SET payload = ? WHERE thread_id = ?")
+          .run(JSON.stringify(payload), `codex:${id}`);
+      }
+    })();
+    const { immutableUsageActivities: _usage, managedReviewEntries: _reviews,
+      permissionTransitionLog: _permissions, messagingBindingTransitionLog: _bindings,
+      turnFailureLog: _failures, questionnaireActivityLog: _questions, ...metadata } =
+      (await store.getThreadOverlayState({ backend: "codex", threadId: "0" }))!;
+    const sql = vi.spyOn(db.raw, "prepare");
+    const parse = vi.spyOn(JSON, "parse");
+    const read = () => store.getThreadListingOverlayStates({ backend: "codex", threadIds: [...ids, "0", "missing"] });
+    for (let refresh = 0; refresh < 3; refresh++) {
+      const rows = await read();
+      expect(Object.keys(rows)).toHaveLength(1_001);
+      expect(rows["0"]).toMatchObject({ model: "fixture-model", parentThreadBackend: "acp:grok",
+        parentThreadInstanceId: "peer", worktreeSnapshots: [{ id: "snapshot" }], pinnedRank: "a" });
+      expect(rows["0"]).toEqual(metadata);
+      expect(rows["0"]?.immutableUsageActivities).toBeUndefined();
+      expect(rows.missing).toBeUndefined();
+      rows["0"]!.extraLinkedDirectories.push({ id: "mutation", label: "mutation", kind: "local", path: "/contrived/mutation" });
+    }
+    expect(sql).toHaveBeenCalledTimes(9); // three indexed batches, no pending-claim payload reads
+    expect(parse).toHaveBeenCalledTimes(3_000);
+    const bytes = parse.mock.calls.reduce((sum, [payload]) => sum + Buffer.byteLength(payload), 0);
+    expect(bytes).toBeLessThan(1_500_000);
+    expect(parse.mock.calls.some(([payload]) => payload.includes("contrived history"))).toBe(false);
+  });
+
   it.each([10, 100, 1_000])("batches %i overlays without per-thread SQL or extra parses", async (count) => {
     const ids = Array.from({ length: count }, (_, i) => String(i));
     db.raw.transaction(() => { for (const id of ids) seed(id); })();
@@ -75,18 +133,19 @@ describe("thread listing overlay reads", () => {
     expect(prepare).not.toHaveBeenCalled();
   });
 
-  it("observes external changes and deletion on the next read and isolates returned mutations", async () => {
+  it.each(["getThreadOverlayStates", "getThreadListingOverlayStates"] as const)("%s observes external changes, deletion and mutable return isolation", async (method) => {
     db.close();
     const temp = createTempStateDb("pwragent-list-reads-"); tempDir = temp.tempDir;
     db = StateDb.open(temp.dbPath); store = new SqliteOverlayStore(db);
     const other = new Database(temp.dbPath);
-    const read = () => store.getThreadOverlayStates({ backend: "codex", threadIds: ["same"] });
+    const read = () => store[method]({ backend: "codex", threadIds: ["same"] });
     try {
       seed("same");
       (await read()).same!.model = "mutated";
       expect((await read()).same?.model).toBe("fixture-model");
       seed("same", "codex", other, "External"); pending("same", "pending", other);
-      expect((await read()).same).toMatchObject({ model: "External", prAutoDispatchPending: { fingerprint: "fingerprint" } });
+      expect((await read()).same?.model).toBe("External");
+      if (method === "getThreadOverlayStates") expect((await read()).same?.prAutoDispatchPending?.fingerprint).toBe("fingerprint");
       pending("same", "dispatched", other);
       expect((await read()).same?.prAutoDispatchPending).toBeUndefined();
       other.prepare("DELETE FROM threads WHERE thread_id = ?").run("codex:same");
@@ -108,12 +167,12 @@ describe("thread listing overlay reads", () => {
     expect((await store.getThreadOverlayStates({ backend: "codex", threadIds: ["legacy"] })).legacy).toEqual(individual);
   });
 
-  it("does not retain transaction results after rollback", async () => {
+  it.each(["getThreadOverlayStates", "getThreadListingOverlayStates"] as const)("%s does not retain transaction results after rollback", async (method) => {
     seed("same");
     db.raw.exec("BEGIN");
     seed("same", "codex", db.raw, "Uncommitted");
-    expect((await store.getThreadOverlayStates({ backend: "codex", threadIds: ["same"] })).same?.model).toBe("Uncommitted");
+    expect((await store[method]({ backend: "codex", threadIds: ["same"] })).same?.model).toBe("Uncommitted");
     db.raw.exec("ROLLBACK");
-    expect((await store.getThreadOverlayStates({ backend: "codex", threadIds: ["same"] })).same?.model).toBe("fixture-model");
+    expect((await store[method]({ backend: "codex", threadIds: ["same"] })).same?.model).toBe("fixture-model");
   });
 });

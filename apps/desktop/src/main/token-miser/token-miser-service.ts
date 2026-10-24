@@ -807,6 +807,7 @@ export class TokenMiserService {
       groupId: payload.cell_id,
       groupMembers,
       helperUsage: {
+        ...(generated.accountKey ? { accountKey: generated.accountKey } : {}),
         helperThreadId: generated.helperThreadId,
         helperTurnId: generated.helperTurnId,
         model: generated.model,
@@ -1009,6 +1010,7 @@ export class TokenMiserService {
       summary: decision.summary,
       disposition: "summarized",
       helperUsage: {
+        ...(generated.accountKey ? { accountKey: generated.accountKey } : {}),
         helperThreadId: generated.helperThreadId,
         helperTurnId: generated.helperTurnId,
         model: generated.model,
@@ -1075,6 +1077,7 @@ export class TokenMiserService {
       ...(params.generated
         ? {
             helperUsage: {
+              ...(params.generated.accountKey ? { accountKey: params.generated.accountKey } : {}),
               helperThreadId: params.generated.helperThreadId,
               helperTurnId: params.generated.helperTurnId,
               model: params.generated.model,

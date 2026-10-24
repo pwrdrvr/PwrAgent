@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   describeNoticeDrift,
   flattenLicenseReport,
+  supplementLicenseReport,
   expandOptionalPlatformVariants,
   enrichRecord,
   StaleInstallError,
@@ -220,5 +221,77 @@ describe("installed license metadata", () => {
       name: "example-package", version: "1.2.3", license: "GPL-3.0",
     }));
     expect(flattenLicenseReport({ Unknown: [entry] })[0].declaredLicense).toBe("GPL-3.0");
+  });
+});
+
+describe("installed peer license coverage", () => {
+  it("includes missing peers and their dependencies without adding workspace or unsaved packages", () => {
+    const root = createTemporaryDirectory();
+    const projectPath = join(root, "desktop");
+    const peerPath = join(root, "peer");
+    const childPath = join(root, "child");
+    for (const [path, name, license] of [
+      [projectPath, "@pwragent/desktop", "MIT"],
+      [peerPath, "installed-peer", "MIT"],
+      [childPath, "peer-child", "GPL-3.0-only"],
+    ]) {
+      mkdirSync(path);
+      writeFileSync(join(path, "package.json"), JSON.stringify({ name, version: "1.0.0", license, optionalDependencies: { "other-platform": "1.0.0" } }));
+    }
+    const child = { path: childPath, version: "1.0.0" };
+    const peer = { path: peerPath, version: "link:../peer", dependencies: { child, "other-platform": { path: join(root, "missing-platform") } } };
+    const report = { MIT: [{ name: "installed-peer", versions: ["1.0.0"], paths: [peerPath] }] };
+    supplementLicenseReport(report, [{
+      path: projectPath,
+      dependencies: { peer, duplicate: peer },
+      unsavedDependencies: { leftover: { path: join(root, "does-not-exist") } },
+    }]);
+    expect(flattenLicenseReport(report)).toEqual([
+      expect.objectContaining({ name: "installed-peer", version: "1.0.0", declaredLicense: "MIT" }),
+      expect.objectContaining({ name: "peer-child", version: "1.0.0", declaredLicense: "GPL-3.0-only" }),
+    ]);
+  });
+
+  it("finds declared optional peers omitted from the dependency report", () => {
+    const root = createTemporaryDirectory();
+    const packagePath = join(root, "node_modules", "linked-peer");
+    mkdirSync(packagePath, { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify({
+      name: "workspace",
+      version: "1.0.0",
+      peerDependencies: { "linked-peer": "*" },
+      peerDependenciesMeta: { "linked-peer": { optional: true } },
+    }));
+    writeFileSync(join(packagePath, "package.json"), JSON.stringify({
+      name: "linked-peer", version: "1.0.0", license: "GPL-3.0-only",
+    }));
+    const report = supplementLicenseReport({}, [{
+      path: root,
+      unsavedDependencies: { "linked-peer": { path: packagePath } },
+    }]);
+    expect(flattenLicenseReport(report)).toEqual([
+      expect.objectContaining({ name: "linked-peer", declaredLicense: "GPL-3.0-only" }),
+    ]);
+  });
+
+  it("rejects missing required packages instead of dropping their disclosures", () => {
+    const root = createTemporaryDirectory();
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "workspace", version: "1.0.0" }));
+    expect(() => supplementLicenseReport({}, [{
+      path: root,
+      dependencies: { required: { path: join(root, "missing-required") } },
+    }])).toThrow();
+  });
+
+  it("keeps a missing license declaration visible to the allowlist gate", () => {
+    const root = createTemporaryDirectory();
+    const packagePath = join(root, "peer");
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "workspace", version: "1.0.0" }));
+    mkdirSync(packagePath);
+    writeFileSync(join(packagePath, "package.json"), JSON.stringify({ name: "unlicensed-peer", version: "1.0.0" }));
+    const report = supplementLicenseReport({}, [{ path: root, dependencies: { peer: { path: packagePath } } }]);
+    expect(flattenLicenseReport(report)).toEqual([
+      expect.objectContaining({ name: "unlicensed-peer", declaredLicense: "Unknown" }),
+    ]);
   });
 });

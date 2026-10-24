@@ -1,3 +1,16 @@
+import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
+import type { ThreadTodosChangedEvent } from "@pwragent/shared";
+import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
+  registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
+  type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
+import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
+import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
+  type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
+import { createTerminalHistoryStore } from "../terminal/terminal-history";
+import type { ServiceThread, ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
+import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY } from "@pwragent/shared";
+import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES, serviceThread } from "./federation-services";
+import { FederationServiceForwarder } from "./federation-service-forwarder";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -5,21 +18,21 @@ import type {
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
-import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, resolveFilePullThread } from "./federation-file-pull";
+import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, FILE_RESOLVE_TRANSCRIPT_METHOD, resolveFilePullThread } from "./federation-file-pull";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
 import { resolveActiveProfileDir } from "../profile";
 import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest } from "./thread-instance-handoff-service";
-import { runGitCommand } from "../app-server/git-executable";
 import { app } from "electron";
 import {
   FederationFilePushReceiver,
   FILE_PUSH_METHOD_CAPABILITIES,
   registerFilePushHandlers,
   pushFederationFile,
+  type PushFederationFileOptions,
 } from "./federation-file-push";
 import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { FederationShutdown } from "./federation-shutdown";
-import { FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
+import { FEDERATION_HEALTH_CHANGED_METHOD, FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
 import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD } from "@pwragent/shared";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
@@ -32,6 +45,7 @@ import { CloudflareAccessRefusedError, CloudflareSignInRequiredError } from "./c
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { markLocalNavigationDirectorySeen, removeLocalNavigationDirectory } from "../app-server/navigation-directory-actions";
+import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
@@ -49,7 +63,10 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadSummary,
   AttachDirectoryToThreadResponse,
+  DetachDirectoryFromThreadRequest,
+  DetachDirectoryFromThreadResponse,
   CancelQueuedTurnResponse,
+  MoveQueuedTurnResponse,
   ReleaseQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
@@ -72,6 +89,7 @@ import type {
   FederationInstanceRole,
   FederationLoadStatus,
   FederationPeerSummary,
+  TodoUnavailableInstance,
   FederationPinDisposition,
   FederationProtocolEnvelope,
   FederationSessionId,
@@ -145,11 +163,14 @@ import {
   resolveThreadTerminalCwd,
   type ReadMarkdownFileRequest,
   type ReadMarkdownFileResponse,
+  type ResolveTranscriptFilesRequest,
+  type ResolveTranscriptFilesResponse,
   type AppServerListSkillsRequest,
   type AppServerReadThreadRequest,
   type AppServerBackendKind,
   type AttachDirectoryToThreadRequest,
   type CancelQueuedTurnRequest,
+  type MoveQueuedTurnRequest,
   type ReleaseQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
   type CelestialIconAssignment,
@@ -170,6 +191,12 @@ import {
   type InterruptTurnRequest,
   type ListWorktreeUnpublishedCommitsRequest,
   type ListWorktreeUnpublishedCommitsResponse,
+  type ListMcpConnectionsResponse,
+  type ReadThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsResponse,
+  type DescribeThreadMcpConnectionsRequest,
+  type DescribeThreadMcpConnectionsResponse,
   type ListThreadMcpServersRequest,
   type MaterializeDirectoryLaunchpadRequest,
   type MaterializeDirectoryLaunchpadOptions,
@@ -178,6 +205,8 @@ import {
   type SetThreadPinRequest,
   type SetThreadPinResponse,
   type SetThreadReactionRequest,
+  type SetThreadLockRequest,
+  type SetThreadLockResponse,
   type SetThreadReactionResponse,
   type SetThreadPrAutoDispatchRequest,
   type SetThreadPrAutoDispatchResponse,
@@ -243,6 +272,7 @@ import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { createScratchProjectDirectory, resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
+import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import {
   readTranscriptImageProtocolRequest,
   rewriteFederatedTranscriptImageUrlsForRenderer,
@@ -257,6 +287,9 @@ import {
 import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { getAppStateDb, isAppStateInitialized } from "../state/app-state";
+import { DurableTurnRequestService, DurableTurnRequestError } from "./durable-turn-request-service";
+import { durableFederationCallerScope, authenticateMessageOrigin } from "./federation-backend-bridge";
+import type { SubmitDurableTurnRequest, GetDurableTurnRequest, DurableTurnReceipt, SubmitDurableSteerRequest, DurableSteerReceipt } from "@pwragent/shared";
 import {
   getExistingRuntimeFederationLeaseCoordinator,
   getRuntimeFederationLeaseCoordinator,
@@ -290,6 +323,8 @@ import {
   decodeFederationInvite,
   encodeFederationInvite,
 } from "./federation-enrollment";
+import { searchFederatedContent } from "./federated-content-search-service";
+import type { ThreadSearchRequest, ThreadSearchResponse } from "@pwragent/shared";
 import { FederatedSearchService } from "./federated-search-service";
 import {
   collectFederationHostInfo,
@@ -389,6 +424,7 @@ import {
 } from "./federation-ssh";
 import { noiseKeyPairFromRawPrivate } from "./federation-noise";
 import { federationReconnectDelayMs } from "./federation-reconnect-policy";
+import { FederationConnectionFailureLog } from "./federation-connection-failure-log";
 import { federationLocalNetworkFailureHint, federationLocalNetworkNotice } from "./federation-local-network";
 
 const log = getMainLogger("pwragent:federation-runtime");
@@ -463,6 +499,13 @@ const CELESTIAL_TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60_000;
 const DUPLICATE_IDENTITY_NOTE_TTL_MS = 5 * 60_000;
 /** A session must last this long before it counts as stable enough to reset backoff. */
 const FEDERATION_STABLE_SESSION_MS = 60_000;
+/**
+ * How long before a Cloudflare grant ends that its sign-in prompt appears: a
+ * day, or the grant's last quarter when that is shorter, so a short grant is
+ * not inside its warning the moment a sign-in completes.
+ */
+const CLOUDFLARE_SIGN_IN_EXPIRY_WARNING_MS = 24 * 60 * 60_000;
+const SIGN_IN_EXPIRY_RECHECK_MS = 60 * 60_000;
 
 function rewriteLiveTranscriptImagesForFederation(
   event: AgentEvent,
@@ -525,13 +568,16 @@ function rewriteLiveTranscriptImagesForFederation(
   } as AgentEvent;
 }
 
-const DEFAULT_CAPABILITIES: FederationCapability[] = [
+/** What this instance advertises to every peer it connects to. */
+export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "navigation_group_invalidations",
   "remote_window",
   "thread_navigation",
   "thread_grouping",
   "thread_detail",
   "turn_control",
+  "durable_turn_requests_v1",
+  "durable_steer_requests_v1",
   "scheduled_actions",
   "pending_request_control",
   "environment_actions",
@@ -544,6 +590,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // permits code execution via agent turns, so the direct shell defaults to
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
+  FEDERATION_SERVICE_CAPABILITY,
   "file_push",
   "thread_handoff",
   "file_pull",
@@ -553,6 +600,11 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "transport_brotli",
   "shutdown_notice",
   "navigation_directory_set_events",
+  "turn_queue_reorder",
+  "thread_mcp_connections",
+  "thread_todos",
+  "operator_questions",
+  "operator_requests",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -650,6 +702,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/executionMode/queueCleared",
   "thread/executionMode/queued",
   "thread/executionMode/updated",
+  "thread/lock/updated",
   "thread/modelSettings/updated",
   "thread/name/updated",
   "thread/parent/cleared",
@@ -666,6 +719,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/subAgents/updated",
   "thread/subthreadOrder/updated",
   "thread/subthreadsCollapsed/updated",
+  "thread/turnQueue/reordered",
   "thread/turnQueue/updated",
   "thread/unarchived",
   "turn/cancelled",
@@ -679,6 +733,10 @@ export function federationEventClassForMethod(
 ): FederationEventClass {
   if (method === "thread/scheduledAction/updated") {
     return "scheduled_actions";
+  }
+  if (method === "thread/operatorQuestions/changed") {
+    // Dismissed-question state is readable with thread_detail access.
+    return "transcript";
   }
   if (
     method === "item/tool/requestUserInput"
@@ -697,7 +755,7 @@ export function federationEventClassForMethod(
   ) {
     return "star_map";
   }
-  if (method === "navigation/invalidated") {
+  if (method === "navigation/invalidated" || method === "thread/todos/changed" || method === "thread/operatorRequests/changed") {
     return "navigation";
   }
   if (method === NAVIGATION_DIRECTORY_SET_CHANGED_METHOD) {
@@ -913,7 +971,9 @@ export function eventMatchesThreadSelection(
   // a shared resource rather than one thread. Sparse consumers still need the
   // tiny invalidation so they can refresh their selected rows; the expensive
   // snapshot response remains filtered.
-  if (!threadId) return eventClass === "navigation" || event.notification.method === "federation/eventStream/changed";
+  if (!threadId) return eventClass === "navigation" || event.notification.method === "federation/eventStream/changed"
+    || ((event.notification.method === "thread/todoDetails/changed" || event.notification.method === "thread/operatorRequestDetails/changed")
+      && selection.threads.length > 0);
   const actionBackend =
     typeof scheduledAction?.backend === "string"
     && isAppServerBackendKind(scheduledAction.backend)
@@ -946,6 +1006,104 @@ function eventClassAllowedByCapabilities(
 }
 
 export class DesktopFederationRuntime {
+  private durableTurnRequests?: DurableTurnRequestService;
+  private unsubscribeDurableTurnEvents?: () => void;
+
+  /** Adapter must authenticate callerScope and check its grants on every call.
+   * Target is the original owner recorded in the client's outbox, never discovery.
+   */
+  async submitDurableTurnRequest(
+    callerScope: string,
+    request: SubmitDurableTurnRequest,
+    target?: FederationRemoteTarget,
+  ): Promise<DurableTurnReceipt> {
+    if (target) {
+      this.assertDurableTurnPeer(target);
+      return this.remoteBackend(target).submitTurnRequest({ ...request, callerScope });
+    }
+    return this.durableTurnRequestService().submit(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
+  }
+
+  async getDurableTurnRequest(
+    callerScope: string,
+    request: GetDurableTurnRequest,
+    target?: FederationRemoteTarget,
+  ): Promise<DurableTurnReceipt | null> {
+    if (target) {
+      this.assertDurableTurnPeer(target);
+      return this.remoteBackend(target).getTurnRequest({ ...request, callerScope });
+    }
+    return this.durableTurnRequestService().get(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
+  }
+
+  async submitDurableSteerRequest(
+    callerScope: string,
+    request: SubmitDurableSteerRequest,
+    target?: FederationRemoteTarget,
+  ): Promise<DurableSteerReceipt> {
+    if (target) {
+      this.assertDurableTurnPeer(target, "durable_steer_requests_v1");
+      return this.remoteBackend(target).submitSteerRequest({ ...request, callerScope });
+    }
+    return this.durableTurnRequestService().submitSteer(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
+  }
+
+  async getDurableSteerRequest(
+    callerScope: string,
+    request: GetDurableTurnRequest,
+    target?: FederationRemoteTarget,
+  ): Promise<DurableSteerReceipt | null> {
+    if (target) {
+      this.assertDurableTurnPeer(target, "durable_steer_requests_v1");
+      return this.remoteBackend(target).getSteerRequest({ ...request, callerScope });
+    }
+    return this.durableTurnRequestService().getSteer(durableFederationCallerScope(this.ensureLocalInstanceId(), callerScope), request);
+  }
+
+  private assertDurableTurnPeer(target: FederationRemoteTarget, capability: FederationCapability = "durable_turn_requests_v1"): void {
+    const peer = this.connectedPeerTargets().find((candidate) => candidate.target.instanceId === target.instanceId);
+    if (!peer?.capabilities.includes(capability) || !peer.capabilities.includes("turn_control")) {
+      throw new DurableTurnRequestError("request_unsupported");
+    }
+  }
+
+  private durableTurnRequestService(): DurableTurnRequestService {
+    if (!this.durableTurnRequests) {
+      const backend = localBackendOperations();
+      this.durableTurnRequests = new DurableTurnRequestService({
+        stateDb: getAppStateDb(),
+        ownerInstanceId: this.ensureLocalInstanceId(),
+        authorize: async (_scope, request) => {
+          const resolved = await backend.resolveThread({ backend: request.backend, threadId: request.threadId });
+          if (!resolved.thread) throw new DurableTurnRequestError("request_destination_unavailable");
+        },
+        dispatch: (request, scope) => backend.startTurn({
+          ...request,
+          messageOrigin: authenticateMessageOrigin({
+            messageOrigin: request.messageOrigin,
+            sourceInstanceId: (JSON.parse(scope) as string[])[1]!,
+            resolveSourceInstance: (instanceId) => this.resolveThreadMessageOriginInstance(instanceId),
+          }),
+        }),
+        isQueued: async (receipt) => {
+          await backend.readQueuedTurn({ backend: receipt.backend, threadId: receipt.threadId, queueEntryId: receipt.queueEntryId });
+          return true;
+        },
+        steer: (request) => backend.controlActiveTurn!({ ...request, operation: "steer" }),
+      });
+      const service = this.durableTurnRequests;
+      this.unsubscribeDurableTurnEvents = getDesktopBackendRegistry().onEvent((event) => {
+        if (event.notification.method === "thread/turnQueue/updated") {
+          const params = event.notification.params as {
+            threadId: string; queueEntryId: string; status: string; turnId?: string; terminalStatus?: string;
+          };
+          service.observeQueueEvent({ backend: event.backend, ...params });
+        }
+      });
+    }
+    return this.durableTurnRequests;
+  }
+
   private sessionEnabledOverride?: boolean;
   private router?: FederationRouter;
   private server?: FederationGatewayWebSocketServer;
@@ -1036,6 +1194,10 @@ export class DesktopFederationRuntime {
     event: CodexEnvironmentSetupProgressEvent,
   ) => void;
   private ptyService?: FederationPtyService;
+  private services?: FederationServices;
+  private readonly serviceForwarder = new FederationServiceForwarder();
+  private readonly serviceViews = new Map<number, { viewId: string; instanceId: string; thread: ServiceThread }>();
+  private releaseWorktreeTerminalOwner?: () => void;
   private filePushReceiver?: FederationFilePushReceiver;
   private threadHandoffService?: ThreadInstanceHandoffService;
   private readonly handoffFileReceipts = new Map<string, { peerId: string; sizeBytes: number; sha256: string }>();
@@ -1082,6 +1244,7 @@ export class DesktopFederationRuntime {
   private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private accessRefreshTimer?: ReturnType<typeof setTimeout>;
+  private signInExpiryTimer?: ReturnType<typeof setTimeout>;
   /**
    * Dialing stopped on a failure no retry can fix: a lapsed Cloudflare sign-in
    * or a credential Cloudflare refused, on the only configured endpoint.
@@ -1091,6 +1254,7 @@ export class DesktopFederationRuntime {
   private parked = false;
   private connectionAttempt?: symbol;
   private reconnectAttempt = 0;
+  private readonly connectionFailureLog = new FederationConnectionFailureLog();
   private connectionGeneration = 0;
   /** Bumped only by stop(), so an in-flight endpoint walk can detect teardown. */
   private walkEpoch = 0;
@@ -1098,6 +1262,9 @@ export class DesktopFederationRuntime {
   private stopping = true;
   private lastConnectionError?: string;
   private lastConnectionFailureKind?: "auth" | "replaced" | "transport";
+  private cloudflareSignInRequiredEndpoint?: string;
+  private cloudflareSignInPending = false;
+  private cloudflareSignInExpiring?: { endpoint: string; expiresAt: number };
   /** Peer ids the gateway recently flagged for duplicate-identity churn. */
   private readonly duplicateIdentitySuspectedAt = new Map<
     FederationInstanceId,
@@ -1429,8 +1596,13 @@ export class DesktopFederationRuntime {
     }
     clearTimeout(this.accessRefreshTimer);
     this.accessRefreshTimer = undefined;
+    clearTimeout(this.signInExpiryTimer);
+    this.signInExpiryTimer = undefined;
     this.unsubscribeLocalBackendEvents?.();
     this.unsubscribeLocalBackendEvents = undefined;
+    this.unsubscribeDurableTurnEvents?.();
+    this.unsubscribeDurableTurnEvents = undefined;
+    this.durableTurnRequests = undefined;
     this.remoteThreadSummaryCache?.dispose();
     this.remoteThreadSummaryCache = undefined;
     this.peerDirectoryReceivers.clear();
@@ -1444,7 +1616,13 @@ export class DesktopFederationRuntime {
     this.filePushReceiver = undefined;
     this.threadHandoffService = undefined;
     this.handoffFileReceipts.clear();
-    this.ptyService?.disposeAll();
+    this.serviceViews.clear();
+    this.serviceForwarder.dispose();
+    this.services?.dispose();
+    this.services = undefined;
+    this.releaseWorktreeTerminalOwner?.();
+    this.releaseWorktreeTerminalOwner = undefined;
+    await this.ptyService?.disposeAll();
     this.ptyService = undefined;
     this.client?.close();
     this.client = undefined;
@@ -1470,9 +1648,12 @@ export class DesktopFederationRuntime {
     this.receivedEventStreams.clear();
     this.relayedEventSubscriptions.clear();
     this.reconnectAttempt = 0;
+    this.connectionFailureLog.reset();
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
     this.gatewayListenerError = undefined;
+    this.setCloudflareSignInRequired(undefined);
+    this.setCloudflareSignInExpiring(undefined);
   }
 
   async setDetailedTrafficCapture(enabled: boolean): Promise<ReadFederationActivityResponse> {
@@ -1595,6 +1776,18 @@ export class DesktopFederationRuntime {
       unavailableReason: this.gatewayListenerError,
     });
     health.shutdownNotices = this.shutdown.snapshot();
+    if (config.cloudflareAccessOAuthEnabled && this.cloudflareSignInRequiredEndpoint) {
+      health.cloudflareSignInRequired = {
+        endpoint: this.cloudflareSignInRequiredEndpoint,
+        ...(this.cloudflareSignInPending ? { pending: true } : {}),
+      };
+    } else if (config.cloudflareAccessOAuthEnabled && this.cloudflareSignInExpiring) {
+      health.cloudflareSignInExpiring = {
+        endpoint: this.cloudflareSignInExpiring.endpoint,
+        expiresAt: new Date(this.cloudflareSignInExpiring.expiresAt).toISOString(),
+        ...(this.cloudflareSignInPending ? { pending: true } : {}),
+      };
+    }
     if (
       config.mode === "client" ||
       config.mode === "dual"
@@ -1839,6 +2032,8 @@ export class DesktopFederationRuntime {
     revokedAt?: number,
   ): Promise<void> {
     try {
+      // A revoked instance's drafts stop rendering with its pins.
+      this.remoteThreadSummaryCache?.forgetWatchedThreads(instanceId);
       this.remoteThreadSummaryCache?.invalidate(instanceId);
       const overlayStore = getDesktopOverlayStore();
       const affected =
@@ -2127,6 +2322,64 @@ export class DesktopFederationRuntime {
     };
   }
 
+  async requestThreadTodoOperation<K extends ThreadTodoOperation>(
+    target: FederationRemoteTarget, operation: K, request: ThreadTodoOperationRequest<K>,
+  ): Promise<ThreadTodoOperationResponse<K>> {
+    const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos");
+    if (unavailable) {
+      if (operation === "listTodos") {
+        return { todos: [], unavailableInstances: [unavailable] } as ThreadTodoOperationResponse<K>;
+      }
+      if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
+      throw new Error("This Federation owner does not support To-dos. Update that PwrAgent instance.");
+    }
+    return await this.rpcFor(target).request({ method: FEDERATION_THREAD_TODO_METHODS[operation], params: request,
+      ...(operation === "runAction" ? { timeoutMs: null } : {}),
+    });
+  }
+
+  async requestOperatorQuestionOperation<K extends OperatorQuestionOperation>(
+    target: FederationRemoteTarget, operation: K, request: OperatorQuestionOperationRequest<K>,
+  ): Promise<OperatorQuestionOperationResponse<K>> {
+    const queueOperation = operation === "list" || operation === "listPending" || operation === "markSeen" || operation === "reply";
+    const unavailable = this.todoQueueUnavailableInstance(target, queueOperation ? "operator_requests" : "operator_questions");
+    if (unavailable) {
+      if (operation === "list") {
+        return { serverRequests: [], questions: [], seenKeys: [], unavailableInstances: [unavailable] } as OperatorQuestionOperationResponse<K>;
+      }
+      if (operation === "listPending") return [] as OperatorQuestionOperationResponse<K>;
+      if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
+      throw new Error(`This Federation owner does not support ${queueOperation ? "the operator request queue" : "question dismissals"}. Update that PwrAgent instance.`);
+    }
+    if (operation === "listPending" && !this.remotePeerAdvertisesCapability(target.instanceId, "pending_request_control")) {
+      return [] as OperatorQuestionOperationResponse<K>;
+    }
+    return await this.rpcFor(target).request({
+      method: FEDERATION_OPERATOR_QUESTION_METHODS[operation], params: request,
+    });
+  }
+
+  publishOperatorQuestionsChanged(params: { backend: AppServerBackendKind; threadId: string }): void {
+    this.forwardLocalBackendEvent({ backend: params.backend,
+      notification: { method: "thread/operatorQuestions/changed", params } });
+  }
+
+  publishOperatorRequestsChanged(params: { reason: "requests" | "questions" | "seen"; backend?: AppServerBackendKind; threadId?: string }): void {
+    this.forwardLocalBackendEvent({ backend: params.backend ?? "codex",
+      notification: { method: "thread/operatorRequests/changed", params } });
+    this.forwardLocalBackendEvent({ backend: params.backend ?? "codex",
+      notification: { method: "thread/operatorRequestDetails/changed", params } });
+  }
+
+  publishThreadTodosChanged(event: ThreadTodosChangedEvent): void {
+    this.forwardLocalBackendEvent({ backend: event.backend ?? "codex",
+      notification: { method: "thread/todos/changed", params: event } });
+    // Detail-only viewers have no navigation subscription. Keep the sparse
+    // navigation marker for background queues and also refresh selected details.
+    this.forwardLocalBackendEvent({ backend: event.backend ?? "codex",
+      notification: { method: "thread/todoDetails/changed", params: event } });
+  }
+
   remoteBackend(target: FederationRemoteTarget): FederationRemoteBackendClient {
     return new FederationRemoteBackendClient(
       this.rpcFor(target),
@@ -2342,14 +2595,129 @@ export class DesktopFederationRuntime {
     return localBackendOperations();
   }
 
+  threadServices(): FederationServices {
+    this.services ??= new FederationServices({
+      instanceId: this.ensureLocalInstanceId(),
+      allowForwarding: () => this.receiverPermissions().portForwarding,
+      blockedPorts: () => [getDesktopSettingsService().readFederationConfig().listenPort ?? 47830],
+      threadExists: async (thread) => await getDesktopBackendRegistry().isThreadActiveForService(thread),
+    });
+    return this.services;
+  }
+
+  leaveThreadServices(windowId: number, thread?: ServiceThread, instanceId?: string): void {
+    this.serviceForwarder.leave(windowId, thread, instanceId);
+    if (!thread) this.serviceViews.delete(windowId);
+  }
+
+  async threadServiceAction(windowId: number, input: ServiceUiRequest): Promise<ServiceUiResponse> {
+    const thread = serviceThread(input);
+    const instanceId = input.instanceId ?? this.ensureLocalInstanceId();
+    const remote = instanceId !== this.ensureLocalInstanceId();
+    const previousView = this.serviceViews.get(windowId);
+    if (input.action === "watch" && (!previousView || previousView.viewId !== input.viewId
+      || previousView.instanceId !== instanceId || previousView.thread.backend !== thread.backend
+      || previousView.thread.threadId !== thread.threadId)) {
+      this.leaveThreadServices(windowId);
+      this.serviceViews.set(windowId, { viewId: input.viewId, instanceId, thread });
+    }
+    const view = this.serviceViews.get(windowId);
+    const assertViewing = (): void => {
+      if (!view || view.viewId !== input.viewId || view.instanceId !== instanceId
+        || view.thread.backend !== thread.backend || view.thread.threadId !== thread.threadId
+        || this.serviceViews.get(windowId) !== view) throw new Error("Service viewer closed or changed thread.");
+    };
+    if (input.action === "leave") {
+      if (view?.viewId === input.viewId) this.leaveThreadServices(windowId);
+      return { services: [], forwards: [] };
+    }
+    assertViewing();
+    if (input.action === "disconnect") {
+      if (typeof input.forwardId !== "string") throw new Error("Select a forward to disconnect.");
+      this.serviceForwarder.disconnect(windowId, input.forwardId);
+    }
+    if (remote) {
+      const peer = this.visiblePeers().find((candidate) => candidate.id === instanceId);
+      if (peer?.status !== "connected" || !this.viewerCapabilitiesFor(instanceId, peer).includes(FEDERATION_SERVICE_CAPABILITY)) {
+        throw new Error("Service forwarding requires a connected owner and gateway with service_forward_v1 support.");
+      }
+    }
+    if (remote && input.action === "connect"
+      && this.visiblePeers().find((peer) => peer.id === instanceId)?.receiverPermissions?.portForwarding === false) {
+      throw new Error("Port forwarding is disabled on the owning machine. Enable Allow port forwarding in its Federation settings.");
+    }
+    const rpc = remote ? this.rpcFor({ scope: "remote", instanceId }) : undefined;
+    if (input.action === "remove") {
+      if (typeof input.serviceId !== "string") throw new Error("Select a service to remove.");
+      if (rpc) await rpc.request({ method: FEDERATION_SERVICE_METHODS.remove, params: { ...thread, serviceId: input.serviceId } });
+      else this.threadServices().remove(thread, input.serviceId);
+    }
+    const services = rpc
+      ? await rpc.request<import("@pwragent/shared").ThreadService[]>({ method: FEDERATION_SERVICE_METHODS.list, params: thread, timeoutMs: 5000 })
+      : await this.threadServices().list(thread);
+    assertViewing();
+    // Never use caller-supplied owner/address/protocol to construct a listener or URL.
+    if (!Array.isArray(services) || services.length > 64 || services.some((service) => service.ownerInstanceId !== instanceId
+      || service.backend !== thread.backend || service.threadId !== thread.threadId
+      || !["http", "https", "tcp"].includes(service.protocol))) throw new Error("Invalid service inventory from owner.");
+    for (const forward of this.serviceForwarder.list(windowId, instanceId, thread)) {
+      if (!services.some((service) => service.serviceId === forward.service.serviceId)) this.serviceForwarder.disconnect(windowId, forward.forwardId);
+    }
+    if (input.action === "connect") {
+      if (!rpc) throw new Error("This service already runs on this machine. Connect from a remote thread viewer.");
+      const service = services.find((entry) => entry.serviceId === input.serviceId);
+      if (!service) throw new Error("Service is no longer advertised.");
+      const forward = await this.serviceForwarder.connect(windowId, service, rpc);
+      try { assertViewing(); }
+      catch (error) { this.serviceForwarder.disconnect(windowId, forward.forwardId); throw error; }
+    }
+    const forwards = this.serviceForwarder.list(windowId, instanceId, thread);
+    // Most threads advertise nothing; their viewers poll without reading
+    // permissions or peers.
+    if (!services.length) return { services, forwards };
+    if (remote) {
+      const allowed = this.visiblePeers().find((peer) => peer.id === instanceId)?.receiverPermissions?.portForwarding;
+      return { services, forwards, forwarding: allowed === undefined ? "unknown" : allowed ? "allowed" : "blocked" };
+    }
+    // The owner shows which peers hold a lease, so its operator can see that
+    // a port is in use. Lease state is in memory; this reads no storage.
+    const peers = this.visiblePeers();
+    const peerLabel = (peerId: string): string => {
+      const peer = peers.find((candidate) => candidate.id === peerId);
+      return peer?.shortLabel ?? peer?.label ?? "Federation peer";
+    };
+    const inbound = services.flatMap((service) => {
+      const holders = this.threadServices().leaseHolders(service.serviceId);
+      return holders.length ? [{ serviceId: service.serviceId, peerLabels: holders.map(peerLabel) }] : [];
+    });
+    return {
+      services,
+      forwards,
+      forwarding: this.receiverPermissions().portForwarding ? "allowed" : "blocked",
+      inbound,
+    };
+  }
+
   receiverPermissions() {
     const config = getDesktopSettingsService().readFederationConfig();
     return {
       remoteShells: config.allowRemoteShells !== false,
+      portForwarding: config.allowPortForwarding === true,
       filePush: config.allowFilePush === true,
       filePull: config.allowFilePull === true,
       filePullOutsideThreadDirectories: config.allowFilePullOutsideThreadDirectories === true,
     };
+  }
+
+  async resolveTranscriptFiles(target: FederationRemoteTarget, request: ResolveTranscriptFilesRequest) {
+    const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
+    if (!peer?.capabilities.includes("file_pull") || peer.receiverPermissions?.filePull !== true) {
+      throw new Error("File pull is unavailable on the owning machine.");
+    }
+    return await this.rpcFor(target).request<ResolveTranscriptFilesResponse>({
+      method: FILE_RESOLVE_TRANSCRIPT_METHOD,
+      params: { references: request.references, thread: request.thread },
+    });
   }
 
   async pullMarkdownFile(target: FederationRemoteTarget, request: ReadMarkdownFileRequest) {
@@ -2362,11 +2730,11 @@ export class DesktopFederationRuntime {
     });
   }
 
-  async pushFile(target: FederationRemoteTarget, sourcePath: string, name?: string) {
+  async pushFile(target: FederationRemoteTarget, sourcePath: string, name?: string, options?: PushFederationFileOptions) {
     const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
     if (!peer?.capabilities.includes("file_push")) throw new Error("The target does not support file push.");
     if (peer.receiverPermissions?.filePush !== true) throw new Error("The target does not allow incoming files.");
-    return await pushFederationFile(this.rpcFor(target), sourcePath, name);
+    return await pushFederationFile(this.rpcFor(target), sourcePath, name, options);
   }
 
   async handoffInstanceThread(request: HandoffInstanceThreadRequest, sourceInstanceId?: string): Promise<HandoffInstanceThreadResult> {
@@ -2425,6 +2793,10 @@ export class DesktopFederationRuntime {
   ): Promise<NavigationQueryPage> {
     this.assertRemoteNavigationQueryProtocol(target);
     if (request.inventory === "viewer") throw new Error("Viewer navigation inventory is available only on its local machine.");
+    // The viewer resolves owners itself. The flag never travels to an owner.
+    if (request.query.kind === "exact" && request.query.resolveFromOwners) {
+      throw new Error("Owner-resolved navigation is available only to this machine's viewer inventory.");
+    }
     const backend = this.remoteBackend(target);
     if (!backend.getNavigationQueryPage) {
       throw navigationUpgradeRequired(target.instanceId);
@@ -2608,6 +2980,23 @@ export class DesktopFederationRuntime {
     } catch {
       return instanceId;
     }
+  }
+
+  private todoQueueUnavailableInstance(
+    target: FederationRemoteTarget,
+    capability: FederationCapability,
+  ): TodoUnavailableInstance | undefined {
+    let peer: FederationPeerSummary | undefined;
+    try {
+      peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
+    } catch {
+      // Direct connections are also authoritative during startup.
+    }
+    const connected = this.router?.getConnection(target.instanceId) || peer?.status === "connected";
+    const reason = !connected ? "disconnected"
+      : !this.viewerCapabilitiesFor(target.instanceId, peer).includes(capability) ? "unsupported"
+        : undefined;
+    return reason ? { instanceId: target.instanceId, label: this.diagnosticInstanceLabel(target.instanceId), reason } : undefined;
   }
 
   private remotePeerAdvertisesCapability(
@@ -2989,6 +3378,20 @@ export class DesktopFederationRuntime {
     }
   }
 
+  async searchThreadContent(
+    request: ThreadSearchRequest,
+    local: (request: ThreadSearchRequest, signal?: AbortSignal) => Promise<ThreadSearchResponse>,
+    onProgress?: (response: ThreadSearchResponse) => void,
+    signal?: AbortSignal,
+  ): Promise<ThreadSearchResponse> {
+    const visible = this.visiblePeers();
+    return await searchFederatedContent({ request, local, signal, onProgress,
+      peers: visible.filter((peer) => peer.status === "connected" && peer.capabilities.includes("thread_detail"))
+        .map((peer) => ({ instanceId: peer.id, label: formatFederationPeerDisplayLabel(peer, visible),
+          backend: this.remoteBackend({ scope: "remote", instanceId: peer.id }) })),
+    });
+  }
+
   async searchConnectedPeers(
     request: FederatedSearchRequest,
   ): Promise<FederatedSearchResponse> {
@@ -3097,20 +3500,26 @@ export class DesktopFederationRuntime {
           : undefined),
       methodCapabilities: {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
+        ...FEDERATION_THREAD_TODO_CAPABILITIES,
+        ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
+        ...SERVICE_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
         [THREAD_HANDOFF_METHODS.send]: "thread_handoff",
         [THREAD_HANDOFF_METHODS.import]: "thread_handoff",
         [THREAD_HANDOFF_METHODS.prepare]: "thread_handoff",
         [FILE_PULL_MARKDOWN_METHOD]: "file_pull",
+        [FILE_RESOLVE_TRANSCRIPT_METHOD]: "file_pull",
       },
-      additionalRequiredCapabilities: (envelope) => envelope.method === THREAD_HANDOFF_METHODS.import
-        ? ["file_push", "turn_control", "environment_actions"]
-        : envelope.method === THREAD_HANDOFF_METHODS.send
-          ? ["turn_control", "environment_actions"]
-          : envelope.method === THREAD_HANDOFF_METHODS.prepare
-            ? ["environment_actions"]
-            : additionalFederationBackendCapabilities(envelope),
+      additionalRequiredCapabilities: (envelope) => envelope.method === FEDERATION_THREAD_TODO_METHODS.runAction
+        ? ["environment_actions"]
+        : envelope.method === THREAD_HANDOFF_METHODS.import
+          ? ["file_push", "turn_control", "environment_actions"]
+          : envelope.method === THREAD_HANDOFF_METHODS.send
+            ? ["turn_control", "environment_actions"]
+            : envelope.method === THREAD_HANDOFF_METHODS.prepare
+              ? ["environment_actions"]
+              : additionalFederationBackendCapabilities(envelope),
     });
     router.registerBlobChunkHandler(async (envelope) => {
       await this.turnInputAttachmentReceiver.receive(
@@ -3118,9 +3527,12 @@ export class DesktopFederationRuntime {
         envelope.sourceInstanceId,
       );
     });
+    registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
+    registerFederationOperatorQuestionHandlers(router);
     registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
+      durableTurnRequests: this.durableTurnRequestService(),
       resolveTurnInput: async (input, sourceInstanceId) =>
         await this.turnInputAttachmentReceiver.resolveInput(
           input,
@@ -3162,8 +3574,8 @@ export class DesktopFederationRuntime {
         const scheduled = await localBackendOperations().listScheduledThreadActions({ backend: "codex", threadId });
         if (scheduled.actions.length) throw new Error("Cancel the source thread's scheduled actions before Move, or use Copy.");
       },
-      prepareTarget: async (instanceId, repository) => await this.rpcFor({ scope: "remote", instanceId }).request<string[]>({
-        method: THREAD_HANDOFF_METHODS.prepare, params: { repository }, timeoutMs: 30_000,
+      prepareTarget: async (instanceId, request) => await this.rpcFor({ scope: "remote", instanceId }).request({
+        method: THREAD_HANDOFF_METHODS.prepare, params: request, timeoutMs: null,
       }),
       receipt: (sourceInstanceId, file) => {
         const receipt = this.handoffFileReceipts.get(file.path);
@@ -3176,11 +3588,10 @@ export class DesktopFederationRuntime {
     router.registerHandler(THREAD_HANDOFF_METHODS.import, (envelope) =>
       this.threadHandoffService!.receive(envelope.sourceInstanceId, envelope.params as ImportInstanceThreadRequest));
     router.registerHandler(THREAD_HANDOFF_METHODS.prepare, async (envelope) => {
-      const repository = (envelope.params as { repository?: unknown })?.repository;
-      if (!this.receiverPermissions().filePush || typeof repository !== "string" || !path.isAbsolute(repository)) {
-        throw new Error("Thread handoff requires incoming files to be enabled and an absolute receiver repository path.");
+      if (!this.receiverPermissions().filePush) {
+        throw new Error("Enable incoming files on the receiving machine before handing off a thread.");
       }
-      return (await runGitCommand(repository, ["rev-list", "--max-count=256", "HEAD"], { maxBuffer: 64 * 1024 })).stdout.trim().split("\n");
+      return await this.threadHandoffService!.prepare(envelope.params as Parameters<ThreadInstanceHandoffService["prepare"]>[0]);
     });
     const filePullReader = new FederationFilePullReader({
       permissions: () => this.receiverPermissions(),
@@ -3188,7 +3599,9 @@ export class DesktopFederationRuntime {
         resolveFilePullThread(getDesktopBackendRegistry(), backend, threadId),
     });
     router.registerHandler(FILE_PULL_MARKDOWN_METHOD, (envelope) => filePullReader.readMarkdown(envelope.params));
+    router.registerHandler(FILE_RESOLVE_TRANSCRIPT_METHOD, (envelope) => filePullReader.resolveTranscript(envelope.params));
     this.ptyService = new FederationPtyService({
+      historyStore: createTerminalHistoryStore(this.ensureLocalInstanceId()),
       allowOpen: () => this.receiverPermissions().remoteShells,
       spawnPty: async (params) => await spawnTerminalPty(params),
       resolveThreadCwd: async ({ backend, threadId }) => {
@@ -3233,7 +3646,9 @@ export class DesktopFederationRuntime {
         warn: (message, meta) => log.warn(message, meta),
       },
     });
+    this.releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(this.ptyService);
     registerFederationPtyHandlers({ router, service: this.ptyService });
+    registerFederationServices(router, this.threadServices());
     this.router = router;
     this.subscribeLocalBackendEvents();
 
@@ -3317,10 +3732,10 @@ export class DesktopFederationRuntime {
     if (mode === "client" || mode === "dual") {
       const configured = config.gatewayEndpoints;
       // Last line of defense before anything is dialed: the config file is
-      // hand-editable and may predate the scheme allowlist.
+      // hand-editable and may predate endpoint validation.
       const endpoints = configured.filter(isFederationGatewayEndpointUrl);
       if (endpoints.length !== configured.length) {
-        log.warn("ignoring federation endpoints with an unsupported scheme", {
+        log.warn("ignoring invalid federation gateway endpoints", {
           ignored: configured.length - endpoints.length,
         });
       }
@@ -3328,7 +3743,7 @@ export class DesktopFederationRuntime {
       if (endpoints.length === 0) {
         this.lastConnectionError =
           configured.length > 0
-            ? "No federation gateway endpoint uses a supported ws://, wss://, or ssh:// scheme."
+            ? "No federation gateway endpoint has a valid hostname and supported ws://, wss://, or ssh:// scheme."
             : "Federation gateway URL is not configured.";
       } else {
         await this.connectToGateway().catch((error) => {
@@ -3755,13 +4170,65 @@ export class DesktopFederationRuntime {
     this.lastConnectedAt = Date.now();
     this.lastConnectionError = undefined;
     this.lastConnectionFailureKind = undefined;
+    this.setCloudflareSignInRequired(undefined);
     // Replayed subscriptions require the authenticated router connection and
     // restored local subscription state before any queued envelope is handled.
     client.startReceiving();
     log.info("federation client connected", { gatewayUrl });
     if (cloudflareSignIn) {
       this.scheduleAccessRefresh(cloudflareSignIn, gatewayUrl, client, connectionGeneration);
+      this.scheduleSignInExpiry(cloudflareSignIn, gatewayUrl, client, connectionGeneration);
+    } else {
+      // A connection that does not use the grant has nothing expiring.
+      clearTimeout(this.signInExpiryTimer);
+      this.signInExpiryTimer = undefined;
+      this.setCloudflareSignInExpiring(undefined);
     }
+  }
+
+  /**
+   * Ask for a new sign-in shortly before a connection's Cloudflare grant ends.
+   *
+   * A refresh does not extend the grant, so without this Federation runs until
+   * the grant lapses mid-session and only then asks. Known only when the
+   * gateway's setup file carried its grant lifetime. The timer re-checks at
+   * least hourly, because a sleeping Mac pauses it while the deadline moves.
+   */
+  private scheduleSignInExpiry(
+    signIn: ReturnType<typeof getCloudflareAccessSignIn>,
+    gatewayUrl: string,
+    client: FederationClientWebSocketClient,
+    connectionGeneration: number,
+  ): void {
+    clearTimeout(this.signInExpiryTimer);
+    this.signInExpiryTimer = undefined;
+    const current = () =>
+      !this.stopping
+      && this.client === client
+      && connectionGeneration === this.connectionGeneration;
+    void Promise.resolve()
+      .then(() => signIn.signInGrant(gatewayUrl))
+      .catch(() => undefined)
+      .then((grant) => {
+        if (!current()) return;
+        if (grant === undefined) {
+          this.setCloudflareSignInExpiring(undefined);
+          return;
+        }
+        const { signedInAt, expiresAt } = grant;
+        const lead = Math.min(CLOUDFLARE_SIGN_IN_EXPIRY_WARNING_MS, (expiresAt - signedInAt) / 4);
+        const untilWarning = expiresAt - lead - Date.now();
+        if (untilWarning <= 0) {
+          this.setCloudflareSignInExpiring({ endpoint: gatewayUrl, expiresAt });
+          return;
+        }
+        this.setCloudflareSignInExpiring(undefined);
+        this.signInExpiryTimer = setTimeout(() => {
+          this.signInExpiryTimer = undefined;
+          if (current()) this.scheduleSignInExpiry(signIn, gatewayUrl, client, connectionGeneration);
+        }, Math.min(untilWarning, SIGN_IN_EXPIRY_RECHECK_MS));
+        this.signInExpiryTimer.unref?.();
+      });
   }
 
   /**
@@ -3820,6 +4287,7 @@ export class DesktopFederationRuntime {
 
   // Track the active connection without changing configured endpoint priority.
   private markEndpointConnected(gatewayUrl: string): void {
+    this.connectionFailureLog.reset();
     this.endpointStatuses.set(gatewayUrl, {
       ...this.endpointStatuses.get(gatewayUrl),
       state: "active",
@@ -3862,6 +4330,37 @@ export class DesktopFederationRuntime {
     });
   }
 
+  private setCloudflareSignInRequired(endpoint: string | undefined): void {
+    if (this.cloudflareSignInRequiredEndpoint === endpoint) return;
+    this.cloudflareSignInRequiredEndpoint = endpoint;
+    this.publishHealthChanged();
+  }
+
+  private setCloudflareSignInExpiring(expiring: { endpoint: string; expiresAt: number } | undefined): void {
+    if (this.cloudflareSignInExpiring?.endpoint === expiring?.endpoint
+      && this.cloudflareSignInExpiring?.expiresAt === expiring?.expiresAt) return;
+    this.cloudflareSignInExpiring = expiring;
+    this.publishHealthChanged();
+  }
+
+  /**
+   * A browser sign-in is running in main. Each window draws its sign-in
+   * notice from health, so a window that did not start the sign-in shows it
+   * waiting instead of offering a second one the setup latch refuses.
+   */
+  setCloudflareSignInPending(pending: boolean): void {
+    if (this.cloudflareSignInPending === pending) return;
+    this.cloudflareSignInPending = pending;
+    if (this.cloudflareSignInRequiredEndpoint || this.cloudflareSignInExpiring) this.publishHealthChanged();
+  }
+
+  private publishHealthChanged(): void {
+    this.publishAgentEvent?.({
+      backend: "codex",
+      notification: { method: FEDERATION_HEALTH_CHANGED_METHOD, params: {} },
+    });
+  }
+
   private handleClientConnectionFailure(error: unknown): void {
     if (this.stopping) return;
     this.client = undefined;
@@ -3869,6 +4368,9 @@ export class DesktopFederationRuntime {
     this.lastConnectionFailureKind = classifyFederationClientFailure(rawMessage);
     this.lastConnectionError = redactFederationDiagnostic(rawMessage)
       + federationLocalNetworkFailureHint(rawMessage);
+    if (error instanceof CloudflareSignInRequiredError) {
+      this.setCloudflareSignInRequired(this.readRuntimeConfig().cloudflareEndpoint || undefined);
+    }
     if (this.gatewayInstanceId) {
       this.publishPeerStatus(
         this.gatewayInstanceId,
@@ -3883,26 +4385,31 @@ export class DesktopFederationRuntime {
       createdAt: Date.now(),
       detail: this.lastConnectionError,
     });
-    log.warn("federation client connection failed", {
-      endpoints: this.configuredEndpoints.length,
-      error: this.lastConnectionError,
-    });
     // Nothing a retry changes, and no other path to try: stop instead of
-    // logging the same local failure every thirty seconds, indefinitely.
+    // logging the same local failure every minute, indefinitely.
     if (
       (error instanceof CloudflareSignInRequiredError || error instanceof CloudflareAccessRefusedError)
       && this.configuredEndpoints.length === 1
     ) {
       this.parked = true;
+      log.warn("federation client connection failed", {
+        endpoints: this.configuredEndpoints.length,
+        error: this.lastConnectionError,
+      });
       log.info("federation client stopped dialing until sign-in or settings change");
       return;
     }
-    this.scheduleReconnect();
+    const retryDelayMs = this.scheduleReconnect();
+    if (retryDelayMs === undefined) return;
+    // The error names every endpoint tried and why each failed; without it a
+    // long outage logs nothing an operator can act on.
+    const message = this.connectionFailureLog.recordFailure(Date.now(), retryDelayMs);
+    if (message) log.warn(message, { error: this.lastConnectionError });
   }
 
   // Backoff applies per full cycle through the endpoint list; every cycle
   // re-walks the endpoints in configured order via connectToGateway.
-  private scheduleReconnect(): void {
+  private scheduleReconnect(): number | undefined {
     if (this.stopping || this.reconnectTimer) return;
     if (
       this.lastConnectedAt !== undefined
@@ -3920,6 +4427,7 @@ export class DesktopFederationRuntime {
         this.handleClientConnectionFailure(error);
       });
     }, delayMs);
+    return delayMs;
   }
 
   private registerGatewayConnection(connection: FederationGatewayConnection): void {
@@ -3967,6 +4475,8 @@ export class DesktopFederationRuntime {
   }
 
   private unregisterPeer(peerId: FederationInstanceId): void {
+    this.services?.disconnect(peerId);
+    this.serviceForwarder.disconnectPeer(peerId);
     this.shutdown.disconnected(peerId);
     this.peerDirectoryReceivers.delete(peerId);
     this.removeEventSubscriptionsForPeer(peerId);
@@ -5698,6 +6208,10 @@ export class DesktopFederationRuntime {
     status: FederationConnectionState,
     unavailableReason?: string,
   ): void {
+    if (status !== "connected") {
+      this.services?.disconnect(instanceId);
+      this.serviceForwarder.disconnectPeer(instanceId);
+    }
     const previous = this.publishedPeerStatuses.get(instanceId);
     if (
       previous?.status === status
@@ -6280,6 +6794,12 @@ function localBackendOperations(): FederationBackendOperations {
     async searchNavigationThreads(request) {
       return await messagingBridge.searchNavigationThreads(request);
     },
+    async searchThreadContent(request, rpcOptions) {
+      return await getDesktopBackendRegistry().ownerContentSearch.run(request, rpcOptions);
+    },
+    async cancelThreadContentSearch(request, rpcOptions) {
+      getDesktopBackendRegistry().ownerContentSearch.cancel(request.searchId, rpcOptions);
+    },
     async searchFederatedThreads(request, rpcOptions) {
       return await messagingBridge.searchFederatedThreads(request, rpcOptions);
     },
@@ -6422,6 +6942,20 @@ function localBackendOperations(): FederationBackendOperations {
         pinnedRank: overlay.pinnedRank,
       };
     },
+    async setThreadLock(
+      request: SetThreadLockRequest,
+      options?: { requesterInstanceId?: string },
+    ): Promise<SetThreadLockResponse> {
+      return await getDesktopBackendRegistry().setThreadLock({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        locked: request.locked,
+        ...(request.note !== undefined ? { note: request.note } : {}),
+      }, {
+        source: "peer",
+        ...(options?.requesterInstanceId ? { sourceInstanceId: options.requesterInstanceId } : {}),
+      });
+    },
     async setThreadReaction(
       request: SetThreadReactionRequest,
     ): Promise<SetThreadReactionResponse> {
@@ -6455,6 +6989,11 @@ function localBackendOperations(): FederationBackendOperations {
       // cycle. An unregistered reader (messaging not wired yet) reads as
       // "no platforms configured", which renders as no MSG chip.
       return await (messagingPlatformStatusReader?.() ?? []);
+    },
+    async readForge(request, options) {
+      const deadline = options?.deadlineAt ?? Date.now() + 60_000;
+      if (deadline <= Date.now()) throw new Error("Forge read deadline expired.");
+      return await getDesktopBackendRegistry().readForgeForPeer(request, AbortSignal.timeout(Math.min(60_000, deadline - Date.now())));
     },
     async detachThreadPullRequest(
       request: DetachThreadPullRequestRequest,
@@ -6567,27 +7106,9 @@ function localBackendOperations(): FederationBackendOperations {
     async updateSubthreadOrder(
       request: UpdateSubthreadOrderRequest,
     ): Promise<UpdateSubthreadOrderResponse> {
-      const backend = request.backend ?? "codex";
-      const threadIds = await getDesktopOverlayStore().updateSubthreadOrder({
-        backend,
-        parentThreadId: request.parentThreadId,
-        threadIds: request.threadIds,
-      });
-      await getDesktopBackendRegistry().publishLocalEvent({
-        backend,
-        notification: {
-          method: "thread/subthreadOrder/updated",
-          params: {
-            parentThreadId: request.parentThreadId,
-            threadIds,
-          },
-        },
-      });
-      return {
-        backend,
-        parentThreadId: request.parentThreadId,
-        threadIds,
-      };
+      // A viewer sends relative moves; the owner validates them against its
+      // complete child order, the same as a local drag.
+      return await updateLocalSubthreadOrder(request);
     },
     async setSubthreadsCollapsed(
       request: SetSubthreadsCollapsedRequest,
@@ -6692,6 +7213,11 @@ function localBackendOperations(): FederationBackendOperations {
         request.queueEntryId,
       );
     },
+    async moveQueuedTurn(
+      request: MoveQueuedTurnRequest,
+    ): Promise<MoveQueuedTurnResponse> {
+      return await getDesktopBackendRegistry().moveQueuedTurn(request);
+    },
     async listScheduledThreadActions(
       request: ListScheduledThreadActionsRequest = {},
       rpcOptions?: FederationRpcRequestOptions,
@@ -6746,6 +7272,24 @@ function localBackendOperations(): FederationBackendOperations {
       request: CompactThreadRequest,
     ): Promise<CompactThreadResponse> {
       return await getDesktopBackendRegistry().compactThread(request);
+    },
+    async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
+      return { connections: await getMcpConnectionGatewayService().listConnections() };
+    },
+    async readThreadMcpConnections(
+      request: ReadThreadMcpConnectionsRequest,
+    ): Promise<SetThreadMcpConnectionsResponse> {
+      return await getDesktopBackendRegistry().readThreadMcpConnections(request);
+    },
+    async setThreadMcpConnections(
+      request: SetThreadMcpConnectionsRequest,
+    ): Promise<SetThreadMcpConnectionsResponse> {
+      return await getDesktopBackendRegistry().setThreadMcpConnections(request);
+    },
+    async describeThreadMcpConnections(
+      request: DescribeThreadMcpConnectionsRequest,
+    ): Promise<DescribeThreadMcpConnectionsResponse> {
+      return await getDesktopBackendRegistry().describeThreadMcpConnections(request);
     },
     async listThreadMcpServers(
       request: ListThreadMcpServersRequest,
@@ -6968,6 +7512,24 @@ function localBackendOperations(): FederationBackendOperations {
         threadId: request.threadId,
         directory,
       };
+    },
+    async detachDirectoryFromThread(
+      request: DetachDirectoryFromThreadRequest,
+    ): Promise<DetachDirectoryFromThreadResponse> {
+      return await detachOwnedThreadDirectory(request, {
+        overlayStore: getDesktopOverlayStore(),
+        readThread: async (backend, threadId) =>
+          await getDesktopBackendRegistry().resolveThread({ backend, threadId }),
+        publishUpdate: async (backend, threadId) => {
+          await getDesktopBackendRegistry().publishLocalEvent({
+            backend,
+            notification: {
+              method: "navigation/threadDirectories/updated",
+              params: { reason: "selected-thread", threadIds: [threadId] },
+            },
+          });
+        },
+      });
     },
     async listWorktreeUnpublishedCommits(
       request: ListWorktreeUnpublishedCommitsRequest,

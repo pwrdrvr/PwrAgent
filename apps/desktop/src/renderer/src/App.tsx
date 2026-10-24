@@ -1,7 +1,12 @@
+import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared";
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
+import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRenameNotice";
+import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
-import { classifyDirectory } from "@pwragent/shared";
+import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
+import { formatBackendLabel } from "./lib/backend-label";
+import { classifyDirectory, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
   Suspense,
@@ -15,10 +20,12 @@ import {
   type ComponentType,
   type CSSProperties,
   type PointerEvent,
+  type RefObject,
   type SetStateAction,
 } from "react";
 import {
   buildThreadIdentityKey,
+  DEFAULT_THREAD_TODO_MERGE_METHOD,
   federatedThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -29,6 +36,7 @@ import {
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
   type DesktopPwrAgentProfileSummary,
+  type DesktopSettingsSnapshot,
   type FederationInstanceId,
   type FederationTarget,
   type MessagingChannelKind,
@@ -47,6 +55,8 @@ import {
   toolOutputWarningChars,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
+import type { ProjectRevealRequest } from "./features/navigation/DirectoriesList";
+import { isSubthreadLaunchpadDraft } from "./features/navigation/StartingThreadRow";
 import { SidebarResizeHandle } from "./features/navigation/SidebarResizeHandle";
 import { useThreadJump } from "./features/navigation/useThreadJump";
 import { AppTitleBar } from "./features/chrome/AppTitleBar";
@@ -59,8 +69,16 @@ import {
   type SendThreadToMachineRequest,
   type SendThreadToMachineSource,
 } from "./features/federation/SendThreadToMachineDialog";
+import { ContinueAfterDialog } from "./features/thread-dependencies/ContinueAfterDialog";
+import {
+  ThreadDependencyIndicatorsContext,
+  useThreadDependencyIndicators,
+} from "./features/thread-dependencies/useThreadDependencyIndicators";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
-import type { LaunchpadMachineControl } from "./features/composer/LaunchpadMachineChip";
+import type {
+  LaunchpadMachineControl,
+  MachineChipValue,
+} from "./features/composer/LaunchpadMachineChip";
 import { findPeerCounterpartDirectory } from "./lib/federation-project-match";
 import type { HistoryNavControls } from "./features/chrome/HistoryNavButtons";
 import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
@@ -91,6 +109,7 @@ import {
 } from "./features/thread-detail/context-panels/context-tab";
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
+import { hasComposerDraftContent } from "./features/composer/useComposerDraftStore";
 import { useRecoverableState, useRecoverableComposerDraftStore } from "./lib/RendererRecoveryState";
 import { readBootstrapLayoutPreferences } from "./lib/layout-preferences";
 import { useAppearance, type AppearanceController } from "./lib/useAppearance";
@@ -98,6 +117,7 @@ import { useBackendSummaries } from "./lib/useBackendSummaries";
 import { useDesktopApi, type DesktopApi } from "./lib/desktop-api";
 import { useDesktopApplications } from "./lib/useDesktopApplications";
 import { useEventCallback } from "./lib/useEventCallback";
+import { useExecutionModeSelection } from "./lib/useExecutionModeSelection";
 import {
   readRendererFederationLabel,
   readRendererFederationTarget,
@@ -119,7 +139,16 @@ import {
 } from "./lib/useNavigationHistory";
 import { TranscriptLinkProvider } from "./lib/transcript-links";
 import { MarkdownRenderingOptionsProvider } from "./lib/markdown-rendering-options";
-import { useThreadNavigation } from "./lib/useThreadNavigation";
+import {
+  InteractiveSvgPreferencesProvider,
+  type InteractiveSvgPreferences,
+} from "./lib/interactive-svg-preferences";
+import { TerminalPreferencesProvider } from "./lib/terminal-preferences";
+import {
+  useThreadNavigation,
+  type ArchivedThreadRef,
+  type SubthreadLaunchpadDraft,
+} from "./lib/useThreadNavigation";
 import { usePwrAgentProfiles } from "./lib/usePwrAgentProfiles";
 import { usePullRequestRefresh } from "./features/pr-status/usePullRequestRefresh";
 import { useThreadGitWorkingStateRefresh } from "./features/navigation/useThreadGitWorkingStateRefresh";
@@ -133,10 +162,27 @@ import { useScheduledThreadActionProjection } from "./lib/useScheduledThreadActi
 import { useIndependentQueueProjection } from "./lib/useIndependentQueueProjection";
 import { useThreadQueuedMessageIndicators } from "./lib/useThreadQueuedMessageIndicators";
 import { useThreadDraftIndicators, useUnassignedThreadDraftCount } from "./lib/useThreadDraftIndicators";
+import {
+  ThreadTodoCountsContext,
+  useThreadTodos,
+} from "./features/thread-todos/useThreadTodos";
+import type {
+  ThreadTodoProjectMenu,
+  ThreadTodosView,
+} from "./features/thread-todos/thread-todos-view";
+import {
+  OperatorWaitsContext,
+  useOperatorRequests,
+} from "./features/operator-requests/useOperatorRequests";
+import { useOffscreenQuestionAnswers } from "./features/operator-requests/useOffscreenQuestionAnswers";
 import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
+import {
+  CODEX_LAUNCH_NOTICE_ID,
+  CodexLaunchNotice,
+} from "./features/notifications/CodexLaunchNotice";
 import { turnFailureAcknowledgements, turnFailureNoticeId, turnFailureScopeKey } from "./features/notifications/turn-failure-acknowledgements";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
 import {
@@ -144,7 +190,7 @@ import {
   NO_STARTUP_BACKEND_NOTICE_ID,
 } from "./features/notifications/provider-startup-notice";
 import { QuitBlockerQueueToast } from "./features/notifications/QuitBlockerQueueToast";
-import { isCodexStreamNoticeMethod } from "./features/notifications/codex-stream-notice";
+import { isStreamNoticeEvent } from "./features/notifications/codex-stream-notice";
 import {
   appNoticeReducer,
   INITIAL_APP_NOTICE_STATE,
@@ -154,6 +200,7 @@ import {
   threadActionErrorNoticeId,
   type ThreadActionErrorKind,
 } from "./features/notifications/thread-action-error-notice";
+import { useNavigationReadErrorNotices } from "./features/notifications/navigation-read-error-notice";
 import {
   buildCodexMissingThreadsNotice,
   CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID,
@@ -176,6 +223,10 @@ import {
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
 import { buildBundledGitLfsNotice } from "./features/notifications/bundled-git-lfs-notice";
+import {
+  AUTO_ACCESS_UPGRADE_NOTICE_ID,
+  buildAutoAccessUpgradeNotice,
+} from "./features/notifications/auto-access-upgrade-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
   buildToolAccountingNotice,
@@ -202,6 +253,7 @@ import {
   type GithubPrSamlEnforcementEvent,
 } from "../../shared/github-pr-access";
 import { buildLocalThreadDiagnosticsInfo } from "../../shared/local-diagnostics-info";
+import { PROFILES_SETTINGS_CREATE_SUBSECTION } from "../../shared/settings-routes";
 import { AppUpdateBanner } from "./features/update/AppUpdateBanner";
 import { isNativeVoiceApi, useNativeVoiceNotices } from "./features/native-voice/NativeVoice";
 import {
@@ -219,6 +271,7 @@ import {
 
 const SETTINGS_SECTIONS = new Set<SettingsSection>([
   "general",
+  "keyboard",
   "updates",
   "applications",
   "plugins",
@@ -307,6 +360,8 @@ export function App() {
     snapshotPreference: settings.snapshot?.general.appearance
       ? {
         theme: settings.snapshot.general.appearance.theme.value,
+        darkTheme: settings.snapshot.general.appearance.darkTheme.value,
+        lightTheme: settings.snapshot.general.appearance.lightTheme.value,
         density: settings.snapshot.general.appearance.density.value,
         sidebarTextSize:
           settings.snapshot.general.appearance.sidebarTextSize.value,
@@ -391,6 +446,10 @@ function DesktopAppShell(props: {
   );
   const [revealSelectedThreadRequest, setRevealSelectedThreadRequest] =
     useState(0);
+  // The open thread whose title strip holds a rename field.
+  const [titleRenameKey, setTitleRenameKey] = useState<string>();
+  const [projectRevealRequest, setProjectRevealRequest] =
+    useState<ProjectRevealRequest>();
   const [contextRailPinned, setContextRailPinned] = useState(
     () => readBootstrapLayoutPreferences().contextRailPinned,
   );
@@ -446,7 +505,7 @@ function DesktopAppShell(props: {
       }
       show();
     },
-    [],
+    [setMainViewState],
   );
   // The opener went inert with the sidebar or main, so focus moves onto the
   // layer, and Tab starts at its first control. On close, or on a switch
@@ -492,6 +551,22 @@ function DesktopAppShell(props: {
   const [settingsInitialSubsection, setSettingsInitialSubsection] = useState<
     string | undefined
   >(undefined);
+  // Profiles → New Profile… asks Settings → Profiles to open its create form.
+  // A one-shot flag rather than a route: ProfilesSettings clears it once the
+  // form is open, so a second click opens it again and a later visit to the
+  // pane does not.
+  const [profileCreateRequested, setProfileCreateRequested] = useState(false);
+  const clearProfileCreateRequest = useCallback(() => {
+    setProfileCreateRequested(false);
+  }, []);
+  // Settings can close before the Profiles pane ever mounts (an unsaved-edits
+  // prompt kept another pane open, then Exit Settings). The request goes with
+  // it, or a later visit to Profiles would open a form nobody asked for.
+  useEffect(() => {
+    if (mainView !== "settings") {
+      setProfileCreateRequested(false);
+    }
+  }, [mainView]);
   const [threadViewReady, setThreadViewReady] = useState(false);
   // Onboarding wizard overlay state. Three paths into it:
   //  (1) auto-launch on first snapshot if `onboarding.completed` is
@@ -632,6 +707,14 @@ function DesktopAppShell(props: {
   // effect below, once `navigation` is defined.
   const backendErrorThreadsRef = useRef<NavigationThreadSummary[]>([]);
   const backendErrorDirectoriesRef = useRef<NavigationDirectorySummary[]>([]);
+  const codexConfigWarningsDismissed =
+    props.settings.snapshot?.experimental.codexConfigWarningsDismissed?.value;
+  // Read by the toast subscription without re-subscribing on every settings
+  // write, which replaces this array.
+  const codexConfigWarningsDismissedRef = useRef(codexConfigWarningsDismissed);
+  useEffect(() => {
+    codexConfigWarningsDismissedRef.current = codexConfigWarningsDismissed;
+  }, [codexConfigWarningsDismissed]);
   /* Per-thread incident disposition, keyed by notice id. Mirrors what the
      overlay persists so a reply to a live notification does not need to wait
      on a round trip to know whether the operator already silenced this. */
@@ -698,6 +781,11 @@ function DesktopAppShell(props: {
       desktopApi?.getNavigationQueryPage,
       liveFederationHealth,
     ],
+  );
+  // Every known machine, the window's owner included, for naming one.
+  const federationMachines = useMemo(
+    () => buildFederationThreadTargets(liveFederationHealth),
+    [liveFederationHealth],
   );
   useEffect(() => {
     return desktopApi?.onWindowFocus?.(() => {
@@ -838,9 +926,50 @@ function DesktopAppShell(props: {
     if (bundledGitLfsNotice) showAppNotice(bundledGitLfsNotice);
   }, [bundledGitLfsNotice, showAppNotice]);
 
+  // The upgrade that moved new Codex and Claude threads to Auto says so once.
+  // The state DB keeps it pending across restarts until the operator closes it.
+  // A window fronting a peer shows the peer's threads, not this profile's.
+  const [autoAccessUpgradePending, setAutoAccessUpgradePending] = useState(false);
+  useEffect(() => {
+    if (readRendererFederationTarget()) return;
+    let cancelled = false;
+    void desktopApi?.readLaunchpadAccessNoticePending?.()
+      .then((pending) => {
+        if (!cancelled && pending) setAutoAccessUpgradePending(true);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopApi]);
+  const dismissAutoAccessUpgradeNotice = useCallback(() => {
+    dispatchAppNotice({ type: "dismiss", id: AUTO_ACCESS_UPGRADE_NOTICE_ID });
+    setAutoAccessUpgradePending(false);
+    void desktopApi?.dismissLaunchpadAccessNotice?.().catch(() => undefined);
+  }, [desktopApi]);
+  const autoAccessUpgradeNotice = useMemo(() => {
+    return autoAccessUpgradePending
+      ? buildAutoAccessUpgradeNotice({
+          onDismiss: dismissAutoAccessUpgradeNotice,
+          onReviewAccess: () => {
+            dismissAutoAccessUpgradeNotice();
+            openSettingsSection("models");
+          },
+        })
+      : undefined;
+  }, [autoAccessUpgradePending, dismissAutoAccessUpgradeNotice, openSettingsSection]);
+  useEffect(() => {
+    if (autoAccessUpgradeNotice) showAppNotice(autoAccessUpgradeNotice);
+  }, [autoAccessUpgradeNotice, showAppNotice]);
+
   const syncFederationShutdownNotice = useCallback((instanceId: string, notice: AppNoticeToastNotice | undefined): void => {
     if (notice) showAppNotice(notice);
     else dispatchAppNotice({ type: "dismiss", id: `federation-shutdown:${instanceId}` });
+  }, [showAppNotice]);
+
+  const syncCloudflareSignInNotice = useCallback((notice: AppNoticeToastNotice | undefined): void => {
+    if (notice) showAppNotice(notice);
+    else dispatchAppNotice({ type: "dismiss", id: CLOUDFLARE_SIGN_IN_NOTICE_ID });
   }, [showAppNotice]);
 
   const syncMessagingErrorNotice = useCallback((
@@ -895,18 +1024,25 @@ function DesktopAppShell(props: {
   const openCodexSettings = useCallback(() => {
     openSettingsSection("models", "codex");
   }, [openSettingsSection]);
+  const syncCodexLaunchNotice = useCallback((
+    notice: AppNoticeToastNotice | undefined,
+  ): void => {
+    dispatchAppNotice({ type: "dismiss", id: CODEX_LAUNCH_NOTICE_ID });
+    if (notice) showAppNotice(notice);
+  }, [showAppNotice]);
+  const { writeConfig: writeSettingsConfig, refresh: refreshSettings } = props.settings;
   const changeCodexManagedBuilds = useCallback(async (managedBuilds: boolean) => {
-    const saved = await props.settings.writeConfig({ models: { codex: { managedBuilds } } });
+    const saved = await writeSettingsConfig({ models: { codex: { managedBuilds } } });
     if (saved) {
-      await props.settings.refresh();
+      await refreshSettings();
       await refreshManagedCodexModelCatalog(desktopApi);
     }
     return saved;
-  }, [desktopApi, props.settings.writeConfig, props.settings.refresh]);
+  }, [desktopApi, writeSettingsConfig, refreshSettings]);
   const checkCodexManagedBuildUpdates = useCallback(async () => {
     await checkForManagedCodexUpdates(desktopApi);
-    await props.settings.refresh();
-  }, [desktopApi, props.settings.refresh]);
+    await refreshSettings();
+  }, [desktopApi, refreshSettings]);
 
   useEffect(() => {
     return desktopApi?.onGithubPrSamlEnforcement?.((event) => {
@@ -1103,7 +1239,7 @@ function DesktopAppShell(props: {
       }
       return backend === "codex"
         ? `Codex thread${threadId ? ` ${threadId}` : ""}`
-        : `${backend} thread${threadId ? ` ${threadId}` : ""}`;
+        : `${formatBackendLabel(backend as AppServerBackendKind)} thread${threadId ? ` ${threadId}` : ""}`;
     };
     return desktopApi?.onAgentEvent?.(async (event) => {
       if (
@@ -1117,19 +1253,18 @@ function DesktopAppShell(props: {
       const instanceId = event.federationTarget?.scope === "remote"
         ? event.federationTarget.instanceId
         : undefined;
-      if (
-        event.backend === "codex"
-        && isCodexStreamNoticeMethod(event.notification.method)
-      ) {
+      if (isStreamNoticeEvent(event.backend, event.notification.method)) {
         const params = event.notification.params as Record<string, unknown>;
         dispatchAppNotice({
           type: "codex-stream-event",
+          backend: event.backend,
           notification: { method: event.notification.method, params },
           ...(instanceId ? { instanceId } : {}),
           skillQuestionsWarningDismissed:
             props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
+          dismissedWarningIds: codexConfigWarningsDismissedRef.current,
           threadLabel: labelForThread(
-            "codex",
+            event.backend,
             typeof params.threadId === "string" ? params.threadId : undefined,
           ),
         });
@@ -1427,6 +1562,7 @@ function DesktopAppShell(props: {
             errorNoticeContext: event.errorNoticeContext,
             originLabel: instanceId ? `Remote instance: ${instanceId}` : "This machine",
             onCodexLogin: openCodexLogin,
+            onOpenCodexSettings: openCodexSettings,
             backend: event.backend,
             threadId: params.threadId ?? "unknown",
             turnId: params.turnId ?? "unknown",
@@ -1511,6 +1647,7 @@ function DesktopAppShell(props: {
     acknowledgeThreadSpendAlert,
     desktopApi,
     openCodexLogin,
+    openCodexSettings,
     props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
   ]);
   // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
@@ -1549,19 +1686,44 @@ function DesktopAppShell(props: {
   // writeConfig call is fire-and-forget; a failed write just means the
   // preference isn't remembered next launch.
   const writeConfig = settings.writeConfig;
+  // The config banner and the thread warning toast save into one list.
+  const suppressCodexWarning = (id: string): Promise<boolean> => writeConfig({
+    experimental: {
+      codexConfigWarningsDismissed: [...new Set([
+        ...(codexConfigWarningsDismissedRef.current ?? []),
+        id,
+      ])],
+    },
+  });
+  const interactiveSvgSkipNotice =
+    settings.snapshot?.general.interactiveSvgSkipNotice?.value ?? false;
+  const interactiveSvgAutoOpen =
+    settings.snapshot?.general.interactiveSvgAutoOpen?.value ?? false;
+  const interactiveSvgPreferences = useMemo<InteractiveSvgPreferences>(() => ({
+    skipNotice: interactiveSvgSkipNotice,
+    autoOpen: interactiveSvgAutoOpen,
+    save: (patch) => writeConfig({ general: patch }),
+  }), [interactiveSvgAutoOpen, interactiveSvgSkipNotice, writeConfig]);
   // Thread-jump palette (⌘K anywhere, ⌘F while the sidebar is focused). Owns
   // its own open state and the sidebar peek a jump's landing scroll needs.
   const threadJump = useThreadJump({ sidebarHidden, setSidebarHidden });
   const endSidebarPeek = threadJump.endPeek;
+  const closeThreadJump = threadJump.closeJump;
   const toggleGlobalThreadSearch = () => {
     threadJump.closeJump();
     setMainView((current) => current === "search" ? "thread" : "search");
   };
+  // Layout prefs the operator has set in this window. The startup snapshot
+  // never adopts one of these: see the adoption effect below.
+  const layoutPrefsChosenRef = useRef(
+    new Set<keyof DesktopSettingsSnapshot["ui"]>(),
+  );
   const setSidebarHiddenPersisted = useCallback(
     (next: boolean) => {
       // An explicit toggle (⌘B, the chips) is the operator stating a preference,
       // so it ends any jump-landing peek in flight.
       endSidebarPeek();
+      layoutPrefsChosenRef.current.add("sidebarHidden");
       setSidebarHidden(next);
       void writeConfig({ ui: { sidebarHidden: next } });
     },
@@ -1569,6 +1731,7 @@ function DesktopAppShell(props: {
   );
   const setContextRailPinnedPersisted = useCallback(
     (next: boolean) => {
+      layoutPrefsChosenRef.current.add("contextRailPinned");
       setContextRailPinned(next);
       void writeConfig({ ui: { contextRailPinned: next } });
     },
@@ -1584,6 +1747,7 @@ function DesktopAppShell(props: {
   });
   const setActiveContextTabPersisted = useCallback(
     (tab: ContextTabId) => {
+      layoutPrefsChosenRef.current.add("activeContextTab");
       setActiveContextTab(tab);
       void writeConfig({ ui: { activeContextTab: tab } });
     },
@@ -1591,6 +1755,7 @@ function DesktopAppShell(props: {
   );
   const setEditedFilesDockPersisted = useCallback(
     (dock: EditedFilesDock) => {
+      layoutPrefsChosenRef.current.add("editedFilesDock");
       setEditedFilesDock(dock);
       void writeConfig({ ui: { editedFilesDock: dock } });
     },
@@ -1598,6 +1763,7 @@ function DesktopAppShell(props: {
   );
   const setActionRunsDockPersisted = useCallback(
     (dock: ActionRunsDock) => {
+      layoutPrefsChosenRef.current.add("actionRunsDock");
       setActionRunsDock(dock);
       void writeConfig({ ui: { actionRunsDock: dock } });
     },
@@ -1610,6 +1776,12 @@ function DesktopAppShell(props: {
   // — the bootstrap hint read the same file before first paint — so these two
   // set what they already hold. They stay because a window that somehow got
   // no hint would otherwise never see the operator's stored layout.
+  //
+  // The bootstrap projection opens navigation before this snapshot arrives,
+  // so the operator can already have toggled a pref. Their choice wins over
+  // the stored value, even when the read resolved first: this effect runs
+  // only after the snapshot's render commits, and a click in that gap would
+  // otherwise be reset (Windows Desktop E2E lost a Pricing tab click to it).
   const uiPrefsSeededRef = useRef(false);
   const uiPrefs = settings.snapshot?.ui;
   useEffect(() => {
@@ -1617,17 +1789,31 @@ function DesktopAppShell(props: {
       return;
     }
     uiPrefsSeededRef.current = true;
-    setSidebarHidden(uiPrefs.sidebarHidden.value);
-    setContextRailPinned(uiPrefs.contextRailPinned.value);
-    if (isContextTabId(uiPrefs.activeContextTab.value)) {
+    const chosen = layoutPrefsChosenRef.current;
+    if (!chosen.has("sidebarHidden")) {
+      setSidebarHidden(uiPrefs.sidebarHidden.value);
+    }
+    if (!chosen.has("contextRailPinned")) {
+      setContextRailPinned(uiPrefs.contextRailPinned.value);
+    }
+    if (
+      !chosen.has("activeContextTab")
+      && isContextTabId(uiPrefs.activeContextTab.value)
+    ) {
       setActiveContextTab(uiPrefs.activeContextTab.value);
     }
     const editedFilesDockPref = uiPrefs.editedFilesDock?.value;
-    if (isEditedFilesDock(editedFilesDockPref)) {
+    if (
+      !chosen.has("editedFilesDock")
+      && isEditedFilesDock(editedFilesDockPref)
+    ) {
       setEditedFilesDock(editedFilesDockPref);
     }
     const actionRunsDockPref = uiPrefs.actionRunsDock?.value;
-    if (isActionRunsDock(actionRunsDockPref)) {
+    if (
+      !chosen.has("actionRunsDock")
+      && isActionRunsDock(actionRunsDockPref)
+    ) {
       setActionRunsDock(actionRunsDockPref);
     }
   }, [uiPrefs]);
@@ -1654,6 +1840,7 @@ function DesktopAppShell(props: {
     composerDraftStore,
     providerModelDefaults,
     attentionPromoteOnTurnEnd: settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true,
+    pinnedThreadsOnTop: settings.snapshot?.general.pinnedThreadsOnTop?.value,
     onThreadActionError: handleThreadActionError,
     progressiveInitialRefresh: true,
     threadViewVisible: mainView === "thread",
@@ -1784,6 +1971,7 @@ function DesktopAppShell(props: {
     showAppNotice,
     dismissAppNotice,
   );
+  const [operatorFocusPublishRevision, setOperatorFocusPublishRevision] = useState(0);
   const operatorFocus = useMemo(
     () => operatorFocusFor({
       view: mainView,
@@ -1793,7 +1981,7 @@ function DesktopAppShell(props: {
     }),
     [mainView, navigation.browseMode, navigation.selectedThread, navigation.selectedLaunchpad],
   );
-  useOperatorFocusPublisher(directorVoiceApi, operatorFocus);
+  useOperatorFocusPublisher(directorVoiceApi, operatorFocus, operatorFocusPublishRevision);
   const directorVoiceControl = useMemo(
     () => directorVoiceApi ? <DirectorVoiceButton api={directorVoiceApi} /> : undefined,
     [directorVoiceApi],
@@ -1855,6 +2043,11 @@ function DesktopAppShell(props: {
     backendErrorThreadsRef.current = navigation.threads;
     backendErrorDirectoriesRef.current = navigation.directories;
   }, [navigation.directories, navigation.threads]);
+  useNavigationReadErrorNotices({
+    admissionError: navigation.pagedNavigation.admissionError,
+    resources: navigation.pagedNavigation.resources,
+    instances: federationMachines,
+  }, dispatchAppNotice);
   /* Incident-notice inputs the live notification handler reads without
      re-subscribing: which thread is on screen, whether the operator has
      pricing display on, and the loaded thread's usage rows. */
@@ -2269,6 +2462,249 @@ function DesktopAppShell(props: {
     threads: navigation.threads,
   });
   const unassignedThreadDraftCount = useUnassignedThreadDraftCount(composerDraftStore);
+  const mountedTodoThreadKeys = useMemo(() => navigation.threads.filter((thread) => thread.federation)
+    .map(threadSummaryIdentityKey).sort().join("\n"), [navigation.threads]);
+  const threadTodoController = useThreadTodos(desktopApi, mountedTodoThreadKeys);
+  const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
+  const operatorWaitsContext = useMemo(
+    () => operatorRequests.ready ? {
+      waitsByThreadKey: operatorRequests.waitsByThreadKey,
+      seenKeys: operatorRequests.seenKeys,
+    } : undefined,
+    [operatorRequests.ready, operatorRequests.waitsByThreadKey, operatorRequests.seenKeys],
+  );
+  const localThreadTitles = useMemo(() => {
+    const titles = new Map<string, string>();
+    for (const thread of navigation.threads) {
+      titles.set(threadSummaryIdentityKey(thread), thread.title);
+    }
+    return titles;
+  }, [navigation.threads]);
+  // The project each thread files under, by its primary workspace, as
+  // the sidebar groups it.
+  const localThreadProjects = useMemo(() => {
+    const projects = new Map<string, { key: string; label: string }>();
+    for (const thread of navigation.threads) {
+      const linked = thread.linkedDirectories[0];
+      if (!linked) continue;
+      const descriptor = classifyDirectory(linked);
+      projects.set(threadSummaryIdentityKey(thread), {
+        key: descriptor.key,
+        label: descriptor.label,
+      });
+    }
+    return projects;
+  }, [navigation.threads]);
+  // What the selected thread shows is on screen: its cards in the stack and
+  // its waits in the transcript. Marked only while the window has focus, so
+  // a thread left selected behind another app still counts what arrives.
+  const markOperatorItemsSeen = operatorRequests.markSeen;
+  const selectedThreadKey = mainView === "thread" ? navigation.selectedThreadKey : undefined;
+  const selectedOpenTodos = selectedThreadKey
+    ? threadTodoController.openByThreadKey.get(selectedThreadKey)
+    : undefined;
+  const selectedWaits = selectedThreadKey
+    ? operatorRequests.waitsByThreadKey.get(selectedThreadKey)
+    : undefined;
+  useEffect(() => {
+    const keys = [
+      ...(selectedOpenTodos ?? []).map((todo) => operatorTodoItemKey(todo.id)),
+      ...(selectedWaits ?? []).map((wait) => wait.key),
+    ];
+    if (keys.length === 0) return;
+    const mark = (): void => {
+      if (document.hasFocus()) markOperatorItemsSeen(keys);
+    };
+    mark();
+    window.addEventListener("focus", mark);
+    return () => window.removeEventListener("focus", mark);
+  }, [markOperatorItemsSeen, selectedOpenTodos, selectedWaits]);
+  const listThreadTodos = desktopApi?.listThreadTodos;
+  const listThreadTodoProjects = desktopApi?.listThreadTodoProjects;
+  const setThreadTodoProject = desktopApi?.setThreadTodoProject;
+  // Its own memo: the card's menu refetches when this object changes, and
+  // the to-dos view below rebuilds on every card change.
+  const todoProjectMenu = useMemo<ThreadTodoProjectMenu | undefined>(
+    () => listThreadTodoProjects && setThreadTodoProject
+      ? {
+          list: async (todo) => (await listThreadTodoProjects({ federationTarget: todo.federationTarget })).projects,
+          set: async (todo, projectKey) =>
+            (await setThreadTodoProject({ id: todo.id, projectKey })).todo,
+        }
+      : undefined,
+    [listThreadTodoProjects, setThreadTodoProject],
+  );
+  const submitServerRequest = desktopApi?.submitServerRequest;
+  const configuredMergeMethod = props.settings.snapshot?.git?.defaultMergeMethod?.value;
+  // Peers that can host a handoff thread, the same list the new-thread
+  // machine chip offers.
+  const todoHandoffInstances = useMemo(
+    () => newThreadFederationTargets
+      .filter((target) => target.availability === "available")
+      .map((target) => ({ instanceId: target.instanceId, label: target.label })),
+    [newThreadFederationTargets],
+  );
+  // A handoff card asking for Full Access passes the same confirmation as
+  // every other escalation: the agent proposed the mode, the operator has
+  // not chosen it yet. A declined dialog leaves the run's promise pending,
+  // which the card reads as "nothing happened".
+  const pendingFullAccessTodoRunRef = useRef<(() => void) | undefined>(undefined);
+  const {
+    fullAccessRiskDialog: todoFullAccessRiskDialog,
+    requestExecutionModeSelection: requestTodoExecutionMode,
+  } = useExecutionModeSelection({
+    applyExecutionMode: () => {
+      const run = pendingFullAccessTodoRunRef.current;
+      pendingFullAccessTodoRunRef.current = undefined;
+      run?.();
+    },
+    currentExecutionMode: "default",
+    desktopApi,
+    dismissed: settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
+    onDismiss: () => handleDismissFullAccessRiskWarning(),
+  });
+  // The thread on screen, read by the To-dos panel's jumps without
+  // rebuilding the panel's view on every selection.
+  const selectedThreadKeyRef = useRef(navigation.selectedThreadKey);
+  useEffect(() => {
+    selectedThreadKeyRef.current = navigation.selectedThreadKey;
+  }, [navigation.selectedThreadKey]);
+  const offscreenQuestionAnswers = useOffscreenQuestionAnswers({
+    submitThreadReply: desktopApi?.submitThreadReply,
+    findThread: (threadKey) => navigation.threads.find((candidate) =>
+      threadSummaryIdentityKey(candidate) === threadKey),
+    onUserRepliedToThread: reportUserRepliedToThread,
+  });
+  const threadTodosView = useMemo<ThreadTodosView | undefined>(() => {
+    if (!listThreadTodos) return undefined;
+    const showTodoThread = (todo: ThreadTodo): void => {
+      showThreadFromLink({
+        backend: todo.backend,
+        threadId: todo.threadId,
+        ...(todo.federationTarget ? { instanceId: todo.federationTarget.instanceId } : {}),
+      });
+    };
+    // Settings is the live source for the default, so the button relabels
+    // as soon as it changes there rather than on the next card change.
+    const mergeMethods = threadTodoController.mergeMethods || configuredMergeMethod
+      ? {
+          defaultMethod: configuredMergeMethod
+            ?? threadTodoController.mergeMethods?.defaultMethod
+            ?? DEFAULT_THREAD_TODO_MERGE_METHOD,
+          byProject: threadTodoController.mergeMethods?.byProject ?? {},
+        }
+      : undefined;
+    return {
+      open: threadTodoController.openTodos,
+      openByThreadKey: threadTodoController.openByThreadKey,
+      revision: threadTodoController.revision,
+      runningIds: threadTodoController.runningIds,
+      mergeMethods,
+      instances: todoHandoffInstances,
+      ...(todoProjectMenu ? { projectMenu: todoProjectMenu } : {}),
+      threadTitle: (todo) =>
+        localThreadTitles.get(threadTodoThreadKey(todo))
+          ?? todo.threadTitle
+          ?? "Untitled thread",
+      resolve: (todo, status, resolution, options) =>
+        threadTodoController.resolve(todo.id, status, resolution, options),
+      setItemChecked: (todo, itemId, checked) =>
+        threadTodoController.setItemChecked(todo.id, itemId, checked),
+      run: (todo, options) => {
+        if (
+          todo.action?.type !== "start_thread"
+          || todo.action.executionMode !== "full-access"
+        ) {
+          return threadTodoController.runAction(todo.id, options);
+        }
+        return new Promise((resolve, reject) => {
+          pendingFullAccessTodoRunRef.current = () => {
+            threadTodoController.runAction(todo.id, options).then(resolve, reject);
+          };
+          requestTodoExecutionMode("full-access");
+        });
+      },
+      openThread: (todo) => showTodoThread(todo),
+      openStartedThread: (todo) => {
+        const started = todo.startedThread;
+        if (!started) return;
+        const instanceId = started.instanceId ?? todo.federationTarget?.instanceId;
+        showThreadFromLink({
+          backend: started.backend,
+          threadId: started.threadId,
+          ...(instanceId
+            ? {
+                instanceId,
+                ...(started.instanceLabel ? { instanceLabel: started.instanceLabel } : {}),
+              }
+            : {}),
+        });
+      },
+      listResolved: async () => {
+        const response = await listThreadTodos({ status: "all" });
+        if (response.errors?.length) throw new Error(response.errors.join("\n"));
+        return response.todos
+          .filter((todo) => todo.status !== "open")
+          .sort((left, right) =>
+            (right.resolvedAt ?? right.updatedAt) - (left.resolvedAt ?? left.updatedAt));
+      },
+      queueError: [threadTodoController.error, operatorRequests.error].filter(Boolean).join("\n") || undefined,
+      unavailableInstances: [...threadTodoController.unavailableInstances, ...operatorRequests.unavailableInstances],
+      waits: operatorRequests.waits,
+      waitsByThreadKey: operatorRequests.waitsByThreadKey,
+      seenKeys: operatorRequests.seenKeys,
+      markSeen: operatorRequests.markSeen,
+      respond: async (wait, response) => {
+        const request = wait.request;
+        if (!request || !submitServerRequest) {
+          throw new Error("This request can only be answered in its thread.");
+        }
+        await submitServerRequest({
+          backend: wait.backend,
+          threadId: wait.threadId,
+          federationTarget: wait.federationTarget,
+          turnId: typeof request.params.turnId === "string" ? request.params.turnId : undefined,
+          requestId: request.params.requestId,
+          response,
+        });
+      },
+      dismissQuestion: operatorRequests.dismissQuestion,
+      dismissedQuestionKeys: operatorRequests.dismissedQuestionKeys,
+      openWait: (wait) => {
+        // A question opens on its card, as a message link does.
+        const messageId = wait.question?.messageId;
+        if (messageId && wait.threadKey === selectedThreadKeyRef.current) {
+          // Already on screen: scroll only. Selecting it again would refresh
+          // its git status and clear its errors for nothing.
+          queueMessageLinkRequest({ backend: wait.backend, threadId: wait.threadId, messageId, instanceId: wait.federationTarget?.instanceId });
+          return;
+        }
+        showThreadFromLink({
+          backend: wait.backend,
+          threadId: wait.threadId,
+          ...(messageId ? { messageId } : {}),
+          ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
+        });
+      },
+      ...offscreenQuestionAnswers,
+      threadTitleForKey: (threadKey) => localThreadTitles.get(threadKey) ?? "Untitled thread",
+      threadProjectForKey: (threadKey) => localThreadProjects.get(threadKey),
+    };
+  }, [
+    configuredMergeMethod,
+    listThreadTodos,
+    localThreadProjects,
+    localThreadTitles,
+    offscreenQuestionAnswers,
+    operatorRequests,
+    queueMessageLinkRequest,
+    submitServerRequest,
+    requestTodoExecutionMode,
+    showThreadFromLink,
+    threadTodoController,
+    todoProjectMenu,
+    todoHandoffInstances,
+  ]);
   // Fetch the boot info once at mount. Stable for the renderer's
   // lifetime — the main process records the decision before this
   // window opens, and graduating the bootstrap profile spawns a
@@ -2349,10 +2785,33 @@ function DesktopAppShell(props: {
     if (!desktopApi?.onOpenSettingsRequested) {
       return;
     }
-    return desktopApi.onOpenSettingsRequested((section) => {
-      openSettingsSection(isSettingsSection(section) ? section : undefined);
+    return desktopApi.onOpenSettingsRequested((section, subsection) => {
+      if (
+        section === "profiles"
+        && subsection === PROFILES_SETTINGS_CREATE_SUBSECTION
+      ) {
+        openSettingsSection("profiles");
+        setProfileCreateRequested(true);
+        return;
+      }
+      openSettingsSection(
+        isSettingsSection(section) ? section : undefined,
+        subsection,
+      );
     });
   }, [desktopApi, openSettingsSection]);
+  useEffect(() => {
+    // View → Search Threads / View → Automations. The menu opens rather than
+    // toggles: the row names a screen, so choosing it again keeps it up.
+    if (!desktopApi?.onOpenMainViewRequested) {
+      return;
+    }
+    return desktopApi.onOpenMainViewRequested((view) => {
+      // The ⌘K palette sits above every screen, so it would cover either one.
+      closeThreadJump();
+      setMainView(view);
+    });
+  }, [closeThreadJump, desktopApi, setMainView]);
   useEffect(() => {
     if (!desktopApi?.onOpenNewThreadRequested) {
       return;
@@ -2367,8 +2826,16 @@ function DesktopAppShell(props: {
     }
     return desktopApi.onShowThreadRequested((request) => {
       setMainView("thread", () => {
-        queueMessageLinkRequest(request);
-        void navigation.showThread(request);
+        void (async () => {
+          // Commands from agents and auxiliary windows can name a peer's
+          // thread before this main window has mounted it.
+          await ensureWindowThreadMounted(desktopApi, request, navigation.threads, Boolean(readRendererFederationTarget()));
+          queueMessageLinkRequest(request);
+          await navigation.showThread(request);
+          // A command selecting the current thread still needs a fresh UI
+          // acknowledgement; main must not accept a stale focus snapshot.
+          setOperatorFocusPublishRevision((revision) => revision + 1);
+        })().catch((error) => console.warn("Opening the requested thread failed.", error));
       });
     });
   }, [desktopApi, navigation, queueMessageLinkRequest, setMainView]);
@@ -2571,6 +3038,24 @@ function DesktopAppShell(props: {
   // whether a turn is running.
   const [sendToMachineThread, setSendToMachineThread] =
     useState<NavigationThreadSummary>();
+  // Continue After, from the thread menu or a row's dependency chip.
+  // Dependencies run on the owning machine, so a federation window has none.
+  const [continueAfter, setContinueAfter] = useState<{
+    thread: NavigationThreadSummary;
+    returnFocus?: RefObject<HTMLElement | null>;
+  }>();
+  const threadDependencyIndicators = useThreadDependencyIndicators(desktopApi);
+  const canContinueAfter = Boolean(desktopApi?.manageThreadDependencies)
+    && !readRendererFederationTarget();
+  const threadDependencyContext = useMemo(
+    () => ({
+      byThreadKey: threadDependencyIndicators,
+      ...(canContinueAfter
+        ? { open: (thread: NavigationThreadSummary) => setContinueAfter({ thread }) }
+        : {}),
+    }),
+    [threadDependencyIndicators, canContinueAfter],
+  );
   const threadHandoffTargets = useMemo(
     () =>
       desktopApi?.handoffThreadToInstance && !readRendererFederationTarget()
@@ -2590,13 +3075,15 @@ function DesktopAppShell(props: {
         return undefined;
       }
       const localRepository = project.repositoryKey?.toLowerCase();
+      const knownRepository = Boolean(counterpart.repositoryKey || counterpart.repositoryKeys?.length)
+        && Boolean(project.repositoryKey || project.repositoryKeys?.length);
       return {
         path: counterpart.path,
         matchedBy:
           localRepository
           && counterpart.repositoryKey?.toLowerCase() === localRepository
             ? "origin"
-            : "name",
+            : knownRepository ? "remote" : "name",
       };
     },
     [findFederatedCounterpartDirectory],
@@ -2632,6 +3119,7 @@ function DesktopAppShell(props: {
             ? { path: directoryRow?.path ?? descriptor.path }
             : {}),
           ...(repositoryKey !== undefined ? { repositoryKey } : {}),
+          ...(directoryRow?.repositoryKeys !== undefined ? { repositoryKeys: directoryRow.repositoryKeys } : {}),
         }
       : undefined;
     return {
@@ -2688,6 +3176,83 @@ function DesktopAppShell(props: {
       federatedTargetHasProject({ scope: "remote", instanceId }, directory),
     [federatedTargetHasProject],
   );
+  // The breadcrumb's project name. Only Directories lists projects, so the
+  // click switches to it, the way clicking its lens tab would (leaving
+  // Attention clears the selected thread's cookie, as any exit does). A
+  // hidden sidebar is shown: the click asks to see the list. The header
+  // names the project, since it can link one before the thread's detail
+  // (and so `navigation.selectedDirectory`) has loaded.
+  const selectedItemKey = navigation.selectedItemKey;
+  const browseMode = navigation.browseMode;
+  const renameThread = navigation.renameThread;
+  const titleRename = useMemo(() => ({
+    active: titleRenameKey !== undefined && titleRenameKey === selectedItemKey,
+    onStart: () => setTitleRenameKey(selectedItemKey),
+    onEnd: (thread: NavigationThreadSummary, name: string | null) => {
+      setTitleRenameKey(undefined);
+      if (name !== null) void renameThread(thread, name);
+    },
+  }), [renameThread, selectedItemKey, titleRenameKey]);
+  // Opening another thread drops the field without a commit; forget the edit,
+  // or the field would reopen when the operator comes back to this thread.
+  useEffect(() => {
+    setTitleRenameKey((current) => (current === selectedItemKey ? current : undefined));
+  }, [selectedItemKey]);
+  const requestTitleRename = useCallback((thread: NavigationThreadSummary) => {
+    setTitleRenameKey(threadSummaryIdentityKey(thread));
+  }, []);
+  const restoreArchivedThreads = navigation.restoreArchivedThreads;
+  // Archive is one keystroke away now, so it can be taken back from the toast.
+  const offerArchiveUndo = useCallback((
+    archived: ArchivedThreadRef[],
+    details: { title?: string; reopenKey?: string },
+  ) => {
+    const restorable = archived.filter((thread) => !thread.remote);
+    if (restorable.length === 0) return;
+    const id = `thread-archived:${restorable.map((thread) => `${thread.backend}:${thread.threadId}`).join(",")}`;
+    showAppNotice({
+      id,
+      title: archived.length === 1 ? "Thread archived" : `${archived.length} threads archived`,
+      // A peer's thread cannot be restored from here, so say what Undo covers.
+      message: restorable.length < archived.length
+        ? `Undo brings back the ${restorable.length} on this machine.`
+        : details.title ?? "Undo brings them all back.",
+      actions: [{
+        label: "Undo",
+        onClick: () => {
+          dismissAppNotice(id);
+          void restoreArchivedThreads(restorable, details.reopenKey);
+        },
+      }],
+    });
+  }, [dismissAppNotice, restoreArchivedThreads, showAppNotice]);
+  const setBrowseMode = navigation.setBrowseMode;
+  const revealSelectedProjectInList = useCallback((directory: NavigationDirectorySummary) => {
+    if (!selectedItemKey) return;
+    if (sidebarHidden) setSidebarHiddenPersisted(false);
+    if (browseMode !== "directories") setBrowseMode("directories");
+    setProjectRevealRequest({
+      key: directory.key,
+      selectedThreadKey: selectedItemKey,
+    });
+  }, [
+    browseMode,
+    selectedItemKey,
+    setBrowseMode,
+    setSidebarHiddenPersisted,
+    sidebarHidden,
+  ]);
+  // This instance, as the machine chips name it.
+  const localMachine: MachineChipValue = {
+    label: liveFederationHealth?.localLabel ?? "This machine",
+    shortLabel: federationLocalDisplayLabel(liveFederationHealth),
+    ...(liveFederationHealth?.localCelestialIcon
+      ? { celestialIcon: liveFederationHealth.localCelestialIcon }
+      : {}),
+    ...(liveFederationHealth?.instanceId
+      ? { instanceId: liveFederationHealth.instanceId }
+      : {}),
+  };
   const selectedLaunchpadForMachine = navigation.selectedLaunchpad;
   const launchpadMachine = ((): LaunchpadMachineControl | undefined => {
     const windowTarget = readRendererFederationTarget();
@@ -2698,7 +3263,7 @@ function DesktopAppShell(props: {
       return undefined;
     }
     const windowOwner = windowTarget
-      ? buildFederationThreadTargets(liveFederationHealth).find((candidate) =>
+      ? federationMachines.find((candidate) =>
           candidate.instanceId === windowTarget.instanceId)
       : undefined;
     const launchpadTarget = selectedLaunchpadForMachine.federationTarget;
@@ -2717,6 +3282,9 @@ function DesktopAppShell(props: {
           ...(projectRow.path !== undefined ? { path: projectRow.path } : {}),
           ...(projectRow.repositoryKey !== undefined
             ? { repositoryKey: projectRow.repositoryKey }
+            : {}),
+          ...(projectRow.repositoryKeys !== undefined
+            ? { repositoryKeys: projectRow.repositoryKeys }
             : {}),
         }
       : {
@@ -2745,16 +3313,7 @@ function DesktopAppShell(props: {
               ? { celestialIcon: windowOwner.celestialIcon }
               : {}),
           }
-        : {
-            label: liveFederationHealth?.localLabel ?? "This machine",
-            shortLabel: federationLocalDisplayLabel(liveFederationHealth),
-            ...(liveFederationHealth?.localCelestialIcon
-              ? { celestialIcon: liveFederationHealth.localCelestialIcon }
-              : {}),
-            ...(liveFederationHealth?.instanceId
-              ? { instanceId: liveFederationHealth.instanceId }
-              : {}),
-          },
+        : localMachine,
       targets: newThreadFederationTargets,
       project,
       localHasProject:
@@ -2772,6 +3331,35 @@ function DesktopAppShell(props: {
               ),
           }
         : {}),
+    };
+  })();
+  // The thread header names the thread's machine wherever the launchpad
+  // showed its machine chip, so starting a thread leaves the machine put.
+  const selectedThreadForMachine = navigation.selectedThread;
+  const threadMachine = ((): MachineChipValue | undefined => {
+    const windowTarget = readRendererFederationTarget();
+    if (!selectedThreadForMachine
+      || (!windowTarget && newThreadFederationTargets.length === 0)) {
+      return undefined;
+    }
+    const target = selectedThreadForMachine.federation?.ref.target;
+    const ownerId = target && isRemoteFederationTarget(target)
+      ? target.instanceId
+      : windowTarget?.instanceId;
+    if (!ownerId) return localMachine;
+    const owner = federationMachines.find(
+      (candidate) => candidate.instanceId === ownerId,
+    );
+    return {
+      label: owner?.label
+        ?? selectedThreadForMachine.federation?.instanceLabel
+        ?? readRendererFederationLabel()
+        ?? ownerId,
+      shortLabel: owner?.shortLabel,
+      celestialIcon: owner?.celestialIcon,
+      instanceId: ownerId,
+      remote: true,
+      offline: owner?.availability === "offline",
     };
   })();
   const mastheadActions = {
@@ -2801,7 +3389,7 @@ function DesktopAppShell(props: {
     },
     onCreateThreadWithoutDirectory: async () => {
       setMainView("thread");
-      await navigation.createThread(undefined, "default", { forceWorkspace: true });
+      await navigation.createThread(undefined, undefined, { forceWorkspace: true });
     },
     onCreateThreadOnFederationTarget: createThreadOnFederationTarget,
   };
@@ -2894,6 +3482,66 @@ function DesktopAppShell(props: {
       history.goBack();
     }
   });
+  // A sub-thread draft row's Discard. The open composer holds the draft
+  // live and saves it back to the store when it unmounts, so when it is the
+  // draft's composer it runs the discard itself, exactly as Cancel does.
+  const [launchpadCancelRequest, setLaunchpadCancelRequest] =
+    useState<{ directoryKey: string; id: number }>();
+  // A mouse click on a sidebar row hands focus to that thread's composer.
+  // The shell owns its lifetime across composer unmounts and delayed loads.
+  const [composerFocusRequest, setComposerFocusRequest] =
+    useState<ThreadViewProps["composerFocusRequest"]>();
+  const composerFocusRequestIdRef = useRef(0);
+  const handleComposerFocusRequestHandled = useEventCallback((id: number) => {
+    setComposerFocusRequest((current) => current?.id === id ? undefined : current);
+  });
+  useEffect(() => {
+    if (!composerFocusRequest) {
+      return;
+    }
+    const request = composerFocusRequest;
+    if (mainView !== "thread" || navigation.selectedItemKey !== request.threadKey
+      || document.activeElement !== request.origin) {
+      handleComposerFocusRequestHandled(request.id);
+      return;
+    }
+    // Moving to another row, a row action, or another field cancels the
+    // handoff permanently, even if focus returns before the thread is ready.
+    const handleFocusIn = (event: FocusEvent): void => {
+      if (event.target !== request.origin) {
+        handleComposerFocusRequestHandled(request.id);
+      }
+    };
+    document.addEventListener("focusin", handleFocusIn, true);
+    return () => document.removeEventListener("focusin", handleFocusIn, true);
+  }, [composerFocusRequest, mainView, navigation.selectedItemKey, handleComposerFocusRequestHandled]);
+  const handleDiscardSubthreadDraft = useEventCallback((draft: SubthreadLaunchpadDraft) => {
+    const composerOwnsDraft =
+      navigation.selectedItemKey === draft.selectionKey
+      && mainView !== "search"
+      && !threadDetailPending
+      && Boolean(ThreadViewComponent);
+    if (composerOwnsDraft) {
+      setLaunchpadCancelRequest((current) => ({
+        directoryKey: draft.directoryKey,
+        id: (current?.id ?? 0) + 1,
+      }));
+      return;
+    }
+    const scopeKey = `launchpad:${draft.directoryKey}`;
+    const snapshot = composerDraftStore.get(scopeKey);
+    if (snapshot && hasComposerDraftContent(snapshot)) {
+      composerDraftStore.recordHistory?.(scopeKey, snapshot, "abandoned");
+    }
+    composerDraftStore.delete(scopeKey);
+    navigation.discardLaunchpad(draft.directoryKey);
+  });
+  const handleDetachLaunchpadParent = useEventCallback((directoryKey: string) => {
+    navigation.detachSubthreadLaunchpad(directoryKey);
+  });
+  const handleSelectLaunchpadParent = useEventCallback((launchpad: { directoryKey: string }) => {
+    navigation.selectSubthreadLaunchpadParent(launchpad.directoryKey);
+  });
 
   // These event props cross the memoized Composer boundary on every shell update.
   const handleAttachDirectoryReferences = useEventCallback((
@@ -2940,6 +3588,10 @@ function DesktopAppShell(props: {
     const thread = navigation.selectedThread;
     if (thread) await navigation.setThreadPrAutoDispatch(thread, enabled);
   });
+  const handleSetThreadLock = useEventCallback(async (locked: boolean, note?: string) => {
+    const thread = navigation.selectedThread;
+    if (thread) await navigation.setThreadLock(thread, locked, note);
+  });
   const handleCancelThreadPrAutoDispatch = useEventCallback(async (
     fingerprint: Parameters<NonNullable<ThreadViewProps["onCancelThreadPrAutoDispatch"]>>[0],
   ) => {
@@ -2954,6 +3606,10 @@ function DesktopAppShell(props: {
   });
 
   const threadViewProps = {
+    titleRename,
+    onForkThread: navigation.forkThread,
+    onCreateSubthread: navigation.createSubthread,
+    readThreadWorktreeAvailability: navigation.readThreadWorktreeAvailability,
     pendingLaunchpadCreation: navigation.pendingLaunchpadCreations.find(
       (creation) => creation.selectionKey === navigation.selectedItemKey,
     ),
@@ -2983,6 +3639,8 @@ function DesktopAppShell(props: {
       // A remote thread cannot accept input while its owning instance is
       // unreachable — typing would only queue into a dead RPC.
       remoteReadsSuspended ||
+      // A locked thread refuses every turn; its lock card says why.
+      Boolean(navigation.selectedThread?.lock) ||
       !backendSummaries.backends.some(
         (backend) =>
           backend.kind === navigation.selectedThread?.source &&
@@ -3055,6 +3713,7 @@ function DesktopAppShell(props: {
     selectedDirectory: navigation.selectedDirectory,
     selectedLaunchpad: navigation.selectedLaunchpad,
     launchpadMachine,
+    threadMachine,
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
     suppressBranchDriftDialog: mainView === "settings",
@@ -3110,6 +3769,18 @@ function DesktopAppShell(props: {
     onOpenMessagingSettings: openMessagingSettings,
     onOpenPluginSettings: openPluginSettings,
     onRevealSelectedThreadInList: revealSelectedThreadInList,
+    onRevealSelectedProjectInList: revealSelectedProjectInList,
+    projectThreadActions: {
+      onCreateThread: (directory) => {
+        setMainView("thread");
+        void navigation.openDirectoryLaunchpad(directory, directory.launchpad?.backend);
+      },
+      federationTargets: newThreadFederationTargets,
+      checkFederationTargetProject,
+      onCreateThreadOnFederationTarget: (instanceId, directory) => {
+        void createThreadOnFederationTarget(instanceId, directory);
+      },
+    },
     contextRailPinned,
     onContextRailPinnedChange: setContextRailPinnedPersisted,
     activeContextTab,
@@ -3123,6 +3794,7 @@ function DesktopAppShell(props: {
     mastheadActions,
     historyNav,
     starMap: starMapControls,
+    threadTodos: threadTodosView,
     findOpen: threadFindOpen,
     findInitialQuery: threadFindInitialQuery,
     findTurnId: threadFindTurnId,
@@ -3152,6 +3824,11 @@ function DesktopAppShell(props: {
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: handleCancelLaunchpad,
+    launchpadCancelRequest,
+    composerFocusRequest,
+    onComposerFocusRequestHandled: handleComposerFocusRequestHandled,
+    onDetachLaunchpadParent: handleDetachLaunchpadParent,
+    onSelectLaunchpadParent: handleSelectLaunchpadParent,
     // The composer's 5th argument is `extraDirectoryPaths` (draft
     // `@`-references); the hook's 5th is `parentThreadId` (resolved from
     // the launchpad draft internally), so map positions explicitly.
@@ -3182,6 +3859,7 @@ function DesktopAppShell(props: {
     onCancelExecutionModeQueue: navigation.selectedThread ? handleCancelExecutionModeQueue : undefined,
     onSetThreadModelSettings: navigation.selectedThread ? handleSetThreadModelSettings : undefined,
     onSetThreadPrAutoDispatch: navigation.selectedThread ? handleSetThreadPrAutoDispatch : undefined,
+    onSetThreadLock: navigation.selectedThread ? handleSetThreadLock : undefined,
     onCancelThreadPrAutoDispatch: navigation.selectedThread ? handleCancelThreadPrAutoDispatch : undefined,
     onSendThreadPrAutoDispatchNow: navigation.selectedThread ? handleSendThreadPrAutoDispatchNow : undefined,
     onRestoreWorktree: navigation.restoreWorktree,
@@ -3278,6 +3956,9 @@ function DesktopAppShell(props: {
 
   return (
     <FederationDisplayLabelsProvider health={liveFederationHealth}>
+    <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
+    <OperatorWaitsContext.Provider value={operatorWaitsContext}>
+    <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
@@ -3292,6 +3973,15 @@ function DesktopAppShell(props: {
           findRepository={findThreadHandoffRepository}
           onClose={() => setSendToMachineThread(undefined)}
           onSend={(request) => sendThreadToMachine(sendToMachineThread, request)}
+        />
+      ) : null}
+      {continueAfter ? (
+        <ContinueAfterDialog
+          key={`${continueAfter.thread.source}:${continueAfter.thread.id}`}
+          desktopApi={desktopApi}
+          thread={continueAfter.thread}
+          {...(continueAfter.returnFocus ? { returnFocus: continueAfter.returnFocus } : {})}
+          onClose={() => setContinueAfter(undefined)}
         />
       ) : null}
       {codexLoginProfile ? (
@@ -3327,13 +4017,27 @@ function DesktopAppShell(props: {
           inert={layerView !== undefined}
           directoryDisclosure={navigation.directoryDisclosure}
           pendingLaunchpadCreations={navigation.pendingLaunchpadCreations}
-          onSelectPendingLaunchpad={(creation) => {
-            navigation.selectPendingLaunchpad(creation.selectionKey);
+          subthreadLaunchpadDrafts={navigation.subthreadLaunchpadDrafts}
+          onSelectPendingLaunchpad={(entry) => {
+            setMainView("thread");
+            if (isSubthreadLaunchpadDraft(entry)) {
+              navigation.selectDirectoryLaunchpad(entry.directoryKey);
+            } else {
+              navigation.selectPendingLaunchpad(entry.selectionKey);
+            }
+          }}
+          onDiscardSubthreadDraft={handleDiscardSubthreadDraft}
+          onDetachSubthreadDraft={(draft) => {
+            navigation.detachSubthreadLaunchpad(draft.directoryKey);
           }}
           addingProjectDirectory={navigation.pickingDirectory}
           backends={backendSummaries.backends}
           onRefreshRateLimits={backendSummaries.refreshRateLimits}
           browseMode={navigation.browseMode}
+          pinnedThreadsOnTop={navigation.pinnedThreadsOnTop}
+          pinnedGroupCollapsed={navigation.pinnedGroupCollapsed}
+          onSetPinnedGroupCollapsed={navigation.setPinnedGroupCollapsed}
+          threadLensesEmpty={navigation.threadLensesEmpty}
           creatingThread={navigation.creatingThread}
           pagedNavigation={navigation.pagedNavigation}
           selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
@@ -3359,6 +4063,7 @@ function DesktopAppShell(props: {
           composerSourceThreadKey={navigation.composerSourceThreadKey}
           revealSelectedThreadRequest={revealSelectedThreadRequest}
           onRevealSelectedThreadComplete={threadJump.completePeekRestore}
+          projectRevealRequest={projectRevealRequest}
           selectedItemKey={navigation.selectedItemKey}
           thinkingThreadKeys={session.thinkingThreadKeys}
           agentCommandThreadKeys={session.agentCommandThreadKeys}
@@ -3374,7 +4079,7 @@ function DesktopAppShell(props: {
           }}
           onCreateThreadWithoutDirectory={async () => {
             setMainView("thread");
-            await navigation.createThread(undefined, "default", {
+            await navigation.createThread(undefined, undefined, {
               forceWorkspace: true,
             });
           }}
@@ -3384,6 +4089,9 @@ function DesktopAppShell(props: {
           onCreateThreadOnFederationTarget={createThreadOnFederationTarget}
           onSendThreadToMachine={threadHandoffTargets.length > 0
             ? setSendToMachineThread
+            : undefined}
+          onContinueAfter={canContinueAfter
+            ? (thread, returnFocus) => setContinueAfter({ thread, returnFocus })
             : undefined}
           onAddProjectDirectory={readRendererFederationTarget()
             ? undefined
@@ -3415,8 +4123,15 @@ function DesktopAppShell(props: {
           onOpenUsageActivity={desktopApi?.openUsageActivity
             ? () => void desktopApi.openUsageActivity?.()
             : undefined}
-          onSelectThread={(thread) => {
+          onSelectThread={(thread, options) => {
             setMainView("thread");
+            setComposerFocusRequest(options?.focusComposer && options.focusOrigin
+              ? {
+                threadKey: threadSummaryIdentityKey(thread),
+                id: ++composerFocusRequestIdRef.current,
+                origin: options.focusOrigin,
+              }
+              : undefined);
             navigation.selectThread(thread);
           }}
           threadJumpOpen={threadJump.open}
@@ -3497,7 +4212,10 @@ function DesktopAppShell(props: {
             desktopApi?.markThreadSeen ? navigation.markThreadUnread : undefined
           }
           onRenameThread={navigation.renameThread}
+          onRequestTitleRename={requestTitleRename}
+          onThreadsArchived={offerArchiveUndo}
           onSetThreadReaction={navigation.setThreadReaction}
+          onSetThreadLock={navigation.setThreadLock}
           onSetThreadPin={navigation.setThreadPin}
           onReorderThreadPins={navigation.reorderThreadPins}
           onSetThreadParent={navigation.setThreadParent}
@@ -3631,7 +4349,16 @@ function DesktopAppShell(props: {
                 settings.snapshot?.experimental.markdownMathRendering?.value ?? true
               }
             >
-              <ThreadViewComponent {...threadViewProps} />
+              <InteractiveSvgPreferencesProvider value={interactiveSvgPreferences}>
+                <TerminalPreferencesProvider
+                  minimumContrast={
+                    settings.snapshot?.general.appearance.terminalMinimumContrast
+                      ?.value ?? false
+                  }
+                >
+                  <ThreadViewComponent {...threadViewProps} />
+                </TerminalPreferencesProvider>
+              </InteractiveSvgPreferencesProvider>
             </MarkdownRenderingOptionsProvider>
           ) : null}
         </main>
@@ -3645,11 +4372,13 @@ function DesktopAppShell(props: {
                 desktopApi={desktopApi}
                 initialSection={settingsInitialSection}
                 initialSubsection={settingsInitialSubsection}
+                profileCreateRequested={profileCreateRequested}
                 profiles={profiles}
                 registerLeaveGuard={registerSettingsLeaveGuard}
                 settings={settings}
                 onClose={() => setMainView("thread")}
                 onOpenMessagingActivity={openMessagingActivityWindow}
+                onProfileCreateRequestHandled={clearProfileCreateRequest}
                 onOpenThread={(target) => {
                   setMainView("thread");
                   void navigation.showThread(target);
@@ -3761,8 +4490,22 @@ function DesktopAppShell(props: {
           </Suspense>
         ) : null}
 
-        <CodexConfigWarningBanner desktopApi={desktopApi} />
+        <CodexConfigWarningBanner
+          desktopApi={desktopApi}
+          preferencesLoaded={
+            Boolean(props.settings.snapshot)
+            || !desktopApi?.readSettings
+          }
+          dismissedWarningIds={codexConfigWarningsDismissed}
+          onSuppressWarning={suppressCodexWarning}
+        />
         <FederationShutdownNotices desktopApi={desktopApi} onNoticeChanged={syncFederationShutdownNotice} />
+        <CloudflareSignInNotice
+          desktopApi={desktopApi}
+          health={liveFederationHealth}
+          onNoticeChanged={syncCloudflareSignInNotice}
+          onRefreshHealth={refreshFederationHealth}
+        />
         <MessagingErrorNotices
           desktopApi={desktopApi}
           onNoticeChanged={syncMessagingErrorNotice}
@@ -3779,6 +4522,11 @@ function DesktopAppShell(props: {
           onManagedBuildsChange={changeCodexManagedBuilds}
           onCheckManagedBuildUpdates={checkCodexManagedBuildUpdates}
         />
+        <CodexLaunchNotice
+          discovery={settings.snapshot?.models?.codex?.discovery}
+          onNoticeChanged={syncCodexLaunchNotice}
+          onOpenCodexSettings={openCodexSettings}
+        />
         <CodexRestartNotice
           desktopApi={desktopApi}
           onNoticeChanged={syncCodexRestartNotice}
@@ -3791,6 +4539,7 @@ function DesktopAppShell(props: {
           onSuppressSkillQuestionsWarning={() => settings.writeConfig({
             experimental: { codexSkillQuestionsWarningDismissed: true },
           })}
+          onSuppressCodexWarning={suppressCodexWarning}
           transientNotices={[
             {
               notice: navigation.archiveThreadNotice,
@@ -3803,6 +4552,7 @@ function DesktopAppShell(props: {
           ]}
         >
           <QuitBlockerQueueToast desktopApi={desktopApi} />
+          <AgentThreadRenameNotice desktopApi={desktopApi} onOpenThread={showThreadFromLink} />
           <AppUpdateBanner
             desktopApi={desktopApi}
             showNotice={showAppNotice}
@@ -3820,7 +4570,11 @@ function DesktopAppShell(props: {
         ) : null}
       </div>
 
+      {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
+    </ThreadDependencyIndicatorsContext.Provider>
+    </OperatorWaitsContext.Provider>
+    </ThreadTodoCountsContext.Provider>
     </FederationDisplayLabelsProvider>
   );
 }

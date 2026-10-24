@@ -274,6 +274,26 @@ export type StartTurnResponse = {
   queueEntryCreatedAt?: number;
 };
 
+/**
+ * An operator's reply to a thread no composer shows. The owner's FIFO
+ * starts it, steers it into the running turn, or queues it, as a composer
+ * reply would; it carries no turn settings.
+ */
+export type SubmitThreadReplyRequest = {
+  federationTarget?: import("./federation").FederationRemoteTarget;
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  input: AppServerTurnInputItem[];
+};
+
+/** The FIFO took the reply: it started a turn, or waits to steer or start. */
+export type SubmitThreadReplyResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  queueStatus: "started" | "queued";
+  queueEntryId: string;
+};
+
 export type ReadQueuedTurnRequest = {
   /** Recover portable attachment bytes before moving a peer-owned entry to a draft. */
   forEdit?: boolean;
@@ -307,6 +327,29 @@ export type CancelQueuedTurnResponse = {
    */
   disposition?: "cancelled" | "already_admitted" | "not_found" | "content_changed";
   turnId?: string;
+};
+
+export type MoveQueuedTurnRequest = {
+  federationTarget?: FederationTarget;
+  queueEntryId: string;
+  /**
+   * The entry to land in front of. Omitted, the entry moves to the end of
+   * its FIFO. An anchor rather than an index, so a head that starts while the
+   * operator drags cannot shift the target by one place.
+   */
+  beforeQueueEntryId?: string;
+};
+
+export type MoveQueuedTurnResponse = {
+  queueEntryId: string;
+  /**
+   * `held`: the entry, or a place in front of the anchor, is held for
+   * retry; nothing moves past a hold. `anchor_not_found`: the anchor left
+   * the queue (it started, or was cancelled) before the move ran.
+   */
+  disposition: "moved" | "unchanged" | "not_found" | "anchor_not_found" | "held";
+  /** The FIFO's entry ids in dispatch order after the request. */
+  queueEntryIds?: string[];
 };
 
 export type ReleaseQueuedTurnRequest = {
@@ -397,6 +440,7 @@ export type ControlActiveTurnRequest = {
 };
 
 export type ControlActiveTurnErrorCode =
+  | "forbidden"
   | "invalid_arguments"
   | "no_active_turn"
   | "stale_target"

@@ -1,21 +1,21 @@
 {
   "turn-start-with-related-notifications": {
     "logicalRequests": 4,
-    "indexConstructions": 2,
+    "indexConstructions": 1,
     "providerListings": 2,
     "paginatedRpcs": 6,
     "pagesPerListing": 3
   },
   "unchanged-rerender": {
     "logicalRequests": 4,
-    "indexConstructions": 2,
+    "indexConstructions": 1,
     "providerListings": 2,
     "paginatedRpcs": 6,
     "pagesPerListing": 3
   },
   "later-mutation": {
     "logicalRequests": 1,
-    "indexConstructions": 3,
+    "indexConstructions": 2,
     "providerListings": 3,
     "paginatedRpcs": 9,
     "pagesPerListing": 3
@@ -51,5 +51,38 @@
     "deletedPendingIntentThreads": 0,
     "archivedRpcsFromPreMutationRegistryListing": 1,
     "pageRpcsForForwardedNotification": 1
+  },
+  "sidebar-archive-pr-bookkeeping": {
+    "logicalRequests": 40,
+    "indexConstructions": 1,
+    "providerListings": 2,
+    "paginatedRpcs": 6,
+    "fullOverlayParses": 0,
+    "fullOverlayBytes": 0,
+    "compactOverlayParses": 119,
+    "compactOverlayBytes": 79729
+  },
+  "pr-candidate-bootstrap-and-unchanged": {
+    "readsPerBatch": 3,
+    "payloadBytes": 0,
+    "fullOverlayParses": 0
+  },
+  "codex-create-pin-name-turn-burst": {
+    "logicalRequests": 20,
+    "providerGenerations": 7,
+    "pagesPerScan": 3,
+    "physicalPages": 21,
+    "physicalPagesAfterLaterRead": 24
+  },
+  "codex-registry-listing-projection": {
+    "refreshes": 3,
+    "pagesPerScan": 3,
+    "physicalPages": 9,
+    "overlayRows": 360,
+    "overlayParses": 360,
+    "overlayBytes": 36750,
+    "historyParses": 0,
+    "targetedMetadataReads": 2,
+    "physicalPagesAfterTitleReads": 9
   }
 }

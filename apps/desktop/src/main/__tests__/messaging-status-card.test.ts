@@ -681,6 +681,36 @@ describe("buildBindingStatusIntent", () => {
     expect(intent.text).toContain("Pending skill: $ce:plan");
   });
 
+  it("shows a locked thread's note and puts Unlock among the first controls", () => {
+    const binding = buildBinding();
+    const base = buildNavigationSnapshot();
+    const navigation = {
+      ...base,
+      threads: base.threads.map((thread) => ({
+        ...thread,
+        lock: { note: "Worktree handed to the repair thread.", lockedAt: 900, source: "operator" as const },
+      })),
+    };
+    const status = (snapshot: NavigationSnapshot) => buildBindingStatusIntent({
+      id: "status-lock",
+      createdAt: 1000,
+      binding,
+      threadState: resolveMessagingThreadState({ binding, navigation: snapshot }),
+    });
+
+    const locked = status(navigation);
+    expect(locked.text).toContain("Locked: Worktree handed to the repair thread.");
+    expect(locked.actions).toContainEqual(expect.objectContaining({
+      id: "status:lock", label: "Unlock", fallbackText: "unlock", priority: 1, value: { locked: false },
+    }));
+
+    const unlocked = status(base);
+    expect(unlocked.text).not.toContain("Locked:");
+    expect(unlocked.actions).toContainEqual(expect.objectContaining({
+      id: "status:lock", label: "Lock", fallbackText: "lock",
+    }));
+  });
+
   it("labels Agent-thread bindings on the status card", () => {
     const binding = {
       ...buildBinding(),

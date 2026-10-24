@@ -95,9 +95,23 @@ describe("SendThreadToMachineDialog", () => {
     const input = screen.getByRole("textbox", { name: "Repository on studio-mac" });
     await waitFor(() => expect(input).toHaveValue("/Users/operator/src/PwrAgent"));
     expect(input).toHaveAccessibleDescription(
-      "Matched by origin github.com/pwrdrvr/pwragent. The thread starts in a new detached worktree there.",
+      "Matched by origin github.com/pwrdrvr/pwragent. A new worktree uses the source branch when available, or starts detached at the source commit.",
     );
     expect(screen.getByRole("button", { name: "Copy to studio-mac" })).toBeEnabled();
+  });
+
+  it("passes configured remotes to the lookup and describes a shared remote match", async () => {
+    const project = { ...GIT_SOURCE.project!, repositoryKeys: ["github.com/pwrdrvr/pwragent", "github.com/upstream/pwragent"] };
+    const findRepository = vi.fn<FindThreadHandoffRepository>(async () => ({
+      path: "/home/fixture/PwrAgent", matchedBy: "remote",
+    }));
+    renderDialog({ source: { ...GIT_SOURCE, project }, findRepository });
+    const input = screen.getByRole("textbox", { name: "Repository on build-linux" });
+    await waitFor(() => expect(input).toHaveValue("/home/fixture/PwrAgent"));
+    expect(findRepository).toHaveBeenCalledWith("pwr_linux", project);
+    expect(input).toHaveAccessibleDescription(
+      "Matched by a configured Git remote. A new worktree uses the source branch when available, or starts detached at the source commit.",
+    );
   });
 
   it("holds Send until a machine with no matching project has a typed path", async () => {
@@ -154,12 +168,17 @@ describe("SendThreadToMachineDialog", () => {
       .toBeInTheDocument();
   });
 
-  it("sends a Workspaces thread as history only, with no repository field", async () => {
+  it("discloses non-Git workspace copying before sending, with no repository field", async () => {
     const { onSend } = renderDialog({
       source: { title: "Sketch the release checklist" },
     });
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.getByText(/This thread has no Git project/)).toBeInTheDocument();
+    expect(screen.getByText(/including hidden files/)).toBeInTheDocument();
+    expect(screen.getByText(/Remove sensitive files before sending/)).toBeInTheDocument();
+    expect(screen.getByText(/Symlinks pointing outside the workspace/)).toBeInTheDocument();
+    expect(screen.queryByText(/Files in this workspace are not copied/)).not.toBeInTheDocument();
+    expect(onSend).not.toHaveBeenCalled();
     await act(async () => {
       screen.getByRole("button", { name: "Copy to build-linux" }).click();
     });

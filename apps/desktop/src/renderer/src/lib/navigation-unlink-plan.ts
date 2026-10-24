@@ -68,10 +68,16 @@ export async function readNavigationUnlinkPlan(params: {
           federationTarget: pinTarget, inventory: params.windowTarget?.scope === "remote" ? "owner" : "viewer",
           query: { kind: "exact", identities: [ref] }, deadlineAt }, token);
         admit(pinTarget);
-        if (page.protocol !== 2 || page.unchanged || page.coverage.state !== "complete" || page.nextCursor || page.entries.length > 1) {
+        const row = page.entries[0]?.row;
+        // Pin ranks live in the pin owner's state, so a returned row is exact
+        // while providers still list threads, and a viewer sees a peer's
+        // parent only through its own pins. Coverage matters only when an
+        // owner-inventory parent is absent and may simply be unlisted yet.
+        const viewerPinOnly = pinTarget.scope === "local" && parentTarget.scope === "remote";
+        if (page.protocol !== 2 || page.unchanged || page.nextCursor || page.entries.length > 1
+          || (!row && !viewerPinOnly && page.coverage.state !== "complete")) {
           throw new Error("Parent pin placement is not ready. Refresh before unlinking.");
         }
-        const row = page.entries[0]?.row;
         if (row && (row.ref.backend !== ref.backend || row.ref.threadId !== ref.threadId
           || row.ref.ownerInstanceId !== ref.ownerInstanceId)) throw new Error("Parent pin belongs to a different owner.");
         parent = { thread: parentThread, children: [], pinBefore: row?.pinnedRank ? threadSummaryIdentityKey(row) : undefined };

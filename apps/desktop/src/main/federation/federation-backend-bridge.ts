@@ -1,3 +1,4 @@
+import { ForgeReadError, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -42,6 +43,8 @@ import type {
   CancelQueuedTurnResponse,
   ReleaseQueuedTurnRequest,
   ReleaseQueuedTurnResponse,
+  MoveQueuedTurnRequest,
+  MoveQueuedTurnResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   CelestialIconId,
@@ -58,6 +61,8 @@ import type {
   FederationCapability,
   FederationJumpSearchRequest,
   FederationJumpSearchResponse,
+  FederationContentSearchRequest,
+  ThreadSearchResponse,
   FederationThreadSearchRequest,
   FederationThreadSearchResponse,
   FederationInstanceId,
@@ -78,6 +83,12 @@ import type {
   InterruptTurnResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  DescribeThreadMcpConnectionsRequest,
+  DescribeThreadMcpConnectionsResponse,
+  ListMcpConnectionsResponse,
+  ReadThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsResponse,
   ListThreadMcpServersRequest,
   ListThreadMcpServersResponse,
   ListModelSettingsRecentsRequest,
@@ -96,6 +107,8 @@ import type {
   PwrSnapConnectionStatus,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadLockRequest,
+  SetThreadLockResponse,
   SetThreadPinRequest,
   SetThreadPinResponse,
   SetThreadPrAutoDispatchRequest,
@@ -122,6 +135,8 @@ import type {
   OpenDesktopApplicationResponse,
   AttachDirectoryToThreadRequest,
   AttachDirectoryToThreadResponse,
+  DetachDirectoryFromThreadRequest,
+  DetachDirectoryFromThreadResponse,
   QueueThreadExecutionModeRequest,
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
@@ -204,9 +219,25 @@ import {
   threadReplayCursorIdSpace,
 } from "../app-server/thread-replay-pagination";
 import { FEDERATION_MAX_FRAME_BYTES } from "./federation-transport";
+import type {
+  DurableTurnReceipt,
+  FederationSubmitDurableTurnRequest,
+  FederationGetDurableTurnRequest,
+  DurableSteerReceipt,
+  FederationSubmitDurableSteerRequest,
+} from "@pwragent/shared";
+import { DurableTurnRequestError, type DurableTurnRequestService } from "./durable-turn-request-service";
 
 export const FEDERATION_RESPONSE_BYTE_BUDGET =
   FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
+
+/** A delegated device can only occupy its authenticated issuer's namespace. */
+export function durableFederationCallerScope(sourceInstanceId: string, callerScope?: string): string {
+  if (callerScope !== undefined && (typeof callerScope !== "string" || !callerScope || callerScope.length > 256)) {
+    throw new DurableTurnRequestError("request_invalid");
+  }
+  return JSON.stringify(["federation", sourceInstanceId, callerScope ?? ""]);
+}
 
 /**
  * Load queries answer from in-memory OS counters plus one statfs, so a
@@ -302,6 +333,23 @@ async function resolveFederationTurnInput(
   return input as AppServerTurnInputItem[];
 }
 
+/** Durable v1 cannot verify owner-local references or rewrite hashed inputs. */
+function assertDurableFederationTurnInput(input: unknown): void {
+  if (!Array.isArray(input)) throw new DurableTurnRequestError("request_invalid");
+  for (const item of input) {
+    if (!item || typeof item !== "object"
+      || item.type === "localImage" || item.type === "localFile") {
+      throw new DurableTurnRequestError("request_invalid");
+    }
+    if (item.type === "image") {
+      let protocol: string;
+      try { protocol = new URL(item.url).protocol; }
+      catch { throw new DurableTurnRequestError("request_invalid"); }
+      if (protocol === "file:") throw new DurableTurnRequestError("request_invalid");
+    }
+  }
+}
+
 export type FederationRefreshThreadPullRequestsRequest =
   RefreshOwnedThreadPullRequestsRequest;
 
@@ -337,7 +385,7 @@ type ResolvedSourceInstance = {
   celestialIcon?: CelestialIconId;
 };
 
-function authenticateMessageOrigin(params: {
+export function authenticateMessageOrigin(params: {
   messageOrigin: AppServerThreadMessageOrigin | undefined;
   resolveSourceInstance?: (
     instanceId: string,
@@ -403,6 +451,10 @@ function authenticateScheduledTurnOrigin<
   };
 }
 
+/** What a viewer hears when the owning instance cannot reorder its queue. */
+export const QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE =
+  "Update PwrAgent on the owning instance to reorder its queued messages.";
+
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationQueryPage: "backend.getNavigationQueryPage",
   removeNavigationDirectory: "backend.removeNavigationDirectory",
@@ -419,6 +471,8 @@ export const FEDERATION_BACKEND_METHODS = {
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   searchNavigationThreads: "backend.searchNavigationThreads",
   searchFederatedThreads: "backend.searchFederatedThreads",
+  searchThreadContent: "backend.searchThreadContent",
+  cancelThreadContentSearch: "backend.cancelThreadContentSearch",
   /** @deprecated Collection enumeration; use bounded queries or exact-ID archive lookup. */
   listThreads: "backend.listThreads",
   resolveThread: "backend.resolveThread",
@@ -433,12 +487,14 @@ export const FEDERATION_BACKEND_METHODS = {
   listBackends: "backend.listBackends",
   markThreadSeen: "backend.markThreadSeen",
   setThreadReaction: "backend.setThreadReaction",
+  setThreadLock: "backend.setThreadLock",
   setThreadPin: "backend.setThreadPin",
   reorderThreadPins: "backend.reorderThreadPins",
   mountRemoteChild: "backend.mountRemoteChild",
   setThreadParent: "backend.setThreadParent",
   updateSubthreadOrder: "backend.updateSubthreadOrder",
   setSubthreadsCollapsed: "backend.setSubthreadsCollapsed",
+  readForge: "backend.readForge",
   detachThreadPullRequest: "backend.detachThreadPullRequest",
   setThreadPrAutoDispatch: "backend.setThreadPrAutoDispatch",
   cancelThreadPrAutoDispatch: "backend.cancelThreadPrAutoDispatch",
@@ -448,10 +504,15 @@ export const FEDERATION_BACKEND_METHODS = {
   startThread: "backend.startThread",
   forkThread: "backend.forkThread",
   startTurn: "backend.startTurn",
+  submitTurnRequest: "backend.submitTurnRequest",
+  getTurnRequest: "backend.getTurnRequest",
+  submitSteerRequest: "backend.submitSteerRequest",
+  getSteerRequest: "backend.getSteerRequest",
   replaceQueuedMessage: "backend.replaceQueuedMessage",
   readQueuedTurn: "backend.readQueuedTurn",
   cancelQueuedTurn: "backend.cancelQueuedTurn",
   releaseQueuedTurn: "backend.releaseQueuedTurn",
+  moveQueuedTurn: "backend.moveQueuedTurn",
   startReview: "backend.startReview",
   startPullRequestReview: "backend.startPullRequestReview",
   listScheduledThreadActions: "backend.listScheduledThreadActions",
@@ -462,6 +523,10 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelScheduledThreadAction: "backend.cancelScheduledThreadAction",
   sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
+  listMcpConnections: "backend.listMcpConnections",
+  readThreadMcpConnections: "backend.readThreadMcpConnections",
+  setThreadMcpConnections: "backend.setThreadMcpConnections",
+  describeThreadMcpConnections: "backend.describeThreadMcpConnections",
   listThreadMcpServers: "backend.listThreadMcpServers",
   reloadCodexMcpConfig: "backend.reloadCodexMcpConfig",
   controlActiveTurn: "backend.controlActiveTurn",
@@ -493,6 +558,7 @@ export const FEDERATION_BACKEND_METHODS = {
   listModelSettingsRecents: "backend.listModelSettingsRecents",
   recordModelSettingsRecent: "backend.recordModelSettingsRecent",
   attachDirectoryToThread: "backend.attachDirectoryToThread",
+  detachDirectoryFromThread: "backend.detachDirectoryFromThread",
   listWorktreeUnpublishedCommits: "backend.listWorktreeUnpublishedCommits",
   getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
@@ -544,10 +610,13 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchNavigationThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.searchFederatedThreads]: "federated_search",
+  [FEDERATION_BACKEND_METHODS.searchThreadContent]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.cancelThreadContentSearch]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.readForge]: "thread_detail",
   /* Reads the thread's own transcript history; same data class as reading it. */
   [FEDERATION_BACKEND_METHODS.readUsageActivity]: "thread_detail",
   // Starts a paid helper turn on the owner; transcript-read permission is insufficient.
@@ -559,6 +628,9 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.markThreadSeen]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadReaction]: "thread_navigation",
+  // A lock refuses every turn on the owner's thread, so it takes the same
+  // capability as starting one.
+  [FEDERATION_BACKEND_METHODS.setThreadLock]: "turn_control",
   [FEDERATION_BACKEND_METHODS.setThreadPin]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.reorderThreadPins]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.mountRemoteChild]: "thread_navigation",
@@ -577,10 +649,15 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.startThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.forkThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.submitTurnRequest]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.getTurnRequest]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.submitSteerRequest]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.getSteerRequest]: "turn_control",
   [FEDERATION_BACKEND_METHODS.replaceQueuedMessage]: "turn_control",
   [FEDERATION_BACKEND_METHODS.readQueuedTurn]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.releaseQueuedTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.moveQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startReview]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startPullRequestReview]: "turn_control",
   [FEDERATION_BACKEND_METHODS.listScheduledThreadActions]: "scheduled_actions",
@@ -591,6 +668,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.listMcpConnections]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.readThreadMcpConnections]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.setThreadMcpConnections]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.describeThreadMcpConnections]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listThreadMcpServers]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.reloadCodexMcpConfig]: "turn_control",
   [FEDERATION_BACKEND_METHODS.controlActiveTurn]: "turn_control",
@@ -624,6 +705,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.listModelSettingsRecents]: "remote_window",
   [FEDERATION_BACKEND_METHODS.recordModelSettingsRecent]: "remote_window",
   [FEDERATION_BACKEND_METHODS.attachDirectoryToThread]: "environment_actions",
+  [FEDERATION_BACKEND_METHODS.detachDirectoryFromThread]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.listWorktreeUnpublishedCommits]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
@@ -659,6 +741,10 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
 export function additionalFederationBackendCapabilities(
   envelope: FederationRequestEnvelope,
 ): readonly FederationCapability[] {
+  if (envelope.method === FEDERATION_BACKEND_METHODS.submitTurnRequest
+    || envelope.method === FEDERATION_BACKEND_METHODS.getTurnRequest) return ["durable_turn_requests_v1"];
+  if (envelope.method === FEDERATION_BACKEND_METHODS.submitSteerRequest
+    || envelope.method === FEDERATION_BACKEND_METHODS.getSteerRequest) return ["durable_steer_requests_v1"];
   if (envelope.method !== FEDERATION_BACKEND_METHODS.steerTurn) return [];
   const request = envelope.params as Partial<SteerTurnRequest> | undefined;
   return request?.fallback ? ["scheduled_actions"] : [];
@@ -713,6 +799,14 @@ export type FederationBackendOperations = {
     request: FederationThreadSearchRequest,
     rpcOptions?: FederationRpcRequestOptions,
   ): Promise<FederationThreadSearchResponse>;
+  searchThreadContent?(
+    request: FederationContentSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<ThreadSearchResponse>;
+  cancelThreadContentSearch?(
+    request: { searchId: string },
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<void>;
   listThreads(
     request?: AppServerListThreadsRequest,
     rpcOptions?: FederationRpcRequestOptions,
@@ -745,6 +839,10 @@ export type FederationBackendOperations = {
   setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse>;
+  setThreadLock(
+    request: SetThreadLockRequest,
+    options?: { requesterInstanceId?: string },
+  ): Promise<SetThreadLockResponse>;
   setThreadPin(request: SetThreadPinRequest): Promise<SetThreadPinResponse>;
   reorderThreadPins(
     request: ReorderThreadPinsRequest,
@@ -761,6 +859,7 @@ export type FederationBackendOperations = {
   setSubthreadsCollapsed(
     request: SetSubthreadsCollapsedRequest,
   ): Promise<SetSubthreadsCollapsedResponse>;
+  readForge(request: ForgeReadRequest, options?: FederationRpcRequestOptions): Promise<unknown>;
   detachThreadPullRequest(
     request: DetachThreadPullRequestRequest,
   ): Promise<DetachThreadPullRequestResponse>;
@@ -794,6 +893,13 @@ export type FederationBackendOperations = {
   releaseQueuedTurn(
     request: ReleaseQueuedTurnRequest,
   ): Promise<ReleaseQueuedTurnResponse>;
+  /**
+   * Optional on owner adapters so a viewer of an older owner receives
+   * method_not_found and can say which instance to update.
+   */
+  moveQueuedTurn?(
+    request: MoveQueuedTurnRequest,
+  ): Promise<MoveQueuedTurnResponse>;
   startReview(request: StartReviewRequest): Promise<StartReviewResponse>;
   listScheduledThreadActions(
     request?: ListScheduledThreadActionsRequest,
@@ -812,6 +918,16 @@ export type FederationBackendOperations = {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
+  listMcpConnections(): Promise<ListMcpConnectionsResponse>;
+  readThreadMcpConnections(
+    request: ReadThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse>;
+  setThreadMcpConnections(
+    request: SetThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse>;
+  describeThreadMcpConnections(
+    request: DescribeThreadMcpConnectionsRequest,
+  ): Promise<DescribeThreadMcpConnectionsResponse>;
   listThreadMcpServers(
     request: ListThreadMcpServersRequest,
   ): Promise<ListThreadMcpServersResponse>;
@@ -894,6 +1010,9 @@ export type FederationBackendOperations = {
   attachDirectoryToThread(
     request: AttachDirectoryToThreadRequest,
   ): Promise<AttachDirectoryToThreadResponse>;
+  detachDirectoryFromThread(
+    request: DetachDirectoryFromThreadRequest,
+  ): Promise<DetachDirectoryFromThreadResponse>;
   listWorktreeUnpublishedCommits(
     request: ListWorktreeUnpublishedCommitsRequest,
   ): Promise<ListWorktreeUnpublishedCommitsResponse>;
@@ -939,6 +1058,7 @@ export type FederationBackendOperations = {
 export function registerFederationBackendHandlers(params: {
   router: FederationRouter;
   backend: FederationBackendOperations;
+  durableTurnRequests?: DurableTurnRequestService;
   resolveSourceInstance?: (
     instanceId: string,
   ) => ResolvedSourceInstance | undefined;
@@ -948,6 +1068,27 @@ export function registerFederationBackendHandlers(params: {
   ) => void;
   resolveTurnInput?: ResolveIncomingFederationTurnInput;
 }): void {
+  if (params.durableTurnRequests) {
+    const service = params.durableTurnRequests;
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.submitTurnRequest, async (envelope) => {
+      const request = envelope.params as FederationSubmitDurableTurnRequest;
+      assertDurableFederationTurnInput(request?.request?.input);
+      return service.submit(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.getTurnRequest, async (envelope) => {
+      const request = envelope.params as FederationGetDurableTurnRequest;
+      return service.get(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.submitSteerRequest, async (envelope) => {
+      const request = envelope.params as FederationSubmitDurableSteerRequest;
+      assertDurableFederationTurnInput(request?.request?.input);
+      return service.submitSteer(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.getSteerRequest, async (envelope) => {
+      const request = envelope.params as FederationGetDurableTurnRequest;
+      return service.getSteer(durableFederationCallerScope(envelope.sourceInstanceId, request?.callerScope), request);
+    });
+  }
   const forwardEnvironmentSetupProgress = (
     event: CodexEnvironmentSetupProgressEvent,
     targetInstanceId: FederationInstanceId,
@@ -1085,6 +1226,18 @@ export function registerFederationBackendHandlers(params: {
         );
       },
     );
+  }
+  if (params.backend.searchThreadContent) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.searchThreadContent, async (envelope) =>
+      await params.backend.searchThreadContent!(envelope.params as FederationContentSearchRequest, {
+        deadlineAt: envelope.deadlineAt, requesterInstanceId: envelope.sourceInstanceId,
+      }));
+  }
+  if (params.backend.cancelThreadContentSearch) {
+    params.router.registerHandler(FEDERATION_BACKEND_METHODS.cancelThreadContentSearch, async (envelope) =>
+      await params.backend.cancelThreadContentSearch!(envelope.params as { searchId: string }, {
+        requesterInstanceId: envelope.sourceInstanceId,
+      }));
   }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listThreads,
@@ -1231,6 +1384,14 @@ export function registerFederationBackendHandlers(params: {
       ),
   );
   params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadLock,
+    async (envelope) =>
+      await params.backend.setThreadLock(
+        envelope.params as SetThreadLockRequest,
+        { requesterInstanceId: envelope.sourceInstanceId },
+      ),
+  );
+  params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.setThreadPin,
     async (envelope) =>
       await params.backend.setThreadPin(
@@ -1272,6 +1433,14 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as SetSubthreadsCollapsedRequest,
       ),
   );
+  params.router.registerHandler(FEDERATION_BACKEND_METHODS.readForge, async (envelope) => {
+    try {
+      return { ok: true, data: await params.backend.readForge(envelope.params as ForgeReadRequest, { deadlineAt: envelope.deadlineAt }) };
+    } catch (error) {
+      if (error instanceof ForgeReadError) return { ok: false, error: { code: error.code, message: error.message } };
+      throw error;
+    }
+  });
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.detachThreadPullRequest,
     async (envelope) =>
@@ -1398,6 +1567,15 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as ReleaseQueuedTurnRequest,
       ),
   );
+  if (params.backend.moveQueuedTurn) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.moveQueuedTurn,
+      async (envelope) =>
+        await params.backend.moveQueuedTurn!(
+          envelope.params as MoveQueuedTurnRequest,
+        ),
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.startReview,
     async (envelope) =>
@@ -1491,6 +1669,31 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.compactThread(
         envelope.params as CompactThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.listMcpConnections,
+    async () => await params.backend.listMcpConnections(),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.readThreadMcpConnections,
+    async (envelope) =>
+      await params.backend.readThreadMcpConnections(
+        envelope.params as ReadThreadMcpConnectionsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.setThreadMcpConnections,
+    async (envelope) =>
+      await params.backend.setThreadMcpConnections(
+        envelope.params as SetThreadMcpConnectionsRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.describeThreadMcpConnections,
+    async (envelope) =>
+      await params.backend.describeThreadMcpConnections(
+        envelope.params as DescribeThreadMcpConnectionsRequest,
       ),
   );
   params.router.registerHandler(
@@ -1723,6 +1926,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.attachDirectoryToThread(
         envelope.params as AttachDirectoryToThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.detachDirectoryFromThread,
+    async (envelope) =>
+      await params.backend.detachDirectoryFromThread(
+        envelope.params as DetachDirectoryFromThreadRequest,
       ),
   );
   params.router.registerHandler(
@@ -2014,6 +2224,19 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async searchThreadContent(
+    request: FederationContentSearchRequest,
+    rpcOptions?: FederationRpcRequestOptions,
+  ): Promise<ThreadSearchResponse> {
+    return await this.rpc.request<ThreadSearchResponse>({
+      method: FEDERATION_BACKEND_METHODS.searchThreadContent, params: request, ...rpcOptions,
+    });
+  }
+
+  async cancelThreadContentSearch(request: { searchId: string }): Promise<void> {
+    await this.rpc.request({ method: FEDERATION_BACKEND_METHODS.cancelThreadContentSearch, params: request });
+  }
+
   async listThreads(
     _request: AppServerListThreadsRequest = {},
     _rpcOptions?: FederationRpcRequestOptions,
@@ -2152,6 +2375,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async setThreadLock(
+    request: SetThreadLockRequest,
+  ): Promise<SetThreadLockResponse> {
+    return await this.rpc.request<SetThreadLockResponse>({
+      method: FEDERATION_BACKEND_METHODS.setThreadLock,
+      params: request,
+    });
+  }
+
   async reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> {
@@ -2204,6 +2436,19 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.markThreadSeen,
       params: request,
     });
+  }
+
+  async readForge(request: ForgeReadRequest, options?: FederationRpcRequestOptions): Promise<unknown> {
+    try {
+      const reply = await this.rpc.request<{ ok: true; data: unknown } | { ok: false; error: { code: string; message: string } }>({
+        method: FEDERATION_BACKEND_METHODS.readForge, params: request, ...options,
+      });
+      if (!reply.ok) throw new ForgeReadError(reply.error.code, reply.error.message);
+      return reply.data;
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) throw new ForgeReadError("unavailable", "Update PwrAgent on the owning instance to use forge read tools.");
+      throw error;
+    }
   }
 
   async detachThreadPullRequest(
@@ -2269,6 +2514,23 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async submitTurnRequest(request: FederationSubmitDurableTurnRequest): Promise<DurableTurnReceipt> {
+    // Do not transform attachments: the canonical wire request must stay stable.
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.submitTurnRequest, params: request });
+  }
+
+  async getTurnRequest(request: FederationGetDurableTurnRequest): Promise<DurableTurnReceipt | null> {
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.getTurnRequest, params: request });
+  }
+
+  async submitSteerRequest(request: FederationSubmitDurableSteerRequest): Promise<DurableSteerReceipt> {
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.submitSteerRequest, params: request });
+  }
+
+  async getSteerRequest(request: FederationGetDurableTurnRequest): Promise<DurableSteerReceipt | null> {
+    return this.rpc.request({ method: FEDERATION_BACKEND_METHODS.getSteerRequest, params: request });
+  }
+
   async replaceQueuedMessage(
     request: FederationReplaceQueuedMessageRequest,
   ): Promise<StartTurnResponse> {
@@ -2328,6 +2590,22 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.releaseQueuedTurn,
       params: request,
     });
+  }
+
+  async moveQueuedTurn(
+    request: MoveQueuedTurnRequest,
+  ): Promise<MoveQueuedTurnResponse> {
+    try {
+      return await this.rpc.request<MoveQueuedTurnResponse>({
+        method: FEDERATION_BACKEND_METHODS.moveQueuedTurn,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
+      }
+      throw error;
+    }
   }
 
   async listScheduledThreadActions(
@@ -2405,6 +2683,40 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<CompactThreadResponse> {
     return await this.rpc.request<CompactThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.compactThread,
+      params: request,
+    });
+  }
+
+  async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
+    return await this.rpc.request<ListMcpConnectionsResponse>({
+      method: FEDERATION_BACKEND_METHODS.listMcpConnections,
+      params: {},
+    });
+  }
+
+  async readThreadMcpConnections(
+    request: ReadThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> {
+    return await this.rpc.request<SetThreadMcpConnectionsResponse>({
+      method: FEDERATION_BACKEND_METHODS.readThreadMcpConnections,
+      params: request,
+    });
+  }
+
+  async setThreadMcpConnections(
+    request: SetThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> {
+    return await this.rpc.request<SetThreadMcpConnectionsResponse>({
+      method: FEDERATION_BACKEND_METHODS.setThreadMcpConnections,
+      params: request,
+    });
+  }
+
+  async describeThreadMcpConnections(
+    request: DescribeThreadMcpConnectionsRequest,
+  ): Promise<DescribeThreadMcpConnectionsResponse> {
+    return await this.rpc.request<DescribeThreadMcpConnectionsResponse>({
+      method: FEDERATION_BACKEND_METHODS.describeThreadMcpConnections,
       params: request,
     });
   }
@@ -2710,6 +3022,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<AttachDirectoryToThreadResponse> {
     return await this.rpc.request<AttachDirectoryToThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.attachDirectoryToThread,
+      params: request,
+    });
+  }
+
+  async detachDirectoryFromThread(
+    request: DetachDirectoryFromThreadRequest,
+  ): Promise<DetachDirectoryFromThreadResponse> {
+    return await this.rpc.request<DetachDirectoryFromThreadResponse>({
+      method: FEDERATION_BACKEND_METHODS.detachDirectoryFromThread,
       params: request,
     });
   }

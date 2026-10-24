@@ -142,7 +142,7 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
     const activeLens = app.window.locator(".lens-switch__button.is-active");
     const selectedRow = app.window.locator(".thread-row.is-selected").first();
     const primaryButton = app.window.locator(".composer__send-split-pill").first();
-    const composerInput = app.window.getByLabel("Reply");
+    const composerInput = app.window.getByRole("textbox", { name: "Reply", exact: true });
     // The editor fills its scroller edge to edge, which clipped all of its
     // own outline, so the box around it draws the ring.
     const composerBox = app.window.locator(".composer-tiptap-input", {
@@ -175,10 +175,13 @@ test("renders the desktop shell with the black-first Tangerine Terminal theme", 
       "border-left-color",
       /^(?:rgba\(255, 138, 31, 0\.42\)|color\(srgb 1 0\.541176 0\.121569 \/ 0\.42\))$/,
     );
-    expect(await computedPseudoStyle(selectedRow, "::before", "background-color")).toBe(
-      "rgb(255, 138, 31)"
+    // The selected-row marker is an inset accent edge on the row itself,
+    // not a ::before bar inside it.
+    await expect(selectedRow).toHaveCSS(
+      "box-shadow",
+      "rgb(255, 138, 31) 2px 0px 0px 0px inset",
     );
-    expect(await computedPseudoStyle(selectedRow, "::before", "width")).toBe("3px");
+    expect(await computedPseudoStyle(selectedRow, "::before", "content")).toBe("none");
 
     await assertReadableText({
       background: sidebar,
@@ -240,7 +243,7 @@ test("keeps workflow states, scanner phases, and narrow desktop layout stable", 
     ).toBeVisible();
 
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("Read /etc/hosts and tell me the first three lines.");
     await app.window.getByRole("button", { name: "Send" }).click();
     await app.advance({ stepId: "status-active-1" });

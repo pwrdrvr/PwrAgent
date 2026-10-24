@@ -9,7 +9,8 @@
   checking, available, downloading (with percent and bytes), downloaded,
   canceled, error. Every check moves it, including the hourly background ones.
 - **`app:update-check-result-event`** is emitted from exactly one trigger —
-  `checkForAppUpdatesNow("menu")`, i.e. Help → Check for Updates. It is the
+  `checkForAppUpdatesNow("menu")`, i.e. Check for Updates… in the menu bar
+  (the PwrAgent menu on macOS, Help elsewhere). It is the
   only thing that distinguishes "the operator is waiting for this answer" from
   "the hour hand looked again". Settings → Updates deliberately does
   not emit it: that surface reports its `manual` result inline beside the
@@ -99,6 +100,33 @@ than sniffing the error. Keep that flag the discriminator. That handler is
 also the only thing observing `downloadPromise` at all — without it a cancel
 would be an unhandled rejection in main.
 
+## A newer release replaces a downloaded one
+
+A downloaded update does not end the check. Main still reads the feed, and
+when the selected track has a release newer than the held download, it
+downloads that release and moves the Restart offer to it. Before this, someone
+who left the app open across two releases restarted into the older one and was
+offered the newer one straight away. So the status can move `downloaded` →
+`available` → `downloading` → `downloaded` for a higher version. The banner
+keys dismissal on the version, so the newer `downloaded` brings back an offer
+the operator dismissed for the older one.
+
+What can be installed while that runs depends on the platform. Main owns that
+(`supersedingDownload` in
+[auto-updater.ts](../../../../main/auto-updater.ts)), and the renderer only
+follows the status:
+
+- **macOS** shows the newer build as ready only after Squirrel.Mac has staged
+  it, because until then `quitAndInstall` still installs the older build. If
+  the newer download fails or is canceled, or Squirrel does not stage it
+  within five minutes, the older offer comes back.
+- **Windows and Linux** drop the older offer when the newer download starts,
+  because electron-updater deletes the older installer at that point. A
+  failed newer download does not bring it back.
+
+A held switch back (`direction: "downgrade"`) is never replaced this way, and
+neither is a held version that does not parse as semver.
+
 ## The dev fake is the only way to see any of this
 
 Real auto-update runs in packaged production builds only, so
@@ -117,9 +145,9 @@ paces it so `e2e/update-check.spec.ts` can click a button that only exists
 mid-download.
 
 Because the opt-in is checked inside the `!productionUpdatesEnabled()` branch,
-which comes *before* the Linux branch, the fake reaches every platform. That
-is what lets one e2e spec cover this flow on the Linux lane, where a packaged
-build answers `skipped` and offers no in-app download at all.
+which comes *before* the portable Linux fallback, the fake reaches every
+platform. Native DEB, RPM, and pacman builds use the production updater;
+portable tar.gz builds answer `skipped`.
 
 ## A version this app names, it must also be able to describe
 

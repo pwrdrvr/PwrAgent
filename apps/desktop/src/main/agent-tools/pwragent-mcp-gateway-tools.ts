@@ -8,6 +8,7 @@ export function buildMcpGatewayToolDefinitions(service?: McpGatewayToolService, 
   return [{
     namespace: PWRAGENT_TOOL_NAMESPACE,
     name: "search_mcp_tools",
+    annotations: { readOnlyHint: true },
     description: "Search live tools on this thread's selected PwrAgent MCP connections. New connections and tools are discoverable during an existing turn. Results contain exact schemas and source identities. Invoke results through call_mcp_tool, even when their upstream names are not registered native tools. Search does not grant authorization or execute a tool. Emit the returned string unchanged in Code Mode so schemas survive Token Miser.",
     inputSchema: {
       type: "object", additionalProperties: false, required: ["query"],
@@ -41,7 +42,8 @@ export function buildMcpGatewayToolDefinitions(service?: McpGatewayToolService, 
   }, {
     namespace: PWRAGENT_TOOL_NAMESPACE,
     name: "call_mcp_tool",
-    description: "Invoke a discovered tool on this thread's selected PwrAgent MCP connections. Use the exact connectionId, toolName, schemaRevision and arguments from search_mcp_tools. The gateway rechecks selection, authorization and schema. Full Access approves the invocation automatically. Automations pre-approve their allowed MCP servers and tools. Other Default and Auto calls request confirmation. A schema change requires another search. Never retry a failed side effect without knowing whether it completed. Native tools remain available independently.",
+    annotations: { readOnlyHint: false },
+    description: "Invoke a discovered tool on this thread's selected PwrAgent MCP connections. Use the exact connectionId, toolName, schemaRevision and arguments from search_mcp_tools. The gateway rechecks selection, authorization and schema. Full Access approves the invocation automatically. Automations pre-approve their allowed MCP servers and tools. Other Default and Auto calls follow each connection's tool approval setting. By default, tools the server marks read-only run without approval. Approval covers one tool, once or for this conversation. Conversation approval expires when PwrAgent restarts, MCP access changes, or the tool changes. A schema change requires another search. Never retry a failed side effect without knowing whether it completed. Native tools remain available independently.",
     inputSchema: {
       type: "object", additionalProperties: false,
       required: ["connectionId", "toolName", "schemaRevision", "arguments"],

@@ -1,5 +1,5 @@
 import "./foreground-fixture";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { pointerDeltaToCanvas } from "../star-map-layout";
 import { StarMapScreen } from "../StarMapScreen";
@@ -131,21 +131,25 @@ describe("card drag under zoom", () => {
 
       const SCREEN_DX = 120;
       fireEvent.pointerDown(shell, { button: 0, clientX: 500, clientY: 400 });
-      await act(async () => {
-        fireEvent.pointerMove(window, {
-          clientX: 500 + SCREEN_DX,
-          clientY: 400,
-        });
-        await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      fireEvent.pointerMove(window, {
+        clientX: 500 + SCREEN_DX,
+        clientY: 400,
       });
 
       // The card must travel SCREEN_DX / scale in canvas units so that,
       // rendered back through the same scale, it lands exactly under the
       // pointer. Applying the raw screen delta moved it `scale` times too
       // far — the card outrunning the mouse.
-      const movedBy = Number.parseFloat(shell.style.left) - startLeft;
-      expect(movedBy).toBeCloseTo(SCREEN_DX / scale, 1);
-      fireEvent.pointerUp(window, { clientX: 500 + SCREEN_DX, clientY: 400 });
+      try {
+        // A frame callback does not establish that React has committed the
+        // zoom and guide updates. Observe the position the drag owns instead.
+        await waitFor(() => {
+          const movedBy = Number.parseFloat(shell.style.left) - startLeft;
+          expect(movedBy).toBeCloseTo(SCREEN_DX / scale, 1);
+        });
+      } finally {
+        fireEvent.pointerUp(window, { clientX: 500 + SCREEN_DX, clientY: 400 });
+      }
     } finally {
       window.localStorage.removeItem("pwragent.starMap.viewPreferences");
     }

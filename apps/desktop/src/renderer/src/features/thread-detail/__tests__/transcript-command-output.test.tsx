@@ -137,7 +137,43 @@ describe("TranscriptCommandOutput", () => {
     });
   });
 
-  it("opens a transcript for a PwrAgent-managed sub-agent", () => {
+  it.each([undefined, "pwr_remote"])(
+    "keeps ephemeral Codex monitor activity without offering a transcript (owner %s)",
+    (instanceId) => {
+      const openSubAgentTranscriptWindow = vi.fn();
+      (window as Window & { pwragent?: unknown }).pwragent = {
+        openSubAgentTranscriptWindow,
+      };
+      render(
+        <TranscriptCommandOutput
+          threadLinkSource={instanceId ? { backend: "codex", instanceId } : undefined}
+          detail={{
+            id: "agent-monitor-1",
+            kind: "command",
+            label: "Created monitor",
+            command: {
+              displayCommand: "create_monitor",
+              subAgent: {
+                backend: "codex",
+                origin: "pwragent",
+                operation: "spawn",
+                agents: [{ threadId: "monitor-thread-1", name: "Build monitor" }],
+              },
+              output: "Monitor started.",
+            },
+          }}
+        />,
+      );
+
+      expect(screen.getByText("Build monitor")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Open transcript for Build monitor" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Show raw details" }));
+      expect(screen.getByText("Monitor started.")).toBeInTheDocument();
+      expect(openSubAgentTranscriptWindow).not.toHaveBeenCalled();
+    },
+  );
+
+  it("opens a transcript for a PwrAgent-managed ACP sub-agent", () => {
     const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
     (window as Window & { pwragent?: unknown }).pwragent = {
       openSubAgentTranscriptWindow,

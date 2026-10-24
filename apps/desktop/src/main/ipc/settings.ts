@@ -62,6 +62,7 @@ import type {
 import {
   isAcpBackendId,
   isMessagingRuntimeSecret,
+  resolveDesktopLogsViewerPreferences,
   sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
@@ -104,6 +105,7 @@ import {
 import type { ManagedRuntimeProgress } from "../../shared/managed-runtime-progress";
 import { readManagedRuntimeProgress } from "../managed-runtime-progress";
 import type { DesktopSettingsService } from "../settings/desktop-settings-service";
+import { checkDecisionProvider } from "../decision/decision-provider-check";
 import {
   getDesktopConfigStore,
   getDesktopSettingsService,
@@ -1471,6 +1473,17 @@ function getCredentialTester(
       },
       validateMessagingCredentials: (request) =>
         getDesktopMessagingRuntime().requestCredentialValidation(request),
+      checkClaude: async () => {
+        const response = await getDesktopBackendRegistry().listBackends(
+          { includeUnavailable: true, refreshModels: "claude" },
+          issueProviderDiscoveryPermit("settings-user-action"),
+        );
+        return response.backends.find((backend) => backend.kind === "claude")?.claude;
+      },
+      checkDecisionProvider: async (provider) => await checkDecisionProvider(provider, {
+        settings: resolveService().resolveDecisionModelSettings(),
+        apiKey: await resolveService().resolveDecisionApiKey(provider),
+      }),
     });
   }
   return credentialTesterInstance;
@@ -1549,6 +1562,16 @@ function createProviderCatalogRefresh(
       }
       const models = codex.launchpadOptions?.models;
       return models ? { modelCount: models.length } : {};
+    },
+    refreshClaude: async () => {
+      const response = await getDesktopBackendRegistry().listBackends(
+        { includeUnavailable: true, refreshModels: "claude" },
+        issueProviderDiscoveryPermit("settings-user-action"),
+      );
+      const claude = response.backends.find((backend) => backend.kind === "claude");
+      return claude?.available
+        ? { status: "succeeded", modelCount: claude.launchpadOptions?.models?.length }
+        : { status: "skipped", detail: claude?.unavailableReason ?? "Claude is not installed." };
     },
     refreshAcp: async (progress) => {
       // A pass this request joins, or a result it reuses, reports nothing
@@ -1713,6 +1736,7 @@ export function registerSettingsIpcHandlers(
             : {}),
           appearance: store.read("general").appearance,
           onboarding: store.read("onboarding"),
+          logs: resolveDesktopLogsViewerPreferences(store.read("ui").logs),
         },
       };
     },
@@ -1751,6 +1775,7 @@ export function registerSettingsIpcHandlers(
       const discoveryPermit = (
         request.patch.models?.codex?.path !== undefined
         || request.patch.models?.codex?.managedBuilds !== undefined
+        || request.patch.models?.codex?.managedBuildChannel !== undefined
         || request.patch.experimental?.tokenMiserEnabled !== undefined
       )
         ? issueProviderDiscoveryPermit("settings-user-action")

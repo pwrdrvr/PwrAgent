@@ -250,6 +250,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   };
   /** Per-thread emoji reactions, ordered by insertion. */
   reactions?: string[];
+  /** Present while the thread is locked against new turns. */
+  lock?: ThreadLock;
   /** Pull requests known for this thread's linked directories + branch history. */
   prs?: PrSummary[];
   /** Codex environments discovered from the active thread workspace. */
@@ -301,6 +303,12 @@ export type ThreadQueuedTurnSummary = {
   position: number;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  /**
+   * Generated display title for a message too long to show as typed. Absent
+   * until the helper answers, and from owners that predate it; show
+   * `displayText` then.
+   */
+  title?: string;
 };
 
 /**
@@ -345,6 +353,7 @@ export type TokenMiserSubAgentAccounting = {
   revealedParentTokens: number;
   revealedParentCostMicros: number;
   cachedRevealedTokens?: number;
+  /** Cached revealed cost includes full prompt replay overhead on retrieval requests. */
   cachedRevealedCostMicros?: number;
   savingsMicros: number;
 };
@@ -492,6 +501,8 @@ export type PrSummary = {
    * worktree that shares the same Git object database.
    */
   linkedDirectoryPaths?: string[];
+  /** Thread-local operator/agent attachment intent; never provider status. */
+  explicitlyAttached?: true;
   /**
    * Deprecated compatibility alias for `checkState`. New writers keep this
    * check-only so review/lifecycle/mergeability never collide with checks.
@@ -830,12 +841,44 @@ function seedNavigationLaunchpadProviderSettings<T extends NavigationLaunchpadDe
   return providerSettings;
 }
 
+/**
+ * Providers whose new threads start on Auto when nothing else says otherwise.
+ * Both run Auto inside the workspace sandbox; other providers advertise their
+ * own runtime modes and keep Default Access.
+ */
+const AUTO_ACCESS_DEFAULT_BACKENDS: ReadonlySet<AppServerBackendKind> = new Set([
+  "codex",
+  "claude",
+]);
+
+/** Whether Settings offers an access default for this provider. */
+export function supportsProviderExecutionModeDefault(
+  backend: AppServerBackendKind,
+): boolean {
+  return AUTO_ACCESS_DEFAULT_BACKENDS.has(backend);
+}
+
+/**
+ * Access for a new thread when its launchpad has none saved for the provider:
+ * the profile's provider default from Settings, else Auto for Codex and
+ * Claude, else Default Access.
+ */
+export function resolveDefaultLaunchpadExecutionMode(
+  backend: AppServerBackendKind,
+  providerDefaults?: Record<string, Pick<DesktopProviderModelDefaults, "executionMode">>,
+): ThreadExecutionMode {
+  if (!supportsProviderExecutionModeDefault(backend)) return "default";
+  return providerDefaults?.[backend]?.executionMode ?? "auto";
+}
+
 function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDefaults>(
   launchpad: T,
 ): T {
   return {
     ...launchpad,
-    executionMode: "default",
+    // Unset, not "default": the projection then resolves the new provider's
+    // own default instead of carrying this one's access across.
+    executionMode: undefined as unknown as ThreadExecutionMode,
     model: undefined,
     reasoningEffort: undefined,
     serviceTier: undefined,
@@ -858,7 +901,9 @@ export function projectNavigationLaunchpadProviderSettings<
   };
   return {
     ...launchpad,
-    executionMode: settings.executionMode ?? "default",
+    executionMode:
+      settings.executionMode
+      ?? resolveDefaultLaunchpadExecutionMode(launchpad.backend),
     model: settings.model,
     reasoningEffort: settings.reasoningEffort,
     serviceTier: settings.serviceTier,
@@ -945,6 +990,95 @@ export function applyNavigationLaunchpadProviderModelDefaults<T extends Navigati
     };
   }
   return projectNavigationLaunchpadProviderSettings({ ...seeded, providerSettings });
+}
+
+export function changedProviderExecutionModeDefaultBackends(
+  previous: Record<string, DesktopProviderModelDefaults>,
+  next: Record<string, DesktopProviderModelDefaults>,
+): AppServerBackendKind[] {
+  return [...new Set([
+    ...Object.keys(previous),
+    ...Object.keys(next),
+  ])].filter((backend) =>
+    supportsProviderExecutionModeDefault(backend as AppServerBackendKind)
+    && resolveDefaultLaunchpadExecutionMode(backend as AppServerBackendKind, previous)
+      !== resolveDefaultLaunchpadExecutionMode(backend as AppServerBackendKind, next)
+  ) as AppServerBackendKind[];
+}
+
+/**
+ * Replace only the access choice for each changed provider, as a model
+ * default change does; the launchpad's model, prompt, and other providers
+ * stay as they were.
+ */
+export function applyNavigationLaunchpadProviderExecutionModeDefaults<
+  T extends NavigationLaunchpadDefaults,
+>(
+  value: T,
+  defaults: Record<string, DesktopProviderModelDefaults>,
+  changedBackends: AppServerBackendKind[],
+  includeAll = false,
+): T {
+  const relevantBackends = changedBackends.filter((backend) =>
+    includeAll
+    || value.backend === backend
+    || value.providerSettings?.[backend] !== undefined
+  );
+  if (relevantBackends.length === 0) return value;
+  const seeded = applyNavigationLaunchpadProviderSettingsPatch(value, {});
+  const providerSettings = { ...seeded.providerSettings };
+  for (const backend of relevantBackends) {
+    providerSettings[backend] = {
+      ...providerSettings[backend],
+      executionMode: resolveDefaultLaunchpadExecutionMode(backend, defaults),
+    };
+  }
+  return projectNavigationLaunchpadProviderSettings({ ...seeded, providerSettings });
+}
+
+/**
+ * Before Auto became the default, an unset access projected to "default" and
+ * was then saved as if chosen. Forget those saved "default" values for the
+ * providers that now start on Auto, so they resolve to the new default.
+ * Returns the input unchanged when nothing applies.
+ */
+export function forgetLegacyDefaultLaunchpadExecutionModes<
+  T extends NavigationLaunchpadDefaults,
+>(value: T): T {
+  let changed = false;
+  let providerSettings = value.providerSettings;
+  for (const [backend, settings] of Object.entries(value.providerSettings ?? {})) {
+    if (
+      !supportsProviderExecutionModeDefault(backend as AppServerBackendKind)
+      || settings?.executionMode !== "default"
+    ) {
+      continue;
+    }
+    const { executionMode: _executionMode, ...rest } = settings;
+    providerSettings = { ...providerSettings };
+    if (Object.keys(rest).length > 0) {
+      providerSettings[backend as AppServerBackendKind] = rest;
+    } else {
+      delete providerSettings[backend as AppServerBackendKind];
+    }
+    changed = true;
+  }
+  const clearTopLevel =
+    supportsProviderExecutionModeDefault(value.backend)
+    && value.executionMode === "default";
+  if (!changed && !clearTopLevel) return value;
+  const next = {
+    ...value,
+    ...(clearTopLevel
+      ? { executionMode: undefined as unknown as ThreadExecutionMode }
+      : {}),
+  };
+  if (providerSettings && Object.keys(providerSettings).length > 0) {
+    next.providerSettings = providerSettings;
+  } else {
+    delete next.providerSettings;
+  }
+  return projectNavigationLaunchpadProviderSettings(next);
 }
 
 export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
@@ -1113,6 +1247,8 @@ export type NavigationDirectoryGitStatus = {
    * origin, and for a directory that is not a Git repository at all.
    */
   originRepository?: string;
+  /** Normalized fetch remote repositories, including origin, for fork/upstream matching. */
+  remoteRepositories?: string[];
   syncState?:
     | "in-sync"
     | "ahead"
@@ -1357,13 +1493,76 @@ export type GetWorktreeUnpublishedCommitDiffResponse = {
   detail?: AppServerThreadActivityDetail;
 };
 
+/** Which revision of a worktree file to read image bytes from. */
+export type WorktreeImageRevision =
+  | { kind: "worktree" }
+  | { kind: "head" }
+  | { kind: "commit"; sha: string }
+  /** The commit's first parent: the "before" of a commit's change. */
+  | { kind: "commitParent"; sha: string };
+
+export type ReadWorktreeImageRequest = {
+  worktreePath: string;
+  /** Absolute path inside `worktreePath`. */
+  path: string;
+  revision: WorktreeImageRevision;
+};
+
+/**
+ * One side of an image diff. `missing` is the ordinary answer for the other
+ * side of an add or a delete, not an error, so callers can ask for both sides
+ * unconditionally.
+ */
+export type ReadWorktreeImageResponse =
+  | { kind: "image"; mediaType: string; bytes: Uint8Array }
+  | { kind: "missing" }
+  | { kind: "tooLarge"; sizeBytes: number }
+  | { kind: "lfsPointer" }
+  | { kind: "unsupported" };
+
+const WORKTREE_IMAGE_MEDIA_TYPES = new Map<string, string>([
+  ["apng", "image/apng"],
+  ["avif", "image/avif"],
+  ["bmp", "image/bmp"],
+  ["gif", "image/gif"],
+  ["ico", "image/x-icon"],
+  ["jfif", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["jpg", "image/jpeg"],
+  ["png", "image/png"],
+  ["webp", "image/webp"],
+]);
+
+/**
+ * Media type for a raster image path the renderer can preview, or undefined.
+ * Extension-based on purpose: git says a blob is binary, not what it is. SVG
+ * is left out — it is text, and its edits already read as a text diff.
+ */
+export function worktreeImageMediaType(filePath: string): string | undefined {
+  const name = filePath.slice(
+    Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\")) + 1,
+  );
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0) {
+    return undefined;
+  }
+  return WORKTREE_IMAGE_MEDIA_TYPES.get(name.slice(dot + 1).toLowerCase());
+}
+
+/**
+ * Ceiling on one previewed side. The bytes are copied across IPC and decoded
+ * twice (thumbnail and pixel diff), so a repository's 200 MB PSD-like asset
+ * must not stall the renderer for a picture nobody can see anyway.
+ */
+export const WORKTREE_IMAGE_MAX_BYTES = 16 * 1024 * 1024;
+
 const ACP_BACKEND_ID_PREFIX = "acp:";
 const ACP_REGISTRY_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 export function isAppServerBuiltinBackendKind(
   value: string,
 ): value is AppServerBuiltinBackendKind {
-  return value === "codex";
+  return value === "codex" || value === "claude";
 }
 
 export function buildAcpBackendId(registryId: string): AcpBackendId {
@@ -1731,6 +1930,7 @@ export type NavigationRow = {
   subthreadsCollapsed?: boolean;
   reactions?: string[];
   reactionsTruncated?: boolean;
+  lock?: ThreadLock;
   prs?: PrSummary[];
   prsTruncated?: boolean;
   messagingBindings?: MessagingThreadBindingSummary[];
@@ -1772,6 +1972,8 @@ export type NavigationDirectoryRow = {
    * consumers must fall back to `key`.
    */
   repositoryKey?: string;
+  /** Configured fetch remote identities from `gitStatus.remoteRepositories`. */
+  repositoryKeys?: string[];
   localAvailability?: "unconfigured";
   counts: NavigationCounts;
   pinnedRootCount: number;
@@ -1835,6 +2037,16 @@ export type NavigationQuery =
       kind: "lens";
       lens: "attention" | "inbox" | "recents";
       filter?: string;
+      /**
+       * Updated and Created (`inbox`, `recents`) with pinned threads on top:
+       * split the lens by its root's pin, so the Pinned group and the
+       * time-sorted list page independently. A thread's whole
+       * subtree goes with its root. An owner that honors the split answers
+       * with `collectionSize` (the pinned bucket's root count); an older
+       * owner ignores the field and answers with every thread, which the
+       * viewer then filters by each root's own pin.
+       */
+      roots?: "pinned" | "unpinned";
     }
   | {
       kind: "directory";
@@ -1849,6 +2061,13 @@ export type NavigationQuery =
       kind: "exact";
       identities: NavigationIdentity[];
       includeAncestry?: boolean;
+      /**
+       * Viewer inventory only, and never sent to a peer: include each peer
+       * identity's row as held by this machine's peer summary cache, which
+       * reads owners in the background and keeps an offline owner's last
+       * rows. The read never waits on a peer.
+       */
+      resolveFromOwners?: true;
     }
   | {
       kind: "search";
@@ -2071,6 +2290,14 @@ export type SetNavigationBrowseModeResponse = {
   browseMode: NavigationBrowseMode;
 };
 
+export type SetPinnedGroupCollapsedRequest = {
+  collapsed: boolean;
+};
+
+export type SetPinnedGroupCollapsedResponse = {
+  collapsed: boolean;
+};
+
 export type MarkThreadSeenRequest = {
   backend?: AppServerBackendKind;
   federationTarget?: FederationTarget;
@@ -2099,6 +2326,46 @@ export type SetThreadReactionResponse = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   reactions: string[];
+};
+
+/** Who set a thread lock. `messaging` is a contact on a bound chat's status card. */
+export type ThreadLockSource = "operator" | "agent_tool" | "peer" | "messaging";
+
+/**
+ * A lock parks a thread: every path that starts or steers a turn refuses it
+ * until the thread is unlocked. The operator uses it when the thread's
+ * worktree has been handed to another agent, so nothing (a habitual reply,
+ * CI auto-repair, PR auto-fix, a queued message, messaging, a peer, or an
+ * agent tool) touches the worktree from here meanwhile. A running turn is not
+ * interrupted.
+ */
+export type ThreadLock = {
+  /** Why the thread is locked, shown on the thread and in the sidebar. */
+  note?: string;
+  /** Epoch milliseconds. */
+  lockedAt: number;
+  source: ThreadLockSource;
+  /** For `source: "peer"`: the instance that locked it. */
+  sourceInstanceId?: FederationInstanceId;
+};
+
+export type SetThreadLockRequest = {
+  backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  /** true locks the thread, or replaces the note of a locked thread; false unlocks it. */
+  locked: boolean;
+  /** Ignored when unlocking. Omitted keeps a locked thread's note; blank clears it. */
+  note?: string;
+};
+
+export type SetThreadLockResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Absent once unlocked. */
+  lock?: ThreadLock;
+  /** The lock an unlock removed, so a caller can put it back. */
+  previousLock?: ThreadLock;
 };
 
 export type SetThreadPinRequest = {
@@ -2175,6 +2442,11 @@ export type AddRemoteThreadPinRequest = {
 
 export type AddRemoteThreadPinResponse = {
   pin: RemoteThreadPin;
+};
+
+/** Exact persisted viewer membership, independent of loaded navigation pages. */
+export type HasRemoteThreadPinRequest = {
+  ref: FederatedThreadRef;
 };
 
 export type RemoveRemoteThreadPinRequest = {
@@ -2511,6 +2783,8 @@ export type DetachDirectoryFromThreadFailureReason =
 
 export type DetachDirectoryFromThreadRequest = {
   backend?: AppServerBackendKind;
+  /** Route detachment to the instance that owns the thread and its attachments. */
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   directory: Pick<
     LinkedDirectorySummary,
@@ -2667,6 +2941,11 @@ export type ThreadOverlayState = {
   /** MCP connections supplied to this thread's harness. */
   mcpConnectionIds?: string[];
   /**
+   * Shared revocation revision, replaced when an edit changes the set of
+   * MCP connections. A reorder or a provider-servers toggle keeps it.
+   */
+  mcpSelectionRevision?: string;
+  /**
    * Whether the backend's own configured MCP servers stay available to the
    * thread. Undefined means yes. Only Codex can honor `false`; see
    * `SetThreadMcpConnectionsRequest`.
@@ -2728,6 +3007,8 @@ export type ThreadOverlayState = {
    * (e.g., "needs follow-up"), not multi-user voting.
    */
   reactions?: string[];
+  /** Present while the thread is locked against new turns. See {@link ThreadLock}. */
+  lock?: ThreadLock;
   /**
    * Consolidated tool-output incident state for this thread: when it first
    * warned, what the operator dismissed, and what they muted. Persisted so an

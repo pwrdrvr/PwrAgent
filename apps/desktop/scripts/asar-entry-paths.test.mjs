@@ -44,6 +44,48 @@ describe("ASAR entry paths", () => {
         entry: "/node_modules/@napi-rs/canvas-win32-x64-msvc/skia.win32-x64-msvc.node",
         unpacked: true,
       },
+      {
+        entry: "/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+        unpacked: true,
+      },
+      {
+        entry: "/node_modules/node-pty/build/Release/conpty.node",
+        unpacked: true,
+      },
+      {
+        entry: "/node_modules/node-pty/build/Release/conpty_console_list.node",
+        unpacked: true,
+      },
+      { entry: "/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe", unpacked: true },
+    ]);
+  });
+
+  it("requires the natives beforePack stages on every target", () => {
+    expect(requiredPackagedRuntimeFiles("darwin", "arm64")).toEqual([
+      {
+        entry: "/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+        unpacked: true,
+      },
+      {
+        entry: "/node_modules/node-pty/build/Release/pty.node",
+        unpacked: true,
+      },
+      {
+        entry: "/node_modules/node-pty/build/Release/spawn-helper",
+        unpacked: true,
+      },
+      { entry: "/node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude", unpacked: true },
+    ]);
+    expect(requiredPackagedRuntimeFiles("linux", "arm64")).toEqual([
+      {
+        entry: "/node_modules/better-sqlite3/build/Release/better_sqlite3.node",
+        unpacked: true,
+      },
+      {
+        entry: "/node_modules/node-pty/build/Release/pty.node",
+        unpacked: true,
+      },
+      { entry: "/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude", unpacked: true },
     ]);
   });
 
@@ -51,6 +93,10 @@ describe("ASAR entry paths", () => {
     const missing = missingPackagedRuntimeFiles([
       "\\node_modules\\@napi-rs\\canvas-win32-x64-msvc\\package.json",
       "\\node_modules\\@napi-rs\\canvas-win32-x64-msvc\\skia.win32-x64-msvc.node",
+      "\\node_modules\\better-sqlite3\\build\\Release\\better_sqlite3.node",
+      "\\node_modules\\node-pty\\build\\Release\\conpty.node",
+      "\\node_modules\\node-pty\\build\\Release\\conpty_console_list.node",
+      "\\node_modules\\@anthropic-ai\\claude-agent-sdk-win32-x64\\claude.exe",
     ], "win32", "x64");
 
     expect(missing).toEqual([
@@ -62,6 +108,9 @@ describe("ASAR entry paths", () => {
   });
 
   it("does not impose Windows x64 files on another target", () => {
-    expect(requiredPackagedRuntimeFiles("darwin", "arm64")).toEqual([]);
+    expect(
+      requiredPackagedRuntimeFiles("darwin", "arm64")
+        .filter(({ entry }) => entry.includes("@napi-rs")),
+    ).toEqual([]);
   });
 });

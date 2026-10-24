@@ -1,9 +1,11 @@
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { codexAsyncQuestionItemId, type CodexAsyncQuestion } from "@pwragent/shared";
 import {
-  codexAsyncQuestionItemId,
-  formatCodexAsyncQuestionReply,
-  type CodexAsyncQuestion,
-} from "@pwragent/shared";
+  asyncQuestionDraftAnswer,
+  formatAsyncQuestionDraftReply,
+  initialAsyncQuestionDrafts,
+  type AsyncQuestionDraft,
+} from "./async-question-drafts";
 import { resizeFreeformTextarea } from "./PendingQuestionnaire";
 
 type AsyncQuestionCardProps = {
@@ -20,11 +22,6 @@ type AsyncQuestionCardProps = {
   renderTitle: (title: string) => ReactNode;
 };
 
-type QuestionDraft = {
-  option?: string;
-  text: string;
-};
-
 /**
  * Presents the questions Codex asked through `request_user_input_async`.
  * Codex keeps working while they wait, so answering is optional: the
@@ -33,11 +30,8 @@ type QuestionDraft = {
  * recommendation, preselected as Codex's own clients do.
  */
 export function AsyncQuestionCard(props: AsyncQuestionCardProps) {
-  const [drafts, setDrafts] = useState<QuestionDraft[]>(() =>
-    props.questions.map((question) => ({
-      option: question.options?.[0],
-      text: "",
-    }))
+  const [drafts, setDrafts] = useState<AsyncQuestionDraft[]>(() =>
+    initialAsyncQuestionDrafts(props.questions)
   );
   const [sending, setSending] = useState(false);
 
@@ -49,9 +43,7 @@ export function AsyncQuestionCard(props: AsyncQuestionCardProps) {
   const openIndexes = props.questions.flatMap((_, index) =>
     answers[index] === undefined ? [index] : []
   );
-  const draftAnswer = (index: number): string =>
-    drafts[index]?.text.trim() || drafts[index]?.option || "";
-  const readyIndexes = openIndexes.filter((index) => draftAnswer(index));
+  const readyIndexes = openIndexes.filter((index) => asyncQuestionDraftAnswer(drafts[index]));
   const answering = Boolean(props.onAnswer) && !props.dismissed && openIndexes.length > 0;
   const status = openIndexes.length === 0
     ? props.questions.every((_, index) =>
@@ -64,7 +56,7 @@ export function AsyncQuestionCard(props: AsyncQuestionCardProps) {
       ? "Dismissed"
       : undefined;
 
-  const updateDraft = (index: number, update: Partial<QuestionDraft>): void => {
+  const updateDraft = (index: number, update: Partial<AsyncQuestionDraft>): void => {
     setDrafts((current) =>
       current.map((draft, draftIndex) =>
         draftIndex === index ? { ...draft, ...update } : draft
@@ -76,12 +68,11 @@ export function AsyncQuestionCard(props: AsyncQuestionCardProps) {
     if (!props.onAnswer || sending) {
       return;
     }
-    const text = formatCodexAsyncQuestionReply(
-      readyIndexes.map((index) => ({
-        questionItemId: codexAsyncQuestionItemId(props.messageId, index),
-        question: props.questions[index]?.title ?? "",
-        answer: draftAnswer(index),
-      }))
+    const text = formatAsyncQuestionDraftReply(
+      props.messageId,
+      props.questions,
+      drafts,
+      readyIndexes,
     );
     if (!text) {
       return;
@@ -166,10 +157,10 @@ function AsyncQuestionItem(props: {
   answer?: string;
   answering: boolean;
   busy: boolean;
-  draft: QuestionDraft;
+  draft: AsyncQuestionDraft;
   question: CodexAsyncQuestion;
   renderTitle: (title: string) => ReactNode;
-  onDraftChange: (update: Partial<QuestionDraft>) => void;
+  onDraftChange: (update: Partial<AsyncQuestionDraft>) => void;
 }) {
   const titleId = useId();
   const freeformRef = useRef<HTMLTextAreaElement | null>(null);

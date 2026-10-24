@@ -504,3 +504,33 @@ describe("placeListbox", () => {
     expect(placed.left).toBe(1200 - 12 - 400);
   });
 });
+
+describe("Select groups", () => {
+  const GROUPED: SelectOption[] = [
+    { value: "tangerine", label: "Tangerine", group: "PwrAgent", leading: <i data-testid="mark" /> },
+    { value: "gray", label: "Gray", group: "PwrAgent" },
+    { value: "mocha", label: "Catppuccin Mocha", group: "Community palettes" },
+  ];
+
+  it("lists consecutive options under a labelled group and walks them as one list", () => {
+    const { onChange, trigger } = setup({ options: GROUPED, initial: "tangerine" });
+    fireEvent.click(trigger);
+
+    const listbox = screen.getByRole("listbox");
+    const groups = within(listbox).getAllByRole("group");
+    expect(groups.map((group) => group.getAttribute("aria-labelledby")).map(
+      (id) => document.getElementById(id ?? "")?.textContent,
+    )).toEqual(["PwrAgent", "Community palettes"]);
+    expect(within(groups[0]).getAllByRole("option").map((option) => option.textContent))
+      .toEqual(["Tangerine", "Gray"]);
+    // The leading mark is decoration on both the option and the trigger.
+    expect(within(listbox).getByTestId("mark").closest("[aria-hidden='true']")).not.toBeNull();
+    expect(within(trigger).getByTestId("mark")).toBeInTheDocument();
+
+    // The arrows cross from one group into the next.
+    key(trigger, "ArrowDown");
+    key(trigger, "ArrowDown");
+    key(trigger, "Enter");
+    expect(onChange).toHaveBeenCalledWith("mocha");
+  });
+});

@@ -1,6 +1,10 @@
-import { app, ipcMain, type WebContents } from "electron";
+import { createHash } from "node:crypto";
+import { createTerminalHistoryStore } from "../terminal/terminal-history";
+import { app, BrowserWindow, ipcMain, Menu, type WebContents } from "electron";
 import {
+  INTEGRATED_TERMINAL_RENAME_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
+  INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_LIST_CHANNEL,
   INTEGRATED_TERMINAL_RESIZE_CHANNEL,
@@ -10,7 +14,9 @@ import {
   INTEGRATED_TERMINAL_WRITE_CHANNEL,
 } from "../../shared/ipc";
 import type {
+  IntegratedTerminalRenameRequest,
   IntegratedTerminalCloseRequest,
+  IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
   IntegratedTerminalResizeRequest,
@@ -24,6 +30,8 @@ import {
   IntegratedTerminalService,
 } from "../terminal/integrated-terminal-service";
 import type { IntegratedTerminalQuitSnapshot } from "../terminal/integrated-terminal-service";
+import { buildIntegratedTerminalContextMenuTemplate } from "../terminal/integrated-terminal-context-menu";
+import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
 import {
@@ -34,6 +42,7 @@ import {
 let service: IntegratedTerminalService | undefined;
 let federationBridge: FederationTerminalBridge | undefined;
 let serviceDisposalPromise: Promise<void> | undefined;
+let releaseWorktreeTerminalOwner: (() => void) | undefined;
 
 declare global {
   var __PWRAGENT_E2E_GET_INTEGRATED_TERMINAL_QUIT_SNAPSHOT__:
@@ -63,11 +72,30 @@ function broadcastSessions(
 }
 
 export function registerIntegratedTerminalIpcHandlers(): void {
+  ipcMain.removeHandler(INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL);
+  ipcMain.handle(
+    INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL,
+    (event, request: IntegratedTerminalContextMenuRequest): void => {
+      if (!request || !Number.isFinite(request.x) || !Number.isFinite(request.y)
+        || typeof request.canCopy !== "boolean") {
+        throw new Error("Invalid terminal context menu request.");
+      }
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window || window.isDestroyed()) return;
+      Menu.buildFromTemplate(buildIntegratedTerminalContextMenuTemplate(
+        process.platform,
+        request.canCopy,
+      )).popup({ window, x: Math.round(request.x), y: Math.round(request.y) });
+    },
+  );
   if (!service) {
     service = new IntegratedTerminalService({
       onSessionsChanged: broadcastSessions,
+      historyStore: createTerminalHistoryStore(
+        createHash("sha256").update(process.env.PWRAGENT_INSTANCE_ROOT || "default").digest("hex")),
     });
     serviceDisposalPromise = undefined;
+    releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(service);
   }
   federationBridge ??= new FederationTerminalBridge({
     localSessionsFor: () => service?.listSessions() ?? [],
@@ -76,6 +104,14 @@ export function registerIntegratedTerminalIpcHandlers(): void {
     globalThis.__PWRAGENT_E2E_GET_INTEGRATED_TERMINAL_QUIT_SNAPSHOT__ =
       getIntegratedTerminalQuitSnapshot;
   }
+
+  ipcMain.removeHandler(INTEGRATED_TERMINAL_RENAME_CHANNEL);
+  ipcMain.handle(INTEGRATED_TERMINAL_RENAME_CHANNEL, (event, request: IntegratedTerminalRenameRequest) => {
+    if (typeof request?.sessionId !== "string" || typeof request.name !== "string") throw new Error("Invalid terminal name.");
+    if (isFederationWindowWebContents(event.sender) || federationBridge?.hasSession(event.sender, request.sessionId)) {
+      federationBridge?.rename(request.sessionId, request.name, event.sender);
+    } else service?.rename(request.sessionId, request.name);
+  });
 
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CREATE_CHANNEL);
   ipcMain.handle(
@@ -178,6 +214,7 @@ export function registerIntegratedTerminalIpcHandlers(): void {
 }
 
 export function disposeIntegratedTerminalIpcHandlers(): Promise<void> {
+  ipcMain.removeHandler(INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CREATE_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_WRITE_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_RESIZE_CHANNEL);
@@ -185,6 +222,8 @@ export function disposeIntegratedTerminalIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(INTEGRATED_TERMINAL_LIST_CHANNEL);
   ipcMain.removeHandler(INTEGRATED_TERMINAL_SET_PANEL_HIDDEN_CHANNEL);
   serviceDisposalPromise ??= service?.dispose() ?? Promise.resolve();
+  releaseWorktreeTerminalOwner?.();
+  releaseWorktreeTerminalOwner = undefined;
   service = undefined;
   // Drops the viewer-side registry without sending pty.close for each
   // session: this runs at app shutdown, where the federation runtime is

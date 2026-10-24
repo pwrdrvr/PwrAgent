@@ -1,5 +1,6 @@
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import type { ReviewRunMode } from "@pwragent/shared";
+import { isThreadLockRefusal } from "@pwragent/shared";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
 import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
@@ -21,9 +22,9 @@ import {
   isAppServerBackendKind,
   isCodexAsyncQuestionAnswered,
   isMessagingBindingTargetKind,
-  normalizeCodexAsyncQuestions,
+  readCodexAsyncQuestionRepliesFromNotification,
+  readCodexAsyncQuestionsFromNotification,
   normalizeRenamedTitleSource,
-  parseCodexAsyncQuestionReply,
   parseCodexTurnErrorMessage,
   parseThreadIdentityKey,
   permissionForActionId,
@@ -1076,6 +1077,7 @@ export class MessagingController {
     MessagingAdmissionTimingRecord
   >();
   private readonly pendingIntentTtlMs: number;
+  private readonly pendingRequestPresentations = new Map<string, Promise<void>>();
   private readonly interactionMapper: MessagingInteractionMapper;
   private readonly activeTurnsByThreadKey = new Map<string, MessagingActiveTurnSummary>();
   private readonly contextUsageSummariesByThreadKey = new Map<string, string>();
@@ -1114,7 +1116,10 @@ export class MessagingController {
     string,
     MessagingWorkingCardState
   >();
-  private readonly completedTaskMonitorTurns = new Set<string>();
+  private readonly taskMonitorMessagingOrigins = new Map<
+    string,
+    { parentTurnId: string; suppressed: boolean }
+  >();
   private readonly turnAdmission: MessagingTurnAdmission;
   private readonly pendingNewThreadPrompts = new Map<string, PendingNewThreadPromptWindow>();
   private readonly pendingFullAccessNewThreadPrompts = new Map<
@@ -1545,14 +1550,19 @@ export class MessagingController {
     if (!threadId) {
       return;
     }
-    if (event.notification.method === "item/transientMessage/updated") {
-      // Transient transcript text is a local, replaceable desktop surface.
+    if (
+      event.notification.method === "item/transientMessage/updated"
+      || event.notification.method === "thread/subAgents/updated"
+      || isPrivateTaskMonitorEvent(event)
+    ) {
+      // Private monitor/sub-agent activity and transient transcript text
+      // belong to desktop surfaces, not the parent messaging transcript.
       // It is intentionally not translated into a messaging intent: remote
       // delivery would give it durable-message queueing, retry, and budget
       // semantics that it must never inherit.
       return;
     }
-    const asyncQuestionReplies = asyncQuestionRepliesForBackendEvent(event);
+    const asyncQuestionReplies = readCodexAsyncQuestionRepliesFromNotification(event.notification);
     if (asyncQuestionReplies) {
       await this.retireAnsweredAsyncQuestionnaires(
         event,
@@ -1631,8 +1641,7 @@ export class MessagingController {
       eventTurnKey
       && reviewTurnEvent
       && rawAssistantText
-      && !isNonFinalAssistantTextForBackendEvent(event)
-      && !isTaskMonitorProgressEvent(event),
+      && !isNonFinalAssistantTextForBackendEvent(event),
     );
     if (
       eventTurnKey
@@ -1739,6 +1748,7 @@ export class MessagingController {
     if (
       event.notification.method === "thread/executionMode/updated" ||
       event.notification.method === "thread/modelSettings/updated" ||
+      event.notification.method === "thread/lock/updated" ||
       event.notification.method === "thread/rewound" ||
       event.notification.method === "thread/prAutoDispatch/updated" ||
       event.notification.method === "thread/prAutoDispatch/pendingUpdated" ||
@@ -1771,6 +1781,44 @@ export class MessagingController {
       eventTurnId,
       persistentBindings,
     );
+    // Monitor lifecycle notices are working activity, never parent turn
+    // completions. Sharing the active turn also shares its Some allowance.
+    const monitorLifecycle = taskMonitorLifecycleActivityForBackendEvent(event);
+    if (monitorLifecycle) {
+      // Remember suppression even without bindings: a monitor may complete
+      // after its parent's private/automation tracking has been cleared.
+      if (this.suppressTaskMonitorLifecycle(event, threadId, monitorLifecycle)) {
+        return;
+      }
+      for (const binding of bindings) {
+        const activeTurn = this.getActiveTurn(binding);
+        if (this.suppressTaskMonitorLifecycle(
+          event,
+          threadId,
+          monitorLifecycle,
+          activeTurn?.turnId,
+        )) {
+          continue;
+        }
+        const turnId = activeTurn?.status === "working"
+          ? activeTurn.turnId
+          : `monitor-lifecycle:${threadId}`;
+        const mode = resolveMessagingToolUpdateMode(
+          binding,
+          await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
+        );
+        const deliveries = this.toolUpdatePolicy.processActivity({
+          activity: monitorLifecycle.activity,
+          bindingId: binding.id,
+          mode,
+          turnId,
+        });
+        for (const delivery of deliveries) {
+          await this.deliverToolUpdateDelivery(delivery, binding);
+        }
+      }
+      return;
+    }
     const reviewStartOutcome = reviewStartOutcomeForBackendEvent(event);
     if (reviewStartOutcome) {
       if (
@@ -1924,21 +1972,6 @@ export class MessagingController {
           activeTurn?.turnId,
         );
       }
-      if (eventTurnId && isTaskMonitorCompletionEvent(event)) {
-        // A monitor's terminal result wakes the parent agent, whose final
-        // response is the one user-facing completion notification. Tombstone
-        // the monitor turn before clearing its batch so a heartbeat already
-        // released into budget/retry handling is also cancelled before a
-        // pending or replayed adapter attempt.
-        this.rememberCompletedTaskMonitorTurn(binding.id, eventTurnId);
-        this.toolUpdatePolicy.flush({
-          bindingId: binding.id,
-          clear: true,
-          turnId: eventTurnId,
-        });
-        await this.finalizeWorkingCard(binding, eventTurnId, "completed");
-        this.clearTurnProse(binding.id, eventTurnId);
-      }
       if (
         turnStateChanged &&
         (isTerminalTurnLifecycle(lifecycle) ||
@@ -2039,10 +2072,7 @@ export class MessagingController {
           || !isNonFinalAssistantTextForBackendEvent(event)
         )
       ) {
-        if (
-          !isNonFinalAssistantTextForBackendEvent(event)
-          && !isTaskMonitorProgressEvent(event)
-        ) {
+        if (!isNonFinalAssistantTextForBackendEvent(event)) {
           // Claim the stable backend item before image resolution yields. A
           // nearly-simultaneous idle/terminal event may flush the same buffered
           // deltas while this lookup is in flight; both paths must contend for
@@ -2057,7 +2087,7 @@ export class MessagingController {
             event,
             binding,
           );
-          const asyncQuestions = asyncQuestionsForBackendEvent(event);
+          const asyncQuestions = readCodexAsyncQuestionsFromNotification(event.notification);
           if (!assistantMessageClaimed) {
             await this.deliverAssistantImages(assistantImages, event, binding);
           } else if (asyncQuestions) {
@@ -2115,7 +2145,6 @@ export class MessagingController {
           !suppressSourceResponse &&
           isFinalAssistantImageResolutionEvent(event)
           && !reviewTurnEvent
-          && !isTaskMonitorProgressEvent(event)
         ) {
           const assistantImages = await this.resolveAssistantMessageImages(
             "",
@@ -2315,6 +2344,33 @@ export class MessagingController {
     request: AppServerPendingRequestNotification,
     federationTarget?: FederationTarget,
   ): Promise<void> {
+    const key = JSON.stringify([
+      backend,
+      request.params.threadId,
+      request.params.requestId,
+      federationTarget?.scope === "remote" ? federationTarget.instanceId : undefined,
+    ]);
+    const existing = this.pendingRequestPresentations.get(key);
+    if (existing) {
+      await existing;
+      return;
+    }
+    // Reserve before the first store read completes so overlapping redisplays
+    // cannot both create an intent for the same backend request.
+    const presentation = this.presentBackendPendingRequest(backend, request, federationTarget);
+    this.pendingRequestPresentations.set(key, presentation);
+    try {
+      await presentation;
+    } finally {
+      this.pendingRequestPresentations.delete(key);
+    }
+  }
+
+  private async presentBackendPendingRequest(
+    backend: AppServerBackendKind,
+    request: AppServerPendingRequestNotification,
+    federationTarget?: FederationTarget,
+  ): Promise<void> {
     const persistentBindings = this.filterBindingsForChannel(
       await this.options.store.findActiveBindingsForThread({
         backend,
@@ -2330,7 +2386,18 @@ export class MessagingController {
       persistentBindings,
     );
 
+    const existingIntents = await this.options.store.findActivePendingIntentsForRequest({
+      backend,
+      threadId: request.params.threadId,
+      requestId: request.params.requestId,
+      now: this.now(),
+    });
     for (const binding of bindings) {
+      // Desktop transcript recovery also reaches messaging. Keep the existing
+      // actionable message and any questionnaire answers for this binding.
+      if (existingIntents.some((intent) => intent.bindingId === binding.id)) {
+        continue;
+      }
       const intent = this.intentForPendingRequest(request);
       if (!intent) {
         continue;
@@ -8079,6 +8146,7 @@ export class MessagingController {
     try {
       const images = await resolveImages({
         backend: binding.backend,
+        federationTarget: federationTargetForBinding(binding),
         itemId: assistantItemIdForBackendEvent(event),
         text,
         threadId: binding.threadId,
@@ -8086,9 +8154,12 @@ export class MessagingController {
       });
       return selectAssistantImagesForCapability(images, this.capabilityProfile);
     } catch (error) {
-      this.logger.debug?.("messaging assistant image resolution failed", {
+      // The reply text still goes out, so a failure here otherwise leaves only
+      // dead image links in the chat with nothing in the main log to say why.
+      this.logger.warn?.("messaging assistant image resolution failed", {
         backend: binding.backend,
         error: error instanceof Error ? error.message : String(error),
+        federated: federationTargetForBinding(binding) !== undefined,
         threadId: binding.threadId,
       });
       return [];
@@ -8188,6 +8259,7 @@ export class MessagingController {
         images = selectAssistantImagesForCapability(
           await this.options.backend.resolveAssistantMessageImages({
             backend: binding.backend,
+            federationTarget: federationTargetForBinding(binding),
             text: trimmed,
             threadId: binding.threadId,
           }),
@@ -8293,7 +8365,7 @@ export class MessagingController {
     this.pendingNewThreadPrompts.clear();
     this.pendingFullAccessNewThreadPrompts.clear();
     this.toolUpdatePolicy.dispose();
-    this.completedTaskMonitorTurns.clear();
+    this.taskMonitorMessagingOrigins.clear();
     this.activeAgentMessagingOriginsByTurnKey.clear();
     this.startingAgentMessagingOriginsByThreadKey.clear();
     this.pendingTurnFailureHandlersByThreadKey.clear();
@@ -8315,6 +8387,15 @@ export class MessagingController {
     this.workingUpdateDeliveries.clear();
     this.workingUpdateSurfaces.clear();
     this.queuedAgentMessagingOriginsByQueueKey.clear();
+  }
+
+  /**
+   * Resolves once the tool-update batches that a flush timer already started
+   * have finished delivering, including their store writes. dispose() is
+   * synchronous and only stops new batches.
+   */
+  async whenToolUpdatesSettled(): Promise<void> {
+    await this.toolUpdatePolicy.whenIdle();
   }
 
   /**
@@ -12594,6 +12675,10 @@ export class MessagingController {
       await this.compactThread(binding, event);
       return;
     }
+    if (actionId === "status:lock") {
+      await this.toggleThreadLock(binding, event);
+      return;
+    }
     if (actionId === "status:sync-name") {
       await this.syncConversationName(binding, event);
       return;
@@ -14753,6 +14838,45 @@ export class MessagingController {
     await this.renderBindingStatus(binding, event);
   }
 
+  private async toggleThreadLock(
+    binding: MessagingBindingRecord,
+    event: MessagingInboundEvent,
+  ): Promise<void> {
+    if (!this.options.backend.setThreadLock) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-lock-unavailable"),
+          createdAt: this.now(),
+          title: "Lock unavailable",
+          body: "This backend does not expose thread locks through messaging.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      return;
+    }
+    // The button carries the state it asks for. A text fallback carries
+    // none, and toggles the thread's current state. A chat has no note
+    // field, so a lock from here carries none; one set elsewhere keeps its
+    // note.
+    const requested = event.kind === "callback" && event.value
+      && typeof (event.value as { locked?: unknown }).locked === "boolean"
+      ? (event.value as { locked: boolean }).locked
+      : undefined;
+    const locked = requested ?? !findThreadForBinding(
+      await this.readBoundThreadConfiguration(binding),
+      binding,
+    )?.lock;
+    await this.options.backend.setThreadLock({
+      backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
+      threadId: binding.threadId,
+      locked,
+    });
+    // Refresh handled by the thread-state update bus.
+  }
+
   private async compactThread(
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
@@ -16692,21 +16816,53 @@ export class MessagingController {
     );
   }
 
+  private suppressTaskMonitorLifecycle(
+    event: AgentEvent,
+    threadId: ThreadIdentifier,
+    lifecycle: MessagingTaskMonitorLifecycle,
+    fallbackParentTurnId?: string,
+  ): boolean {
+    const key = `${threadKeyForBackendEvent(event, threadId)}\0${lifecycle.monitorId}`;
+    const previous = this.taskMonitorMessagingOrigins.get(key);
+    const parentTurnId = lifecycle.parentTurnId ?? previous?.parentTurnId ?? fallbackParentTurnId;
+    if (!parentTurnId) {
+      return false;
+    }
+    const suppressed = Boolean(
+      previous?.suppressed
+      || this.isTerminalPrivateResponseTurn(event.backend, threadId, parentTurnId)
+      || this.isPrivateResponseFallbackTurn(event.backend, threadId, parentTurnId)
+      || this.isPrivateReplyCompletionTurn(event.backend, threadId, parentTurnId)
+      || this.isAutomationTurn(event.backend, threadId, parentTurnId),
+    );
+    rememberBoundedMap(
+      this.taskMonitorMessagingOrigins,
+      key,
+      { parentTurnId, suppressed },
+      MAX_TRACKED_TURN_PROSE,
+    );
+    return suppressed;
+  }
+
+  private isAutomationTurn(
+    backend: AppServerBackendKind,
+    threadId: ThreadIdentifier,
+    turnId: string | undefined,
+  ): boolean {
+    return Boolean(turnId && this.automationTurnsByTurnKey.has(
+      automationTurnKey({ backend, threadId, turnId }),
+    ));
+  }
+
   private isAutomationTurnEvent(
     event: AgentEvent,
     binding: MessagingBindingRecord,
     fallbackTurnId?: string,
   ): boolean {
-    const turnId = turnIdForBackendEvent(event) ?? fallbackTurnId;
-    if (!turnId) {
-      return false;
-    }
-    return this.automationTurnsByTurnKey.has(
-      automationTurnKey({
-        backend: event.backend,
-        threadId: binding.threadId,
-        turnId,
-      }),
+    return this.isAutomationTurn(
+      event.backend,
+      binding.threadId,
+      turnIdForBackendEvent(event) ?? fallbackTurnId,
     );
   }
 
@@ -17659,29 +17815,6 @@ export class MessagingController {
     this.workingCards.delete(key);
   }
 
-  private rememberCompletedTaskMonitorTurn(
-    bindingId: string,
-    turnId: string,
-  ): void {
-    this.completedTaskMonitorTurns.add(this.turnProseKey(bindingId, turnId));
-    while (this.completedTaskMonitorTurns.size > MAX_TRACKED_TURN_PROSE) {
-      const oldest = this.completedTaskMonitorTurns.values().next().value;
-      if (oldest === undefined) {
-        break;
-      }
-      this.completedTaskMonitorTurns.delete(oldest);
-    }
-  }
-
-  private isTaskMonitorTurnComplete(
-    bindingId: string,
-    turnId: string,
-  ): boolean {
-    return this.completedTaskMonitorTurns.has(
-      this.turnProseKey(bindingId, turnId),
-    );
-  }
-
   private async flushToolUpdatesForBinding(
     binding: MessagingBindingRecord,
     options: { clear: boolean; turnId?: string },
@@ -17704,11 +17837,6 @@ export class MessagingController {
       delivery.bindingId,
       delivery.turnId,
     );
-    const isTaskMonitorCancelled = () =>
-      this.isTaskMonitorTurnComplete(delivery.bindingId, delivery.turnId);
-    if (isTaskMonitorCancelled()) {
-      return;
-    }
     const binding =
       knownBinding?.id === delivery.bindingId
         ? knownBinding
@@ -17745,7 +17873,7 @@ export class MessagingController {
       delivery.turnId,
     );
     const guardedIsCancelled = () =>
-      isTaskMonitorCancelled() || cancellation.isCancelled();
+      cancellation.isCancelled();
     const deliveryPromise = (async (): Promise<MessagingDeliveryResult> => {
       const result = await this.deliver(
         intent,
@@ -22289,38 +22417,57 @@ function isFinalAssistantImageResolutionEvent(event: AgentEvent): boolean {
     && !isNonFinalAssistantTextForBackendEvent(event);
 }
 
-function isTaskMonitorProgressEvent(event: AgentEvent): boolean {
-  if (event.notification.method !== "item/completed") {
-    return false;
-  }
-  const item = (event.notification.params as {
-    item?: {
-      data?: unknown;
-      type?: unknown;
-    };
-  }).item;
-  const data = asPlainRecord(item?.data);
-  return (
-    item?.type === "agentMessage"
-    && data?.source === "pwragent_task_monitor"
-    && data.transient === true
-  );
+function taskMonitorItemData(item: unknown): Record<string, unknown> | undefined {
+  const data = asPlainRecord(asPlainRecord(item)?.data);
+  return data?.source === "pwragent_task_monitor" ? data : undefined;
 }
 
-function isTaskMonitorCompletionEvent(event: AgentEvent): boolean {
+type MessagingTaskMonitorLifecycle = {
+  activity: MessagingToolActivity;
+  monitorId: string;
+  parentTurnId?: string;
+};
+
+function taskMonitorLifecycleActivityForBackendEvent(
+  event: AgentEvent,
+): MessagingTaskMonitorLifecycle | undefined {
   if (event.notification.method !== "item/completed") {
+    return undefined;
+  }
+  const item = asPlainRecord((event.notification.params as { item?: unknown }).item);
+  const data = taskMonitorItemData(item);
+  if (!item || !data || typeof data.monitorId !== "string") {
+    return undefined;
+  }
+  const created = item.type === "taskMonitorCreated";
+  const completed = item.type === "taskMonitorCompletion"
+    && (data.outcome === "success" || data.outcome === "failure");
+  if (!created && !completed) {
+    return undefined;
+  }
+  const task = typeof data.task === "string" ? data.task : "Job";
+  const phase = created ? "Created" : data.outcome === "failure" ? "Failed" : "Succeeded";
+  return {
+    monitorId: data.monitorId,
+    ...(typeof data.parentTurnId === "string" ? { parentTurnId: data.parentTurnId } : {}),
+    activity: {
+      // Dedup lifecycle replays independently of timestamped backend item ids.
+      id: `monitor:${data.monitorId}:${phase}`,
+      kind: "tool",
+      status: data.outcome === "failure" ? "failed" : "completed",
+      title: `Monitor · ${task} · ${phase}`,
+    },
+  };
+}
+
+function isPrivateTaskMonitorEvent(event: AgentEvent): boolean {
+  if (taskMonitorLifecycleActivityForBackendEvent(event)) {
     return false;
   }
-  const item = (event.notification.params as {
-    item?: {
-      data?: unknown;
-      type?: unknown;
-    };
-  }).item;
-  const data = asPlainRecord(item?.data);
-  return (
-    item?.type === "taskMonitorCompletion"
-    && data?.source === "pwragent_task_monitor"
+  const params = event.notification.params as { item?: unknown };
+  return Boolean(
+    taskMonitorItemData(params.item)
+    || turnIdForBackendEvent(event)?.startsWith("monitor:"),
   );
 }
 
@@ -22648,48 +22795,6 @@ function sleepUntil(
  * names each question by this item id, so a message without one cannot be
  * answered and stays ordinary assistant text.
  */
-function asyncQuestionsForBackendEvent(
-  event: AgentEvent,
-): { itemId: string; questions: CodexAsyncQuestion[] } | undefined {
-  if (event.notification.method !== "item/completed") {
-    return undefined;
-  }
-  const item = (event.notification.params as {
-    item?: { delivery?: unknown; questions?: unknown; type?: unknown };
-  }).item;
-  if (item?.type !== "agentMessage" || item.delivery !== "async") {
-    return undefined;
-  }
-  const itemId = assistantItemIdForBackendEvent(event);
-  const questions = normalizeCodexAsyncQuestions(item.questions);
-  return itemId && questions ? { itemId, questions } : undefined;
-}
-
-/**
- * Codex reads an async question reply only from a user message whose single
- * text input is the reply envelope; skill and mention inputs may accompany it.
- */
-function asyncQuestionRepliesForBackendEvent(
-  event: AgentEvent,
-): CodexAsyncQuestionReply[] | undefined {
-  if (event.notification.method !== "item/completed") {
-    return undefined;
-  }
-  const item = (event.notification.params as {
-    item?: { content?: unknown; type?: unknown };
-  }).item;
-  if (item?.type !== "userMessage" || !Array.isArray(item.content)) {
-    return undefined;
-  }
-  const inputs = (item.content as Array<{ text?: unknown; type?: unknown } | null>)
-    .filter((input) => input?.type !== "skill" && input?.type !== "mention");
-  const [input] = inputs;
-  if (inputs.length !== 1 || input?.type !== "text" || typeof input.text !== "string") {
-    return undefined;
-  }
-  return parseCodexAsyncQuestionReply(input.text);
-}
-
 function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
   if (event.notification.method === "item/completed") {
     const params = event.notification.params as {
@@ -22969,7 +23074,10 @@ function truncateText(text: string, limit: number): string {
 
 function isTurnInProgressStartError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /\b(active turn|turn already|already active|in progress)\b/i.test(message);
+  // A lock's note is free text, so "repair in progress" must not read as busy
+  // and quietly queue a message the lock will refuse.
+  return !isThreadLockRefusal(message)
+    && /\b(active turn|turn already|already active|in progress)\b/i.test(message);
 }
 
 function isMissingTurnTargetStartError(

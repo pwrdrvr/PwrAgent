@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readdir, readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -36,6 +37,45 @@ for (const filePath of javascriptFiles) {
       });
     }
   }
+  // Vitest accepts synthetic named exports from xterm's CommonJS packages,
+  // but Node/Electron's native ESM loader does not. Check the actual bundled
+  // import clauses without booting Electron or opening a desktop window.
+  const terminalImports = [...contents.matchAll(
+    /\bimport\s*[^;]*?\bfrom\s*["']@xterm\/(?:headless|addon-serialize)["'];?/g,
+  )].map(([statement]) => statement);
+  if (terminalImports.length > 0) {
+    try {
+      execFileSync(process.execPath, ["--input-type=module", "--eval", terminalImports.join("\n")], {
+        cwd: desktopRoot,
+        stdio: "pipe",
+      });
+    } catch (error) {
+      violations.push({
+        file: path.relative(desktopRoot, filePath),
+        label: `terminal dependency imports rejected by native ESM: ${error.stderr?.toString().split("\n").slice(0, 4).join(" ") ?? error.message}`,
+      });
+    }
+  }
+}
+
+// Every preload runs sandboxed, where `require` resolves only Electron's own
+// modules. When two preload entries share code, Rollup splits it into
+// `out/preload/chunks/`, and each entry's `require("./chunks/...")` throws at
+// load. The main window then has no desktop API and the app cannot start.
+const preloadOutputDirectory = path.resolve(desktopRoot, "out", "preload");
+const preloadFiles = (await readdir(preloadOutputDirectory, { withFileTypes: true }))
+  .filter((entry) => entry.isFile() && /\.(?:c|m)?js$/.test(entry.name))
+  .map((entry) => path.join(preloadOutputDirectory, entry.name));
+for (const filePath of preloadFiles) {
+  const contents = await readFile(filePath, "utf8");
+  for (const [, specifier] of contents.matchAll(/\brequire\(["']([^"']+)["']\)/g)) {
+    if (specifier !== "electron") {
+      violations.push({
+        file: path.relative(desktopRoot, filePath),
+        label: `sandboxed preload requires "${specifier}"; keep each preload a single file`,
+      });
+    }
+  }
 }
 
 if (violations.length > 0) {
@@ -47,5 +87,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `main bundle boundary: OK (${javascriptFiles.length} files, no external bundled-dependency imports)`,
+  `main bundle boundary: OK (${javascriptFiles.length} files, no external bundled-dependency imports; ${preloadFiles.length} single-file preloads)`,
 );

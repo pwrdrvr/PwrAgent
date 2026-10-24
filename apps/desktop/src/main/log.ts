@@ -126,6 +126,18 @@ export function initializeMainLogger(options?: { profileName?: string }): void {
     _transport: Parameters<ElectronLogHook>[1],
     transportName: Parameters<ElectronLogHook>[2],
   ) => {
+    // Routine backend transitions remain at info in the rotating file and Logs
+    // window. Even a short stdout write can stall the main loop on a slow sink;
+    // opt into terminal copies with Help → Logs debug collection. Filter before
+    // console formatting and keep warnings/errors on their ordinary path.
+    if (
+      transportName === "console"
+      && message.scope === "pwragent:backend-lifecycle"
+      && message.level === "info"
+      && !debugCollectionEnabled
+    ) {
+      return false;
+    }
     const compacted: ElectronLogMessage = {
       ...message,
       data: compactStructuredLogData(message.data),

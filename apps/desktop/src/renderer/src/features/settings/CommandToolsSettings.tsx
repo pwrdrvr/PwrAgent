@@ -16,6 +16,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
 import { GitHubIcon, GitLabIcon, GitIcon } from "../../icons";
 import { SettingsCopyValue } from "./SettingsCopyValue";
+import { GitHubCliSetup, isGhVersionTooOldForAttachments } from "./github-cli-setup";
 import {
   SettingsField,
   SettingsSection,
@@ -424,6 +425,11 @@ export function GhToolSection(props: {
       : []),
   ].filter((part) => part !== undefined).join(" ");
   const resolvedVersion = selected?.version;
+  const ghNeedsUpgrade = provider === "github"
+    && Boolean(selected && isValidatedDiscoveryCandidate(selected))
+    && isGhVersionTooOldForAttachments(resolvedVersion);
+  const ghNeedsInstall = provider === "github"
+    && !candidates.some(isValidatedDiscoveryCandidate);
   const sourceLabel = gh.path.source === "default" ? "auto" : gh.path.source;
   const saveGhPath = async (path: string): Promise<void> => {
     try {
@@ -547,6 +553,13 @@ export function GhToolSection(props: {
             </div>
           }
         />
+        {ghNeedsUpgrade || ghNeedsInstall ? (
+          <GitHubCliSetup
+            desktopApi={desktopApi}
+            upgrade={ghNeedsUpgrade}
+            version={resolvedVersion}
+          />
+        ) : null}
         {status?.installed && !status.loggedIn ? (
           <SettingsField
             label={`Sign in to ${label}`}
@@ -771,6 +784,13 @@ function GhCandidateRow(props: {
       key: "state",
       label: unavailableLabel ?? "Unavailable",
       tone: "err",
+    });
+  } else if ((props.cli ?? "gh") === "gh" && isGhVersionTooOldForAttachments(candidate.version)) {
+    chips.push({
+      key: "attachments",
+      label: "No PR attachments",
+      tone: "warn",
+      title: "Image and video attachments require GitHub CLI 2.99.0 or newer.",
     });
   }
 

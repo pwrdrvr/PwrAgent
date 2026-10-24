@@ -337,6 +337,56 @@ describe("ReplayClient", () => {
     await expect(client.listThreads()).resolves.toEqual([]);
   });
 
+  it("lists an archived thread in the archived listing once archive completes", async () => {
+    const thread = {
+      id: "thread-1",
+      title: "Archive fixture thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+    };
+    const client = ReplayClient.fromFixture({
+      metadata: { backend: "codex", scenario: "archived-list-causality" },
+      steps: [
+        {
+          id: "initialize-1",
+          kind: "response",
+          method: "initialize",
+          result: {
+            serverInfo: { name: "Replay Codex", version: "1.0.0" },
+            methods: ["thread/list", "thread/archive"],
+          },
+        },
+        { id: "thread-list-active", kind: "response", method: "thread/list", result: [thread] },
+        { id: "thread-archive-1", kind: "response", method: "thread/archive", result: { threadId: thread.id } },
+        {
+          id: "thread-list-post-archive",
+          afterResponseId: "thread-archive-1",
+          kind: "response",
+          method: "thread/list",
+          result: [],
+        },
+        {
+          id: "thread-list-archived-post-archive",
+          afterResponseId: "thread-archive-1",
+          archived: true,
+          kind: "response",
+          method: "thread/list",
+          result: [thread],
+        },
+      ],
+    });
+
+    await expect(client.listThreads({ archived: true })).resolves.toEqual([]);
+    await expect(client.listThreads()).resolves.toMatchObject([thread]);
+    await expect(client.listThreads()).resolves.toMatchObject([thread]);
+    await expect(client.listThreads()).resolves.toMatchObject([thread]);
+    await expect(client.archiveThread({ threadId: thread.id })).resolves.toEqual({ threadId: thread.id });
+    await expect(client.listThreads()).resolves.toEqual([]);
+    await expect(client.listThreads({ archived: true })).resolves.toMatchObject([thread]);
+    await expect(client.listThreads({ archived: true })).resolves.toMatchObject([thread]);
+  });
+
   it("supports workspace updates for existing threads", async () => {
     const client = ReplayClient.fromFixture(buildFixture());
 

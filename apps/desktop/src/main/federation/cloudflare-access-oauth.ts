@@ -29,6 +29,11 @@ export type CloudflareAccessSession = {
   accessToken?: string;
   accessExpiresAt?: number;
   signedInAt?: number;
+  /**
+   * The gateway's grant duration, from its setup file. The grant ends this
+   * long after `signedInAt`; a refresh does not extend it.
+   */
+  signInLifetimeMs?: number;
   /** Set when a refresh was refused; only an interactive sign-in clears it. */
   signInRequired?: boolean;
   lastError?: string;
@@ -116,13 +121,28 @@ export class CloudflareAccessOAuth {
     const state = session.signInRequired || !session.refreshToken && !this.hasFreshAccessToken(session)
       ? session.signedInAt ? "sign-in-required" : "signed-out"
       : "signed-in";
+    const grantEnd = grantEndsAt(session);
     return {
       endpoint,
       state,
       signedInAt: session.signedInAt ? new Date(session.signedInAt).toISOString() : undefined,
       accessExpiresAt: session.accessExpiresAt ? new Date(session.accessExpiresAt).toISOString() : undefined,
+      signInExpiresAt: state === "signed-in" && grantEnd !== undefined ? new Date(grantEnd).toISOString() : undefined,
       lastError: session.lastError,
     };
+  }
+
+  /**
+   * When `endpoint`'s grant began and ends, or undefined when its lifetime is
+   * unknown or it has already ended.
+   */
+  async signInGrant(endpoint: string): Promise<{ signedInAt: number; expiresAt: number } | undefined> {
+    const session = await this.deps.load().catch(() => undefined);
+    if (!session || !sameEndpoint(session.endpoint, endpoint) || session.signInRequired || !session.refreshToken) {
+      return undefined;
+    }
+    const expiresAt = grantEndsAt(session);
+    return session.signedInAt && expiresAt ? { signedInAt: session.signedInAt, expiresAt } : undefined;
   }
 
   /**
@@ -165,7 +185,11 @@ export class CloudflareAccessOAuth {
 
   async signOut(): Promise<void> {
     const session = await this.deps.load().catch(() => undefined);
-    await this.deps.save(undefined);
+    // Only the setup file's grant lifetime outlives a sign-out: no file comes
+    // with the next sign-in to state it again.
+    await this.deps.save(session?.signInLifetimeMs
+      ? { version: 1, endpoint: session.endpoint, signInLifetimeMs: session.signInLifetimeMs }
+      : undefined);
     // Best effort: revoke the grant server-side when Cloudflare advertises a
     // revocation endpoint. The local copy is already gone either way.
     if (!session?.refreshToken || !session.clientId) return;
@@ -184,7 +208,7 @@ export class CloudflareAccessOAuth {
    * Interactive sign-in: open the operator's browser at Access's authorization
    * endpoint and wait on 127.0.0.1 for the redirect.
    */
-  async signIn(endpoint: string): Promise<void> {
+  async signIn(endpoint: string, options: { lifetimeMs?: number } = {}): Promise<void> {
     if (this.signingIn) throw new Error("A Cloudflare sign-in is already waiting in your browser.");
     this.signingIn = true;
     this.cancelRequested = false;
@@ -258,6 +282,9 @@ export class CloudflareAccessOAuth {
           version: 1, endpoint, clientId, redirectUri: listener.redirectUri,
           refreshToken: tokens.refreshToken, accessToken: tokens.accessToken,
           accessExpiresAt: tokens.expiresAt, signedInAt: this.now(),
+          // A setup file states the lifetime; a later sign-in to the same
+          // endpoint keeps the one it learned.
+          signInLifetimeMs: options.lifetimeMs ?? reuse?.signInLifetimeMs,
         });
         this.deps.log?.("Cloudflare sign-in completed", { host });
       } finally {
@@ -336,7 +363,8 @@ export class CloudflareAccessOAuth {
         await this.deps.save({
           version: 1, endpoint: session.endpoint, clientId: error.clientRejected ? undefined : session.clientId,
           redirectUri: error.clientRejected ? undefined : session.redirectUri,
-          signedInAt: session.signedInAt, signInRequired: true, lastError: error.message,
+          signedInAt: session.signedInAt, signInLifetimeMs: session.signInLifetimeMs,
+          signInRequired: true, lastError: error.message,
         });
         throw new CloudflareSignInRequiredError();
       }
@@ -510,6 +538,12 @@ export function resourceFor(endpoint: string): string {
   if (url.protocol !== "wss:" && url.protocol !== "https:") throw new Error("Cloudflare sign-in needs a wss:// endpoint.");
   if (url.username || url.password || url.port) throw new Error("Cloudflare sign-in needs a standard endpoint address.");
   return `https://${url.hostname}`;
+}
+
+function grantEndsAt(session: CloudflareAccessSession): number | undefined {
+  return session.signedInAt && session.signInLifetimeMs
+    ? session.signedInAt + session.signInLifetimeMs
+    : undefined;
 }
 
 /**

@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { detectPullRequestsForThread } from "../pr-status/pr-detection";
+import { detectPullRequestsForThread, filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
 import type { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
+import * as gitExecutable from "../app-server/git-executable";
+import { resolveForgeReposForDirectory } from "../pr-status/git-remote";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +20,109 @@ afterEach(async () => {
 });
 
 describe("detectPullRequestsForThread", () => {
+  it.each(["all", "default-refs"])("does not query main when cached remotes survive failed %s git probes", async (failure) => {
+    const repo = await createRepoWithDefaultBranch("main");
+    await resolveForgeReposForDirectory(repo);
+    const runGit = gitExecutable.runGitCommand;
+    const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation((cwd, args, options) => {
+      if (failure === "default-refs" && args[0] === "remote") return runGit(cwd, args, options);
+      return Promise.reject(new Error("git probe timed out"));
+    });
+    const fetcher = { fetchAllPullRequestsForBranch: vi.fn(async () => []) };
+    try {
+      await expect(detectPullRequestsForThread({ fetcher, branch: "main", directoryPaths: [repo] }))
+        .resolves.toEqual([]);
+      expect(fetcher.fetchAllPullRequestsForBranch).not.toHaveBeenCalled();
+    } finally {
+      runner.mockRestore();
+    }
+  });
+
+  it("rejects PRs from unrelated forks with the same head branch and commit", async () => {
+    const repo = await createRepoWithRenamedTrackedBranch({
+      localBranch: "fix/shared-name",
+      remoteBranch: "fix/shared-name",
+    });
+    const ownPr = {
+      provider: "github.com",
+      number: 1,
+      org: "ExampleOrg",
+      repo: "catalog-service",
+      headRefName: "fix/shared-name",
+      headSha: "a".repeat(40),
+      state: "pending" as const,
+      url: "https://github.com/ExampleOrg/catalog-service/pull/1",
+    };
+    const unrelatedPr = {
+      ...ownPr,
+      number: 2,
+      sourceRepository: { provider: "github.com", org: "unrelated", repo: "catalog-service" },
+      url: "https://github.com/ExampleOrg/catalog-service/pull/2",
+    };
+    const fetcher = { fetchAllPullRequestsForBranch: vi.fn(async () => [unrelatedPr, ownPr]) };
+
+    await expect(detectPullRequestsForThread({
+      fetcher,
+      branch: "fix/shared-name",
+      directoryPaths: [repo],
+    })).resolves.toEqual([{ ...ownPr, linkedDirectoryPaths: [repo] }]);
+  });
+
+  it("accepts a fork contribution only when its source repository is configured", async () => {
+    const repo = await createRepoWithRenamedTrackedBranch({
+      localBranch: "fix/fork-contribution",
+      remoteBranch: "fix/fork-contribution",
+    });
+    await git(repo, "remote", "add", "fork", "git@github.com:contributor/renamed-fork.git");
+    const pr = {
+      provider: "github.com", number: 3, org: "ExampleOrg", repo: "catalog-service",
+      sourceRepository: { provider: "github.com", org: "CONTRIBUTOR", repo: "Renamed-Fork" },
+      state: "pending" as const, url: "https://github.com/ExampleOrg/catalog-service/pull/3",
+    };
+    await expect(detectPullRequestsForThread({
+      fetcher: { fetchAllPullRequestsForBranch: vi.fn(async () => [pr]) },
+      branch: "fix/fork-contribution", directoryPaths: [repo],
+    })).resolves.toEqual([{ ...pr, linkedDirectoryPaths: [repo] }]);
+  });
+
+  it("removes legacy default-branch discoveries while preserving explicit PRs and feature history", async () => {
+    const repo = await createRepoWithDefaultBranch("main");
+    const legacyPr = {
+      provider: "github.com", number: 14495, org: "ExampleOrg", repo: "catalog-service",
+      headRefName: "main", headSha: "a".repeat(40), state: "merged" as const,
+      lifecycleState: "merged" as const,
+      sourceRepository: { provider: "github.com", org: "unrelated", repo: "catalog-service" },
+      linkedDirectoryPaths: [repo], url: "https://github.com/ExampleOrg/catalog-service/pull/14495",
+    };
+    const deletedForkPr = { ...legacyPr, number: 12586, sourceRepository: undefined };
+    const featurePr = { ...deletedForkPr, number: 4, headRefName: "fix/old-feature" };
+    const explicitPr = { ...legacyPr, number: 5, explicitlyAttached: true as const };
+    const unavailablePr = { ...legacyPr, number: 6, linkedDirectoryPaths: [path.join(repo, "missing")] };
+    const unrelatedFeaturePr = { ...legacyPr, number: 7, headRefName: "fix/shared-name" };
+    await expect(filterStoredDiscoveredPullRequests([
+      legacyPr, deletedForkPr, featurePr, explicitPr, unavailablePr, unrelatedFeaturePr,
+    ])).resolves.toEqual([featurePr, explicitPr, unavailablePr]);
+  });
+
+  it("shares stored-attachment probes across threads using the same checkout", async () => {
+    const repo = await createRepoWithDefaultBranch("main");
+    const pr = {
+      provider: "github.com", number: 1, org: "ExampleOrg", repo: "catalog-service", headRefName: "main",
+      state: "merged" as const, url: "https://github.com/ExampleOrg/catalog-service/pull/1",
+      linkedDirectoryPaths: [repo],
+    };
+    const runner = vi.spyOn(gitExecutable, "runGitCommand");
+    try {
+      await expect(filterStoredDiscoveredPullRequests([pr])).resolves.toEqual([]);
+      const probeCount = runner.mock.calls.length;
+      expect(probeCount).toBeGreaterThan(0);
+      await Promise.all(Array.from({ length: 10 }, () => filterStoredDiscoveredPullRequests([pr])));
+      expect(runner).toHaveBeenCalledTimes(probeCount);
+    } finally {
+      runner.mockRestore();
+    }
+  });
+
   it("does not use local feature branches pointing at detached HEAD", async () => {
     const repo = await createDetachedRepoWithFeatureBranchAtHead(
       "fix/messaging-nonblocking-startup",

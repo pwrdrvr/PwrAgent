@@ -30,6 +30,7 @@ export type QuitBlockerQueueSnapshot = {
   automationRunCount: number;
   terminalSessionCount: number;
   actionRunCount: number;
+  archiveCleanupCount?: number;
   items: QuitBlockerItem[];
 };
 

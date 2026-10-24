@@ -38,6 +38,17 @@ describe("parseFederationGatewayEndpoint", () => {
   });
 
   it.each([
+    "ws://studio:47830",
+    "ws://studio.local:47830",
+    "ws://studio.tail1234.ts.net.:47830",
+    "ws://192.168.1.20:47830",
+    "ssh://ops..admin@studio.local?forward=127.0.0.1:47830",
+    "wss://studio.tail1234.ts.net/a..b",
+  ])("keeps valid endpoint %s", (value) => {
+    expect(isFederationGatewayEndpointUrl(value)).toBe(true);
+  });
+
+  it.each([
     "https://gateway.example.com",
     "http://gateway.example.com",
     "file:///etc/passwd",
@@ -48,6 +59,12 @@ describe("parseFederationGatewayEndpoint", () => {
     // Would reach ssh(1) as an option instead of a destination.
     "ssh://-oProxyCommand=touch%20pwned",
     "ssh://-ohost@gateway.lan",
+    // Empty DNS labels never resolve, even though URL accepts them.
+    "ws://studio.tail1234.ts..net:47830",
+    "wss://studio.tail1234.ts..net/pwragent-federation",
+    "ssh://ops@studio.tail1234.ts..net",
+    "ws://.studio.local:47830",
+    "ws://studio.local..:47830",
   ])("rejects %s", (value) => {
     expect(parseFederationGatewayEndpoint(value)).toBeUndefined();
     expect(isFederationGatewayEndpointUrl(value)).toBe(false);

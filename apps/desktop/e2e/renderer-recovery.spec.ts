@@ -99,12 +99,12 @@ test("remounts the UI with its unsent draft while the main-owned turn completes"
   try {
     await app.window.getByRole("button", { name: /Turn lifecycle replay/i }).first().click();
     await expect(app.window.getByText("lifecycle baseline ready", { exact: true })).toBeVisible();
-    await app.window.getByLabel("Reply").fill("Start the contrived recovery turn.");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Start the contrived recovery turn.");
     await app.window.getByRole("button", { name: "Send", exact: true }).click();
     await app.advance({ stepId: "status-active-1" });
     await app.advance({ stepId: "turn-started-1" });
     await expect(app.window.getByTestId("composer-stop-turn")).toBeVisible();
-    await app.window.getByLabel("Reply").fill("Keep this unsent draft through recovery.");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Keep this unsent draft through recovery.");
     const mainPid = await app.electronApp.evaluate(() => process.pid);
     const timeOrigin = await app.window.evaluate(() => performance.timeOrigin);
     await injectBoundaryFault(app.window);
@@ -130,7 +130,7 @@ test("remounts the UI with its unsent draft while the main-owned turn completes"
     });
     await expect(app.window.getByRole("alert")).toHaveCount(0);
     await expect(app.window.getByRole("heading", { level: 2, name: "Turn lifecycle replay" })).toBeVisible();
-    await expect(app.window.getByLabel("Reply")).toContainText("Keep this unsent draft through recovery.");
+    await expect(app.window.getByRole("textbox", { name: "Reply", exact: true })).toContainText("Keep this unsent draft through recovery.");
     await expect(app.window.getByText("Created /tmp/pwragent-turn-lifecycle.txt with exactly the text lifecycle second turn.")).toBeVisible();
     await expect(app.window.getByTestId("composer-stop-turn")).toHaveCount(0);
     expect(await app.electronApp.evaluate(() => process.pid)).toBe(mainPid);
@@ -168,7 +168,7 @@ test("reloads after actual renderer termination while retaining the main process
   try {
     await app.window.getByRole("button", { name: /Turn lifecycle replay/i }).first().click();
     await expect(app.window.getByText("lifecycle baseline ready", { exact: true })).toBeVisible();
-    await app.window.getByLabel("Reply").fill("Saved before renderer termination.");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("Saved before renderer termination.");
     // The existing draft policy flushes when the window loses focus. Wait for
     // the IPC response so this tests saved recovery rather than racing a save.
     await app.window.evaluate(async () => {

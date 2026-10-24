@@ -1,4 +1,5 @@
 import { threadSearchTextTerms } from "@pwragent/shared";
+import { awaitThreadSearchRead } from "./thread-search-cancellation";
 import type {
   AppServerBackendKind,
   AppServerReadThreadResponse,
@@ -13,6 +14,7 @@ export type ThreadContentSearchRequest = {
   query: string;
   candidates: ThreadSearchResult[];
   limit: number;
+  signal?: AbortSignal;
 };
 
 export type ThreadContentSearchResponse = {
@@ -42,15 +44,17 @@ export class ProviderTranscriptThreadSearchAdapter {
     const candidates = request.candidates.slice(0, MAX_TRANSCRIPT_CANDIDATES);
 
     for (const candidate of candidates) {
+      request.signal?.throwIfAborted();
       if (results.length >= request.limit) {
         break;
       }
       try {
-        const response = await this.readThread({
+        const response = await awaitThreadSearchRead(() => this.readThread({
           backend: candidate.backend,
           threadId: candidate.threadId,
           limit: DEFAULT_TRANSCRIPT_READ_LIMIT,
-        });
+        }), request.signal);
+        request.signal?.throwIfAborted();
         const snippet = findTranscriptSnippet(response, terms);
         if (!snippet) {
           continue;
@@ -75,6 +79,7 @@ export class ProviderTranscriptThreadSearchAdapter {
           ],
         });
       } catch (error) {
+        request.signal?.throwIfAborted();
         unavailableScopes.push({
           scope: "provider_content",
           backend: candidate.backend,
@@ -90,6 +95,8 @@ export class ProviderTranscriptThreadSearchAdapter {
     return { results, unavailableScopes };
   }
 }
+
+const READ_THREAD_TOOL = /(?:^|[/.])read_thread$/i;
 
 function findTranscriptSnippet(
   response: AppServerReadThreadResponse,
@@ -118,7 +125,9 @@ function findTranscriptSnippet(
         detail.label,
         detail.markdown,
         detail.command?.displayCommand,
-        detail.command?.output,
+        // A thread read's result is the other thread's transcript. Matching
+        // it would list every thread that read a thread beside that thread.
+        READ_THREAD_TOOL.test(detail.command?.rawCommand ?? "") ? undefined : detail.command?.output,
       ]),
     ].filter((value): value is string => Boolean(value?.trim()));
     for (const text of texts) {

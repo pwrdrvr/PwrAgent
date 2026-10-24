@@ -5,7 +5,7 @@ import {
   CloseIcon,
   CopyIcon,
 } from "../../icons";
-import { copyText } from "../../lib/copy-text";
+import { copyTextAsCodeBlock } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import { ThreadChip } from "../thread-detail/ThreadChip";
@@ -34,6 +34,8 @@ export type AppNoticeToastNotice = {
   message: string;
   /** Offers a profile-scoped dismissal for this one Codex development warning. */
   skillQuestionsWarning?: boolean;
+  /** Offers a profile-scoped dismissal saved under this Codex warning id. */
+  warningSuppressionId?: string;
   /** Optional notice-specific dismissal, including any durable disposition. */
   onDismiss?: () => void;
   /**
@@ -62,7 +64,7 @@ export type AppNoticeToastNotice = {
 
 export function AppNoticeToast(props: {
   children?: ReactNode;
-  desktopApi?: Pick<DesktopApi, "copyText">;
+  desktopApi?: Pick<DesktopApi, "copyText" | "copyRichText">;
   navigation?: {
     current: number;
     total: number;
@@ -77,15 +79,23 @@ export function AppNoticeToast(props: {
   onDismiss: () => void;
   onOpenThread?: (link: ResolvedThreadLink) => void;
   onSuppressSkillQuestionsWarning?: () => Promise<boolean>;
+  onSuppressCodexWarning?: (id: string) => Promise<boolean>;
 }) {
   const [paused, setPaused] = useState(false);
+  // The checkbox records a choice; closing the toast applies it.
+  const [suppressOnDismiss, setSuppressOnDismiss] = useState(false);
   const [suppressionSaving, setSuppressionSaving] = useState(false);
   const [suppressionError, setSuppressionError] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
+  // What the bar has left to drain. A pause stops the timer and freezes the
+  // bar's animation, so a resume must continue from here, not from 9s.
+  const remainingRef = useRef(AUTO_DISMISS_MS);
   const onDismissRef = useRef(props.onDismiss);
   const noticeId = props.notice?.id;
   const noticePresent = props.notice !== undefined;
   const autoDismiss = props.notice?.autoDismiss !== false;
+  // Every reason the timer is stopped also holds the bar where it is.
+  const countdownHeld = paused || suppressOnDismiss || suppressionSaving;
 
   useEffect(() => {
     onDismissRef.current = props.onDismiss;
@@ -96,28 +106,42 @@ export function AppNoticeToast(props: {
       window.clearTimeout(timeoutRef.current);
       timeoutRef.current = undefined;
     }
+    remainingRef.current = AUTO_DISMISS_MS;
     setPaused(false);
+    setSuppressOnDismiss(false);
     setSuppressionSaving(false);
     setSuppressionError(false);
   }, [props.notice?.id]);
 
   useEffect(() => {
-    if (!noticePresent || !autoDismiss || paused || suppressionSaving) {
+    // A checked "Don't show again" waits for the operator to close the toast;
+    // the timer must neither drop that choice nor apply it unasked.
+    if (!noticePresent || !autoDismiss) {
+      // The bar unmounts, so a later countdown starts over with a fresh bar.
+      remainingRef.current = AUTO_DISMISS_MS;
+      return;
+    }
+    if (countdownHeld) {
       return;
     }
 
+    const startedAt = Date.now();
     timeoutRef.current = window.setTimeout(() => {
       timeoutRef.current = undefined;
       onDismissRef.current();
-    }, AUTO_DISMISS_MS);
+    }, remainingRef.current);
 
     return () => {
       if (timeoutRef.current) {
         window.clearTimeout(timeoutRef.current);
         timeoutRef.current = undefined;
       }
+      remainingRef.current = Math.max(
+        0,
+        remainingRef.current - (Date.now() - startedAt),
+      );
     };
-  }, [autoDismiss, noticeId, noticePresent, paused, suppressionSaving]);
+  }, [autoDismiss, countdownHeld, noticeId, noticePresent]);
 
   if (!props.notice) {
     return null;
@@ -155,6 +179,33 @@ export function AppNoticeToast(props: {
               ? "error"
               : "neutral";
   const facts = props.notice.facts ?? [];
+  const dismissNotice = props.notice.onDismiss ?? props.onDismiss;
+  const { warningSuppressionId } = props.notice;
+  const onSuppressCodexWarning = props.onSuppressCodexWarning;
+  const suppressWarning = props.notice.skillQuestionsWarning
+    ? props.onSuppressSkillQuestionsWarning
+    : warningSuppressionId && onSuppressCodexWarning
+      ? () => onSuppressCodexWarning(warningSuppressionId)
+      : undefined;
+  const closeNotice = (): void => {
+    if (!suppressOnDismiss || !suppressWarning) {
+      dismissNotice();
+      return;
+    }
+    setSuppressionSaving(true);
+    setSuppressionError(false);
+    void suppressWarning().then(
+      (saved) => {
+        setSuppressionSaving(false);
+        if (saved) dismissNotice();
+        else setSuppressionError(true);
+      },
+      () => {
+        setSuppressionSaving(false);
+        setSuppressionError(true);
+      },
+    );
+  };
 
   return (
     <aside
@@ -190,7 +241,7 @@ export function AppNoticeToast(props: {
             aria-label="Copy notice"
             title="Copy notice"
             onClick={() => {
-              void copyText(copyValue, props.desktopApi);
+              void copyTextAsCodeBlock(copyValue, props.desktopApi);
             }}
           >
             <CopyIcon size={13} aria-hidden="true" />
@@ -200,7 +251,8 @@ export function AppNoticeToast(props: {
             type="button"
             aria-label={props.notice.dismissLabel ?? "Dismiss notice"}
             title={props.notice.dismissLabel ?? "Dismiss notice"}
-            onClick={props.notice.onDismiss ?? props.onDismiss}
+            disabled={suppressionSaving}
+            onClick={closeNotice}
           >
             <CloseIcon size={13} aria-hidden="true" />
           </button>
@@ -238,27 +290,16 @@ export function AppNoticeToast(props: {
             ))}
           </dl>
         ) : null}
-        {props.notice.skillQuestionsWarning && props.onSuppressSkillQuestionsWarning ? (
+        {suppressWarning ? (
           <>
             <label className="composer__checkbox app-notice-toast__suppress">
               <input
                 type="checkbox"
-                checked={suppressionSaving}
+                checked={suppressOnDismiss}
                 disabled={suppressionSaving}
-                onChange={() => {
-                  setSuppressionSaving(true);
+                onChange={(event) => {
+                  setSuppressOnDismiss(event.currentTarget.checked);
                   setSuppressionError(false);
-                  void props.onSuppressSkillQuestionsWarning?.().then(
-                    (saved) => {
-                      setSuppressionSaving(false);
-                      if (saved) props.onDismiss();
-                      else setSuppressionError(true);
-                    },
-                    () => {
-                      setSuppressionSaving(false);
-                      setSuppressionError(true);
-                    },
-                  );
                 }}
               />
               Don't show again
@@ -333,9 +374,11 @@ export function AppNoticeToast(props: {
       ) : null}
       {autoDismiss ? (
         <span
+          // A new notice in this slot drains a new bar.
+          key={noticeId}
           className="app-notice-toast__timer"
           aria-hidden="true"
-          data-paused={paused ? "true" : undefined}
+          data-paused={countdownHeld ? "true" : undefined}
         />
       ) : null}
     </aside>

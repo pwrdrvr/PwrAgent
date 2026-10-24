@@ -26,10 +26,10 @@ test("applies the correct per-turn permission policy after execution mode toggle
       })
     ).toBeVisible();
 
-    const accessMode = app.window.getByLabel("Access mode");
+    const accessMode = app.window.getByLabel(/^Access mode(?::|$)/);
     await expect(accessMode).toHaveAttribute("data-value", "default");
 
-    await app.window.getByLabel("Reply").fill("First turn on default mode");
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill("First turn on default mode");
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await expect(
@@ -78,7 +78,7 @@ test("applies the correct per-turn permission policy after execution mode toggle
     await expect(accessMode).toHaveAttribute("data-value", "full-access");
 
     await app.window
-      .getByLabel("Reply")
+      .getByRole("textbox", { name: "Reply", exact: true })
       .fill("Second turn must use full-access policy");
     await expect(
       app.window.getByRole("button", { name: "Send" })

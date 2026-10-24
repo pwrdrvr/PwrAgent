@@ -16,6 +16,8 @@ import type {
   CancelThreadExecutionModeQueueResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  SetThreadLockRequest,
+  SetThreadLockResponse,
   CreateScheduledThreadActionRequest,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
@@ -92,7 +94,10 @@ import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
-import { materializeTranscriptMessageImagesForMessaging } from "../transcript-image-protocol";
+import {
+  materializeFederatedTranscriptMessageImagesForMessaging,
+  materializeTranscriptMessageImagesForMessaging,
+} from "../transcript-image-protocol";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
 import { searchFederatedThreadsOnOwner } from "../federation/federated-search-service";
 import {
@@ -707,12 +712,15 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   async resolveAssistantMessageImages(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     itemId?: string;
     text: string;
     threadId: string;
     turnId?: string;
   }): Promise<MessagingImagePart[]> {
+    const target = request.federationTarget;
     const key = [
+      target && isRemoteFederationTarget(target) ? target.instanceId : "",
       request.backend,
       request.threadId,
       request.turnId ?? "",
@@ -744,11 +752,21 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   private async resolveAssistantMessageImagesOnce(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     itemId?: string;
     text: string;
     threadId: string;
     turnId?: string;
   }): Promise<MessagingImagePart[]> {
+    const target = request.federationTarget;
+    if (target && isRemoteFederationTarget(target)) {
+      const remote = this.remoteBackend(target);
+      // Without a peer connection there is nothing to read. A local lookup
+      // would resolve the peer's `/tmp` paths against this machine's disk.
+      return remote
+        ? await this.resolveRemoteAssistantMessageImages(request, target, remote)
+        : [];
+    }
     const response = await this.registry.readThread({
       backend: request.backend,
       limit: 20,
@@ -776,6 +794,48 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         approvedLocalImageRoots: roots,
         includeTemporaryImageRoots: true,
       },
+    );
+    return parts.map((part) => ({
+      ...part,
+      source: "assistant" as const,
+    }));
+  }
+
+  /**
+   * A peer-owned thread's images live on the peer. Its readThread already
+   * materializes them, Markdown-linked `/tmp` files included, so read the
+   * message from there and fetch each image's bytes from the owner. A local
+   * lookup would find neither the thread nor the files.
+   */
+  private async resolveRemoteAssistantMessageImages(
+    request: {
+      backend: AppServerBackendKind;
+      itemId?: string;
+      text: string;
+      threadId: string;
+      turnId?: string;
+    },
+    target: FederationRemoteTarget,
+    remote: FederationBackendOperations,
+  ): Promise<MessagingImagePart[]> {
+    const response = await remote.readThread({
+      backend: request.backend,
+      limit: 20,
+      threadId: request.threadId,
+    });
+    const message = findAssistantMessageForText(
+      response.replay,
+      request.text,
+      request.itemId,
+      request.turnId,
+    );
+    if (!message) {
+      return [];
+    }
+    const parts = await materializeFederatedTranscriptMessageImagesForMessaging(
+      message,
+      target.instanceId,
+      async ({ url }) => await remote.readTranscriptImage({ url }),
     );
     return parts.map((part) => ({
       ...part,
@@ -980,6 +1040,19 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       return await remote.startThread(stripFederationTarget(request));
     }
     return await this.registry.startThread(request);
+  }
+
+  async setThreadLock(request: SetThreadLockRequest): Promise<SetThreadLockResponse> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      return await remote.setThreadLock(stripFederationTarget(request));
+    }
+    return await this.registry.setThreadLock({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      locked: request.locked,
+      ...(request.note !== undefined ? { note: request.note } : {}),
+    }, { source: "messaging" });
   }
 
   async compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse> {

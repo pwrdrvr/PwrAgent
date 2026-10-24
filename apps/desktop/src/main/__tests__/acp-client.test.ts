@@ -33,6 +33,47 @@ afterEach(() => {
   removeTempStateDbDir(tempDir);
 });
 
+it("keeps Grok planning provenance when selecting permissions and receiving mode updates", async () => {
+  const configOptions = [{
+    id: "permission_mode",
+    category: "mode",
+    currentValue: "auto",
+    options: [{ value: "default", name: "Default" }, { value: "auto", name: "Auto" }],
+  }];
+  const modes = {
+    currentModeId: "plan",
+    availableModes: [{ id: "default", name: "Default" }, { id: "plan", name: "Plan" }],
+  };
+  const transport = new FakeAcpAgentTransport({
+    "session/new": { sessionId: "grok-session", configOptions, modes },
+    "session/set_config_option": {
+      configOptions: [{ ...configOptions[0], currentValue: "default" }],
+      modes,
+    },
+  });
+  const client = new AcpAgentClient({ backendId: "acp:grok", store, transport });
+  await client.initialize();
+  await client.startSession({ cwd: "/repo", executionMode: "default" });
+  await expect(client.setRuntimeOption({
+    sessionId: "grok-session",
+    source: "configOption",
+    optionId: "permission_mode",
+    value: "default",
+  })).resolves.toMatchObject({
+    currentModeId: "plan",
+    configValues: { permission_mode: "default" },
+  });
+  transport.emitSessionUpdate("grok-session", {
+    sessionUpdate: "current_mode_update",
+    currentModeId: "default",
+  });
+  expect(store.getSession("acp:grok", "grok-session")?.acpRuntime).toMatchObject({
+    currentModeId: "default",
+    configValues: { permission_mode: "default" },
+  });
+  await client.dispose();
+});
+
 function createDeferred<T>(): {
   promise: Promise<T>;
   reject: (reason?: unknown) => void;
@@ -163,6 +204,26 @@ describe("AcpAgentClient", () => {
       await client.dispose();
     },
   );
+  it("rejects unsupported Grok steering before sending the extension RPC", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "_x.ai/session/steer": { result: { delivery: "currentTurn" } },
+    });
+    const client = new AcpAgentClient({ backendId: "acp:grok", store, transport });
+    await client.initialize();
+    const session = await client.startSession({ executionMode: "default", mcpServers: "none" });
+    try {
+      await expect(client.steerSession({
+        sessionId: session.sessionId,
+        text: "Add berries",
+        content: [{ type: "text", text: "Add berries" }],
+        interjectionId: "steer-unsupported",
+      })).rejects.toThrow("does not support turn steering over ACP");
+      expect(transport.requests.map((request) => request.method)).not.toContain("_x.ai/session/steer");
+    } finally {
+      await client.dispose();
+    }
+  });
+
   it("sends Grok steering and workflow-budget extension payloads", async () => {
     const transport = new FakeAcpAgentTransport({
       "session/new": { sessionId: "grok-session" },
@@ -175,6 +236,7 @@ describe("AcpAgentClient", () => {
     });
     const client = new AcpAgentClient({
       backendId: "acp:grok",
+      supportsTurnSteering: true,
       store,
       transport,
     });
@@ -3464,11 +3526,11 @@ describe("AcpAgentClient", () => {
     expect(titleUpdates).toEqual(["Exploring PwrSnap Project"]);
   });
 
-  it("does not overwrite an explicit ACP session title with topic updates", async () => {
+  it.each(["acp:gemini", "acp:claude"] as const)("does not overwrite an explicit %s session title with topic updates", async (backendId) => {
     const transport = new FakeAcpAgentTransport();
     const titleUpdates: string[] = [];
     const client = new AcpAgentClient({
-      backendId: "acp:gemini",
+      backendId,
       store,
       transport,
       now: () => 1000,
@@ -3493,7 +3555,12 @@ describe("AcpAgentClient", () => {
       status: "completed",
     });
 
-    expect(store.getSession("acp:gemini", session.sessionId)).toMatchObject({
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "session_info_update",
+      title: "Provider generated name",
+    });
+
+    expect(store.getSession(backendId, session.sessionId)).toMatchObject({
       title: "Manual thread name",
       titleSource: "explicit",
     });
@@ -4015,7 +4082,7 @@ describe("AcpAgentClient", () => {
     });
     const errorMessage =
       "Kimi Code CLI ended the turn without a response. Kimi Code CLI 1.46.0 may be out of date or incompatible with the selected model. Update Kimi, refresh the model catalog, and try again.";
-    expect((errors[0]?.error as Error).message).toBe(errorMessage);
+    expect((errors[0]!.error as Error).message).toBe(errorMessage);
     expect(store.getSession("acp:kimi", session.sessionId)).toMatchObject({
       lastError: errorMessage,
       status: "idle",
@@ -4275,7 +4342,7 @@ describe("AcpAgentClient", () => {
       turnId: "pending:session-1",
     });
     expect(errors[0]?.error).toBeInstanceOf(Error);
-    expect((errors[0]?.error as Error).message).toBe(quotaError);
+    expect((errors[0]!.error as Error).message).toBe(quotaError);
     expect(sessionUpdateKinds).not.toContain("turn_finished");
     expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
       hasConversationHistory: true,

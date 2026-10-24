@@ -4,6 +4,7 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerTurnInputItem,
+  FederationCapability,
   FederationProtocolEnvelope,
   NavigationThreadSummary,
   TrustCodexProjectRequest,
@@ -18,6 +19,7 @@ import {
   FEDERATION_LOAD_STATUS_TIMEOUT_MS,
   FEDERATION_RESPONSE_BYTE_BUDGET,
   FederationRemoteBackendClient,
+  QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE,
   registerFederationBackendHandlers,
   type FederationBackendOperations,
 } from "../federation/federation-backend-bridge";
@@ -27,6 +29,103 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("round-trips directory detachment and requires environment_actions", async () => {
+    const request = { backend: "codex" as const, threadId: "source-thread",
+      directory: { id: "/owner/PwrGit", kind: "local" as const, label: "PwrGit", path: "/owner/PwrGit" } };
+    const response = { ok: true as const, backend: "codex" as const, threadId: "source-thread", directories: [] };
+    const backend = { detachDirectoryFromThread: vi.fn(async () => response) };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    connect(["environment_actions"]);
+    expect(await client.detachDirectoryFromThread(request)).toEqual(response);
+    expect(backend.detachDirectoryFromThread).toHaveBeenCalledWith(request);
+    connect(["thread_navigation"]);
+    await expect(client.detachDirectoryFromThread(request)).rejects.toThrow();
+    expect(backend.detachDirectoryFromThread).toHaveBeenCalledOnce();
+  });
+
+  it("round-trips content search and authenticates cancellation with transcript-read permission", async () => {
+    const response = { backend: "all", fetchedAt: 1, query: "DKIM", filters: {}, contentMode: "available",
+      semanticMode: "disabled", results: [], searchedScopes: ["provider_content"], unavailableScopes: [] };
+    const backend = { searchThreadContent: vi.fn(async () => response), cancelThreadContentSearch: vi.fn(async () => {}) };
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    const connect = (capabilities: FederationCapability[]): void => {
+      router.registerConnection({ peerId: "viewer", capabilities,
+        sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    };
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    const request = { searchId: "search", request: { query: "DKIM", contentMode: "available" as const,
+      filters: { backend: "acp:grok" as const, includeArchived: true } } };
+    connect(["thread_detail"]);
+    expect(await client.searchThreadContent(request)).toEqual(response);
+    expect(backend.searchThreadContent).toHaveBeenCalledWith(request,
+      { requesterInstanceId: "viewer", deadlineAt: expect.any(Number) });
+    await client.cancelThreadContentSearch({ searchId: "search" });
+    expect(backend.cancelThreadContentSearch).toHaveBeenCalledWith({ searchId: "search" }, { requesterInstanceId: "viewer" });
+    connect(["federated_search"]);
+    await expect(client.searchThreadContent(request)).rejects.toThrow();
+    expect(backend.searchThreadContent).toHaveBeenCalledOnce();
+  });
+
+  it("round-trips gateway connections and thread MCP selection through the owner", async () => {
+    const request = { backend: "codex" as const, threadId: "thread-1" };
+    const selection = { connectionIds: ["rovo"], providerServersEnabled: false };
+    const backend = {
+      listMcpConnections: vi.fn(async () => ({ connections: [{ id: "rovo" }] })),
+      readThreadMcpConnections: vi.fn(async () => selection),
+      setThreadMcpConnections: vi.fn(async () => selection),
+      describeThreadMcpConnections: vi.fn(async () => ({ connections: [{ connectionId: "rovo", toolCount: 12 }] })),
+    };
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail", "turn_control"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    registerFederationBackendHandlers({ router, backend: backend as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({
+      localInstanceId: "viewer_one",
+      remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer_one" }); },
+    });
+    const client = new FederationRemoteBackendClient(rpc);
+
+    expect(await client.listMcpConnections()).toEqual({ connections: [{ id: "rovo" }] });
+    expect(await client.readThreadMcpConnections(request)).toEqual(selection);
+    expect(await client.setThreadMcpConnections({ ...request, ...selection })).toEqual(selection);
+    expect(await client.describeThreadMcpConnections(request)).toEqual({ connections: [{ connectionId: "rovo", toolCount: 12 }] });
+    expect(backend.listMcpConnections).toHaveBeenCalledOnce();
+    expect(backend.readThreadMcpConnections).toHaveBeenCalledWith(request);
+    expect(backend.setThreadMcpConnections).toHaveBeenCalledWith({ ...request, ...selection });
+    expect(backend.describeThreadMcpConnections).toHaveBeenCalledWith(request);
+
+    // A viewer with read permission can inspect connections without changing access.
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
+    });
+    await expect(client.setThreadMcpConnections({ ...request, ...selection })).rejects.toThrow();
+    expect(backend.setThreadMcpConnections).toHaveBeenCalledOnce();
+    expect(await client.readThreadMcpConnections(request)).toEqual(selection);
+  });
+
   it("keeps remote environment selection unbounded and forwards setup progress", async () => {
     const sent: FederationProtocolEnvelope[] = [];
     const onEnvironmentSetupProgress = vi.fn();
@@ -3693,12 +3792,14 @@ describe("federation backend bridge", () => {
       listBackends: vi.fn(),
       markThreadSeen: vi.fn(),
       setThreadReaction: vi.fn(),
+      setThreadLock: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
       mountRemoteChild: vi.fn(),
       setThreadParent: vi.fn(),
       updateSubthreadOrder: vi.fn(),
       setSubthreadsCollapsed: vi.fn(),
+      readForge: vi.fn(),
       detachThreadPullRequest: vi.fn(),
       setThreadPrAutoDispatch: vi.fn(),
       cancelThreadPrAutoDispatch: vi.fn(),
@@ -3722,6 +3823,10 @@ describe("federation backend bridge", () => {
         threadId: "thread-1",
         turnId: "compact-1",
       })),
+      listMcpConnections: vi.fn(),
+      readThreadMcpConnections: vi.fn(),
+      setThreadMcpConnections: vi.fn(),
+      describeThreadMcpConnections: vi.fn(),
       listThreadMcpServers: vi.fn(async () => ({
         backend: "codex" as const,
         threadId: "thread-1",
@@ -3794,6 +3899,7 @@ describe("federation backend bridge", () => {
       listModelSettingsRecents: vi.fn(),
       recordModelSettingsRecent: vi.fn(),
       attachDirectoryToThread: vi.fn(),
+      detachDirectoryFromThread: vi.fn(),
       listWorktreeUnpublishedCommits: vi.fn(),
       getWorktreeUnpublishedCommitDiff: vi.fn(),
       handoffThreadWorkspace: vi.fn(),
@@ -4116,12 +4222,14 @@ describe("federation backend bridge", () => {
         listBackends: vi.fn(),
         markThreadSeen: vi.fn(),
         setThreadReaction: vi.fn(),
+        setThreadLock: vi.fn(),
       setThreadPin: vi.fn(),
       reorderThreadPins: vi.fn(),
         mountRemoteChild: vi.fn(),
         setThreadParent: vi.fn(),
         updateSubthreadOrder: vi.fn(),
         setSubthreadsCollapsed: vi.fn(),
+        readForge: vi.fn(),
         detachThreadPullRequest: vi.fn(),
         setThreadPrAutoDispatch: vi.fn(),
         cancelThreadPrAutoDispatch: vi.fn(),
@@ -4141,7 +4249,11 @@ describe("federation backend bridge", () => {
         cancelScheduledThreadAction: vi.fn(),
         sendScheduledThreadActionNow: vi.fn(),
         compactThread: vi.fn(),
-        listThreadMcpServers: vi.fn(),
+        listMcpConnections: vi.fn(),
+      readThreadMcpConnections: vi.fn(),
+      setThreadMcpConnections: vi.fn(),
+      describeThreadMcpConnections: vi.fn(),
+      listThreadMcpServers: vi.fn(),
         reloadCodexMcpConfig: vi.fn(),
         resolveActiveTurn: vi.fn(),
         interruptTurn: vi.fn(),
@@ -4171,6 +4283,7 @@ describe("federation backend bridge", () => {
         listModelSettingsRecents: vi.fn(),
         recordModelSettingsRecent: vi.fn(),
         attachDirectoryToThread: vi.fn(),
+        detachDirectoryFromThread: vi.fn(),
         listWorktreeUnpublishedCommits: vi.fn(),
         getWorktreeUnpublishedCommitDiff: vi.fn(),
         materializeDirectoryLaunchpad: vi.fn(),
@@ -4371,5 +4484,114 @@ describe("federation backend bridge", () => {
         result: { trusted: true },
       },
     ]);
+  });
+});
+
+describe("backend.moveQueuedTurn", () => {
+  const moveEnvelope = (id: string, params: unknown): FederationProtocolEnvelope => ({
+    id,
+    kind: "request",
+    method: FEDERATION_BACKEND_METHODS.moveQueuedTurn,
+    params,
+    protocolVersion: 1,
+    sourceInstanceId: "viewer_one",
+    targetInstanceId: "owner_one",
+    createdAt: 1_000,
+  });
+  const ownerRouter = (params: {
+    backend: Partial<FederationBackendOperations>;
+    viewerCapabilities: FederationCapability[];
+  }) => {
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: params.viewerCapabilities,
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: params.backend as FederationBackendOperations,
+    });
+    return { router, replies };
+  };
+
+  it("moves the owner's entry for a viewer granted turn control", async () => {
+    const moveQueuedTurn = vi.fn(async () => ({
+      queueEntryId: "c",
+      disposition: "moved" as const,
+      queueEntryIds: ["c", "a", "b"],
+    }));
+    const { router, replies } = ownerRouter({
+      backend: { moveQueuedTurn },
+      viewerCapabilities: ["turn_control"],
+    });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: moveEnvelope("move-1", { queueEntryId: "c", beforeQueueEntryId: "a" }),
+    });
+
+    expect(moveQueuedTurn).toHaveBeenCalledWith({ queueEntryId: "c", beforeQueueEntryId: "a" });
+    expect(replies[0]).toMatchObject({
+      kind: "response",
+      result: { queueEntryId: "c", disposition: "moved", queueEntryIds: ["c", "a", "b"] },
+    });
+  });
+
+  it("refuses a viewer without turn control, without touching the queue", async () => {
+    const moveQueuedTurn = vi.fn();
+    const { router, replies } = ownerRouter({
+      backend: { moveQueuedTurn },
+      viewerCapabilities: ["thread_navigation", "thread_detail"],
+    });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: moveEnvelope("move-2", { queueEntryId: "c" }),
+    });
+
+    expect(replies[0]).toMatchObject({ kind: "error" });
+    expect(moveQueuedTurn).not.toHaveBeenCalled();
+  });
+
+  it("answers method_not_found from an owner that cannot move entries", async () => {
+    const { router, replies } = ownerRouter({ backend: {}, viewerCapabilities: ["turn_control"] });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: moveEnvelope("move-3", { queueEntryId: "c" }),
+    });
+
+    expect(replies[0]).toMatchObject({ kind: "error", error: { code: "method_not_found" } });
+  });
+
+  it("tells the viewer to update an older owner, and passes other failures through", async () => {
+    const olderOwner = vi.fn(async () => {
+      throw Object.assign(new Error("No handler"), { code: "method_not_found" });
+    });
+    await expect(
+      new FederationRemoteBackendClient({ request: olderOwner } as unknown as FederationRpcEndpoint)
+        .moveQueuedTurn({ queueEntryId: "c" }),
+    ).rejects.toThrow(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
+
+    const offline = vi.fn(async () => { throw new Error("Peer disconnected."); });
+    await expect(
+      new FederationRemoteBackendClient({ request: offline } as unknown as FederationRpcEndpoint)
+        .moveQueuedTurn({ queueEntryId: "c" }),
+    ).rejects.toThrow("Peer disconnected.");
+
+    const request = vi.fn(async () => ({ queueEntryId: "c", disposition: "anchor_not_found", queueEntryIds: ["b", "c"] }));
+    await expect(
+      new FederationRemoteBackendClient({ request } as unknown as FederationRpcEndpoint)
+        .moveQueuedTurn({ queueEntryId: "c", beforeQueueEntryId: "a" }),
+    ).resolves.toEqual({ queueEntryId: "c", disposition: "anchor_not_found", queueEntryIds: ["b", "c"] });
+    expect(request).toHaveBeenCalledWith({
+      method: FEDERATION_BACKEND_METHODS.moveQueuedTurn,
+      params: { queueEntryId: "c", beforeQueueEntryId: "a" },
+    });
   });
 });

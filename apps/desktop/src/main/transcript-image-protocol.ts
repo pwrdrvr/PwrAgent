@@ -11,7 +11,7 @@ import type {
 } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -19,6 +19,7 @@ import { resolveActiveProfilePath, resolvePwragentRoot } from "./profile";
 import { isPwrSnapSignedMediaUrl } from "./pwrsnap-media-url";
 import { fetchGitHubAttachmentImage } from "./github-attachment-image";
 import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
+import { existingThreadAssetAlias, isThreadAssetPath, storeThreadAsset, type ThreadAssetOwner } from "./app-server/thread-assets";
 
 export const TRANSCRIPT_IMAGE_PROTOCOL_SCHEME = "pwragent-image";
 
@@ -89,6 +90,7 @@ type TranscriptImageFetchResponse = {
 };
 
 export type TranscriptImageMaterializerDependencies = {
+  retainLocalImage?: (sourcePath: string, owner: ThreadAssetOwner) => Promise<string | undefined>;
   fetch: (
     url: string,
     init: { redirect: "error"; signal: AbortSignal },
@@ -97,6 +99,16 @@ export type TranscriptImageMaterializerDependencies = {
     backend: AppServerBackendKind;
     threadId: string;
   }) => string;
+  /**
+   * The same thread's image directories in the other PwrAgent profiles.
+   * Profiles that share a Codex home restore the same threads, and a
+   * Markdown-linked image's source is often a temporary file that macOS has
+   * since swept away: the first profile to render it may hold the only copy.
+   */
+  resolveSiblingRoots?: (request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => Promise<readonly string[]>;
   mkdir: (dirPath: string, options: { recursive: true }) => Promise<unknown>;
   resolveLocalImageLink: (
     sourcePath: string,
@@ -123,21 +135,88 @@ type MaterializedMarkdownLinkedImage = {
 
 type ApprovedLocalImageRootResolver = () => Promise<readonly string[]>;
 
+function threadImagesSegment(backend: AppServerBackendKind, threadId: string): string {
+  return path.join(
+    "state",
+    "thread-images",
+    encodePathSegment(backend),
+    encodePathSegment(threadId),
+  );
+}
+
 const defaultMaterializerDependencies: TranscriptImageMaterializerDependencies = {
+  retainLocalImage: retainLegacyThreadImage,
   fetch: async (url, init) => await globalThis.fetch(url, init),
   resolveRoot: ({ backend, threadId }) =>
-    resolveActiveProfilePath(
-      path.join(
-        "state",
-        "thread-images",
-        encodePathSegment(backend),
-        encodePathSegment(threadId),
-      ),
-    ),
+    resolveActiveProfilePath(threadImagesSegment(backend, threadId)),
+  resolveSiblingRoots: async ({ backend, threadId }) => {
+    const profilesDir = path.join(resolvePwragentRoot(), "profiles");
+    const activeRoot = resolveActiveProfilePath(threadImagesSegment(backend, threadId));
+    let profileNames: string[];
+    try {
+      profileNames = await readdir(profilesDir);
+    } catch {
+      return [];
+    }
+    return profileNames
+      .map((name) => path.join(profilesDir, name, threadImagesSegment(backend, threadId)))
+      .filter((root) => root !== activeRoot);
+  },
   mkdir,
   resolveLocalImageLink: resolveTranscriptImageFile,
   writeFile,
 };
+
+async function retainLegacyThreadImage(sourcePath: string, owner: ThreadAssetOwner): Promise<string | undefined> {
+  if (isThreadAssetPath(sourcePath, owner)) return sourcePath;
+  if (!/[\\/]state[\\/](?:image-inputs|turn-input-attachments|thread-assets)[\\/]/u.test(sourcePath)) return undefined;
+  const alias = await existingThreadAssetAlias(owner, sourcePath);
+  if (alias) return alias;
+  const resolved = await resolveTranscriptImageFile(sourcePath);
+  if (!resolved.ok) return undefined;
+  const info = await stat(resolved.path);
+  if (info.size === 0 || info.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES) return undefined;
+  return await storeThreadAsset(owner, await readFile(resolved.path), path.basename(sourcePath), resolved.path);
+}
+
+/** One read is one thread, so every missed image shares one profile scan. */
+function withMemoizedSiblingRoots(
+  deps: TranscriptImageMaterializerDependencies,
+): TranscriptImageMaterializerDependencies {
+  const retainLocalImage = deps.retainLocalImage;
+  if (retainLocalImage) {
+    const retained = new Map<string, Promise<string | undefined>>();
+    deps = {
+      ...deps,
+      retainLocalImage: (sourcePath, owner) => {
+        const key = `${owner.backend}\0${owner.threadId}\0${sourcePath}`;
+        let result = retained.get(key);
+        if (!result) {
+          result = retainLocalImage(sourcePath, owner).catch(() => undefined);
+          retained.set(key, result);
+        }
+        return result;
+      },
+    };
+  }
+  const resolveSiblingRoots = deps.resolveSiblingRoots;
+  if (!resolveSiblingRoots) {
+    return deps;
+  }
+  const roots = new Map<string, Promise<readonly string[]>>();
+  return {
+    ...deps,
+    resolveSiblingRoots: (request) => {
+      const key = `${request.backend}\0${request.threadId}`;
+      let resolved = roots.get(key);
+      if (!resolved) {
+        resolved = resolveSiblingRoots(request).catch(() => []);
+        roots.set(key, resolved);
+      }
+      return resolved;
+    },
+  };
+}
 
 function createApprovedLocalImageRootResolver(
   options: TranscriptImageMaterializationOptions,
@@ -209,7 +288,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
   dependencies: Partial<TranscriptImageMaterializerDependencies> = {},
   options: TranscriptImageMaterializationOptions = {},
 ): Promise<AppServerReadThreadResponse> {
-  const deps = { ...defaultMaterializerDependencies, ...dependencies };
+  const deps = withMemoizedSiblingRoots({ ...defaultMaterializerDependencies, ...dependencies });
   const resolveApprovedLocalImageRoots = createApprovedLocalImageRootResolver(options);
   const materializedFileWrites = new Map<string, Promise<void>>();
   const fetchedLoopbackImages = new Map<
@@ -302,24 +381,35 @@ export async function materializeTranscriptMessageImagesForMessaging(
   }
 
   const approvedLocalImageRoots = await createApprovedLocalImageRootResolver(options)();
-  const imageParts = materializedMessage.parts?.filter(
+  return await resolveMessageImagePartsForMessaging(
+    materializedMessage,
+    async (url) => await transcriptImageUrlForMessaging(
+      url,
+      approvedLocalImageRoots,
+    ),
+  );
+}
+
+/**
+ * Map a message's image parts to provider-safe URLs, dropping any the
+ * resolver cannot serve. Parts resolve concurrently and keep message order.
+ */
+async function resolveMessageImagePartsForMessaging(
+  message: AppServerThreadMessage,
+  resolveUrl: (url: string) => Promise<string | undefined>,
+): Promise<AppServerThreadImagePart[]> {
+  const imageParts = message.parts?.filter(
     (part): part is AppServerThreadImagePart => part.type === "image",
   ) ?? [];
-  const output: AppServerThreadImagePart[] = [];
-  for (const part of imageParts) {
-    const providerUrl = await transcriptImageUrlForMessaging(
-      part.url,
-      approvedLocalImageRoots,
-    );
-    if (!providerUrl) {
-      continue;
-    }
-    output.push({
-      ...part,
-      url: providerUrl,
-    });
-  }
-  return output;
+  const resolved = await Promise.all(
+    imageParts.map(async (part) => {
+      const providerUrl = await resolveUrl(part.url);
+      return providerUrl ? { ...part, url: providerUrl } : undefined;
+    }),
+  );
+  return resolved.filter(
+    (part): part is AppServerThreadImagePart => part !== undefined,
+  );
 }
 
 async function transcriptImageUrlForMessaging(
@@ -358,6 +448,78 @@ async function transcriptImageUrlForMessaging(
     return undefined;
   }
   return `data:${resolution.mimeType};base64,${buffer.toString("base64")}`;
+}
+
+/**
+ * Resolve the images of one assistant message read from a federation peer.
+ * The owner already materialized the message's local and Markdown-linked
+ * images when it served the thread, and the remote client rewrote them to
+ * `pwragent-image://federation/...` URLs. Those name files on the owner's
+ * disk, so their bytes come back through `readOwnerImage` and leave here as
+ * data URLs. Nothing is resolved against this instance's filesystem: a
+ * `/tmp` path in a peer's message names a file on the peer.
+ */
+export async function materializeFederatedTranscriptMessageImagesForMessaging(
+  message: AppServerThreadMessage,
+  instanceId: FederationInstanceId,
+  readOwnerImage: (
+    request: FederatedTranscriptImageRequest,
+  ) => Promise<FederatedTranscriptImageResponse>,
+): Promise<AppServerThreadImagePart[]> {
+  return await resolveMessageImagePartsForMessaging(
+    message,
+    async (url) => await federatedTranscriptImageUrlForMessaging(
+      url,
+      instanceId,
+      readOwnerImage,
+    ),
+  );
+}
+
+async function federatedTranscriptImageUrlForMessaging(
+  url: string,
+  instanceId: FederationInstanceId,
+  readOwnerImage: (
+    request: FederatedTranscriptImageRequest,
+  ) => Promise<FederatedTranscriptImageResponse>,
+): Promise<string | undefined> {
+  if (url.startsWith("data:image/") || /^https:\/\//iu.test(url)) {
+    return url;
+  }
+
+  const request = decodeFederatedTranscriptImageProtocolRequest(url);
+  if (!request || request.instanceId !== instanceId) {
+    return undefined;
+  }
+
+  let image: { bytes: Buffer; mimeType: string } | undefined;
+  try {
+    image = decodeFederatedTranscriptImageResponse(await readOwnerImage(request));
+  } catch {
+    return undefined;
+  }
+  // Providers decode these themselves, so only the types this module can
+  // name an extension for leave as data URLs.
+  if (!image || !DATA_IMAGE_EXTENSIONS.has(image.mimeType)) {
+    return undefined;
+  }
+  return `data:${image.mimeType};base64,${image.bytes.toString("base64")}`;
+}
+
+/** The trust check every consumer applies to a peer's image bytes. */
+function decodeFederatedTranscriptImageResponse(
+  remote: FederatedTranscriptImageResponse,
+): { bytes: Buffer; mimeType: string } | undefined {
+  const mimeType = remote.mimeType.toLowerCase();
+  const bytes = Buffer.from(remote.dataBase64, "base64");
+  if (
+    !mimeType.startsWith("image/")
+    || bytes.byteLength === 0
+    || bytes.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
+  ) {
+    return undefined;
+  }
+  return { bytes, mimeType };
 }
 
 export function registerTranscriptImageProtocolScheme(): void {
@@ -467,10 +629,26 @@ async function materializeTranscriptMessagePartImageUrl(
     return part;
   }
 
-  if (isFileImageUrl(part.url)) {
+  let sourcePath: string | undefined;
+  try {
+    sourcePath = isFileImageUrl(part.url)
+      ? fileURLToPath(part.url)
+      : decodeTranscriptImageProtocolRequest(part.url);
+  } catch {
+    // A provider filename can contain an unescaped percent or separator.
+    // Keep this unusable image from rejecting the rest of the conversation.
+    return part;
+  }
+  if (sourcePath) {
+    const owner = { backend: response.backend, threadId: response.threadId };
+    const retained = isThreadAssetPath(sourcePath, owner)
+      ? sourcePath
+      : await deps.retainLocalImage?.(sourcePath, owner);
     return {
       ...part,
-      url: toTranscriptImageProtocolUrl(part.url),
+      url: retained
+        ? toTranscriptImageProtocolUrl(pathToFileURL(retained).toString())
+        : isFileImageUrl(part.url) ? toTranscriptImageProtocolUrl(part.url) : part.url,
     };
   }
 
@@ -804,23 +982,73 @@ async function readCachedMarkdownLinkedImage(
     response,
     deps,
   );
-  try {
-    const fileStat = await stat(filePath);
-    if (
-      !fileStat.isFile()
-      || fileStat.size === 0
-      || fileStat.size > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
-    ) {
+  if (!await isUsableCachedImage(filePath)) {
+    const adopted = await adoptSiblingCachedMarkdownLinkedImage(filePath, response, deps);
+    if (!adopted) {
       return undefined;
     }
-  } catch {
-    return undefined;
   }
 
   return {
     sourceUrl,
     url: toTranscriptImageProtocolUrl(pathToFileURL(filePath).toString()),
   };
+}
+
+async function isRegularFile(filePath: string): Promise<boolean> {
+  try {
+    return (await lstat(filePath)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function isUsableCachedImage(filePath: string): Promise<boolean> {
+  try {
+    const fileStat = await stat(filePath);
+    return fileStat.isFile()
+      && fileStat.size > 0
+      && fileStat.size <= MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Copies another profile's snapshot of this message's linked image into the
+ * active profile's cache. The cache name hashes the message id and source URL,
+ * so a match is the same link in the same message, captured when its source
+ * still existed. It is copied rather than referenced so the image outlives
+ * that profile.
+ */
+async function adoptSiblingCachedMarkdownLinkedImage(
+  filePath: string,
+  response: AppServerReadThreadResponse,
+  deps: TranscriptImageMaterializerDependencies,
+): Promise<boolean> {
+  const request = { backend: response.backend, threadId: response.threadId };
+  const siblingRoots = await deps.resolveSiblingRoots?.(request) ?? [];
+  for (const siblingRoot of siblingRoots) {
+    const siblingPath = path.join(siblingRoot, path.basename(filePath));
+    // A regular file only: a symlink here could name any file on disk, and
+    // the copy would launder it past the protocol's root containment.
+    if (!await isRegularFile(siblingPath) || !await isUsableCachedImage(siblingPath)) {
+      continue;
+    }
+    // Staged and renamed, so a concurrent read never finds a partial copy at
+    // the cache path and serves it as complete.
+    const stagingPath = `${filePath}.${process.pid}.${Date.now()}.adopting`;
+    try {
+      await deps.mkdir(path.dirname(filePath), { recursive: true });
+      await copyFile(siblingPath, stagingPath);
+      await rename(stagingPath, filePath);
+      return true;
+    } catch {
+      await rm(stagingPath, { force: true }).catch(() => undefined);
+      return false;
+    }
+  }
+  return false;
 }
 
 async function writeCachedMarkdownLinkedImage(
@@ -1104,6 +1332,7 @@ function isFileImageUrl(url: string): boolean {
 function isMaterializableImageUrl(url: string): boolean {
   return (
     isFileImageUrl(url)
+    || url.startsWith(`${TRANSCRIPT_IMAGE_PROTOCOL_SCHEME}://file/`)
     || url.startsWith("data:image/")
     || isPwrSnapSignedMediaUrl(url)
   );
@@ -1136,19 +1365,16 @@ export function installTranscriptImageProtocol(
       }
 
       try {
-        const remote = await options.resolveFederatedImage(federatedRequest);
-        const bytes = Buffer.from(remote.dataBase64, "base64");
-        if (
-          !remote.mimeType.startsWith("image/")
-          || bytes.byteLength === 0
-          || bytes.byteLength > MAX_FETCHED_TRANSCRIPT_IMAGE_BYTES
-        ) {
+        const image = decodeFederatedTranscriptImageResponse(
+          await options.resolveFederatedImage(federatedRequest),
+        );
+        if (!image) {
           return new Response("invalid federated transcript image response", {
             status: 502,
             headers: { "content-type": "text/plain; charset=utf-8" },
           });
         }
-        return transcriptImageResponse(bytes, remote.mimeType);
+        return transcriptImageResponse(image.bytes, image.mimeType);
       } catch (error) {
         return new Response(
           error instanceof Error ? error.message : String(error),

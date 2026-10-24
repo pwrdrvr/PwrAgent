@@ -9,16 +9,20 @@ import {
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadata.js";
-import { THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA } from "./thread-navigation-relationships.js";
-import { getNativeBinding } from "./native-binding.js";
+import {
+  THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA,
+  THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA,
+} from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
+import { THREAD_DEPENDENCY_SCHEMA } from "./thread-dependency-store.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
+import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
 import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 68;
+export const CURRENT_STATE_DB_USER_VERSION = 78;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -554,6 +558,140 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_thread_actions_queue
   WHERE queue_entry_id IS NOT NULL;
 `;
 
+// Cards a thread raises for the operator (review, merge, start a proposed
+// thread, or a reminder). Written once per tool call or operator click, never
+// per streamed event. The partial unique index enforces "one open card per
+// key per thread"; a done card frees its key for the next one.
+const THREAD_TODO_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todos (
+  todo_id      TEXT PRIMARY KEY,
+  backend      TEXT NOT NULL,
+  thread_id    TEXT NOT NULL,
+  todo_key     TEXT,
+  kind         TEXT NOT NULL,
+  status       TEXT NOT NULL,
+  title        TEXT NOT NULL,
+  detail       TEXT,
+  action_json  TEXT,
+  cwd          TEXT,
+  result_json  TEXT,
+  error        TEXT,
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  resolved_at  INTEGER,
+  source_project_json TEXT,
+  target_project_json TEXT,
+  items_json   TEXT,
+  dependency_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_thread_todos_status_thread
+  ON thread_todos(status, backend, thread_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_todos_open_key
+  ON thread_todos(backend, thread_id, todo_key)
+  WHERE status = 'open' AND todo_key IS NOT NULL;
+`;
+
+/**
+ * The merge method an operator last picked from a to-do card's menu, per
+ * project. Learned state, so it lives here rather than in config.toml; the
+ * configured default is `[git] default_merge_method`.
+ */
+const THREAD_TODO_PROJECT_PREFS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todo_project_prefs (
+  directory_key TEXT PRIMARY KEY,
+  merge_method  TEXT NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+`;
+
+/** v70: the project a card came from and the one it is for. */
+function ensureThreadTodoProjectColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_todos")) {
+    db.exec(THREAD_TODO_SCHEMA);
+  }
+  if (!tableColumnExists(db, "thread_todos", "source_project_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN source_project_json TEXT");
+  }
+  if (!tableColumnExists(db, "thread_todos", "target_project_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN target_project_json TEXT");
+  }
+  db.exec(THREAD_TODO_PROJECT_PREFS_SCHEMA);
+}
+
+/**
+ * v73: a card's checklist, as one JSON array on the card's own row. The
+ * steps are always read and written with their card, a list is capped at
+ * 20 short steps, and nothing queries a step on its own, so a child table
+ * would only add a join to every list and a second row to every write. A
+ * tick rewrites this one unindexed column: one row page per commit.
+ */
+function ensureThreadTodoItemsColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_todos")) {
+    db.exec(THREAD_TODO_SCHEMA);
+  }
+  if (!tableColumnExists(db, "thread_todos", "items_json")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN items_json TEXT");
+  }
+}
+
+/**
+ * v78: the thread dependency that raised a card for the operator. The open
+ * key index frees a key once its card is resolved; this one never does, so a
+ * dependency raises at most one card for its lifetime. Kept out of
+ * THREAD_TODO_SCHEMA, which runs before this column exists on old profiles.
+ */
+function ensureThreadTodoDependencyColumn(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_todos")) {
+    db.exec(THREAD_TODO_SCHEMA);
+  }
+  if (!tableColumnExists(db, "thread_todos", "dependency_id")) {
+    db.exec("ALTER TABLE thread_todos ADD COLUMN dependency_id TEXT");
+  }
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_thread_todos_dependency
+    ON thread_todos(dependency_id) WHERE dependency_id IS NOT NULL`);
+}
+
+// What threads are waiting on the operator for, beyond the registry's live
+// server requests. An async question is an assistant message, so nothing
+// else records that it is still open; a row is written when it arrives and
+// once more when a reply answers it or the operator dismisses it. The text is
+// kept only while the question is open (a pending request, like a pending
+// approval); closing it blanks `questions_json`. Seen marks
+// are written once per item, the first time it is on screen. Neither table
+// is written per streamed event or on a timer.
+/** Tracked review findings; see "Tracked review findings" in docs/thread-history-persistence.md. */
+const THREAD_REVIEW_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_reviews (
+  review_id TEXT PRIMARY KEY,
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('open', 'handled', 'dismissed')),
+  updated_at INTEGER NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_reviews_status_thread
+  ON thread_reviews(status, backend, thread_id);
+`;
+
+const OPERATOR_REQUEST_SCHEMA = `
+CREATE TABLE IF NOT EXISTS operator_async_questions (
+  backend        TEXT NOT NULL,
+  thread_id      TEXT NOT NULL,
+  message_id     TEXT NOT NULL,
+  questions_json TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  created_at     INTEGER NOT NULL,
+  resolved_at    INTEGER,
+  PRIMARY KEY (backend, thread_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_operator_async_questions_status
+  ON operator_async_questions(status, created_at);
+CREATE TABLE IF NOT EXISTS operator_seen_items (
+  item_key TEXT PRIMARY KEY,
+  seen_at  INTEGER NOT NULL
+);
+`;
+
 const MESSAGING_ACTIVITY_SUMMARY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS messaging_activity_summary (
   platform         TEXT PRIMARY KEY,
@@ -710,6 +848,8 @@ CREATE TABLE IF NOT EXISTS pr_auto_dispatch_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_candidate_winner
   ON pr_auto_dispatch_candidates(pr_key, eligible_since, backend, thread_id);
+CREATE INDEX IF NOT EXISTS idx_pr_auto_dispatch_candidate_thread
+  ON pr_auto_dispatch_candidates(backend, thread_id, pr_key);
 `;
 
 const PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX = `
@@ -932,6 +1072,7 @@ CREATE TABLE IF NOT EXISTS thread_usage_lines (
   usage_line_id              TEXT PRIMARY KEY,
   usage_turn_id              TEXT,
   provider                   TEXT NOT NULL DEFAULT 'openai',
+  account_key                TEXT,
   backend                    TEXT NOT NULL,
   thread_id                  TEXT NOT NULL,
   parent_thread_id           TEXT,
@@ -1351,8 +1492,7 @@ export class StateDb {
 
   static open(dbPath: string, options?: { profileName?: string }): StateDb {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-    const nativeBinding = getNativeBinding();
-    const db = new Database(dbPath, nativeBinding ? { nativeBinding } : {});
+    const db = new Database(dbPath);
 
     // FIRST, ahead of every other pragma. SQLite honours `auto_vacuum` only
     // while the file still has no database header; once one exists the
@@ -1879,6 +2019,75 @@ export class StateDb {
         db.transaction(() => {
           ensureThreadUsageTurnInferredCompletionColumn(db);
           db.pragma("user_version = 68");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 69) {
+        db.transaction(() => {
+          db.exec(THREAD_TODO_SCHEMA);
+          db.pragma("user_version = 69");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 70) {
+        db.transaction(() => {
+          ensureThreadTodoProjectColumns(db);
+          db.pragma("user_version = 70");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 71) {
+        db.transaction(() => {
+          if (tableExists(db, "thread_usage_lines")
+            && !tableColumnExists(db, "thread_usage_lines", "account_key")) {
+            db.exec("ALTER TABLE thread_usage_lines ADD COLUMN account_key TEXT");
+          }
+          db.pragma("user_version = 71");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 72) {
+        db.transaction(() => {
+          db.exec(OPERATOR_REQUEST_SCHEMA);
+          db.pragma("user_version = 72");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 73) {
+        db.transaction(() => {
+          ensureThreadTodoItemsColumn(db);
+          db.pragma("user_version = 73");
+        })();
+      }
+      // ensureCurrentSchema creates durable turn requests (74), tracked
+      // reviews (75) and thread dependencies (77) on every open; these steps
+      // only record the version.
+      if ((db.pragma("user_version", { simple: true }) as number) < 74) {
+        db.pragma("user_version = 74");
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 75) {
+        db.pragma("user_version = 75");
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 76) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 76) return;
+          if (tableExists(db, "thread_navigation_relationships")) {
+            db.exec(THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA);
+          }
+          db.pragma("user_version = 76");
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 77) {
+        db.pragma("user_version = 77");
+      }
+      // A development profile that ran the thread-dependency branch while it
+      // claimed v76 skipped the relationship-generation step above. Converge
+      // it the same way. Normal opens only read sqlite_master here.
+      if (tableExists(db, "thread_navigation_relationships")
+        && !tableExists(db, "thread_navigation_relationship_generation")) {
+        db.transaction(() => {
+          db.exec(THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA);
+        }).immediate();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 78) {
+        db.transaction(() => {
+          ensureThreadTodoDependencyColumn(db);
+          db.pragma("user_version = 78");
         })();
       }
       // Keep current-version databases converged without asking pre-v36 profiles
@@ -2576,6 +2785,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_AUTO_DISPATCH_SCHEMA);
     db.exec(PR_AUTO_DISPATCH_BUDGET_SCHEMA);
     db.exec(PR_STATUS_WATCH_SCHEMA);
+    db.exec(THREAD_DEPENDENCY_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);
@@ -2591,7 +2801,16 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(REMOTE_THREAD_TARGET_SCHEMA);
     db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
     db.exec(STAR_MAP_WORKSPACE_SCHEMA);
+    db.exec(THREAD_TODO_SCHEMA);
+    ensureThreadTodoProjectColumns(db);
+    ensureThreadTodoItemsColumn(db);
+    ensureThreadTodoDependencyColumn(db);
     db.exec(DESKTOP_CONFIG_STORE_SCHEMA);
+    // Created on every open rather than in their numbered steps: two branches
+    // claimed version 74, so a profile can hold either version without the
+    // other's table. Both are idempotent.
+    db.exec(DURABLE_TURN_REQUEST_SCHEMA);
+    db.exec(THREAD_REVIEW_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
@@ -4009,6 +4228,7 @@ function tableColumnExists(
     | "thread_pricing_summaries"
     | "remote_thread_pins"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines"
     | "thread_usage_turns",
   columnName: string,
@@ -4048,10 +4268,15 @@ function readTableInfo(
     | "thread_pricing_summaries"
     | "remote_thread_pins"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines"
     | "thread_usage_turns",
 ): Array<{ name: string }> {
   switch (tableName) {
+    case "thread_todos":
+      return db.prepare("PRAGMA table_info(thread_todos)").all() as Array<{
+        name: string;
+      }>;
     case "app_runtime_instances":
       return db.prepare("PRAGMA table_info(app_runtime_instances)").all() as Array<{
         name: string;

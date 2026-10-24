@@ -2,13 +2,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { StateDb } from "../state/state-db";
+import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 afterEach(() => vi.unstubAllEnvs());
 
 it("reconciles owner PR candidates in one commit and makes unchanged startup reconciliation read-only", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  const db = openInMemoryStateDb();
+  const temp = createTempStateDb("pwragent-pr-candidate-writes-");
+  const db = StateDb.open(temp.dbPath);
   const store = new SqliteOverlayStore(db);
   const threads = Array.from({ length: 120 }, (_, index) => ({ backend: "codex" as const, threadId: `thread-${index}`, prKeys: ["github.com:owner/repo#1"] }));
   try {
@@ -26,5 +28,5 @@ it("reconciles owner PR candidates in one commit and makes unchanged startup rec
     await store.setThreadPrAutoDispatchEnabled({ backend: "codex", threadId: "thread-0", enabled: false });
     await store.syncThreadPrAutoDispatchCandidatesBatch({ threads, now: 3_000 });
     expect(await store.getPrAutoDispatchCandidateWinner({ prKey: threads[0]!.prKeys[0]! })).not.toMatchObject({ threadId: "thread-0" });
-  } finally { db.close(); }
+  } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
 });

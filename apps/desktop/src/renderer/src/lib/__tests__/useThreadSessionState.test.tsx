@@ -205,6 +205,21 @@ async function flushReactUpdates(): Promise<void> {
 }
 
 describe("useThreadSessionState", () => {
+  it("hydrates the Claude context moon without treating occupancy as billed tokens", async () => {
+    const response = readThreadResponse({ entries: [], hasPreviousPage: false });
+    const desktopApi: DesktopApi = {
+      readThread: async () => ({ ...response, backend: "claude", replay: {
+        ...response.replay, contextWindow: { usedTokens: 50_000, modelContextWindow: 200_000 },
+      } }),
+      onAgentEvent: () => () => undefined,
+    };
+    const thread: NavigationThreadSummary = { ...buildThread({ id: "thread-1", updatedAt: 100 }), source: "claude" };
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread }));
+    await waitForThreadHydration(result);
+    expect(result.current.contextWindow).toMatchObject({ totalTokens: 50_000, modelContextWindow: 200_000, usedPercent: 25 });
+    expect(result.current.contextWindow).not.toHaveProperty("cumulativeTotalTokens");
+  });
+
   it("reuses an unchanged remote owner page without clearing transcript or pagination", async () => {
     const initial = {
       ...readThreadResponse({
@@ -3407,6 +3422,46 @@ describe("useThreadSessionState", () => {
         },
       },
     });
+  });
+
+  it("keeps the dependency id on a continuation message origin", async () => {
+    let agentEventHandler:
+      | ((event: { backend: "codex"; notification: { method: string; params: Record<string, unknown> } }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: async () => readThreadResponse({ entries: [], hasPreviousPage: false }),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({ desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }) })
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "continuation",
+              type: "userMessage",
+              text: "PwrAgent resumed this thread because its prerequisites were met (all of 1).",
+              origin: { kind: "pwragent", dependencyId: "dependency-1" },
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries).toContainEqual(expect.objectContaining({
+      type: "message", id: "continuation", origin: { kind: "pwragent", dependencyId: "dependency-1" },
+    }));
   });
 
   it("does not duplicate a final reported by both item and turn completion", async () => {
@@ -12049,6 +12104,104 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it.each([
+    { restoration: "notification", phase: "answering" },
+    { restoration: "notification", phase: "review" },
+    { restoration: "hydration", phase: "answering" },
+    { restoration: "hydration", phase: "review" },
+  ] as const)("preserves questionnaire drafts during $restoration in $phase", async ({ restoration, phase }) => {
+    const listeners = new Set<Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]>();
+    const pendingRequest: AppServerToolRequestUserInputNotification = {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "questionnaire-1",
+        questions: ["approach", "scope"].map((id) => ({
+          id,
+          header: id,
+          question: `Choose ${id}`,
+          isOther: true,
+          isSecret: false,
+          options: [],
+        })),
+      },
+    };
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        pendingRequest,
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      }),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi,
+      thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    act(() => {
+      result.current.updatePendingUserInput("questionnaire-1", (state) => ({
+        ...state,
+        phase,
+        currentIndex: 1,
+        answers: [
+          { kind: "text", value: "Keep this scoped" },
+          phase === "review" ? { kind: "text", value: "Desktop" } : null,
+        ],
+      }));
+    });
+    const draft = result.current.pendingUserInput;
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "mcpServer/elicitation/request",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              requestId: "login-1",
+              serverName: "github",
+              mode: "url",
+              _meta: null,
+              message: "Reconnect GitHub.",
+              url: "https://example.test/login",
+              elicitationId: "elicitation-1",
+            },
+          },
+        });
+        listener({
+          backend: "codex",
+          notification: {
+            method: "serverRequest/resolved",
+            params: { threadId: "thread-1", requestId: "login-1" },
+          },
+        });
+      }
+    });
+    if (restoration === "notification") {
+      act(() => {
+        for (const listener of listeners) {
+          listener({ backend: "codex", notification: pendingRequest });
+        }
+      });
+    } else {
+      await act(async () => { await result.current.reload(); });
+    }
+    expect(result.current.pendingMcpInteraction).toBeUndefined();
+    expect(result.current.pendingUserInput).toBe(draft);
+  });
+
   it("does not reintroduce thinking when a request resolves after turn completion", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
@@ -12337,6 +12490,107 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingRequest).toBeUndefined();
     expect(result.current.pendingUserInput).toBeUndefined();
     expect(result.current.pendingStatusText).toBeUndefined();
+  });
+
+  it("keeps a redisplayed MCP request when the previous submit finishes", async () => {
+    let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+      readThread: async () => readThreadResponse({ entries: [], hasPreviousPage: false }),
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    const request = (requestId: string): AgentEvent => ({
+      backend: "codex", notification: {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1", turnId: "turn-1", requestId,
+          serverName: "codex_apps", mode: "url", message: "Reconnect GitHub",
+          url: "https://chatgpt.com/connector", elicitationId: requestId,
+        },
+      },
+    });
+    act(() => {
+      emit(request("58"));
+      emit({ backend: "codex", notification: { method: "serverRequest/resolved", params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "58",
+      } } });
+      emit(request("57"));
+      result.current.clearPendingRequest("58");
+    });
+    expect(result.current.pendingMcpInteraction?.requestId).toBe("57");
+    expect(result.current.pendingStatusText).toBe("Waiting for MCP approval");
+  });
+
+  it.each(["idle", "active"] as const)("settles a stale MCP wait when a fresh %s read has no request", async (threadStatus) => {
+    let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+    const readThread = vi.fn().mockResolvedValue(readThreadResponse({ entries: [], hasPreviousPage: false }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; }, readThread,
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    act(() => emit({ backend: "codex", notification: {
+      method: "mcpServer/elicitation/request", params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "57",
+        serverName: "codex_apps", mode: "url", message: "Reconnect GitHub",
+        url: "https://chatgpt.com/connector", elicitationId: "57",
+      },
+    } }));
+    expect(result.current.pendingMcpInteraction).toBeDefined();
+    readThread.mockResolvedValue({ ...readThreadResponse({ entries: [], hasPreviousPage: false }), threadStatus });
+    await act(async () => { await result.current.reload(); });
+    expect(result.current.pendingMcpInteraction).toBeUndefined();
+    expect(result.current.activeTurnId).toBe(threadStatus === "active" ? "turn-1" : undefined);
+    expect(result.current.threadBusy).toBe(threadStatus === "active");
+  });
+
+  it.each(["new request", "resolved request"])("preserves newer MCP lifecycle over a racing read: %s", async (transition) => {
+    let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+    let resolveRead!: (response: AppServerReadThreadResponse) => void;
+    const request: AgentEvent = { backend: "codex", notification: {
+      method: "mcpServer/elicitation/request", params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "57",
+        serverName: "codex_apps", mode: "url", message: "Reconnect GitHub",
+        url: "https://chatgpt.com/connector", elicitationId: "57",
+      },
+    } };
+    const empty = readThreadResponse({ entries: [], hasPreviousPage: false });
+    const readThread = vi.fn().mockResolvedValueOnce(empty).mockImplementation(() =>
+      new Promise<AppServerReadThreadResponse>((resolve) => { resolveRead = resolve; }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; }, readThread,
+    };
+    const { result } = renderHook(() => useThreadSessionState({
+      desktopApi, thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+    }));
+    await waitForThreadHydration(result);
+    if (transition === "resolved request") act(() => emit(request));
+    let pendingRead!: Promise<void>;
+    act(() => { pendingRead = result.current.reload(); });
+    await waitFor(() => expect(readThread).toHaveBeenCalledTimes(2));
+    act(() => emit(transition === "new request" ? request : {
+      backend: "codex", notification: { method: "serverRequest/resolved", params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "57",
+      } },
+    }));
+    await act(async () => {
+      resolveRead(transition === "new request" ? empty : {
+        ...empty, threadStatus: "active",
+        pendingRequest: request.notification as NonNullable<AppServerReadThreadResponse["pendingRequest"]>,
+      });
+      await pendingRead;
+    });
+    if (transition === "new request") {
+      expect(result.current.pendingMcpInteraction?.requestId).toBe("57");
+      expect(result.current.pendingStatusText).toBe("Waiting for MCP approval");
+    } else {
+      expect(result.current.pendingMcpInteraction).toBeUndefined();
+    }
   });
 
   it("updates and clears pending MCP interactions", async () => {

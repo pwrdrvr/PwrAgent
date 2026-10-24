@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { auditChannels, compareVersions, ghJson, PACKAGE_ID, TAP_REPO, WINGET_PATH, WINGET_REPO } from "./package-manager-release.mjs";
+import { auditChannels, requireCompleteAudit, compareVersions, ghJson, PACKAGE_ID, WINGET_PATH, WINGET_REPO } from "./package-manager-release.mjs";
 
 function mutate(endpoint, payload) {
   const result = spawnSync("gh", ["api", "--method", "POST", endpoint, "--input", "-"], {
@@ -91,11 +91,11 @@ async function main() {
   const dir = resolve(process.argv[2] ?? "");
   if (!process.argv[2]) throw new Error("Usage: node scripts/submit-package-manager-release.mjs <generated-dir>");
   const generated = JSON.parse(await readFile(resolve(dir, "audit.json"), "utf8"));
-  const audit = auditChannels();
+  const audit = auditChannels(ghJson, { families: ["winget"] });
+  requireCompleteAudit(audit);
   const version = audit.stable.version;
   if (version !== generated.stable.version) throw new Error("GitHub Latest changed; regenerate and revalidate inputs before submission");
   if (!process.env.DISTRIBUTION_VALIDATION_RUN) throw new Error("Set DISTRIBUTION_VALIDATION_RUN to the successful platform validation run URL");
-  const cask = await readFile(resolve(dir, "Casks/pwragent.rb"), "utf8");
   const winget = {};
   for (const suffix of ["yaml", "installer.yaml", "locale.en-US.yaml"]) {
     const path = `${WINGET_PATH}/${version}/${PACKAGE_ID}.${suffix}`;
@@ -106,8 +106,6 @@ async function main() {
   if (!fork) throw new Error("Set WINGET_FORK_REPO to an existing publisher-owned fork of microsoft/winget-pkgs");
   const common = { version, runUrl: process.env.DISTRIBUTION_VALIDATION_RUN };
   const results = {};
-  results.homebrew = await submitChannel({ ...common, channel: audit.homebrew, target: TAP_REPO, fork: TAP_REPO, files: { "Casks/pwragent.rb": cask } });
-  console.log(JSON.stringify({ homebrew: results.homebrew }));
   results.winget = await submitChannel({ ...common, channel: audit.winget, target: WINGET_REPO, fork, files: winget });
   console.log(JSON.stringify({ winget: results.winget }));
 }

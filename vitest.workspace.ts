@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
-import { defineConfig } from "vitest/config";
+import { fileURLToPath } from "node:url";
+import { configDefaults, defineConfig } from "vitest/config";
 
 // Windows CI runners are markedly slower at spawning child processes (git.exe,
 // bash.exe), so git/worktree-heavy desktop tests can exceed the 5s default.
@@ -55,14 +56,90 @@ const DISPOSABLE_XDG_ROOT = path.join(
 const DISPOSABLE_XDG_CONFIG_HOME = path.join(DISPOSABLE_XDG_ROOT, "config");
 const DISPOSABLE_XDG_STATE_HOME = path.join(DISPOSABLE_XDG_ROOT, "state");
 
+// The executable search path every project runs with. The operator's shell
+// PATH puts version-manager shims (mise, asdf, nvm, volta) and personal bin
+// directories first, so a test that launches `node`, or a fixture with a
+// `#!/usr/bin/env node` shebang, ran whatever those resolved to: a mise shim
+// read `~/.config/mise/config.toml`, and an unparseable one failed the
+// launch. PATH also reaches operator-authenticated tools such as `gh` and
+// `op`. The Node running the suite comes first, so `node` is always this
+// Node, followed by entries inside this repository: the `node_modules/.bin`
+// directories pnpm prepends, which hold the project's own pinned tools
+// (oxlint finds `tsgolint` there).
+//
+// POSIX keeps only the operating system's own directories after those; Git
+// and the Xcode tools the suite uses live there. Windows keeps every entry
+// outside the user's profile instead: Git for Windows and its MSYS tools are
+// installed system-wide in locations that vary by machine, and the code
+// finds `bash.exe` by those paths with PATH as the fallback.
+//
+// Windows spells the variable `Path`, and a threads worker's `process.env` is
+// case-sensitive there, so the sandbox replaces whichever key the host has.
+const PATH_KEY =
+  Object.keys(process.env).find((key) => key.toUpperCase() === "PATH")
+  ?? "PATH";
+const REPOSITORY_ROOT = path.dirname(fileURLToPath(import.meta.url));
+// Relative entries resolve against whatever directory a child runs in, so
+// none of them is kept.
+const HOST_PATH = (process.env[PATH_KEY] ?? "")
+  .split(path.delimiter)
+  .filter((entry) => path.isAbsolute(entry));
+const SANDBOX_PATH = [...new Set([
+  path.dirname(process.execPath),
+  ...HOST_PATH.filter((entry) => isWithin(REPOSITORY_ROOT, entry)),
+  ...(process.platform === "win32"
+    ? HOST_PATH.filter((entry) => !isWithin(os.homedir(), entry))
+    : ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
+])].join(path.delimiter);
+const SANDBOX_ENV = { [PATH_KEY]: SANDBOX_PATH };
+
+function isWithin(parent: string, entry: string): boolean {
+  // Windows paths compare without case; POSIX paths are compared as written.
+  const fold = (value: string) => (process.platform === "win32" ? value.toLowerCase() : value);
+  const relative = path.relative(fold(path.resolve(parent)), fold(path.resolve(entry)));
+  return !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
 // Seeded on every desktop project so the root and the XDG homes always move
 // together; a test that overrides one and forgets the others is the bug this
 // pairing exists to prevent.
 const DISPOSABLE_DESKTOP_ENV = {
+  ...SANDBOX_ENV,
   PWRAGENT_HOME: DISPOSABLE_PWRAGENT_HOME,
   XDG_CONFIG_HOME: DISPOSABLE_XDG_CONFIG_HOME,
   XDG_STATE_HOME: DISPOSABLE_XDG_STATE_HOME,
 };
+
+// Renderer `.test.ts` files that need a DOM. Every other renderer `.test.ts`
+// runs in `desktop-renderer-node`, because loading jsdom costs a file about
+// 0.4s of worker time whether or not it touches the DOM, and most of them
+// test pure projections. A `.test.ts` that needs the DOM fails there with
+// `window is not defined` or `document is not defined`: list it here.
+const RENDERER_DOM_TS_TESTS = [
+  "apps/desktop/src/renderer/src/features/native-voice/__tests__/voice-camera.test.ts",
+  "apps/desktop/src/renderer/src/features/navigation/__tests__/drag-drop.test.ts",
+  "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-row-drag-preview.test.ts",
+  "apps/desktop/src/renderer/src/features/navigation/__tests__/useThreadJump.test.ts",
+  "apps/desktop/src/renderer/src/features/star-map/__tests__/star-map-keyboard.test.ts",
+  "apps/desktop/src/renderer/src/features/star-map/__tests__/star-map-orbit.test.ts",
+  "apps/desktop/src/renderer/src/features/star-map/__tests__/star-map-preferences.test.ts",
+  "apps/desktop/src/renderer/src/features/thread-detail/__tests__/composer-slot.test.ts",
+  "apps/desktop/src/renderer/src/features/thread-detail/__tests__/interactive-svg-document.test.ts",
+  "apps/desktop/src/renderer/src/features/thread-detail/__tests__/token-miser-savings-layout.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/appearance.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/bundled-font-preload.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/copy-image.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/copy-text.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/diagram-image.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/keyboard-accel.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/load-image-blob.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/mermaid-runtime.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/nerd-font-fallback.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/tildify-path.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/useScheduledThreadActionProjection.test.ts",
+  "apps/desktop/src/renderer/src/lib/__tests__/window-frame.test.ts",
+  "apps/desktop/src/renderer/src/test/outbound-fetch-guard.test.ts",
+];
 
 export default defineConfig({
   test: {
@@ -70,6 +147,7 @@ export default defineConfig({
       {
         test: {
           name: "messaging",
+          env: SANDBOX_ENV,
           // Vitest 4 defaults to forks, which execs a fresh Node process for
           // every test file. With hundreds of files and many concurrent
           // worktrees, that executable churn overwhelms macOS provenance
@@ -85,6 +163,7 @@ export default defineConfig({
       {
         test: {
           name: "shared",
+          env: SANDBOX_ENV,
           pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
@@ -143,12 +222,16 @@ export default defineConfig({
       {
         test: {
           name: "desktop-renderer",
+          runner: "apps/desktop/src/renderer/src/test/act-warning-runner.ts",
           pool: "threads",
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           environment: "jsdom",
           env: DISPOSABLE_DESKTOP_ENV,
-          include: ["apps/desktop/src/renderer/src/**/*.test.{ts,tsx}"],
+          include: [
+            "apps/desktop/src/renderer/src/**/*.test.tsx",
+            ...RENDERER_DOM_TS_TESTS,
+          ],
           // The renderer reaches the network through IPC, so it has no `fetch`
           // call site today — but `lint:boundaries` reads imports and cannot
           // see a `globalThis.fetch`, and jsdom inherits a live one from Node,
@@ -157,6 +240,21 @@ export default defineConfig({
             "apps/desktop/src/test-setup/outbound-fetch-guard.ts",
             "apps/desktop/src/renderer/src/test/setup.ts",
           ]
+        }
+      },
+      {
+        test: {
+          name: "desktop-renderer-node",
+          // No act-warning runner: its guard is installed by the jsdom
+          // project's setup.ts, and nothing here renders React.
+          pool: "threads",
+          globals: true,
+          testTimeout: TEST_TIMEOUT_MS,
+          environment: "node",
+          env: DISPOSABLE_DESKTOP_ENV,
+          include: ["apps/desktop/src/renderer/src/**/*.test.ts"],
+          exclude: [...configDefaults.exclude, ...RENDERER_DOM_TS_TESTS],
+          setupFiles: ["apps/desktop/src/test-setup/outbound-fetch-guard.ts"],
         }
       }
     ]

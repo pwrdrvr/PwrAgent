@@ -22,17 +22,16 @@ export function SubthreadPagination(props: {
   const { resource } = props;
   const initialLoad = resource.loading && !resource.state.page;
   const nothingToShow =
-    !resource.state.error
-    && !initialLoad
+    !initialLoad
     && !resource.state.rebaselineRequired
     && !resource.state.page?.nextCursor;
   if (nothingToShow) return null;
   return (
     <div role="listitem">
-      {resource.state.error ? <p className="sidebar-error" role="alert">{resource.state.error}</p> : null}
       {initialLoad ? <p className="sidebar-empty">Loading sub-threads…</p> : null}
       {resource.state.rebaselineRequired ? (
         <SidebarShowMore
+          kind="reload"
           label="Reload sub-threads"
           onClick={() => void props.pagedNavigation?.restart(resource.id)}
         />

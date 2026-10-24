@@ -2,6 +2,7 @@ import { parseThreadIdentityKey, buildThreadIdentityKey, federatedThreadIdentity
 import type {
   FederationTarget,
   NavigationIdentity,
+  NavigationQueryAnchor,
   NavigationQueryEntry,
   NavigationQueryPage,
   NavigationQueryRequest,
@@ -190,6 +191,76 @@ export function isNavigationCursorExpired(error: unknown): boolean {
   if (typeof error === "object" && error !== null && "code" in error && error.code === "navigation_cursor_expired") return true;
   const message = error instanceof Error ? error.message : String(error);
   return message.includes("navigation_cursor_expired") || message.includes("Navigation cursor expired");
+}
+
+/** Electron drops the typed code across IPC; the owner prefixes its message with it. */
+export function isNavigationAnchorMissing(error: unknown): boolean {
+  if (typeof error === "object" && error !== null && "code" in error && error.code === "navigation_anchor_missing") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("navigation_anchor_missing");
+}
+
+function navigationAnchorKey(anchor: NavigationQueryAnchor): string {
+  return anchor.kind === "directory" ? JSON.stringify(["directory", anchor.key]) : navigationIdentityKey(anchor.ref);
+}
+
+export function navigationAnchorsEqual(left: NavigationQueryAnchor | undefined, right: NavigationQueryAnchor | undefined): boolean {
+  return left === right || Boolean(left && right && navigationAnchorKey(left) === navigationAnchorKey(right));
+}
+
+/**
+ * Where a window resumes after its anchor left the owner's query.
+ *
+ * An anchor is a position this window saw, not a membership claim: a thread
+ * revealed at its anchor can be archived, reparented, pinned or moved before
+ * the owner resolves it. A loaded row after the missing one is the nearest
+ * survivor (an anchored page starts at its anchor), then one before it. An
+ * anchor outside the loaded rows, such as an off-page selection, keeps the
+ * window's own first row. A window already at the top restarts there.
+ */
+export function navigationFallbackAnchor(
+  page: NavigationQueryPage | undefined,
+  missing: NavigationQueryAnchor,
+): NavigationQueryAnchor | undefined {
+  if (!page || !(page.rangeStart ?? 0)) return undefined;
+  const rows: NavigationQueryAnchor[] = page.directories?.length
+    ? page.directories.map((directory) => ({ kind: "directory", key: directory.key }))
+    : page.entries.map((entry) => ({ kind: "thread", ref: entry.row.ref }));
+  const index = rows.findIndex((row) => navigationAnchorsEqual(row, missing));
+  const nearest = index < 0 ? rows[0] : rows[index + 1] ?? rows[index - 1];
+  return nearest && !navigationAnchorsEqual(nearest, missing) ? nearest : undefined;
+}
+
+export type NavigationPageErrorKind = "page-budget" | "owner-upgrade" | "viewer-upgrade" | "read-failed";
+
+/**
+ * What a failed page read means to the operator, or nothing to report.
+ *
+ * An offline peer is not a failure: its rows simply aren't there, as in every
+ * lens that merges peers in main. Main returns that case as data, so it never
+ * reaches the log either; the federation runtime logs the outage itself. Any
+ * other failure is thrown, and the owner's message is in the main log
+ * ("Error occurred in handler for 'navigation:get-query-page'"); Electron's
+ * IPC wrapper around it is not something an operator can act on.
+ */
+export function navigationPageErrorKind(error: string | undefined): NavigationPageErrorKind | undefined {
+  if (!error || isNavigationPeerUnavailable(error)) return undefined;
+  if (error.includes("retained-page budget")) return "page-budget";
+  if (error.includes("Upgrade the owning instance")) return "owner-upgrade";
+  if (error.includes("Upgrade this instance")) return "viewer-upgrade";
+  return "read-failed";
+}
+
+const NAVIGATION_PAGE_ERROR_COPY: Record<NavigationPageErrorKind, string> = {
+  "page-budget": "Too many thread lists are open. Collapse a directory to load more.",
+  "owner-upgrade": "Update the other instance to see these threads.",
+  "viewer-upgrade": "Update PwrAgent to see these threads.",
+  "read-failed": "Couldn't load these threads.",
+};
+
+export function navigationPageErrorCopy(error: string | undefined): string | undefined {
+  const kind = navigationPageErrorKind(error);
+  return kind && NAVIGATION_PAGE_ERROR_COPY[kind];
 }
 
 export function failNavigationPageRead(

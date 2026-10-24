@@ -366,6 +366,51 @@ describe("McpOAuthSessionCoordinator", () => {
     expect(coordinator.state).toBe("ready");
   });
 
+  it.each([false, true])("isolates refresh cancellation and retries after abandonment (cancelAll=%s)", async (cancelAll) => {
+    const { vault, writes } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      clientInformation: { client_id: "fixture" },
+      tokens: { access_token: "old-access", refresh_token: "old-refresh", token_type: "bearer" },
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const authFn = refreshAuth(async (provider) => {
+      await gate;
+      await provider.saveTokens?.({ access_token: "new-access", token_type: "bearer" });
+      return "AUTHORIZED";
+    });
+    const coordinator = new McpOAuthSessionCoordinator({
+      connectionId: "example", serverUrl: new URL("https://mcp.example.com/mcp"), vault, authFn,
+      fetchFn: async (_url, init) => new Response(null, { status: new Headers(init?.headers).get("authorization") === "Bearer new-access" ? 200 : 401 }),
+    });
+    const first = new AbortController();
+    const second = new AbortController();
+    const fetch = coordinator.authorizedFetch();
+    const one = fetch("https://mcp.example.com/mcp", { signal: first.signal }).catch((error: unknown) => error);
+    const two = fetch("https://mcp.example.com/mcp", { signal: second.signal }).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(authFn).toHaveBeenCalledOnce());
+    first.abort();
+    expect(await one).toMatchObject({ name: "AbortError" });
+    if (cancelAll) {
+      second.abort();
+      expect(await two).toMatchObject({ name: "AbortError" });
+      expect(coordinator.state).toBe("ready");
+    }
+    release();
+    if (cancelAll) {
+      // The abandoned auth implementation resumes late and tries to save a
+      // token. The cancellation guard must reject that commit before retry.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(writes).toHaveLength(0);
+      expect((await fetch("https://mcp.example.com/mcp")).status).toBe(200);
+      expect(authFn).toHaveBeenCalledTimes(2);
+    } else {
+      expect(await two).toMatchObject({ status: 200 });
+      expect(authFn).toHaveBeenCalledOnce();
+    }
+    expect(writes).toHaveLength(1);
+  });
+
   it("retains the prior refresh token when rotation omits a replacement", async () => {
     const { vault, writes } = createVault({
       resourceUrl: "https://mcp.example.com/mcp",
@@ -555,6 +600,83 @@ describe("McpOAuthSessionCoordinator", () => {
       coordinator.authorizedFetch()("https://mcp.example.com/mcp"),
     ).rejects.toBeInstanceOf(McpReauthorizationRequiredError);
     expect(coordinator.state).toBe("reauthorization_required");
+  });
+
+  it.each([undefined, new Error("The tool request was cancelled.")])(
+    "keeps connection health when its caller cancels a request (%s)",
+    async (reason) => {
+      const { vault, writes } = createVault({
+        resourceUrl: "https://mcp.example.com/mcp",
+        tokens: { access_token: "access", token_type: "bearer" },
+      });
+      const controller = new AbortController();
+      const coordinator = new McpOAuthSessionCoordinator({
+        connectionId: "example",
+        fetchFn: vi.fn(async () => {
+          controller.abort(reason);
+          throw controller.signal.reason;
+        }),
+        serverUrl: new URL("https://mcp.example.com/mcp"),
+        vault,
+      });
+
+      const failure = await coordinator.authorizedFetch()("https://mcp.example.com/mcp", {
+        signal: controller.signal,
+      }).catch((error: unknown) => error);
+
+      expect(coordinator.state).toBe("ready");
+      expect(coordinator.detail).toBeUndefined();
+      expect(failure).toBe(controller.signal.reason);
+      await expect(coordinator.configured()).resolves.toBe(true);
+      expect(writes).toHaveLength(0);
+    },
+  );
+
+  it("does not clear an upstream failure when a later request is cancelled", async () => {
+    const { vault } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      tokens: { access_token: "access", token_type: "bearer" },
+    });
+    const controller = new AbortController();
+    const coordinator = new McpOAuthSessionCoordinator({
+      connectionId: "example",
+      fetchFn: vi.fn()
+        .mockResolvedValueOnce(new Response("busy", { status: 503 }))
+        .mockImplementationOnce(async () => {
+          controller.abort();
+          throw controller.signal.reason;
+        }),
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+    });
+    await coordinator.authorizedFetch()("https://mcp.example.com/mcp");
+    await expect(coordinator.authorizedFetch()("https://mcp.example.com/mcp", {
+      signal: controller.signal,
+    })).rejects.toThrow();
+
+    expect(coordinator.state).toBe("temporarily_unavailable");
+    expect(coordinator.detail).toBe("The MCP server returned HTTP 503.");
+  });
+
+  it("reports a fetch failure even when it is named AbortError without caller cancellation", async () => {
+    const { vault } = createVault({
+      resourceUrl: "https://mcp.example.com/mcp",
+      tokens: { access_token: "access", token_type: "bearer" },
+    });
+    const coordinator = new McpOAuthSessionCoordinator({
+      connectionId: "example",
+      fetchFn: vi.fn(async () => {
+        throw new DOMException("Upstream fetch failed.", "AbortError");
+      }),
+      serverUrl: new URL("https://mcp.example.com/mcp"),
+      vault,
+    });
+
+    await expect(coordinator.authorizedFetch()("https://mcp.example.com/mcp", {
+      signal: new AbortController().signal,
+    })).rejects.toThrow("Upstream fetch failed.");
+    expect(coordinator.state).toBe("temporarily_unavailable");
+    expect(coordinator.detail).toBe("Upstream fetch failed.");
   });
 
   it("retains credentials while exposing a transient upstream failure", async () => {

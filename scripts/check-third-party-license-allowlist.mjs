@@ -103,6 +103,22 @@ import {
  * Adding an id here is a deliberate legal decision. Make it explicitly, in a
  * commit that says why — do not add one to make CI green.
  */
+// PwrDrvr LLC approved the official Agent SDK integration on 2026-10-20.
+// These exact packages use Anthropic Commercial Terms, not an SPDX license.
+// This named exception is NOT a general allowlist entry or approval for other
+// packages declaring "SEE LICENSE IN README.md". First-party code remains MIT.
+export const ANTHROPIC_COMMERCIAL_TERMS_PACKAGES = new Set([
+  "@anthropic-ai/claude-agent-sdk",
+  "@anthropic-ai/claude-agent-sdk-darwin-arm64",
+  "@anthropic-ai/claude-agent-sdk-darwin-x64",
+  "@anthropic-ai/claude-agent-sdk-linux-arm64",
+  "@anthropic-ai/claude-agent-sdk-linux-arm64-musl",
+  "@anthropic-ai/claude-agent-sdk-linux-x64",
+  "@anthropic-ai/claude-agent-sdk-linux-x64-musl",
+  "@anthropic-ai/claude-agent-sdk-win32-arm64",
+  "@anthropic-ai/claude-agent-sdk-win32-x64",
+]);
+
 export const ALLOWED_LICENSE_IDS = new Set([
   // Documented policy, and in the production tree today.
   "Apache-2.0",
@@ -278,6 +294,9 @@ export function checkNpmDependencyLicenses(records, { subject = "" } = {}) {
   const failures = [];
 
   for (const record of records) {
+    if (ANTHROPIC_COMMERCIAL_TERMS_PACKAGES.has(record.name)
+      && (record.declaredLicense === "SEE LICENSE IN README.md"
+        || record.declaredLicense === "SEE LICENSE IN LICENSE.md")) continue;
     const label = `${subject}${record.name}@${record.version || "?"}`;
     let allowed;
     try {

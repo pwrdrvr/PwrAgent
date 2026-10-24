@@ -36,13 +36,12 @@ import {
 } from "@pwragent/shared";
 import { useStarMapProjectPages, starMapProjectResource } from "./useStarMapProjectPages";
 import type { NavigationWindowResource } from "../../lib/navigation-window-queries";
+import { navigationPageErrorCopy } from "../../lib/navigation-query-state";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { SearchIcon } from "../../icons";
-import {
-  formatPrimaryAccel,
-  matchThreadJumpChord,
-} from "../../lib/keyboard-accel";
+import { matchThreadJumpChord } from "../../lib/keyboard-accel";
+import { chordLabelFor, useKeybindings } from "../../lib/keybindings-store";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
 import { SidebarSearchPopup } from "../navigation/SidebarSearchPopup";
@@ -124,6 +123,7 @@ import {
 import {
   chatCardGroupRect,
   chatCardEdgeToward,
+  chatCardIsInView,
   dockContextRect,
   dockTerminalRect,
   resizeChatCardRect,
@@ -576,6 +576,7 @@ function projectBaseSlot(
 
 export function StarMapScreen(props: StarMapScreenProps) {
   const active = useStarMapForeground();
+  const jumpChord = chordLabelFor(useKeybindings(), "navigation.jump_to_thread");
   const layerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -614,6 +615,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
     new Set(),
   );
   /**
+   * The entrance timers, by thread key. Owned here so an unmount cancels
+   * them: a timer that outlives the screen calls a setter on a dead fiber,
+   * and after test teardown that setter runs with no `window` at all.
+   */
+  const enteringTimersRef = useRef(new Map<string, number>());
+  useEffect(() => {
+    const timers = enteringTimersRef.current;
+    return () => {
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
+  /**
    * Play the arrival animation for a card that was not on the map a moment
    * ago. Shared by intake (a thread that did not exist) and the ⌘K summon
    * (a thread the lens was not drawing): both are a card appearing where
@@ -622,13 +636,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const markThreadEntering = useCallback((threadKey: string) => {
     setEnteringThreadKeys((current) => new Set(current).add(threadKey));
-    window.setTimeout(() => {
-      setEnteringThreadKeys((current) => {
-        const next = new Set(current);
-        next.delete(threadKey);
-        return next;
-      });
-    }, 2_000);
+    // A second mark for the same card restarts its window rather than
+    // letting the first mark's timer cut the second arrival short.
+    const timers = enteringTimersRef.current;
+    window.clearTimeout(timers.get(threadKey));
+    timers.set(
+      threadKey,
+      window.setTimeout(() => {
+        timers.delete(threadKey);
+        setEnteringThreadKeys((current) => {
+          const next = new Set(current);
+          next.delete(threadKey);
+          return next;
+        });
+      }, 2_000),
+    );
   }, []);
   /** Open state of the ⌘K palette. */
   const [jumpOpen, setJumpOpen] = useState(false);
@@ -1297,8 +1319,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
     localInstanceId, descriptors: projectDescriptorsByInstance, filters: filterSelection,
   });
   useEffect(() => {
-    const error = projectPages.state.admissionError
-      ?? [...projectPages.state.resources.values()].find((resource) => resource.state.error)?.state.error;
+    const pageError = [...projectPages.state.resources.values()]
+      .map((resource) => navigationPageErrorCopy(resource.state.error)).find(Boolean);
+    const error = projectPages.state.admissionError ?? pageError;
     if (error) setCardError(error);
   }, [projectPages.state]);
   const projectThreadsByInstance = useMemo(() => {
@@ -3005,14 +3028,59 @@ export function StarMapScreen(props: StarMapScreenProps) {
             bounds: canvasBoundsRef.current,
           }
         : undefined;
-      chatCards.open(
+      return chatCards.open(
         ownerInstanceId,
         thread,
         placement,
-        { persist: Boolean(remoteOwner || health?.instanceId) },
+        {
+          persist: Boolean(remoteOwner || health?.instanceId),
+          // A thread with no card in this lens (the Star Map manager, a
+          // filtered-out thread) has nothing to open beside, so it opens
+          // where the operator is looking.
+          inView: {
+            view: viewRef.current,
+            viewport: viewportSizeRef.current,
+            bounds: canvasBoundsRef.current,
+          },
+        },
       );
     },
     [bodies, chatCards, health?.instanceId, localInstanceId],
+  );
+
+  /**
+   * The Manager button's open. An already-open card only rises in place,
+   * and a new one opens beside the manager's own thread card when the lens
+   * draws it, so either can sit off-screen (an open card may also be
+   * restored from a previous session) and make the button look dead. Fly
+   * to wherever the card ended up.
+   */
+  const openManagerThread = useCallback(
+    (thread: NavigationThreadSummary) => {
+      const rect = openThread(thread);
+      if (chatCardIsInView(rect, viewRef.current, viewportSizeRef.current)) {
+        return;
+      }
+      // As `flyForAgent` does: a ⌘K pick still waiting for its card would
+      // otherwise land later and fly the map away again.
+      setPendingFlight(undefined);
+      operatorMovedViewRef.current = true;
+      flight.flyTo(
+        starMapViewFocusedOn({
+          rect: {
+            x: rect.left,
+            y: rect.top,
+            width: rect.width,
+            height: rect.height,
+          },
+          canvas: canvasBoundsRef.current,
+          viewport: viewportSizeRef.current,
+          scale: viewRef.current.scale,
+          topAnchored: topAnchoredView,
+        }),
+      );
+    },
+    [flight, openThread, topAnchoredView],
   );
 
   /**
@@ -3052,7 +3120,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // unset feeds itself, and the manager that read the empty prop would
     // never find the thread it just created.
     threads: localThreads,
-    openThread,
+    openThread: openManagerThread,
     onDemandThread: setManagerDemand,
     onRefreshLocalThreads: props.onRefreshLocalThreads,
     // Reported through the map's one error banner rather than a second one:
@@ -3801,6 +3869,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * identical cards.
    */
   const [locatedThreadKey, setLocatedThreadKey] = useState<string>();
+  /**
+   * The timers that drop the ring and give up on a pending flight. One of
+   * each: a newer pick replaces the older one's timer, and an unmount
+   * cancels both rather than leaving them to call setters on a dead fiber.
+   */
+  const summonTimersRef = useRef<{ located?: number; pendingFlight?: number }>(
+    {},
+  );
+  useEffect(() => {
+    const timers = summonTimersRef.current;
+    return () => {
+      window.clearTimeout(timers.located);
+      window.clearTimeout(timers.pendingFlight);
+    };
+  }, []);
 
   /**
    * Cards an Agent ringed with `highlight_star_map_threads`, by thread key:
@@ -3833,7 +3916,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         markThreadEntering(threadKey);
       }
       setLocatedThreadKey(threadKey);
-      window.setTimeout(() => {
+      const timers = summonTimersRef.current;
+      window.clearTimeout(timers.located);
+      timers.located = window.setTimeout(() => {
+        timers.located = undefined;
         setLocatedThreadKey((current) =>
           current === threadKey ? undefined : current,
         );
@@ -3842,7 +3928,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // A destination that never produces a rect must not sit waiting for
       // one: an unrelated snapshot minutes later would otherwise fly the
       // map somewhere the operator has long stopped expecting.
-      window.setTimeout(() => {
+      window.clearTimeout(timers.pendingFlight);
+      timers.pendingFlight = window.setTimeout(() => {
+        timers.pendingFlight = undefined;
         setPendingFlight((current) =>
           current === threadKey ? undefined : current,
         );
@@ -6511,7 +6599,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         <SidebarSearchPopup
           threads={searchThreads}
           label="Fly to thread"
-          placeholder="Fly to thread, PR #, branch, repo…"
+          placeholder="Fly to thread, PR #, branch · @project to narrow"
           onJumpToThread={flyToThread}
           onClose={() => setJumpOpen(false)}
         />
@@ -6631,14 +6719,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
           <button
             type="button"
             className="star-map__filter-chip star-map__find"
-            aria-label="Find a thread on the map"
+            title="Find a thread on the map"
             onClick={() => setJumpOpen(true)}
           >
             <SearchIcon size={13} />
             <span>Find</span>
-            <span className="star-map__find-chord" aria-hidden="true">
-              {formatPrimaryAccel("K")}
-            </span>
+            {jumpChord === undefined ? null : (
+              <span className="star-map__find-chord" aria-hidden="true">
+                {jumpChord}
+              </span>
+            )}
           </button>
           <StarMapViewOptions
             preferences={preferences}

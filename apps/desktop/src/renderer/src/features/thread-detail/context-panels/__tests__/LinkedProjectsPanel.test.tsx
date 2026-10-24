@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../../../composer/native-picker-boundary";
 import { LinkedProjectsPanel } from "../LinkedProjectsPanel";
@@ -7,6 +7,40 @@ import { LinkedProjectsPanel } from "../LinkedProjectsPanel";
 afterEach(cleanup);
 
 describe("LinkedProjectsPanel", () => {
+  it("routes secondary directory detachment to the remote owner and source thread", async () => {
+    const target = { scope: "remote" as const, instanceId: "owner-one" };
+    const directory = { id: "/owner/PwrGit", kind: "local" as const,
+      label: "PwrGit", path: "/owner/PwrGit" };
+    const detachDirectoryFromThread = vi.fn(async () => ({
+      ok: true as const, backend: "codex" as const, threadId: "source-thread", directories: [],
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+    render(
+      <LinkedProjectsPanel
+        desktopApi={{ detachDirectoryFromThread }}
+        onRefreshNavigation={onRefreshNavigation}
+        hideTooltip={() => undefined}
+        showTooltip={() => undefined}
+        thread={{
+          id: "mounted-thread", title: "PwrSnap", titleSource: "explicit", source: "codex",
+          projectKey: "/owner/PwrSnap",
+          federation: { ref: { backend: "codex", target, threadId: "source-thread" },
+            instanceLabel: "Owner", peerStatus: "connected" },
+          linkedDirectories: [
+            { id: "/owner/PwrSnap", kind: "local", label: "PwrSnap", path: "/owner/PwrSnap" },
+            directory,
+          ],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Detach" }));
+    await waitFor(() => expect(onRefreshNavigation).toHaveBeenCalledOnce());
+    expect(detachDirectoryFromThread).toHaveBeenCalledWith({
+      backend: "codex", federationTarget: target, threadId: "source-thread", directory,
+    });
+  });
+
   it("disables the native directory picker for a remote thread", () => {
     const pickDirectoryFromDisk = vi.fn();
     const attachDirectoryToThread = vi.fn();

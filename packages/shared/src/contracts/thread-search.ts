@@ -156,13 +156,15 @@ export type ThreadSearchResult = {
 /**
  * One federation peer that participated in (or failed out of) a global
  * search, so the results surface can disclose which remote instances
- * were covered. Remote matching is title/metadata filtering only —
- * message content is never searched across the federation link.
+ * were covered. Content matching executes on the owning instance; only
+ * result snippets cross the federation link.
  */
 export type ThreadSearchRemoteInstance = {
   instanceId: string;
   instanceLabel: string;
   resultCount: number;
+  searching?: boolean;
+  cancelled?: boolean;
   failed?: boolean;
   error?: string;
 };
@@ -179,6 +181,12 @@ export type ThreadSearchResponse = {
   unavailableScopes: ThreadSearchUnavailableScope[];
   remoteInstances?: ThreadSearchRemoteInstance[];
   truncated?: boolean;
+};
+
+/** Correlates owner work and cancellation without persisting a search. */
+export type FederationContentSearchRequest = {
+  searchId: string;
+  request: ThreadSearchRequest;
 };
 
 export function isThreadSearchContentMode(

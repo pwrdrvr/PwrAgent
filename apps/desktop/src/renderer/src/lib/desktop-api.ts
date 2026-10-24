@@ -1,3 +1,4 @@
+import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import type { NativeVoiceApi } from "../../../shared/native-voice";
 import type {
   ListBackgroundTerminalsRequest,
@@ -5,15 +6,47 @@ import type {
   TerminateBackgroundTerminalRequest,
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
+import type {
+  ListThreadTodoProjectsResponse,
+  ListThreadTodoProjectsRequest,
+  ListThreadTodosRequest,
+  ListThreadTodosResponse,
+  ResolveThreadTodoRequest,
+  RunThreadTodoActionRequest,
+  SetThreadTodoItemCheckedRequest,
+  SetThreadTodoProjectRequest,
+  ThreadTodoMutationResponse,
+  ThreadTodosChangedEvent,
+  ThreadReview,
+  ListThreadReviewsRequest,
+  UpdateThreadReviewRequest,
+  DismissOperatorQuestionRequest,
+  OperatorQuestionThreadRequest,
+  ListOperatorRequestsResponse,
+  ListOperatorRequestsRequest,
+  MarkOperatorItemsSeenRequest,
+  OperatorRequestsChangedEvent,
+} from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "@pwragent/shared";
+import type {
+  CancelComposerFilePushRequest,
+  ComposerFilePushProgress,
+  PushComposerFileRequest,
+  PushComposerFileResult,
+} from "@pwragent/shared";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
 import { useEffect, useState } from "react";
 import type { ReceivingFolderRequest, ReceivingFolderResponse } from "../../../shared/federation-receiving-folder";
 import type { RendererErrorReport } from "../../../shared/renderer-error";
+import type {
+  KeybindingWriteRequest,
+  KeybindingsSnapshot,
+} from "../../../shared/keybindings";
 import type { RendererDiagnosticLogRequest } from "../../../shared/renderer-diagnostic";
 import type {
   ImageUploadFallbackRequest,
@@ -42,7 +75,9 @@ import type {
   GithubPrSamlEnforcementEvent,
 } from "../../../shared/github-pr-access";
 import type {
+  IntegratedTerminalRenameRequest,
   IntegratedTerminalCloseRequest,
+  IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
   IntegratedTerminalErrorEvent,
@@ -75,6 +110,8 @@ import type {
   ReadQueuedTurnResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
+  MoveQueuedTurnRequest,
+  MoveQueuedTurnResponse,
   ReleaseQueuedTurnRequest,
   ReleaseQueuedTurnResponse,
   CreateScheduledThreadActionRequest,
@@ -162,6 +199,7 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListMcpConnectionsRequest,
   ListMcpConnectionsResponse,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
@@ -205,6 +243,7 @@ import type {
   FederationJumpSearchProgress,
   FederationJumpSearchResponse,
   RemoveRemoteThreadPinRequest,
+  HasRemoteThreadPinRequest,
   RemoveRemoteThreadPinResponse,
   SetRemoteThreadLocalPinRequest,
   SetRemoteThreadLocalPinResponse,
@@ -243,6 +282,8 @@ import type {
   SetDirectoryThreadsCollapsedResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadLockRequest,
+  SetThreadLockResponse,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
@@ -328,6 +369,7 @@ import type {
   RemoveMcpConnectionRequest,
   SetMcpConnectionEnabledRequest,
   SetMcpConnectionSelectForNewThreadsRequest,
+  SetMcpConnectionToolApprovalRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
@@ -366,6 +408,8 @@ import type {
   ListWorktreeUnpublishedCommitsResponse,
   GetWorktreeUnpublishedCommitDiffRequest,
   GetWorktreeUnpublishedCommitDiffResponse,
+  ReadWorktreeImageRequest,
+  ReadWorktreeImageResponse,
   NavigationSnapshot,
   ResetDirectoryLaunchpadRequest,
   ResetDirectoryLaunchpadResponse,
@@ -418,6 +462,8 @@ import type {
   StartThreadMigrationRequest,
   StartThreadMigrationResponse,
   StartTurnRequest,
+  SubmitThreadReplyRequest,
+  SubmitThreadReplyResponse,
   StartTurnResponse,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
@@ -448,6 +494,8 @@ import type {
   DeleteDesktopPwrAgentProfileRequest,
   DeleteDesktopPwrAgentProfileResponse,
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
   DesktopMessagingContactLookupRequest,
@@ -472,10 +520,16 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ResolveTranscriptFilesRequest,
+  ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
   ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
+  ReorderDesktopPwrAgentProfilesRequest,
+  ReorderDesktopPwrAgentProfilesResponse,
+  SetDesktopPwrAgentProfileMenuVisibilityRequest,
+  SetDesktopPwrAgentProfileMenuVisibilityResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   DesktopTokenMiserUsage,
@@ -519,6 +573,8 @@ import type {
   SetDefaultDesktopPwrAgentProfileResponse,
   SetNavigationBrowseModeRequest,
   SetNavigationBrowseModeResponse,
+  SetPinnedGroupCollapsedRequest,
+  SetPinnedGroupCollapsedResponse,
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
@@ -534,7 +590,7 @@ import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type { WindowPointerSnapshot } from "../../../shared/window-pointer";
 import type { WindowShowThreadRequest } from "../../../shared/window-show-thread";
 import type { AppMenuTopLevel, AppMenuPopupRequest } from "../../../shared/app-menu";
-import type { WindowControlAction } from "../../../shared/ipc";
+import type { WindowControlAction, WindowOpenMainViewRequest } from "../../../shared/ipc";
 import type {
   AppChangelogDocument,
   AppLogEntry,
@@ -554,7 +610,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   copyText?: (text: string) => Promise<void>;
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
   readTranscriptImage?: (url: string) => Promise<{ dataBase64: string; mimeType: string }>;
-  listMcpConnections?: () => Promise<ListMcpConnectionsResponse>;
+  listMcpConnections?: (request?: ListMcpConnectionsRequest) => Promise<ListMcpConnectionsResponse>;
   createMcpConnection?: (
     request: CreateMcpConnectionRequest,
   ) => Promise<CreateMcpConnectionResponse>;
@@ -581,6 +637,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<MutateMcpConnectionResponse>;
   setMcpConnectionSelectForNewThreads?: (
     request: SetMcpConnectionSelectForNewThreadsRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  setMcpConnectionToolApproval?: (
+    request: SetMcpConnectionToolApprovalRequest,
   ) => Promise<MutateMcpConnectionResponse>;
   listMcpConnectionTools?: (
     request: ListMcpConnectionToolsRequest,
@@ -617,6 +676,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     callback: (state: PwrSuiteInstallerState) => void,
   ) => () => void;
   getRuntimeIdentity?: () => Promise<RuntimeIdentity>;
+  /** Whether the one-time "new threads start on Auto" upgrade notice is pending. */
+  readLaunchpadAccessNoticePending?: () => Promise<boolean>;
+  /** Closes the upgrade notice for good. */
+  dismissLaunchpadAccessNotice?: () => Promise<void>;
   readAppMetadata?: () => Promise<AppMetadata>;
   readLicenseDocument?: (
     kind: AppLicenseDocumentKind,
@@ -704,6 +767,13 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setPwrAgentProfileCodexProfile?: (
     request: SetDesktopPwrAgentProfileCodexProfileRequest,
   ) => Promise<SetDesktopPwrAgentProfileCodexProfileResponse>;
+  /** Rejects a stale order: one that does not name exactly the current set. */
+  reorderPwrAgentProfiles?: (
+    request: ReorderDesktopPwrAgentProfilesRequest,
+  ) => Promise<ReorderDesktopPwrAgentProfilesResponse>;
+  setPwrAgentProfileMenuVisibility?: (
+    request: SetDesktopPwrAgentProfileMenuVisibilityRequest,
+  ) => Promise<SetDesktopPwrAgentProfileMenuVisibilityResponse>;
   /** Graduate ONLY the bootstrap profile's `config.toml` to the
    *  target real profile (theme, density, messaging acknowledgment,
    *  etc). Does NOT graduate secrets — call `writeSecretsToProfile`
@@ -741,6 +811,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   waitForProfileAlive?: (
     request: WaitForDesktopProfileAliveRequest,
   ) => Promise<WaitForDesktopProfileAliveResponse>;
+  threadServices?: (request: ServiceUiRequest) => Promise<ServiceUiResponse>;
   openFederationWindow?: (
     request: OpenFederationWindowRequest,
   ) => Promise<OpenFederationWindowResponse>;
@@ -757,6 +828,19 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   handoffThreadToInstance?: (
     request: HandoffInstanceThreadRequest,
   ) => Promise<HandoffInstanceThreadResult>;
+  /**
+   * Copy a file from this machine to the owner of a remote thread, for a
+   * composer attachment. Resolves with the owner's path to the copy.
+   */
+  pushComposerFile?: (
+    request: PushComposerFileRequest,
+  ) => Promise<PushComposerFileResult>;
+  cancelComposerFilePush?: (
+    request: CancelComposerFilePushRequest,
+  ) => Promise<void>;
+  onComposerFilePushProgress?: (
+    callback: (progress: ComposerFilePushProgress) => void,
+  ) => () => void;
   /** On-demand load poll for Star Map health indicators. Omitted or
    *  local instanceId samples locally; a remote id rides the
    *  short-timeout `backend.getLoadStatus` federation RPC. `load` is
@@ -864,7 +948,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  manageThreadDependencies?: (
+    request: import("@pwragent/shared").ManageThreadDependenciesRequest,
+  ) => Promise<import("@pwragent/shared").ManageThreadDependenciesResponse>;
   readUsageActivity?: (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
+  /** Stored totals for a local thread and every sub-thread under it. */
+  readThreadFamilyPricing?: (request: ReadThreadFamilyPricingRequest) => Promise<ReadThreadFamilyPricingResponse>;
   analyzeUsageActivity?: (request: AnalyzeUsageActivityRequest) => Promise<AnalyzeUsageActivityResponse>;
   /** Spawns or focuses the dedicated Usage Activity window. */
   openUsageActivity?: () => Promise<void>;
@@ -938,6 +1027,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: RemoveCodexMcpServerRequest,
   ) => Promise<RemoveCodexMcpServerResponse>;
   startTurn?: (request: StartTurnRequest) => Promise<StartTurnResponse>;
+  /** Replies to a local thread no composer shows: start, steer or queue. */
+  submitThreadReply?: (
+    request: SubmitThreadReplyRequest,
+  ) => Promise<SubmitThreadReplyResponse>;
   readQueuedTurn?: (
     request: ReadQueuedTurnRequest,
   ) => Promise<ReadQueuedTurnResponse>;
@@ -947,6 +1040,44 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   releaseQueuedTurn?: (
     request: ReleaseQueuedTurnRequest,
   ) => Promise<ReleaseQueuedTurnResponse>;
+  moveQueuedTurn?: (
+    request: MoveQueuedTurnRequest,
+  ) => Promise<MoveQueuedTurnResponse>;
+  listThreadTodos?: (
+    request?: ListThreadTodosRequest,
+  ) => Promise<ListThreadTodosResponse>;
+  listThreadReviews?: (request?: ListThreadReviewsRequest) => Promise<{ reviews: ThreadReview[] }>;
+  updateThreadReview?: (request: UpdateThreadReviewRequest) => Promise<{ review: ThreadReview }>;
+  resolveThreadTodo?: (
+    request: ResolveThreadTodoRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
+  /** Merge or start-thread; start_review runs through the composer instead. */
+  runThreadTodoAction?: (
+    request: RunThreadTodoActionRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
+  /** The projects a card's project menu offers. */
+  listThreadTodoProjects?: (request?: ListThreadTodoProjectsRequest) => Promise<ListThreadTodoProjectsResponse>;
+  /** The operator's pick from a card's project menu. */
+  setThreadTodoProject?: (
+    request: SetThreadTodoProjectRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
+  /** Ticks or unticks one step of a card's checklist. */
+  setThreadTodoItemChecked?: (
+    request: SetThreadTodoItemCheckedRequest,
+  ) => Promise<ThreadTodoMutationResponse>;
+  /** Marker event; refetch owner-routed cards with `listThreadTodos`. */
+  onThreadTodosChanged?: (
+    callback: (event: ThreadTodosChangedEvent) => void,
+  ) => () => void;
+  /** Every local thread's pending requests and open async questions. */
+  listOperatorRequests?: (request?: ListOperatorRequestsRequest) => Promise<ListOperatorRequestsResponse>;
+  listDismissedOperatorQuestions?: (request: OperatorQuestionThreadRequest) => Promise<string[]>;
+  markOperatorItemsSeen?: (request: MarkOperatorItemsSeenRequest) => Promise<void>;
+  dismissOperatorQuestion?: (request: DismissOperatorQuestionRequest) => Promise<void>;
+  /** Marker event; refetch with `listOperatorRequests`. */
+  onOperatorRequestsChanged?: (
+    callback: (event: OperatorRequestsChangedEvent) => void,
+  ) => () => void;
   listScheduledThreadActions?: (
     request?: ListScheduledThreadActionsRequest,
     consumerId?: string,
@@ -1061,6 +1192,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setNavigationBrowseMode?: (
     request: SetNavigationBrowseModeRequest,
   ) => Promise<SetNavigationBrowseModeResponse>;
+  setPinnedGroupCollapsed?: (
+    request: SetPinnedGroupCollapsedRequest,
+  ) => Promise<SetPinnedGroupCollapsedResponse>;
   listBackends?: (
     request?: ListBackendsRequest
   ) => Promise<ListBackendsResponse>;
@@ -1177,6 +1311,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   openPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   revealPath?: (request: OpenPathRequest) => Promise<OpenPathResponse>;
   receivingFolder?: (request: ReceivingFolderRequest) => Promise<ReceivingFolderResponse>;
+  resolveTranscriptFiles?: (
+    request: ResolveTranscriptFilesRequest
+  ) => Promise<ResolveTranscriptFilesResponse>;
   readMarkdownFile?: (
     request: ReadMarkdownFileRequest
   ) => Promise<ReadMarkdownFileResponse>;
@@ -1201,9 +1338,13 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   showThreadFromToolOutputIncidentExplorer?: (
     request: WindowShowThreadRequest
   ) => Promise<void>;
+  renameIntegratedTerminal?: (request: IntegratedTerminalRenameRequest) => Promise<void>;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;
+  showIntegratedTerminalContextMenu?: (
+    request: IntegratedTerminalContextMenuRequest,
+  ) => Promise<void>;
   writeIntegratedTerminal?: (
     request: IntegratedTerminalWriteRequest,
   ) => Promise<void>;
@@ -1248,11 +1389,16 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<AppServerListThreadsResponse>;
   searchThreads?: (
     request?: ThreadSearchRequest,
+    onProgress?: (response: ThreadSearchResponse) => void,
   ) => Promise<ThreadSearchResponse>;
+  cancelThreadSearch?: () => Promise<void>;
   markThreadSeen?: (request: MarkThreadSeenRequest) => Promise<unknown>;
   setThreadReaction?: (
     request: SetThreadReactionRequest
   ) => Promise<SetThreadReactionResponse>;
+  setThreadLock?: (
+    request: SetThreadLockRequest,
+  ) => Promise<SetThreadLockResponse>;
   setThreadToolIncidentNotice?: (
     request: SetThreadToolIncidentNoticeRequest,
   ) => Promise<SetThreadToolIncidentNoticeResponse>;
@@ -1292,6 +1438,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * Stored only on this instance; removal works while the owner is
    * unreachable and never archives the owner's thread.
    */
+  hasRemoteThreadPin?: (request: HasRemoteThreadPinRequest) => Promise<boolean>;
   addRemoteThreadPin?: (
     request: AddRemoteThreadPinRequest
   ) => Promise<AddRemoteThreadPinResponse>;
@@ -1376,6 +1523,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   getWorktreeUnpublishedCommitDiff?: (
     request: GetWorktreeUnpublishedCommitDiffRequest
   ) => Promise<GetWorktreeUnpublishedCommitDiffResponse>;
+  /** One side of an image diff, for the Edits rail's previews and lightbox. */
+  readWorktreeImage?: (
+    request: ReadWorktreeImageRequest
+  ) => Promise<ReadWorktreeImageResponse>;
   getGlabStatus?: (request?: GetGlabStatusRequest) => Promise<GlabStatus>;
   pickGlabCommand?: () => Promise<PickGhCommandResponse>;
   getGhStatus?: (request?: GetGhStatusRequest) => Promise<GhStatus>;
@@ -1513,6 +1664,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   onAppearanceChanged?: (
     callback: (appearance: {
       theme: DesktopAppearanceTheme;
+      darkTheme: DesktopDarkTheme;
+      lightTheme: DesktopLightTheme;
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;
@@ -1637,13 +1790,29 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * unsubscribe function.
    */
   onOpenSettingsRequested?: (
-    callback: (section?: string) => void,
+    callback: (section?: string, subsection?: string) => void,
+  ) => () => void;
+  /**
+   * Main → renderer push: fires from View → Search Threads and View →
+   * Automations, naming the screen to show.
+   */
+  onOpenMainViewRequested?: (
+    callback: (view: WindowOpenMainViewRequest) => void,
   ) => () => void;
   /**
    * Main → renderer push: fires when the user invokes File → New Thread
    * or presses the native `CmdOrCtrl+N` accelerator.
    */
   onOpenNewThreadRequested?: (callback: () => void) => () => void;
+  /** `~/.pwragent/keybindings.toml`: the operator's changed shortcuts. */
+  readKeybindings?: () => Promise<KeybindingsSnapshot>;
+  writeKeybindings?: (
+    request: KeybindingWriteRequest,
+  ) => Promise<KeybindingsSnapshot>;
+  /** Main → renderer push when the file changes, from any profile's window. */
+  onKeybindingsChanged?: (
+    callback: (snapshot: KeybindingsSnapshot) => void,
+  ) => () => void;
   /**
    * Main -> renderer push: focuses an existing thread from an
    * out-of-app surface such as a native notification.
@@ -1660,7 +1829,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
    * without flipping the persisted `onboarding.completed` flag.
    */
   onReplayOnboardingRequested?: (callback: () => void) => () => void;
-  /** Main → renderer push from Help → Copy Local Diagnostics Info. */
+  /** Main → renderer push from Help → Copy Diagnostics Info. */
   onCopyLocalDiagnosticsInfoRequested?: (callback: () => void) => () => void;
   getWindowPointerSnapshot?: () => Promise<WindowPointerSnapshot>;
   /**

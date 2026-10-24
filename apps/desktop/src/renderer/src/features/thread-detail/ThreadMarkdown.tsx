@@ -1,5 +1,7 @@
 import {
+  filePreviewKind,
   findSharedSkillNames,
+  isFilePreviewPath,
   isSharedSkillName,
   isThreadUrl,
   isGitHubAttachmentImageUrl,
@@ -10,6 +12,7 @@ import {
   type AppServerThreadImagePart,
   type DesktopApplicationsSnapshot,
   type MarkdownFileViewerContext,
+  type ResolvedTranscriptFile,
 } from "@pwragent/shared";
 import {
   createContext,
@@ -39,6 +42,7 @@ import {
   repairNestedLanguageFences,
 } from "../../lib/markdown-fences";
 import { useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
+import type { MarkdownMathRuntime } from "../../lib/markdown-math-runtime";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -65,6 +69,16 @@ import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
+import {
+  TranscriptFileRegistrationContext,
+  useTranscriptFileReference,
+  useTranscriptFiles,
+} from "./useTranscriptFiles";
+import {
+  FilePreviewBody,
+  FilePreviewCopyButton,
+  filePreviewDocumentName,
+} from "./FilePreview";
 
 type ThreadMarkdownProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -76,6 +90,7 @@ type ThreadMarkdownProps = {
     | "openApplication"
     | "openMarkdownFileViewer"
     | "readMarkdownFile"
+    | "resolveTranscriptFiles"
   >;
   fileViewerContext?: MarkdownFileViewerContext;
   imageParts?: AppServerThreadImagePart[];
@@ -154,6 +169,24 @@ function clipboardTextFromFragment(fragment: DocumentFragment): string {
   return text;
 }
 
+// `user-select: all` makes Chromium select the whole chip on a mousedown
+// inside it, so a plain click to open the PR left the chip highlighted and a
+// drag started on it began a selection. Refusing the mousedown's default keeps
+// the click and leaves a drag that merely crosses a chip atomic. Shift still
+// extends an existing selection over the chip.
+function suppressPullRequestChipSelectionStart(
+  event: MouseEvent<HTMLDivElement>,
+): void {
+  if (
+    event.button === 0
+    && !event.shiftKey
+    && event.target instanceof Element
+    && event.target.closest("[data-pr-chip]")
+  ) {
+    event.preventDefault();
+  }
+}
+
 function copySelectedPullRequestLinks(
   event: ClipboardEvent<HTMLDivElement>,
 ): void {
@@ -193,7 +226,6 @@ function copySelectedPullRequestLinks(
 function TranscriptCode(props: {
   children: ReactNode;
   className?: string;
-  desktopApi?: Pick<DesktopApi, "copyText">;
   editorName?: string;
   onOpenSkillInEditor?: (skill: SkillActionTarget) => void;
   onViewSkillMarkdown?: (skill: SkillActionTarget) => void;
@@ -203,6 +235,8 @@ function TranscriptCode(props: {
   const insideCodeBlock = useContext(CodeBlockContext);
   const insideLink = useContext(MarkdownLinkContext);
   const isBlockCode = insideCodeBlock || (props.className?.includes("language-") ?? false);
+  const inlineText = !isBlockCode && !insideLink ? extractTextContent(props.children) : "";
+  useTranscriptFileReference(inlineText, !isBlockCode && !insideLink && !props.skill);
 
   // Only inline code on a navigation-capable surface can become a chip; skip
   // the text extraction entirely on block code and on the Activity/Changelog/
@@ -214,7 +248,7 @@ function TranscriptCode(props: {
     // anyone to re-run anything. Gated on the id resolving to a real thread,
     // so an unrelated uuid stays plain code.
     const threadLink = resolveThreadIdText(
-      extractTextContent(props.children),
+      inlineText,
       threadLinks,
     );
     if (threadLink) {
@@ -242,10 +276,65 @@ function TranscriptCode(props: {
     );
   }
 
-  const copyText = extractTextContent(props.children);
+  const copyText = inlineText;
 
   if (!copyText) {
     return <code className="transcript-message__code">{props.children}</code>;
+  }
+
+  return <InlineTranscriptCode text={copyText}>{props.children}</InlineTranscriptCode>;
+}
+
+function InlineTranscriptCode(props: { children: ReactNode; text: string }) {
+  const {
+    props: markdownProps,
+    inlineFiles,
+    editorApplication,
+    openLocalFileInEditor,
+    viewLocalFile,
+  } = useContext(MarkdownRenderContext)!;
+  const target = inlineFiles.get(props.text);
+  if (target) {
+    const canPreview = target.previewable && markdownProps.desktopApi?.readMarkdownFile;
+    return (
+      <span className="thread-markdown__file-link">
+        {canPreview ? (
+          <a
+            className="transcript-message__link"
+            href={`file://${encodeURI(target.path)}`}
+            title={target.path}
+            onClick={(event) => {
+              event.preventDefault();
+              viewLocalFile({ ...target, label: props.text });
+            }}
+          >
+            <code className="transcript-message__code">{props.children}</code>
+          </a>
+        ) : (
+          <TranscriptCopyButton
+            as="span"
+            className="transcript-message__inline-code transcript-copy-button--inline"
+            copiedLabel="Copied inline code"
+            desktopApi={markdownProps.desktopApi}
+            label="Copy inline code"
+            text={props.text}
+          >
+            <code className="transcript-message__code">{props.children}</code>
+          </TranscriptCopyButton>
+        )}
+        {editorApplication && markdownProps.desktopApi?.openApplication ? (
+          <button
+            type="button"
+            className="thread-markdown__editor-link"
+            aria-label={openFileInEditorLabel(props.text, editorApplication.name)}
+            title={openFileInEditorTitle(editorApplication.name)}
+            onClick={() => openLocalFileInEditor(target)}
+          >
+            <AppIcon application={editorApplication} className="thread-markdown__editor-link-icon" size={13} />
+          </button>
+        ) : null}
+      </span>
+    );
   }
 
   return (
@@ -253,9 +342,9 @@ function TranscriptCode(props: {
       as="span"
       className="transcript-message__inline-code transcript-copy-button--inline"
       copiedLabel="Copied inline code"
-      desktopApi={props.desktopApi}
+      desktopApi={markdownProps.desktopApi}
       label="Copy inline code"
-      text={copyText}
+      text={props.text}
     >
       <code className="transcript-message__code">{props.children}</code>
     </TranscriptCopyButton>
@@ -282,6 +371,8 @@ type MarkdownRenderState = {
   skillsByPath: Map<string, AppServerSkillSummary & { path: string }>;
   skillsByToken: Map<string, AppServerSkillSummary & { path: string }>;
   sharedSkillNames: ReturnType<typeof findSharedSkillNames>;
+  inlineFiles: Map<string, ResolvedTranscriptFile>;
+  viewLocalFile: (target: MarkdownViewerTarget) => void;
   openLocalFileInEditor: (target: LocalFileTarget) => boolean;
   openLocalFileLink: (event: MouseEvent<HTMLAnchorElement>, href: string, label: string) => void;
   openSkillMarkdownInEditor: (skill: SkillActionTarget) => void;
@@ -311,8 +402,8 @@ const markdownComponents: Components = {
     const pullRequestLinks = usePullRequestLinks();
     const href = typeof anchorProps.href === "string" ? anchorProps.href : "";
     const localTarget = localFileTargetFromHref(href);
-    const isLocalMarkdownFile = Boolean(
-      localTarget && isMarkdownFilePath(localTarget.path)
+    const isLocalPreviewFile = Boolean(
+      localTarget && isFilePreviewPath(localTarget.path)
     );
     const skillPath = localTarget?.path;
     const label = extractTextContent(anchorProps.children).trim();
@@ -449,7 +540,7 @@ const markdownComponents: Components = {
         }}
         rel="noopener noreferrer"
         target="_blank"
-        title={isLocalMarkdownFile && localTarget
+        title={isLocalPreviewFile && localTarget
           ? tildifyPath(localTarget.path)
           : href || undefined}
       >
@@ -457,7 +548,7 @@ const markdownComponents: Components = {
       </a>
     );
 
-    if (isLocalMarkdownFile && localTarget) {
+    if (isLocalPreviewFile && localTarget) {
       return (
         <span className="thread-markdown__file-link">
           {link}
@@ -526,7 +617,6 @@ const markdownComponents: Components = {
     return (
       <TranscriptCode
         className={codeProps.className}
-        desktopApi={props.desktopApi}
         editorName={editorApplication?.name}
         onOpenSkillInEditor={editorApplication && props.desktopApi?.openApplication
           ? openSkillMarkdownInEditor
@@ -642,6 +732,32 @@ function MarkdownImage(props: { alt: string; src: string; title: string }) {
   );
 }
 
+// Parsing belongs to the document text and parser configuration, not the
+// surrounding application snapshot, file hydration, or document-viewer state.
+// Context consumers below this boundary still update their links and controls.
+const MarkdownDocument = memo(function MarkdownDocument(props: {
+  text: string;
+  mathRuntime?: MarkdownMathRuntime;
+}) {
+  return (
+    <ReactMarkdown
+      components={markdownComponents}
+      rehypePlugins={props.mathRuntime?.rehypePlugins}
+      remarkPlugins={[
+        ...(props.mathRuntime?.remarkPlugins ?? []),
+        remarkBreaks,
+        // Single tildes are common in home paths and approximate values.
+        [remarkGfm, { singleTilde: false }],
+        remarkPullRequestReferences,
+        remarkTableProfile,
+      ]}
+      urlTransform={normalizeMarkdownUrl}
+    >
+      {props.text}
+    </ReactMarkdown>
+  );
+});
+
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
   const sourceMarkdownText = useMemo(
     () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
@@ -654,6 +770,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
   );
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
+  const { files: inlineFiles, register: registerInlineFile } = useTranscriptFiles(props.desktopApi, props.fileViewerContext);
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -732,7 +849,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         return;
       }
 
-      if (isMarkdownFilePath(target.path) && props.desktopApi?.readMarkdownFile) {
+      if (isFilePreviewPath(target.path) && props.desktopApi?.readMarkdownFile) {
         event.preventDefault();
         setMarkdownViewerTarget({
           ...target,
@@ -783,6 +900,8 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     skillsByPath,
     skillsByToken,
     sharedSkillNames,
+    inlineFiles,
+    viewLocalFile: setMarkdownViewerTarget,
     openLocalFileInEditor,
     openLocalFileLink,
     openSkillMarkdownInEditor,
@@ -795,6 +914,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     skillsByPath,
     skillsByToken,
     sharedSkillNames,
+    inlineFiles,
     openLocalFileInEditor,
     openLocalFileLink,
     openSkillMarkdownInEditor,
@@ -811,25 +931,14 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         .filter(Boolean)
         .join(" ")}
       onCopy={copySelectedPullRequestLinks}
+      onMouseDown={suppressPullRequestChipSelectionStart}
     >
       <MarkdownRenderContext.Provider value={renderState}>
-        <MarkdownCodeApiContext.Provider value={props.desktopApi}>
-          <ReactMarkdown
-            components={markdownComponents}
-            rehypePlugins={mathRuntime?.rehypePlugins}
-            remarkPlugins={[
-              ...(mathRuntime?.remarkPlugins ?? []),
-              remarkBreaks,
-              // Single tildes are common in home paths and approximate values.
-              [remarkGfm, { singleTilde: false }],
-              remarkPullRequestReferences,
-              remarkTableProfile,
-            ]}
-            urlTransform={normalizeMarkdownUrl}
-          >
-            {markdownText}
-          </ReactMarkdown>
-        </MarkdownCodeApiContext.Provider>
+        <TranscriptFileRegistrationContext.Provider value={registerInlineFile}>
+          <MarkdownCodeApiContext.Provider value={props.desktopApi}>
+            <MarkdownDocument text={markdownText} mathRuntime={mathRuntime} />
+          </MarkdownCodeApiContext.Provider>
+        </TranscriptFileRegistrationContext.Provider>
       </MarkdownRenderContext.Provider>
       {markdownViewerTarget ? (
         <MarkdownDocumentModal
@@ -870,6 +979,7 @@ function MarkdownDocumentModal(props: {
   // reads the latest one on Escape. The effect it replaced depended on it, so
   // any re-render of the message sent focus back to the first control.
   const contentRef = useModalDialog({ onClose: props.onClose });
+  const previewKind = filePreviewKind(props.target.path) ?? "markdown";
   const [loadState, setLoadState] = useState<
     | { status: "loading" }
     | { status: "loaded"; content: string }
@@ -885,7 +995,7 @@ function MarkdownDocumentModal(props: {
     if (!readMarkdownFile) {
       setLoadState({
         status: "error",
-        error: "Markdown preview is unavailable.",
+        error: "File preview is unavailable.",
       });
       return () => {
         cancelled = true;
@@ -902,7 +1012,7 @@ function MarkdownDocumentModal(props: {
         if (response.error || response.content === undefined) {
           setLoadState({
             status: "error",
-            error: response.error ?? "Markdown file could not be read.",
+            error: response.error ?? "File could not be read.",
           });
           return;
         }
@@ -913,7 +1023,7 @@ function MarkdownDocumentModal(props: {
         if (cancelled) return;
         setLoadState({
           status: "error",
-          error: error instanceof Error ? error.message : "Markdown file could not be read.",
+          error: error instanceof Error ? error.message : "File could not be read.",
         });
       });
 
@@ -931,7 +1041,7 @@ function MarkdownDocumentModal(props: {
       className="markdown-document-modal"
       role="dialog"
       aria-modal="true"
-      aria-label={`Markdown document: ${props.target.label}`}
+      aria-label={`${filePreviewDocumentName(previewKind)}: ${props.target.label}`}
       onClick={props.onClose}
     >
       <div
@@ -960,6 +1070,13 @@ function MarkdownDocumentModal(props: {
             </div>
           </div>
           <div className="markdown-document-modal__actions">
+            {loadState.status === "loaded" ? (
+              <FilePreviewCopyButton
+                content={loadState.content}
+                desktopApi={props.desktopApi}
+                kind={previewKind}
+              />
+            ) : null}
             {props.editorApplication ? (
               <button
                 type="button"
@@ -1020,16 +1137,27 @@ function MarkdownDocumentModal(props: {
           </div>
         </header>
 
-        <div className="markdown-document-modal__body">
+        <div
+          className={[
+            "markdown-document-modal__body",
+            previewKind === "markdown" ? undefined : "markdown-document-modal__body--file",
+          ].filter(Boolean).join(" ")}
+        >
           {loadState.status === "loading" ? (
-            <p className="markdown-document-modal__status">Loading document...</p>
+            <p className="markdown-document-modal__status">Loading file…</p>
           ) : null}
           {loadState.status === "error" ? (
             <p className="markdown-document-modal__status markdown-document-modal__status--error">
               {loadState.error}
             </p>
           ) : null}
-          {loadState.status === "loaded" ? (
+          {loadState.status === "loaded" ? (previewKind !== "markdown" ? (
+            <FilePreviewBody
+              content={loadState.content}
+              kind={previewKind}
+              targetLine={props.target.line}
+            />
+          ) : (
             <ThreadMarkdown
               applications={props.applications}
               className="markdown-document-modal__markdown"
@@ -1039,7 +1167,7 @@ function MarkdownDocumentModal(props: {
               text={loadState.content}
               variant="summary"
             />
-          ) : null}
+          )) : null}
         </div>
       </div>
     </div>,
@@ -1193,10 +1321,6 @@ function findMarkdownLinkedImagePart(
 
     return localFileTargetFromHref(imagePart.sourceUrl)?.path === target.path;
   });
-}
-
-function isMarkdownFilePath(filePath: string): boolean {
-  return /\.(?:md|markdown)$/i.test(filePath);
 }
 
 function fileNameFromPath(filePath: string): string {

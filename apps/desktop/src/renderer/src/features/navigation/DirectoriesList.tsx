@@ -1,3 +1,4 @@
+import { threadRowInstanceKey } from "./thread-row-instance";
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
@@ -15,6 +16,7 @@ import {
   type ReactElement,
   type MouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -26,27 +28,25 @@ import type {
 } from "@pwragent/shared";
 import {
   comparePinnedDirectories,
-  comparePinnedThreads,
   isKeptAtTopThread,
   isPinnedDirectory,
-  isPinnedThread,
   isSubthreadLaunchpadKey,
   moveDirectoryKey,
-  moveThreadKey,
-  resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
   ChevronDownIcon,
   NewThreadIcon,
-  PinIcon,
   UnlinkedDotIcon,
 } from "../../icons";
 import { useEventCallback } from "../../lib/useEventCallback";
 import {
-  didDragLeaveCurrentTarget,
-  getDropIndicatorPosition,
-  useDropIndicatorController,
-} from "./drag-drop";
+  isRenamingRow,
+  matchMoveHotkey,
+  type RenamingThreadRow,
+} from "./thread-action-hotkeys";
+import { useDropIndicatorController } from "./drag-drop";
+import { beginPointerReorderDrag, type Point, type PointerReorderTarget } from "./pointer-reorder-drag";
+import { useSubthreadReorderDrag } from "./useSubthreadReorderDrag";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import {
   threadSummaryIdentityKey,
@@ -54,11 +54,9 @@ import {
 } from "../../lib/federated-thread-events";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { isFederationViewerWindow } from "../../lib/federation-window";
-import {
-  beginNativeDragInteraction,
-  endNativeDragInteraction,
-} from "../../lib/native-drag-interaction";
+import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
+import { useThreadPinOrdering, type ThreadPinScope } from "./useThreadPinOrdering";
 import { SubthreadPagination } from "./SubthreadPagination";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
@@ -71,10 +69,6 @@ import {
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
-import {
-  createThreadRowPointerDragPreview,
-  type ThreadRowPointerDragPreview,
-} from "./thread-row-drag-preview";
 import {
   formatActiveThreadCount,
   formatLocalActiveThreadCount,
@@ -89,19 +83,55 @@ import {
 import { createSubthreadTrays } from "./subthread-trays";
 import {
   interleaveStartingSubthreads,
+  isSubthreadLaunchpadDraft,
   selectUnlandedStartingThreads,
-  StartingThreadRow,
+  type PendingSidebarRow,
 } from "./StartingThreadRow";
-import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
+import { PendingThreadRow } from "./SubthreadDraftRow";
+import type { SubthreadLaunchpadDraft } from "../../lib/useThreadNavigation";
+
+/**
+ * Scroll a project's section to the top of the lens, expanding it first.
+ *
+ * Each reveal waits for a selection, because its caller selects and reveals
+ * in one gesture and the selection can land a render later. A launchpad
+ * reveal (⌘K's project jump, a selected launchpad) waits for that project's
+ * launchpad. A reveal from the thread header's project name names the thread
+ * it was clicked from instead: it keeps that row in view, and flashes the
+ * project's summary, because that click can also switch the lens and the
+ * eye needs somewhere to land.
+ */
+export type ProjectRevealRequest = {
+  key: string;
+  selectedThreadKey?: string;
+};
+
+/** How long a header reveal outlines the project's summary. */
+const PROJECT_REVEAL_FLASH_MS = 1200;
 
 type DirectoriesListProps = {
   presentationOrder?: NavigationPresentationOrder;
   /**
-   * Threads still starting. Each renders in the slot its thread will take:
-   * under its parent, or in its project where a new top-level thread sorts.
+   * Threads still starting, and sub-threads still being written. Each
+   * renders in the slot its thread will take: under its parent, or in its
+   * project where a new top-level thread sorts.
    */
-  startingThreads?: PendingLaunchpadCreation[];
-  onSelectStartingThread?: (creation: PendingLaunchpadCreation) => void;
+  startingThreads?: PendingSidebarRow[];
+  onSelectStartingThread?: (entry: PendingSidebarRow) => void;
+  onOpenSubthreadDraftContextMenu?: (
+    draft: SubthreadLaunchpadDraft,
+    position: { x: number; y: number },
+  ) => void;
+  /**
+   * Shown when no project has a row. Defaults to the lens's own reading; the
+   * Sidebar says "No threads yet." when no thread exists in any lens.
+   */
+  emptyLabel?: string;
+  /**
+   * The lane's last item (the start actions), after every directory, so it
+   * scrolls with them. Also follows the empty state.
+   */
+  footer?: ReactNode;
   pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
   selectedThreadDirectoryKeys?: readonly string[];
   directoryDisclosure?: NavigationDirectoryDisclosure;
@@ -114,8 +144,13 @@ type DirectoriesListProps = {
   composerSourceThreadKey?: string;
   /** The thread whose ⋮ actions menu is open, for that button's `aria-expanded`. */
   actionsMenuThreadKey?: string;
+  /** The row whose title is a rename field. */
+  renamingRow?: RenamingThreadRow;
+  onRequestRenameThread?: (thread: NavigationThreadSummary, row: ThreadRowRef) => void;
+  onCommitRenameThread?: (thread: NavigationThreadSummary, name: string | null) => void;
   directories: NavigationDirectorySummary[];
-  projectReveal?: { key: string; focus?: boolean };
+  /** Expand and scroll to a project. Focus stays where it is: the launchpad's composer takes it. */
+  projectReveal?: ProjectRevealRequest;
   onProjectRevealComplete?: () => void;
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
@@ -217,6 +252,11 @@ type DirectoriesListProps = {
   ) => Promise<void>;
 };
 
+/** What releasing a held project header does. */
+type DirectoryDrop =
+  | { kind: "move"; anchorKey: string; placement: "before" | "after" }
+  | { kind: "unpin" };
+
 function buildLaunchpadSelectionKey(directoryKey: string): string {
   return `launchpad:${directoryKey}`;
 }
@@ -228,7 +268,6 @@ function buildLaunchpadSelectionKey(directoryKey: string): string {
  * frames without swallowing the user's next intentional click.
  */
 const POST_DRAG_CLICK_SUPPRESS_MS = 150;
-const POINTER_DRAG_ACTIVATION_PX = 4;
 
 const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
   unpinnedThreads: [],
@@ -289,183 +328,6 @@ type DirectoryRowContext = {
   selectionOrder: string[];
 };
 
-type ThreadPinDragSession = {
-  activated: boolean;
-  appendTargetElement?: HTMLDivElement;
-  canceled: boolean;
-  directory: NavigationDirectorySummary;
-  directoryElement: HTMLElement;
-  frame: number;
-  keepAtTopTargetElement?: HTMLDivElement;
-  lastPoint: { x: number; y: number };
-  pointerId: number;
-  preview?: ThreadRowPointerDragPreview;
-  releaseClickSuppression?: () => void;
-  removeListeners?: () => void;
-  scrollElement?: HTMLElement;
-  sourceElement: HTMLDivElement;
-  sourceWasPinned: boolean;
-  target?: ThreadPinPointerDropTarget;
-  threadKey: string;
-};
-
-type ThreadPinPointerDropTarget =
-  | {
-      element: HTMLDivElement;
-      kind: "append";
-    }
-  | {
-      element: HTMLDivElement;
-      kind: "keepAtTop";
-    }
-  | {
-      element: HTMLDivElement;
-      kind: "row";
-      position: "before" | "after";
-      threadKey: string;
-    };
-
-function setThreadPinAppendTargetActive(
-  session: ThreadPinDragSession,
-  active: boolean,
-): void {
-  for (const element of [session.appendTargetElement, session.keepAtTopTargetElement]) {
-    element?.classList.toggle("is-drag-enabled", active);
-    if (active) {
-      element?.removeAttribute("aria-hidden");
-    } else {
-      element?.setAttribute("aria-hidden", "true");
-    }
-  }
-}
-
-function isPointInsideDragSource(
-  session: ThreadPinDragSession,
-  point: { x: number; y: number },
-): boolean {
-  const sourceBounds = session.sourceElement.getBoundingClientRect();
-  if (
-    sourceBounds.right <= sourceBounds.left
-    || sourceBounds.bottom <= sourceBounds.top
-  ) {
-    return false;
-  }
-  return (
-    point.x >= sourceBounds.left
-    && point.x <= sourceBounds.right
-    && point.y >= sourceBounds.top
-    && point.y <= sourceBounds.bottom
-  );
-}
-
-function getPointInsideElement(
-  element: Element,
-  point: { x: number; y: number },
-): boolean {
-  const bounds = element.getBoundingClientRect();
-  return (
-    bounds.right > bounds.left
-    && bounds.bottom > bounds.top
-    && point.x >= bounds.left
-    && point.x <= bounds.right
-    && point.y >= bounds.top
-    && point.y <= bounds.bottom
-  );
-}
-
-function resolveThreadPinPointerDropTarget(
-  session: ThreadPinDragSession,
-): ThreadPinPointerDropTarget | undefined {
-  if (
-    session.canceled
-    || isPointInsideDragSource(session, session.lastPoint)
-  ) {
-    return undefined;
-  }
-
-  // The Keep at top slot is a box of its own between rows, never over one,
-  // so only a drop inside it means "keep". The line above the first ordinary
-  // pin stays that row's "before" target: the top of the ordinary pins.
-  if (
-    session.keepAtTopTargetElement
-    && getPointInsideElement(session.keepAtTopTargetElement, session.lastPoint)
-  ) {
-    return { element: session.keepAtTopTargetElement, kind: "keepAtTop" };
-  }
-
-  if (!session.sourceWasPinned) {
-    return session.appendTargetElement
-      ? { element: session.appendTargetElement, kind: "append" }
-      : undefined;
-  }
-
-  const buildRowTarget = (
-    row: HTMLDivElement,
-  ): ThreadPinPointerDropTarget | undefined => {
-    const threadKey = row.dataset.threadPinKey;
-    if (
-      row === session.sourceElement
-      || !threadKey
-      || threadKey === session.threadKey
-    ) {
-      return undefined;
-    }
-    const bounds = row.getBoundingClientRect();
-    return {
-      element: row,
-      kind: "row",
-      position:
-        session.lastPoint.y > bounds.top + bounds.height / 2
-          ? "after"
-          : "before",
-      threadKey,
-    };
-  };
-
-  if (typeof document.elementFromPoint === "function") {
-    const hit = document.elementFromPoint(
-      session.lastPoint.x,
-      session.lastPoint.y,
-    );
-    const hitRow = hit?.closest<HTMLDivElement>(
-      '.thread-row-shell[data-thread-pin-state="pinned"]',
-    );
-    if (
-      hitRow
-      && session.directoryElement.contains(hitRow)
-    ) {
-      return buildRowTarget(hitRow);
-    }
-    if (
-      hit
-      && session.appendTargetElement?.contains(hit)
-    ) {
-      return { element: session.appendTargetElement, kind: "append" };
-    }
-    return undefined;
-  }
-
-  const pinnedRows = session.directoryElement.querySelectorAll<HTMLDivElement>(
-    '.thread-row-shell[data-thread-pin-state="pinned"]',
-  );
-  for (const row of pinnedRows) {
-    if (
-      !getPointInsideElement(row, session.lastPoint)
-    ) {
-      continue;
-    }
-    const target = buildRowTarget(row);
-    if (target) return target;
-  }
-
-  if (
-    session.appendTargetElement
-    && getPointInsideElement(session.appendTargetElement, session.lastPoint)
-  ) {
-    return { element: session.appendTargetElement, kind: "append" };
-  }
-  return undefined;
-}
 function getDirectoryRowLinkedDirectoryMode(
   thread: NavigationThreadSummary,
 ): "kind" | "label" {
@@ -554,328 +416,37 @@ export function DirectoriesList(props: DirectoriesListProps) {
     className: "viewport-tooltip",
   });
   const dropIndicator = useDropIndicatorController();
-  // Sub-thread (child) drag/drop state — kept SEPARATE from the
-  // pinned-thread / directory drag state above so a child reorder can
-  // never cross-wire with a pin or directory drag. Child drags carry the
-  // `application/x-pwragent-subthread` MIME (not `text/plain`), so the
-  // top-level drop handlers (which read `text/plain`) ignore them.
-  const [draggedSubthreadKey, setDraggedSubthreadKey] = useState<
-    string | undefined
-  >(undefined);
-  const subthreadDropIndicator = useDropIndicatorController();
-  // Directory drag/drop state (plan 2026-05-09-002 Unit K). Mirrors
-  // the per-thread state above but tracks directory keys rather
-  // than thread keys. The `directoriesPinnedDividerDropTarget`
-  // boolean toggles the divider's "promote to pinned" affordance
-  // when an unpinned directory is dragged over it.
-  const [draggedDirectoryKey, setDraggedDirectoryKey] = useState<
-    string | undefined
-  >(undefined);
+  // Folder drags (pinned project order). Pointer-driven like pins: see
+  // `beginDirectoryDrag`. The list folds to its headers while one is held.
   const directoryDropIndicator = useDropIndicatorController();
-  const [directoriesPinnedDividerDropTarget, setDirectoriesPinnedDividerDropTarget] =
-    useState(false);
-  const threadPinDragSessionRef = useRef<ThreadPinDragSession | undefined>(
-    undefined,
-  );
-  const threadPinDragCleanupRef = useRef<(() => void) | undefined>(undefined);
-  /**
-   * Suppress the directory summary button's expand/collapse click
-   * when the click is the trailing edge of a drag gesture. Browsers
-   * fire a synthetic `click` on the element under the mouse on
-   * drag-release; that click used to expand/collapse whatever row
-   * the user dropped onto — a confusing side-effect of a reorder.
-   *
-   * We record `Date.now()` at every drag-end and drop, and the
-   * summary button's onClick bails if the click arrives within
-   * `POST_DRAG_CLICK_SUPPRESS_MS` of the last drag end. Using a
-   * timestamp (instead of a `boolean` ref cleared on a timer)
-   * means we can never get stuck in "clicks suppressed forever"
-   * mode if a `dragend` handler doesn't fire — the comparison
-   * naturally expires. Plan 2026-05-09-002 Unit K follow-up.
-   */
-  const lastDirectoryDragEndedAtRef = useRef(0);
+  const directoryListRef = useRef<HTMLDivElement>(null);
+  const directoryDividerRef = useRef<HTMLDivElement>(null);
+  const directoryDragCancelRef = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => directoryDragCancelRef.current?.(), []);
   // The Directory threads disclosure is also a thread-pin drop target.
   // Suppress the click browsers synthesize immediately after a drop so
   // pinning a thread never also minimizes the section.
   const lastDirectoryThreadDropAtRef = useRef(0);
 
-  const deactivateThreadPinDrag = (session: ThreadPinDragSession): void => {
-    if (session.frame) {
-      cancelAnimationFrame(session.frame);
-      session.frame = 0;
-    }
-    session.preview?.remove();
-    session.preview = undefined;
-    session.sourceElement.classList.remove("is-pointer-dragging");
-    setThreadPinAppendTargetActive(session, false);
-    dropIndicator.clear();
-    session.target = undefined;
-    if (session.activated) {
-      endNativeDragInteraction();
-      session.activated = false;
-    }
-  };
-
-  const finishThreadPinDrag = (session: ThreadPinDragSession): void => {
-    deactivateThreadPinDrag(session);
-    session.removeListeners?.();
-    session.removeListeners = undefined;
-    session.releaseClickSuppression?.();
-    session.releaseClickSuppression = undefined;
-    if (threadPinDragSessionRef.current === session) {
-      threadPinDragSessionRef.current = undefined;
-    }
-    if (threadPinDragCleanupRef.current) {
-      threadPinDragCleanupRef.current = undefined;
-    }
-  };
-
-  const updateThreadPinPointerTarget = (
-    session: ThreadPinDragSession,
-  ): void => {
-    session.preview?.move(session.lastPoint);
-    session.target = resolveThreadPinPointerDropTarget(session);
-    session.preview?.setDropLabel(
-      session.target?.kind === "keepAtTop" ? "Keep at top" : undefined,
-    );
-    if (!session.target) {
-      dropIndicator.clear();
-      return;
-    }
-    dropIndicator.show(session.target.element, {
-      targetKey:
-        session.target.kind === "row"
-          ? `${session.directory.key}:${session.target.threadKey}`
-          : session.target.kind === "keepAtTop"
-            ? `pinned-keep-top:${session.directory.key}`
-            : `pinned-append:${session.directory.key}`,
-      position:
-        session.target.kind === "row" ? session.target.position : "before",
-    });
-  };
-
-  const scheduleThreadPinPointerTarget = (
-    session: ThreadPinDragSession,
-  ): void => {
-    if (session.frame || !session.activated || session.canceled) return;
-    session.frame = requestAnimationFrame(() => {
-      session.frame = 0;
-      updateThreadPinPointerTarget(session);
-    });
-  };
-
-  /**
-   * Thread pinning deliberately avoids native HTML drag-and-drop. Chromium's
-   * drag processing model suppresses ordinary input events, and its macOS
-   * trackpad path can queue momentum at scroll boundaries for seconds. A
-   * pointer session leaves wheel scrolling browser-controlled while batching
-   * our preview and hit testing to one update per animation frame.
-   */
-  const beginThreadPinPointerDrag = (
-    event: ReactPointerEvent<HTMLDivElement>,
-    directory: NavigationDirectorySummary,
-    threadKey: string,
-    sourceWasPinned: boolean,
-  ): void => {
-    if (event.button !== 0 || !props.onReorderThreadPins) return;
-    threadPinDragCleanupRef.current?.();
-
-    const sourceElement = event.currentTarget;
-    const directoryElement = sourceElement.closest(".directory-row");
-    if (!(directoryElement instanceof HTMLElement)) return;
-
-    const startPoint = { x: event.clientX, y: event.clientY };
-    const session: ThreadPinDragSession = {
-      activated: false,
-      appendTargetElement:
-        directoryElement.querySelector<HTMLDivElement>(
-          ".directory-row__pin-drop-slot",
-        ) ?? undefined,
-      canceled: false,
-      directory,
-      directoryElement,
-      frame: 0,
-      keepAtTopTargetElement:
-        directoryElement.querySelector<HTMLDivElement>(
-          ".directory-row__keep-top-slot",
-        ) ?? undefined,
-      lastPoint: startPoint,
-      pointerId: event.pointerId,
-      scrollElement:
-        sourceElement.closest<HTMLElement>(".directory-list") ?? undefined,
-      sourceElement,
-      sourceWasPinned,
-      threadKey,
-    };
-    threadPinDragSessionRef.current = session;
-
-    let suppressClickTimer: number | undefined;
-    const removeClickSuppression = (): void => {
-      session.directoryElement.removeEventListener(
-        "click",
-        suppressReleaseClick,
-        true,
-      );
-      if (suppressClickTimer !== undefined) {
-        window.clearTimeout(suppressClickTimer);
-        suppressClickTimer = undefined;
-      }
-    };
-    const suppressReleaseClick = (clickEvent: globalThis.MouseEvent): void => {
-      clickEvent.preventDefault();
-      clickEvent.stopImmediatePropagation();
-      removeClickSuppression();
-    };
-    const armClickSuppression = (): void => {
-      session.directoryElement.addEventListener(
-        "click",
-        suppressReleaseClick,
-        true,
-      );
-      session.releaseClickSuppression = () => {
-        suppressClickTimer = window.setTimeout(
-          removeClickSuppression,
-          POST_DRAG_CLICK_SUPPRESS_MS,
-        );
-      };
-    };
-
-    const activate = (): void => {
-      if (session.activated || session.canceled) return;
-      session.activated = true;
-      beginNativeDragInteraction();
-      session.sourceElement.classList.add("is-pointer-dragging");
-      // Measure the held card before the targets open: the ghost Keep at
-      // top slot takes layout space and pushes the source row down.
-      session.preview = createThreadRowPointerDragPreview(
-        session.sourceElement,
-        startPoint,
-      );
-      setThreadPinAppendTargetActive(session, true);
-      armClickSuppression();
-      session.scrollElement?.addEventListener("scroll", onScroll, {
-        passive: true,
-      });
-      scheduleThreadPinPointerTarget(session);
-    };
-    const move = (pointerEvent: globalThis.PointerEvent): void => {
-      if (pointerEvent.pointerId !== session.pointerId || session.canceled) {
-        return;
-      }
-      session.lastPoint = {
-        x: pointerEvent.clientX,
-        y: pointerEvent.clientY,
-      };
-      if (
-        !session.activated
-        && Math.hypot(
-          session.lastPoint.x - startPoint.x,
-          session.lastPoint.y - startPoint.y,
-        ) < POINTER_DRAG_ACTIVATION_PX
-      ) {
-        return;
-      }
-      activate();
-      pointerEvent.preventDefault();
-      scheduleThreadPinPointerTarget(session);
-    };
-    const onScroll = (): void => scheduleThreadPinPointerTarget(session);
-    const stop = (pointerEvent: globalThis.PointerEvent): void => {
-      if (pointerEvent.pointerId !== session.pointerId) return;
-      session.lastPoint = {
-        x: pointerEvent.clientX,
-        y: pointerEvent.clientY,
-      };
-      if (session.activated && !session.canceled) {
-        if (session.frame) {
-          cancelAnimationFrame(session.frame);
-          session.frame = 0;
-        }
-        updateThreadPinPointerTarget(session);
-      }
-      const target = session.target;
-      const wasActivated = session.activated;
-      finishThreadPinDrag(session);
-      if (!target || session.canceled || !wasActivated) return;
-
+  // Drag, the Keep at top slot, and ⌘⇧↑/↓, shared with the Pinned group in
+  // Updated and Created so all of them edit the one global pin order the same way.
+  const pinOrdering = useThreadPinOrdering({
+    threads: props.threads,
+    dropIndicator,
+    onReorderThreadPins: props.onReorderThreadPins,
+    onSetThreadPin: props.onSetThreadPin,
+    onDrop: () => {
       lastDirectoryThreadDropAtRef.current = Date.now();
-      if (target.kind === "append") {
-        dropThreadAfterDirectoryPins(session.directory, session.threadKey);
-        return;
-      }
-      if (target.kind === "keepAtTop") {
-        keepDirectoryThreadAtTop(session.directory, session.threadKey);
-        return;
-      }
-      if (session.sourceWasPinned) {
-        moveDirectoryPin(
-          session.directory,
-          session.threadKey,
-          target.threadKey,
-          target.position,
-        );
-      }
-    };
-    const cancel = (): void => {
-      session.canceled = true;
-      finishThreadPinDrag(session);
-    };
-    const cancelOnPointer = (pointerEvent: globalThis.PointerEvent): void => {
-      if (pointerEvent.pointerId === session.pointerId) cancel();
-    };
-    const cancelOnEscape = (keyboardEvent: globalThis.KeyboardEvent): void => {
-      if (keyboardEvent.key !== "Escape") return;
-      session.canceled = true;
-      deactivateThreadPinDrag(session);
-    };
-    const removeListeners = (): void => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", cancelOnPointer);
-      window.removeEventListener("blur", cancel);
-      window.removeEventListener("keydown", cancelOnEscape);
-      session.scrollElement?.removeEventListener("scroll", onScroll);
-    };
-    session.removeListeners = removeListeners;
-    threadPinDragCleanupRef.current = cancel;
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", stop);
-    window.addEventListener("pointercancel", cancelOnPointer);
-    window.addEventListener("blur", cancel);
-    window.addEventListener("keydown", cancelOnEscape);
-  };
-
-  useEffect(
-    () => () => threadPinDragCleanupRef.current?.(),
-    [],
-  );
-  const threadsByKey = useMemo(
-    () =>
-      new Map(
-        props.threads.map((thread) => [
-          threadSummaryIdentityKey(thread),
-          thread,
-        ]),
-      ),
-    [props.threads]
-  );
-  const pinnedThreads = useMemo(
-    () =>
-      props.threads
-        .filter(isPinnedThread)
-        .sort(comparePinnedThreads),
-    [props.threads],
-  );
-  const pinnedThreadKeys = useMemo(
-    () =>
-      pinnedThreads.map((thread) =>
-        threadSummaryIdentityKey(thread),
-      ),
-    [pinnedThreads],
-  );
+    },
+  });
+  const { threadsByKey, pinnedThreadKeys } = pinOrdering;
+  const pointerDownSubthread = useSubthreadReorderDrag({
+    threadByKey: threadsByKey,
+    onUpdateSubthreadOrder: props.onUpdateSubthreadOrder,
+  });
 
   // Directory pinning (plan 2026-05-09-002 Unit K). Same shape as
-  // pinnedThreads above. The `pinnedDirectoryKeys` array is the
+  // the thread pins above. The `pinnedDirectoryKeys` array is the
   // input to `moveDirectoryKey` for drag-reorder calculations.
   const directoryDragEnabled = Boolean(
     props.onSetDirectoryPin && props.onReorderDirectoryPins,
@@ -899,7 +470,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   );
   // The projects a starting thread will render in. A sub-thread launchpad's
   // own key names no project; its thread lands under the parent's row.
-  const startingThreadDirectoryKeys = useCallback((creation: PendingLaunchpadCreation): string[] => {
+  const startingThreadDirectoryKeys = useCallback((creation: PendingSidebarRow): string[] => {
     const parent = creation.parentThreadKey ? threadsByKey.get(creation.parentThreadKey) : undefined;
     return parent
       ? parent.linkedDirectories.map((linked) => classifyDirectory(linked).key)
@@ -912,7 +483,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
     threadsByKey,
   );
   const projectHeaders = useRef(new Map<string, HTMLButtonElement>());
-  const handledProjectReveal = useRef<{ key: string; focus?: boolean } | undefined>(undefined);
+  const handledProjectReveal = useRef<ProjectRevealRequest | undefined>(undefined);
+  const [flashedProjectKey, setFlashedProjectKey] = useState<string>();
+  useEffect(() => {
+    if (flashedProjectKey === undefined) return;
+    const timeout = window.setTimeout(
+      () => setFlashedProjectKey(undefined),
+      PROJECT_REVEAL_FLASH_MS,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [flashedProjectKey]);
 
   const pinnedDirectories = useMemo(
     () =>
@@ -936,12 +516,25 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ),
     [pinnedDirectories, unpinnedDirectories],
   );
-  const directoryByKey = useMemo(
-    () => new Map(visibleDirectories.map((directory) => [directory.key, directory])),
-    [visibleDirectories],
-  );
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
   const selectedItemKeyForReveal = props.selectedItemKey;
+  const [clickedRow, setClickedRow] = useState<{
+    threadKey: string;
+    revealRequest: number;
+  }>();
+  // A row click already has a visible landing. Opening its transcript must
+  // not scroll another occurrence, even when selection was already on it.
+  // A later thread-only reveal (search, Back/Forward, header) chooses one
+  // directory, then one root or descendant occurrence in that directory.
+  const preserveClickedPosition = clickedRow?.threadKey === props.selectedItemKey
+    && clickedRow?.revealRequest === (revealSelectedThreadRequest ?? 0);
+  useEffect(() => {
+    if (clickedRow && clickedRow.threadKey !== props.selectedItemKey) {
+      setClickedRow(undefined);
+    }
+  }, [clickedRow, props.selectedItemKey]);
+  const revealDirectoryKey = visibleDirectories.find((directory) =>
+    props.selectedThreadDirectoryKeys?.includes(directory.key))?.key;
   const setDirectoryThreadsCollapsed = props.onSetDirectoryThreadsCollapsed;
   // Rows this lens is still waiting on. A reveal opens the selected row's
   // directory and re-anchors its root range, which puts reads in flight for
@@ -977,7 +570,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
   useEffect(() => {
     const request = props.projectReveal;
     if (!request || handledProjectReveal.current === request
-      || props.selectedItemKey !== buildLaunchpadSelectionKey(request.key)) return;
+      || props.selectedItemKey !== (
+        request.selectedThreadKey ?? buildLaunchpadSelectionKey(request.key)
+      )) return;
     const header = projectHeaders.current.get(request.key);
     if (!header) return;
     if (expandedByKey[request.key] !== true) {
@@ -987,13 +582,23 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // Loaded threads provide the scroll extent below the header and can
     // shift it when another expanded directory above finishes loading.
     if (revealPagesInFlight) return;
-    // Wait until the palette's modal cleanup has restored its prior focus.
     const frame = requestAnimationFrame(() => {
       // The header is sticky: its visual top may already be at the viewport
       // edge while the project's threads are scrolled out above it. Reveal the
-      // section's normal-flow start, then focus without moving the scroll.
-      header.closest(".directory-row")?.scrollIntoView?.({ block: "start" });
-      if (request.focus !== false) header.focus({ preventScroll: true });
+      // section's normal-flow start.
+      const section = header.closest(".directory-row");
+      section?.scrollIntoView?.({ block: "start" });
+      if (request.selectedThreadKey) {
+        // Then bring the thread the reveal came from to the nearest edge.
+        // The header is sticky, so it stays on screen wherever the section
+        // scrolls to; when the project is too long for both, the row wins.
+        // The summary carries `.thread-row.is-selected` too, when the
+        // project itself is selected, so it is excluded by name.
+        section
+          ?.querySelector(".thread-row.is-selected:not(.directory-row__summary)")
+          ?.scrollIntoView?.({ block: "nearest" });
+        setFlashedProjectKey(request.key);
+      }
       handledProjectReveal.current = request;
       props.onProjectRevealComplete?.();
     });
@@ -1044,9 +649,113 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
   };
 
-  // The owner resolves relative moves against its complete pin order.
-  const reorderPins = (nextThreadKeys: string[], move?: NavigationRelativePinMove): void => {
-    if (move) void props.onReorderThreadPins?.(nextThreadKeys, move);
+  /**
+   * Drag a project header to reorder the pinned projects, pin one, or unpin
+   * one. While the card is held the lens folds to one line per project
+   * (`.is-folding-directories`), so the drop is a choice between folders, not
+   * a scroll past every expanded thread list. The fold is a class on the list,
+   * not a disclosure change: each project's open state, pages and React tree
+   * are untouched, and release takes the class off.
+   */
+  const beginDirectoryDrag = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    directory: NavigationDirectorySummary,
+  ): void => {
+    const list = directoryListRef.current;
+    const header = event.currentTarget;
+    const section = header.closest<HTMLElement>(".directory-row");
+    if (event.button !== 0 || !list || !section || !props.onReorderDirectoryPins) return;
+    directoryDragCancelRef.current?.();
+    const scrollElement = header.closest<HTMLElement>(".sidebar-list--dense") ?? undefined;
+    const sourcePinned = pinnedDirectoryKeys.includes(directory.key);
+    const orderBeforeDrag = pinnedDirectoryKeys;
+    let scrollTopBeforeLift: number | undefined;
+
+    const resolveTarget = (point: Point): PointerReorderTarget<DirectoryDrop> | undefined => {
+      const bounds = list.getBoundingClientRect();
+      if (point.x < bounds.left || point.x > bounds.right || point.y < bounds.top || point.y > bounds.bottom) {
+        return undefined;
+      }
+      const pinnedRows = Array.from(
+        list.querySelectorAll<HTMLElement>(".directory-row[data-directory-pinned=\"true\"]"),
+      );
+      const keys = pinnedRows.map((row) => row.dataset.directoryKey ?? "");
+      const divider = directoryDividerRef.current;
+      const dividerBounds = divider?.getBoundingClientRect();
+      if (divider && dividerBounds && point.y >= dividerBounds.top) {
+        // Below the pins: the unpinned group has no manual order, so the drop
+        // goes to the group. A pinned folder leaves the pins; an unpinned one
+        // over the divider itself joins them at the end.
+        if (sourcePinned) {
+          return { element: divider, key: "directories:unpin", label: "Unpin", value: { kind: "unpin" } };
+        }
+        if (point.y > dividerBounds.bottom || keys.length === 0) return undefined;
+        return { element: pinnedRows[pinnedRows.length - 1], key: `directory:${keys[keys.length - 1]}`,
+          position: "after", label: "Pin",
+          value: { kind: "move", anchorKey: keys[keys.length - 1], placement: "after" } };
+      }
+      if (keys.length === 0) return undefined;
+      const before = pinnedRows.findIndex((row) => {
+        const rect = row.getBoundingClientRect();
+        return point.y < rect.top + rect.height / 2;
+      });
+      const insertAt = before < 0 ? keys.length : before;
+      const sourceIndex = keys.indexOf(directory.key);
+      if (sourceIndex >= 0 && (insertAt === sourceIndex || insertAt === sourceIndex + 1)) return undefined;
+      const index = before < 0 ? keys.length - 1 : before;
+      const placement = before < 0 ? "after" : "before";
+      return { element: pinnedRows[index], key: `directory:${keys[index]}`, position: placement,
+        label: sourcePinned ? undefined : "Pin",
+        value: { kind: "move", anchorKey: keys[index], placement } };
+    };
+
+    directoryDragCancelRef.current = beginPointerReorderDrag({
+      event,
+      sourceElement: section,
+      previewSource: header,
+      compactPreview: true,
+      clickSuppressionRoot: list,
+      scrollElement,
+      dropIndicator: directoryDropIndicator,
+      resolveTarget,
+      onLift: () => {
+        // Keep the held header where the pointer is: scroll by however far
+        // folding the threads above it moved it.
+        const before = header.getBoundingClientRect().top;
+        scrollTopBeforeLift = scrollElement?.scrollTop;
+        list.classList.add("is-folding-directories");
+        if (scrollElement) scrollElement.scrollTop += header.getBoundingClientRect().top - before;
+      },
+      onSettle: (dropped) => {
+        directoryDragCancelRef.current = undefined;
+        // A drop keeps the folder it landed beside where it was on screen; a
+        // cancel goes back to where the drag began.
+        const anchor = dropped?.element;
+        const anchorTop = anchor?.getBoundingClientRect().top;
+        list.classList.remove("is-folding-directories");
+        if (!scrollElement) return;
+        if (anchor && anchorTop !== undefined) {
+          scrollElement.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+        } else if (scrollTopBeforeLift !== undefined) {
+          scrollElement.scrollTop = scrollTopBeforeLift;
+        }
+      },
+      onDrop: ({ value }) => {
+        if (value.kind === "unpin") {
+          void props.onSetDirectoryPin?.(directory, false);
+          return;
+        }
+        const move = { key: directory.key, anchorKey: value.anchorKey, placement: value.placement };
+        if (sourcePinned) {
+          reorderDirectoryPins(moveDirectoryKey(orderBeforeDrag, directory.key, value.anchorKey, value.placement), move);
+          return;
+        }
+        void (async () => {
+          await props.onSetDirectoryPin?.(directory, true);
+          await props.onReorderDirectoryPins?.([], move);
+        })();
+      },
+    });
   };
 
   const isAdmittedDirectoryRoot = (directory: NavigationDirectorySummary, threadKey: string): boolean => {
@@ -1076,96 +785,20 @@ export function DirectoriesList(props: DirectoriesListProps) {
       isAdmittedDirectoryRoot(directory, threadKey),
     );
 
-  const moveDirectoryPin = (
-    directory: NavigationDirectorySummary,
-    draggedKey: string,
-    targetKey: string,
-    position: "before" | "after",
-  ): void => {
-    if (!isAdmittedDirectoryRoot(directory, draggedKey) || !isAdmittedDirectoryRoot(directory, targetKey)) return;
-
-    const draggedThread = threadsByKey.get(draggedKey);
-    const targetThread = threadsByKey.get(targetKey);
-    if (!draggedThread || !targetThread) {
-      return;
-    }
-
-    const move = { key: draggedKey, anchorKey: targetKey, placement: position };
-    if (pinnedThreadKeys.includes(draggedKey)) {
-      reorderPins(moveThreadKey(pinnedThreadKeys, draggedKey, targetKey, position), move);
-      return;
-    }
-    if (!props.onSetThreadPin) return;
-    void (async () => {
-      await props.onSetThreadPin!(draggedThread, true);
-      await props.onReorderThreadPins?.([], move);
-    })();
-  };
-
-  const dropThreadAfterDirectoryPins = (
-    directory: NavigationDirectorySummary,
-    draggedKey: string,
-  ): void => {
-    if (!isAdmittedDirectoryRoot(directory, draggedKey)) return;
-
-    const draggedThread = threadsByKey.get(draggedKey);
-    if (!draggedThread) return;
-
-    // An anchor move adopts the anchor's tier, so the anchor must be an
-    // ordinary pin: the append target sits below the pins kept at top.
-    const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(directory)
-      .filter((threadKey) => {
-        const thread = threadsByKey.get(threadKey);
-        return Boolean(thread) && !isKeptAtTopThread(thread!);
-      });
-    const targetKey =
-      directoryPinnedThreadKeys[directoryPinnedThreadKeys.length - 1];
-
-    if (!targetKey) {
-      if (pinnedThreadKeys.includes(draggedKey)) {
-        // Every pin here is kept: below them, the drop leaves the kept tier.
-        if (isKeptAtTopThread(draggedThread)) {
-          void props.onReorderThreadPins?.([], { key: draggedKey, keepAtTop: false });
-        }
-        return;
-      }
-      void props.onSetThreadPin?.(draggedThread, true);
-      return;
-    }
-
-    moveDirectoryPin(directory, draggedKey, targetKey, "after");
-  };
-
-  const keepDirectoryThreadAtTop = (
-    directory: NavigationDirectorySummary,
-    draggedKey: string,
-  ): void => {
-    if (!isAdmittedDirectoryRoot(directory, draggedKey)) return;
-    const draggedThread = threadsByKey.get(draggedKey);
-    if (!draggedThread) return;
-    void (async () => {
-      if (!pinnedThreadKeys.includes(draggedKey)) {
-        if (!props.onSetThreadPin) return;
-        await props.onSetThreadPin(draggedThread, true);
-      }
-      await props.onReorderThreadPins?.([], { key: draggedKey, keepAtTop: true });
-    })();
-  };
-
-  const movePinnedThreadByKeyboard = (
-    _directory: NavigationDirectorySummary,
-    thread: NavigationThreadSummary,
-    direction: "up" | "down",
-  ): void => {
-    // The adjacent pin can be unloaded. The owner resolves the neighbor and
-    // revalidates membership before changing rank.
-    void props.onReorderThreadPins?.([], { key: threadSummaryIdentityKey(thread), direction });
-  };
+  const directoryPinScope = (directory: NavigationDirectorySummary): ThreadPinScope => ({
+    key: directory.key,
+    admitsRoot: (threadKey) => isAdmittedDirectoryRoot(directory, threadKey),
+    pinnedKeys: () => buildDirectoryPinnedKeys(directory),
+  });
 
   useEffect(() => {
     const selectedItemKey = props.selectedItemKey;
     if (!selectedItemKey) {
       previousSelectedItemKeyRef.current = undefined;
+      return;
+    }
+    if (preserveClickedPosition) {
+      previousSelectedItemKeyRef.current = selectedItemKey;
       return;
     }
     const selectedStartingThread = props.startingThreads?.find(
@@ -1222,7 +855,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     setExpandedByKey((current) => revealsDirectory(current)
       ? { ...current, [matchingDirectory.key]: true }
       : current);
-  }, [expandedByKey, previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey, props.startingThreads, startingThreadDirectoryKeys]);
+  }, [expandedByKey, preserveClickedPosition, previousSelectedItemKeyRef, setExpandedByKey, visibleDirectories, props.selectedItemKey, props.selectedThreadDirectoryKeys, props.startingThreads, startingThreadDirectoryKeys]);
 
   useEffect(() => {
     const request = revealSelectedThreadRequest ?? 0;
@@ -1303,6 +936,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
         .flatMap((context) => context.selectionOrder.map((threadKey) => ({
           directoryKey: context.directory.key, threadKey,
         })));
+      if (!event.metaKey && !event.shiftKey) {
+        setClickedRow({ threadKey: row.threadKey, revealRequest: revealSelectedThreadRequest ?? 0 });
+      }
       props.onSelectThread(thread, event, selectionOrder, row);
     },
   );
@@ -1312,9 +948,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       if (!context) {
         return;
       }
-      beginThreadPinPointerDrag(
+      pinOrdering.beginPointerDrag(
         event,
-        context.directory,
+        directoryPinScope(context.directory),
         row.threadKey,
         row.pinned,
       );
@@ -1330,7 +966,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       if (!context) {
         return;
       }
-      movePinnedThreadByKeyboard(context.directory, thread, direction);
+      pinOrdering.movePinnedThreadByKeyboard(thread, direction);
     },
   );
   const toggleSubthreads = useEventCallback((thread: NavigationThreadSummary) => {
@@ -1340,8 +976,15 @@ export function DirectoriesList(props: DirectoriesListProps) {
     );
   });
 
-  if (visibleDirectories.length === 0) {
-    return <p className="sidebar-empty">No directory-linked threads.</p>;
+  // A starting thread with no loaded project still needs its row: an empty
+  // index is exactly when navigation shows this lens for the first thread.
+  if (visibleDirectories.length === 0 && unplacedStartingThreads.length === 0) {
+    return (
+      <>
+        <p className="sidebar-empty">{props.emptyLabel ?? "No directory-linked threads."}</p>
+        {props.footer}
+      </>
+    );
   }
 
   /**
@@ -1404,10 +1047,24 @@ export function DirectoriesList(props: DirectoriesListProps) {
     // depth-first order. The owner keys each child under its *true* parent, so
     // a grandchild is filed under a row that is itself a child; rendering only
     // direct children would silently drop it from the lens.
-    const trays = createSubthreadTrays(childThreadsByParentKey);
-    for (const thread of expandedThreadModel.directoryPinnedThreads) trays.addTrayOwner(thread);
-    for (const thread of expandedThreadModel.selectedUnpinnedThreads) trays.addTrayOwner(thread);
-    for (const thread of expandedThreadModel.unpinnedThreads) trays.addTrayOwner(thread);
+    const roots = [
+      ...expandedThreadModel.directoryPinnedThreads,
+      ...expandedThreadModel.selectedUnpinnedThreads,
+      ...expandedThreadModel.unpinnedThreads,
+    ];
+    const trays = createSubthreadTrays(childThreadsByParentKey, roots);
+    const selectedRoot = roots.find((thread) => threadSummaryIdentityKey(thread) === props.selectedItemKey);
+    const selectedTrayRoot = selectedRoot ? undefined : roots.find((thread) =>
+      trays.subtree(threadSummaryIdentityKey(thread)).some((child) =>
+        threadSummaryIdentityKey(child) === props.selectedItemKey));
+    const revealThreadRowKey = !preserveClickedPosition && directory.key === revealDirectoryKey
+      && props.selectedItemKey && (selectedRoot || selectedTrayRoot)
+      ? threadRowInstanceKey({
+          directoryKey: directory.key,
+          threadKey: props.selectedItemKey,
+          parentThreadKey: selectedTrayRoot ? threadSummaryIdentityKey(selectedTrayRoot) : undefined,
+        })
+      : null;
     const renderStaticSubthreads = (parent: NavigationPresentedThread): ReactElement | null => {
       const parentKey = threadSummaryIdentityKey(parent);
       // Already depth-first ordered by the tray. Re-sorting here by this row's
@@ -1440,10 +1097,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ) {
         return null;
       }
-      // The child tray is a user-ordered "pinned" section (subthreadOrder).
-      // Wire drag-to-reorder, mirroring RecentsList — see the dedicated
-      // `draggedSubthreadKey` state for why it stays isolated from the
-      // directory / pinned-thread drag.
+      // The child tray is a user-ordered section (subthreadOrder). Its
+      // direct children reorder with `useSubthreadReorderDrag`, the same
+      // pointer drag RecentsList uses.
       const directChildKeySet = new Set(directChildKeys);
       const reorderable =
         threadSupportsFederationCapability(parent, "thread_grouping")
@@ -1457,7 +1113,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
         // `role="list"` there fails `aria-required-children` — list owns only
         // listitem. This is the `<li><ul>...</ul></li>` shape.
         <div className="directory-row__threads-slot" role="listitem">
-          <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`}>
+          <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`} data-subthread-tray={parentKey}>
             {/* The parent's own workers lead its tray. Trailing them after every
                 child read as the last child's workers and buried them under a
                 long child list. */}
@@ -1467,20 +1123,20 @@ export function DirectoriesList(props: DirectoriesListProps) {
             {trayEntries.flatMap((entry) => {
               if (entry.kind === "starting") {
                 return [
-                  <StartingThreadRow
+                  <PendingThreadRow
                     key={`${directory.key}:${entry.creation.selectionKey}`}
                     compact
-                    creation={entry.creation}
+                    entry={entry.creation}
                     locationMode="kind"
                     nestedDepth={entry.depth}
                     selected={props.selectedItemKey === entry.creation.selectionKey}
+                    onOpenSubthreadDraftContextMenu={props.onOpenSubthreadDraftContextMenu}
                     onSelect={props.onSelectStartingThread}
                   />,
                 ];
               }
               const child = entry.thread;
               const childKey = threadSummaryIdentityKey(child);
-              const rowDropKey = `subthread:${parentKey}:${childKey}`;
               // A row plus its own worker group, as siblings of this list. A
               // wrapping element would break the tray's flat list semantics.
               return [
@@ -1493,9 +1149,14 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 actionsMenuOpen={childKey === props.actionsMenuThreadKey}
+                renaming={isRenamingRow(props.renamingRow, childKey, directory.key)}
+                onRequestRename={props.onRequestRenameThread}
+                onCommitRename={props.onCommitRenameThread}
                 compact
                 directoryKey={directory.key}
-                draggable={reorderable && directChildKeySet.has(childKey)}
+                parentThreadKey={parentKey}
+                revealThreadRowKey={revealThreadRowKey}
+                pointerDraggable={reorderable && directChildKeySet.has(childKey)}
                 includeLinkedDirectories
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
@@ -1506,72 +1167,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 agentCommandThreadKeys={props.agentCommandThreadKeys}
                 thread={child}
-                onDragStartThread={(event) => {
-                  setDraggedSubthreadKey(childKey);
-                  event.dataTransfer.effectAllowed = "move";
-                  // Subthread-only MIME — top-level drop handlers read
-                  // `text/plain` and so ignore a child reorder drag.
-                  event.dataTransfer.setData(
-                    "application/x-pwragent-subthread",
-                    childKey,
-                  );
-                }}
-                onDragOverThread={(event) => {
-                  event.preventDefault();
-                  const draggedThread = draggedSubthreadKey
-                    ? threadsByKey.get(draggedSubthreadKey)
-                    : undefined;
-                  if (
-                    !draggedThread
-                    || draggedSubthreadKey === childKey
-                    || !directChildKeySet.has(childKey)
-                    || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
-                  ) {
-                    event.dataTransfer.dropEffect = "none";
-                    subthreadDropIndicator.clear();
-                    return;
-                  }
-                  event.dataTransfer.dropEffect = "move";
-                  subthreadDropIndicator.show(event.currentTarget, {
-                    targetKey: rowDropKey,
-                    position: getDropIndicatorPosition(event),
-                  });
-                }}
-                onDragLeaveThread={(event) => {
-                  if (didDragLeaveCurrentTarget(event)) {
-                    subthreadDropIndicator.clear();
-                  }
-                }}
-                onDragEndThread={() => {
-                  setDraggedSubthreadKey(undefined);
-                  subthreadDropIndicator.clear();
-                }}
-                onDropOnThread={(event) => {
-                  event.preventDefault();
-                  setDraggedSubthreadKey(undefined);
-                  subthreadDropIndicator.clear();
-                  const draggedKey = event.dataTransfer.getData(
-                    "application/x-pwragent-subthread",
-                  );
-                  const draggedThread = draggedKey
-                    ? threadsByKey.get(draggedKey)
-                    : undefined;
-                  if (
-                    !draggedThread
-                    || !directChildKeySet.has(childKey)
-                    || resolveThreadParentKey(draggedThread, threadsByKey) !== parentKey
-                  ) {
-                    return;
-                  }
-                  // `subthreadOrder` names this row's own children, so the
-                  // move stays inside that list — never the flattened tray,
-                  // which also carries rows owned by those children.
-                  void props.onUpdateSubthreadOrder?.(parent, {
-                    threadId: draggedThread.id,
-                    anchorThreadId: child.id,
-                    placement: getDropIndicatorPosition(event),
-                  });
-                }}
+                onPointerDownThread={
+                  reorderable && directChildKeySet.has(childKey) ? pointerDownSubthread : undefined
+                }
                 onOpenContextMenu={props.onOpenThreadContextMenu}
                 onOpenPullRequestContextMenu={props.onOpenPullRequestContextMenu}
                 onDetachPullRequest={props.onDetachPullRequest}
@@ -1633,16 +1231,25 @@ export function DirectoriesList(props: DirectoriesListProps) {
       creation.parentThreadKey && renderedThreadKeys.has(creation.parentThreadKey));
     const startingRootThreads = directoryStartingThreads.filter((creation) =>
       creation.directoryKey === directory.key && !startingSubthreads.includes(creation));
+    // A sub-thread being written opens its parent's tray and gives the
+    // parent its chevron, as the thread will once it lands.
+    const draftParentKeys = new Set(
+      startingSubthreads.filter(isSubthreadLaunchpadDraft).map((draft) => draft.parentThreadKey),
+    );
+    const holdsSubthreadDraft = (threadKey: string): boolean =>
+      draftParentKeys.size > 0
+      && (draftParentKeys.has(threadKey)
+        || trays.subtree(threadKey).some((child) => draftParentKeys.has(threadSummaryIdentityKey(child))));
     const startingRootSlot = !directoryThreadsCollapsed
       ? "unpinned"
       : (directory.pinnedRootCount ?? 0) > 0 ? "pinned" : "selected";
     const renderStartingRootThreads = (slot: typeof startingRootSlot): ReactElement[] | null =>
       slot === startingRootSlot
         ? startingRootThreads.map((creation) => (
-            <StartingThreadRow
+            <PendingThreadRow
               key={`${directory.key}:${creation.selectionKey}`}
               compact
-              creation={creation}
+              entry={creation}
               locationMode="kind"
               selected={props.selectedItemKey === creation.selectionKey}
               onSelect={props.onSelectStartingThread}
@@ -1683,11 +1290,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
     ): ReactElement => {
       const threadKey = threadSummaryIdentityKey(thread);
       const ordinarySubthreadCount = trays.subtree(threadKey).length;
+      const holdsDraft = holdsSubthreadDraft(threadKey);
       const subthreadCount = getSubthreadDisclosureCount(
         thread,
         ordinarySubthreadCount,
-      );
-      const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
+      ) + (holdsDraft ? 1 : 0);
+      const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
       return (
         <Fragment key={`${directory.key}:${threadKey}`}>
           <ThreadRow
@@ -1699,8 +1307,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
             draftThreadKeys={props.draftThreadKeys}
             composerSourceThreadKey={props.composerSourceThreadKey}
             actionsMenuOpen={threadKey === props.actionsMenuThreadKey}
+            renaming={isRenamingRow(props.renamingRow, threadKey, directory.key)}
+            onRequestRename={props.onRequestRenameThread}
+            onCommitRename={props.onCommitRenameThread}
             compact
             directoryKey={directory.key}
+            revealThreadRowKey={revealThreadRowKey}
             pointerDraggable={Boolean(props.onReorderThreadPins)}
             includeLinkedDirectories
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
@@ -1743,103 +1355,9 @@ export function DirectoriesList(props: DirectoriesListProps) {
         key={directory.key}
         className="directory-row"
         data-hover-stable-row="directory"
-        onDragOver={
-          directoryDragEnabled
-            ? (event) => {
-                // Gate on `draggedDirectoryKey` (state) first; the
-                // `application/x-pwragent-directory` MIME is set on
-                // dragStart but `getData()` returns "" during
-                // dragOver for security, so the state is the
-                // reliable signal for same-document drags. Thread
-                // drags don't set this state, so they fall through
-                // and the inner thread-row handlers take over.
-                const draggedKey =
-                  draggedDirectoryKey ??
-                  event.dataTransfer.getData(
-                    "application/x-pwragent-directory",
-                  );
-                if (!draggedKey || draggedKey === directory.key) {
-                  return;
-                }
-                const draggedDirectory = directoryByKey.get(draggedKey);
-                if (
-                  !draggedDirectory ||
-                  !isPinnableDirectoryKind(draggedDirectory)
-                ) {
-                  return;
-                }
-                event.preventDefault();
-                event.dataTransfer.dropEffect = "move";
-                directoryDropIndicator.show(event.currentTarget, {
-                  targetKey: directory.key,
-                  position: getDropIndicatorPosition(event),
-                });
-                setDirectoriesPinnedDividerDropTarget(false);
-              }
-            : undefined
-        }
-        onDragLeave={
-          directoryDragEnabled
-            ? (event) => {
-                if (didDragLeaveCurrentTarget(event)) {
-                  directoryDropIndicator.clear();
-                }
-              }
-            : undefined
-        }
-        onDrop={
-          directoryDragEnabled
-            ? (event) => {
-                const draggedKey =
-                  draggedDirectoryKey ??
-                  event.dataTransfer.getData(
-                    "application/x-pwragent-directory",
-                  );
-                // Bail without consuming the event for non-directory
-                // drags so inner thread-row drop handlers still fire.
-                if (!draggedKey) {
-                  return;
-                }
-                event.preventDefault();
-                setDraggedDirectoryKey(undefined);
-                directoryDropIndicator.clear();
-                setDirectoriesPinnedDividerDropTarget(false);
-                lastDirectoryDragEndedAtRef.current = Date.now();
-                if (draggedKey === directory.key) {
-                  return;
-                }
-                const draggedDirectory = directoryByKey.get(draggedKey);
-                if (
-                  !draggedDirectory ||
-                  !isPinnableDirectoryKind(draggedDirectory)
-                ) {
-                  return;
-                }
-
-                const position = getDropIndicatorPosition(event);
-                // Drop on a pinned target → reorder within pinned
-                // section. Drop on an unpinned target → drag is
-                // moving among unpinned (no-op for pin state) OR
-                // dragging an unpinned over an unpinned (also a
-                // no-op since they have no pin order). The
-                // promote-to-pinned path uses the divider as
-                // drop target.
-                if (!directoryPinned) {
-                  return;
-                }
-
-                const move = { key: draggedKey, anchorKey: directory.key, placement: position };
-                if (pinnedDirectoryKeys.includes(draggedKey)) {
-                  reorderDirectoryPins(moveDirectoryKey(pinnedDirectoryKeys, draggedKey, directory.key, position), move);
-                } else if (draggedDirectory && props.onSetDirectoryPin) {
-                  void (async () => {
-                    await props.onSetDirectoryPin!(draggedDirectory, true);
-                    await props.onReorderDirectoryPins?.([], move);
-                  })();
-                }
-              }
-            : undefined
-        }
+        data-thread-pin-scope="directory"
+        data-directory-key={directory.key}
+        data-directory-pinned={directoryPinned ? "true" : undefined}
       >
         <div
           // The modifier classes mirror booleans this render already
@@ -1859,52 +1377,19 @@ export function DirectoriesList(props: DirectoriesListProps) {
             !directoryUnconfigured && hasPendingLaunchpadState(directory)
               ? " directory-row__header--has-draft"
               : ""
-          }`}
-          draggable={directoryDraggable}
-          onDragStart={
+          }${directoryDraggable ? " is-draggable" : ""}`}
+          onPointerDown={
             directoryDraggable
-              ? (event) => {
-                  setDraggedDirectoryKey(directory.key);
-                  event.dataTransfer.effectAllowed = "move";
-                  event.dataTransfer.setData(
-                    "application/x-pwragent-directory",
-                    directory.key,
-                  );
-                  // Set text/plain too so generic drop targets fall
-                  // through cleanly (no accidental "drop directory
-                  // into the thread list" behavior — receivers check
-                  // the directory MIME).
-                  event.dataTransfer.setData("text/plain", directory.key);
-                }
-              : undefined
-          }
-          onDragEnd={
-            directoryDragEnabled
-              ? () => {
-                  setDraggedDirectoryKey(undefined);
-                  directoryDropIndicator.clear();
-                  setDirectoriesPinnedDividerDropTarget(false);
-                  // Record drag-end so the summary button's click
-                  // handler can suppress the synthetic post-release
-                  // click that browsers fire on drag-release. The
-                  // timestamp naturally expires after
-                  // POST_DRAG_CLICK_SUPPRESS_MS so this can never
-                  // get stuck if `dragend` doesn't fire reliably.
-                  lastDirectoryDragEndedAtRef.current = Date.now();
-                }
+              ? (event) => beginDirectoryDrag(event, directory)
               : undefined
           }
           onKeyDown={
             directoryDragEnabled && directoryPinned
               ? (event) => {
-                  if (!event.metaKey || !event.shiftKey) return;
-                  if (event.key === "ArrowUp") {
-                    event.preventDefault();
-                    movePinnedDirectoryByKeyboard(directory, "up");
-                  } else if (event.key === "ArrowDown") {
-                    event.preventDefault();
-                    movePinnedDirectoryByKeyboard(directory, "down");
-                  }
+                  const direction = matchMoveHotkey(event);
+                  if (direction === null) return;
+                  event.preventDefault();
+                  movePinnedDirectoryByKeyboard(directory, direction);
                 }
               : undefined
           }
@@ -1921,22 +1406,13 @@ export function DirectoriesList(props: DirectoriesListProps) {
             className={`thread-row thread-row--compact directory-row__summary${
               selectedDirectory ? " is-selected" : ""
             }${
+              flashedProjectKey === directory.key ? " is-revealed" : ""
+            }${
               directoryUnconfigured ? " directory-row__summary--unconfigured" : ""
             }`}
             type="button"
             onBlur={directoryUnconfigured ? unavailableDirectoryTooltip.hide : undefined}
             onClick={(event) => {
-              // Suppress the synthetic post-drop click that the
-              // browser fires on the element under the mouse when
-              // a drag releases. The timestamp comparison expires
-              // on its own, so we can never get stuck in a
-              // permanently-suppressed state.
-              if (
-                Date.now() - lastDirectoryDragEndedAtRef.current <
-                POST_DRAG_CLICK_SUPPRESS_MS
-              ) {
-                return;
-              }
               props.onSelectDirectory?.(
                 directory,
                 event,
@@ -2118,31 +1594,21 @@ export function DirectoriesList(props: DirectoriesListProps) {
 	                      const threadKey = threadSummaryIdentityKey(thread);
                           const ordinarySubthreadCount =
                             trays.subtree(threadKey).length;
+                          const holdsDraft = holdsSubthreadDraft(threadKey);
                           const subthreadCount = getSubthreadDisclosureCount(
                             thread,
                             ordinarySubthreadCount,
-                          );
-                          const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);
+                          ) + (holdsDraft ? 1 : 0);
+                          const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
 	                      return (
                             <Fragment key={`${directory.key}:${threadKey}`}>
                               {pinnedIndex === keepAtTopSeamIndex ? (
                                 // Same role-carrying boundary as the append
                                 // target below; see its comment. It grows to
                                 // hold the slot only while a drag is live.
-                                <div
-                                  className="directory-row__pin-drop-boundary"
-                                  role="listitem"
-                                >
-                                  <div
-                                    aria-label={`Keep thread at top of pinned threads for ${directory.label}`}
-                                    aria-hidden="true"
-                                    className="directory-row__keep-top-slot"
-                                    role="separator"
-                                  >
-                                    <PinIcon size={12} />
-                                    Keep at top
-                                  </div>
-                                </div>
+                                <KeepAtTopSlot
+                                  label={`Keep thread at top of pinned threads for ${directory.label}`}
+                                />
                               ) : null}
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
@@ -2153,8 +1619,12 @@ export function DirectoriesList(props: DirectoriesListProps) {
                           draftThreadKeys={props.draftThreadKeys}
                           composerSourceThreadKey={props.composerSourceThreadKey}
                           actionsMenuOpen={threadKey === props.actionsMenuThreadKey}
+                          renaming={isRenamingRow(props.renamingRow, threadKey, directory.key)}
+                          onRequestRename={props.onRequestRenameThread}
+                          onCommitRename={props.onCommitRenameThread}
                           compact
                           directoryKey={directory.key}
+                          revealThreadRowKey={revealThreadRowKey}
                           pointerDraggable={Boolean(props.onReorderThreadPins)}
                           includeLinkedDirectories
                           linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
@@ -2223,17 +1693,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
                       </div>
                     ) : null}
 
-                    {pinResource && (pinResource.state.error || (pinResource.loading && !pinResource.state.page)
+                    {pinResource && ((pinResource.loading && !pinResource.state.page)
                       || pinResource.state.rebaselineRequired || pinResource.state.page?.nextCursor
                       || (pinResource.state.page?.rangeStart ?? 0) > 0) ? (
                       <div role="listitem">
-                        {pinResource.state.error ? <p className="sidebar-error">{pinResource.state.error}</p> : null}
                         {pinResource.loading && !pinResource.state.page ? <p className="sidebar-empty">Loading pinned threads…</p> : null}
                         {(pinResource.state.page?.rangeStart ?? 0) > 0 && !pinResource.state.rebaselineRequired ? (
-                          <SidebarShowMore busy={pinResource.loading} label="Show pinned threads from beginning" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
+                          <SidebarShowMore kind="reload" busy={pinResource.loading} label="Show pinned threads from beginning" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
                         ) : null}
                         {pinResource.state.rebaselineRequired ? (
-                          <SidebarShowMore label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
+                          <SidebarShowMore kind="reload" label="Reload pinned threads" onClick={() => void props.pagedNavigation?.restart(pinResourceId)} />
                         ) : pinResource.state.page?.nextCursor ? (
                           <SidebarShowMore busy={pinResource.loading} label="Load more pinned threads" onClick={() => void props.pagedNavigation?.loadMore(pinResourceId)} />
                         ) : null}
@@ -2297,7 +1766,6 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 ) : (
                   <p className="sidebar-empty directory-row__empty">{directory.counts ? "No threads in this directory yet." : "Loading directory counts…"}</p>
                 )}
-                {rootResource?.state.error ? <p className="sidebar-error">{rootResource.state.error}</p> : null}
                 {/* `directory-row__empty` reads as "empty" but means "a status
                     line in a directory's lane" — the sibling above already
                     wears it for "Loading directory counts…". Without it this
@@ -2306,7 +1774,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     left. Both render together while a directory first opens. */}
                 {rootResource?.loading && !rootResource.state.page ? <p className="sidebar-empty directory-row__empty">Loading threads…</p> : null}
                 {rootResource?.state.rebaselineRequired ? (
-                  <SidebarShowMore label="Reload this directory" onClick={() => void props.pagedNavigation?.restart(rootResourceId)} />
+                  <SidebarShowMore kind="reload" label="Reload this directory" onClick={() => void props.pagedNavigation?.restart(rootResourceId)} />
                 ) : rootResource?.state.page?.nextCursor ? (
                   <SidebarShowMore busy={rootResource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(rootResourceId)} />
                 ) : null}
@@ -2317,18 +1785,20 @@ export function DirectoriesList(props: DirectoriesListProps) {
       };
 
   return (
-    <div className="directory-list sidebar-list sidebar-list--dense">
+    <div ref={directoryListRef} className="directory-list sidebar-list sidebar-list--dense">
       {unplacedStartingThreads.length > 0 ? (
         // No project or parent row this lens has loaded will take these, so
         // they wait at the top, the one place every lens can show them.
         <div className="sidebar-list sidebar-list--compact" role="list" aria-label="Starting threads">
           {unplacedStartingThreads.map((creation) => (
-            <StartingThreadRow
+            <PendingThreadRow
               key={creation.selectionKey}
               compact
-              creation={creation}
+              entry={creation}
               locationMode="label"
               selected={props.selectedItemKey === creation.selectionKey}
+              showParent
+              onOpenSubthreadDraftContextMenu={props.onOpenSubthreadDraftContextMenu}
               onSelect={props.onSelectStartingThread}
             />
           ))}
@@ -2337,63 +1807,16 @@ export function DirectoriesList(props: DirectoriesListProps) {
       {pinnedDirectories.map(renderDirectoryRow)}
       {directoryDragEnabled && pinnedDirectories.length > 0 ? (
         <div
-          className={`directories-pinned-divider${
-            directoriesPinnedDividerDropTarget ? " is-drop-target" : ""
-          }`}
+          ref={directoryDividerRef}
+          className="directories-pinned-divider"
           role="separator"
           aria-label="Unpinned directories"
-          onDragOver={(event) => {
-            const draggedKey =
-              draggedDirectoryKey ??
-              event.dataTransfer.getData("application/x-pwragent-directory");
-            if (!draggedKey) return;
-            const draggedDirectory = directoryByKey.get(draggedKey);
-            // Only allow promote-to-pinned drops here. Pinned →
-            // divider should be a no-op (unpin happens via the
-            // unpinned-section's drop target, or context menu).
-            if (
-              !draggedDirectory ||
-              !isPinnableDirectoryKind(draggedDirectory) ||
-              pinnedDirectoryKeys.includes(draggedKey)
-            ) {
-              event.dataTransfer.dropEffect = "none";
-              setDirectoriesPinnedDividerDropTarget(false);
-              return;
-            }
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
-            directoryDropIndicator.clear();
-            setDirectoriesPinnedDividerDropTarget(true);
-          }}
-          onDragLeave={(event) => {
-            if (didDragLeaveCurrentTarget(event)) {
-              setDirectoriesPinnedDividerDropTarget(false);
-            }
-          }}
-          onDrop={(event) => {
-            event.preventDefault();
-            const draggedKey =
-              draggedDirectoryKey ??
-              event.dataTransfer.getData("application/x-pwragent-directory");
-            setDraggedDirectoryKey(undefined);
-            setDirectoriesPinnedDividerDropTarget(false);
-            lastDirectoryDragEndedAtRef.current = Date.now();
-            if (!draggedKey) return;
-            const draggedDirectory = directoryByKey.get(draggedKey);
-            if (
-              !draggedDirectory ||
-              !isPinnableDirectoryKind(draggedDirectory) ||
-              pinnedDirectoryKeys.includes(draggedKey)
-            ) {
-              return;
-            }
-            void props.onSetDirectoryPin?.(draggedDirectory, true);
-          }}
         >
           <span>Directories</span>
         </div>
       ) : null}
       {unpinnedDirectories.map(renderDirectoryRow)}
+      {props.footer}
       {unavailableDirectoryTooltip.tooltipNode}
     </div>
   );

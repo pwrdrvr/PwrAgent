@@ -1,9 +1,19 @@
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { copyText } from "../../lib/copy-text";
+import {
+  discoverNerdFontFamily,
+  discoveredNerdFontFamily,
+  withNerdFontFallback,
+} from "../../lib/nerd-font-fallback";
+import {
+  TERMINAL_MINIMUM_CONTRAST_RATIO,
+  useTerminalMinimumContrast,
+} from "../../lib/terminal-preferences";
 import type { IntegratedTerminalPaneRemote } from "../../lib/useIntegratedTerminals";
 import { InstanceChip } from "../federation/InstanceGlyph";
-import type { Terminal } from "@xterm/xterm";
+import type { ITheme, Terminal } from "@xterm/xterm";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -17,6 +27,9 @@ const TERMINAL_RESIZE_STEP = 16;
 type IntegratedTerminalProps = {
   desktopApi?: DesktopApi;
   threadKey: string;
+  sessionId?: string;
+  attachOnly?: boolean;
+  newSession?: boolean;
   cwd?: string;
   /**
    * Present when this shell runs on another instance: the create request
@@ -38,11 +51,21 @@ type IntegratedTerminalProps = {
   onHeightChange?: (height: number) => void;
   onClose: () => void;
   onExit: () => void;
+  /** Live output arrived while this pane was not on screen. */
+  onHiddenOutput?: () => void;
+  /** Bumped by a host that wants keyboard focus in the shell, such as a
+   *  pointer click on this terminal's tab. */
+  focusRequest?: number;
+  /** Saved history: start a new shell under this id, below the history. */
+  resume?: boolean;
 };
 
 export function IntegratedTerminal({
   desktopApi,
   threadKey,
+  sessionId: requestedSessionId,
+  attachOnly,
+  newSession,
   cwd,
   remote,
   height,
@@ -51,6 +74,9 @@ export function IntegratedTerminal({
   onHeightChange,
   onClose,
   onExit,
+  onHiddenOutput,
+  focusRequest,
+  resume,
 }: IntegratedTerminalProps) {
   const hosted = chrome === "hosted";
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -58,8 +84,11 @@ export function IntegratedTerminal({
   const sessionIdRef = useRef<string | undefined>(undefined);
   const pendingInputRef = useRef<string[]>([]);
   const replayingBufferedOutputRef = useRef(false);
+  const writableRef = useRef(true);
   const fitAndResizeRef = useRef<() => void>(() => undefined);
   const visibleRef = useRef(visible);
+  const onHiddenOutputRef = useRef(onHiddenOutput);
+  onHiddenOutputRef.current = onHiddenOutput;
   // `cwd` is a create-time hint only — main resolves it (falling back to the
   // home directory) and the running PTY's directory can't be changed after the
   // fact. Keeping it OUT of the mount effect's deps matters: the pane's `cwd`
@@ -67,17 +96,32 @@ export function IntegratedTerminal({
   // lands (undefined -> "/Users/…" for a thread with no directory), and with
   // `cwd` in the deps that tore down the freshly built xterm and rebuilt it,
   // discarding anything the user had typed during the spawn.
+  const attachOnlyRef = useRef(attachOnly);
+  const newSessionRef = useRef(newSession);
+  const resumeRef = useRef(resume);
   const cwdRef = useRef(cwd);
   cwdRef.current = cwd;
   // Same rationale as cwdRef: the owning target is a create-time input and
   // must not tear down a live xterm when the pane object identity changes.
   const remoteTargetRef = useRef(remote?.target);
   remoteTargetRef.current = remote?.target;
+  // A display preference, applied live: read at creation from the ref, then
+  // pushed into the running xterm by the effect below.
+  const minimumContrast = useTerminalMinimumContrast();
+  const minimumContrastRef = useRef(minimumContrast);
+  minimumContrastRef.current = minimumContrast;
   const [status, setStatus] = useState<string>("Starting shell...");
+  const [error, setError] = useState<string>();
 
   useEffect(() => {
     visibleRef.current = visible;
   }, [visible]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.minimumContrastRatio = minimumContrastRatio(minimumContrast);
+  }, [minimumContrast]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -102,39 +146,42 @@ export function IntegratedTerminal({
           allowTransparency: true,
           cursorBlink: true,
           cursorStyle: "block",
-          fontFamily: cssVariable("--font-mono"),
+          fontFamily: withNerdFontFallback(
+            cssVariable("--font-mono"),
+            discoveredNerdFontFamily(),
+          ),
           fontSize: 12,
           lineHeight: 1.25,
           macOptionIsMeta: true,
+          minimumContrastRatio: minimumContrastRatio(minimumContrastRef.current),
           scrollback: 5_000,
-          theme: {
-            background: cssVariable("--terminal-bg"),
-            foreground: cssVariable("--terminal-fg"),
-            cursor: cssVariable("--terminal-cursor"),
-            cursorAccent: cssVariable("--terminal-cursor-accent"),
-            selectionBackground: cssVariable("--accent"),
-            black: cssVariable("--terminal-ansi-black"),
-            red: cssVariable("--terminal-ansi-red"),
-            green: cssVariable("--terminal-ansi-green"),
-            yellow: cssVariable("--terminal-ansi-yellow"),
-            blue: cssVariable("--terminal-ansi-blue"),
-            magenta: cssVariable("--terminal-ansi-magenta"),
-            cyan: cssVariable("--terminal-ansi-cyan"),
-            white: cssVariable("--terminal-ansi-white"),
-            brightBlack: cssVariable("--terminal-ansi-bright-black"),
-            brightRed: cssVariable("--terminal-ansi-bright-red"),
-            brightGreen: cssVariable("--terminal-ansi-bright-green"),
-            brightYellow: cssVariable("--terminal-ansi-bright-yellow"),
-            brightBlue: cssVariable("--terminal-ansi-bright-blue"),
-            brightMagenta: cssVariable("--terminal-ansi-bright-magenta"),
-            brightCyan: cssVariable("--terminal-ansi-bright-cyan"),
-            brightWhite: cssVariable("--terminal-ansi-bright-white"),
-          },
+          theme: readTerminalTheme(),
         });
         const fitAddon = new fitModule.FitAddon();
+        terminal.attachCustomKeyEventHandler((event) => {
+          if (desktopApi.platform !== "linux" && desktopApi.platform !== "win32") {
+            return true;
+          }
+          if (!event.ctrlKey || event.altKey || event.metaKey) return true;
+          if (event.key.toLowerCase() === "v") {
+            // Leave Chromium's native paste enabled, but don't let xterm send
+            // Ctrl+V (Readline's quoted-insert) before the paste event arrives.
+            // The paste event still goes through xterm's bracketed-paste path.
+            return false;
+          }
+          if (event.shiftKey && event.key.toLowerCase() === "c") {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.type === "keydown" && terminal.hasSelection()) {
+              void copyText(terminal.getSelection(), desktopApi).catch(() => undefined);
+            }
+            return false;
+          }
+          return true;
+        });
         terminal.loadAddon(fitAddon);
         terminal.open(container);
-        terminal.focus();
+        if (visibleRef.current) terminal.focus();
         terminalRef.current = terminal;
 
         let resizeFrame: number | undefined;
@@ -170,6 +217,7 @@ export function IntegratedTerminal({
         fitAndResizeRef.current = scheduleFitAndResize;
 
         const dataDisposable = terminal.onData((data) => {
+          if (!writableRef.current) return;
           if (replayingBufferedOutputRef.current) {
             if (isReplayGeneratedTerminalReply(data)) {
               return;
@@ -189,50 +237,136 @@ export function IntegratedTerminal({
         const resizeObserver = new ResizeObserver(scheduleFitAndResize);
         resizeObserver.observe(container);
 
+        // The pane's background follows the theme through CSS, but xterm
+        // paints text from the palette it was handed. Without a re-read, a
+        // terminal opened under a dark theme kept dark-theme ink on the light
+        // canvas after the window switched scheme. A color change repaints
+        // every row, scrollback included.
+        const themeObserver = new MutationObserver(() => {
+          terminal.options.theme = readTerminalTheme();
+        });
+        themeObserver.observe(document.documentElement, {
+          attributes: true,
+          attributeFilter: ["data-theme", "data-color-theme"],
+        });
+
+        // The first terminal in a window opens before the Nerd Font lookup
+        // returns. The fallback sits behind Geist Mono, so adding it changes
+        // no cell size; the refit only confirms that.
+        if (!discoveredNerdFontFamily()) {
+          void discoverNerdFontFamily().then((family) => {
+            if (disposed || !family) return;
+            terminal.options.fontFamily = withNerdFontFallback(
+              cssVariable("--font-mono"),
+              family,
+            );
+            scheduleFitAndResize();
+          });
+        }
+
+        let attached = false;
+        let lastSeq = 0;
+        let queuedChars = 0;
+        let overflow = false;
+        const queued: { sessionId: string; data: string; seq?: number }[] = [];
+        // Subscribe before attach. Main may emit while its snapshot parses or
+        // while the IPC response is in flight; the watermark removes duplicates.
+        const unsubscribeOutput = desktopApi.onIntegratedTerminalOutput?.((event) => {
+          const expectedId = sessionIdRef.current ?? requestedSessionId;
+          if (expectedId && event.sessionId !== expectedId) return;
+          if (!attached) {
+            queuedChars += event.data.length;
+            if (queuedChars > 1024 * 1024) { overflow = true; queued.length = 0; }
+            if (!overflow) queued.push(event);
+            return;
+          }
+          if (event.snapshot) {
+            if (event.snapshot.seq < lastSeq) return;
+            replayingBufferedOutputRef.current = true;
+            terminal.reset();
+            terminal.resize(event.snapshot.cols, event.snapshot.rows);
+            lastSeq = event.snapshot.seq;
+            terminal.write(event.snapshot.data + (event.snapshot.pendingEscape ?? ""), () => {
+              replayingBufferedOutputRef.current = false;
+              scheduleFitAndResize();
+            });
+            return;
+          }
+          if (event.seq !== undefined && event.seq <= lastSeq) return;
+          if (event.seq !== undefined && event.seq !== lastSeq + 1) {
+            attached = false;
+            queued.push(event);
+            void attach().then(applyResponse).catch(reportError);
+            return;
+          }
+          lastSeq = event.seq ?? lastSeq;
+          terminal.write(event.data);
+          if (!visibleRef.current) onHiddenOutputRef.current?.();
+        });
         const dimensions = fitAddon.proposeDimensions();
-        void createIntegratedTerminal({
+        const attach = () => createIntegratedTerminal({
+          sessionId: requestedSessionId,
+          attachOnly: attachOnlyRef.current,
+          newSession: newSessionRef.current,
+          ...(resumeRef.current ? { resume: true } : {}),
           threadKey,
           cwd: cwdRef.current,
           cols: dimensions?.cols ?? terminal.cols,
           rows: dimensions?.rows ?? terminal.rows,
           federationTarget: remoteTargetRef.current,
-        })
-          .then((response) => {
+        });
+        const applyResponse = (response: Awaited<ReturnType<typeof createIntegratedTerminal>>) => {
+          if (disposed) return;
+          sessionIdRef.current = response.sessionId;
+          writableRef.current = !response.status || response.status === "running";
+          setStatus(response.status === "restored"
+            ? "Saved output · process ended when the app closed"
+            : response.status === "exited" ? "Shell exited · saved output" : response.cwd);
+          terminal.options.disableStdin = !writableRef.current;
+          const snapshot = response.snapshot;
+          lastSeq = snapshot?.seq ?? response.bufferSeq ?? 0;
+          if (snapshot) terminal.resize(snapshot.cols, snapshot.rows);
+          replayingBufferedOutputRef.current = true;
+          terminal.reset();
+          terminal.write(snapshot ? snapshot.data + (snapshot.pendingEscape ?? "") : response.buffer ?? "", () => {
             if (disposed) return;
-            sessionIdRef.current = response.sessionId;
-            setStatus(response.cwd);
-            const finishAttach = () => {
-              if (disposed) return;
+            if (overflow) {
+              overflow = false;
+              queuedChars = 0;
+              queued.length = 0;
+              void attach().then(applyResponse).catch(reportError);
+              return;
+            }
+            for (const event of queued) {
+              if (event.sessionId !== response.sessionId) continue;
+              if (event.seq !== undefined && event.seq <= lastSeq) continue;
+              lastSeq = event.seq ?? lastSeq;
+              terminal.write(event.data);
+            }
+            queued.length = 0;
+            attached = true;
+            // Keep replies suppressed until every queued write was parsed.
+            terminal.write("", () => {
+              replayingBufferedOutputRef.current = false;
               const pendingInput = pendingInputRef.current.join("");
               pendingInputRef.current = [];
-              if (pendingInput && desktopApi.writeIntegratedTerminal) {
-                void desktopApi.writeIntegratedTerminal({
-                  sessionId: response.sessionId,
-                  data: pendingInput,
-                });
+              if (pendingInput && writableRef.current) {
+                void desktopApi.writeIntegratedTerminal?.({ sessionId: response.sessionId, data: pendingInput });
               }
               scheduleFitAndResize();
-              if (visibleRef.current) {
-                terminal.focus();
-              }
-            };
-            if (response.buffer) {
-              replayingBufferedOutputRef.current = true;
-              terminal.write(response.buffer, () => {
-                replayingBufferedOutputRef.current = false;
-                finishAttach();
-              });
-            } else {
-              finishAttach();
-            }
-          })
-          .catch((error) => {
-            if (disposed) return;
-            setStatus(error instanceof Error ? error.message : String(error));
+              if (visibleRef.current) terminal.focus();
+            });
           });
+        };
+        const reportError = (error: unknown) => {
+          if (!disposed) setError(error instanceof Error ? error.message : String(error));
+        };
+        void attach().then(applyResponse).catch(reportError);
 
         cleanupTerminal = () => {
+          unsubscribeOutput?.();
           resizeObserver.disconnect();
+          themeObserver.disconnect();
           if (resizeFrame !== undefined) window.cancelAnimationFrame(resizeFrame);
           dataDisposable.dispose();
           terminal.dispose();
@@ -253,7 +387,7 @@ export function IntegratedTerminal({
       cleanupTerminal?.();
     };
     // `cwd` is intentionally not a dependency — see `cwdRef` above.
-  }, [desktopApi, threadKey]);
+  }, [desktopApi, threadKey, requestedSessionId]);
 
   useEffect(() => {
     if (!visible) {
@@ -269,6 +403,11 @@ export function IntegratedTerminal({
       terminalRef.current?.focus();
     }
   }, [height, hosted, visible]);
+
+  useEffect(() => {
+    // A pane that has not opened yet focuses itself on open when visible.
+    if (visible && focusRequest) terminalRef.current?.focus();
+  }, [focusRequest, visible]);
 
   const resizeBy = (delta: number) => {
     onHeightChange?.(clampTerminalHeight(height + delta));
@@ -307,21 +446,14 @@ export function IntegratedTerminal({
   };
 
   useEffect(() => {
-    if (!desktopApi?.onIntegratedTerminalOutput) return;
-    return desktopApi.onIntegratedTerminalOutput((event) => {
-      if (event.sessionId !== sessionIdRef.current) return;
-      terminalRef.current?.write(event.data);
-    });
-  }, [desktopApi]);
-
-  useEffect(() => {
     if (!desktopApi?.onIntegratedTerminalExit) return;
     return desktopApi.onIntegratedTerminalExit((event) => {
       if (event.sessionId !== sessionIdRef.current) return;
       const suffix =
         event.exitCode === null ? "" : ` with exit code ${event.exitCode}`;
       setStatus(`Shell exited${suffix}`);
-      sessionIdRef.current = undefined;
+      writableRef.current = false;
+      if (terminalRef.current) terminalRef.current.options.disableStdin = true;
       onExit();
     });
   }, [desktopApi, onExit]);
@@ -330,7 +462,7 @@ export function IntegratedTerminal({
     if (!desktopApi?.onIntegratedTerminalError) return;
     return desktopApi.onIntegratedTerminalError((event) => {
       if (event.sessionId && event.sessionId !== sessionIdRef.current) return;
-      setStatus(event.message);
+      setError(event.message);
     });
   }, [desktopApi]);
 
@@ -349,6 +481,7 @@ export function IntegratedTerminal({
         } as CSSProperties
       }
     >
+      {error ? <div className="thread-terminal-panel__history-note" role="alert">{error}</div> : null}
       {hosted ? null : (
         <div
           aria-label="Resize terminal"
@@ -390,10 +523,54 @@ export function IntegratedTerminal({
         {status}
       </span>
       <div className="integrated-terminal__body">
-        <div ref={containerRef} className="integrated-terminal__viewport" />
+        <div
+          ref={containerRef}
+          className="integrated-terminal__viewport"
+          onContextMenu={(event) => {
+            if (!desktopApi?.showIntegratedTerminalContextMenu) return;
+            event.preventDefault();
+            event.stopPropagation();
+            void desktopApi.showIntegratedTerminalContextMenu({
+              x: event.clientX,
+              y: event.clientY,
+              canCopy: terminalRef.current?.hasSelection() ?? false,
+            }).catch(() => undefined);
+          }}
+        />
       </div>
     </section>
   );
+}
+
+/** 1 is xterm's "leave every color alone". */
+function minimumContrastRatio(enabled: boolean): number {
+  return enabled ? TERMINAL_MINIMUM_CONTRAST_RATIO : 1;
+}
+
+function readTerminalTheme(): ITheme {
+  return {
+    background: cssVariable("--terminal-bg"),
+    foreground: cssVariable("--terminal-fg"),
+    cursor: cssVariable("--terminal-cursor"),
+    cursorAccent: cssVariable("--terminal-cursor-accent"),
+    selectionBackground: cssVariable("--accent"),
+    black: cssVariable("--terminal-ansi-black"),
+    red: cssVariable("--terminal-ansi-red"),
+    green: cssVariable("--terminal-ansi-green"),
+    yellow: cssVariable("--terminal-ansi-yellow"),
+    blue: cssVariable("--terminal-ansi-blue"),
+    magenta: cssVariable("--terminal-ansi-magenta"),
+    cyan: cssVariable("--terminal-ansi-cyan"),
+    white: cssVariable("--terminal-ansi-white"),
+    brightBlack: cssVariable("--terminal-ansi-bright-black"),
+    brightRed: cssVariable("--terminal-ansi-bright-red"),
+    brightGreen: cssVariable("--terminal-ansi-bright-green"),
+    brightYellow: cssVariable("--terminal-ansi-bright-yellow"),
+    brightBlue: cssVariable("--terminal-ansi-bright-blue"),
+    brightMagenta: cssVariable("--terminal-ansi-bright-magenta"),
+    brightCyan: cssVariable("--terminal-ansi-bright-cyan"),
+    brightWhite: cssVariable("--terminal-ansi-bright-white"),
+  };
 }
 
 function cssVariable(name: string): string {

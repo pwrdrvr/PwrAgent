@@ -9,6 +9,8 @@ import {
   type ReactNode,
 } from "react";
 import {
+  hasDurableSubAgentTranscript,
+  isCodexNativeSubAgent,
   parseCodexAsyncQuestionReply,
   stripCodexGitActionDirectives,
 } from "@pwragent/shared";
@@ -84,8 +86,19 @@ const EMPTY_IMAGE_PARTS: AppServerThreadImagePart[] = [];
 
 export const TranscriptMessage = memo(function TranscriptMessage(props: TranscriptMessageProps) {
   const threadLinks = useThreadLinks();
-  const sourceThreadLink = props.message.origin?.sourceThread
-    ? threadLinks?.resolve(props.message.origin.sourceThread)
+  const origin = props.message.origin;
+  const sourceThread = origin?.sourceThread;
+  const hasDurableSourceThread = sourceThread && (
+    origin.kind !== "sub-agent"
+    || hasDurableSubAgentTranscript({
+      backend: sourceThread.backend,
+      origin: origin.subAgent && isCodexNativeSubAgent(origin.subAgent)
+        ? "codex-native"
+        : "pwragent",
+    })
+  );
+  const sourceThreadLink = hasDurableSourceThread
+    ? threadLinks?.resolve(sourceThread)
     : undefined;
   const contentParts = useMemo(
     () => {
@@ -1299,6 +1312,9 @@ function labelForMessage(message: AppServerThreadMessageEntry): string {
 function labelForOrigin(origin: AppServerThreadMessageOrigin): string {
   if (origin.kind === "pwragent" && origin.systemReason === "monitor-job-suggestion") {
     return "PwrAgent System - Monitor Job Suggestion";
+  }
+  if (origin.kind === "pwragent" && origin.dependencyId) {
+    return "Continue after";
   }
   if (origin.kind === "agent") {
     return origin.sourceThread ? "From thread" : "Agent";

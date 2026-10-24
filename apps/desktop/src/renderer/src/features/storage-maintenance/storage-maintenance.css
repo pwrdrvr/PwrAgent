@@ -1,14 +1,15 @@
 .storage-maintenance {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   min-height: 100vh;
-  box-sizing: border-box;
-  padding: 24px;
   background: var(--bg-panel);
   color: var(--text-primary);
   font-size: 13px;
 }
+.storage-maintenance__body { flex: 1; padding: 4px 24px 24px; }
 .storage-maintenance h1 { font-size: 20px; margin: 20px 0 12px; }
-.storage-maintenance p { color: var(--text-secondary); line-height: 1.5; }
-.storage-maintenance .sidebar__brand { color: var(--text-primary); }
+.storage-maintenance__body p { color: var(--text-secondary); line-height: 1.5; }
 .storage-maintenance__choice { display: flex; gap: 8px; align-items: center; margin-top: 20px; }
 .storage-maintenance__choice input { appearance: none; width: 16px; height: 16px; flex-shrink: 0; margin: 0; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--bg-input); }
 .storage-maintenance__choice input:checked { background: var(--accent-soft); border-color: var(--accent); }
@@ -16,9 +17,23 @@
 .storage-maintenance__choice input:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .storage-maintenance__choice input:disabled { opacity: 0.6; }
 .storage-maintenance__detail { font-size: 12px; }
-.storage-maintenance__progress { padding: 12px 0; min-height: 36px; }
+.storage-maintenance__progress { padding: 12px 0; min-height: 36px; font-variant-numeric: tabular-nums; }
+.storage-maintenance__count { display: inline-block; text-align: right; }
 .storage-maintenance footer { display: flex; gap: 8px; align-items: center; }
 .storage-maintenance footer span { flex: 1; font-size: 11px; color: var(--text-muted); }
 .storage-maintenance button { background: var(--bg-panel-hover); border: 1px solid var(--border-strong); color: var(--text-primary); padding: 8px 12px; border-radius: 8px; cursor: pointer; }
 .storage-maintenance button:focus-visible { outline: 2px solid var(--focus-ring); }
 .storage-maintenance .storage-maintenance__primary { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); }
+/* The toast countdown (`.app-notice-toast__timer`) along the window's bottom
+   edge. Its duration is set inline from STORAGE_MAINTENANCE_AUTO_CLOSE_MS. */
+.storage-maintenance__timer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: color-mix(in srgb, var(--text-muted) 42%, transparent);
+  transform-origin: left center;
+  animation: app-notice-toast-countdown linear forwards;
+}
+.storage-maintenance__timer[data-paused="true"] { animation-play-state: paused; }

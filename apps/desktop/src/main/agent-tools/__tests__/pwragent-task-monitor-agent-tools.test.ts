@@ -40,10 +40,19 @@ describe("PwrAgent task monitor agent tools", () => {
     // highlight_star_map_threads and set_star_map_view, 41 with push_instance_file,
     // 43 with search_mcp_tools and call_mcp_tool, 44 with handoff_instance_thread,
     // 45 with read_operator_focus, 46 with list_attention_threads,
-    // 47 with mark_project_read.
-    expect(dynamicTools).toHaveLength(47);
+    // 47 with mark_project_read, 50 with the three thread to-do tools,
+    // 52 with rename_current_thread, 59 with the seven forge read tools,
+    // 63 with the four review-tracking tools, 64 with manage_thread_dependencies,
+    // 65 with read_tool_guide, 66 with graphical open_thread,
+    // 69 with the three Federation service tools.
+    expect(dynamicTools).toHaveLength(69);
+    expect(dynamicTools.map((tool) => tool.name)).toContain("open_thread");
+    expect(mcpTools.map((tool) => tool.name)).toContain("open_thread");
+    expect(dynamicTools.map((tool) => tool.name))
+      .toContain("manage_thread_dependencies");
     expect(mcpTools).toEqual(expect.arrayContaining(
-      dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
+      dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name))
+        .map((tool) => expect.objectContaining(tool)),
     ));
     expect(mcpTools.map((tool) => tool.name))
       .toContain("create_monitor_delegation");
@@ -63,6 +72,11 @@ describe("PwrAgent task monitor agent tools", () => {
       .toContain("send_messaging_file");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("push_instance_file");
+    expect(mcpTools.map((tool) => tool.name)).toEqual(expect.arrayContaining([
+      "advertise_service",
+      "list_services",
+      "remove_service",
+    ]));
     expect(mcpTools.map((tool) => tool.name))
       .toContain("handoff_instance_thread");
     expect(mcpTools.map((tool) => tool.name))
@@ -84,6 +98,9 @@ describe("PwrAgent task monitor agent tools", () => {
       "Omit preferredModel and preferredReasoningEffort",
     );
     expect(createMonitorTool?.description).toContain(
+      "Never pass the parent's own model or effort",
+    );
+    expect(createMonitorTool?.description).toContain(
       "Do not use this for an attached PR",
     );
     expect(createMonitorTool?.description).toContain(
@@ -102,12 +119,12 @@ describe("PwrAgent task monitor agent tools", () => {
         },
         preferredModel: {
           description: expect.stringContaining(
-            "Omit it to use the monitor default",
+            "Only a lightweight model, such as a Luna or mini model, is accepted",
           ),
         },
         preferredReasoningEffort: {
           description: expect.stringContaining(
-            "Omit it to use the monitor default",
+            "Only medium or lower is accepted",
           ),
         },
       },

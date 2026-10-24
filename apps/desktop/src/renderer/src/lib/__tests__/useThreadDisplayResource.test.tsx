@@ -204,3 +204,13 @@ it("adopts a pending resource when the panel closes and reopens", async () => {
   expect(second.result.current.data?.subAgents?.[0]?.monitorId).toBe("retained-owner");
   second.unmount();
 });
+
+it("refreshes a demanded pricing snapshot on usage even without a ledger notification", async () => {
+  const h = harness();
+  const view = renderHook(() => useThreadDisplayResource({ desktopApi: h.api, thread: thread(), resource: "pricing" }));
+  await waitFor(() => expect(view.result.current.data).toBeDefined());
+  vi.useFakeTimers();
+  h.emit({ backend: "codex", federationTarget: target, notification: { method: "thread/tokenUsage/updated", params: { threadId: "thread", tokenUsage: { total: { totalTokens: 100 } } } } });
+  await act(async () => { await vi.advanceTimersByTimeAsync(1_050); });
+  expect(h.readThread).toHaveBeenCalledTimes(2);
+});

@@ -1,5 +1,6 @@
 import { ipcMain } from "electron";
 import {
+  isMcpConnectionToolApproval,
   type AuthorizeMcpConnectionRequest,
   type AuthorizeMcpConnectionResponse,
   type CancelMcpConnectionAuthorizationRequest,
@@ -15,12 +16,14 @@ import {
   type ListMcpConnectionToolsResponse,
   isRemoteFederationTarget,
   type ConnectPwrGitResponse,
+  type ListMcpConnectionsRequest,
   type ListMcpConnectionsResponse,
   type McpConnectionStatus,
   type MutateMcpConnectionResponse,
   type RemoveMcpConnectionRequest,
   type SetMcpConnectionEnabledRequest,
   type SetMcpConnectionSelectForNewThreadsRequest,
+  type SetMcpConnectionToolApprovalRequest,
   type ReadThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsResponse,
@@ -48,6 +51,7 @@ import {
   MCP_CONNECTION_REMOVE_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
+  MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
@@ -103,8 +107,18 @@ export function registerMcpConnectionIpcHandlers(
   ipcMain.removeHandler(MCP_CONNECTION_LIST_CHANNEL);
   ipcMain.handle(
     MCP_CONNECTION_LIST_CHANNEL,
-    async (event): Promise<ListMcpConnectionsResponse> => {
-      requireLocalOwner(event);
+    async (
+      event,
+      request: ListMcpConnectionsRequest = {},
+    ): Promise<ListMcpConnectionsResponse> => {
+      const target =
+        federationWindowTargetForWebContents(event.sender)
+        ?? request.federationTarget;
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .listMcpConnections();
+      }
       return { connections: await service.listConnections() };
     },
   );
@@ -202,6 +216,25 @@ export function registerMcpConnectionIpcHandlers(
       return { connectionId: request.connectionId, connection };
     },
   );
+  ipcMain.removeHandler(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
+    async (
+      event,
+      request: SetMcpConnectionToolApprovalRequest,
+    ): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      if (!isMcpConnectionToolApproval(request?.toolApproval)) {
+        throw new Error("Choose a tool approval mode for this MCP connection.");
+      }
+      const connection: McpConnectionStatus =
+        await service.setConnectionToolApproval(
+          request.connectionId,
+          request.toolApproval,
+        );
+      return { connectionId: request.connectionId, connection };
+    },
+  );
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
   ipcMain.handle(
     MCP_CONNECTION_LIST_TOOLS_CHANNEL,
@@ -220,11 +253,16 @@ export function registerMcpConnectionIpcHandlers(
       event,
       request: SetThreadMcpConnectionsRequest,
     ): Promise<SetThreadMcpConnectionsResponse> => {
-      // Managed connections belong to the profile that runs the thread. A
-      // federated viewer editing this would write a selection the executing
-      // machine cannot honor, so the guard matches the rest of this surface.
-      requireLocalOwner(event);
-      return await getDesktopBackendRegistry().setThreadMcpConnections(request);
+      const target =
+        federationWindowTargetForWebContents(event.sender)
+        ?? request.federationTarget;
+      const { federationTarget: _federationTarget, ...ownerRequest } = request;
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .setThreadMcpConnections(ownerRequest);
+      }
+      return await getDesktopBackendRegistry().setThreadMcpConnections(ownerRequest);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_READ_THREAD_CHANNEL);
@@ -234,8 +272,16 @@ export function registerMcpConnectionIpcHandlers(
       event,
       request: ReadThreadMcpConnectionsRequest,
     ): Promise<SetThreadMcpConnectionsResponse> => {
-      requireLocalOwner(event);
-      return await getDesktopBackendRegistry().readThreadMcpConnections(request);
+      const target =
+        federationWindowTargetForWebContents(event.sender)
+        ?? request.federationTarget;
+      const { federationTarget: _federationTarget, ...ownerRequest } = request;
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .readThreadMcpConnections(ownerRequest);
+      }
+      return await getDesktopBackendRegistry().readThreadMcpConnections(ownerRequest);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL);
@@ -245,9 +291,16 @@ export function registerMcpConnectionIpcHandlers(
       event,
       request: DescribeThreadMcpConnectionsRequest,
     ): Promise<DescribeThreadMcpConnectionsResponse> => {
-      requireLocalOwner(event);
-      return await getDesktopBackendRegistry()
-        .describeThreadMcpConnections(request);
+      const target =
+        federationWindowTargetForWebContents(event.sender)
+        ?? request.federationTarget;
+      const { federationTarget: _federationTarget, ...ownerRequest } = request;
+      if (target && isRemoteFederationTarget(target)) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(target)
+          .describeThreadMcpConnections(ownerRequest);
+      }
+      return await getDesktopBackendRegistry().describeThreadMcpConnections(ownerRequest);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_UPDATE_CHANNEL);
@@ -466,6 +519,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_LIST_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_AUTHORIZE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL);

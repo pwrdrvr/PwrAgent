@@ -1,6 +1,6 @@
-import { Component, type ReactNode } from "react";
+import { Component, useEffect, type ReactNode } from "react";
 import { setImmediate } from "node:timers";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, getConfig, render } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import type { NavigationDirectorySummary, NavigationThreadSummary } from "@pwragent/shared";
@@ -58,11 +58,12 @@ function fixture() {
 }
 
 /** Stands in for RendererErrorBoundary, which is what lost the sidebar. */
-class Boundary extends Component<{ children: ReactNode }, { error?: Error }> {
+class Boundary extends Component<{ children: ReactNode; onError: () => void }, { error?: Error }> {
   state: { error?: Error } = {};
   static getDerivedStateFromError(error: Error): { error: Error } {
     return { error };
   }
+  componentDidCatch(): void { this.props.onError(); }
   render(): ReactNode {
     return this.state.error ? null : this.props.children;
   }
@@ -81,10 +82,12 @@ it("opens every directory in one lens without exceeding React's update depth", a
   // console.error at all, so anything here is a diagnostic worth failing on.
   const reported: string[] = [];
   vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { reported.push(String(args[0])); });
+  let notifyReady = () => {};
   let boundary!: Boundary;
   let navigation!: ReturnType<typeof useThreadNavigation>;
   function Window() {
     navigation = useThreadNavigation(f.api);
+    useEffect(() => { notifyReady(); });
     return <Sidebar backends={[]} browseMode={navigation.browseMode} directories={navigation.directories}
       directoryDisclosure={navigation.directoryDisclosure}
       selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
@@ -97,10 +100,16 @@ it("opens every directory in one lens without exceeding React's update depth", a
   // A renderer that died stops settling, so every wait below takes the boundary
   // as an exit too — otherwise a throw that lands earlier than expected fails
   // as an opaque timeout instead of naming itself.
-  const settled = async (ready: () => boolean, timeout?: number): Promise<void> => {
-    await waitFor(() => expect(Boolean(boundary.state.error) || ready()).toBe(true), { timeout });
+  const settled = async (ready: () => boolean): Promise<void> => {
+    // Use the same async scope as Testing Library waitFor, but observe actual
+    // React commits instead of racing the collection reads against a timeout.
+    await getConfig().asyncWrapper(() => new Promise<void>((resolve) => {
+      notifyReady = () => { if (boundary.state.error || ready()) resolve(); };
+      notifyReady();
+    }));
+    notifyReady = () => {};
   };
-  const mounted = render(<Boundary ref={(instance) => { if (instance) boundary = instance; }}><Window /></Boundary>);
+  const mounted = render(<Boundary onError={() => notifyReady()} ref={(instance) => { if (instance) boundary = instance; }}><Window /></Boundary>);
   try {
     await settled(() => navigation.threads.length > 0);
     await act(async () => { navigation.setBrowseMode("directories"); });
@@ -118,7 +127,6 @@ it("opens every directory in one lens without exceeding React's update depth", a
     await settled(() => navigation.pagedNavigation.resources.size > 2 * DIRECTORY_COUNT);
     await settled(
       () => [...navigation.pagedNavigation.resources.values()].every((resource) => !resource.loading),
-      15_000,
     );
 
     expect(boundary.state.error).toBeUndefined();

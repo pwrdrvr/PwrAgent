@@ -168,6 +168,7 @@ export function EnvActionRunEntry(props: {
   run: CodexEnvironmentActionRun;
 }): ReactNode {
   const { run } = props;
+  const environmentName = run.environmentName ?? props.environmentName;
   const status = run.status;
   const terminationMode = run.terminationMode;
   const stateLabel =
@@ -225,7 +226,7 @@ export function EnvActionRunEntry(props: {
       className={`composer__queued composer__queued--env-action ${modifier} env-action-run env-action-run--${props.placement}`}
       aria-label={label}
     >
-      <summary className="composer__queued-env-action-summary">
+      <summary className="composer__queued-env-action-summary composer__queued-env-action-header">
         <span
           className="composer__queued-env-action-chevron"
           aria-hidden="true"
@@ -244,7 +245,7 @@ export function EnvActionRunEntry(props: {
           <span className="composer__queued-label">{visibleLabel}</span>
           <span className="composer__queued-text">
             {run.actionName}
-            {props.environmentName ? ` · ${props.environmentName}` : ""}
+            {environmentName ? ` · ${environmentName}` : ""}
             {meta.length > 0 ? ` · ${meta.join(" · ")}` : ""}
           </span>
           {props.placement === "sidebar" &&

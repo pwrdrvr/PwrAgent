@@ -41,7 +41,7 @@ function expectDocumentPreserved(saved: ReturnType<typeof selectDocument>) {
   expect(saved.selection.focusNode).toBe(saved.paragraph);
   expect(saved.selection.toString()).toBe(saved.selectedText);
   expect(saved.scroll.scrollTop).toBe(640);
-  expect(screen.queryByText("Loading document...")).not.toBeInTheDocument();
+  expect(screen.queryByText("Loading file…")).not.toBeInTheDocument();
 }
 
 afterEach(() => {

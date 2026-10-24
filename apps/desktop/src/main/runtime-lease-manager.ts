@@ -116,6 +116,10 @@ export class RuntimeLeaseManager {
     return this.instanceId;
   }
 
+  get profile(): string {
+    return this.profileName;
+  }
+
   recordMessagingState(params: {
     desiredMessagingEnabled: boolean;
     effectiveMessagingEnabled: boolean;

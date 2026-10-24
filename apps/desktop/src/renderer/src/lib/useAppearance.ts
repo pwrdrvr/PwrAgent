@@ -8,6 +8,8 @@ import {
   resolveTheme,
   type AppearancePreference,
   type DensityPreference,
+  type DarkThemePreference,
+  type LightThemePreference,
   type ResolvedTheme,
   type TextSizePreference,
   type ThemePreference,
@@ -21,6 +23,8 @@ export type AppearanceState = AppearancePreference & {
 export type AppearanceController = {
   appearance: AppearanceState;
   setTheme(theme: ThemePreference): void;
+  setDarkTheme(darkTheme: DarkThemePreference): void;
+  setLightTheme(lightTheme: LightThemePreference): void;
   setDensity(density: DensityPreference): void;
   setSidebarTextSize(sidebarTextSize: TextSizePreference): void;
   setTranscriptTextSize(transcriptTextSize: TextSizePreference): void;
@@ -58,6 +62,8 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   const { snapshotPreference, writeConfig } = input;
   const snapshotDensity = snapshotPreference?.density;
   const snapshotTheme = snapshotPreference?.theme;
+  const snapshotDarkTheme = snapshotPreference?.darkTheme;
+  const snapshotLightTheme = snapshotPreference?.lightTheme;
   const snapshotSidebarTextSize = snapshotPreference?.sidebarTextSize;
   const snapshotTranscriptTextSize = snapshotPreference?.transcriptTextSize;
 
@@ -77,6 +83,8 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     if (
       !snapshotDensity
       || !snapshotTheme
+      || !snapshotDarkTheme
+      || !snapshotLightTheme
       || !snapshotSidebarTextSize
       || !snapshotTranscriptTextSize
     ) {
@@ -85,6 +93,8 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     setAppearanceState((current) => {
       if (
         current.theme === snapshotTheme
+        && current.darkTheme === snapshotDarkTheme
+        && current.lightTheme === snapshotLightTheme
         && current.density === snapshotDensity
         && current.sidebarTextSize === snapshotSidebarTextSize
         && current.transcriptTextSize === snapshotTranscriptTextSize
@@ -93,6 +103,8 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
       }
       return {
         density: snapshotDensity,
+        darkTheme: snapshotDarkTheme,
+        lightTheme: snapshotLightTheme,
         resolvedTheme: resolveTheme(snapshotTheme),
         sidebarTextSize: snapshotSidebarTextSize,
         transcriptTextSize: snapshotTranscriptTextSize,
@@ -102,6 +114,8 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   }, [
     snapshotDensity,
     snapshotTheme,
+    snapshotDarkTheme,
+    snapshotLightTheme,
     snapshotSidebarTextSize,
     snapshotTranscriptTextSize,
   ]);
@@ -112,12 +126,16 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   useEffect(() => {
     applyAppearanceAttributes(
       appearance.resolvedTheme,
+      appearance.darkTheme,
+      appearance.lightTheme,
       appearance.density,
       appearance.sidebarTextSize,
       appearance.transcriptTextSize,
     );
   }, [
     appearance.resolvedTheme,
+    appearance.darkTheme,
+    appearance.lightTheme,
     appearance.density,
     appearance.sidebarTextSize,
     appearance.transcriptTextSize,
@@ -194,6 +212,16 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
     [updateAxis],
   );
 
+  const setDarkTheme = useCallback(
+    (darkTheme: DarkThemePreference) => updateAxis("darkTheme", darkTheme),
+    [updateAxis],
+  );
+
+  const setLightTheme = useCallback(
+    (lightTheme: LightThemePreference) => updateAxis("lightTheme", lightTheme),
+    [updateAxis],
+  );
+
   const setDensity = useCallback(
     (density: DensityPreference) => updateAxis("density", density),
     [updateAxis],
@@ -216,6 +244,8 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
       setAppearanceState((current) => {
         if (
           current.theme === preference.theme
+          && current.darkTheme === preference.darkTheme
+          && current.lightTheme === preference.lightTheme
           && current.density === preference.density
           && current.sidebarTextSize === preference.sidebarTextSize
           && current.transcriptTextSize === preference.transcriptTextSize
@@ -237,6 +267,8 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
   return {
     appearance,
     setTheme,
+    setDarkTheme,
+    setLightTheme,
     setDensity,
     setSidebarTextSize,
     setTranscriptTextSize,
@@ -247,6 +279,8 @@ export function useAppearance(input: UseAppearanceInput): AppearanceController {
 export { DEFAULT_APPEARANCE };
 export type {
   ThemePreference,
+  DarkThemePreference,
+  LightThemePreference,
   DensityPreference,
   ResolvedTheme,
   TextSizePreference,

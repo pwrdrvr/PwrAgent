@@ -11,6 +11,9 @@ export function formatBackendAccountText(
   if (account.type === "chatgpt" && account.email?.trim()) {
     return account.email.trim();
   }
+  if (account.type === "chatgpt") {
+    return "ChatGPT account";
+  }
   if (account.type === "apiKey") {
     return "API key";
   }
@@ -118,7 +121,7 @@ export function describeRateLimitRow(
   const resetText = formatRateLimitResetCompact(limit.resetAt, now);
   const base = {
     label: rateLimitDisplayLabel(limit),
-    ...(resetText ? { reset: `resets ${resetText}` } : {}),
+    ...(resetText ? { reset: `${limit.expires ? "expires" : "resets"} ${resetText}` } : {}),
   };
   if (typeof limit.used === "number" && typeof limit.limit === "number" && limit.limit > 0) {
     return {
@@ -165,7 +168,7 @@ export function formatRateLimitLine(limit: BackendRateLimitSummary): string {
   const { label } = splitRateLimitName(limit.name);
   const displayLabel = rateLimitDisplayLabel(limit);
   const resetText = formatRateLimitReset(limit.resetAt);
-  const suffix = resetText ? `, resets ${resetText}` : "";
+  const suffix = resetText ? `, ${limit.expires ? "expires" : "resets"} ${resetText}` : "";
   if (
     label === "Individual limit"
     && typeof limit.used === "number"
@@ -311,7 +314,7 @@ function formatRateLimitReset(resetAt: number | undefined): string | undefined {
   }).format(date);
 }
 
-/** Today's time, a weekday and hour within the week, else the date. */
+/** Today's time, a weekday and time within the week, else the date. */
 function formatRateLimitResetCompact(
   resetAt: number | undefined,
   now: number,
@@ -333,7 +336,7 @@ function formatRateLimitResetCompact(
   return new Intl.DateTimeFormat(
     undefined,
     resetAt >= now && resetAt - now < sixDaysMs
-      ? { weekday: "short", hour: "numeric" }
+      ? { weekday: "short", hour: "numeric", minute: "2-digit" }
       : { month: "short", day: "numeric" },
   ).format(date);
 }

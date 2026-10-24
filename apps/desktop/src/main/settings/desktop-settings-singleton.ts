@@ -5,6 +5,7 @@ import { DesktopSettingsService } from "./desktop-settings-service";
 import { DbBackedSafeStorageSecretStore } from "../state/secret-store-sqlite";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
 import { broadcastAppearanceChange } from "../appearance-broadcast";
+import { syncThemedDockIcon } from "../themed-dock-icon";
 import { resolveBootstrapProfilePath } from "../profile";
 import {
   isE2eMemorySecretStorageEnabled,
@@ -19,6 +20,7 @@ import {
   getDesktopConfigStore,
 } from "./config-store/desktop-config-store-singleton";
 import { resolveDesktopConfigPath } from "./desktop-config";
+import { readEvalManagedRuntime } from "../eval-managed-runtime";
 
 let unsubscribeAuth: (() => void) | undefined;
 let desktopSettingsService: DesktopSettingsService | undefined;
@@ -41,6 +43,9 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       ? resolveBootstrapProfilePath("config.toml")
       : resolveDesktopConfigPath();
     const configStore = getDesktopConfigStore();
+    // Memoize validation for this process. A rejected pin never falls back to
+    // a downloaded binary, and both eval arms use the same managed release.
+    let evalRuntime: ReturnType<typeof readEvalManagedRuntime> | undefined;
     const secretStore = isE2eMemorySecretStorageEnabled(
       process.env,
       app.isPackaged,
@@ -58,11 +63,14 @@ export function getDesktopSettingsService(): DesktopSettingsService {
         requirePlatformSignature: app.isPackaged === true,
       }),
       ensureManagedCodexRuntime: async ({
+        channel,
         checkMode,
         signal,
         waitForUpdate,
       }) =>
-        await ensureManagedCodexRuntime({
+        await (evalRuntime ??= readEvalManagedRuntime(app.isPackaged))
+        ?? await ensureManagedCodexRuntime({
+          channel,
           checkMode,
           requirePlatformSignature: app.isPackaged === true,
           signal,
@@ -96,7 +104,9 @@ export function getDesktopSettingsService(): DesktopSettingsService {
     });
     configStore.subscribe(["general"], ({ values }) => {
       broadcastAppearanceChange(values.general.appearance);
+      syncThemedDockIcon(values.general.appearance);
     });
+    syncThemedDockIcon(configStore.read("general").appearance);
     configStore.subscribeUpdates(
       ({ version, configRevision, changedDomains }) => {
         const payload = {

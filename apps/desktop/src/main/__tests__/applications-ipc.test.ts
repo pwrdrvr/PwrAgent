@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { registerApplicationIpcHandlers } from "../ipc/applications";
+import { MARKDOWN_FILE_READ_CHANNEL, TRANSCRIPT_FILES_RESOLVE_CHANNEL } from "../../shared/ipc";
 import type {
   DesktopApplicationsSnapshot,
   OpenDesktopApplicationRequest,
@@ -43,6 +48,8 @@ const mocks = vi.hoisted(() => {
     handlers,
     openApplication,
     readApplications,
+    resolveTranscriptFiles: vi.fn(async () => ({ files: [{ reference: "notes.md", path: "/owner/notes.md", previewable: true }] })),
+    resolveThread: vi.fn(async () => ({ projectKey: "/owner", linkedDirectories: [] })),
     discoverDesktopApplications: vi.fn(async () => remoteApplications),
     openDesktopApplication: vi.fn(
       async (): Promise<OpenDesktopApplicationResponse> => ({ opened: true }),
@@ -80,7 +87,12 @@ vi.mock("../settings/application-discovery", () => ({
 vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => ({
     remoteBackend: mocks.remoteBackendForTarget,
+    resolveTranscriptFiles: mocks.resolveTranscriptFiles,
   }),
+}));
+
+vi.mock("../app-server/backend-registry", () => ({
+  getDesktopBackendRegistry: () => ({ resolveThread: mocks.resolveThread }),
 }));
 
 vi.mock("../markdown-files-window", () => ({
@@ -102,6 +114,8 @@ vi.mock("../tool-output-incident-explorer-window", () => ({
 describe("application IPC", () => {
   beforeEach(() => {
     mocks.handlers.clear();
+    mocks.resolveThread.mockClear();
+    mocks.resolveTranscriptFiles.mockClear();
     mocks.openApplication.mockClear();
     mocks.readApplications.mockClear();
     mocks.discoverDesktopApplications.mockClear();
@@ -111,8 +125,63 @@ describe("application IPC", () => {
     mocks.showToolOutputIncidentExplorerWindow.mockClear();
   });
 
+  it("routes hydration to the owning peer and never stats a remote path locally", async () => {
+    registerApplicationIpcHandlers();
+    const federationTarget = { scope: "remote" as const, instanceId: "owner" };
+    const request = { references: ["notes.md"], thread: { backend: "codex", threadId: "thread-1" }, federationTarget };
+    expect(await mocks.handlers.get(TRANSCRIPT_FILES_RESOLVE_CHANNEL)?.({}, request))
+      .toEqual({ files: [{ reference: "notes.md", path: "/owner/notes.md", previewable: true }] });
+    expect(mocks.resolveTranscriptFiles).toHaveBeenCalledWith(federationTarget, request);
+    expect(mocks.resolveThread).not.toHaveBeenCalled();
+    mocks.resolveTranscriptFiles.mockRejectedValueOnce(new Error("Peer offline"));
+    expect(await mocks.handlers.get(TRANSCRIPT_FILES_RESOLVE_CHANNEL)?.({}, request)).toEqual({ files: [] });
+  });
+
+  it("resolves local references against the owner thread instead of the supplied viewer root", async () => {
+    registerApplicationIpcHandlers();
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-inline-files-"));
+    try {
+      await writeFile(path.join(root, "notes.md"), "fixture");
+      mocks.resolveThread.mockResolvedValueOnce({ projectKey: root, linkedDirectories: [] });
+      expect(await mocks.handlers.get(TRANSCRIPT_FILES_RESOLVE_CHANNEL)?.({}, {
+        references: ["notes.md"], projectPath: "/incorrect/viewer/root", thread: { backend: "codex", threadId: "thread-1" },
+      })).toEqual({ files: [{ reference: "notes.md", path: path.join(root, "notes.md"), previewable: true }] });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads local previewable files and rejects unsupported, missing, directory and oversized paths", async () => {
+    registerApplicationIpcHandlers();
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-json-preview-"));
+    const read = (filePath: string) => mocks.handlers.get(MARKDOWN_FILE_READ_CHANNEL)?.({}, { path: filePath });
+    try {
+      const filePath = path.join(root, "widget.JSON");
+      const content = '{"title":"Widget","id":9007199254740993}';
+      await writeFile(filePath, content);
+      expect(await read(filePath)).toEqual({ path: filePath, content });
+      for (const name of ["config.yml", "pyproject.toml", "events.ndjson", "rows.tsv", "build.log"]) {
+        await writeFile(path.join(root, name), "x");
+        expect(await read(path.join(root, name))).toEqual({ path: path.join(root, name), content: "x" });
+      }
+      for (const name of ["script.js", ".env", "secrets.env"]) {
+        expect(await read(path.join(root, name))).toMatchObject({ error: "This file type cannot be previewed." });
+      }
+      await writeFile(path.join(root, ".env"), "SECRET=1");
+      await symlink(path.join(root, ".env"), path.join(root, "notes.txt"));
+      expect(await read(path.join(root, "notes.txt"))).toMatchObject({ error: "This file type cannot be previewed." });
+      expect(await read(path.join(root, "missing.json"))).toMatchObject({ error: expect.stringContaining("does not exist") });
+      const directory = path.join(root, "directory.json");
+      await mkdir(directory);
+      expect(await read(directory)).toMatchObject({ error: expect.stringContaining("not a file") });
+      await writeFile(filePath, Buffer.alloc(2 * 1024 * 1024 + 1));
+      expect(await read(filePath)).toMatchObject({ error: "File is too large to preview." });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("opens applications on the selected federation peer", async () => {
-    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
     const { APPLICATION_OPEN_CHANNEL } = await import("../../shared/ipc");
     registerApplicationIpcHandlers();
 
@@ -138,7 +207,6 @@ describe("application IPC", () => {
   });
 
   it("reads application candidates from the selected federation peer", async () => {
-    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
     const { APPLICATIONS_READ_CHANNEL } = await import("../../shared/ipc");
     registerApplicationIpcHandlers();
 
@@ -157,7 +225,6 @@ describe("application IPC", () => {
   });
 
   it("opens the thread-scoped tool-output incident explorer", async () => {
-    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
     const { TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -183,7 +250,6 @@ describe("application IPC", () => {
   });
 
   it("routes incident-explorer thread navigation through its owner", async () => {
-    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
     const { TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL } = await import(
       "../../shared/ipc"
     );

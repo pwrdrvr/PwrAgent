@@ -846,7 +846,9 @@ if (!signStageOnly) {
   if (win) {
     deployArgs.push("--config.node-linker=hoisted");
   } else {
-    deployArgs.push("--prod");
+    // Production deploys intentionally omit patched dev tools such as
+    // Playwright. Keep unused-patch validation enabled for workspace installs.
+    deployArgs.push("--prod", "--config.allowUnusedPatches=true");
   }
   deployArgs.push(stageDir);
   step(`pnpm ${win ? "deploy (hoisted)" : "deploy --prod"} -> release-stage`);
@@ -1090,10 +1092,18 @@ runChecked("codesign", [
   "--verbose=2",
   dockTilePlugin,
 ]);
-verifyMacSlices(join(
-  builtApp, "Contents", "Resources", "app.asar.unpacked", "node_modules",
-  "better-sqlite3", "build", "Release", "better_sqlite3.node",
-));
+// beforePack stages each architecture's Node-API prebuilds at these paths, and
+// @electron/universal lipo-merges them.
+for (const nativeFile of [
+  ["better-sqlite3", "build", "Release", "better_sqlite3.node"],
+  ["node-pty", "build", "Release", "pty.node"],
+  ["node-pty", "build", "Release", "spawn-helper"],
+]) {
+  verifyMacSlices(join(
+    builtApp, "Contents", "Resources", "app.asar.unpacked", "node_modules",
+    ...nativeFile,
+  ));
+}
 for (const { binding, lipoArch, packageName } of macCanvasBindings) {
   runChecked("lipo", [
     join(

@@ -41,7 +41,7 @@ describe("SettingsLayout", () => {
   it("collapses and expands sections from the header", async () => {
     renderSectionStack("collapse-pane");
 
-    const alpha = screen.getByRole("button", { name: "Alpha" });
+    const alpha = screen.getByRole("button", { name: /\bAlpha$/ });
     expect(alpha).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: "Alpha action" })).toBeEnabled();
 
@@ -74,11 +74,11 @@ describe("SettingsLayout", () => {
 
     fireEvent.click(collapseAll);
 
-    expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /\bAlpha$/ })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
-    expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /\bBeta$/ })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
@@ -87,11 +87,11 @@ describe("SettingsLayout", () => {
 
     fireEvent.click(expandAll);
 
-    expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /\bAlpha$/ })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
-    expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /\bBeta$/ })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
@@ -100,8 +100,8 @@ describe("SettingsLayout", () => {
   it("handles keyboard activation and section-header focus movement", () => {
     renderSectionStack();
 
-    const alpha = screen.getByRole("button", { name: "Alpha" });
-    const beta = screen.getByRole("button", { name: "Beta" });
+    const alpha = screen.getByRole("button", { name: /\bAlpha$/ });
+    const beta = screen.getByRole("button", { name: /\bBeta$/ });
 
     alpha.focus();
     fireEvent.keyDown(alpha, { key: " " });
@@ -150,7 +150,7 @@ describe("SettingsLayout", () => {
         </SettingsSectionStack>,
       );
 
-      const beta = screen.getByRole("button", { name: "Beta" });
+      const beta = screen.getByRole("button", { name: /\bBeta$/ });
       await waitFor(() => {
         expect(beta).toHaveFocus();
       });
@@ -166,13 +166,13 @@ describe("SettingsLayout", () => {
     const firstRender = renderSectionStack(paneId);
 
     fireEvent.click(await screen.findByRole("button", { name: "Collapse all" }));
-    fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+    fireEvent.click(screen.getByRole("button", { name: /\bBeta$/ }));
 
-    expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /\bAlpha$/ })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
-    expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /\bBeta$/ })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
@@ -181,13 +181,13 @@ describe("SettingsLayout", () => {
     renderSectionStack(paneId);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Beta" })).toHaveFocus();
+      expect(screen.getByRole("button", { name: /\bBeta$/ })).toHaveFocus();
     });
-    expect(screen.getByRole("button", { name: "Alpha" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /\bAlpha$/ })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
-    expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /\bBeta$/ })).toHaveAttribute(
       "aria-expanded",
       "true",
     );

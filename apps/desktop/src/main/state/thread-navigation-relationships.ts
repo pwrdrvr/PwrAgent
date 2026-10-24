@@ -72,3 +72,31 @@ CREATE TRIGGER thread_navigation_relationships_delete AFTER DELETE ON threads BE
   DELETE FROM thread_navigation_relationships WHERE thread_id = OLD.thread_id;
 END;
 `;
+
+/** A table-specific stamp, maintained even by writers that never load our JS.
+ * The projection's existing equality guards keep metadata/stream updates from
+ * touching this row. Mutations share the writer's transaction and rollback.
+ */
+export const THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_navigation_relationship_generation (
+  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+  generation INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO thread_navigation_relationship_generation VALUES (1, 0);
+
+CREATE TRIGGER IF NOT EXISTS thread_navigation_relationship_generation_insert
+AFTER INSERT ON thread_navigation_relationships BEGIN
+  UPDATE thread_navigation_relationship_generation SET generation = generation + 1 WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS thread_navigation_relationship_generation_update
+AFTER UPDATE ON thread_navigation_relationships
+WHEN OLD.thread_id IS NOT NEW.thread_id
+  OR OLD.managed_children IS NOT NEW.managed_children
+  OR OLD.grouped_subthread IS NOT NEW.grouped_subthread BEGIN
+  UPDATE thread_navigation_relationship_generation SET generation = generation + 1 WHERE singleton = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS thread_navigation_relationship_generation_delete
+AFTER DELETE ON thread_navigation_relationships BEGIN
+  UPDATE thread_navigation_relationship_generation SET generation = generation + 1 WHERE singleton = 1;
+END;
+`;

@@ -80,7 +80,7 @@ it.each(scenarios)("bounds cleanup pages for $name", async (scenario) => {
       });
       const wal = readWal(`${fixture.dbPath}-wal`);
       const after = db.prepare("SELECT total_changes() AS n").get() as { n: number };
-      expect(after.n - before.n).toBe(scenario.ids.length * (projectionCleanup ? 2 : 1));
+      expect(after.n - before.n).toBe(scenario.ids.length * (projectionCleanup ? 3 : 1));
       expect(wal.commits).toBe(scenario.transaction ? 1 : scenario.ids.length);
       expect(wal.commits).toBe(writes.commits);
       if (projectionCleanup) {

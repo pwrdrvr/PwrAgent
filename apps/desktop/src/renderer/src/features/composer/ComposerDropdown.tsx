@@ -66,6 +66,12 @@ export function useDismissableMenu<T extends HTMLElement>(
 
 export function ComposerDropdown(props: {
   ariaLabel: string;
+  /**
+   * A change of this choice is in flight. The trigger disables, sets
+   * `aria-busy`, and swaps its icon for the shared pending ring, so the chip
+   * itself says the selection is still being applied.
+   */
+  busy?: boolean;
   compact?: boolean;
   disabled?: boolean;
   icon?: ComposerDropdownIcon;
@@ -76,6 +82,12 @@ export function ComposerDropdown(props: {
   iconOnly?: boolean;
   id?: string;
   kind?: "branch";
+  /**
+   * `below` is for a trigger near the top of the window, such as the thread
+   * header's machine chip. The menu is then `position: fixed` under the
+   * trigger, so a clipping row (the header's eyebrow row clips) cannot cut it.
+   */
+  menuPlacement?: "above" | "below";
   /**
    * `danger` is Full Access. `remote` marks a chip whose choice routes the
    * thread to another machine: an accent rim and an accent icon, louder than
@@ -89,12 +101,15 @@ export function ComposerDropdown(props: {
   onPointerEnter?: () => void;
   options: ComposerDropdownOption[];
   otherOptions?: ComposerDropdownOption[];
+  otherLabel?: string;
   tooltip?: string;
   value: string;
 }) {
   const [open, setOpen] = useState(false);
   const [showOther, setShowOther] = useState(false);
   const [otherMenuPosition, setOtherMenuPosition] = useState({ left: 0, top: 0 });
+  const [belowMenuPosition, setBelowMenuPosition] = useState({ right: 0, top: 0 });
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const [tooltipOption, setTooltipOption] = useState<string>();
   const listboxId = useId();
   const otherListboxId = useId();
@@ -107,12 +122,33 @@ export function ComposerDropdown(props: {
     [...props.options, ...otherOptions].find((option) => option.value === props.value)
     ?? props.options[0]
     ?? otherOptions[0];
+  const selectedLabel = selectedOption?.label ?? props.value;
+  const showsSelectedLabel = !(props.iconOnly && props.icon);
+  const accessibleName = showsSelectedLabel && props.ariaLabel !== selectedLabel
+    ? `${props.ariaLabel}: ${selectedLabel}`
+    : props.ariaLabel;
   const closeMenu = useCallback((): void => {
     setOpen(false);
     setShowOther(false);
     onOpenChange?.(false);
   }, [onOpenChange]);
   const ref = useDismissableMenu<HTMLDivElement>(open, closeMenu);
+  // Right-aligned to the trigger: it sits toward the window's right.
+  const placeBelowMenu = useCallback((): void => {
+    const trigger = buttonRef.current?.getBoundingClientRect();
+    if (!trigger) return;
+    setBelowMenuPosition({
+      right: Math.max(8, window.innerWidth - trigger.right),
+      top: trigger.bottom + 8,
+    });
+  }, []);
+  // A fixed menu does not follow its trigger, so follow it on resize.
+  const belowMenuOpen = open && props.menuPlacement === "below";
+  useEffect(() => {
+    if (!belowMenuOpen) return undefined;
+    window.addEventListener("resize", placeBelowMenu);
+    return () => window.removeEventListener("resize", placeBelowMenu);
+  }, [belowMenuOpen, placeBelowMenu]);
   const Icon = props.icon;
   const getTooltipHorizontalBounds = useCallback((target: HTMLElement) => {
     const composerSetup = target.closest<HTMLElement>(".composer__setup");
@@ -266,11 +302,17 @@ export function ComposerDropdown(props: {
         aria-describedby={visible && !open ? tooltipId : undefined}
         aria-controls={open ? listboxId : undefined}
         aria-expanded={open}
+        aria-busy={props.busy || undefined}
         aria-haspopup="listbox"
-        aria-label={props.ariaLabel}
+        aria-label={accessibleName}
         className="composer-dropdown__button"
         data-value={props.value}
-        disabled={props.disabled || props.options.length + otherOptions.length === 0}
+        ref={buttonRef}
+        disabled={
+          props.disabled
+          || props.busy
+          || props.options.length + otherOptions.length === 0
+        }
         id={props.id}
         type="button"
         value={props.value}
@@ -283,6 +325,7 @@ export function ComposerDropdown(props: {
         onClick={() => {
           hide();
           const nextOpen = !open;
+          if (nextOpen && props.menuPlacement === "below") placeBelowMenu();
           setOpen(nextOpen);
           if (nextOpen) {
             setShowOther(false);
@@ -290,14 +333,18 @@ export function ComposerDropdown(props: {
           onOpenChange?.(nextOpen);
         }}
       >
-        {Icon ? (
+        {props.busy ? (
+          <span aria-hidden="true" className="composer-dropdown__icon">
+            <span className="pending-spinner pending-spinner--sm" />
+          </span>
+        ) : Icon ? (
           <span aria-hidden="true" className="composer-dropdown__icon">
             <Icon size={props.iconOnly ? 15 : 13} />
           </span>
         ) : null}
         {props.iconOnly && Icon ? null : (
           <span className="composer-dropdown__label">
-            {selectedOption?.label ?? props.value}
+            {selectedLabel}
           </span>
         )}
       </button>
@@ -307,9 +354,12 @@ export function ComposerDropdown(props: {
       {open ? (
         <div
           aria-label={props.ariaLabel}
-          className="composer-dropdown__menu"
+          className={`composer-dropdown__menu${
+            props.menuPlacement === "below" ? " composer-dropdown__menu--below" : ""
+          }`}
           id={listboxId}
           role="listbox"
+          style={props.menuPlacement === "below" ? belowMenuPosition : undefined}
         >
           {renderOptions(props.options, listboxId, false)}
           {otherOptions.length > 0 ? (
@@ -325,7 +375,7 @@ export function ComposerDropdown(props: {
               onClick={toggleOtherMenu}
             >
               <span aria-hidden="true" className="composer-dropdown__check" />
-              <span className="composer-dropdown__option-label">Other</span>
+              <span className="composer-dropdown__option-label">{props.otherLabel ?? "Other"}</span>
               <span aria-hidden="true" className="composer-dropdown__option-chevron">›</span>
             </button>
           ) : null}
@@ -333,7 +383,7 @@ export function ComposerDropdown(props: {
       ) : null}
       {open && showingOther ? (
         <div
-          aria-label={`${props.ariaLabel}: Other`}
+          aria-label={`${props.ariaLabel}: ${props.otherLabel ?? "Other"}`}
           className="composer-dropdown__menu composer-dropdown__menu--other"
           id={otherListboxId}
           role="listbox"

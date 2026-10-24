@@ -1,5 +1,158 @@
 # Changelog
 
+## v1.3.1 - 2026-10-23
+
+- Federation Port Forwarding - Access development servers running beside remote threads through an explicit local forward. The Ports panel provides connection controls, browser links, forwarding status, and traffic counts. Supports HTTP, WebSockets, HTTPS pass-through, and TCP.
+- Remote File Attachments - Drop, paste, or pick files in a remote thread's composer to transfer them to the owning machine. Uploads show progress, cancellation, and retry controls. Requires incoming-file permission on the owner.
+- Claude Sessions and Reviews - Thread names now appear during the first turn instead of waiting for completion. Review findings display meaningful categories such as Correctness and Efficiency instead of an unknown-priority badge.
+- Usage and Cost - Prevent agents from silently assigning expensive parent models to lightweight task monitors. Explicit operator-selected monitor settings remain supported.
+- Grok Permissions - Honor native Auto permission controls when supported by the installed Grok runtime, keeping permissions separate from planning mode.
+- Images and To-dos - Preserve newly pasted images when Grok/ACP conversations reopen. Disconnected Federation instances produce a compact availability notice without obscuring available To-dos.
+
+Compatibility: New Federation capabilities require compatible builds on the participating machines. Port forwarding requires explicit operator activation.
+
+## v1.3.0 - 2026-10-23
+
+### Claude Code Sessions
+
+PwrAgent now works with **Claude Code sessions**, alongside Codex and Grok. Built-in support includes model and effort selection, streaming tool activity, approvals, questionnaires, MCP connections, resumable conversations, native session titles, and usage reporting with plan-limit meters and reset countdowns.
+
+### More Highlights
+
+- Code Reviews - Claude's `/code-review` findings appear as tracked review cards, with reported fixes synchronized back to those findings. Standard review actions select a supported reviewer while preserving the thread's workspace.
+- Continue After - Automatically resume work when another turn finishes, a PR becomes reviewable, CI passes, or a PR merges. Dependencies survive restarts without model-driven polling. Choose an operator reminder instead of automatic continuation, optionally starting a new thread.
+- Federated Thread Controls - Act on remote To-dos, approvals, questionnaires, replies, and review findings through the owning machine. Manage remote MCP connections and linked repositories from mounted threads and remote viewers.
+- Federated Search - Search transcript content across connected machines, with results appearing progressively and including matching snippets and links to the conversation.
+- MCP and Automations - Test connections with visible discovery progress and clearer failure details. Automation allowlists can select offered MCP Gateway connections independently of the Agent's current selections.
+- Queues and Organization - Reorder queued messages in the composer and Star Map. Drag folders and sub-threads to organize the sidebar, including mixed-provider and remote sub-threads, with drag-to-pin and unpin.
+- Voice and Star Map - Voice Manager can open local or remote threads in the UI. Live voice tracks whether camera awareness is enabled, waiting for an observation, or disabled. Star Map keeps the manager card accessible when navigating the canvas.
+- Access Defaults - New Codex and Claude threads default to Auto, with separate provider defaults in Settings. Existing threads retain their access settings.
+- Usage Visibility - Clearer Claude usage limits and reset countdowns, accurate five-hour versus weekly limit labels, and usage-detail cards that remain on screen.
+- Performance and Reliability - Faster bulk archive cleanup, safer worktree removal, and more reliable context compaction that honors selected model settings and releases queued follow-ups afterward. Improved PR discovery and clearer Grok tool activity.
+- Security - Updated Electron networking protections and disabled lifecycle hooks and notification commands in background Codex helpers.
+
+Upgrade notes: Legacy Codex/Claude launchpad "Default Access" selections reset to the new default. Select your preferred access in Settings. Update both machines to use the new Federation controls.
+
+## v1.3.0-prerelease.4 - 2026-10-22
+
+- Claude Reviews - Show `/code-review` findings as tracked review cards and synchronize reported fixes. Standard review actions now choose a supported reviewer and preserve the thread's workspace.
+- Federated Search - Search remote transcript content, not just titles and summaries. Results appear progressively as connected machines respond, with matching snippets and links.
+- Voice and Star Map - Let Voice Manager open local or remote threads in the UI. Keep the Star Map manager card visible when the canvas is panned or zoomed.
+- New Thread Access - Default new Codex and Claude threads to Auto, with per-provider access defaults in Settings. Existing threads retain their access.
+- Usage Charts - Keep usage-detail cards on screen and correctly distinguish five-hour limits from weekly limits, including after resets.
+
+Upgrade note: Legacy Codex/Claude launchpad "Default Access" selections are reset to the new default. Operators who prefer Default Access can select it in Settings.
+
+## v1.3.0-prerelease.3 - 2026-10-22
+
+- Federated To-dos - Complete remote approvals, questionnaires, replies, and review actions through the owning machine. Synchronize question dismissals across viewers and preserve selected findings when a repair request fails.
+- MCP Diagnostics - Add visible "Test connection" controls with discovery progress and clearer failure details. Improve cancellation and recovery when discovery stalls.
+- Automation MCP Access - Select offered MCP Gateway connections directly in automation allowlists, including connections not already selected by the Agent.
+- Claude Naming - Use Claude's native session titles and respect manual renames. Claude and ACP queue labels no longer trigger implicit Codex helper calls.
+- Git and Navigation - Refresh Claude and ACP branch state for accurate PR discovery, and keep sidebar clicks from jumping to another occurrence of the same thread.
+- Grok Tools - Prevent stale status updates from disconnecting MCP access during an active turn.
+- Helper Safety - Keep lifecycle hooks and notification commands disabled for background Codex helpers, including fallback starts.
+
+## v1.3.0-prerelease.2 - 2026-10-22
+
+- Claude - Add plan-limit meters and clearer reset countdowns, improve remembered usage limits and sign-in status, and refresh model catalogs with versioned labels.
+- Remote MCP Access - Select and verify a remote thread's MCP connections from mounted threads and remote viewers, subject to owner permissions.
+- Federated To-dos and Reviews - View and act on remote To-dos and tracked review findings, with actions routed to the owning machine. Requires updated builds on both ends.
+- Navigation Reliability - Show unread sub-threads in their own project, recover navigation coverage after provider failures, and surface failed sidebar actions as notices.
+- Pull Requests - Prevent unrelated fork PRs from being attached automatically and repair stale automatic attachments while preserving explicit selections.
+- Cleanup Safety and Performance - Protect replaced worktree directories during Windows cleanup and stop repeatedly processing archives whose cleanup is already complete.
+
+## v1.3.0-prerelease.1 - 2026-10-21
+
+- Claude - Added built-in Claude support through the official Agent SDK, with model and effort selection, approvals, questionnaires, MCP connections, resumable conversations, and usage reporting.
+- Continue After - Resume a thread when another turn finishes, a PR becomes reviewable, CI passes, or a PR merges. Dependencies survive restarts without model-driven polling.
+- Dependency Reminders - Choose a reminder instead of an automatic continuation, with an optional action to start a new thread.
+- Message Queues - Drag queued messages into a new order in the composer and Star Map, with keyboard controls.
+- Context Compaction - Honor the selected model and reasoning settings, recover from known invalid-message-ID failures, and release queued follow-ups after compaction.
+- Archive Performance - Reduce redundant work during bulk cleanup and improve diagnostics for delayed cleanup.
+
+## v1.2.2 - 2026-10-19
+
+- Terminals - Keep multiple terminal tabs per thread, with names, activity indicators, and restored scrollback after restarting. Commands are not replayed.
+- To-dos - Add checklists to follow-ups and answer questions from other local threads directly in the panel, without switching conversations.
+- Code Reviews - Track unresolved findings in To-dos, fix or decline individual findings, and see repair progress. Stale reviews and archived threads no longer clutter the queue.
+- Forge and CI Tools - Agents can inspect GitHub/GitLab status, CI runs, jobs, checks, artifact listings, and bounded logs through built-in PwrAgent tools.
+- Archive Cleanup - Warn about pending cleanup when quitting and resume it on the next launch. Improve repair of leftover worktrees and empty containers.
+- Federation and Messaging - Deliver reply images from their owning machine, improve cross-machine fork/upstream project matching, and resolve remote drafts more reliably.
+- Performance - Reduce repeated inventory scans, bulk-archive discovery, relationship rebuilding, and Token Miser history reads in large profiles.
+
+## v1.2.1 - 2026-10-13
+
+- Voice Activity - Group consecutive tool calls into compact, expandable rows, with clearer thread labels and inspectable arguments and results.
+- Tool Details - Expand dynamic tool calls in regular transcripts even when they have no title, including replayed history.
+- Thread Navigation - Make "Load more threads" easier to find with a full-width button directly below the thread rows.
+
+## v1.2.0 - 2026-10-12
+
+- Thread Organization - Actionable to-dos with project assignments, a unified "Waiting on You" view for approvals and questions, and thread locks for safer handoffs.
+- Keyboard and Navigation - Configurable shortcuts, inline renaming, archive undo, cross-project pinned groups, and project-scoped quick navigation.
+- Director Voice - Optional camera cues complement voice control with presence and gesture detection. Requires a local decision model; gestures never approve actions.
+- Federated Work - More reliable conversation transfers, branch selection, project moves, remote file previews, and Cloudflare sign-in renewal. Workspace archives respect the receiving machine's permissions while keeping scripts executable.
+- Usage and Cost - Account-filtered usage across machines and profiles, interactive spending breakdowns, and combined totals for threads and their sub-threads.
+- Files and Images - In-app previews for structured data and logs, clickable filenames in transcripts, and synchronized before/after image comparisons.
+- Messaging - Richer Telegram replies with tables, formulas, and mixed media, cleaner private-agent delivery, and correctly ordered delivery receipts.
+- Appearance - Independent light and dark themes, automatic OS switching, and theme-matched macOS Dock icons.
+- Agent Controls - Separate managed Codex Latest/Prerelease tracks, conversation-scoped MCP approvals, and persistent output and Stop controls for running actions. Pending MCP prompts recover without reopening the thread or losing questionnaire answers.
+- Performance and Updates - Less navigation and Star Map churn, paced archive cleanup without false blocks from unrelated metadata refreshes, improved recovery, Linux package updates, and replacement of downloaded updates when a newer release arrives.
+
+## v1.2.0-prerelease.5 - 2026-10-11
+
+- Keyboard Shortcuts - Customize thread-action shortcuts in Settings. Rename threads inline, and undo local thread archiving without losing your place in the sidebar.
+- To-dos - Assign or change a card's target project directly from the card, making it clear where its actions will run.
+- File Previews - Existing filenames in inline code become preview or editor links, including remote files when the owning instance permits access.
+- Federation and Worktrees - Copied threads appear immediately in their destination project and retain their source branch when available. Project moves preserve worktree isolation and detach threads from their previous group.
+- Archive Cleanup - Fix worktrees being left behind after archiving persisted threads, while protecting shared and externally owned checkouts.
+- Running Actions - Keep logs and Stop controls available when changing or clearing an environment, rather than losing visibility into processes still running.
+- Messaging and Grok - Keep delivery receipts in their correct transcript position. Unsupported Grok builds now queue follow-ups normally instead of attempting steering and failing.
+
+## v1.2.0-prerelease.4 - 2026-10-09
+
+- MCP Approvals - Allow a tool once or for the conversation, reducing repeated prompts while keeping permission scoped to that connection and tool.
+- Usage and Cost - See combined spending for a thread and its sub-threads, with individual cost breakdowns and direct links.
+- Attention Queue - Load up to 100 threads initially instead of ten, making running and waiting work easier to find.
+- New Threads - Respect your launchpad's configured access mode instead of silently resetting new chats to Default Access.
+- Performance - Reduce redundant sidebar rebuilding and history parsing during archiving and pull-request bookkeeping.
+- Desktop Polish - Keep queued-message images clear of row actions, improve image viewing, and make the storage-maintenance window follow the app's theme.
+
+## v1.2.0-prerelease.3 - 2026-10-08
+
+- Waiting on You - The To-dos panel now gathers approvals, forms, and questions across threads and projects, with unread counts and inline approval actions. Sidebar labels show exactly what each thread needs.
+- Usage and Cost - Filter usage by provider account across machines and profiles. Inspect and pin chart time slices to see which threads and models contributed to spending.
+- Logs - Rebuilt the Logs window with filtering, surrounding context, line selection, bookmarks, and copying selected lines together with troubleshooting diagnostics.
+- Cloudflare Federation - Added browser sign-in prompts and renewal reminders. Sign-in setup invites can now be exported without re-entering the Cloudflare API token.
+- Thread Handoff - Git transfers now fetch published references instead of copying repository history, fixing tracked-symlink failures. Git handoffs require a clean, published workspace; non-Git workspaces retain archive-based transfer.
+- Project Navigation - Scope the quick-jump palette with @project mentions and combine search terms without busy projects crowding out results.
+- Performance and Reliability - Moved archive cleanup into a paced background queue, improved navigation-list recovery, and corrected overlapping Codex quota updates and repeated-warning dismissal.
+
+## v1.2.0-prerelease.2 - 2026-10-07
+
+- Director Voice - Added optional camera cues for gestures, presence, and head nods or shakes, with conversation-aware filtering to avoid repeated interruptions. Requires a configured local decision model; disabled by default, and gestures never approve actions.
+- Managed Codex Builds - Choose Latest or Prerelease independently. Latest now installs only promoted builds, keeping experimental runtimes opt-in.
+- File Previews - Open JSON, YAML, TOML, CSV, and logs inside PwrAgent, with syntax coloring, table views, and linked-line navigation for local and federated threads.
+- Profiles and Menus - Reorder or hide profiles, use shortcuts for the first nine visible profiles, and access consistent PwrSuite menus across platforms.
+- Appearance - Added theme-matched light and dark Dock icons, including macOS 26 Liquid Glass rendering, and improved terminal colors and Nerd Font glyphs.
+- Accounts and Usage - Recover missing Codex account, plan, and quota information after interrupted startup, and prevent stale readings from appearing as current usage.
+- Federation and Navigation - Fixed incoming-file permission reporting, kept active child threads visible during discovery, and improved project navigation and Git refresh.
+- Updates and Reliability - Let Beta Prerelease users receive newer stable release candidates, reduced irrelevant Codex startup warnings, and improved clean shutdown.
+
+## v1.2.0-prerelease.1 - 2026-10-06
+
+- Thread To-dos - Turn agent follow-ups into visible reminders with actions to start reviews, merge pull requests, or hand work to another thread or machine.
+- Thread Control - Lock a thread with an explanatory note to prevent new turns while its workspace is handed off. Added /fork with workspace choices and clearer sub-thread creation.
+- Color Themes - Choose independent dark and light themes, including Catppuccin, Solarized, Gray, and Blue, with automatic switching alongside the OS.
+- Telegram and Messaging - Added richer replies with tables, formulas, footnotes, collapsible sections, and mixed media. Private monitor and sub-agent updates no longer leak into chat delivery.
+- Image Review - Inspect local image edits with Before, After, and pixel-difference views, synchronized zoom, and navigation across changed images.
+- Queues and Star Map - Added readable queued-message titles, grouped cross-thread guidance, and queue-or-steer controls directly on Star Map cards.
+- Performance and Recovery - Reduced repeated navigation reads and unnecessary Star Map redraws. Failed interface windows can recover automatically without stopping running agents.
+- Linux Updates - Added update checking, downloads, and explicitly authorized installation for DEB, RPM, and pacman packages, with copyable terminal fallback commands.
+- Usage and Cost - Added estimated pricing for previously unobserved Codex threads, improved usage-chart responsiveness, and corrected Token Miser retrieval accounting.
+- MCP Reliability - Improved connection recovery across instance changes, preserved authorization choices, and stopped canceled requests from making healthy connections appear unavailable.
+
 ## v1.1.6 - 2026-10-02
 
 - Live Voice - Talk to local Codex threads, or use Director voice to check on work, start threads, and steer agents across connected machines, with transcripts and action receipts.

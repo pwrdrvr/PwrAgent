@@ -289,6 +289,7 @@ export function materializeNavigationThreads(params: {
       linkedDirectories,
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
+      lock: overlay?.lock,
       subAgents: overlay?.subAgents ?? [],
       scheduledStart: overlay?.scheduledStart,
       pinnedRank: overlay?.pinnedRank,
@@ -360,7 +361,7 @@ export function buildNavigationSnapshot(params: {
     }),
     launchpadDefaults: params.launchpadDefaults ?? {
       backend: "codex",
-      executionMode: "default",
+      executionMode: "auto",
     },
   };
 }
@@ -628,6 +629,7 @@ export function serializeNavigationSnapshotForHash(params: {
         lastSeenUpdatedAt: thread.inbox.lastSeenUpdatedAt ?? null,
       },
       reactions: thread.reactions ?? [],
+      lock: thread.lock ?? null,
       pinnedRank: thread.pinnedRank ?? null,
       parentThreadId: thread.parentThreadId ?? null,
       parentThreadBackend: thread.parentThreadBackend ?? null,
@@ -775,7 +777,7 @@ export function serializeNavigationSnapshotForHash(params: {
     })),
     launchpadDefaults: params.launchpadDefaults ?? {
       backend: "codex",
-      executionMode: "default",
+      executionMode: "auto",
     },
   });
 }

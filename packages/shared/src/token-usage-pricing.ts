@@ -25,6 +25,9 @@ export type ThreadUsageTokenBreakdown = {
 
 /** Read-only provider totals, kept separate from the observed usage ledger. */
 export type ThreadPricingSnapshot = {
+  /** Provider estimate covers the recorded model/speed groups, independently of current settings. */
+  pricingSource?: "provider";
+  estimatedCostMicros?: number;
   /** Current model is declared local in PwrAgent and has zero token cost. */
   localModel?: boolean;
   model?: string;
@@ -59,6 +62,8 @@ export type ThreadUsageLineStatus = "pending" | "finalized" | "superseded";
 
 export type ThreadUsageLineRecord = {
   backend: string;
+  /** Opaque account identity captured for this request, independently of limits. */
+  accountKey?: string;
   // Cache-write cost is separate from uncachedInputCostMicros; the tokens are
   // still a subset of uncachedInputTokens.
   cacheWriteInputCostMicros?: number;
@@ -105,7 +110,7 @@ export type ThreadUsageLineRecord = {
   provider: string;
   pricingCatalogId?: string;
   pricingCatalogVersion?: string;
-  pricingBasis?: "aggregate" | "request-components";
+  pricingBasis?: "aggregate" | "request-components" | "provider-reported";
   pricingRateId?: string;
   reasoningEffort?: string;
   reasoningOutputTokens: number;

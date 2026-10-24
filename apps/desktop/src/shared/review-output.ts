@@ -1,4 +1,4 @@
-import type { AppServerReviewOutput } from "@pwragent/shared";
+import type { AppServerReviewOutput, AppServerReviewFinding } from "@pwragent/shared";
 
 /**
  * The structured review contract a PwrAgent Sub Agent child answers in. Main
@@ -92,6 +92,9 @@ export function parseReviewOutputText(
         confidence_score: finding.confidence_score,
         ...(typeof finding.priority === "number"
           ? { priority: finding.priority }
+          : {}),
+        ...(normalizeReviewCategory(finding.category)
+          ? { category: normalizeReviewCategory(finding.category) }
           : {}),
         code_location: {
           absolute_file_path: location.absolute_file_path,
@@ -212,6 +215,46 @@ export function withoutRedundantPriorityTag<T extends ReviewFinding>(
   return finding.priority === tagged ? { ...finding, title } : finding;
 }
 
+const REVIEW_CATEGORY_MAX_LENGTH = 40;
+
+/**
+ * A category is a short label drawn in a one-line chip. Anything longer, or
+ * spanning lines, is a reviewer's prose in the wrong field and is dropped.
+ */
+export function normalizeReviewCategory(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const category = value.trim();
+  return category
+    && category.length <= REVIEW_CATEGORY_MAX_LENGTH
+    && !/[\r\n]/.test(category)
+    ? category
+    : undefined;
+}
+
+/** "test-coverage" reads as "Test coverage". */
+export function reviewCategoryLabel(category: string): string {
+  const words = category.trim().replace(/[-_]+/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * What labels a finding: its priority, else its category. Codex-style
+ * reviewers rank findings; Claude Code classifies them and never ranks.
+ * A finding with neither has no label, rather than a "P?" placeholder.
+ */
+export function reviewFindingTag(finding: {
+  priority?: number;
+  category?: string;
+}): string | undefined {
+  if (typeof finding.priority === "number") {
+    return `P${finding.priority}`;
+  }
+  const category = normalizeReviewCategory(finding.category);
+  return category ? reviewCategoryLabel(category) : undefined;
+}
+
 export function formatReviewOutputText(
   output: AppServerReviewOutput,
 ): string {
@@ -223,12 +266,10 @@ export function formatReviewOutputText(
   }
   lines.push("");
   for (const finding of output.findings.map(withoutRedundantPriorityTag)) {
-    const priority = finding.priority === undefined
-      ? "P?"
-      : `P${finding.priority}`;
+    const tag = reviewFindingTag(finding);
     const range = finding.code_location.line_range;
     lines.push(
-      `- [${priority}] ${finding.title} (${finding.code_location.absolute_file_path}:${range.start}-${range.end})`,
+      `- ${tag ? `[${tag}] ` : ""}${finding.title} (${finding.code_location.absolute_file_path}:${range.start}-${range.end})`,
       `  ${finding.body}`,
     );
   }
@@ -250,4 +291,107 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+export function parsePlainReview(review: string): {
+  explanation: string;
+  findings: AppServerReviewFinding[];
+} {
+  const [rawExplanation, rawComments] = review.split(
+    /\n\s*(?:Full\s+)?Review comments?:\s*\n/i
+  );
+  if (!rawComments) {
+    return {
+      explanation: review,
+      findings: [],
+    };
+  }
+
+  const findingPattern =
+    /(?:^|\n)- \[P(\d+)\] ([^\n—]+?)\s+—\s+(.+?):(\d+)(?:-(\d+))?\n([\s\S]*?)(?=\n- \[P\d+\] |\n*$)/g;
+  const findings: AppServerReviewFinding[] = [];
+
+  for (const match of rawComments.matchAll(findingPattern)) {
+    const priority = Number.parseInt(match[1] ?? "", 10);
+    const title = match[2]?.trim();
+    const absoluteFilePath = match[3]?.trim();
+    const start = Number.parseInt(match[4] ?? "", 10);
+    const end = Number.parseInt(match[5] ?? match[4] ?? "", 10);
+    const body = match[6]?.trim();
+
+    if (
+      !title ||
+      !absoluteFilePath ||
+      !body ||
+      !Number.isInteger(priority) ||
+      !Number.isInteger(start) ||
+      !Number.isInteger(end)
+    ) {
+      continue;
+    }
+
+    findings.push({
+      title,
+      body,
+      priority,
+      confidence_score: 0,
+      code_location: {
+        absolute_file_path: absoluteFilePath,
+        line_range: {
+          start,
+          end,
+        },
+      },
+    });
+  }
+
+  return {
+    explanation: rawExplanation.trim(),
+    findings,
+  };
+}
+
+// The old mapper's last paragraph: the category, then " · " and the verdict.
+const LEGACY_CLAUDE_FACTS = /\n\nCategory: ([^\n·]+?)(?: · Verdict: (\w+))?$/;
+
+/**
+ * Claude reviews recorded before findings carried a category wrote it into
+ * the body's last paragraph ("Category: correctness · Verdict: CONFIRMED").
+ * Lift it back out so those reviews get the same badge as new ones.
+ */
+function withLegacyClaudeCategory(
+  finding: AppServerReviewFinding,
+): AppServerReviewFinding {
+  if (finding.category !== undefined || finding.priority !== undefined) {
+    return finding;
+  }
+  const facts = LEGACY_CLAUDE_FACTS.exec(finding.body);
+  const category = normalizeReviewCategory(facts?.[1]);
+  if (!facts || !category) {
+    return finding;
+  }
+  const rest = finding.body.slice(0, facts.index);
+  return {
+    ...finding,
+    category,
+    body: facts[2] ? `${rest}\n\nVerdict: ${facts[2]}` : rest,
+  };
+}
+
+/**
+ * A review entry's findings in display order, without a title's redundant
+ * priority tag. The transcript renders these and review tracking records them,
+ * so a tracked finding's index names the same row in both.
+ */
+export function reviewEntryFindings(entry: {
+  output?: AppServerReviewOutput;
+  review: string;
+  reviewer?: { backend: string };
+}): AppServerReviewFinding[] {
+  const output = entry.output ?? parseReviewOutputText(entry.review);
+  const findings = output?.findings.map(withoutRedundantPriorityTag)
+    ?? parsePlainReview(entry.review).findings;
+  return entry.reviewer?.backend === "claude"
+    ? findings.map(withLegacyClaudeCategory)
+    : findings;
 }

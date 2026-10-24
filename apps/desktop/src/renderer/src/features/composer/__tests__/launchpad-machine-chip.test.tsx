@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, within } from "@testing-librar
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   describeLaunchpadMachineOffline,
+  FixedMachineChip,
   LaunchpadMachineChip,
   type LaunchpadMachineControl,
 } from "../LaunchpadMachineChip";
@@ -29,10 +30,42 @@ function options(): HTMLElement[] {
 }
 
 describe("LaunchpadMachineChip", () => {
+  it("opens its menu below the chip when it sits in the title rail", () => {
+    render(
+      <LaunchpadMachineChip
+        control={control()}
+        menuPlacement="below"
+        onRetarget={() => undefined}
+      />,
+    );
+    const chip = screen.getByRole("button", { name: /^Machine(?::|$)/ });
+    vi.spyOn(chip, "getBoundingClientRect").mockReturnValue(
+      { bottom: 32, right: 900, top: 8, left: 780, width: 120, height: 24, x: 780, y: 8 } as DOMRect,
+    );
+    fireEvent.click(chip);
+    // Fixed under the trigger, so the header's clipping row cannot cut it.
+    const menu = screen.getByRole("listbox", { name: "Machine" });
+    expect(menu).toHaveClass("composer-dropdown__menu--below");
+    expect(menu.style.top).toBe("40px");
+    expect(menu.style.right).toBe(`${window.innerWidth - 900}px`);
+  });
+
+  it("names a thread's machine by its short label", () => {
+    render(
+      <FixedMachineChip
+        machine={{ label: "Studio Mac / default", shortLabel: "Studio", instanceId: "studio", remote: true }}
+      />,
+    );
+    const chip = screen.getByLabelText("Runs on Studio");
+    expect(chip).toHaveTextContent("Studio");
+    expect(chip).toHaveAttribute("title", "Studio Mac / default");
+    expect(chip).toHaveAttribute("data-remote", "true");
+  });
+
   it("names this machine and stays neutral while the launchpad is local", () => {
     render(<LaunchpadMachineChip control={control()} onRetarget={() => undefined} />);
 
-    const chip = screen.getByRole("button", { name: "Machine" });
+    const chip = screen.getByRole("button", { name: /^Machine(?::|$)/ });
     expect(chip).toHaveTextContent("Harbor Mac");
     expect(chip.closest(".composer-dropdown")).not.toHaveClass("composer-dropdown--remote");
   });
@@ -47,7 +80,7 @@ describe("LaunchpadMachineChip", () => {
         onRetarget={onRetarget}
       />,
     );
-    const chip = screen.getByRole("button", { name: "Machine" });
+    const chip = screen.getByRole("button", { name: /^Machine(?::|$)/ });
     expect(chip).toHaveTextContent("Remote owner");
     expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--remote");
     fireEvent.click(chip);
@@ -64,7 +97,7 @@ describe("LaunchpadMachineChip", () => {
       local: { label: "Remote owner", instanceId: "owner", remote: true, availability },
     });
     const view = render(<LaunchpadMachineChip control={selected} onRetarget={onRetarget} />);
-    fireEvent.click(screen.getByRole("button", { name: "Machine" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Machine(?::|$)/ }));
     const owner = options()[0]!;
     expect(owner).toHaveAttribute("aria-disabled", "true");
     expect(owner).toHaveTextContent(availability === "offline" ? "Offline" : "Unsupported");
@@ -87,11 +120,11 @@ describe("LaunchpadMachineChip", () => {
     });
     const onRetarget = vi.fn();
     render(<LaunchpadMachineChip control={selected} onRetarget={onRetarget} />);
-    expect(screen.getByRole("button", { name: "Machine" }).closest(".composer-dropdown"))
+    expect(screen.getByRole("button", { name: /^Machine(?::|$)/ }).closest(".composer-dropdown"))
       .toHaveClass("composer-dropdown--offline");
     expect(describeLaunchpadMachineOffline(selected))
       .toBe("Remote owner is offline. Your draft stays here until it reconnects.");
-    fireEvent.click(screen.getByRole("button", { name: "Machine" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Machine(?::|$)/ }));
     fireEvent.click(options()[1]!);
     expect(onRetarget).toHaveBeenCalledWith("studio");
   });
@@ -119,7 +152,7 @@ describe("LaunchpadMachineChip", () => {
       />,
     );
 
-    const chip = screen.getByRole("button", { name: "Machine" });
+    const chip = screen.getByRole("button", { name: /^Machine(?::|$)/ });
     expect(chip).toHaveTextContent("Studio Mac");
     expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--remote");
 
@@ -147,7 +180,7 @@ describe("LaunchpadMachineChip", () => {
     );
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Machine" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Machine(?::|$)/ }));
     });
     const [here] = options();
     expect(here).toHaveTextContent("No project");
@@ -162,7 +195,7 @@ describe("LaunchpadMachineChip", () => {
     const offline = control({ currentInstanceId: "attic" });
     render(<LaunchpadMachineChip control={offline} onRetarget={() => undefined} />);
 
-    const chip = screen.getByRole("button", { name: "Machine" });
+    const chip = screen.getByRole("button", { name: /^Machine(?::|$)/ });
     expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--offline");
     expect(chip.closest(".composer-dropdown")).not.toHaveClass("composer-dropdown--remote");
     expect(describeLaunchpadMachineOffline(offline))
@@ -180,7 +213,7 @@ describe("LaunchpadMachineChip", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: "Machine" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Machine(?::|$)/ })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Runs on Studio Mac")).toHaveTextContent("Studio Mac");
   });
 });

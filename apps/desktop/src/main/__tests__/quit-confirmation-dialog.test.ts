@@ -149,7 +149,11 @@ vi.mock("../window-show-quit-blockers", () => ({
 }));
 
 vi.mock("../settings/appearance-bootstrap", () => ({
-  readBootstrapAppearance: () => ({ theme: "dark" }),
+  readBootstrapAppearance: () => ({
+    theme: "dark",
+    darkTheme: "tangerine-dark",
+    lightTheme: "tangerine-light",
+  }),
 }));
 
 import { app, BrowserWindow, type WebContents } from "electron";
@@ -420,6 +424,27 @@ describe("raising the open quit dialog", () => {
     }
   });
 
+  it("keeps waiting until cleanup-only work reaches zero", async () => {
+    vi.useFakeTimers();
+    try {
+      let remaining = 30;
+      const pending = showQuitConfirmationDialog({ countdownSeconds: 10, inProgressThreadCount: 0,
+        terminalSessionCount: 0, archiveCleanupCount: 130, items: [],
+        refresh: async () => ({ inProgressThreadCount: 0, automationRunCount: 0, terminalSessionCount: 0,
+          actionRunCount: 0, archiveCleanupCount: remaining, items: [] }),
+      });
+      const window = dialogWindows.at(-1)!;
+      window.listeners.get("ready-to-show")?.();
+      sendDialogAction(window, "wait-for-work");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(window.closed).toBe(0);
+      expect(window.webContents.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("30 worktree cleanups are pending"), true);
+      remaining = 0;
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(pending).resolves.toBe("work-completed");
+    } finally { vi.useRealTimers(); }
+  });
+
   it("does not quit when work finishes after interaction only cancelled the countdown", async () => {
     vi.useFakeTimers();
     try {
@@ -563,6 +588,7 @@ describe("clicking a quit dialog row", () => {
       automationRunCount: 0,
       terminalSessionCount: 1,
       actionRunCount: 0,
+      archiveCleanupCount: 0,
       items: [item],
     });
     await expect(pending).resolves.toBe("manual-cancel");

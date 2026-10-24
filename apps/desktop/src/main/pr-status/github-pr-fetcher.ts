@@ -4,12 +4,14 @@ import type {
   DesktopGhDiscoverySnapshot,
   GhStatus,
   PrSummary,
+  ThreadTodoMergeMethod,
 } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getMainLogger } from "../log";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveGitHubReposForDirectory } from "./git-remote";
+import { prMatchesSourceRepository } from "./pr-source-repository";
 import {
   branchRefKey,
   GithubGraphqlPrClient,
@@ -30,6 +32,12 @@ export {
 export type { GhCheckRunPayload, GhPrPayload } from "./pr-derivations";
 
 const execFileAsync = promisify(execFile);
+
+const MERGE_METHOD_RESULTS: Record<ThreadTodoMergeMethod, string> = {
+  squash: "Squash-merged",
+  rebase: "Rebased and merged",
+  merge: "Merged",
+};
 const fetcherLog = getMainLogger("pwragent:pr-fetcher");
 
 /** Default re-probe cadence for `gh --version`. */
@@ -162,6 +170,43 @@ export class GithubPrFetcher {
       options.ghAvailableCacheTtlMs ?? DEFAULT_GH_AVAILABLE_CACHE_TTL_MS;
   }
 
+  /**
+   * Merge one PR with the operator's gh, by `method`. Run only from an
+   * explicit operator click (a thread to-do's confirmed merge). `pullRequest` is
+   * a number, resolved against the repository at `cwd`, or a github.com URL.
+   * The branch is left alone: `--delete-branch` would also check out the
+   * default branch in `cwd`, which may be the thread's worktree.
+   */
+  async mergePullRequest(params: {
+    cwd?: string;
+    pullRequest: string;
+    method: ThreadTodoMergeMethod;
+  }): Promise<{ summary: string }> {
+    const command = await this.resolveGhCommand();
+    try {
+      await execFileAsync(
+        command,
+        ["pr", "merge", params.pullRequest, `--${params.method}`],
+        {
+          ...(params.cwd ? { cwd: params.cwd } : {}),
+          env: buildPwrAgentChildProcessEnv(process.env),
+          timeout: 60_000,
+          encoding: "utf8",
+        },
+      );
+    } catch (error) {
+      const err = error as { stderr?: string; message?: string };
+      const detail = err.stderr?.trim() || err.message || String(error);
+      throw new Error(`gh pr merge failed: ${detail.split("\n")[0]}`);
+    }
+    const verb = MERGE_METHOD_RESULTS[params.method];
+    return {
+      summary: /^\d+$/.test(params.pullRequest)
+        ? `${verb} #${params.pullRequest}`
+        : verb,
+    };
+  }
+
   async isGhAvailable(): Promise<boolean> {
     if (
       this.ghAvailableCache
@@ -212,7 +257,7 @@ export class GithubPrFetcher {
       const byUrl = new Map<string, PrSummary>();
       for (const ref of refs) {
         for (const pr of byBranch.get(branchRefKey(ref)) ?? []) {
-          if (pr.lifecycleState === "open") {
+          if (pr.lifecycleState === "open" && prMatchesSourceRepository(pr, repos)) {
             byUrl.set(pr.url, pr);
           }
         }
@@ -250,11 +295,11 @@ export class GithubPrFetcher {
     // sweep avoid one `gh` subprocess per branch without changing any of the
     // PR→thread attachment logic below this call.
     const primed = this.takePrimedBranchLookup(params.cwd, params.branch);
-    if (params.allowPrimed !== false && primed) {
-      return primed;
-    }
     const repos = await this.resolveGitHubRepos(params.cwd);
     if (repos.length === 0) return [];
+    if (params.allowPrimed !== false && primed) {
+      return primed.filter((pr) => prMatchesSourceRepository(pr, repos));
+    }
     if (!(await this.isGhAvailable())) {
       params.onProviderFailure?.();
       return [];
@@ -268,8 +313,15 @@ export class GithubPrFetcher {
       const byBranch = await this.graphqlClient.fetchPullRequestsForBranches(refs);
       const byUrl = new Map<string, PrSummary>();
       for (const ref of refs) {
-        for (const pr of byBranch.get(branchRefKey(ref)) ?? []) {
-          byUrl.set(pr.url, pr);
+        const prs = byBranch.get(branchRefKey(ref));
+        if (!prs) {
+          // Missing entries mean the provider could not answer (auth, retry
+          // exhaustion or backoff). Only an explicit [] confirms no PRs.
+          params.onProviderFailure?.();
+          continue;
+        }
+        for (const pr of prs) {
+          if (prMatchesSourceRepository(pr, repos)) byUrl.set(pr.url, pr);
         }
       }
       return [...byUrl.values()];

@@ -1,4 +1,5 @@
 import type {
+  AppServerBackendKind,
   AppServerReviewFinding,
   AppServerReviewOutput,
   AppServerThreadReviewEntry,
@@ -9,7 +10,11 @@ import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import { pullRequestReviewPromptUrl } from "../../../../shared/pull-request-review";
-import { withoutRedundantPriorityTag } from "../../../../shared/review-output";
+import {
+  parsePlainReview,
+  reviewEntryFindings,
+  reviewFindingTag,
+} from "../../../../shared/review-output";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -24,6 +29,13 @@ import {
 } from "./review-clipboard";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
+import {
+  ReviewFindingActions,
+  ReviewFindingResolution,
+  ReviewFindingState,
+  ReviewStatusRow,
+  useTrackedReview,
+} from "../thread-todos/review-tracking";
 
 type TranscriptReviewProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -37,6 +49,8 @@ type TranscriptReviewProps = {
     | "readMarkdownFile"
   >;
   entry: AppServerThreadReviewEntry;
+  parentThreadId?: string;
+  parentThreadBackend?: AppServerBackendKind;
   fileViewerContext?: MarkdownFileViewerContext;
   threadLinkSource?: ThreadLinkSource;
 };
@@ -86,17 +100,20 @@ function formatPath(path: string, directoryPaths: string[] | undefined): string 
   return formatPathRelativeToDirectories(normalizePath(path), directoryPaths);
 }
 
-function priorityLabel(priority: number | undefined): string {
-  return typeof priority === "number" ? `P${priority}` : "P?";
-}
-
-function priorityClassName(priority: number | undefined): string {
-  const normalizedPriority =
-    typeof priority === "number" && priority >= 0 && priority <= 3
-      ? `p${priority}`
-      : "unknown";
-
-  return `transcript-review__priority transcript-review__priority--${normalizedPriority}`;
+/**
+ * A finding's badge: its priority, else its category (Claude Code classifies
+ * findings and never ranks them), else nothing.
+ */
+function FindingTag(props: { finding: AppServerReviewFinding; tag: string }) {
+  const { priority } = props.finding;
+  const variant = typeof priority === "number"
+    ? priority >= 0 && priority <= 3 ? `p${priority}` : "unknown"
+    : "category";
+  return (
+    <span className={`transcript-review__priority transcript-review__priority--${variant}`}>
+      {props.tag}
+    </span>
+  );
 }
 
 /**
@@ -116,64 +133,6 @@ function shouldHideReviewBody(summary: string, review: string): boolean {
     trimmedReview === summary.trim() ||
     normalizeReviewDisplayText(trimmedReview) === summary.trim()
   );
-}
-
-function parsePlainReview(review: string): {
-  explanation: string;
-  findings: AppServerReviewFinding[];
-} {
-  const [rawExplanation, rawComments] = review.split(
-    /\n\s*(?:Full\s+)?Review comments?:\s*\n/i
-  );
-  if (!rawComments) {
-    return {
-      explanation: review,
-      findings: [],
-    };
-  }
-
-  const findingPattern =
-    /(?:^|\n)- \[P(\d+)\] ([^\n—]+?)\s+—\s+(.+?):(\d+)(?:-(\d+))?\n([\s\S]*?)(?=\n- \[P\d+\] |\n*$)/g;
-  const findings: AppServerReviewFinding[] = [];
-
-  for (const match of rawComments.matchAll(findingPattern)) {
-    const priority = Number.parseInt(match[1] ?? "", 10);
-    const title = match[2]?.trim();
-    const absoluteFilePath = match[3]?.trim();
-    const start = Number.parseInt(match[4] ?? "", 10);
-    const end = Number.parseInt(match[5] ?? match[4] ?? "", 10);
-    const body = match[6]?.trim();
-
-    if (
-      !title ||
-      !absoluteFilePath ||
-      !body ||
-      !Number.isInteger(priority) ||
-      !Number.isInteger(start) ||
-      !Number.isInteger(end)
-    ) {
-      continue;
-    }
-
-    findings.push({
-      title,
-      body,
-      priority,
-      confidence_score: 0,
-      code_location: {
-        absolute_file_path: absoluteFilePath,
-        line_range: {
-          start,
-          end,
-        },
-      },
-    });
-  }
-
-  return {
-    explanation: rawExplanation.trim(),
-    findings,
-  };
 }
 
 /**
@@ -220,6 +179,15 @@ function ReviewVerdictBadge(props: {
 }
 
 export function TranscriptReview(props: TranscriptReviewProps) {
+  const tracking = useTrackedReview(
+    props.parentThreadId
+      ? { backend: props.parentThreadBackend ?? "codex", threadId: props.parentThreadId,
+          ...(props.fileViewerContext?.federationTarget?.scope === "remote"
+            ? { federationTarget: props.fileViewerContext.federationTarget } : {}),
+        }
+      : undefined,
+    { sourceKey: props.entry.id },
+  );
   const editorApplication = useMemo(
     () =>
       props.applications?.editors.find(
@@ -259,12 +227,14 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     [output, props.entry.review],
   );
   // One array feeds the rows and both copy buttons, so the tag is dropped once
-  // for all three.
+  // for all three. Review tracking records the same list, in the same order.
   const findings = useMemo(
-    () => output?.findings.map(withoutRedundantPriorityTag)
-      ?? plainReview?.findings
-      ?? [],
-    [output, plainReview],
+    () => reviewEntryFindings({
+      output,
+      review: props.entry.review,
+      reviewer: props.entry.reviewer,
+    }),
+    [output, props.entry.review, props.entry.reviewer],
   );
   const findingCount = output?.findings.length;
   const displayText = props.entry.displayText;
@@ -396,24 +366,39 @@ export function TranscriptReview(props: TranscriptReviewProps) {
         </div>
       ) : null}
 
+      {tracking.review ? (
+        <ReviewStatusRow review={tracking.review} busy={tracking.busy} update={tracking.update} />
+      ) : null}
+      {tracking.error ? (
+        <p className="review-status__error" role="alert">{tracking.error}</p>
+      ) : null}
+
       {findings.length > 0 ? (
         <ol className="transcript-review__findings">
           {findings.map((finding, index) => {
+            // Tracked findings are recorded from this same list, in order.
+            // Only their state is read from the record; what a finding says
+            // is always rendered from the transcript entry.
+            const item = tracking.review?.items[index];
             const range = finding.code_location.line_range;
             const absoluteFilePath = normalizePath(finding.code_location.absolute_file_path);
             const displayPath = formatPath(absoluteFilePath, props.directoryPaths);
+            const tag = reviewFindingTag(finding);
             return (
               <li
                 className="transcript-review__finding"
                 key={`${finding.code_location.absolute_file_path}:${range.start}:${index}`}
               >
-                <div className="transcript-review__finding-head">
-                  <span className={priorityClassName(finding.priority)}>
-                    {priorityLabel(finding.priority)}
-                  </span>
+                <div
+                  className={`transcript-review__finding-head${tag ? "" : " transcript-review__finding-head--untagged"}`}
+                >
+                  {tag ? <FindingTag finding={finding} tag={tag} /> : null}
                   <span className="transcript-review__finding-title">
                     {finding.title}
                   </span>
+                  {tracking.review && item ? (
+                    <ReviewFindingState review={tracking.review} item={item} />
+                  ) : null}
                   <TranscriptCopyButton
                     className="transcript-copy-button--review-finding"
                     copiedLabel="Copied finding"
@@ -435,25 +420,45 @@ export function TranscriptReview(props: TranscriptReviewProps) {
                   text={finding.body}
                   threadLinkSource={props.threadLinkSource}
                 />
-                <div className="transcript-review__location">
-                  <a
-                    className="transcript-review__location-path"
-                    href={fileHref(absoluteFilePath, range.start)}
-                    onClick={(event) => {
-                      openLocalFile(event, absoluteFilePath, range.start);
-                    }}
-                    rel="noopener noreferrer"
-                    target="_blank"
-                    title={`${absoluteFilePath}:${range.start}`}
-                  >
-                    {displayPath}
-                  </a>
-                  <span className="transcript-review__location-line">
-                    {range.start === range.end
-                      ? `Line ${range.start}`
-                      : `Lines ${range.start}-${range.end}`}
-                  </span>
+                <div className="transcript-review__finding-foot">
+                  <div className="transcript-review__location">
+                    <a
+                      className="transcript-review__location-path"
+                      href={fileHref(absoluteFilePath, range.start)}
+                      onClick={(event) => {
+                        openLocalFile(event, absoluteFilePath, range.start);
+                      }}
+                      rel="noopener noreferrer"
+                      target="_blank"
+                      title={`${absoluteFilePath}:${range.start}`}
+                    >
+                      {displayPath}
+                    </a>
+                    <span className="transcript-review__location-line">
+                      {range.start === range.end
+                        ? `Line ${range.start}`
+                        : `Lines ${range.start}-${range.end}`}
+                    </span>
+                  </div>
+                  {tracking.review && item ? (
+                    <ReviewFindingActions
+                      review={tracking.review}
+                      item={item}
+                      title={finding.title}
+                      busy={tracking.busy}
+                      update={tracking.update}
+                    />
+                  ) : null}
                 </div>
+                {tracking.review && item ? (
+                  <ReviewFindingResolution
+                    review={tracking.review}
+                    item={item}
+                    title={finding.title}
+                    busy={tracking.busy}
+                    update={tracking.update}
+                  />
+                ) : null}
               </li>
             );
           })}

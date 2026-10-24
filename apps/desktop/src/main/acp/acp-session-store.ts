@@ -89,6 +89,31 @@ export class AcpSessionStore {
     });
   }
 
+  /** Identity-keyset pages omit transcript history and runtime command data. */
+  listArchiveCleanupSessionsPage(backendId: AcpBackendId, params: {
+    archived: boolean;
+    after?: string;
+    limit: number;
+  }): { sessions: AcpSessionMetadata[]; nextCursor?: string } {
+    const rows = this.stateDb.raw.prepare(`
+      SELECT session_id, json_object(
+        'backendId', backend_id, 'sessionId', session_id,
+        'title', '', 'cwd', json_extract(payload, '$.cwd'),
+        'createdAt', created_at, 'updatedAt', updated_at,
+        'executionMode', 'default', 'status', json_extract(payload, '$.status'),
+        'archivedAt', json_extract(payload, '$.archivedAt')
+      ) AS payload
+      FROM acp_sessions
+      WHERE backend_id = ? AND session_id > ?
+      ORDER BY session_id LIMIT ?
+    `).all(backendId, params.after ?? "", params.limit) as Array<{ session_id: string; payload: string }>;
+    const sessions = rows.flatMap((row) => {
+      const value = parseJson(row.payload);
+      return isSessionMetadata(value) && Boolean(value.archivedAt) === params.archived ? [value] : [];
+    });
+    return { sessions, nextCursor: rows.length === params.limit ? rows.at(-1)?.session_id : undefined };
+  }
+
   deleteSession(backendId: AcpBackendId, sessionId: string): void {
     this.stateDb.raw.prepare("DELETE FROM acp_sessions WHERE backend_id = ? AND session_id = ?").run(backendId, sessionId);
   }

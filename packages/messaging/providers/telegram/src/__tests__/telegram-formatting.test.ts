@@ -131,6 +131,14 @@ describe("telegram formatting", () => {
       .toBe("<blockquote>outer\n\nnested code and link</blockquote>");
   });
 
+  it("renders loose task lists with one checkbox per item in both delivery modes", () => {
+    const markdown = "- [x] **Checked**\n\n- [ ] Pending";
+    expect(renderTelegramHtml(markdown, "markdown"))
+      .toBe("☑ <b>Checked</b>\n☐ Pending");
+    expect(richMessageForTelegramText(markdown, "markdown")?.html)
+      .toBe("<ul><li><input type=\"checkbox\" checked><p><b>Checked</b></p></li><li><input type=\"checkbox\"><p>Pending</p></li></ul>");
+  });
+
   it("degrades a GFM table into labelled records readable on a phone", () => {
     const rendered = renderTelegramHtml([
       "| Asset | Downloads | Change |",

@@ -42,6 +42,8 @@ test("keeps the branch drift warning open after refreshing observed checkout sta
 
     await expect(dialog).toBeVisible();
 
+    await expect(app.window.getByText(/Branch warning:/)).toBeVisible();
+
     expect(readThreadPayload(fixture.homeDir)).toMatchObject({
       gitBranch: "codex/expected-branch",
       observedGitBranch: "codex/current-branch",

@@ -269,3 +269,8 @@ paint(dockIcon) { context in
   )
 }
 try writePNG(dockIcon, to: macOSDockIconURL, label: "icon-macos.png")
+
+// The themed Dock icons and the macOS 26 development Dock icon
+// (icon-macos-glass.png) are rendered from icon-macos.png and icon.icon by
+// another script, which needs macOS 26 and actool 26.
+print("Next: pnpm --filter @pwragent/desktop generate:themed-dock-icons")

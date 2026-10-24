@@ -59,6 +59,8 @@ import type {
   UpdateScheduledThreadActionRequest,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
+  SetThreadLockRequest,
+  SetThreadLockResponse,
 } from "@pwragent/shared";
 import type {
   MessagingDeliveryResult,
@@ -219,6 +221,7 @@ export type MessagingBackendBridge = {
   }): Promise<MessagingLastAssistantReply | undefined>;
   resolveAssistantMessageImages?(request: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     itemId?: string;
     text: string;
     threadId: string;
@@ -275,6 +278,7 @@ export type MessagingBackendBridge = {
     request: SteerTurnRequest & { messageOrigin?: AppServerThreadMessageOrigin },
   ): Promise<SteerTurnResponse>;
   compactThread?(request: CompactThreadRequest): Promise<CompactThreadResponse>;
+  setThreadLock?(request: SetThreadLockRequest): Promise<SetThreadLockResponse>;
   interruptTurn?(request: InterruptTurnRequest): Promise<InterruptTurnResponse>;
   listSkills?(
     request?: AppServerListSkillsRequest,

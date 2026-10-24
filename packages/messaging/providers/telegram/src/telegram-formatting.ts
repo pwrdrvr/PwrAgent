@@ -358,6 +358,8 @@ function renderBlocks(
           : `<tg-document src="tg://document?id=${token.id}"></tg-document>`;
         return `<figure>${media}${token.caption ? `<figcaption>${renderText(token.caption, textLength)}</figcaption>` : ""}</figure>`;
       }
+      // Task markers are rendered once by renderList, including loose lists.
+      case "checkbox":
       case "space":
       case "def":
         return "";
@@ -438,6 +440,8 @@ function renderInline(tokens: Token[], mode: TelegramHtmlMode, textLength?: Tele
       case "br":
         if (textLength) textLength.characters += 1;
         return mode === "rich" ? "<br>" : "\n";
+      case "checkbox":
+        return "";
       case "text":
         return token.tokens ? renderInline(token.tokens, mode, textLength) : renderText(token.text, textLength);
       case "escape":

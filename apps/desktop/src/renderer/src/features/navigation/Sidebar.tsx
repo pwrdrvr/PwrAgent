@@ -7,13 +7,18 @@ import {
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
-import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { isNavigationPeerUnavailable, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
+import { PINNED_GROUP_RESOURCE_ID, lensHasPinnedGroup } from "../../lib/navigation-window-demand";
 import { useEventCallback } from "../../lib/useEventCallback";
+import { useMousePress } from "../../lib/useMousePress";
 import { useLensScrollRestoration } from "../../lib/useLensScrollRestoration";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
-import { useModalDialog } from "../../lib/useModalDialog";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
-import type { PendingLaunchpadCreation } from "../../lib/useThreadNavigation";
+import type {
+  PendingLaunchpadCreation,
+  SubthreadLaunchpadDraft,
+} from "../../lib/useThreadNavigation";
+import type { PendingSidebarRow } from "./StartingThreadRow";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   ComponentType,
@@ -63,6 +68,7 @@ import {
   type IconProps,
 } from "../../icons";
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
+import { SidebarStartActions } from "./SidebarStartActions";
 import {
   FEDERATION_PROJECT_STATE_LABEL,
   type FederationThreadTarget,
@@ -82,6 +88,7 @@ import {
 import { NewThreadButton } from "../chrome/NewThreadButton";
 import { SidebarShowMore } from "./SidebarShowMore";
 import type {
+  ArchivedThreadRef,
   ArchiveThreadOptions,
   BrowseMode,
   ThreadWorkspaceMode,
@@ -94,7 +101,13 @@ import {
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { useNativeDragInteractionGuard } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
-import { formatPrimaryAccel } from "../../lib/keyboard-accel";
+import {
+  ariaKeyShortcutsFor,
+  chordLabelFor,
+  useKeybindings,
+  withChordHint,
+} from "../../lib/keybindings-store";
+import type { KeybindingActionId } from "../../../../shared/keybindings";
 import {
   DetachPullRequestWarning,
   shouldShowDetachPullRequestWarning,
@@ -104,8 +117,19 @@ import {
   formatRateLimitLine,
   selectVisibleRateLimits,
 } from "../../lib/backend-status-format";
-import { DirectoriesList } from "./DirectoriesList";
+import { DirectoriesList, type ProjectRevealRequest } from "./DirectoriesList";
 import type { ThreadRowRef } from "./ThreadRow";
+import {
+  findThreadRowElement,
+  focusedThreadRowKey,
+  matchThreadHotkey,
+  nextThreadAfterArchive,
+  readVisibleThreadRowKeys,
+  resolveThreadHotkeyTargets,
+  threadHotkeyFocusContext,
+  threadSupportsRename,
+  type RenamingThreadRow,
+} from "./thread-action-hotkeys";
 import { RecentsList } from "./RecentsList";
 import { createHoverStableSidebarHydrator } from "./hover-stable-sidebar-snapshot";
 import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
@@ -184,6 +208,8 @@ function useRevealListChange<Args extends unknown[], Result>(
 
 import type { NavigationDirectoryDisclosure } from "../../lib/useNavigationDirectoryDisclosure";
 import { BrandLockup } from "../chrome/BrandLockup";
+import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
+import { useThreadDependencyIndicatorsContext } from "../thread-dependencies/useThreadDependencyIndicators";
 
 type SidebarProps = {
   /** Director voice's mic, rendered first in the masthead; it subscribes to voice itself. */
@@ -193,6 +219,19 @@ type SidebarProps = {
   inert?: boolean;
   backends: BackendSummary[];
   browseMode: BrowseMode;
+  /**
+   * `general.pinned_threads_on_top`: Updated and Created gather every pin
+   * into a Pinned group. Defaults on, as the setting does.
+   */
+  pinnedThreadsOnTop?: boolean;
+  /** Whether the Pinned group is closed. Persisted per profile. */
+  pinnedGroupCollapsed?: boolean;
+  onSetPinnedGroupCollapsed?: (collapsed: boolean) => void;
+  /**
+   * The owner index holds no threads, so every lens but Directories is empty.
+   * Those tabs go `aria-disabled` while Directories is shown in their place.
+   */
+  threadLensesEmpty?: boolean;
   directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads?: NavigationThreadSummary[];
@@ -243,9 +282,20 @@ type SidebarProps = {
   /** Incremented when the thread title asks the active lens to reveal its row. */
   revealSelectedThreadRequest?: number;
   onRevealSelectedThreadComplete?: (request: number) => void;
+  /**
+   * Set (to a fresh object) when the thread header's project name asks the
+   * Directories lens to show that project. The caller switches the lens.
+   */
+  projectRevealRequest?: ProjectRevealRequest;
   selectedItemKey?: string;
   pendingLaunchpadCreations?: PendingLaunchpadCreation[];
-  onSelectPendingLaunchpad?: (creation: PendingLaunchpadCreation) => void;
+  /** Sub-thread launchpads being written in this window. */
+  subthreadLaunchpadDrafts?: SubthreadLaunchpadDraft[];
+  onSelectPendingLaunchpad?: (entry: PendingSidebarRow) => void;
+  /** The draft row's Discard: the composer's Cancel. */
+  onDiscardSubthreadDraft?: (draft: SubthreadLaunchpadDraft) => void;
+  /** The draft row's Detach from Parent: the source row's ×. */
+  onDetachSubthreadDraft?: (draft: SubthreadLaunchpadDraft) => void;
   thinkingThreadKeys?: Record<string, boolean>;
   agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -266,6 +316,15 @@ type SidebarProps = {
    * Absent when no peer could receive one, which hides the menu item.
    */
   onSendThreadToMachine?: (thread: NavigationThreadSummary) => void;
+  /**
+   * Open Continue After for a thread this window owns. Dependencies run on
+   * the owning machine, so a peer's row offers no item. `returnFocus` is
+   * where focus goes when the dialog closes, since the menu item is gone.
+   */
+  onContinueAfter?: (
+    thread: NavigationThreadSummary,
+    returnFocus: RefObject<HTMLElement | null>,
+  ) => void;
   /** Whether a peer has a directory row's project, for its machine menu. */
   checkFederationTargetProject?: CheckFederationTargetProject;
   newThreadFederationTargets?: readonly FederationThreadTarget[];
@@ -319,7 +378,15 @@ type SidebarProps = {
   onOpenProfile?: (profile: string) => Promise<void>;
   /** Opens the Usage Activity window: account limits and spend across instances. */
   onOpenUsageActivity?: () => void;
-  onSelectThread: (thread: NavigationThreadSummary) => void;
+  /**
+   * `focusComposer` is set only for a plain click from a real mouse or
+   * trackpad. A keyboard or assistive-technology activation leaves focus on
+   * the row, so the list stays navigable from where the operator is.
+   */
+  onSelectThread: (
+    thread: NavigationThreadSummary,
+    options?: { focusComposer?: boolean; focusOrigin?: HTMLElement },
+  ) => void;
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>;
   onMarkDirectoriesSeen?: (directoryKeys: string[]) => Promise<void>;
   onArchiveDirectories?: (directoryKeys: string[]) => Promise<void>;
@@ -327,12 +394,31 @@ type SidebarProps = {
   onArchiveThread?: (
     thread: NavigationThreadSummary,
     options?: ArchiveThreadOptions,
-  ) => Promise<void>;
+  ) => Promise<ArchivedThreadRef[] | void>;
+  /**
+   * Threads left the list through Archive. `reopenKey` is the thread that
+   * was open, so an Undo can bring the operator back to it.
+   */
+  onThreadsArchived?: (
+    archived: ArchivedThreadRef[],
+    details: { title?: string; reopenKey?: string },
+  ) => void;
   onRenameThread?: (thread: NavigationThreadSummary, name: string) => Promise<void>;
+  /**
+   * Rename the open thread in the title strip: the sidebar is hidden, or the
+   * open thread has no row in the current lens.
+   */
+  onRequestTitleRename?: (thread: NavigationThreadSummary) => void;
   onSetThreadReaction?: (
     thread: NavigationThreadSummary,
     emoji: string,
     present: boolean,
+  ) => Promise<void>;
+  /** Locks (or re-notes) the thread when `locked`, else unlocks it. */
+  onSetThreadLock?: (
+    thread: NavigationThreadSummary,
+    locked: boolean,
+    note?: string,
   ) => Promise<void>;
   onSetThreadPin?: (
     thread: NavigationThreadSummary,
@@ -431,6 +517,17 @@ const browseModeLabels = {
   directories: "Directories",
 } satisfies Record<BrowseMode, string>;
 
+// The label over a ⌘K-jumped thread's visiting row (see RecentsList). Updated
+// and Created hold every thread but load a page at a time, so a thread with
+// no row there is further down, not absent.
+const visitingThreadLabels = {
+  attention: "Not in Attention",
+  drafts: "Not in Drafts",
+  inbox: "Further down",
+  recents: "Further down",
+  directories: undefined,
+} satisfies Record<BrowseMode, string | undefined>;
+
 // Attention is absent: it renders its two live indicators instead of an icon.
 // Typed as `ComponentType`, not `(props) => ReactElement`: every icon is a
 // `memo(...)` exotic component, which is a valid element type but not a
@@ -474,6 +571,19 @@ function formatDraftThreadCount(count: number): string {
   return `${count} threads with unsent drafts`;
 }
 
+// The line a thread lens's tooltip gains while no threads exist to show.
+const NO_THREADS_TOOLTIP_LINE = "No threads yet";
+
+/**
+ * The lenses that draw pin order: each project's pins in Directories, and the
+ * Pinned group in Updated and Created while pinned threads sit on top. There
+ * a pin moves a row and Move Up/Down, Keep at Top and ⌘⇧↑/↓ mean something;
+ * with the setting off, both are pure time sorts.
+ */
+function lensShowsPinOrder(mode: BrowseMode, pinnedThreadsOnTop: boolean): boolean {
+  return mode === "directories" || lensHasPinnedGroup(mode, pinnedThreadsOnTop);
+}
+
 function formatThreadCount(count: number): string {
   return `${count} ${count === 1 ? "Thread" : "Threads"}`;
 }
@@ -490,8 +600,11 @@ function uniqueContextMenuValues(
 
 export function Sidebar(props: SidebarProps) {
   useNativeDragInteractionGuard();
+  const pinnedThreadsOnTop = props.pinnedThreadsOnTop ?? true;
+  const pinnedGroupShown = lensHasPinnedGroup(props.browseMode, pinnedThreadsOnTop);
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
+  const dependencyIndicators = useThreadDependencyIndicatorsContext();
   const contextMenuRef = useRef<HTMLDivElement>(null);
   // What had focus when the thread context menu opened: the row's ⋮ button,
   // or wherever focus was for a right-click. Escape, Tab and a finished
@@ -502,10 +615,22 @@ export function Sidebar(props: SidebarProps) {
   const directoryContextMenuOpenerRef = useRef<HTMLElement | null>(null);
   const directoryTargetMenuRef = useRef<HTMLDivElement>(null);
   const directoryTargetMenuOpenerRef = useRef<HTMLElement | null>(null);
+  const subthreadDraftMenuRef = useRef<HTMLDivElement>(null);
+  const subthreadDraftMenuOpenerRef = useRef<HTMLElement | null>(null);
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const profileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   const federationThreadTargets = props.newThreadFederationTargets ?? [];
-  const renameInputRef = useRef<HTMLInputElement>(null);
+  const keybindings = useKeybindings();
+  // A menu row's chord, drawn the way the native menu draws its own.
+  const menuShortcut = (actionId: KeybindingActionId) => {
+    const label = chordLabelFor(keybindings, actionId);
+    return label === undefined ? null : (
+      <span className="thread-context-menu__shortcut" aria-hidden="true">
+        {label}
+      </span>
+    );
+  };
+  const sidebarRef = useRef<HTMLElement>(null);
   const handledRevealRequestRef = useRef(0);
   const selectionAnchorKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
@@ -515,7 +640,7 @@ export function Sidebar(props: SidebarProps) {
   const previousSelectedItemKeyRef = useRef<string | undefined>(
     props.selectedItemKey,
   );
-  const [projectReveal, setProjectReveal] = useState<{ key: string; focus?: boolean }>();
+  const [projectReveal, setProjectReveal] = useState<ProjectRevealRequest>();
   const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
   const [selectedThreadKeys, setSelectedThreadKeys] = useState<Set<string>>(
     () =>
@@ -554,6 +679,18 @@ export function Sidebar(props: SidebarProps) {
     | undefined
   >();
   /**
+   * A sub-thread draft row's menu. Its own state, like the directory menu:
+   * a draft has no thread id, so none of the thread menu's actions apply.
+   */
+  const [subthreadDraftMenu, setSubthreadDraftMenu] = useState<
+    | {
+        requestedPosition: ThreadContextMenuPosition;
+        position?: { x: number; y: number };
+        draft: SubthreadLaunchpadDraft;
+      }
+    | undefined
+  >();
+  /**
    * "New chat on <machine>" for one directory row's launchpad button. Hoisted
    * here rather than owned by the row for the same reason the two context
    * menus are: the row lives inside the scrolling thread list, and a popover
@@ -582,15 +719,16 @@ export function Sidebar(props: SidebarProps) {
       }
     | undefined
   >();
-  const [renameThread, setRenameThread] = useState<NavigationThreadSummary>();
-  const [renameDraft, setRenameDraft] = useState("");
-  const [renameValidationError, setRenameValidationError] = useState<string>();
-  const renameDialogRef = useModalDialog<HTMLElement>({
-    open: Boolean(renameThread),
-    onClose: () => setRenameThread(undefined),
-    initialFocus: renameInputRef,
-    returnFocus: contextMenuOpenerRef,
-  });
+  const [renamingRow, setRenamingRow] = useState<RenamingThreadRow>();
+  // Another lens unmounts the field without a commit; forget the edit, or it
+  // would reopen and take focus when the operator comes back to this lens.
+  useEffect(() => {
+    setRenamingRow(undefined);
+  }, [props.browseMode]);
+  const [lockDialog, setLockDialog] = useState<{
+    thread: NavigationThreadSummary;
+    mode: "lock" | "edit";
+  }>();
   const onArchiveThread = props.onArchiveThread ?? (async () => undefined);
   const onRenameThread = props.onRenameThread ?? (async () => undefined);
   const [copiedRuntimeValue, setCopiedRuntimeValue] = useState<"branch" | "cwd">();
@@ -630,7 +768,10 @@ export function Sidebar(props: SidebarProps) {
     })
     : undefined;
   const lensResources = [...props.pagedNavigation?.resources.values() ?? []]
-    .filter((resource) => props.browseMode === "drafts" ? resource.id.startsWith("drafts:") : resource.id === "lens");
+    .filter((resource) => props.browseMode === "drafts" ? resource.id.startsWith("drafts:")
+      : resource.id === "lens" || (pinnedGroupShown && resource.id === PINNED_GROUP_RESOURCE_ID));
+  // The Pinned group pages on its own and renders its own continuation.
+  const listResources = lensResources.filter((resource) => resource.id !== PINNED_GROUP_RESOURCE_ID);
   const directoryIndexResource = props.pagedNavigation?.resources.get("directory-index");
   const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
   const visibleThreads = [...new Map(lensResources.flatMap((resource) => resource.state.page?.entries ?? [])
@@ -650,7 +791,10 @@ export function Sidebar(props: SidebarProps) {
   const hoverStableSnapshot = useHoverStableSnapshot({
     hydrateFrozenValue: (frozen, latest) =>
       hydrateHoverStable(frozen, latest, {
-        refreshThreadPinRanks: props.browseMode !== "directories",
+        // A pin moves a row in Directories and, with a Pinned group, in
+        // Updated and Created (into or out of the group), so none of them
+        // may take a new rank under the pointer.
+        refreshThreadPinRanks: !lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop),
         removeMissingThreads: props.browseMode === "attention",
       }),
     scope: props.browseMode,
@@ -674,12 +818,88 @@ export function Sidebar(props: SidebarProps) {
   const renderedThreads = props.browseMode === "directories" ? presentedThreads
     : hoverStableSnapshot.value.visibleKeys.map((key) => presentedByKey.get(key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
   const renderedDirectoryKeys = new Set(renderedDirectories.map((directory) => directory.key));
-  // A starting thread renders where its thread will land. Drafts holds only
-  // threads with unsent replies, which a new thread never is, so it lands
-  // nowhere there.
-  const startingThreads = props.browseMode === "drafts"
-    ? NO_STARTING_THREADS
-    : props.pendingLaunchpadCreations ?? NO_STARTING_THREADS;
+  // A starting thread renders where its thread will land, and a sub-thread
+  // being written renders in the same slot. Drafts holds only threads with
+  // unsent replies, which a new thread never is, so neither lands there.
+  // Drafts splice in last, so a draft leads its parent's tray, above any
+  // sibling still starting: the slot the next child takes.
+  const startingThreads = useMemo((): PendingSidebarRow[] => {
+    if (props.browseMode === "drafts") return NO_STARTING_THREADS;
+    const creations = props.pendingLaunchpadCreations ?? NO_STARTING_THREADS;
+    return props.subthreadLaunchpadDrafts?.length
+      ? [...creations, ...props.subthreadLaunchpadDrafts]
+      : creations;
+  }, [props.browseMode, props.pendingLaunchpadCreations, props.subthreadLaunchpadDrafts]);
+  const onCreateThreadWithoutDirectory = props.onCreateThreadWithoutDirectory;
+  const onAddProjectDirectory = props.onAddProjectDirectory;
+  // The list's own way to begin. Not while it loads, and not without a
+  // provider: the setup notice owns a provider-less window, and a Start Chat
+  // that cannot start would compete with it.
+  const canStartFromList = !props.loading
+    && props.backends.some((backend) => backend.available)
+    && Boolean(onCreateThreadWithoutDirectory || onAddProjectDirectory);
+  const lensEmptyMessage = (
+    <p className="sidebar-empty">
+      {props.browseMode === "attention"
+        ? "Nothing running, nothing to review."
+        : props.browseMode === "drafts"
+          // "replies", not "drafts": launchpad (new-thread) composer
+          // text is equally unsent but belongs to a directory rather
+          // than a thread, so this lens cannot show it and must not
+          // claim there is nothing to find.
+          ? props.unassignedThreadDraftCount
+            ? "Older drafts are available. Use Recover Draft in a composer to choose one."
+            : "No unsent replies."
+          : "No threads yet."}
+    </p>
+  );
+  // Handed to whichever list renders, which places it after its last row,
+  // inside the scrolling lane; an empty lens shows it under its empty line.
+  const startActions = canStartFromList ? (
+    <SidebarStartActions
+      lead={Boolean(props.threadLensesEmpty)}
+      creatingThread={Boolean(props.creatingThread)}
+      addingProjectDirectory={Boolean(props.addingProjectDirectory)}
+      onStartChat={onCreateThreadWithoutDirectory
+        ? () => void onCreateThreadWithoutDirectory()
+        : undefined}
+      onAddProjectFolder={onAddProjectDirectory
+        ? () => void onAddProjectDirectory()
+        : undefined}
+    />
+  ) : null;
+  // The lens's own continuation, handed to the list beside `startActions` so
+  // it sits right under the last row, inside the scrolling lane. It used to
+  // render after the list as a sibling in the scroll region. The lane is
+  // `flex: 1`, so that put it at the rail's bottom edge, below the start
+  // actions' hairline, which already reads as the end of the list. A short
+  // list left hundreds of pixels of empty rail between the last row and the
+  // control, and a long one parked it under the scroller like a status line.
+  const lensPager = props.browseMode === "directories"
+    // `loadMore` has no reentrancy guard of its own — it awaits any
+    // pending read and then unconditionally starts another — so the
+    // in-flight guard is the only thing standing between a double
+    // click and two page advances. This was the one load-more control
+    // without it.
+    ? directoryIndexResource?.state.page?.nextCursor ? (
+      <SidebarShowMore busy={directoryIndexResource.loading} label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
+    ) : null
+    : listResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((resource) => (
+      resource.state.rebaselineRequired ? (
+        <SidebarShowMore key={resource.id} kind="reload" label="Reload this lens" onClick={() => void props.pagedNavigation?.restart(resource.id)} />
+      ) : resource.state.page?.nextCursor ? (
+        <SidebarShowMore key={resource.id} busy={resource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(resource.id)} />
+      ) : null
+    ));
+  // Shown in place of the list, which then takes no footer.
+  const listStatus = props.loading ? (
+    <p className="sidebar-empty">Loading threads…</p>
+  ) : props.providerRefresh?.state === "checking"
+    && renderedThreads.length === 0 ? (
+    <p className="sidebar-empty">Checking providers…</p>
+  ) : props.error && !props.loaded ? (
+    <p className="sidebar-error">{props.error}</p>
+  ) : null;
   const lensScroll = useLensScrollRestoration(
     JSON.stringify([federationTarget, props.browseMode]),
     !props.loading && (!props.pagedNavigation || (props.pagedNavigation.presentationReady
@@ -718,17 +938,25 @@ export function Sidebar(props: SidebarProps) {
     revealHoverStableSnapshot,
     props.onSetSubthreadsCollapsed,
   );
-  // Directories is the only lens whose pin action reorders the list, so it is
-  // the only one that has to reveal the result. Elsewhere pins render in
-  // place and the freeze must survive the write. One stable wrapper spanning
-  // both, rather than a lens-dependent identity: a row's `memo` cannot bail
-  // out past a handler that changes when the lens does.
+  // Directories and a lens with a Pinned group are the ones whose pin action
+  // moves a row (into or out of the group), so they have to reveal the
+  // result. Elsewhere pins render in place and the freeze must survive the
+  // write. One stable wrapper spanning both, rather than a lens-dependent
+  // identity: a row's `memo` cannot bail out past a handler that changes
+  // when the lens does.
+  //
+  // A pin also opens a closed Pinned group: selection follows the thread
+  // into the group, and a closed group would hide the selected row.
   const setThreadPin = useStableRowCallback(
     props.onSetThreadPin
-      ? (thread: NavigationThreadSummary, pinned: boolean): Promise<void> =>
-          props.browseMode === "directories"
+      ? (thread: NavigationThreadSummary, pinned: boolean): Promise<void> => {
+          if (pinned && pinnedGroupShown && props.pinnedGroupCollapsed) {
+            props.onSetPinnedGroupCollapsed?.(false);
+          }
+          return lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop)
             ? revealHoverStableSnapshot(() => props.onSetThreadPin!(thread, pinned))
-            : props.onSetThreadPin!(thread, pinned)
+            : props.onSetThreadPin!(thread, pinned);
+        }
       : undefined,
   );
   const releasedUpdateSubthreadOrder = useRevealListChange(
@@ -793,7 +1021,30 @@ export function Sidebar(props: SidebarProps) {
     [navigationThreads],
   );
   const setSubthreadsCollapsed = props.onSetSubthreadsCollapsed;
+  const pinnedGroupCollapsed = Boolean(props.pinnedGroupCollapsed);
+  const setPinnedGroupCollapsed = props.onSetPinnedGroupCollapsed;
   const browseMode = props.browseMode;
+
+  // The thread a ⌘K pick landed on, for as long as it stays selected. A jump
+  // never changes the lens: when the thread is not among the lens's rows,
+  // RecentsList gives it a visiting row instead (Directories needs none — its
+  // reveal opens the folder that holds the thread). Only jumps do this. A
+  // thread that leaves Attention while it is open (a reply) still leaves.
+  const [jumpedThread, setJumpedThread] = useState<NavigationThreadSummary>();
+  const jumpedThreadKey = jumpedThread ? threadSummaryIdentityKey(jumpedThread) : undefined;
+  // The jump ends when the selection moves anywhere but the jumped thread. A
+  // remote pick selects only after its pin round-trips, so the selection
+  // standing still meanwhile does not end it; one that never lands ends at
+  // the next selection, as a repeat jump to the same thread does.
+  const jumpSelectionRef = useRef(selectedItemKey);
+  useEffect(() => {
+    if (jumpSelectionRef.current === selectedItemKey) return;
+    jumpSelectionRef.current = selectedItemKey;
+    if (jumpedThreadKey && selectedItemKey !== jumpedThreadKey) setJumpedThread(undefined);
+  }, [jumpedThreadKey, selectedItemKey]);
+  const visitingThread = browseMode !== "directories" && jumpedThreadKey && jumpedThreadKey === selectedItemKey
+    ? navigationThreadByKey.get(jumpedThreadKey) ?? jumpedThread
+    : undefined;
 
   // A direct navigation change (history, search, a thread link, etc.) starts a
   // fresh selection. Modified clicks deliberately do not navigate, so they can
@@ -837,6 +1088,8 @@ export function Sidebar(props: SidebarProps) {
     );
   }, [browseMode]);
 
+  const isMousePress = useMousePress();
+
   // The four handlers a thread row receives are wrapped in `useEventCallback`
   // rather than declared plainly, because a memoized row cannot bail out past
   // a prop that is a new function on every render of this component — and it
@@ -847,15 +1100,26 @@ export function Sidebar(props: SidebarProps) {
     selectionOrder: (string | Pick<ThreadRowRef, "directoryKey" | "threadKey">)[],
     row?: ThreadRowRef,
   ): void => {
+    const mousePress = isMousePress(event);
     const threadKey = threadSummaryIdentityKey(thread);
     const occurrences = selectionOrder.map((entry) => typeof entry === "string"
       ? { threadKey: entry, directoryKey: undefined } : entry);
 
     if (!event.metaKey && !event.shiftKey) {
+      // Padding, chip gaps, and status indicators select through the row's
+      // non-focusable div. Anchor every real mouse selection to its accessible
+      // open button so the pending handoff has one concrete focus owner.
+      const focusOrigin = mousePress
+        ? event.currentTarget.closest(".thread-row")?.querySelector<HTMLButtonElement>(".thread-row__open") ?? undefined
+        : undefined;
+      focusOrigin?.focus({ preventScroll: true });
       selectionAnchorKeyRef.current = threadKey;
       selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
       setSelectedThreadKeys(new Set([threadKey]));
-      props.onSelectThread(thread);
+      props.onSelectThread(thread, {
+        focusComposer: Boolean(focusOrigin),
+        ...(focusOrigin ? { focusOrigin } : {}),
+      });
       return;
     }
 
@@ -964,7 +1228,7 @@ export function Sidebar(props: SidebarProps) {
     if (browseMode === "directories" && selectedItemKey.startsWith("launchpad:")) {
       handledRevealRequestRef.current = request;
       releaseHoverStableSnapshot();
-      setProjectReveal({ key: selectedItemKey.slice("launchpad:".length), focus: false });
+      setProjectReveal({ key: selectedItemKey.slice("launchpad:".length) });
       return;
     }
 
@@ -1000,12 +1264,20 @@ export function Sidebar(props: SidebarProps) {
       }
       current = parent;
     }
+    // A pinned root renders only in the Pinned group, so a closed group
+    // opens to reveal it, as a project opens to reveal its thread.
+    if (pinnedGroupShown && pinnedGroupCollapsed && isPinnedThread(current)) {
+      setPinnedGroupCollapsed?.(false);
+    }
   }, [
     browseMode,
     navigationThreadByKey,
+    pinnedGroupCollapsed,
+    pinnedGroupShown,
     revealSelectedThreadRequest,
     releaseHoverStableSnapshot,
     selectedItemKey,
+    setPinnedGroupCollapsed,
     setSubthreadsCollapsed,
   ]);
 
@@ -1017,6 +1289,21 @@ export function Sidebar(props: SidebarProps) {
       setDirectoryRevealRequest(0);
     }
   }, [browseMode, directoryRevealRequest]);
+
+  // The request outlives the lens switch that comes with it: it is held here,
+  // and DirectoriesList picks it up when it mounts. Each request is taken
+  // once, so a completed reveal cannot replay into a later remount of the lens.
+  const projectRevealRequest = props.projectRevealRequest;
+  const takenProjectRevealRequestRef = useRef<ProjectRevealRequest>(undefined);
+  useEffect(() => {
+    if (
+      !projectRevealRequest
+      || takenProjectRevealRequestRef.current === projectRevealRequest
+    ) return;
+    takenProjectRevealRequestRef.current = projectRevealRequest;
+    releaseHoverStableSnapshot();
+    setProjectReveal(projectRevealRequest);
+  }, [projectRevealRequest, releaseHoverStableSnapshot]);
 
   useEffect(() => {
     if (!copiedRuntimeValue) {
@@ -1087,6 +1374,21 @@ export function Sidebar(props: SidebarProps) {
   }, [directoryContextMenu]);
 
   useEffect(() => {
+    if (!subthreadDraftMenu) {
+      return;
+    }
+
+    const closeMenu = (): void => setSubthreadDraftMenu(undefined);
+
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("contextmenu", closeMenu, true);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("contextmenu", closeMenu, true);
+    };
+  }, [subthreadDraftMenu]);
+
+  useEffect(() => {
     if (federationThreadTargets.length === 0) {
       // The menu is also gated on this at render time, so without clearing the
       // state a peer reconnecting would pop the menu back open at its old
@@ -1139,6 +1441,12 @@ export function Sidebar(props: SidebarProps) {
     menuRef: directoryContextMenuRef,
     triggerRef: directoryContextMenuOpenerRef,
     onClose: () => setDirectoryContextMenu(undefined),
+  });
+  useMenuNavigation({
+    open: subthreadDraftMenu?.position !== undefined,
+    menuRef: subthreadDraftMenuRef,
+    triggerRef: subthreadDraftMenuOpenerRef,
+    onClose: () => setSubthreadDraftMenu(undefined),
   });
   useMenuNavigation({
     open:
@@ -1214,6 +1522,34 @@ export function Sidebar(props: SidebarProps) {
   }, [directoryContextMenu]);
 
   useLayoutEffect(() => {
+    if (!subthreadDraftMenu) {
+      return;
+    }
+
+    const menu = subthreadDraftMenuRef.current;
+    if (!menu) {
+      return;
+    }
+
+    const nextPosition = placeThreadContextMenu(
+      subthreadDraftMenu.requestedPosition,
+      menu.getBoundingClientRect(),
+    );
+
+    if (
+      subthreadDraftMenu.position?.x === nextPosition.x &&
+      subthreadDraftMenu.position.y === nextPosition.y
+    ) {
+      return;
+    }
+
+    setSubthreadDraftMenu({
+      ...subthreadDraftMenu,
+      position: nextPosition,
+    });
+  }, [subthreadDraftMenu]);
+
+  useLayoutEffect(() => {
     if (!directoryTargetMenu) {
       return;
     }
@@ -1248,16 +1584,6 @@ export function Sidebar(props: SidebarProps) {
       position: nextPosition,
     });
   }, [directoryTargetMenu]);
-
-  useLayoutEffect(() => {
-    if (!renameThread) {
-      return;
-    }
-
-    const input = renameInputRef.current;
-    input?.focus();
-    input?.select();
-  }, [renameThread]);
 
   const resolveContextMenuThreads = (
     thread: NavigationThreadSummary,
@@ -1313,7 +1639,6 @@ export function Sidebar(props: SidebarProps) {
     position: ThreadContextMenuPosition
   ): void => {
     rememberMenuOpener(contextMenuOpenerRef, contextMenuRef);
-    setRenameThread(undefined);
     // Symmetric with `openDirectoryContextMenu`'s
     // `setContextMenu(undefined)` — a `contextmenu` event doesn't
     // trigger the document-level `click` listener that normally
@@ -1337,7 +1662,6 @@ export function Sidebar(props: SidebarProps) {
     position: ThreadContextMenuPosition,
   ): void => {
     rememberMenuOpener(contextMenuOpenerRef, contextMenuRef);
-    setRenameThread(undefined);
     setDirectoryContextMenu(undefined);
     setDirectoryTargetMenu(undefined);
     setProfileMenuOpen(false);
@@ -1351,9 +1675,68 @@ export function Sidebar(props: SidebarProps) {
 
   const requestRenameFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
-    setRenameThread(thread);
-    setRenameDraft(thread.title);
-    setRenameValidationError(undefined);
+    startRename(thread);
+  };
+
+  const requestLockFromContextMenu = (
+    thread: NavigationThreadSummary,
+    mode: "lock" | "edit",
+  ): void => {
+    setContextMenu(undefined);
+    setLockDialog({ thread, mode });
+  };
+
+  const unlockFromContextMenu = (thread: NavigationThreadSummary): void => {
+    setContextMenu(undefined);
+    // A failed unlock leaves the lock glyph and the thread's lock card in
+    // place, which is the report: the card's own Unlock shows the error.
+    void props.onSetThreadLock?.(thread, false).catch(() => undefined);
+  };
+
+  /**
+   * Archive, then open the row after the open thread as the list shows it
+   * (the one before, when it was last) rather than jumping to the top.
+   */
+  const archiveThreads = async (
+    threads: NavigationThreadSummary[],
+    options?: ArchiveThreadOptions,
+  ): Promise<void> => {
+    const openKey = props.selectedItemKey;
+    const archivingKeys = new Set(threads.map(threadSummaryIdentityKey));
+    if (options?.includeSubthreads) {
+      // The group goes too, so the next row cannot be one of its children.
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const candidate of props.threads) {
+          const key = threadSummaryIdentityKey(candidate);
+          const parentKey = resolveThreadParentKey(candidate, navigationThreadByKey);
+          if (!archivingKeys.has(key) && parentKey !== undefined && archivingKeys.has(parentKey)) {
+            archivingKeys.add(key);
+            grew = true;
+          }
+        }
+      }
+    }
+    const reopenKey = openKey !== undefined && archivingKeys.has(openKey) ? openKey : undefined;
+    const nextSelectionKey = reopenKey === undefined
+      ? undefined
+      : nextThreadAfterArchive(
+          readVisibleThreadRowKeys(sidebarRef.current),
+          archivingKeys,
+          reopenKey,
+        );
+    const archiveOptions: ArchiveThreadOptions | undefined =
+      nextSelectionKey === undefined ? options : { ...options, nextSelectionKey };
+    const results = await Promise.all(threads.map((thread) =>
+      archiveOptions ? onArchiveThread(thread, archiveOptions) : onArchiveThread(thread)));
+    const archived = results.flatMap((result) => result ?? []);
+    if (archived.length > 0) {
+      props.onThreadsArchived?.(archived, {
+        title: threads.length === 1 ? threads[0]!.title : undefined,
+        reopenKey,
+      });
+    }
   };
 
   const archiveFromContextMenu = (
@@ -1362,11 +1745,7 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     setContextMenu(undefined);
     hoverStableSnapshot.release();
-    if (options) {
-      void onArchiveThread(thread, options);
-      return;
-    }
-    void onArchiveThread(thread);
+    void archiveThreads([thread], options);
   };
 
   const createSubthreadFromContextMenu = (
@@ -1452,12 +1831,23 @@ export function Sidebar(props: SidebarProps) {
     setContextMenu(undefined);
     setDirectoryTargetMenu(undefined);
     setProfileMenuOpen(false);
-    setRenameThread(undefined);
     setDirectoryContextMenu({
       requestedPosition: position,
       directory,
       directories: resolveDirectoryContextMenuDirectories(directory),
     });
+  };
+
+  const openSubthreadDraftMenu = (
+    draft: SubthreadLaunchpadDraft,
+    position: ThreadContextMenuPosition,
+  ): void => {
+    rememberMenuOpener(subthreadDraftMenuOpenerRef, subthreadDraftMenuRef);
+    setContextMenu(undefined);
+    setDirectoryContextMenu(undefined);
+    setDirectoryTargetMenu(undefined);
+    setProfileMenuOpen(false);
+    setSubthreadDraftMenu({ requestedPosition: position, draft });
   };
 
   const openDirectoryTargetMenu = (
@@ -1468,7 +1858,6 @@ export function Sidebar(props: SidebarProps) {
     setContextMenu(undefined);
     setDirectoryContextMenu(undefined);
     setProfileMenuOpen(false);
-    setRenameThread(undefined);
     setDirectoryTargetMenu({
       requestedPosition: position,
       directoryKey: directory.key,
@@ -1479,6 +1868,9 @@ export function Sidebar(props: SidebarProps) {
         ...(directory.path !== undefined ? { path: directory.path } : {}),
         ...(directory.repositoryKey !== undefined
           ? { repositoryKey: directory.repositoryKey }
+          : {}),
+        ...(directory.repositoryKeys !== undefined
+          ? { repositoryKeys: directory.repositoryKeys }
           : {}),
       },
     });
@@ -1622,7 +2014,7 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     setContextMenu(undefined);
     hoverStableSnapshot.release();
-    void Promise.all(threads.map((thread) => onArchiveThread(thread)));
+    void archiveThreads(threads);
   };
 
   const unlinkThreadsFromContextMenu = (
@@ -1645,8 +2037,13 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    if (props.browseMode === "directories") {
+    if (lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop)) {
       hoverStableSnapshot.release();
+    }
+    // Selection follows a pinned thread into the group; a closed group
+    // would hide it.
+    if (pinnedGroupShown && props.pinnedGroupCollapsed) {
+      props.onSetPinnedGroupCollapsed?.(false);
     }
     void (async () => {
       for (const thread of threads) {
@@ -1659,7 +2056,7 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    if (props.browseMode === "directories") {
+    if (lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop)) {
       hoverStableSnapshot.release();
     }
     void Promise.all(
@@ -1687,22 +2084,188 @@ export function Sidebar(props: SidebarProps) {
     void props.onDetachPullRequest(thread, pr);
   });
 
-  const submitRename = (): void => {
-    if (!renameThread) {
+  // Per-thread versions of the context menu's gates, for the keyboard
+  // shortcuts, which act without a menu open.
+  const threadCanRouteRemoteCapability = (
+    thread: NavigationThreadSummary,
+    capability: "thread_navigation" | "turn_control",
+  ): boolean =>
+    !(thread.federation && !federationTarget)
+    || Boolean(
+      thread.federation.peerStatus === "connected"
+      && thread.federation.capabilities?.includes(capability),
+    );
+  const threadCanRename = (thread: NavigationThreadSummary): boolean =>
+    Boolean(props.onRenameThread)
+    && threadSupportsRename(thread, props.backends, Boolean(federationTarget));
+
+  /**
+   * Rename in place: in the thread's sidebar row when the list shows one,
+   * else in the title strip. `origin` picks the row when the thread shows
+   * more than once (the Directories lens lists it under each directory).
+   */
+  const startRename = (thread: NavigationThreadSummary, origin?: Element | null): void => {
+    if (!threadCanRename(thread)) return;
+    const threadKey = threadSummaryIdentityKey(thread);
+    const sidebar = sidebarRef.current;
+    // Hidden by the layout toggle, unless a reveal is peeking it open.
+    const sidebarShown = sidebar !== null
+      && (!sidebar.closest("[data-sidebar-hidden='true']") || sidebar.getClientRects().length > 0);
+    const row = sidebarShown ? findThreadRowElement(sidebar, threadKey, origin) : null;
+    if (row === null) {
+      props.onRequestTitleRename?.(thread);
       return;
     }
-
-    const nextName = renameDraft.trim();
-    if (!nextName) {
-      setRenameValidationError("Thread name cannot be blank.");
-      return;
-    }
-
-    const thread = renameThread;
-    setRenameThread(undefined);
-    setRenameValidationError(undefined);
-    void onRenameThread(thread, nextName);
+    setRenamingRow({
+      threadKey,
+      directoryKey: row.getAttribute("data-thread-directory-key") ?? undefined,
+    });
   };
+
+  const requestRenameFromRow = useEventCallback((
+    thread: NavigationThreadSummary,
+    row: ThreadRowRef,
+  ): void => {
+    if (!threadCanRename(thread)) return;
+    setRenamingRow({ threadKey: row.threadKey, directoryKey: row.directoryKey });
+  });
+
+  const commitRenameFromRow = useEventCallback((
+    thread: NavigationThreadSummary,
+    name: string | null,
+  ): void => {
+    setRenamingRow(undefined);
+    if (name !== null) {
+      void onRenameThread(thread, name);
+    }
+  });
+
+  const runThreadHotkey = useEventCallback((event: KeyboardEvent): void => {
+    // Settings or Automations covers the window: the open thread is not what
+    // the operator is looking at.
+    if (props.inert) return;
+    const action = matchThreadHotkey(event);
+    if (action === null) return;
+    const targets = resolveThreadHotkeyTargets({
+      focusedRowKey: focusedThreadRowKey(event),
+      selectedKeys: selectedThreadKeys,
+      openThreadKey: props.selectedItemKey,
+    });
+    const threads = (targets?.keys ?? [])
+      .map((key) => navigationThreadByKey.get(key))
+      .filter((thread): thread is NavigationThreadSummary => thread !== undefined);
+    const thread = threads[0];
+    if (thread === undefined) return;
+    const single = threads.length === 1;
+    const origin = event.target instanceof Element ? event.target : null;
+    let handled = true;
+    switch (action) {
+      case "threads.rename":
+        // One name cannot apply to several threads.
+        handled = single && threadCanRename(thread);
+        if (handled) startRename(thread, origin);
+        break;
+      case "threads.archive": {
+        const archivable = threads.filter((candidate) =>
+          canArchiveThread(candidate)
+          && threadCanRouteRemoteCapability(candidate, "turn_control"));
+        handled = archivable.length > 0;
+        if (!handled) break;
+        hoverStableSnapshot.release();
+        if (targets?.source === "rows") {
+          // Focus moves to the row that takes this one's place, so a run of
+          // archives needs no mouse.
+          // Measured from the focused row, not the selection's last pick:
+          // the selection is in click order, the list in display order.
+          const archivingKeys = new Set(archivable.map(threadSummaryIdentityKey));
+          const focusedKey = focusedThreadRowKey(event);
+          const focusKey = nextThreadAfterArchive(
+            readVisibleThreadRowKeys(sidebarRef.current),
+            archivingKeys,
+            focusedKey !== undefined && archivingKeys.has(focusedKey)
+              ? focusedKey
+              : threadSummaryIdentityKey(archivable[archivable.length - 1]!),
+          );
+          window.requestAnimationFrame(() => {
+            if (focusKey === undefined) return;
+            findThreadRowElement(sidebarRef.current, focusKey)
+              ?.querySelector<HTMLElement>(".thread-row__open")
+              ?.focus();
+          });
+        }
+        void archiveThreads(archivable);
+        break;
+      }
+      case "threads.toggle_pin": {
+        const pinnable = threads.filter((candidate) => !candidate.parentThreadId);
+        handled = pinnable.length > 0 && Boolean(props.onSetThreadPin);
+        if (!handled) break;
+        // Any unpinned thread in the set pins them all, as Finder tags do.
+        if (pinnable.some((candidate) => !candidate.pinnedRank)) {
+          pinThreadsFromContextMenu(pinnable.filter((candidate) => !candidate.pinnedRank));
+        } else {
+          unpinThreadsFromContextMenu(pinnable);
+        }
+        break;
+      }
+      case "threads.toggle_keep_at_top":
+        handled = single
+          && !thread.parentThreadId
+          && browseMode === "directories"
+          && Boolean(props.onReorderThreadPins && props.onSetThreadPin);
+        if (handled) toggleKeepAtTopFromContextMenu(navigationThreadByKey.get(threadSummaryIdentityKey(thread)) ?? thread);
+        break;
+      case "threads.toggle_unread":
+        if (single && thread.inbox.inInbox) {
+          handled = Boolean(props.onMarkThreadsSeen) && !(thread.federation && !federationTarget);
+          if (handled) void props.onMarkThreadsSeen?.([thread]);
+        } else if (single) {
+          handled = Boolean(props.onMarkThreadUnread)
+            && thread.updatedAt !== undefined
+            && threadCanRouteRemoteCapability(thread, "thread_navigation");
+          if (handled) void props.onMarkThreadUnread?.(thread);
+        } else {
+          handled = false;
+        }
+        break;
+      case "threads.lock":
+        handled = single
+          && Boolean(props.onSetThreadLock)
+          && threadCanRouteRemoteCapability(thread, "turn_control");
+        if (!handled) break;
+        if (thread.lock) {
+          unlockFromContextMenu(thread);
+        } else {
+          setLockDialog({ thread, mode: "lock" });
+        }
+        break;
+      case "threads.copy_link":
+        void copyText(uniqueContextMenuValues(threads.map((candidate) =>
+          buildThreadUrl({ backend: candidate.source, threadId: candidate.id }))).join("\n"));
+        break;
+    }
+    if (handled) event.preventDefault();
+  });
+
+  useEffect(() => {
+    const captureComposerArchive = (event: KeyboardEvent): void => {
+      // ProseMirror consumes native Backspace at a block boundary before the
+      // window's bubble listener sees it. Claim only the permitted archive
+      // chord in the composer, through the same action/lifecycle owner.
+      if (threadHotkeyFocusContext(event) !== "field"
+        || matchThreadHotkey(event) !== "threads.archive") return;
+      runThreadHotkey(event);
+      // Keep the editor from deleting draft content and the bubble listener
+      // from dispatching a second archive. Unhandled chords stay with editing.
+      if (event.defaultPrevented) event.stopPropagation();
+    };
+    window.addEventListener("keydown", captureComposerArchive, true);
+    window.addEventListener("keydown", runThreadHotkey);
+    return () => {
+      window.removeEventListener("keydown", captureComposerArchive, true);
+      window.removeEventListener("keydown", runThreadHotkey);
+    };
+  }, [runThreadHotkey]);
 
   const contextMenuThreads = contextMenu?.threads ?? [];
   const contextMenuIsBulk = contextMenuThreads.length > 1;
@@ -1733,6 +2296,14 @@ export function Sidebar(props: SidebarProps) {
       ? canRenameThread(contextMenu.thread)
         && contextMenuCanRouteRemoteCapability("turn_control")
       : false;
+  // A lock refuses turns on the owner, so a remote row needs the same grant
+  // as starting one there.
+  const contextMenuCanLock = Boolean(
+    contextMenu
+      && !contextMenuIsBulk
+      && props.onSetThreadLock
+      && contextMenuCanRouteRemoteCapability("turn_control"),
+  );
   const contextMenuCanArchive =
     contextMenu && !contextMenuIsBulk
       ? canArchiveThread(contextMenu.thread)
@@ -1764,6 +2335,18 @@ export function Sidebar(props: SidebarProps) {
       !contextMenu.thread.codexNativeSubAgent &&
       !contextMenu.thread.archivedAt,
   );
+  const contextMenuCanContinueAfter = Boolean(
+    contextMenu &&
+      !contextMenuIsBulk &&
+      props.onContinueAfter &&
+      !contextMenu.thread.federation &&
+      readRendererFederationTarget()?.scope !== "remote",
+  );
+  const contextMenuDependencyCount = contextMenu && contextMenuCanContinueAfter
+    ? dependencyIndicators?.byThreadKey.get(
+        threadSummaryIdentityKey(contextMenu.thread),
+      )?.count ?? 0
+    : 0;
   const contextMenuChildThreadCount = contextMenu && !contextMenuIsBulk
     ? props.threads.filter(
         (thread) =>
@@ -2074,10 +2657,12 @@ export function Sidebar(props: SidebarProps) {
    * Move Up / Move Down show as menu items only when the target
    * thread is pinned (reorder only applies inside the pinned
    * section), the reorder IPC is wired, AND the active lens actually
-   * renders a pinned section. Updated and Created are pure sort
-   * orders, so a reorder there would move a thread within a list whose
+   * renders a pinned section: Directories, or the Pinned group in Updated
+   * and Created. With pinned threads kept in place, those two are pure
+   * sorts, so a reorder there would move a thread within a list whose
    * order is invisible — the row would not budge and the menu's
-   * ⌘⇧↑/↓ hint would advertise a shortcut those rows don't carry.
+   * Move Up / Move Down hint would advertise a shortcut those rows don't
+   * carry. Rows below the group are unpinned, so they get none.
    * Each item is then disabled when the thread is at the top / bottom
    * of the global pinned section. We render the items even when
    * disabled so the menu layout doesn't jump as the user walks the
@@ -2085,7 +2670,7 @@ export function Sidebar(props: SidebarProps) {
    */
   const contextMenuShowMoveItems = Boolean(
     !contextMenuIsBulk &&
-      browseMode === "directories" &&
+      lensShowsPinOrder(browseMode, pinnedThreadsOnTop) &&
       contextMenuPinThread?.pinnedRank &&
       props.onReorderThreadPins,
   );
@@ -2109,7 +2694,7 @@ export function Sidebar(props: SidebarProps) {
   const contextMenuCanKeepAtTop = Boolean(
     contextMenuHasPinAction
       && !contextMenuIsBulk
-      && browseMode === "directories"
+      && lensShowsPinOrder(browseMode, pinnedThreadsOnTop)
       && props.onReorderThreadPins,
   );
   const contextMenuHasCreationActions =
@@ -2118,6 +2703,8 @@ export function Sidebar(props: SidebarProps) {
     contextMenuCanUnlinkSubthread ||
     contextMenuShowMoveItems ||
     contextMenuCanRename ||
+    contextMenuCanLock ||
+    contextMenuCanContinueAfter ||
     contextMenuCanMarkRead ||
     contextMenuCanMarkUnread ||
     contextMenuCanSendToMachine ||
@@ -2219,6 +2806,7 @@ export function Sidebar(props: SidebarProps) {
 
   return (
     <aside
+      ref={sidebarRef}
       className="sidebar"
       aria-label="Threads"
       inert={props.inert ? true : undefined}
@@ -2233,12 +2821,20 @@ export function Sidebar(props: SidebarProps) {
           projects={props.directories}
           onJumpToProject={(directory) => {
             props.onBrowseModeChange("directories");
+            // The reveal leaves focus alone: the launchpad's composer takes
+            // it, so the operator can type the new thread straight away.
             setProjectReveal({ key: directory.key });
             if (props.onJumpToProject) props.onJumpToProject(directory);
             else void props.onOpenLaunchpad(directory);
           }}
-          onJumpToThread={props.onJumpToThread ?? props.onSelectThread}
-          onJumpToRemoteThread={props.onJumpToRemoteThread}
+          onJumpToThread={(thread) => {
+            setJumpedThread(thread);
+            (props.onJumpToThread ?? props.onSelectThread)(thread);
+          }}
+          onJumpToRemoteThread={props.onJumpToRemoteThread ? (thread) => {
+            setJumpedThread(thread);
+            props.onJumpToRemoteThread?.(thread);
+          } : undefined}
           onClose={() => props.onThreadJumpOpenChange?.(false)}
         />
       ) : null}
@@ -2255,9 +2851,9 @@ export function Sidebar(props: SidebarProps) {
             // ⌘K leads: it's the one an operator reaches for by reflex, and
             // the palette it opens is the surface this button most resembles.
             tooltipText={[
-              `Quick Thread List Search  (${formatPrimaryAccel("K")})`,
-              `Open Search All  (${formatPrimaryAccel("F", { shift: true })})`,
-              `Context Search  (${formatPrimaryAccel("F")}) — Thread List in sidebar, Thread Chat elsewhere`,
+              withChordHint("Quick Thread List Search", chordLabelFor(keybindings, "navigation.jump_to_thread")),
+              withChordHint("Open Search All", chordLabelFor(keybindings, "navigation.search_threads")),
+              `${withChordHint("Context Search", chordLabelFor(keybindings, "navigation.find"))} — Thread List in sidebar, Thread Chat elsewhere`,
             ].join("\n")}
             ariaPressed={props.threadSearchActive}
             className={`sidebar__icon-button${props.threadSearchActive ? " is-active" : ""}`}
@@ -2273,7 +2869,9 @@ export function Sidebar(props: SidebarProps) {
           <MastheadActionButton
             ariaLabel="Open automations"
             ariaPressed={props.automationsActive}
-            className={`sidebar__icon-button${props.automationsActive ? " is-active" : ""}`}
+            // `sidebar__masthead-automations` drops out after the gear on a
+            // narrow rail; View → Automations is its other home.
+            className={`sidebar__icon-button sidebar__masthead-automations${props.automationsActive ? " is-active" : ""}`}
             onClick={props.onOpenAutomations}
           >
             <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4"/><path d="M16 2v4"/><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></svg>
@@ -2284,7 +2882,7 @@ export function Sidebar(props: SidebarProps) {
             ariaLabel="Open settings"
             ariaPressed={props.settingsActive}
             // `sidebar__masthead-settings` lets the gear drop out first when the
-            // rail is too narrow for the wordmark + all four actions — Settings
+            // rail is too narrow for the wordmark + all five controls — Settings
             // is still reachable from the app menu (⌘,), so it's the safe one to
             // shed before the (less reachable) brand wordmark.
             className={`sidebar__icon-button sidebar__masthead-settings${props.settingsActive ? " is-active" : ""}`}
@@ -2373,32 +2971,39 @@ export function Sidebar(props: SidebarProps) {
               tabIndex={-1}
               onClick={(event) => event.stopPropagation()}
             >
-              {props.profiles.map((profile) => (
-                <button
-                  key={profile.name}
-                  className="sidebar__menu-item"
-                  disabled={profile.active || !props.onOpenProfile}
-                  role="menuitem"
-                  type="button"
-                  onClick={() => {
-                    setProfileMenuOpen(false);
-                    void props.onOpenProfile?.(profile.name);
-                  }}
-                >
-                  <span className="sidebar__menu-item-title">
-                    {profile.displayName || profile.name}
-                  </span>
-                  <span className="sidebar__menu-item-detail">
-                    {profile.active
-                      ? profile.default
-                        ? "Current profile - startup default"
-                        : "Current profile"
-                      : profile.default
-                        ? "Startup default - open in new app instance"
-                        : "Open in new app instance"}
-                  </span>
-                </button>
-              ))}
+              {/*
+                The operator's Settings → Profiles order, minus the profiles
+                switched out of the Profiles menu. The current profile stays,
+                because this row is also where it says it is current.
+              */}
+              {props.profiles
+                .filter((profile) => profile.showInMenu || profile.active)
+                .map((profile) => (
+                  <button
+                    key={profile.name}
+                    className="sidebar__menu-item"
+                    disabled={profile.active || !props.onOpenProfile}
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      void props.onOpenProfile?.(profile.name);
+                    }}
+                  >
+                    <span className="sidebar__menu-item-title">
+                      {profile.displayName || profile.name}
+                    </span>
+                    <span className="sidebar__menu-item-detail">
+                      {profile.active
+                        ? profile.default
+                          ? "Current profile - startup default"
+                          : "Current profile"
+                        : profile.default
+                          ? "Startup default - open in new app instance"
+                          : "Open in new app instance"}
+                    </span>
+                  </button>
+                ))}
               {props.onOpenUsageActivity ? (
                 <>
                   <div className="thread-context-menu__separator" role="separator" />
@@ -2444,6 +3049,7 @@ export function Sidebar(props: SidebarProps) {
                   remoteSignalVisible ? attentionCounts.activeRemote : undefined
                 }
                 reviewThreadCount={attentionCounts.review}
+                disabled={props.threadLensesEmpty}
                 onSelect={() => props.onBrowseModeChange(mode)}
               />
             ) : (
@@ -2462,6 +3068,7 @@ export function Sidebar(props: SidebarProps) {
                     : undefined
                 }
                 tooltipText={browseModeTooltips[mode]}
+                disabled={props.threadLensesEmpty && mode !== "directories"}
                 onSelect={() => props.onBrowseModeChange(mode)}
               />
             ),
@@ -2481,17 +3088,23 @@ export function Sidebar(props: SidebarProps) {
           {props.browseMode === "drafts" && renderedThreads.length > 0 && Boolean(props.unassignedThreadDraftCount) ? (
             <p className="sidebar-empty">Older drafts are also available. Use Recover Draft in a composer to choose one.</p>
           ) : null}
-          {props.loading ? (
-            <p className="sidebar-empty">Loading threads…</p>
-          ) : props.providerRefresh?.state === "checking"
-            && renderedThreads.length === 0 ? (
-            <p className="sidebar-empty">Checking providers…</p>
-          ) : props.error && !props.loaded ? (
-            <p className="sidebar-error">{props.error}</p>
+          {listStatus ? (
+            <>
+              {listStatus}
+              {lensPager}
+            </>
           ) : props.browseMode === "directories" ? (
             <DirectoriesList
               startingThreads={startingThreads}
               onSelectStartingThread={props.onSelectPendingLaunchpad}
+              emptyLabel={props.threadLensesEmpty ? "No threads yet." : undefined}
+              footer={(
+                <>
+                  {lensPager}
+                  {startActions}
+                </>
+              )}
+              onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
               projectReveal={projectReveal}
               onProjectRevealComplete={() => setProjectReveal(undefined)}
               pagedNavigation={props.pagedNavigation}
@@ -2505,6 +3118,9 @@ export function Sidebar(props: SidebarProps) {
               draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
               actionsMenuThreadKey={actionsMenuThreadKey}
+              renamingRow={renamingRow}
+              onRequestRenameThread={requestRenameFromRow}
+              onCommitRenameThread={commitRenameFromRow}
               directories={renderedDirectories}
               revealSelectedThreadRequest={directoryRevealRequest}
               selectedItemKey={props.selectedItemKey}
@@ -2558,26 +3174,29 @@ export function Sidebar(props: SidebarProps) {
               onUnbindMessagingBinding={forwardedUnbindMessagingBinding}
             />
           ) : (
-            renderedThreads.length === 0 && startingThreads.length === 0 ? (
-              <p className="sidebar-empty">
-                {props.browseMode === "attention"
-                  ? "Nothing running, nothing to review."
-                  : props.browseMode === "drafts"
-                    // "replies", not "drafts": launchpad (new-thread) composer
-                    // text is equally unsent but belongs to a directory rather
-                    // than a thread, so this lens cannot show it and must not
-                    // claim there is nothing to find.
-                    ? props.unassignedThreadDraftCount
-                      ? "Older drafts are available. Use Recover Draft in a composer to choose one."
-                      : "No unsent replies."
-                    : "No threads yet."}
-              </p>
+            renderedThreads.length === 0 && startingThreads.length === 0 && !visitingThread ? (
+              <>
+                {lensEmptyMessage}
+                {lensPager}
+                {startActions}
+              </>
             ) : (
               <RecentsList
+                pager={lensPager}
+                footer={startActions}
+                pinnedResourceId={pinnedGroupShown ? PINNED_GROUP_RESOURCE_ID : undefined}
+                pinnedGroupCollapsed={props.pinnedGroupCollapsed}
+                onSetPinnedGroupCollapsed={props.onSetPinnedGroupCollapsed}
+                onReorderThreadPins={pinnedGroupShown
+                  ? hoverReleasedListHandlers.reorderThreadPins : undefined}
+                emptyMessage={lensEmptyMessage}
+                visitingThread={visitingThread}
+                visitingLabel={visitingThreadLabels[props.browseMode]}
                 startingThreads={startingThreads}
                 onSelectStartingThread={props.onSelectPendingLaunchpad}
+                onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
                 pagedNavigation={props.pagedNavigation}
-                resourceIds={lensResources.map((resource) => resource.id)}
+                resourceIds={listResources.map((resource) => resource.id)}
                 presentationOrder={hoverStableSnapshot.value.order}
                 loadedThreads={presentedThreads}
                 approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -2587,6 +3206,9 @@ export function Sidebar(props: SidebarProps) {
                 draftThreadKeys={props.draftThreadKeys}
                 composerSourceThreadKey={props.composerSourceThreadKey}
                 actionsMenuThreadKey={actionsMenuThreadKey}
+                renamingRow={renamingRow}
+                onRequestRenameThread={requestRenameFromRow}
+                onCommitRenameThread={commitRenameFromRow}
                 revealSelectedThreadRequest={revealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}
                 selectedThreadKeys={selectedThreadKeys}
@@ -2614,25 +3236,6 @@ export function Sidebar(props: SidebarProps) {
               />
             )
           )}
-          {props.pagedNavigation?.admissionError ? <p className="sidebar-error">{props.pagedNavigation.admissionError}</p> : null}
-          {props.browseMode !== "directories" ? lensResources.map((resource) => (
-            <div key={resource.id}>
-              {resource.state.error ? <p className="sidebar-error">{resource.state.error}</p> : null}
-              {resource.state.rebaselineRequired ? (
-                <SidebarShowMore label="Reload this lens" onClick={() => void props.pagedNavigation?.restart(resource.id)} />
-              ) : resource.state.page?.nextCursor ? (
-                <SidebarShowMore busy={resource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(resource.id)} />
-              ) : null}
-            </div>
-          )) : null}
-          {props.browseMode === "directories" && directoryIndexResource?.state.page?.nextCursor ? (
-            // `loadMore` has no reentrancy guard of its own — it awaits any
-            // pending read and then unconditionally starts another — so the
-            // in-flight guard is the only thing standing between a double
-            // click and two page advances. This was the one load-more control
-            // without it.
-            <SidebarShowMore busy={directoryIndexResource.loading} label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
-          ) : null}
         </div>
       </section>
 
@@ -2778,6 +3381,7 @@ export function Sidebar(props: SidebarProps) {
                   <button
                     role="menuitemcheckbox"
                     aria-checked={Boolean(contextMenuPinThread!.pinnedRank)}
+                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_pin")}
                     type="button"
                     onClick={() => togglePinFromContextMenu(contextMenuPinThread!)}
                     onKeyDown={closeContextMenuOnEnter}
@@ -2785,12 +3389,14 @@ export function Sidebar(props: SidebarProps) {
                     <span className="thread-context-menu__check" aria-hidden="true">
                       <CheckIcon size={12} strokeWidth={3} />
                     </span>
-                    Pinned
+                    <span>Pinned</span>
+                    {menuShortcut("threads.toggle_pin")}
                   </button>
                   {contextMenuCanKeepAtTop ? (
                     <button
                       role="menuitemcheckbox"
                       aria-checked={isKeptAtTopThread(contextMenuPinThread!)}
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_keep_at_top")}
                       type="button"
                       onClick={() => toggleKeepAtTopFromContextMenu(contextMenuPinThread!)}
                       onKeyDown={closeContextMenuOnEnter}
@@ -2798,7 +3404,8 @@ export function Sidebar(props: SidebarProps) {
                       <span className="thread-context-menu__check" aria-hidden="true">
                         <CheckIcon size={12} strokeWidth={3} />
                       </span>
-                      Keep at Top
+                      <span>Keep at Top</span>
+                      {menuShortcut("threads.toggle_keep_at_top")}
                     </button>
                   ) : null}
                 </div>
@@ -2918,36 +3525,26 @@ export function Sidebar(props: SidebarProps) {
                       <button
                         role="menuitem"
                         type="button"
-                        aria-keyshortcuts="Meta+Shift+ArrowUp"
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_up")}
                         disabled={!contextMenuCanMoveUp}
                         onClick={() =>
                           moveThreadFromContextMenu(contextMenu.thread, "up")
                         }
                       >
                         <span>Move Up</span>
-                        <span
-                          className="thread-context-menu__shortcut"
-                          aria-hidden="true"
-                        >
-                          {"⌘⇧↑"}
-                        </span>
+                        {menuShortcut("threads.move_up")}
                       </button>
                       <button
                         role="menuitem"
                         type="button"
-                        aria-keyshortcuts="Meta+Shift+ArrowDown"
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_down")}
                         disabled={!contextMenuCanMoveDown}
                         onClick={() =>
                           moveThreadFromContextMenu(contextMenu.thread, "down")
                         }
                       >
                         <span>Move Down</span>
-                        <span
-                          className="thread-context-menu__shortcut"
-                          aria-hidden="true"
-                        >
-                          {"⌘⇧↓"}
-                        </span>
+                        {menuShortcut("threads.move_down")}
                       </button>
                     </>
                   ) : null}
@@ -2955,33 +3552,94 @@ export function Sidebar(props: SidebarProps) {
                     <button
                       role="menuitem"
                       type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.rename")}
                       onClick={() =>
                         requestRenameFromContextMenu(contextMenu.thread)
                       }
                     >
-                      Rename Thread
+                      <span>Rename Thread</span>
+                      {menuShortcut("threads.rename")}
+                    </button>
+                  ) : null}
+                  {contextMenuCanLock && contextMenu.thread.lock ? (
+                    <>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
+                        onClick={() => unlockFromContextMenu(contextMenu.thread)}
+                      >
+                        <span>Unlock Thread</span>
+                        {menuShortcut("threads.lock")}
+                      </button>
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() =>
+                          requestLockFromContextMenu(contextMenu.thread, "edit")
+                        }
+                      >
+                        Edit Lock Note…
+                      </button>
+                    </>
+                  ) : contextMenuCanLock ? (
+                    <button
+                      role="menuitem"
+                      type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.lock")}
+                      onClick={() =>
+                        requestLockFromContextMenu(contextMenu.thread, "lock")
+                      }
+                    >
+                      <span>Lock Thread…</span>
+                      {menuShortcut("threads.lock")}
+                    </button>
+                  ) : null}
+                  {contextMenuCanContinueAfter ? (
+                    <button
+                      aria-label={contextMenuDependencyCount > 0
+                        ? `Continue After, ${contextMenuDependencyCount} waiting`
+                        : undefined}
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        const target = contextMenu.thread;
+                        setContextMenu(undefined);
+                        props.onContinueAfter!(target, contextMenuOpenerRef);
+                      }}
+                    >
+                      <span>Continue After…</span>
+                      {contextMenuDependencyCount > 0 ? (
+                        <span className="thread-context-menu__aside">
+                          {contextMenuDependencyCount} waiting
+                        </span>
+                      ) : null}
                     </button>
                   ) : null}
                   {contextMenuCanMarkUnread ? (
                     <button
                       role="menuitem"
                       type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
                       onClick={() =>
                         markUnreadFromContextMenu(contextMenu.thread)
                       }
                     >
-                      Mark Unread
+                      <span>Mark Unread</span>
+                      {menuShortcut("threads.toggle_unread")}
                     </button>
                   ) : null}
                   {contextMenuCanMarkRead ? (
                     <button
                       role="menuitem"
                       type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.toggle_unread")}
                       onClick={() =>
                         markReadFromContextMenu(contextMenu.thread)
                       }
                     >
-                      Mark Read
+                      <span>Mark Read</span>
+                      {menuShortcut("threads.toggle_unread")}
                     </button>
                   ) : null}
                   {contextMenuCanSendToMachine ? (
@@ -3045,9 +3703,11 @@ export function Sidebar(props: SidebarProps) {
                     <button
                       role="menuitem"
                       type="button"
+                      aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.archive")}
                       onClick={() => archiveFromContextMenu(contextMenu.thread)}
                     >
-                      Archive Thread
+                      <span>Archive Thread</span>
+                      {menuShortcut("threads.archive")}
                     </button>
                   ) : null}
                 </div>
@@ -3113,8 +3773,10 @@ export function Sidebar(props: SidebarProps) {
                       }),
                     )
                   }
+                  aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.copy_link")}
                 >
-                  Copy Thread Link
+                  <span>Copy Thread Link</span>
+                  {menuShortcut("threads.copy_link")}
                 </button>
                 <button
                   role="menuitem"
@@ -3201,6 +3863,55 @@ export function Sidebar(props: SidebarProps) {
         </div>
       ) : null}
 
+      {subthreadDraftMenu ? (
+        <div
+          ref={subthreadDraftMenuRef}
+          className="thread-context-menu"
+          role="menu"
+          aria-label={`Actions for the sub-thread draft under ${subthreadDraftMenu.draft.parentThreadTitle}`}
+          style={{
+            left:
+              subthreadDraftMenu.position?.x ??
+              subthreadDraftMenu.requestedPosition.x,
+            top:
+              subthreadDraftMenu.position?.y ??
+              subthreadDraftMenu.requestedPosition.y,
+            visibility: subthreadDraftMenu.position ? undefined : "hidden",
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="thread-context-menu__section">
+            <button
+              role="menuitem"
+              type="button"
+              disabled={!props.onDetachSubthreadDraft}
+              onClick={() => {
+                const { draft } = subthreadDraftMenu;
+                setSubthreadDraftMenu(undefined);
+                props.onDetachSubthreadDraft?.(draft);
+              }}
+            >
+              Detach from Parent
+            </button>
+          </div>
+          <div className="thread-context-menu__separator" role="separator" />
+          <div className="thread-context-menu__section">
+            <button
+              role="menuitem"
+              type="button"
+              disabled={!props.onDiscardSubthreadDraft}
+              onClick={() => {
+                const { draft } = subthreadDraftMenu;
+                setSubthreadDraftMenu(undefined);
+                props.onDiscardSubthreadDraft?.(draft);
+              }}
+            >
+              Discard Sub-thread
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       {directoryContextMenu ? (
         <div
           ref={directoryContextMenuRef}
@@ -3258,7 +3969,7 @@ export function Sidebar(props: SidebarProps) {
                   <button
                     role="menuitem"
                     type="button"
-                    aria-keyshortcuts="Meta+Shift+ArrowUp"
+                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_up")}
                     disabled={!directoryMenuCanMoveUp}
                     onClick={() =>
                       moveDirectoryFromContextMenu(
@@ -3268,17 +3979,12 @@ export function Sidebar(props: SidebarProps) {
                     }
                   >
                     <span>Move Up</span>
-                    <span
-                      className="thread-context-menu__shortcut"
-                      aria-hidden="true"
-                    >
-                      {"⌘⇧↑"}
-                    </span>
+                    {menuShortcut("threads.move_up")}
                   </button>
                   <button
                     role="menuitem"
                     type="button"
-                    aria-keyshortcuts="Meta+Shift+ArrowDown"
+                    aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.move_down")}
                     disabled={!directoryMenuCanMoveDown}
                     onClick={() =>
                       moveDirectoryFromContextMenu(
@@ -3288,12 +3994,7 @@ export function Sidebar(props: SidebarProps) {
                     }
                   >
                     <span>Move Down</span>
-                    <span
-                      className="thread-context-menu__shortcut"
-                      aria-hidden="true"
-                    >
-                      {"⌘⇧↓"}
-                    </span>
+                    {menuShortcut("threads.move_down")}
                   </button>
                 </>
               ) : null}
@@ -3339,68 +4040,18 @@ export function Sidebar(props: SidebarProps) {
         </div>
       ) : null}
 
-      {renameThread ? (
-        <div className="rename-thread-backdrop" role="presentation">
-          <section
-            ref={renameDialogRef}
-            aria-labelledby="rename-thread-title"
-            aria-modal="true"
-            className="rename-thread-dialog"
-            role="dialog"
-          >
-            <h2 id="rename-thread-title">Rename Thread</h2>
-            <label className="rename-thread-dialog__field">
-              <span>Name</span>
-              <input
-                autoFocus
-                ref={renameInputRef}
-                value={renameDraft}
-                onChange={(event) => {
-                  setRenameDraft(event.currentTarget.value);
-                  setRenameValidationError(undefined);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    submitRename();
-                  } else if (
-                    (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
-                    !event.altKey &&
-                    !event.ctrlKey &&
-                    !event.metaKey &&
-                    !event.shiftKey &&
-                    event.currentTarget.selectionStart === 0 &&
-                    event.currentTarget.selectionEnd === event.currentTarget.value.length
-                  ) {
-                    event.preventDefault();
-                    const nextPosition =
-                      event.key === "ArrowLeft" ? 0 : event.currentTarget.value.length;
-                    event.currentTarget.setSelectionRange(nextPosition, nextPosition);
-                  }
-                }}
-              />
-            </label>
-            {renameValidationError ? (
-              <p className="rename-thread-dialog__error">{renameValidationError}</p>
-            ) : null}
-            <div className="rename-thread-dialog__actions">
-              <button
-                className="button button--secondary"
-                type="button"
-                onClick={() => setRenameThread(undefined)}
-              >
-                Cancel
-              </button>
-              <button
-                className="button button--primary"
-                type="button"
-                onClick={submitRename}
-              >
-                Rename Thread
-              </button>
-            </div>
-          </section>
-        </div>
+      {lockDialog ? (
+        <ThreadLockDialog
+          initialNote={lockDialog.thread.lock?.note}
+          mode={lockDialog.mode}
+          returnFocus={contextMenuOpenerRef}
+          threadTitle={lockDialog.thread.title}
+          onCancel={() => setLockDialog(undefined)}
+          onSubmit={async (note) => {
+            await props.onSetThreadLock?.(lockDialog.thread, true, note);
+            setLockDialog(undefined);
+          }}
+        />
       ) : null}
 
     </aside>
@@ -3512,7 +4163,7 @@ function ProfileIdentityButton(props: {
     <>
       <button
         ref={props.buttonRef}
-        aria-label="Open PwrAgent profile menu"
+        aria-label={`Open PwrAgent profile menu: ${props.label}`}
         aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         aria-expanded={props.hasMenu ? props.menuOpen : undefined}
         aria-haspopup={props.hasMenu ? "menu" : undefined}
@@ -3606,6 +4257,8 @@ function AttentionLensTab(props: {
    */
   remoteActiveThreadCount?: number;
   reviewThreadCount: number;
+  /** No threads exist, so the lens would be empty. See `LensTab`'s `disabled`. */
+  disabled?: boolean;
   onSelect: () => void;
 }) {
   const counts = {
@@ -3618,6 +4271,7 @@ function AttentionLensTab(props: {
     title: browseModeLabels.attention,
     caption: "Threads in progress or waiting to be reviewed",
     reviewLabel: "To review",
+    ...(props.disabled ? { footer: NO_THREADS_TOOLTIP_LINE } : {}),
   });
   const accessibleName = `${browseModeLabels.attention}, ${describeAttentionCounts(
     counts,
@@ -3628,19 +4282,20 @@ function AttentionLensTab(props: {
     <>
       <button
         role="tab"
-        aria-label={props.countsReady === false ? "Attention, loading counts" : accessibleName}
         // The card's consequence lines ("Quitting interrupts these") exist
         // nowhere else — without this they are sighted-only, since the portal
         // sits outside this button's subtree. Gated on `visible`: naming an
         // absent element is a dangling reference.
         aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         aria-selected={props.active}
+        aria-disabled={props.disabled || undefined}
         className={`lens-switch__button lens-switch__button--attention${
           props.active ? " is-active" : ""
         }`}
         type="button"
         onBlur={tooltip.hide}
         onClick={() => {
+          if (props.disabled) return;
           tooltip.hide();
           props.onSelect();
         }}
@@ -3648,13 +4303,19 @@ function AttentionLensTab(props: {
         onMouseEnter={(event) => tooltip.show(event.currentTarget, card)}
         onMouseLeave={tooltip.hide}
       >
-        {props.countsReady === false ? <span aria-label="Loading counts">…</span> : <>
-        <AttentionTurnReadouts
-          activeLocal={props.activeThreadCount}
-          activeRemote={props.remoteActiveThreadCount}
-        />
-        <AttentionReviewReadout count={props.reviewThreadCount} />
-        </>}
+        <span
+          role="img"
+          aria-label={props.countsReady === false ? "Attention, loading counts" : accessibleName}
+          className="signal-count-group"
+        >
+          {props.countsReady === false ? "…" : <>
+            <AttentionTurnReadouts
+              activeLocal={props.activeThreadCount}
+              activeRemote={props.remoteActiveThreadCount}
+            />
+            <AttentionReviewReadout count={props.reviewThreadCount} />
+          </>}
+        </span>
       </button>
       {tooltip.tooltipNode}
     </>
@@ -3682,6 +4343,12 @@ function LensTab(props: {
    */
   countLabel?: string;
   tooltipText: string;
+  /**
+   * No threads exist, so the lens would be empty. `aria-disabled` rather than
+   * `disabled`: a disabled button takes no focus, so a keyboard user could
+   * never reach the tooltip that says why the tab is off.
+   */
+  disabled?: boolean;
   onSelect: () => void;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
@@ -3689,9 +4356,11 @@ function LensTab(props: {
   const label = props.countLabel
     ? `${browseModeLabels[props.mode]}, ${props.countLabel}`
     : browseModeLabels[props.mode];
-  const tooltipText = props.countLabel
-    ? [props.tooltipText, props.countLabel].join("\n")
-    : props.tooltipText;
+  const tooltipText = [
+    props.tooltipText,
+    props.countLabel,
+    props.disabled ? NO_THREADS_TOOLTIP_LINE : undefined,
+  ].filter(Boolean).join("\n");
 
   return (
     <>
@@ -3705,10 +4374,12 @@ function LensTab(props: {
         // whole accessible name.
         aria-label={label}
         aria-selected={props.active}
+        aria-disabled={props.disabled || undefined}
         className={`lens-switch__button${props.active ? " is-active" : ""}`}
         type="button"
         onBlur={tooltip.hide}
         onClick={() => {
+          if (props.disabled) return;
           tooltip.hide();
           props.onSelect();
         }}
@@ -3779,13 +4450,14 @@ function RuntimeIdentityButton(props: {
   const tooltipText = props.copied
     ? "Copied"
     : `${props.value}\nClick to copy to clipboard`;
+  const copyName = `Copy ${
+    props.copyLabel ?? (props.valueKind === "cwd" ? "working directory" : "branch name")
+  }`;
 
   return (
     <>
       <button
-        aria-label={`Copy ${
-          props.copyLabel ?? (props.valueKind === "cwd" ? "working directory" : "branch name")
-        }`}
+        aria-label={copyName.endsWith(` ${props.label}`) ? copyName : `${copyName}: ${props.label}`}
         className="runtime-identity__button path-copy-target"
         type="button"
         onBlur={tooltip.hide}

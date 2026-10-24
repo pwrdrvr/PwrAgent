@@ -16,6 +16,39 @@ describe("AppNoticeToast", () => {
     detail: "/repo/.worktrees/shared: Worktree is still used by another active thread.",
   };
 
+  it.each([false, true])("copies a code block and unchanged plain text (custom handoff: %s)", (customHandoff) => {
+    const copyRichText = vi.fn(async () => undefined);
+    const copyText = vi.fn(async () => undefined);
+    const desktopApi = { copyRichText, copyText };
+    const diagnosticNotice = {
+      id: "hot-cpu:1",
+      title: "Main CPU profile captured",
+      status: { label: "Capture complete", state: "success" as const },
+      message: "Spike (1 sample >= 50%) saved main-hot-0001.cpuprofile.",
+      detail: "Profile: <fixture> & diagnostics",
+      facts: [{ label: "Session", value: "hot-cpu-fixture" }],
+      copyText: customHandoff ? "Inspect <profile> & report\n\n  Path: /tmp/main.cpuprofile" : undefined,
+    };
+    const text = customHandoff
+      ? "Inspect <profile> & report\n\n  Path: /tmp/main.cpuprofile"
+      : "Main CPU profile captured\nCapture complete\nSpike (1 sample >= 50%) saved main-hot-0001.cpuprofile.\nProfile: <fixture> & diagnostics\nSession: hot-cpu-fixture";
+    const html = customHandoff
+      ? "<pre><code>Inspect &lt;profile&gt; &amp; report\n\n  Path: /tmp/main.cpuprofile</code></pre>"
+      : "<pre><code>Main CPU profile captured\nCapture complete\nSpike (1 sample &gt;= 50%) saved main-hot-0001.cpuprofile.\nProfile: &lt;fixture&gt; &amp; diagnostics\nSession: hot-cpu-fixture</code></pre>";
+
+    render(
+      <AppNoticeToast
+        desktopApi={desktopApi}
+        notice={diagnosticNotice}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy notice" }));
+    expect(copyRichText).toHaveBeenCalledExactlyOnceWith({ text, html });
+    expect(copyText).not.toHaveBeenCalled();
+  });
+
   it("renders selectable notice text with copy and dismiss controls", () => {
     const copyText = vi.fn(async () => undefined);
     const onDismiss = vi.fn();
@@ -202,7 +235,82 @@ describe("AppNoticeToast", () => {
     expect(screen.getByRole("status")).toHaveAttribute("data-tone", "warning");
   });
 
-  it("saves a Skill Questions warning dismissal before closing the toast", async () => {
+  it("saves a Skill Questions warning dismissal when the checked toast is closed", async () => {
+    const onDismiss = vi.fn();
+    const onSuppressSkillQuestionsWarning = vi.fn(async () => true);
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, skillQuestionsWarning: true }}
+        onDismiss={onDismiss}
+        onSuppressSkillQuestionsWarning={onSuppressSkillQuestionsWarning}
+      />,
+    );
+
+    const checkbox = screen.getByRole("checkbox", { name: "Don't show again" });
+    await act(async () => {
+      fireEvent.click(checkbox);
+    });
+    expect(checkbox).toBeChecked();
+    expect(onSuppressSkillQuestionsWarning).not.toHaveBeenCalled();
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    expect(onSuppressSkillQuestionsWarning).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves a Codex warning's suppression id when the checked toast is closed", async () => {
+    const onDismiss = vi.fn();
+    const onSuppressCodexWarning = vi.fn(async (_id: string) => true);
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, warningSuppressionId: "warning-id" }}
+        onDismiss={onDismiss}
+        onSuppressCodexWarning={onSuppressCodexWarning}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+    expect(onSuppressCodexWarning).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
+    expect(onSuppressCodexWarning).toHaveBeenCalledWith("warning-id");
+  });
+
+  it("offers no Don't show again for a notice without a suppression", () => {
+    render(
+      <AppNoticeToast
+        notice={notice}
+        onDismiss={vi.fn()}
+        onSuppressCodexWarning={vi.fn(async () => true)}
+        onSuppressSkillQuestionsWarning={vi.fn(async () => true)}
+      />,
+    );
+    expect(screen.queryByRole("checkbox", { name: "Don't show again" })).not.toBeInTheDocument();
+  });
+
+  it("closes an unchecked Skill Questions warning without saving", () => {
+    const onDismiss = vi.fn();
+    const onSuppressSkillQuestionsWarning = vi.fn(async () => true);
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, skillQuestionsWarning: true }}
+        onDismiss={onDismiss}
+        onSuppressSkillQuestionsWarning={onSuppressSkillQuestionsWarning}
+      />,
+    );
+
+    const checkbox = screen.getByRole("checkbox", { name: "Don't show again" });
+    fireEvent.click(checkbox);
+    fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(onSuppressSkillQuestionsWarning).not.toHaveBeenCalled();
+  });
+
+  it("keeps a checked Skill Questions warning open past the auto-dismiss timer", () => {
+    vi.useFakeTimers();
     const onDismiss = vi.fn();
     const onSuppressSkillQuestionsWarning = vi.fn(async () => true);
     render(
@@ -214,8 +322,31 @@ describe("AppNoticeToast", () => {
     );
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
-    await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
-    expect(onSuppressSkillQuestionsWarning).toHaveBeenCalledTimes(1);
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(onSuppressSkillQuestionsWarning).not.toHaveBeenCalled();
+  });
+
+  it("keeps a checked Skill Questions warning open when saving fails", async () => {
+    const onDismiss = vi.fn();
+    const onSuppressSkillQuestionsWarning = vi.fn(async () => false);
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, skillQuestionsWarning: true }}
+        onDismiss={onDismiss}
+        onSuppressSkillQuestionsWarning={onSuppressSkillQuestionsWarning}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Could not save this preference.");
+    expect(screen.getByRole("checkbox", { name: "Don't show again" })).toBeChecked();
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 
   it("copies an explicit handoff value without rendering it", () => {
@@ -429,6 +560,69 @@ describe("AppNoticeToast", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
     expect(durableDismiss).toHaveBeenCalledOnce();
     expect(stackDismiss).not.toHaveBeenCalled();
+  });
+
+  it("resumes the countdown from what the bar had left, not from the start", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    const { container } = render(<AppNoticeToast notice={notice} onDismiss={onDismiss} />);
+
+    const toast = screen.getByRole("status");
+    const timer = () => container.querySelector(".app-notice-toast__timer");
+    act(() => {
+      vi.advanceTimersByTime(6_000);
+    });
+    fireEvent.mouseEnter(toast);
+    expect(timer()).toHaveAttribute("data-paused", "true");
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+    fireEvent.mouseLeave(toast);
+    expect(timer()).not.toHaveAttribute("data-paused");
+
+    act(() => {
+      vi.advanceTimersByTime(2_999);
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds the bar while a checked Don't show again holds the toast", () => {
+    vi.useFakeTimers();
+    const { container } = render(
+      <AppNoticeToast
+        notice={{ ...notice, skillQuestionsWarning: true }}
+        onDismiss={vi.fn()}
+        onSuppressSkillQuestionsWarning={vi.fn(async () => true)}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Don't show again" }));
+    expect(container.querySelector(".app-notice-toast__timer")).toHaveAttribute("data-paused", "true");
+  });
+
+  it("gives a replacement notice in the same slot a full countdown and a new bar", () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    const { container, rerender } = render(<AppNoticeToast notice={notice} onDismiss={onDismiss} />);
+    const firstBar = container.querySelector(".app-notice-toast__timer");
+    act(() => {
+      vi.advanceTimersByTime(6_000);
+    });
+
+    rerender(<AppNoticeToast notice={{ ...notice, id: "notice-2" }} onDismiss={onDismiss} />);
+    expect(container.querySelector(".app-notice-toast__timer")).not.toBe(firstBar);
+    act(() => {
+      vi.advanceTimersByTime(8_999);
+    });
+    expect(onDismiss).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
   it("starts a hover-paused countdown when repair progress flips to success", () => {

@@ -547,3 +547,58 @@ it("revalidates only expanded Pricing gate resources and preserves unchanged his
   await act(async () => { invalidate(); await vi.advanceTimersByTimeAsync(1_000); });
   expect(readThread).toHaveBeenCalledTimes(8);
 });
+
+it("reads a local thread's sub-thread totals, but never a peer's", async () => {
+  const family = {
+    readAt: 1,
+    members: [
+      { backend: "codex" as const, threadId: "parent", title: "Parent", self: true, active: false, totalCostMicros: 1_000_000, usageLineCount: 1, unpricedUsageLineCount: 0 },
+      { backend: "codex" as const, threadId: "child", title: "Child", self: false, active: false, totalCostMicros: 500_000, usageLineCount: 1, unpricedUsageLineCount: 0 },
+    ],
+  };
+  const readThreadFamilyPricing = vi.fn(async () => family);
+  const desktopApi = { readThreadFamilyPricing } as unknown as DesktopApi;
+  const local = render(<PricingPanel desktopApi={desktopApi} thread={{ id: "parent", source: "codex" }} subThreadCount={1} />);
+  await waitFor(() => expect(local.container.querySelector(".thread-family-pricing")).toHaveTextContent("$1.50"));
+  expect(readThreadFamilyPricing).toHaveBeenCalledWith({ backend: "codex", threadId: "parent" });
+  local.unmount();
+
+  readThreadFamilyPricing.mockClear();
+  const peerThread = { id: "parent", source: "codex" as const, federation: {
+    ref: { backend: "codex" as const, threadId: "parent", target: { scope: "remote" as const, instanceId: "peer" } },
+  } } as unknown as ComponentProps<typeof PricingPanel>["thread"];
+  const peer = render(<PricingPanel desktopApi={desktopApi} thread={peerThread} subThreadCount={1} />);
+  expect(peer.container.querySelector(".thread-family-pricing")).toBeNull();
+  peer.unmount();
+
+  // A window that fronts a peer carries the target on the window, not the thread.
+  (window as typeof window & { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = { scope: "remote", instanceId: "peer" };
+  try {
+    const peerWindow = render(<PricingPanel desktopApi={desktopApi} thread={{ id: "parent", source: "codex" }} subThreadCount={1} />);
+    expect(peerWindow.container.querySelector(".thread-family-pricing")).toBeNull();
+  } finally {
+    delete (window as typeof window & { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget;
+  }
+  expect(readThreadFamilyPricing).not.toHaveBeenCalled();
+});
+
+
+it("shows Claude limits without requesting or displaying the Codex account pace", () => {
+  const readUsageActivity = vi.fn();
+  const { pricing } = buildTokenMiserPricingFixture();
+  const thread = { id: "claude-thread", source: "claude" as const, updatedAt: 1 };
+  const view = render(<PricingPanel pricing={pricing} thread={thread}
+    desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }}
+    backends={[{ kind: "claude", label: "Claude", rateLimits: [{ name: "Weekly limit", usedPercent: 35 }] } as import("@pwragent/shared").BackendSummary]} />);
+  expect(view.getByLabelText("Claude plan limits")).toHaveTextContent("35% used");
+  expect(view.container.querySelector(".usage-pace-card")).toBeNull();
+  expect(readUsageActivity).not.toHaveBeenCalled();
+});
+
+it("keeps the Usage Activity card on ACP threads", () => {
+  const { pricing } = buildTokenMiserPricingFixture();
+  const thread = { id: "acp-thread", source: "acp:gemini" as const, updatedAt: 1 };
+  const view = render(<PricingPanel pricing={pricing} thread={thread}
+    desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity: vi.fn() }} />);
+  expect(view.container.querySelector(".usage-pace-card")).not.toBeNull();
+});

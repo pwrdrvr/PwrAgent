@@ -26,15 +26,12 @@ The desktop style guide defines:
 
 ## Code Formatting & Linting
 
-ESLint is the correctness linter — run `pnpm lint:eslint` (CI runs it too) and
-fix its errors; **don't run `eslint --fix` to reformat**. There is no
-autoformatter by design: **never run Prettier (`npx prettier` /
-`prettier --write`)** on a renderer or main-process file — no config is
-committed, so `npx` applies tool defaults that fight the hand-maintained house
-style (notably leading binary operators) and reformat untouched code. Match the
-surrounding file by hand. See "Code Formatting & Linting" in the
-[repo-root `AGENTS.md`](../../AGENTS.md) for the full rule and the house-style
-summary.
+Oxlint is the correctness linter. Run `pnpm lint:oxlint` after edits and
+`pnpm lint:oxlint:typed` for production receiver safety; CI runs both. Do not
+use linter fixes to reformat. There is no autoformatter by design: never run
+Prettier on a renderer or main-process file. Match adjacent code by hand,
+including leading binary operators. See the repo-root `AGENTS.md` for the
+complete scope, native typecheck command and formatting policy.
 
 ## Non-Negotiables
 
@@ -53,8 +50,12 @@ summary.
   fix. New signals that should move a row need a transition in the reducer, not
   a tiebreaker in the sort.
 - User-curated Pins live as a scrollable section at the top of each directory
-  in the Directories lens. Inbox and Recents are pure sort orders and do not
-  float pins.
+  in the Directories lens. While `general.pinned_threads_on_top` is on (the
+  default), Inbox (the Updated tab) and Recents (the Created tab) also share
+  one collapsible Pinned group at their top, holding every pin across
+  projects in the same global order. Each lists every other thread by its own
+  time below the group, and a thread renders in only one of them. Off, both
+  are pure time sorts and do not float pins.
 - Unread state uses the orange cookie marker, not punctuation badges.
 - The sidebar is an information surface, not a stack of generic cards.
 - Do not use browser-default controls in shipped UI.
@@ -235,15 +236,25 @@ window.__pwragentRendererUpdates.eventNames
 `firstMs`, `lastMs`, and `capturedAtMs` are renderer `performance.now()` times.
 Snapshots are detached copies. `lastError()` retains the latest reported
 failure through automatic recovery; a renderer reload clears this history.
-The error boundary captures before failed-tree teardown. Global errors and
-unhandled rejections capture at notification time.
+The error boundary captures before failed-tree teardown. The first identical
+global error or unhandled rejection in a one-minute window captures at notification
+time; further notifications increment a count without capture or IPC. One trailing
+timeout, eviction, or teardown flushes the repeat count and timestamps without
+replacing the retained snapshot. Renderer and main summary tables each have 64
+slots with bounded summary strings and fixed-size keys. Explicit recovery reports
+remain immediate. Each admitted renderer window has its own fixed-size ID, used
+by main for summary and detail admission so IPC latency cannot suppress the next
+window's snapshot. Merged repeat batches retain their earliest/latest occurrence
+timestamps. See [../../docs/renderer-recovery.md](../../docs/renderer-recovery.md)
+for the delivery and eviction limits.
 
 Normal recording has no timers, IPC, logging, or database writes. Fixed arrays
 use 1,944 bytes for numeric storage and scope-reference slots, plus JavaScript
 object/string overhead. A reported error also retains one bounded snapshot.
 Main logs `report update diagnostics` as a separate JSON string, capped at
 8 KiB, associated with the existing `stackId`. Identical fault details are
-logged at most once per minute. The log includes event names and the number of
+budgeted by their renderer reporting window; reports without window metadata use
+main's one-minute interval. The log includes event names and the number of
 entries omitted to meet the limit. This history covers the instrumented edges;
 it does not identify every React setter or prove which request caused a loop.
 
@@ -451,8 +462,14 @@ which closes Electron automatically after assertions pass.
 
 ## Capturing README Screenshots
 
-The PNGs and animated GIF the top-level README references under
-`docs/assets/screenshots/` are produced by an inspect-style Playwright
+> The top-level README now uses WebP captures,
+> `docs/assets/screenshots/*.webp` (hero, Star Map, backends, review,
+> terminal), taken from the built app at 1440×900 on a Retina display with
+> invented showcase data. They are ordinary Git blobs, not LFS: GitHub's
+> README renderer cannot resolve LFS pointers. The spec below still exists
+> and still writes the older PNG and GIF captures.
+
+The PNGs and animated GIF under `docs/assets/screenshots/` are produced by an inspect-style Playwright
 spec that drives five known UI surfaces and shells out to Swift for
 native macOS window capture (with stoplights, drop shadow, and retina
 resolution — Playwright's `Page.screenshot()` only grabs the renderer
@@ -793,13 +810,16 @@ Things to know when extending the audit:
   seeder writing a row nothing reads would leave the audit green while it
   scanned an absent surface, so `src/main/__tests__/sub-agent-state-seeding.test.ts`
   pins the round-trip in vitest.
-- **Every surface is audited in both themes.** The file wraps its
-  `describe` in `for (const theme of AUDIT_THEMES)` and threads the theme
-  into `launchAuditApp({ theme })`, so a new block is gated in light and
-  dark for free. This matters because contrast is the one rule class that
-  is genuinely theme-dependent — roles, names, and focus order are not.
-  The gate ran dark-only for its whole life, which is how three
-  token-level light-theme contrast failures shipped unnoticed.
+- **Every surface is audited in every color theme.** The file wraps its
+  `describe` in `for (... of AUDIT_APPEARANCES)`: the Tangerine dark and
+  light pair plus each other dark theme in the dark scheme and each light
+  theme in the light scheme. It threads that appearance into
+  `launchAuditApp(appearance)`, so a new block is gated in all of them for
+  free. This matters because contrast is the one rule class that is
+  genuinely theme-dependent — roles, names, and focus order are not. The
+  gate ran dark-only for its whole life, which is how three token-level
+  light-theme contrast failures shipped unnoticed. Add a new color theme to
+  `AUDIT_DARK_THEMES` or `AUDIT_LIGHT_THEMES`.
 - **`runAxe(window, { include })` narrows the scan to one subtree.** No
   block passes it today, and it is not a tool for silencing a failure —
   everything outside the scope stops being gated. Prefer a
@@ -836,8 +856,8 @@ pnpm --filter @pwragent/desktop exec playwright test \
   -c playwright.config.ts e2e/a11y.spec.ts
 ```
 
-(The package's `test:e2e` script does a full Electron rebuild + Vite
-build first; the `playwright test` form above skips that when you've
+(The package's `test:e2e` script checks the Electron runtime and runs a
+Vite build first; the `playwright test` form above skips that when you've
 already built once.)
 
 ### Modal dialogs and overlays
@@ -996,7 +1016,10 @@ sqlite database. Store only desktop metadata there. For the full rule and the
 ACP fallback direction, read
 [../../docs/thread-history-persistence.md](../../docs/thread-history-persistence.md)
 before changing ACP session storage, thread replay restoration, or rollout
-persistence.
+persistence. Its one exception is tracked review findings (`thread_reviews`):
+capped excerpts that only To-dos and the review agent tools read. The
+transcript renders a review from its own entry and reads only status from that
+table.
 
 ## Pull-Request Status Source of Truth
 
@@ -1234,7 +1257,7 @@ Two more suite-wide guards, both pure test infrastructure. Production code has
 no test-awareness and behaves identically either way — the seams are in
 `vitest.workspace.ts`.
 
-**Where.** Both desktop projects set `PWRAGENT_HOME` to
+**Where.** Every desktop project sets `PWRAGENT_HOME` to
 `<os.tmpdir()>/pwragent-vitest-home-<pid>`. `resolvePwragentRoot` otherwise
 falls back to `~/.pwragent`, and only about a dozen main tests override it
 themselves, so every other test that touches a root-relative path was reading
@@ -1255,7 +1278,7 @@ deliberately `os.homedir()`-anchored; no test has ever created it, and
 `git-directory-service` takes an injected `homeDir`.
 
 `XDG_CONFIG_HOME` and `XDG_STATE_HOME` travel with it, pinned to
-`<os.tmpdir()>/pwragent-vitest-xdg-<pid>/{config,state}` on both projects and
+`<os.tmpdir()>/pwragent-vitest-xdg-<pid>/{config,state}` on each project and
 guarded by the same test. Nothing in the app reads them today; the pre-profile
 migration that searched them for `pwragnt/` state is gone. They stay because
 `PWRAGENT_HOME` never covered them: those roots came from `os.homedir()` and
@@ -1263,6 +1286,24 @@ the ambient XDG variables, so a test that stubbed only the PwrAgent root still
 read the operator's real `~/.config` and `~/.local/state` — and a developer
 carrying pre-1.0 files then ran a different code path than CI on every
 `initializeAppState`. Set all three together when a suite needs its own roots.
+
+`PATH` is sandboxed on every project, including messaging and shared. The
+directory of the Node running the suite comes first, so `node` and a fixture's
+`#!/usr/bin/env node` shebang are always that Node. The repository's own
+`node_modules/.bin` directories that pnpm prepends come next; they hold the
+project's pinned tools, such as the `tsgolint` that typed oxlint runs. On POSIX
+only `/usr/bin`, `/bin`, `/usr/sbin` and `/sbin` follow; on Windows every entry
+outside the user's profile does, because Git for Windows lives in system
+locations that vary by machine. It exists because the operator's shell `PATH` starts with
+version-manager shims: a mise shim read `~/.config/mise/config.toml` on every
+ACP fixture launch, and an unparseable one failed the suite on one Mac only.
+It also keeps operator-authenticated tools such as `gh` and `op` out of reach.
+Production code that appends search directories for agent launches still
+does; the agent-CLI spawn guard covers what that can reach. A test that needs
+another tool should resolve it by absolute path, as the deploy-isolation test
+does with `npm_execpath`, or supply it, as the manual Git LFS validation test
+does, rather than widen the sandbox. `disposable-pwragent-home.test.ts` pins
+the sandbox for every project and in the running worker.
 
 **Whether.** [`src/test-setup/outbound-fetch-guard.ts`](src/test-setup/outbound-fetch-guard.ts)
 replaces `globalThis.fetch` and fails any test that makes a real outbound
@@ -1297,7 +1338,7 @@ those have no host to classify, and reading an inline fixture is not egress.
 The allowance is pinned by the self-test, including that a remote host merely
 *containing* "localhost" is still blocked.
 
-The renderer project loads the fetch guard too. It has no `fetch` call site
+Both renderer projects load the fetch guard too. It has no `fetch` call site
 today and reaches the network through IPC, but `lint:boundaries` reads imports
 and cannot see a `globalThis.fetch`, and jsdom inherits a live one from Node —
 so this is the only thing here that would catch a renderer reaching a remote
@@ -1492,13 +1533,19 @@ budget is a record of what a path costs, not permission for it to cost that.
   windows and profiles.
 - Reuse shell primitives instead of adding one-off page styling.
 - When in doubt, make the interface calmer, denser, and more editorial.
-- For tooltips inside clipped or layered surfaces (sidebar, scroll regions,
-  overflow-hidden chips, draggable rails, or anything that must escape the
-  left bar), use `src/renderer/src/lib/useViewportTooltip.tsx` with the
-  shared `.viewport-tooltip` class. CSS pseudo-element tooltips
-  (`tooltip-target` + `data-tooltip`) are only for elements whose ancestors
-  all render with `overflow: visible`; otherwise they get clipped or lose
-  z-order fights against the main surface.
+- Every tooltip is a portal on `document.body`. A plain-text tooltip is
+  `className="tooltip-target"` plus `data-tooltip={text}`:
+  [`DataTooltipLayer`](src/renderer/src/lib/DataTooltipLayer.tsx), mounted
+  once in `main.tsx`, draws it for every window. That works inside any
+  clipping pane and beside the sidebar. Anything richer (a `ReactNode`, a
+  card class, a hover delay, pointer-following placement) uses
+  `src/renderer/src/lib/useViewportTooltip.tsx` with the shared
+  `.viewport-tooltip` class. Never draw a tooltip with `::after` /
+  `content: attr(…)`: a pseudo-element is clipped by its pane and capped by
+  its stacking context. The composer's tooltips kept going under the left
+  bar until the declarative path moved onto the portal. When a tooltip is
+  clipped or buried, fix the layer it renders in. Do not move one
+  tooltip's x or raise one control's z-index.
   - **Structured hover cards pass their own class instead of
     `.viewport-tooltip`.** The hook takes a `ReactNode`, so a card with
     sections and meters (`.context-usage-card`, `.pr-status-card`) styles

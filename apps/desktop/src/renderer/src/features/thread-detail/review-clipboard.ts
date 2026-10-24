@@ -6,6 +6,7 @@ import type {
 } from "@pwragent/shared";
 import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { shortReviewSha } from "../../../../shared/review-command";
+import { reviewFindingTag } from "../../../../shared/review-output";
 import { formatBackendLabel } from "../../lib/backend-label";
 
 /**
@@ -108,10 +109,9 @@ function formatFindingSection(
   context: AppServerReviewContext | undefined,
   numbering: string,
 ): string {
-  const priority =
-    typeof finding.priority === "number" ? `[P${finding.priority}] ` : "";
+  const tag = reviewFindingTag(finding);
   const parts = [
-    `### ${numbering}${priority}${collapseToOneLine(finding.title)}`,
+    `### ${numbering}${tag ? `[${tag}] ` : ""}${collapseToOneLine(finding.title)}`,
   ];
   const location = formatFindingLocation(finding, context);
   if (location) {

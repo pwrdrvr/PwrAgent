@@ -31,6 +31,7 @@ export async function runGitCommand(
     maxBuffer?: number;
     signal?: AbortSignal;
     input?: string;
+    beforeSpawn?: () => void;
   } = {},
 ): Promise<{
   stdout: string;
@@ -39,6 +40,8 @@ export async function runGitCommand(
   const env = gitEnvironment(options.env ?? process.env);
   options.signal?.throwIfAborted();
   const git = await resolveGitExecutable(options.env ?? process.env);
+  // Admission must survive the executable resolver's asynchronous boundary.
+  options.beforeSpawn?.();
   const gitArgs = ["-C", cwd, ...args];
   const windowsJobLaunch =
     process.platform === "win32" && options.ownProcessTree
@@ -77,6 +80,37 @@ export async function runGitCommand(
   } finally {
     windowsJobLaunch?.cleanup();
     // After the command: a checkout installs the Git LFS hooks it warns about.
+    noteBundledGitCommand(cwd, args, options.env ?? process.env);
+  }
+}
+
+/**
+ * `runGitCommand` for a command whose stdout is bytes rather than text — a
+ * blob read with `cat-file blob`. Decoding an image as utf8 replaces every
+ * invalid sequence, so the text runner cannot be reused for this.
+ */
+export async function runGitCommandBinary(
+  cwd: string,
+  args: string[],
+  options: {
+    env?: NodeJS.ProcessEnv;
+    timeout?: number;
+    maxBuffer?: number;
+  } = {},
+): Promise<Buffer> {
+  const env = gitEnvironment(options.env ?? process.env);
+  const git = await resolveGitExecutable(options.env ?? process.env);
+  try {
+    const { stdout } = await execFile(git, ["-C", cwd, ...args], {
+      encoding: "buffer",
+      env,
+      cwd: os.tmpdir(),
+      windowsHide: true,
+      timeout: options.timeout ?? 120_000,
+      maxBuffer: options.maxBuffer ?? 1024 * 1024 * 10,
+    });
+    return stdout;
+  } finally {
     noteBundledGitCommand(cwd, args, options.env ?? process.env);
   }
 }

@@ -12,6 +12,7 @@ import type {
 } from "@pwragent/shared";
 import {
   PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES,
+  PWRAGENT_THREAD_TOOL_NAMESPACE,
   PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
 import type {
@@ -66,6 +67,10 @@ export type PwrAgentFederatedThreadMutationRequest = {
   archive?: boolean;
   pinned?: boolean;
   unread?: boolean;
+  /** true locks (or replaces the note of a locked thread), false unlocks. */
+  locked?: boolean;
+  /** Only with `locked: true`. Blank clears the note. */
+  lockNote?: string;
   dryRun: boolean;
 };
 
@@ -90,11 +95,11 @@ export class PwrAgentFederatedThreadInspectionError extends Error {
 
 export function buildPwrAgentThreadToolRouter(
   handler: PwrAgentThreadInspectionHandler | undefined,
-  options: { namespace?: string; unsupportedMessage?: string } = {},
+  options: { namespace?: string; unsupportedMessage?: string; additionalDefinitions?: AgentToolDefinition[] } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter(buildPwrAgentThreadToolDefinitions(handler, {
+  return new AgentToolRouter([...buildPwrAgentThreadToolDefinitions(handler, {
     namespace: options.namespace,
-  }), {
+  }), ...(options.additionalDefinitions ?? [])], {
     unsupportedMessage:
       options.unsupportedMessage ?? "Unsupported PwrAgent thread tool.",
   });
@@ -104,9 +109,15 @@ export function buildPwrAgentThreadToolDefinitions(
   handler: PwrAgentThreadInspectionHandler | undefined,
   options: { namespace?: string } = {},
 ): AgentToolDefinition<PwrAgentThreadInspectionOperationName>[] {
-  return PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES.map((operation) => ({
+  const operations = PWRAGENT_THREAD_INSPECTION_OPERATION_NAMES
+    .filter((operation) => options.namespace !== PWRAGENT_THREAD_TOOL_NAMESPACE || operation !== "rename_current_thread")
+    .filter((operation) =>
+      operation !== "manage_thread_dependencies" || !options.namespace || options.namespace === PWRAGENT_TOOL_NAMESPACE);
+  return operations.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    // PR status checks refresh stored PR associations. Dependency tools can write.
+    annotations: { readOnlyHint: ["search_threads", "read_thread", "get_thread_status"].includes(operation) },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     deferLoading: false,
@@ -146,8 +157,12 @@ function descriptionForOperation(
       return "Check GitHub pull request or GitLab merge request status through the matching PwrAgent provider. Use this instead of a shell command. Omit backend and threadId for the current thread. The result includes freshness, providerAvailability (CLI availability and last GitLab error), and prAutomation state. GitLab remotes on gitlab.com and gitlab.* hosts are discovered automatically. Explicit MR URLs support other GitLab hosts. Follow the returned prAutomation.guidance. Calling this tool does not start or convert an Auto-fix repair turn. autoFixActive only reports whether the inspected thread owns automatic monitoring. Monitoring ownership does not mean another agent is repairing the PR. The current turn is a repair turn only when PwrAgent started it with an Auto-fix PR event. During such a turn, continue only the reported repair and ignore unrelated prior context unless the user added it. When autoFixActive is true without such an event, avoid duplicate polling and follow the returned guidance. When it is false, do not assume PwrAgent will dispatch a repair turn. Use watch_thread_pull_request when the thread must also wake after success.";
     case "watch_thread_pull_request":
       return "Create a durable, one-time watch for an attached pull request at the current head. The watch wakes the thread after CI success, early failure, or a merge conflict. Only a primary-workspace PR is eligible. The oldest duplicate watch receives the result. A terminal snapshot returns currentOutcome without a new watch. Omit backend and threadId for the current thread. Omit url only when one eligible PR exists. After creation, end the turn. Do not poll CI or create a monitor. Auto-fix PR handles failure wake-ups without a duplicate turn.";
+    case "rename_current_thread":
+      return "Rename the PwrAgent thread running this turn, including an ordinary coding thread. Use when the user asks to rename this thread. Choose a concise title from the conversation when no title is supplied. The calling thread is resolved automatically. The rename applies immediately and appears in the notification rail. No additional approval is required. Do not overwrite a user-set title without a request. This does not rename an attached messaging topic or conversation. Use rename_current_messaging_conversation for that.";
+    case "manage_thread_dependencies":
+      return "Manage durable prerequisites that resume this thread after another local thread reaches a turn or PR milestone. Conditions include successful turn completion, reviewable PR attachment, passing CI, and PR merge. Use dependencies instead of polling read_thread, gh, or a Job Monitor for prerequisites. Supports all/any conditions and rejects cycles. Create requires continuation: the concrete instructions the resumed turn will follow, since this conversation may be compacted by then. Set deliver to operator when only the human can do the follow-up. PwrAgent then raises a to-do card instead of resuming this thread. Omit backend/threadId for the calling thread. For turn_completed, omit turnId to pin the current or latest turn. For PR conditions, omit prUrl only for an unambiguous primary-workspace PR, which may be attached later. Omit headSha to follow the current head. CI must be fresh and complete. onFailure defaults to notify once. The wait option tolerates CI repairs. After creation, end this turn if no unrelated work remains. Do not poll the dependency. List returns failures and uncertain delivery for operator review. Cancel cannot undo an admitted continuation. Use dismiss only after the operator has inspected an uncertain admission. It retires the claim without cancelling any turn. Dependencies currently stay within this PwrAgent instance/profile.";
     case "mutate_thread":
-      return "Change guarded settings on a PwrAgent thread, its project, its pin, its read state, or whether it is archived. To mark a whole project read, use mark_project_read once instead of looping through threads. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread. For projectPath, use a path from list_instance_projects on the thread's own instance. Confirm an archive with the user first. archive false restores it.";
+      return "Change guarded settings on a PwrAgent thread: its title, model, execution mode, project, pin, read state, lock, or archived state. Use rename_current_thread when the user asks to rename this thread. To mark a whole project read, use mark_project_read once instead of looping through threads. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename a messaging topic or thread. For projectPath, use a path from list_instance_projects on the thread's own instance. Confirm an archive with the user first. archive false restores it. Lock a thread whose worktree you hand to another agent, with a lockNote saying why. A locked thread refuses every new turn until it is unlocked.";
     case "mark_project_read":
       return "Mark every unread thread in one project read in a single call, across all backends and beyond listing limits. Use the exact projectKey from list_instance_projects (directory:<absolute path> for a checkout). Omit instanceId for this machine. Pass it for a known peer. Returns projectRead.changedCount. Uses the same guarded, atomic action as the sidebar. Does not archive threads or stop turns. Prefer this over repeated mutate_thread calls. For several projects in Code Mode, call tools.pwragent__mark_project_read for each and print only aggregate results.";
   }
@@ -157,6 +172,57 @@ function inputSchemaForOperation(
   operation: PwrAgentThreadInspectionOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "rename_current_thread":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["title"],
+        properties: {
+          title: {
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
+            description: "New title for the current PwrAgent thread.",
+          },
+        },
+      };
+    case "manage_thread_dependencies":
+      return {
+        type: "object", additionalProperties: false, required: ["action"],
+        properties: {
+          action: { type: "string", enum: ["create", "list", "cancel", "dismiss"] },
+          backend: { type: "string" },
+          threadId: { type: "string", description: "Waiting thread. Defaults to the caller." },
+          dependencyId: { type: "string", description: "Required for cancel or dismiss." },
+          mode: { type: "string", enum: ["all", "any"] },
+          onFailure: { type: "string", enum: ["notify", "wait"] },
+          continuation: {
+            type: "string", maxLength: 8000,
+            description: "Required for create. What must happen once the prerequisites are met, written for a reader who has lost this conversation. With deliver operator, this is the reminder for the human. Name the PR, branch, and concrete steps, e.g. \"When #2999 merges, retarget this PR to main and replay our commits onto fetched main so they don't duplicate #2999's.\"",
+          },
+          deliver: {
+            type: "string", enum: ["agent", "operator"],
+            description: "Who acts when the dependency fires. agent (default) resumes this thread with a new turn that follows continuation. operator raises a reminder to-do card on this thread and starts no turn. Its title joins the met prerequisites and continuation, like \"#2999 merged: announce the release in the team channel\". Choose operator when only the human can act, such as an approval, a decision, or telling someone. A failed prerequisite raises the card with the failure reason.",
+          },
+          handoff: {
+            type: "boolean",
+            description: "Only with deliver operator. The card also offers Start thread, which hands continuation to a new agent thread in one click. Leave unset for work only the human can do.",
+          },
+          conditions: {
+            type: "array", minItems: 1, maxItems: 16,
+            description: "Required for create. May target a thread before its PR exists.",
+            items: {
+              type: "object", additionalProperties: false, required: ["backend", "threadId", "when"],
+              properties: {
+                backend: { type: "string" }, threadId: { type: "string" },
+                when: { type: "string", enum: ["turn_completed", "pr_attached", "ci_passed", "pr_merged"] },
+                turnId: { type: "string" }, prUrl: { type: "string" }, headSha: { type: "string" },
+                title: { type: "string", maxLength: 200, description: "Optional display title. PwrAgent fills it from the thread when omitted." },
+              },
+            },
+          },
+        },
+      };
     case "mark_project_read":
       return {
         type: "object",
@@ -521,6 +587,16 @@ function inputSchemaForOperation(
             type: "boolean",
             description:
               "false marks the thread read. true marks it unread again.",
+          },
+          locked: {
+            type: "boolean",
+            description:
+              "true locks the thread until it is unlocked. Every new, queued or steered turn is refused, from any source. A running turn keeps running. false unlocks it and drops the note.",
+          },
+          lockNote: {
+            type: "string",
+            description:
+              "Why the thread is locked, shown to the operator on the thread. Locks the thread when locked is omitted, and replaces the note of a locked thread. Not allowed with locked false.",
           },
           dryRun: {
             type: "boolean",

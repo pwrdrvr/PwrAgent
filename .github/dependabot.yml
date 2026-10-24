@@ -20,17 +20,20 @@ updates:
       semver-major-days: 14
       semver-minor-days: 7
       semver-patch-days: 7
-    # @types/node tracks the Node runtime, which is pinned to Electron
-    # 41.10.3's bundled Node (.nvmrc + CI node-version: 24.18.0). Block
-    # major bumps so v25+ types don't sneak ahead of the runtime via a
-    # grouped dev-dep PR.
+    # @types/node stays on Electron 44's Node 24 major. Development and CI
+    # require Node 24.22.1 or newer for security fixes. Block major bumps so
+    # v25+ types don't sneak ahead of the runtime via a grouped dev-dep PR.
     ignore:
       - dependency-name: "@types/node"
         update-types:
           - "version-update:semver-major"
-      # Electron majors need a planned desktop runtime migration. Native module
-      # prebuild availability, packaging behavior, and Electron breaking changes
-      # need human review before a PR is worth opening.
+      # 30.1.2 makes the dialog Tab-walk tests 4–7x slower and times out
+      # four Linux CI tests (#2754). Keep 30.1.1; review the next patch.
+      - dependency-name: "jsdom"
+        versions: ["30.1.2"]
+      # Electron majors need a planned desktop runtime migration. Packaging
+      # behavior and Electron breaking changes need human review before a PR
+      # is worth opening.
       - dependency-name: "electron"
         update-types:
           - "version-update:semver-major"
@@ -55,14 +58,6 @@ updates:
       - dependency-name: "@electron/*"
         update-types:
           - "version-update:semver-major"
-      # better-sqlite3 13 is the N-API rewrite: it drops prebuild-install and
-      # Electron-tagged GitHub assets. Desktop postinstall still fetches an
-      # Electron prebuild into electron-native/, so 13.x needs a planned native
-      # pipeline migration rather than a Dependabot bump. 12.x minor/patch
-      # updates stay in desktop-runtime-minor-patch.
-      - dependency-name: "better-sqlite3"
-        versions:
-          - "13.x"
       # node-fetch is kept at v2 for grammY's current Node runtime shim. The
       # latest grammY release still depends on node-fetch v2 and its CommonJS
       # entrypoint; v3 is ESM-only and should be handled as a planned Telegram

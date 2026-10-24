@@ -120,6 +120,7 @@ class MockTransport implements JsonRpcTransport {
     string,
     Array<{ code: number; message: string }>
   >();
+  static threadStartErrors: Array<{ code: number; message: string }> = [];
   static threadStartResult: unknown = {
     thread: {
       id: "thread-3",
@@ -150,6 +151,7 @@ class MockTransport implements JsonRpcTransport {
     }
   };
   static turnStartPreResponseNotification: unknown | null = null;
+  static preResponseNotificationsByMethod = new Map<string, unknown[]>();
   static turnInterruptResult: TurnInterruptResponse = {};
   static reviewStartResult: unknown = {
     reviewThreadId: "thread-2",
@@ -212,6 +214,7 @@ class MockTransport implements JsonRpcTransport {
     summary: {},
     dailyUsageBuckets: [],
   };
+  static accountResult: unknown = { account: null, workspaceRouting: null };
   static unfilteredThreadListResult: unknown[] | undefined;
   static threadListNextCursor: string | undefined;
   static threadListResultBySearchTerm = new Map<string, unknown[]>();
@@ -221,8 +224,7 @@ class MockTransport implements JsonRpcTransport {
   static threadResumeError:
     | { code?: number; message: string }
     | undefined = undefined;
-  static threadResumeUsage: unknown;
-  static threadResumeUsageTiming: "before" | "after" = "after";
+  static accountUsageError: { code: number; message: string } | undefined;
   static threadSettingsUpdateError: string | undefined;
 
   readonly sentMessages: string[] = [];
@@ -237,6 +239,10 @@ class MockTransport implements JsonRpcTransport {
   constructor(options?: unknown) {
     this.options = options;
     MockTransport.instances.push(this);
+  }
+
+  notify(method: string, params: unknown): void {
+    this.messageHandler(JSON.stringify({ method, params }));
   }
 
   async connect(): Promise<void> {
@@ -269,6 +275,10 @@ class MockTransport implements JsonRpcTransport {
       method?: string;
       params?: Record<string, unknown>;
     };
+
+    for (const notification of MockTransport.preResponseNotificationsByMethod.get(payload.method ?? "") ?? []) {
+      this.messageHandler(JSON.stringify(notification));
+    }
 
     if (payload.method?.startsWith("thread/realtime/")) {
       this.messageHandler(JSON.stringify({ id: payload.id, result: {} }));
@@ -868,6 +878,10 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "account/read") {
+      this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: payload.id, result: MockTransport.accountResult }));
+      return;
+    }
     if (payload.method === "account/rateLimits/read") {
       this.messageHandler(
         JSON.stringify({
@@ -880,6 +894,10 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "account/usage/read") {
+      if (MockTransport.accountUsageError) {
+        this.messageHandler(JSON.stringify({ id: payload.id, error: MockTransport.accountUsageError }));
+        return;
+      }
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -1147,6 +1165,11 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/start") {
+      const error = MockTransport.threadStartErrors.shift();
+      if (error) {
+        this.messageHandler(JSON.stringify({ jsonrpc: "2.0", id: payload.id, error }));
+        return;
+      }
       const result = MockTransport.threadStartResult as { thread?: { id?: string } };
       if (result.thread?.id) {
         this.loadedThreads.add(result.thread.id);
@@ -1187,12 +1210,6 @@ class MockTransport implements JsonRpcTransport {
         return;
       }
       this.loadedThreads.add(String(payload.params?.threadId));
-      const emitUsage = () => {
-        if (MockTransport.threadResumeUsage && payload.params?.excludeTurns) this.messageHandler!(JSON.stringify({
-          method: "thread/tokenUsage/updated", params: { threadId: payload.params.threadId, turnId: "historical-turn", tokenUsage: MockTransport.threadResumeUsage },
-        }));
-      };
-      if (MockTransport.threadResumeUsageTiming === "before") emitUsage();
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -1200,7 +1217,6 @@ class MockTransport implements JsonRpcTransport {
           result: MockTransport.threadResumeResult
         })
       );
-      if (MockTransport.threadResumeUsageTiming === "after") queueMicrotask(emitUsage);
       return;
     }
 
@@ -1414,6 +1430,11 @@ vi.mock("../codex-app-server/stdio-transport", () => {
   };
 });
 
+// Load the registry's desktop dependency graph during collection, after the
+// transport mock's base class is initialized. Its cold transform/import cost
+// must not consume the listing workload test's five-second execution budget.
+const { DesktopBackendRegistry } = await import("../app-server/backend-registry");
+
 async function waitForLatestTransportRequest(
   method: string,
   timeoutMs = 1_000
@@ -1435,6 +1456,48 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it.each([false, true])("applies the compaction model before compacting (already loaded: %s)", async (alreadyLoaded) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    try {
+      if (alreadyLoaded) {
+        await client.setThreadPermissions({ threadId: "thread-2", model: "gpt-5.5" });
+        MockTransport.threadResumeResult = { threadId: "thread-2", model: "gpt-5.5" };
+      }
+      const transport = MockTransport.instances.at(-1);
+      const before = transport?.sentMessages.length ?? 0;
+      const selected = { threadId: "thread-2", model: "gpt-6.1-sol", reasoningEffort: "high" };
+      await client.compactThread(selected);
+      const requests = MockTransport.instances.at(-1)!.sentMessages.slice(before).map((message) => JSON.parse(message));
+      expect(requests.find((request) => request.method === "thread/resume")?.params).toMatchObject({
+        threadId: "thread-2", model: "gpt-6.1-sol",
+      });
+      expect(requests.find((request) => request.method === "thread/settings/update")?.params).toMatchObject({
+        threadId: "thread-2", model: "gpt-6.1-sol", effort: "high",
+      });
+      const methods = requests.map((request) => request.method);
+      expect(methods.indexOf("thread/settings/update")).toBeLessThan(methods.indexOf("thread/compact/start"));
+      expect(methods).not.toContain("turn/start");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each(["resume", "settings"])("does not compact with stale settings when %s fails", async (failure) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    if (failure === "resume") MockTransport.threadResumeError = { message: "model resume rejected" };
+    else MockTransport.threadSettingsUpdateError = "model settings rejected";
+    try {
+      const selected = { threadId: "thread-2", model: "gpt-6.1-sol" };
+      await expect(client.compactThread(selected)).rejects.toThrow("rejected");
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+      expect(requests.some((request) => request.method === "thread/compact/start")).toBe(false);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("lists and terminates background terminals through Codex session handles", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient();
@@ -1856,6 +1919,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadTurnsListTransientErrorsByRequest.clear();
     MockTransport.threadItemsListResultByRequest.clear();
     MockTransport.threadItemsListTransientErrorsByRequest.clear();
+    MockTransport.threadStartErrors = [];
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-3",
@@ -1886,6 +1950,7 @@ describe("CodexAppServerClient", () => {
       }
     };
     MockTransport.turnStartPreResponseNotification = null;
+    MockTransport.preResponseNotificationsByMethod.clear();
     MockTransport.reviewStartResult = {
       reviewThreadId: "thread-2",
       turn: {
@@ -1942,14 +2007,28 @@ describe("CodexAppServerClient", () => {
       summary: {},
       dailyUsageBuckets: [],
     };
+    MockTransport.accountResult = { account: null, workspaceRouting: null };
     MockTransport.unfilteredThreadListResult = undefined;
     MockTransport.threadListNextCursor = undefined;
     MockTransport.threadListResultBySearchTerm.clear();
     MockTransport.turnInterruptResponseMode = "success";
     MockTransport.threadResumeError = undefined;
-    MockTransport.threadResumeUsage = undefined;
-    MockTransport.threadResumeUsageTiming = "after";
+    MockTransport.accountUsageError = undefined;
     MockTransport.threadSettingsUpdateError = undefined;
+  });
+
+  it("retains the provider workspace ID independently of email and rate limits", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.accountResult = {
+      account: { type: "chatgpt", email: null, planType: "team" },
+      workspaceRouting: { chatgptAccountId: "fixture-workspace", backendOrigin: "https://example.test" },
+      requiresOpenaiAuth: true,
+    };
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    expect(await client.readAccount()).toMatchObject({ type: "chatgpt", accountId: "fixture-workspace" });
+    expect(MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)))
+      .filter((request) => request.method === "account/rateLimits/read")).toHaveLength(0);
+    await client.close();
   });
 
   it("passes hydrated env into dynamic launch args", async () => {
@@ -2529,6 +2608,18 @@ describe("CodexAppServerClient", () => {
         updatedAt: 1_777_500_300,
         cwd: "/repo/app",
       },
+      {
+        id: "thread-guardian-marker",
+        threadSource: "guardian_review",
+        updatedAt: 1_777_500_400,
+        cwd: "/repo/app",
+      },
+      {
+        id: "thread-guardian-source",
+        source: { subAgent: { other: "guardian" } },
+        updatedAt: 1_777_500_500,
+        cwd: "/repo/app",
+      },
     ]);
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({
@@ -2847,6 +2938,196 @@ describe("CodexAppServerClient", () => {
       await client.close();
     }
   });
+
+  it("budgets registry listing overlay rows, history parses and targeted metadata RPCs", async () => {
+    const budget = navigationListingBudgets["codex-registry-listing-projection"];
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
+    const { openInMemoryStateDb } = await import("./sqlite-test-utils");
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const client = new CodexAppServerClient({ command: "codex" });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: store, threadTitleGenerationService: null });
+    await registry["subAgentStartupReconciliation"];
+    await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true, maxPages: 1 });
+    const ids = Array.from({ length: 120 }, (_, index) => `overlay-budget-${index}`);
+    db.raw.transaction(() => {
+      for (const id of ids) db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run(`codex:${id}`, JSON.stringify({
+        backend: "codex", threadId: id, model: "fixture-model", extraLinkedDirectories: [],
+        immutableUsageActivities: [{ text: "contrived history ".repeat(1_000) }],
+      }));
+    })();
+    const transport = MockTransport.instances.at(-1)!;
+    const send = transport.send.bind(transport);
+    let pages = 0;
+    let metadataReads = 0;
+    let title = "Fixture title";
+    const rpc = vi.spyOn(transport, "send").mockImplementation((message) => {
+      const request = JSON.parse(message);
+      if (request.method === "thread/read") {
+        metadataReads++;
+        expect(request.params).toEqual({ threadId: ids[0], includeTurns: false });
+        transport["messageHandler"](JSON.stringify({ id: request.id, result: { thread: { id: ids[0], name: title, source: "vscode" } } }));
+        return;
+      }
+      if (request.method !== "thread/list") { send(message); return; }
+      pages++;
+      const page = Number(request.params.cursor ?? 0);
+      MockTransport.threadListResultBySearchTerm.set("overlay-budget", ids.slice(page * 40, (page + 1) * 40)
+        .map((id) => ({ id, name: "Fixture title", source: "vscode" })));
+      const previous = MockTransport.threadListNextCursor;
+      MockTransport.threadListNextCursor = page < 2 ? String(page + 1) : undefined;
+      try { send(message); } finally { MockTransport.threadListNextCursor = previous; }
+    });
+    const prepare = db.raw.prepare.bind(db.raw);
+    let overlayRows = 0;
+    let overlayBytes = 0;
+    const sql = vi.spyOn(db.raw, "prepare").mockImplementation((query) => {
+      const statement = prepare(query);
+      if (query.includes("threads.payload") && query.includes("json_each(?)")) {
+        const all = statement.all.bind(statement);
+        vi.spyOn(statement, "all").mockImplementation((...params: unknown[]) => {
+          const rows = all(...params) as Array<{ payload: string | null }>;
+          overlayRows += rows.length;
+          overlayBytes += rows.reduce((sum, row) => sum + Buffer.byteLength(row.payload ?? ""), 0);
+          return rows;
+        });
+      }
+      return statement;
+    });
+    const parse = vi.spyOn(JSON, "parse");
+    try {
+      for (let refresh = 0; refresh < budget.refreshes; refresh++) {
+        const rows = await registry["listCodexThreads"]({ filter: "overlay-budget", enrichDirectories: false, skipArchivedMetadataRefresh: true });
+        expect(rows).toHaveLength(120);
+        expect(rows.every((row) => row.model === "fixture-model")).toBe(true);
+      }
+      expect(pages).toBe(budget.physicalPages); // three legitimate three-page inventories
+      expect(overlayRows).toBe(budget.overlayRows);
+      expect(overlayBytes).toBe(budget.overlayBytes);
+      const overlayParses = parse.mock.calls.filter(([payload]) => payload.startsWith('{"backend":"codex","threadId":"overlay-budget-'));
+      expect(overlayParses).toHaveLength(budget.overlayParses);
+      expect(overlayParses.filter(([payload]) => payload.includes("contrived history"))).toHaveLength(budget.historyParses);
+      const lookup = () => registry["findThreadForTitleGeneration"]({ backend: "codex", threadId: ids[0]! });
+      expect(await lookup()).toMatchObject({ title: "Fixture title" });
+      title = "Operator rename";
+      expect(await lookup()).toMatchObject({ title: "Operator rename" });
+      expect(metadataReads).toBe(budget.targetedMetadataReads);
+      expect(pages).toBe(budget.physicalPagesAfterTitleReads);
+    } finally {
+      parse.mockRestore(); sql.mockRestore(); rpc.mockRestore();
+      await registry.close(); db.close();
+    }
+  });
+
+  it("budgets physical pages across a create, pin, name and turn burst with mixed enrichment", async () => {
+    const budget = navigationListingBudgets["codex-create-pin-name-turn-burst"];
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true, maxPages: 1 });
+    MockTransport.threadListResultBySearchTerm.set("burst-budget", Array.from({ length: 200 }, (_, index) => ({
+      id: `burst-${index}`, name: `Fixture ${index}`, source: "vscode",
+    })));
+    const transport = MockTransport.instances.at(-1)!;
+    const send = transport.send.bind(transport);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let pages = 0;
+    const rpc = vi.spyOn(transport, "send").mockImplementation((message) => {
+      const request = JSON.parse(message);
+      if (request.method !== "thread/list") { send(message); return; }
+      pages++;
+      void gate.then(() => {
+        const previous = MockTransport.threadListNextCursor;
+        const page = Number(request.params.cursor ?? 0);
+        MockTransport.threadListNextCursor = page < 2 ? String(page + 1) : undefined;
+        try { send(message); } finally { MockTransport.threadListNextCursor = previous; }
+      });
+    });
+    const reads: Array<Promise<AppServerThreadSummary[]>> = [];
+    const read = async () => {
+      reads.push(client.listThreads({ filter: "burst-budget", enrichDirectories: false, skipArchivedMetadataRefresh: true }));
+      reads.push(client.listThreads({ filter: "burst-budget", enrichDirectories: true, skipArchivedMetadataRefresh: true }));
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    try {
+      await read();
+      for (const method of ["thread/started", "thread/pin/added", "thread/name/updated", "thread/name/updated",
+        "thread/name/updated", "turn/started", "thread/status/changed", "navigation/thread/seen", "thread/subAgents/updated"]) {
+        transport.notify(method, { threadId: "target", threadName: "New name", status: { type: "active" }, turn: { id: "turn" } });
+        await read();
+      }
+      release();
+      await Promise.all(reads);
+      // Seven provider generations, three pages each; overlay-only events
+      // and enrichment choices must not cause additional physical scans.
+      expect(reads).toHaveLength(budget.logicalRequests);
+      expect(pages).toBe(budget.physicalPages);
+      const originalTitle = (await reads[1]!)[0]?.title;
+      const first = await reads[0]!;
+      if (first[0]) first[0].title = "Caller mutation";
+      expect((await reads[1]!)[0]?.title).toBe(originalTitle);
+      // Completed inventories are never retained: external changes remain visible.
+      await client.listThreads({ filter: "burst-budget", enrichDirectories: false, skipArchivedMetadataRefresh: true });
+      expect(pages).toBe(budget.physicalPagesAfterLaterRead);
+    } finally {
+      release();
+      await Promise.allSettled(reads);
+      rpc.mockRestore();
+      await client.close();
+    }
+  });
+
+  it.each([
+    ["turn/started", 1], ["thread/status/changed", 1], ["thread/pin/added", 1], ["navigation/thread/seen", 1],
+    ["thread/archived", 2], ["thread/unarchived", 2], ["thread/name/updated", 2],
+  ] as const)(
+    "budgets archived scans across %s at %i generations", async (method, generations) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      MockTransport.threadListResultBySearchTerm.set("archive-generation-budget", []);
+
+      const client = new CodexAppServerClient({ command: "codex" });
+      await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true, maxPages: 1 });
+      const transport = MockTransport.instances.at(-1)!;
+      const originalSend = transport.send.bind(transport);
+      const send = (message: string) => {
+        const request = JSON.parse(message);
+        const previousCursor = MockTransport.threadListNextCursor;
+        if (request.method === "thread/list") MockTransport.threadListNextCursor = request.params.cursor ? undefined : "last-page";
+        try { originalSend(message); } finally { MockTransport.threadListNextCursor = previousCursor; }
+      };
+      let release!: () => void;
+      let held = false;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const rpc = vi.spyOn(transport, "send").mockImplementation((message) => {
+        const request = JSON.parse(message);
+        if (request.method === "thread/list" && request.params.archived && !held) {
+          held = true;
+          void gate.then(() => send(message));
+        } else send(message);
+      });
+      const params = { archived: true, filter: "archive-generation-budget", enrichDirectories: false,
+        skipArchivedMetadataRefresh: true };
+      try {
+        const first = client.listThreads(params);
+        await vi.waitFor(() => expect(held).toBe(true));
+        transport.notify(method, { threadId: "active", threadName: "Renamed", status: { type: "active" }, turn: { id: "turn" } });
+        const second = client.listThreads(params);
+        await new Promise((resolve) => setImmediate(resolve));
+        release();
+        await Promise.all([first, second]);
+        const requests = () => rpc.mock.calls.filter(([message]) => JSON.parse(message).method === "thread/list");
+        expect(requests()).toHaveLength(generations * 2); // two cursor pages per affected generation
+        // A later explicit read still reaches the provider; no completed cache.
+        await client.listThreads(params);
+        expect(requests()).toHaveLength((generations + 1) * 2);
+      } finally {
+        release();
+        rpc.mockRestore();
+        await client.close();
+      }
+    },
+  );
 
   it("schedules one archived metadata page sequence for concurrent active listings", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
@@ -3742,104 +4023,95 @@ describe("CodexAppServerClient", () => {
     );
   });
 
-  it.each(["before", "after"] as const)("reads saved totals emitted %s the resume response in an isolated reader", async (timing) => {
-    const tokens = { inputTokens: 1_000, cachedInputTokens: 800, cacheWriteInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
+  it("reads historical pricing through the existing read-only connection without acquiring a writer", async () => {
     const thread = { id: "external-thread", model: "gpt-6.1-sol", updatedAt: 100, status: { type: "notLoaded" } };
     MockTransport.readThreadResultByThreadId.set(thread.id, { thread });
-    MockTransport.threadResumeResult = { model: thread.model, thread };
-    MockTransport.threadResumeUsage = { total: tokens, last: { ...tokens, inputTokens: 100, totalTokens: 200 } };
-    MockTransport.threadResumeUsageTiming = timing;
+    MockTransport.threadResumeError = { message: "thread already has an active writer" };
+    MockTransport.accountUsageResult = { threadUsage: { threadId: thread.id, estimatedUsageUsdMicros: 42_000, groups: [
+      { model: "gpt-6-astra", inputTokens: 1_000, cachedInputTokens: 800, netNewInputTokens: 200, outputTokens: 100, totalTokens: 1_100 },
+      { model: "gpt-6.1-sol", inputTokens: 500, cachedInputTokens: 100, netNewInputTokens: 400, outputTokens: 50, totalTokens: 550 },
+    ] } };
     const { CodexAppServerClient } = await import("../codex-app-server/client");
-    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const client = new CodexAppServerClient({ command: "codex" });
     const observer = vi.fn();
     client.onNotification(observer);
     try {
       const results = await Promise.all([client.readThreadPricingSnapshot(thread.id), client.readThreadPricingSnapshot(thread.id)]);
-      expect(results).toEqual([{ model: thread.model, tokens }, { model: thread.model, tokens }]);
-      expect(MockTransport.instances).toHaveLength(2);
-      const [parent, reader] = MockTransport.instances;
-      expect(reader.closeCount).toBeGreaterThan(0);
-      expect(parent.closeCount).toBe(0);
-      expect(observer.mock.calls.some(([event]) => event.method === "thread/tokenUsage/updated")).toBe(false);
-      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
-      expect(requests.filter((request) => request.method === "thread/resume").map((request) => request.params)).toEqual([{ threadId: thread.id, excludeTurns: true }]);
-      expect(requests.some((request) => ["thread/settings/update", "turn/start", "fs/readFile"].includes(request.method))).toBe(false);
-      MockTransport.readThreadResultByThreadId.set(thread.id, { thread: { ...thread, model: "gpt-6-astra" } });
-      expect(await client.readThreadPricingSnapshot(thread.id)).toEqual({ model: "gpt-6-astra", tokens });
-      expect(MockTransport.instances).toHaveLength(2);
-      MockTransport.readThreadResultByThreadId.set(thread.id, { thread: { ...thread, updatedAt: 101 } });
-      MockTransport.threadResumeUsage = { total: { ...tokens, inputTokens: 2_000, totalTokens: 2_100 } };
+      expect(results).toEqual([expect.objectContaining({ model: thread.model, pricingSource: "provider", estimatedCostMicros: 42_000,
+        tokens: { inputTokens: 1_500, cachedInputTokens: 900, uncachedInputTokens: 600, outputTokens: 150, totalTokens: 1_650 },
+      }), expect.objectContaining({ estimatedCostMicros: 42_000 })]);
+      expect(MockTransport.instances).toHaveLength(1);
+      expect(MockTransport.instances[0].loadedThreads.size).toBe(0);
+      expect(observer).not.toHaveBeenCalled();
+      const requests = MockTransport.instances[0].sentMessages.map((message) => JSON.parse(message));
+      expect(requests.filter((request) => request.method === "account/usage/read").map((request) => request.params)).toEqual([{ threadId: thread.id }]);
+      expect(requests.some((request) => ["thread/resume", "thread/start", "turn/start", "fs/readFile"].includes(request.method))).toBe(false);
+      // updatedAt is second-granular: do not reuse stale historical counts.
+      MockTransport.accountUsageResult = { threadUsage: { threadId: thread.id, groups: [{ totalTokens: 2_100 }] } };
       expect((await client.readThreadPricingSnapshot(thread.id)).tokens?.totalTokens).toBe(2_100);
-      expect(MockTransport.instances).toHaveLength(3);
-      expect(MockTransport.instances[2].closeCount).toBeGreaterThan(0);
-    } finally {
-      await client.close();
-    }
+    } finally { await client.close(); }
   });
 
-  it("keeps totals unknown while another app owns the writer and tries again after it closes", async () => {
-    const thread = { id: "external-thread", model: "gpt-6.1-sol", updatedAt: 100 };
-    MockTransport.readThreadResultByThreadId.set(thread.id, { thread });
-    MockTransport.threadResumeError = { message: "thread already has an active writer" };
+  it.each([null, { threadId: "other", groups: [{ totalTokens: 100 }] }, { threadId: "external-thread", groups: [] }])(
+    "keeps unavailable or unrelated historical totals unknown: %j", async (threadUsage) => {
+      MockTransport.readThreadResultByThreadId.set("external-thread", { thread: { id: "external-thread", model: "gpt-6.1-sol" } });
+      MockTransport.accountUsageResult = { summary: { lifetimeTokens: 999_999 }, threadUsage };
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex" });
+      try {
+        expect(await client.readThreadPricingSnapshot("external-thread")).toEqual({ model: "gpt-6.1-sol" });
+        expect(MockTransport.instances).toHaveLength(1);
+        expect(MockTransport.instances[0].loadedThreads.size).toBe(0);
+      } finally { await client.close(); }
+    },
+  );
+
+  it("keeps partial historical counts unknown and rejects unsafe counts", async () => {
+    MockTransport.readThreadResultByThreadId.set("history", { thread: { id: "history" } });
+    MockTransport.accountUsageResult = { threadUsage: { threadId: "history", estimatedUsageUsdMicros: -1, groups: [
+      { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, totalTokens: Number.MAX_SAFE_INTEGER },
+      { inputTokens: 0, cachedInputTokens: null, outputTokens: -1, totalTokens: 1 },
+    ] } };
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex" });
     try {
-      expect(await client.readThreadPricingSnapshot(thread.id)).toEqual({ model: thread.model });
-      expect(MockTransport.instances[1].closeCount).toBeGreaterThan(0);
-      MockTransport.threadResumeError = undefined;
-      MockTransport.threadResumeResult = { model: thread.model, thread };
-      MockTransport.threadResumeUsage = { total: { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, totalTokens: 1_100 } };
-      expect((await client.readThreadPricingSnapshot(thread.id)).tokens?.totalTokens).toBe(1_100);
-      expect(MockTransport.instances[2].closeCount).toBeGreaterThan(0);
-    } finally {
-      await client.close();
-    }
+      expect(await client.readThreadPricingSnapshot("history")).toEqual({ model: undefined, pricingSource: "provider", tokens: {
+        inputTokens: 0, cachedInputTokens: undefined, uncachedInputTokens: undefined, outputTokens: undefined, totalTokens: undefined,
+      } });
+    } finally { await client.close(); }
   });
 
-  it("bounds a successful resume that supplies no token notification", async () => {
-    MockTransport.readThreadResultByThreadId.set("no-usage", { thread: { id: "no-usage", model: "gpt-6.1-sol" } });
-    MockTransport.threadResumeResult = { model: "gpt-6.1-sol" };
-    const { CodexAppServerClient } = await import("../codex-app-server/client");
-    const client = new CodexAppServerClient({ command: "codex", requestTimeoutMs: 10 });
-    try {
-      expect(await client.readThreadPricingSnapshot("no-usage")).toEqual({ model: "gpt-6.1-sol", tokens: undefined });
-      expect(MockTransport.instances[1].closeCount).toBeGreaterThan(0);
-    } finally {
-      await client.close();
-    }
-  });
-
-  it("closes the isolated reader and cancels queued snapshot reads when its parent closes", async () => {
-    for (const id of ["no-usage", "queued-usage"]) {
-      MockTransport.readThreadResultByThreadId.set(id, { thread: { id, model: "gpt-6.1-sol" } });
-    }
-    MockTransport.threadResumeResult = { model: "gpt-6.1-sol" };
+  it("does not resume as a fallback when the read-only usage API is unsupported", async () => {
+    MockTransport.readThreadResultByThreadId.set("history", { thread: { id: "history", model: "gpt-6.1-sol" } });
+    MockTransport.accountUsageError = { code: -32601, message: "Method not found" };
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex" });
-    vi.useFakeTimers();
-    const reads = Promise.all([client.readThreadPricingSnapshot("no-usage"), client.readThreadPricingSnapshot("queued-usage")]);
-    let closing: Promise<void> | undefined;
     try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(MockTransport.instances).toHaveLength(2);
-      const reader = MockTransport.instances[1];
-      expect(reader.loadedThreads.has("no-usage")).toBe(true);
-      let closed = false;
-      closing = client.close().then(() => { closed = true; });
-      await vi.advanceTimersByTimeAsync(0);
-      // No clock advance: shutdown must release the writer and notification
-      // waiter immediately, rather than waiting out the snapshot timeout.
-      expect(reader.closeCount).toBeGreaterThan(0);
-      expect(reader.loadedThreads.size).toBe(0);
-      expect(closed).toBe(true);
-      await reads;
-      expect(MockTransport.instances).toHaveLength(2);
-    } finally {
-      await vi.runAllTimersAsync();
-      await reads;
-      await (closing ?? client.close());
-      vi.useRealTimers();
-    }
+      expect(await client.readThreadPricingSnapshot("history")).toEqual({ model: "gpt-6.1-sol" });
+      expect(MockTransport.instances).toHaveLength(1);
+      expect(MockTransport.instances[0].loadedThreads.size).toBe(0);
+    } finally { await client.close(); }
+  });
+
+  it.each(["thread/compacted", "thread/rewound", "thread/closed", "item/completed"] as const)("uses owning-client totals for read-only pricing and invalidates them on %s", async (invalidation) => {
+    const total = { inputTokens: 1_000, cachedInputTokens: 800, outputTokens: 100, reasoningOutputTokens: 50, totalTokens: 1_100 };
+    const last = { inputTokens: 100, cachedInputTokens: 80, outputTokens: 10, totalTokens: 110 };
+    MockTransport.readThreadResultByThreadId.set("owned", { thread: { id: "owned", model: "gpt-6.1-sol", turns: [] } });
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      await client.getInitializeResult();
+      const transport = MockTransport.instances[0];
+      transport.notify("thread/tokenUsage/updated", { threadId: "owned", turnId: "active", tokenUsage: { total, last, modelContextWindow: 128_000 } });
+      expect(await client.readThreadPricingSnapshot("owned")).toMatchObject({ model: "gpt-6.1-sol", tokens: total });
+      expect(transport.sentMessages.map((message) => JSON.parse(message)).some((request) => ["thread/resume", "account/usage/read"].includes(request.method))).toBe(false);
+      transport.notify("thread/tokenUsage/updated", { threadId: "owned", tokenUsage: { total: { ...total, totalTokens: 2_100 } } });
+      expect((await client.readThreadPricingSnapshot("owned")).tokens?.totalTokens).toBe(2_100);
+      transport.notify(invalidation, { threadId: "owned", ...(invalidation === "item/completed" ? { item: { type: "contextCompaction", id: "compact" } } : {}) });
+      expect((await client.readThreadPricingSnapshot("owned")).tokens).toBeUndefined();
+      await client.close();
+      expect((await client.readThreadPricingSnapshot("owned")).tokens).toBeUndefined();
+    } finally { await client.close(); }
   });
 
   it("uses query payloads when filtering the codex thread list", async () => {
@@ -3973,6 +4245,10 @@ describe("CodexAppServerClient", () => {
       expect(threadListRequests[0]?.params?.searchTerm).toBeUndefined();
       expect(methods.filter((method) => method === "initialize")).toHaveLength(2);
       expect(methods.at(-1)).toBe("thread/resume");
+      expect(JSON.parse(transport.sentMessages.at(-1)!)).toMatchObject({
+        method: "thread/resume",
+        params: { threadId, excludeTurns: true },
+      });
     } finally {
       await client.close();
       await fs.rm(tempRoot, { force: true, recursive: true });
@@ -6480,6 +6756,36 @@ describe("CodexAppServerClient", () => {
     } finally { await client.close(); }
   });
 
+  it("reads the persisted name without normalizing it as a display title", async () => {
+    MockTransport.readThreadResultByThreadId.set("rename-metadata", {
+      thread: { id: "rename-metadata", name: "Please fix the parser", preview: "Please fix the parser" },
+    });
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      expect((await client.readThreadSummary("rename-metadata")).title).toBe("Fix the parser");
+      expect(await client.readThreadName("rename-metadata")).toBe("Please fix the parser");
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message) as { method?: string; params?: unknown });
+      const reads = requests.filter((request) => request.method === "thread/read");
+      expect(reads.map((request) => request.params)).toEqual([
+        { threadId: "rename-metadata", includeTurns: false },
+        { threadId: "rename-metadata", includeTurns: false },
+      ]);
+      expect(requests.some((request) => ["thread/turns/list", "thread/items/list", "thread/resume"].includes(request.method ?? ""))).toBe(false);
+    } finally { await client.close(); }
+  });
+
+  it.each([null, undefined])("does not substitute a preview for an unset persisted name: %s", async (name) => {
+    MockTransport.readThreadResultByThreadId.set("unnamed-metadata", {
+      thread: { id: "unnamed-metadata", name, preview: "Please fix the parser" },
+    });
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      expect(await client.readThreadName("unnamed-metadata")).toBeUndefined();
+    } finally { await client.close(); }
+  });
+
   it("forwards metadata-only thread/read requests to Codex", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
@@ -8494,6 +8800,66 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  // PwrAgent's own tools take no title argument, so read_thread and
+  // send_message_to_thread rows could not be opened to see their call.
+  it("makes an untitled dynamic tool call expandable, and leaves an empty one alone", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.readThreadResultByThreadId.set("thread-dynamic-tool-untitled", {
+      thread: {
+        turns: [
+          {
+            id: "turn-dynamic-tool-untitled",
+            status: "completed",
+            items: [
+              {
+                type: "dynamicToolCall",
+                id: "tool-read",
+                namespace: "pwragent",
+                tool: "read_thread",
+                arguments: { threadId: "sample-thread" },
+                status: "completed",
+                success: true,
+                contentItems: [
+                  { type: "inputText", text: "{\"read\":{\"title\":\"Sample thread\"}}" },
+                ],
+              },
+              {
+                type: "dynamicToolCall",
+                id: "tool-empty",
+                namespace: "pwragent",
+                tool: "list_instances",
+                arguments: {},
+                status: "completed",
+                success: true,
+                contentItems: [],
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-dynamic-tool-untitled",
+    });
+
+    const details = replay.entries.flatMap((entry) => entry.type === "activity" ? entry.details : []);
+    expect(details.find((detail) => detail.id === "tool-read")?.command).toEqual({
+      displayCommand: "pwragent/read_thread\n{\n  \"threadId\": \"sample-thread\"\n}",
+      rawCommand: "pwragent/read_thread",
+      source: "tool",
+      output: "{\"read\":{\"title\":\"Sample thread\"}}",
+    });
+    expect(details.find((detail) => detail.id === "tool-empty")).not.toHaveProperty("command");
+
+    await client.close();
+  });
+
   it("hydrates dynamic tool result images from persisted thread activity", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.readThreadResultByThreadId.set("thread-pdf-tool-image", {
@@ -9244,6 +9610,72 @@ describe("CodexAppServerClient", () => {
     );
 
     await client.close();
+  });
+
+  it.each([null, "Use the paginated history APIs."])(
+    "keeps Codex deprecation notices in diagnostics (details=%s)",
+    async (details) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        await client.getInitializeResult();
+        const notifications: AppServerNotification[] = [];
+        client.onNotification((notification) => { notifications.push(notification); });
+        const transport = MockTransport.instances.at(-1)!;
+        const summary = "Full-history hydration is deprecated for paginated threads; use `excludeTurns: true`, then page with `thread/turns/list` and `thread/items/list`.";
+        const status: AppServerNotification = {
+          method: "thread/status/changed",
+          params: { threadId: "thread-2", status: { type: "active", activeFlags: [] } },
+        };
+        codexClientLogWarn.mockClear();
+        transport.emitInbound({ jsonrpc: "2.0", method: "deprecationNotice", params: { summary, details } });
+        transport.emitInbound({ jsonrpc: "2.0", ...status });
+
+        await vi.waitFor(() => expect(notifications).toContainEqual(status));
+        expect(notifications).toEqual([status]);
+        expect(codexClientLogWarn).toHaveBeenCalledExactlyOnceWith(
+          "codex deprecation notice",
+          { summary, details },
+        );
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it("consumes Codex native goal notifications without changing normalized thread state", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await client.getInitializeResult();
+      const notifications: AppServerNotification[] = [];
+      client.onNotification((notification) => { notifications.push(notification); });
+      const transport = MockTransport.instances.at(-1)!;
+      const status: AppServerNotification = {
+        method: "thread/status/changed",
+        params: { threadId: "thread-2", status: { type: "active", activeFlags: [] } },
+      };
+      codexClientLogWarn.mockClear();
+      transport.emitInbound({
+        jsonrpc: "2.0",
+        method: "thread/goal/updated",
+        params: {
+          threadId: "thread-2",
+          goal: {
+            threadId: "thread-2", objective: "Finish the fixture task", status: "active",
+            tokenBudget: null, tokensUsed: 0, timeUsedSeconds: 0,
+          },
+        },
+      });
+      transport.emitInbound({ jsonrpc: "2.0", method: "thread/goal/cleared", params: { threadId: "thread-2" } });
+      transport.emitInbound({ jsonrpc: "2.0", ...status });
+
+      await vi.waitFor(() => expect(notifications).toContainEqual(status));
+      expect(notifications).toEqual([status]);
+      expect(codexClientLogWarn).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+    }
   });
 
   it("recognizes Codex hook lifecycle notifications", async () => {
@@ -11788,6 +12220,7 @@ describe("CodexAppServerClient", () => {
   it("generates thread titles through an ephemeral Codex helper turn", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const observedMessages: string[] = [];
+    let helperAccount = "original-helper-account";
     MockTransport.threadMcpServerStatusResult = {
       data: [
         { name: "context7", tools: {} },
@@ -11812,6 +12245,7 @@ describe("CodexAppServerClient", () => {
 
     const client = new CodexAppServerClient({
       command: "codex",
+      resolveUsageAccountKey: async () => helperAccount,
       directoryResolver: async () => [],
       connectionObserver: {
         onMessage: (event) => {
@@ -11839,6 +12273,7 @@ describe("CodexAppServerClient", () => {
     });
 
     const transport = await waitForLatestTransportRequest("thread/start");
+    helperAccount = "switched-helper-account";
 
     transport!.emitInbound({
       jsonrpc: "2.0",
@@ -11889,6 +12324,7 @@ describe("CodexAppServerClient", () => {
 
     await expect(titlePromise).resolves.toEqual({
       status: "ok",
+      accountKey: "original-helper-account",
       object: {
         title: "Add animated leopard tea button",
       },
@@ -12062,6 +12498,113 @@ describe("CodexAppServerClient", () => {
     expect(tracking.helperThreadPredicates.size).toBe(0);
 
     await client.close();
+  });
+
+  describe("helper lifecycle config", () => {
+    const cases = ["title", "structured", "data-only", "tool"] as const;
+
+    async function runHelper(kind: typeof cases[number], fallback: boolean) {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      if (fallback) {
+        MockTransport.threadStartErrors = [{ code: -32602, message: "unsupported helper config" }];
+      }
+      MockTransport.threadStartResult = {
+        thread: { id: "lifecycle-helper" }, instructionSources: [],
+      };
+      MockTransport.turnStartResult = {
+        turn: {
+          id: "lifecycle-turn",
+          output: [{ type: "text", text: JSON.stringify({ title: "Fixture title" }) }],
+        },
+      };
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      const common = {
+        prompt: "Return a fixture title.",
+        schema: { type: "object", required: ["title"], properties: { title: { type: "string" } } },
+        timeoutMs: 5_000,
+      };
+      const result = kind === "title"
+        ? client.generateTitle({ ...common, promptVersion: "thread-title-v3", schemaName: "thread_title" })
+        : kind === "tool"
+          ? client.runHelperToolTurn({
+              helper: "star_map_intake", prompt: common.prompt, timeoutMs: common.timeoutMs,
+              dynamicTools: [{ type: "function", name: "fixture_tool", description: "Fixture tool.",
+                inputSchema: { type: "object" }, deferLoading: false }],
+              onToolCall: async () => ({ success: true, contentItems: [] }),
+            })
+          : client.generateStructuredObject({
+              ...common, helper: "diff_condensation", disableExecution: kind === "data-only",
+              isMatch: (record) => typeof record.title === "string",
+            });
+      if (kind === "tool") {
+        const transport = await waitForLatestTransportRequest("turn/start");
+        transport.emitInbound({ jsonrpc: "2.0", method: "turn/completed", params: {
+          threadId: "lifecycle-helper", turn: { id: "lifecycle-turn", status: "completed" },
+        } });
+      }
+      await expect(result).resolves.toMatchObject({ status: "ok" });
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+        (message) => JSON.parse(message) as { method: string; params: Record<string, unknown> },
+      );
+      const starts = requests.filter((request) => request.method === "thread/start");
+      expect(starts).toHaveLength(fallback ? 2 : 1);
+      return { client, starts };
+    }
+
+    for (const fallback of [false, true]) {
+      it.each(cases)(`suppresses inherited hooks for %s helpers (fallback=${fallback})`, async (kind) => {
+        const { client, starts } = await runHelper(kind, fallback);
+        try {
+          for (const start of starts) {
+            expect(start.params.config).toMatchObject({
+              features: {
+                hooks: false, apps: false, plugins: false, multi_agent: false,
+                ...(kind === "data-only" ? { shell_tool: false, unified_exec: false, js_repl: false } : {}),
+              },
+              mcp_servers: { context7: { enabled: false }, github: { enabled: false } },
+            });
+            if (kind === "tool") expect(start.params.dynamicTools).toBeDefined();
+          }
+        } finally {
+          await client.close();
+        }
+      });
+
+      it.each(cases)(`suppresses inherited notify for %s helpers (fallback=${fallback})`, async (kind) => {
+        const { client, starts } = await runHelper(kind, fallback);
+        try {
+          for (const start of starts) expect(start.params.config).toMatchObject({ notify: [] });
+        } finally {
+          await client.close();
+        }
+      });
+
+      it(`preserves user thread config on the shared client (fallback=${fallback})`, async () => {
+        const { client } = await runHelper("data-only", fallback);
+        const config = { features: { hooks: true, shell_tool: true }, notify: ["fixture-notifier"] };
+        try {
+          await client.startThread({ cwd: "/fixture/user-workspace" });
+          await client.startThread({ cwd: "/fixture/user-workspace", config });
+          await client.forkThread({ threadId: "saved-user-thread", config });
+          await client.startTurn({ threadId: "saved-user-thread", input: [{ type: "text", text: "Fixture input" }], config });
+          const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+            (message) => JSON.parse(message) as { method: string; params: Record<string, unknown> },
+          );
+          const userRequests = requests.filter((request) =>
+            ["thread/start", "thread/fork", "thread/resume"].includes(request.method)
+            && request.params.ephemeral !== true,
+          );
+          expect(userRequests.map((request) => request.method)).toEqual([
+            "thread/start", "thread/start", "thread/fork", "thread/resume",
+          ]);
+          expect(userRequests[0].params).not.toHaveProperty("config");
+          for (const request of userRequests.slice(1)) expect(request.params.config).toEqual(config);
+          expect(config).toEqual({ features: { hooks: true, shell_tool: true }, notify: ["fixture-notifier"] });
+        } finally {
+          await client.close();
+        }
+      });
+    }
   });
 
   it.each([false, true])("forwards structured helper instructions and model (execution disabled=%s)", async (disableExecution) => {
@@ -12937,6 +13480,91 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it.each(["thread/start", "mcpServerStatus/list"])(
+    "isolates helper startup warnings before the %s response without hiding interactive warnings",
+    async (method) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      MockTransport.threadStartResult = {
+        thread: { id: "thread-title-helper" },
+        instructionSources: [],
+      };
+      MockTransport.turnStartResult = {
+        turn: {
+          id: "turn-title-helper",
+          output: [{ type: "text", text: '{"title":"Fixture title"}' }],
+        },
+      };
+      const helperWarning = {
+        method: "warning",
+        params: {
+          threadId: "thread-title-helper",
+          message: "Ignoring unknown 'features' requirement 'ultrafast_mode'",
+        },
+      };
+      const interactiveWarning = {
+        method: "warning",
+        params: { threadId: "interactive-thread", message: "Interactive warning" },
+      };
+      const helperStarted = {
+        method: "thread/started",
+        params: { thread: { id: "thread-title-helper" } },
+      };
+      MockTransport.preResponseNotificationsByMethod.set(method, [helperWarning, helperStarted, interactiveWarning]);
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      const notifications: AppServerNotification[] = [];
+      client.onNotification((notification) => { notifications.push(notification); });
+      try {
+        await expect(client.generateTitle({
+          prompt: "Name this fixture thread",
+          promptVersion: "thread-title-v1",
+          schema: { type: "object", properties: { title: { type: "string" } } },
+          schemaName: "thread_title",
+          timeoutMs: 5_000,
+        })).resolves.toMatchObject({ status: "ok", object: { title: "Fixture title" } });
+        expect(notifications).toContainEqual(interactiveWarning);
+        expect(notifications).not.toContainEqual(helperWarning);
+        expect(notifications.some((notification) => notification.method === "thread/started")).toBe(false);
+        const tracking = client as unknown as {
+          pendingHelperThreadStarts: Set<Promise<string | undefined>>;
+          helperThreadIds: Set<string>;
+        };
+        expect(tracking.pendingHelperThreadStarts.size).toBe(0);
+        expect(tracking.helperThreadIds.size).toBe(0);
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it("releases startup warning delivery when a helper start returns no thread ID", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {};
+    const interactiveWarning = {
+      method: "warning",
+      params: { threadId: "interactive-thread", message: "Interactive warning" },
+    };
+    MockTransport.preResponseNotificationsByMethod.set("thread/start", [interactiveWarning]);
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const notifications: AppServerNotification[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    try {
+      await expect(client.generateTitle({
+        prompt: "Name this fixture thread",
+        promptVersion: "thread-title-v1",
+        schema: { type: "object", properties: { title: { type: "string" } } },
+        schemaName: "thread_title",
+        timeoutMs: 5_000,
+      })).resolves.toMatchObject({ status: "failed", reason: "codex_title_thread_start_missing_thread_id" });
+      await vi.waitFor(() => expect(notifications).toContainEqual(interactiveWarning));
+      const tracking = client as unknown as {
+        pendingHelperThreadStarts: Set<Promise<string | undefined>>;
+      };
+      expect(tracking.pendingHelperThreadStarts.size).toBe(0);
+    } finally {
+      await client.close();
+    }
+  });
+
   it("runs the bounded helper turn when Codex retains global instructions", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadStartResult = {
@@ -13623,7 +14251,7 @@ describe("CodexAppServerClient", () => {
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
       .find((payload) => payload.method === "turn/start");
 
-    expect(resumePayload?.params).toEqual({ threadId: "thread-2" });
+    expect(resumePayload?.params).toEqual({ threadId: "thread-2", excludeTurns: true });
     expect(turnStartPayload?.params).toMatchObject({ threadId: "thread-2" });
     expect(resumePayload?.params).not.toHaveProperty("dynamicTools");
     expect(turnStartPayload?.params).not.toHaveProperty("dynamicTools");
@@ -15422,9 +16050,11 @@ describe("CodexAppServerClient", () => {
       expect(JSON.stringify(log.mock.calls)).not.toContain("Hello");
     }
     await client.appendRealtimeText("voice-fixture", "Check progress.");
+    await client.appendRealtimeText("voice-fixture", "[Camera observation] Neutral visible cue.", "developer");
     await client.stopRealtime("voice-fixture");
     const requests = transport.sentMessages.map((message) => JSON.parse(message));
     expect(requests).toContainEqual(expect.objectContaining({ method: "thread/realtime/appendText", params: { threadId: "voice-fixture", text: "Check progress.", role: "user" } }));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "thread/realtime/appendText", params: { threadId: "voice-fixture", text: "[Camera observation] Neutral visible cue.", role: "developer" } }));
     expect(requests.some((request) => request.method === "turn/interrupt")).toBe(false);
     off();
     transport.emitInbound({ method: "thread/realtime/sdp", params: { threadId: "voice-fixture", sdp: "ignored" } });

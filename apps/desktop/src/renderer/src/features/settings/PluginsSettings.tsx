@@ -11,6 +11,7 @@ import type {
   DesktopSettingsSnapshot,
   McpConnectionSetupState,
   McpConnectionStatus,
+  McpConnectionToolApproval,
   ProbeMcpConnectionResponse,
   PwrSnapConnectionStatus,
   PwrGitConnectionStatus,
@@ -23,6 +24,7 @@ import {
   summarizeMcpConnectionReadiness,
 } from "@pwragent/shared";
 import { McpInventoryLine } from "../../components/McpInventoryLine";
+import { Select, type SelectOption } from "../../components/Select";
 import {
   ChipContextMenu,
   type ChipContextMenuPosition,
@@ -42,6 +44,7 @@ import {
   describeMcpServerTools,
   readManagedMcpConnectionHealth,
   readMcpServerHealth,
+  reconcileManagedMcpInventory,
   type ManagedMcpToolInventory,
 } from "./mcp-server-health";
 import { SettingsCopyValue } from "./SettingsCopyValue";
@@ -73,9 +76,18 @@ type ConnectionPendingAction = {
     | "newThreadDefault"
     | "probe"
     | "remove"
+    | "toolApproval"
     | "update";
   connectionId?: string;
 };
+
+// What each mode does, said the way the gateway decides it. `auto` is
+// Codex's own rule, so the first line is the one a Codex user already knows.
+const TOOL_APPROVAL_OPTIONS: SelectOption<McpConnectionToolApproval>[] = [
+  { value: "auto", label: "Ask before changes", description: "Read-only tools run without asking." },
+  { value: "prompt", label: "Ask for every tool", description: "Read-only tools ask too." },
+  { value: "approve", label: "Allow all tools", description: "No tool asks, including ones that make changes." },
+];
 
 /** An in-place edit of a stored connection's name and endpoint. */
 type ConnectionEditDraft = {
@@ -1078,6 +1090,42 @@ export function PluginsSettings(props: {
     }
   };
 
+  const setConnectionToolApproval = async (
+    connection: McpConnectionStatus,
+    toolApproval: McpConnectionToolApproval,
+  ) => {
+    if (
+      connectionPending
+      || !props.desktopApi?.setMcpConnectionToolApproval
+    ) return;
+    setConnectionPending({
+      kind: "toolApproval",
+      connectionId: connection.id,
+    });
+    try {
+      await props.desktopApi.setMcpConnectionToolApproval({
+        connectionId: connection.id,
+        toolApproval,
+      });
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: toolApproval === "approve"
+          ? `${connection.displayName} runs every tool without asking.`
+          : toolApproval === "prompt"
+            ? `${connection.displayName} asks before every tool.`
+            : `${connection.displayName} asks before tools that make changes.`,
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
   const removeConnection = async () => {
     const connection = connectionRemoveCandidate;
     if (
@@ -1219,6 +1267,12 @@ export function PluginsSettings(props: {
                             connection,
                             selectForNewThreads,
                           )
+                      : undefined
+                  }
+                  onToolApprovalChange={
+                    props.desktopApi?.setMcpConnectionToolApproval
+                      ? (toolApproval) =>
+                          void setConnectionToolApproval(connection, toolApproval)
                       : undefined
                   }
                   onChanged={() => void loadConnections()}
@@ -1695,6 +1749,11 @@ function chipToneClass(tone: "ok" | "warn" | "err" | "idle" | "neutral"): string
     : ` settings-pathrow__chip--${tone}`;
 }
 
+type ManagedConnectionTestResult =
+  | { status: "testing" }
+  | { status: "passed"; elapsedMs: number; toolCount: number }
+  | { status: "failed"; elapsedMs: number };
+
 /**
  * Read a managed connection's tools while its row is on screen.
  *
@@ -1713,11 +1772,13 @@ function useManagedConnectionTools(params: {
   signIns: number;
 }): {
   inventory: ManagedMcpToolInventory | undefined;
-  refresh: () => void;
+  test: () => void;
+  testResult?: ManagedConnectionTestResult;
 } {
   const { connectionId, identity, listable, signIns } = params;
   const list = params.desktopApi?.listMcpConnectionTools;
   const [inventory, setInventory] = useState<ManagedMcpToolInventory>();
+  const [testResult, setTestResult] = useState<ManagedConnectionTestResult>();
   // A refresh can overtake the read the row started on mount, and the two can
   // resolve in either order. The later request is the one the operator asked
   // for, so an earlier answer arriving second is dropped.
@@ -1727,11 +1788,13 @@ function useManagedConnectionTools(params: {
   // read after a sign-in skips that cache; later re-reads use it again.
   const readSignIns = useRef(signIns);
 
-  const read = useCallback(async (refresh: boolean): Promise<void> => {
+  const read = useCallback(async (refresh: boolean, testing = false): Promise<void> => {
     if (!list) return;
     const sequence = latestRead.current + 1;
     latestRead.current = sequence;
     setInventory({ status: "loading" });
+    setTestResult(testing ? { status: "testing" } : undefined);
+    const startedAt = performance.now();
     try {
       const response = await list({
         connectionId,
@@ -1743,12 +1806,14 @@ function useManagedConnectionTools(params: {
         tools: response.tools,
         fetchedAt: response.fetchedAt,
       });
+      if (testing) setTestResult({ status: "passed", elapsedMs: performance.now() - startedAt, toolCount: response.tools.length });
     } catch (cause) {
       if (latestRead.current !== sequence) return;
       setInventory({
         status: "failed",
         error: cause instanceof Error ? cause.message : String(cause),
       });
+      if (testing) setTestResult({ status: "failed", elapsedMs: performance.now() - startedAt });
     }
   }, [connectionId, list]);
 
@@ -1756,6 +1821,7 @@ function useManagedConnectionTools(params: {
     if (!listable || !list) {
       latestRead.current += 1;
       setInventory(listable ? { status: "unavailable" } : undefined);
+      setTestResult(undefined);
       return;
     }
     const signedInAgain = readSignIns.current !== signIns;
@@ -1768,8 +1834,9 @@ function useManagedConnectionTools(params: {
 
   return {
     inventory,
-    refresh: () => {
-      void read(true);
+    testResult,
+    test: () => {
+      void read(true, true);
     },
   };
 }
@@ -1800,6 +1867,7 @@ function ManagedMcpConnectionRow(props: {
   onCancelAuthorization: () => void;
   onAvailabilityChange?: (enabled: boolean) => void;
   onSelectForNewThreadsChange?: (selectForNewThreads: boolean) => void;
+  onToolApprovalChange?: (toolApproval: McpConnectionToolApproval) => void;
   onChanged: () => void;
   onDisconnect: () => void;
   onEdit: () => void;
@@ -1808,7 +1876,10 @@ function ManagedMcpConnectionRow(props: {
 }) {
   const connection = props.connection;
   const drawerId = useId();
+  const toolApprovalLabelId = useId();
+  const toolApprovalHintId = useId();
   const [expanded, setExpanded] = useState(false);
+  const toolApproval = connection.toolApproval ?? "auto";
   const app = connection.kind === "pwrgit"
     ? "PwrGit"
     : connection.kind === "pwrsnap" ? "PwrSnap" : undefined;
@@ -1820,13 +1891,14 @@ function ManagedMcpConnectionRow(props: {
     ...(localStatus ? { localAvailability: localStatus.availability } : {}),
   });
   const listable = setup.state === "ready" || setup.state === "parked";
-  const { inventory, refresh: refreshTools } = useManagedConnectionTools({
+  const { inventory: fetchedInventory, test: testConnection, testResult } = useManagedConnectionTools({
     connectionId: connection.id,
     desktopApi: props.desktopApi,
     identity: `${connection.serverUrl}\n${connection.configured}`,
     listable,
     signIns: props.signIns,
   });
+  const inventory = reconcileManagedMcpInventory(fetchedInventory, connection.discovery);
   const health = readManagedMcpConnectionHealth(setup, inventory);
   const auth = describeMcpConnectionAuth(connection);
   // An app that is missing or not running has nothing to sign in to yet: its
@@ -1883,6 +1955,17 @@ function ManagedMcpConnectionRow(props: {
           ) : null}
         </div>
         <div className="settings-mcp-row__actions">
+          <button
+            className="button button--secondary"
+            disabled={disabled || !listable || inventory?.status === "loading" || inventory?.status === "unavailable"}
+            title={listable
+              ? `Verify ${connection.displayName} by connecting and reading its available tools.`
+              : setup.detail}
+            type="button"
+            onClick={testConnection}
+          >
+            {testResult?.status === "testing" ? "Testing..." : "Test connection"}
+          </button>
           {/*
             * The wait stands where the Authorize the operator clicked was,
             * with its way out beside it. It used to be a disabled "Working..."
@@ -2009,6 +2092,15 @@ function ManagedMcpConnectionRow(props: {
             Sign-in failed: {props.authorizationError}
           </p>
         ) : null}
+        {testResult ? (
+          <p className="settings-mcp-row__state" role="status">
+            {testResult.status === "testing"
+              ? `Testing ${connection.displayName}...`
+              : testResult.status === "passed"
+                ? `Connection test passed · ${testResult.toolCount} ${testResult.toolCount === 1 ? "tool" : "tools"} · ${(testResult.elapsedMs / 1_000).toFixed(1)} s`
+                : `Connection test failed after ${(testResult.elapsedMs / 1_000).toFixed(1)} s.`}
+          </p>
+        ) : null}
         {listable && inventory?.status === "failed" ? (
           <p className="settings-mcp-row__error">{inventory.error}</p>
         ) : null}
@@ -2033,23 +2125,6 @@ function ManagedMcpConnectionRow(props: {
                     : "Reading tools..."}
             </p>
           )}
-          {/*
-            * Codex re-reads its servers when its configuration reloads. A
-            * managed connection has no such moment -- its list is read once
-            * and kept -- so a server that gained or lost a tool needs a way
-            * to be asked again.
-            */}
-          {listable && inventory?.status !== "unavailable" ? (
-            <button
-              className="button button--ghost settings-mcp-row__refresh"
-              disabled={inventory?.status === "loading"}
-              title={`Ask ${connection.displayName} for its tools again.`}
-              type="button"
-              onClick={refreshTools}
-            >
-              {inventory?.status === "loading" ? "Refreshing..." : "Refresh tools"}
-            </button>
-          ) : null}
         </div>
       ) : null}
       {/*
@@ -2111,6 +2186,34 @@ function ManagedMcpConnectionRow(props: {
                     : seedable
                       ? "New threads start with it selected. Existing threads keep theirs."
                       : "New threads skip it until it is signed in again."}
+                </span>
+              </span>
+            </div>
+          ) : null}
+          {/*
+            * A choice of three, not a switch: each mode is a different
+            * question about every tool, and its line under the field says
+            * which. Not tied to Offer: the mode can be set before the
+            * connection is offered, and nothing reads it until it is.
+            */}
+          {props.onToolApprovalChange ? (
+            <div className="settings-mcp-row__policy-item settings-mcp-row__policy-item--choice">
+              <span className="settings-mcp-row__policy-text">
+                <span className="settings-mcp-row__policy-label" id={toolApprovalLabelId}>
+                  Tool approval
+                </span>
+                <Select
+                  aria-describedby={toolApprovalHintId}
+                  aria-labelledby={toolApprovalLabelId}
+                  className="settings-select settings-select--chip"
+                  disabled={disabled || !props.gatewayEnabled}
+                  options={TOOL_APPROVAL_OPTIONS}
+                  value={toolApproval}
+                  onChange={props.onToolApprovalChange}
+                />
+                <span className="settings-mcp-row__policy-hint" id={toolApprovalHintId}>
+                  {TOOL_APPROVAL_OPTIONS.find((option) => option.value === toolApproval)?.description}
+                  {" "}Full Access threads never ask.
                 </span>
               </span>
             </div>
@@ -2446,4 +2549,3 @@ function McpServerRow(props: {
     </article>
   );
 }
-

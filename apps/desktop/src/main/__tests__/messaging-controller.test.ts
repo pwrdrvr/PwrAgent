@@ -2034,15 +2034,41 @@ describe("MessagingController", () => {
         ...navigation.directories[0]!, key: "remote:project", path: "/remote/project",
       }],
     };
-    const harness = await createHarness(boundedPeerBrowseFixture(navigation, complete, peer.promise));
+    const firstDelivery = createDeferred<void>();
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      ...boundedPeerBrowseFixture(navigation, complete, peer.promise),
+      deliver: async (intent) => {
+        delivered.push(intent);
+        firstDelivery.resolve();
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: "presented",
+          surface: { channel: "telegram", id: `surface:${intent.id}` },
+        };
+      },
+    });
     const pending = harness.controller.handleInboundEvent(buildCommandEvent(`/resume${args}`));
-    await vi.waitFor(() => expect(harness.delivered).toHaveLength(1));
-    await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
-    const afterAction = harness.delivered.length;
-    peer.resolve();
-    await pending;
-    expect(harness.delivered).toHaveLength(afterAction);
-    harness.controller.dispose();
+    try {
+      // The initial delivery owns readiness; a polling deadline races the
+      // browse store's disk IO on Windows before this test can act.
+      await Promise.race([
+        firstDelivery.promise,
+        pending.then(() => { throw new Error("Browse completed before publishing its initial picker"); }),
+      ]);
+      expect(delivered).toHaveLength(1);
+      await harness.controller.handleInboundEvent(buildCommandEvent("/help"));
+      const afterAction = delivered.length;
+      peer.resolve();
+      await pending;
+      expect(delivered).toHaveLength(afterAction);
+    } finally {
+      // Release and drain this test's command even when an assertion fails,
+      // before afterEach removes the store it still owns.
+      peer.resolve();
+      await pending.finally(() => harness.controller.dispose());
+    }
   });
 
   it("budgets SQLite writes for initial and completed progressive browse publications", async () => {
@@ -3198,6 +3224,36 @@ describe("MessagingController", () => {
     harness.delivered.length = 0;
     return { channel, harness, resolvePrivateConversation };
   }
+
+  it.each([false, true])("withholds monitor lifecycle notices from a private-response parent (delivered=%s)", async (delivered) => {
+    const { harness } = await createSlackPrivateResponseHarness({ toolUpdateDefaultMode: "show_all" });
+    try {
+      if (delivered) {
+        await harness.controller.handlePwrAgentMessagingRequest({
+          operation: "send_private_response",
+          context: { backend: "codex", threadId: "thread-1", turnId: "turn-1" },
+          args: { text: "Private details" },
+        });
+      }
+      harness.delivered.length = 0;
+      await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "turn-1" }));
+      await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ monitorId: "legacy-monitor" }));
+      expect(JSON.stringify(harness.delivered)).not.toContain("Secret monitor task");
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: { method: "turn/started", params: { threadId: "thread-1", turnId: "turn-2", turn: { id: "turn-2" } } },
+      });
+      // Resolve a delayed creation against its actual parent, not the new turn.
+      await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ monitorId: "delayed-monitor", parentTurnId: "turn-1" }));
+      for (const outcome of ["success", "failure"] as const) {
+        await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "turn-1", outcome }));
+      }
+      await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ monitorId: "legacy-monitor", outcome: "success" }));
+      expect(JSON.stringify(harness.delivered)).not.toContain("Secret monitor task");
+    } finally {
+      harness.controller.dispose();
+    }
+  });
 
   it("uses normalized Agent metadata for private response identity", async () => {
     const { harness } = await createSlackPrivateResponseHarness({
@@ -17226,6 +17282,75 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("resolves a peer-owned thread's assistant images through its federation target", async () => {
+    const resolveAssistantMessageImages = vi.fn(async () => [{
+      type: "image" as const,
+      url: "data:image/png;base64,AQID",
+      alt: "Session chart",
+      source: "assistant" as const,
+    }]);
+    const harness = await createHarness({ resolveAssistantMessageImages });
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "pwr_owner",
+    };
+    await harness.store.upsertBinding({
+      id: "binding:remote-owner",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: buildTextEvent("hello").channel,
+      createdAt: 1_000,
+      federatedThread: {
+        backend: "codex",
+        target: federationTarget,
+        threadId: "thread-1",
+      },
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1_000,
+    });
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      federationTarget,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-message-1",
+            type: "agentMessage",
+            phase: "final",
+            text: "![Session chart](/tmp/charts/session.png)",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(resolveAssistantMessageImages).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget,
+      itemId: "assistant-message-1",
+      text: "![Session chart](/tmp/charts/session.png)",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: expect.arrayContaining([
+          expect.objectContaining({
+            type: "image",
+            url: "data:image/png;base64,AQID",
+          }),
+        ]),
+      }),
+    ]);
+  });
+
   it("delivers resolved images for an image-only assistant completion", async () => {
     const resolveAssistantMessageImages = vi.fn(async () => [{
       type: "image" as const,
@@ -19223,313 +19348,238 @@ describe("MessagingController", () => {
     ]);
   });
 
-  it("posts transient monitor progress through Working Updates at Show All", async () => {
-    const harness = await createHarness({
-      toolUpdateDefaultMode: "show_all",
-    });
-    await bindThread(harness);
-    harness.delivered.length = 0;
-
-    await harness.controller.handleBackendEvent({
-      backend: "codex",
-      notification: {
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "monitor:monitor-1",
-          item: {
-            id: "monitor-1:progress:1000",
-            type: "agentMessage",
-            text: "Monitor · PR checks\nLint is still running.",
-            data: {
-              source: "pwragent_task_monitor",
-              monitorId: "monitor-1",
-              transient: true,
-            },
-          },
-        },
-      },
-    } satisfies AgentEvent);
-
-    expect(harness.delivered).toContainEqual(
-      expect.objectContaining({
-        kind: "message",
-        role: "assistant",
-        parts: [
-          expect.objectContaining({
-            text: "Monitor · PR checks\nLint is still running.",
-          }),
-        ],
-      }),
-    );
-  });
-
-  it("finalizes a Slack working card before task-monitor state is cleared", async () => {
-    const harness = await createHarness({
-      channel: "slack",
-      toolUpdateDefaultMode: "show_all",
-    });
-    await harness.store.upsertBinding({
-      id: "binding-slack-monitor",
-      authorizedActorIds: ["user-1"],
-      backend: "codex",
-      channel: {
-        channel: "slack",
-        conversation: {
-          id: "C012MONITOR",
-          kind: "thread",
-          parentId: "1700000000.000001",
-          workspaceId: "T012WORKSPACE",
-        },
-      },
-      createdAt: 1000,
-      routingState: {
-        opaque: {
-          channelId: "C012MONITOR",
-          threadTs: "1700000000.000001",
-        },
-      },
-      targetKind: "thread",
-      threadId: "thread-1",
-      updatedAt: 1000,
-    });
-
-    await harness.controller.handleBackendEvent({
-      backend: "codex",
-      notification: {
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "monitor:monitor-1",
-          item: {
-            id: "monitor-1:progress:1000",
-            type: "agentMessage",
-            text: "Monitor · PR checks\nLint is still running.",
-            data: {
-              source: "pwragent_task_monitor",
-              monitorId: "monitor-1",
-              transient: true,
-            },
-          },
-        },
-      },
-    } satisfies AgentEvent);
-    await harness.controller.handleBackendEvent({
-      backend: "codex",
-      notification: {
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "monitor:monitor-1",
-          item: {
-            id: "monitor-1:completion:2000",
-            type: "taskMonitorCompletion",
-            data: {
-              source: "pwragent_task_monitor",
-              monitorId: "monitor-1",
-              outcome: "success",
-              transient: false,
-            },
-          },
-        },
-      },
-    } satisfies AgentEvent);
-
-    const cards = harness.delivered.filter(
-      (intent): intent is Extract<MessagingSurfaceIntent, { kind: "working_card" }> =>
-        intent.kind === "working_card",
-    );
-    expect(cards).toHaveLength(2);
-    expect(cards[0]?.card).toMatchObject({ isFinal: false, phase: "working" });
-    expect(cards[1]?.card).toMatchObject({ isFinal: true, phase: "completed" });
-  });
-
-  it("discards a coalesced monitor heartbeat when the monitor completes", async () => {
-    vi.useFakeTimers();
-    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
-    try {
-      harness = await createHarness({
-        toolUpdateDefaultMode: "show_less",
+  describe.each(["telegram", "discord", "slack"] as const)("monitor messaging eligibility on %s", (channel) => {
+    async function monitorHarness(mode: MessagingToolUpdateMode) {
+      const harness = await createHarness({ channel, toolUpdateDefaultMode: mode, now: () => Date.now() });
+      await harness.store.upsertBinding({
+        id: "binding-monitor",
+        authorizedActorIds: ["user-1"],
+        backend: "codex",
+        channel: { channel, conversation: { id: "conversation-1", kind: "dm" } },
+        createdAt: 1000,
+        targetKind: "thread",
+        threadId: "thread-1",
+        updatedAt: 1000,
       });
-      await bindThread(harness);
-      harness.delivered.length = 0;
-
-      await harness.controller.handleBackendEvent({
-        backend: "codex",
-        notification: {
-          method: "item/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "monitor:monitor-1",
-            item: {
-              id: "monitor-1:progress:1000",
-              type: "agentMessage",
-              text: "Monitor · PR checks\nTests are still running.",
-              data: {
-                source: "pwragent_task_monitor",
-                monitorId: "monitor-1",
-                transient: true,
-              },
-            },
-          },
-        },
-      } satisfies AgentEvent);
-      expect(harness.delivered).toEqual([]);
-
-      await harness.controller.handleBackendEvent({
-        backend: "codex",
-        notification: {
-          method: "item/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "monitor:monitor-1",
-            item: {
-              id: "monitor-1:completion:2000",
-              type: "taskMonitorCompletion",
-              data: {
-                source: "pwragent_task_monitor",
-                monitorId: "monitor-1",
-                outcome: "success",
-                transient: false,
-              },
-            },
-          },
-        },
-      } satisfies AgentEvent);
-      await vi.advanceTimersByTimeAsync(60_000);
-
-      expect(harness.delivered).toEqual([]);
-    } finally {
-      harness?.controller.dispose();
-      vi.useRealTimers();
+      return harness;
     }
-  });
 
-  it("cancels a released monitor heartbeat when the monitor completes", async () => {
-    vi.useFakeTimers();
-    let now = 0;
-    let finishFirstAttempt:
-      | ((result: MessagingDeliveryResult) => void)
-      | undefined;
-    let signalFirstAttemptStarted: (() => void) | undefined;
-    const firstAttemptStarted = new Promise<void>((resolve) => {
-      signalFirstAttemptStarted = resolve;
-    });
-    const scope: MessagingDeliveryScope = {
-      platform: "telegram",
-      id: "telegram:dm:chat-1",
-      kind: "dm",
-      budget: { limit: 10, intervalMs: 60_000, reserved: 1 },
-    };
-    const attempts: MessagingSurfaceIntent[] = [];
-    let holdNextAttempt = false;
-    const deliveryBudget = new MessagingDeliveryBudget({ now: () => now });
-    let harness: Awaited<ReturnType<typeof createHarness>> | undefined;
-    try {
-      harness = await createHarness({
-        deliveryBudget,
-        now: () => now,
-        resolveDeliveryScope: () => scope,
-        deliver: async (intent) => {
-          attempts.push(intent);
-          if (holdNextAttempt) {
-            holdNextAttempt = false;
-            signalFirstAttemptStarted?.();
-            return await new Promise<MessagingDeliveryResult>((resolve) => {
-              finishFirstAttempt = resolve;
+    function monitorEvent(type: string, id: string, data: Record<string, unknown> = {}): AgentEvent {
+      return {
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "monitor:monitor-1",
+            item: {
+              id,
+              type,
+              text: `Private monitor report ${id}`,
+              data: { source: "pwragent_task_monitor", monitorId: "monitor-1", task: "PR checks", ...data },
+            },
+          },
+        },
+      };
+    }
+
+    it.each(["show_none", "show_less", "show_some", "show_more", "show_all"] as const)(
+      "never forwards private progress or sub-agent notes at %s",
+      async (mode) => {
+        vi.useFakeTimers();
+        const harness = await monitorHarness(mode);
+        try {
+          // The reported one-minute cadence. Every window that could release
+          // a notice (tool-update batching, monitor interval, slow-mode
+          // recovery) is at most five minutes, so eleven heartbeats cross the
+          // longest of them twice; more minutes only repeat the same state.
+          for (let index = 0; index < 11; index += 1) {
+            await harness.controller.handleBackendEvent(monitorEvent("agentMessage", `heartbeat-${index}`, { transient: true }));
+            await harness.controller.handleBackendEvent({
+              backend: "codex",
+              notification: { method: "thread/subAgents/updated", params: { threadId: "thread-1" } },
             });
+            await vi.advanceTimersByTimeAsync(60_000);
           }
-          return {
-            channel: "telegram",
-            deliveredAt: now,
-            outcome: "presented",
-            surface: {
-              channel: "telegram",
-              id: `surface:${intent.id}`,
-            },
-          };
-        },
-        sleepUntil: async () => {
-          throw new Error("Completed monitor delivery should not retry");
-        },
-        toolUpdateDefaultMode: "show_less",
-      });
-      await bindThread(harness);
-      attempts.length = 0;
-      holdNextAttempt = true;
-      now = 2000;
+          // A persisted ACP synthetic completion is still a monitor notice,
+          // not the parent's final answer.
+          await harness.controller.handleBackendEvent(monitorEvent("agentMessage", "synthetic-final", { transient: false }));
+          await harness.controller.handleBackendEvent(monitorEvent("taskMonitorUsage", "usage"));
+          await vi.advanceTimersByTimeAsync(60_000);
+          expect(harness.delivered).toHaveLength(0);
+        } finally {
+          harness.controller.dispose();
+          await harness.controller.whenToolUpdatesSettled();
+          vi.useRealTimers();
+        }
+      },
+    );
 
-      await harness.controller.handleBackendEvent({
-        backend: "codex",
-        notification: {
-          method: "item/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "monitor:monitor-1",
-            item: {
-              id: "monitor-1:progress:1000",
-              type: "agentMessage",
-              text: "Monitor · PR checks\nTests are still running.",
-              data: {
-                source: "pwragent_task_monitor",
-                monitorId: "monitor-1",
-                transient: true,
-              },
-            },
+    it.each(["show_none", "show_less", "show_some", "show_more", "show_all"] as const)(
+      "routes only created, success, and failure lifecycle notices through %s",
+      async (mode) => {
+        vi.useFakeTimers();
+        const harness = await monitorHarness(mode);
+        try {
+          await harness.controller.handleBackendEvent(monitorEvent("taskMonitorCreated", "created"));
+          await harness.controller.handleBackendEvent(monitorEvent("taskMonitorCompletion", "success", { outcome: "success" }));
+          await harness.controller.handleBackendEvent(monitorEvent("taskMonitorCompletion", "failure", { outcome: "failure" }));
+          await harness.controller.handleBackendEvent(monitorEvent("taskMonitorCompletion", "cancelled", { outcome: "cancelled" }));
+          if (mode === "show_none" || mode === "show_less") {
+            expect(harness.delivered).toEqual([]);
+          } else {
+            expect(harness.delivered).toHaveLength(3);
+          }
+          await vi.advanceTimersByTimeAsync(60_000);
+          await vi.waitFor(() => {
+            expect(harness.delivered).toHaveLength(mode === "show_none" ? 0 : mode === "show_less" ? 1 : 3);
+          });
+          for (const intent of harness.delivered) {
+            expect(messagingDeliveryPriority(intent)).toBe("tool_progress");
+            if (intent.kind === "working_card") {
+              expect(intent.card.isFinal).toBe(false);
+            }
+          }
+        } finally {
+          // The Less notice comes from a flush timer that no test step awaits,
+          // and its store write can still be running after `delivered` grows.
+          // Drain it before afterEach removes the store directory.
+          harness.controller.dispose();
+          await harness.controller.whenToolUpdatesSettled();
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it.each([false, true])("withholds lifecycle notices owned by automation (suppressBindingBroadcast=%s)", async (suppressBindingBroadcast) => {
+      const harness = await monitorHarness("show_all");
+      try {
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: { threadId: "thread-1", queueEntryId: "headless:run-1", origin: "automation", status: "started", turnId: "automation-turn", suppressBindingBroadcast },
           },
-        },
-      } satisfies AgentEvent);
-      expect(attempts).toEqual([]);
-      vi.advanceTimersByTime(60_000);
-      await firstAttemptStarted;
-
-      await harness.controller.handleBackendEvent({
-        backend: "codex",
-        notification: {
-          method: "item/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "monitor:monitor-1",
-            item: {
-              id: "monitor-1:completion:2000",
-              type: "taskMonitorCompletion",
-              data: {
-                source: "pwragent_task_monitor",
-                monitorId: "monitor-1",
-                outcome: "success",
-                transient: false,
-              },
-            },
+        });
+        harness.delivered.length = 0;
+        await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "automation-turn" }));
+        expect(harness.delivered).toHaveLength(0);
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: { threadId: "thread-1", queueEntryId: "headless:run-1", origin: "automation", status: "terminal", turnId: "automation-turn", suppressBindingBroadcast, terminalStatus: "turn/completed", finalText: "Expected automation final" },
           },
-        },
-      } satisfies AgentEvent);
-      finishFirstAttempt?.({
-        channel: "telegram",
-        deliveredAt: now,
-        errorMessage: "Too Many Requests",
-        outcome: "failed",
-        rateLimit: {
-          scope,
-          retryAfterMs: 5_000,
-          observedAt: now,
-          message: "Too Many Requests",
-          retryable: true,
-        },
-      });
-      await vi.waitFor(() => {
-        expect(attempts).toHaveLength(1);
-      });
-      await Promise.resolve();
+        });
+        harness.delivered.length = 0;
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: { method: "turn/started", params: { threadId: "thread-1", turnId: "operator-turn", turn: { id: "operator-turn" } } },
+        });
+        harness.delivered.length = 0;
+        // The original automation has been forgotten; its monitor still owns
+        // the same suppression decision after an operator turn starts.
+        await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "automation-turn", outcome: "success" }));
+        await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ parentTurnId: "automation-turn", outcome: "failure" }));
+        expect(harness.delivered).toHaveLength(0);
+        await harness.controller.handleBackendEvent(buildMonitorLifecycleEvent({ monitorId: "operator-monitor", parentTurnId: "operator-turn" }));
+        expect(harness.delivered).toHaveLength(1);
+      } finally {
+        harness.controller.dispose();
+      }
+    });
 
-      expect(attempts).toHaveLength(1);
-      expect(attempts[0]).toMatchObject({
-        kind: "message",
-        role: "assistant",
-      });
-    } finally {
-      harness?.controller.dispose();
-      vi.useRealTimers();
-    }
+    it("coalesces repeated standalone lifecycle notices at Some without a completion bypass", async () => {
+      vi.useFakeTimers();
+      const harness = await monitorHarness("show_some");
+      try {
+        for (let index = 0; index < 10; index += 1) {
+          const event = monitorEvent("taskMonitorCompletion", `success-${index}`, { outcome: "success", monitorId: `monitor-${index}` });
+          await harness.controller.handleBackendEvent(event);
+          await harness.controller.handleBackendEvent(event);
+        }
+        expect(harness.delivered).toHaveLength(3);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.waitFor(() => expect(harness.delivered).toHaveLength(4));
+        for (let index = 10; index < 20; index += 1) {
+          await harness.controller.handleBackendEvent(monitorEvent("taskMonitorCompletion", `success-${index}`, { outcome: "success", monitorId: `monitor-${index}` }));
+        }
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(harness.delivered).toHaveLength(4);
+      } finally {
+        harness.controller.dispose();
+        await harness.controller.whenToolUpdatesSettled();
+        vi.useRealTimers();
+      }
+    });
+
+    it("shares the Some budget with the parent and does not terminal-flush on monitor success", async () => {
+      vi.useFakeTimers();
+      const harness = await monitorHarness("show_some");
+      try {
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: { method: "turn/started", params: { threadId: "thread-1", turn: { id: "parent-turn" } } },
+        });
+        harness.delivered.length = 0;
+        for (let index = 0; index < 3; index += 1) {
+          await harness.controller.handleBackendEvent({
+            backend: "codex",
+            notification: {
+              method: "item/completed",
+              params: { threadId: "thread-1", turnId: "parent-turn", item: { id: `tool-${index}`, type: "commandExecution", command: "git status", status: "completed" } },
+            },
+          });
+        }
+        expect(harness.delivered).toHaveLength(3);
+        await harness.controller.handleBackendEvent(monitorEvent("taskMonitorCompletion", "success", { outcome: "success" }));
+        expect(harness.delivered).toHaveLength(3);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.waitFor(() => expect(harness.delivered).toHaveLength(4));
+        expect(messagingDeliveryPriority(harness.delivered[3]!)).toBe("tool_progress");
+
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: { threadId: "thread-1", turnId: "monitor:monitor-1", turn: { id: "monitor:monitor-1", status: "completed", output: [{ type: "text", text: "Monitor finished" }] } },
+          },
+        });
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: { threadId: "unbound-child", turnId: "child-turn", turn: { id: "child-turn", status: "completed", output: [{ type: "text", text: "Private child final" }] } },
+          },
+        });
+        expect(harness.delivered).toHaveLength(4);
+
+        // Both a parent item final and the terminal output replay remain valid.
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: { threadId: "thread-1", turnId: "parent-turn", item: { id: "parent-final", type: "agentMessage", phase: "final", text: "The release is ready." } },
+          },
+        });
+        await harness.controller.handleBackendEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: { threadId: "thread-1", turnId: "parent-turn", turn: { id: "parent-turn", status: "completed", output: [
+              { type: "text", text: "The release is ready." },
+            ] } },
+          },
+        });
+        const texts = harness.delivered.flatMap((intent) => intent.kind === "message"
+          ? intent.parts.flatMap((part) => "text" in part ? [part.text] : []) : []);
+        expect(texts.filter((text) => text === "The release is ready.")).toHaveLength(1);
+      } finally {
+        harness.controller.dispose();
+        await harness.controller.whenToolUpdatesSettled();
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("does not re-post buffered text when deltas arrive after the turn is terminal", async () => {
@@ -20318,6 +20368,80 @@ describe("MessagingController", () => {
       ],
     });
   });
+
+  it.each(["telegram", "discord"] as const)(
+    "does not duplicate restored pending requests on %s", async (channel) => {
+      const harness = await createHarness({ channel });
+      await harness.store.upsertBinding({
+        id: `binding:${channel}:thread-1`,
+        authorizedActorIds: ["user-1"],
+        backend: "codex",
+        channel: { channel, conversation: { id: "chat-1", kind: "dm" } },
+        createdAt: 1000,
+        targetKind: "agent_thread",
+        threadId: "thread-1",
+        updatedAt: 1000,
+      });
+      const questionnaire: AppServerPendingRequestNotification = {
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: "thread-1",
+          requestId: "questionnaire-1",
+          questions: [{
+            id: "approach",
+            header: "Approach",
+            question: "How should I proceed?",
+            isOther: true,
+            isSecret: false,
+            options: [],
+          }],
+        },
+      };
+      const login: AppServerPendingRequestNotification = {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          requestId: "login-1",
+          serverName: "github",
+          mode: "url",
+          _meta: null,
+          message: "Reconnect GitHub.",
+          url: "https://example.test/login",
+          elicitationId: "elicitation-1",
+        },
+      };
+      // Duplicate notifications can overlap while the first intent is stored.
+      await Promise.all([
+        harness.controller.handleBackendPendingRequest("codex", questionnaire),
+        harness.controller.handleBackendPendingRequest("codex", questionnaire),
+      ]);
+      await harness.controller.handleBackendPendingRequest("codex", login);
+      await harness.controller.handleBackendPendingRequest("codex", login);
+      const prompts = harness.delivered.filter((intent) => intent.requestContext);
+      expect(prompts.map((intent) => intent.requestContext?.requestId))
+        .toEqual(["questionnaire-1", "login-1"]);
+      await harness.controller.handleBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "serverRequest/resolved",
+          params: { threadId: "thread-1", requestId: "login-1" },
+        },
+      });
+      await harness.controller.handleBackendPendingRequest("codex", questionnaire);
+
+      expect(harness.delivered.filter((intent) =>
+        intent.requestContext?.requestId === "questionnaire-1"
+      )).toHaveLength(1);
+      const retained = await harness.store.findActivePendingIntentsForRequest({
+        backend: "codex",
+        threadId: "thread-1",
+        requestId: "questionnaire-1",
+        now: 1000,
+      });
+      expect(retained).toHaveLength(1);
+      expect(retained[0]?.id).toBe(prompts[0]?.id);
+    },
+  );
 
   it("presents and submits MCP login requests even when Working Updates is None", async () => {
     const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
@@ -24740,6 +24864,70 @@ describe("MessagingController", () => {
     });
   });
 
+  it("locks and unlocks the bound thread from the status card's toggle", async () => {
+    const navigation = buildNavigationSnapshot();
+    const harness = await createHarness({ navigation });
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:lock" }));
+    expect(harness.setThreadLock).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      locked: true,
+    });
+
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      lock: { note: "Parked", lockedAt: 1_000, source: "operator" },
+    };
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/lock/updated",
+        params: { threadId: "thread-1", lock: navigation.threads[0].lock },
+      },
+    });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      text: expect.stringContaining("Locked: Parked"),
+      actions: expect.arrayContaining([expect.objectContaining({ id: "status:lock", label: "Unlock" })]),
+    });
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId: "status:lock" }));
+    expect(harness.setThreadLock).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      locked: false,
+    });
+
+    // A button carries the state it was drawn for: a stale or repeated Lock
+    // on a now-locked thread locks again rather than unlocking it.
+    await harness.controller.handleInboundEvent(
+      buildCallbackEvent({ actionId: "status:lock", value: { locked: true } }),
+    );
+    expect(harness.setThreadLock).toHaveBeenLastCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      locked: true,
+    });
+  });
+
+  it("reports a lock refusal whose note reads like a busy thread instead of queueing it", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    const refusal = "This thread is locked: Repair in progress in another agent. Unlock it before starting a turn.";
+    harness.startTurn.mockRejectedValueOnce(new Error(refusal));
+
+    await harness.controller.handleInboundEvent(buildTextEvent("keep going"));
+
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Turn could not start",
+      body: refusal,
+    });
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+  });
+
   it("starts compaction through the backend bridge", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -25556,6 +25744,20 @@ describe("RBAC capability enforcement", () => {
     ).toEqual({ owns: true, allowed: true });
   });
 
+  it.each([true, false])("requires the rename permission for self-renaming (granted: %s)", async (granted) => {
+    const harness = await createHarness({ rbacPolicy: rbacProviderGranting([
+      "message.reply",
+      ...(granted ? ["thread.settings.name" as const] : ["tools.thread_inspection" as const]),
+    ]) });
+    await driveOneTurn(harness, "rename this thread");
+    expect(harness.controller.checkDynamicToolPermission({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1",
+      category: "thread_inspection", tool: "rename_current_thread", arguments: { title: "New title" },
+    })).toEqual(granted
+      ? { owns: true, allowed: true }
+      : { owns: true, allowed: false, permission: "thread.settings.name" });
+  });
+
   it("gates mutate_thread per field, including the full-access double-gate", async () => {
     // Power User + Tools: can change settings, cannot escalate to full access.
     const harness = await createHarness({
@@ -25940,20 +26142,19 @@ describe("send_messaging_file agent tool", () => {
     // several full copies of it in the main process. `url` stays empty so an
     // adapter that has not been taught about `data` skips the part rather
     // than treating a placeholder as a remote image URL.
-    expect(harness.delivered).toContainEqual(
-      expect.objectContaining({
-        kind: "message",
-        parts: [
-          expect.objectContaining({
-            type: "image",
-            url: "",
-            data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-            mimeType: "image/png",
-            name: "shot.png",
-          }),
-        ],
-      }),
-    );
+    const imagePart = harness.delivered
+      .flatMap((intent) => intent.kind === "message" ? intent.parts : [])
+      .find((part) => part.type === "image");
+    expect(imagePart).toMatchObject({
+      type: "image",
+      url: "",
+      data: expect.any(Uint8Array),
+      mimeType: "image/png",
+      name: "shot.png",
+    });
+    expect(imagePart?.data && Array.from(imagePart.data)).toEqual([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
   });
 
   it("does not re-post a tool-sent image from the final assistant message", async () => {
@@ -26352,6 +26553,7 @@ async function createHarness<
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
+  setThreadLock: ReturnType<typeof vi.fn>;
   cancelThreadExecutionModeQueue: ReturnType<typeof vi.fn>;
   delivered: MessagingSurfaceIntent[];
   ensureDirectoryLaunchpad: ReturnType<typeof vi.fn>;
@@ -26658,6 +26860,10 @@ async function createHarness<
     turnId: "compact-turn-1",
     itemId: "compact-item-1",
   }));
+  const setThreadLock = vi.fn(async (request: { backend?: AppServerBackendKind; threadId: string }) => ({
+    backend: request.backend ?? "codex",
+    threadId: request.threadId,
+  }));
   const interruptTurn = vi.fn(async (request) => request);
   const listSkills =
     options?.listSkills === false
@@ -26856,6 +27062,7 @@ async function createHarness<
   const backend: MessagingBackendBridge = {
     cancelScheduledThreadAction,
     compactThread,
+    setThreadLock,
     cancelThreadExecutionModeQueue,
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
@@ -26946,6 +27153,7 @@ async function createHarness<
   return {
     controller,
     compactThread,
+    setThreadLock,
     cancelThreadExecutionModeQueue,
     delivered,
     ensureDirectoryLaunchpad,
@@ -26980,6 +27188,35 @@ async function createHarness<
     submitServerRequest,
     updateDirectoryLaunchpad,
     store,
+  };
+}
+
+function buildMonitorLifecycleEvent(params: {
+  monitorId?: string;
+  parentTurnId?: string;
+  outcome?: "success" | "failure";
+}): AgentEvent {
+  const monitorId = params.monitorId ?? "private-monitor";
+  return {
+    backend: "codex",
+    notification: {
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: `monitor:${monitorId}`,
+        item: {
+          id: `${monitorId}:${params.outcome ?? "created"}`,
+          type: params.outcome ? "taskMonitorCompletion" : "taskMonitorCreated",
+          data: {
+            source: "pwragent_task_monitor",
+            monitorId,
+            ...(params.parentTurnId ? { parentTurnId: params.parentTurnId } : {}),
+            task: "Secret monitor task",
+            ...(params.outcome ? { outcome: params.outcome } : {}),
+          },
+        },
+      },
+    },
   };
 }
 

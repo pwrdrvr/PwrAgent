@@ -71,6 +71,29 @@ const thread = {
 } satisfies NavigationThreadSummary;
 
 describe("ACP execution mode labels", () => {
+  it("keeps Grok Auto permissions distinct from Default planning mode", () => {
+    const grok = {
+      ...acpBackend,
+      kind: "acp:grok",
+      acp: {
+        ...acpBackend.acp,
+        registryId: "grok",
+        runtime: {
+          ...acpBackend.acp.runtime,
+          configOptions: [{
+            ...acpBackend.acp.runtime.configOptions[0],
+            id: "permission_mode",
+            values: [{ value: "default", label: "Default Access" }, { value: "auto", label: "Auto" }],
+          }],
+        },
+      },
+    } satisfies BackendSummary;
+    expect(getAcpRuntimeModeControl(grok, {
+      ...thread,
+      acpRuntime: { currentModeId: "default", configValues: { permission_mode: "auto" } },
+    })).toMatchObject({ optionId: "permission_mode", value: "auto" });
+  });
+
   it("identifies ACP runtime modes that need the privileged execution envelope", () => {
     expect(acpRuntimeModeRequiresFullAccess("yolo")).toBe(true);
     expect(acpRuntimeModeRequiresFullAccess("YOLO")).toBe(true);

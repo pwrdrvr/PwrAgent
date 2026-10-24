@@ -3,6 +3,7 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { stageNativePrebuilds } from "./stage-native-prebuilds.mjs";
 import { bundledGitFiles } from "./verify-bundled-git.mjs";
 
 const ARCH_NAMES = { 0: "ia32", 1: "x64", 2: "arm", 3: "arm64" };
@@ -26,6 +27,7 @@ export default function beforePack(context) {
     throw new Error("Bundled Git packaging requires a host matching the target platform.");
   }
   const appDir = context.packager.info.appDir;
+  stageNativePrebuilds({ appDir, platform, arch });
   const dugiteDir = join(appDir, "node_modules", "dugite");
   const script = join(dugiteDir, "script", "download-git.js");
   if (!existsSync(script)) throw new Error(`Missing Dugite downloader: ${script}`);

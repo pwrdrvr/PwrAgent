@@ -276,6 +276,32 @@ describe("Cloudflare setup flow", () => {
     expect(statement).not.toHaveTextContent("moves from");
   });
 
+  it.each(["oauth", "service-token", "mtls"] as const)(
+    "requires an administration token for credential exports only (%s)", async (gate) => {
+      const published: CloudflareSetupStatus = {
+        ...connected, connected: false, gate, tunnelId: "t", hostname: "federation.example.com", phase: "Published",
+      };
+      const call = vi.fn(async (_request: CloudflareSetupRequest) => published);
+      render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+        listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+      await screen.findByLabelText("Cloudflare client name");
+      fireEvent.change(screen.getByLabelText("Cloudflare client name"), { target: { value: "Travel laptop" } });
+      fireEvent.change(screen.getByLabelText("Cloudflare client transfer password"), { target: { value: "long-enough-password" } });
+      const button = screen.getByRole("button", { name: gate === "oauth" ? "Save client setup file" : "Issue & save client setup" });
+      if (gate === "oauth") {
+        expect(button).toBeEnabled();
+        expect(screen.queryByText(/Still needed: a connected Cloudflare account \(step 2\)/)).not.toBeInTheDocument();
+        fireEvent.click(button);
+        await waitFor(() => expect(call).toHaveBeenCalledWith({
+          action: "export-client", label: "Travel laptop", password: "long-enough-password", inviteTtlHours: 1,
+        }));
+      } else {
+        expect(button).toBeDisabled();
+        expect(screen.getByText(/Still needed: a connected Cloudflare account \(step 2\)/)).toBeInTheDocument();
+      }
+    },
+  );
+
   it("passes the chosen invite lifetime when issuing a client", async () => {
     const events: CloudflareSetupRequest[] = [];
     const published = { ...connected, gate: "service-token" as const, tunnelId: "t", hostname: "federation.example.com", phase: "Published" };
@@ -391,6 +417,23 @@ describe("Cloudflare setup flow", () => {
     finish({ ...connected, signIn: { ...signIn, state: "signed-in" } });
     fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/^Cloudflare refused\.$/);
+  });
+
+  it("dates a signed-in grant when its setup file stated the lifetime", async () => {
+    const signInExpiresAt = "2026-10-21T15:30:00.000Z";
+    const signIn = { endpoint: "wss://federation.example.com", state: "signed-in" as const, signInExpiresAt };
+    const call = vi.fn(async (_request: CloudflareSetupRequest): Promise<CloudflareSetupStatus> => ({ ...connected, signIn }));
+    const view = render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect this client" }));
+    expect(await screen.findByText(new RegExp(`Access refreshes automatically until ${new Date(signInExpiresAt).toLocaleString()}\\. PwrAgent asks you to sign in again before then`)))
+      .toBeInTheDocument();
+    view.unmount();
+    call.mockImplementation(async () => ({ ...connected, signIn: { ...signIn, signInExpiresAt: undefined } }));
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
+      listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Connect this client" }));
+    expect(await screen.findByText(/When this sign-in expires or Access revokes it, PwrAgent asks you to sign in again\./)).toBeInTheDocument();
   });
 
   it("lists what a stopped creation left and offers to resume on the moved port or start over", async () => {

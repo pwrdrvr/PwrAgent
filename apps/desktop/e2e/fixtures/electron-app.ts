@@ -7,6 +7,8 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import type {
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -257,6 +259,8 @@ type LaunchElectronAppParams = {
    */
   appearance?: {
     theme?: DesktopAppearanceTheme;
+    darkTheme?: DesktopDarkTheme;
+    lightTheme?: DesktopLightTheme;
     density?: DesktopAppearanceDensity;
   };
   /**
@@ -381,6 +385,8 @@ export async function launchElectronApp(
         confirmQuitWithInProgressThreads: false,
         appearance: {
           theme: params.appearance?.theme ?? "dark",
+          darkTheme: params.appearance?.darkTheme ?? "tangerine-dark",
+          lightTheme: params.appearance?.lightTheme ?? "tangerine-light",
           density: params.appearance?.density ?? "mission-control",
         },
       },
@@ -1215,16 +1221,18 @@ export async function closeElectronApplication(
     requestQuit: async () => {
       await withTimeout(
         electronApp.evaluate(({ app }) => {
-          // Fixture teardown has already decided to quit. Use the app's
-          // immediate, bounded shutdown path so connected peers cannot open
-          // an interactive countdown and exhaust the fixture close budget.
-          // Emit inside Electron rather than killing its Windows launcher.
-          if (process.listenerCount("SIGTERM") > 0) {
-            process.emit("SIGTERM", "SIGTERM");
-          } else {
-            // Startup may fail before the app installs its shutdown handlers.
-            app.quit();
-          }
+          // Let Playwright flush its context before app.quit() removes the
+          // renderer and stops the inspector. Starting shutdown in this RPC
+          // races that preparation and can strand electronApp.close().
+          // Authorize immediate quit ahead of the product's before-quit
+          // listener so connected peers cannot open a confirmation dialog.
+          app.prependOnceListener("before-quit", () => {
+            if (process.listenerCount("SIGTERM") > 0) {
+              process.emit("SIGTERM", "SIGTERM");
+            }
+            // Before startup installs the signal handler, Playwright's own
+            // app.quit() supplies the normal native shutdown path.
+          });
         }),
         ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
         "Electron quit evaluation timed out",

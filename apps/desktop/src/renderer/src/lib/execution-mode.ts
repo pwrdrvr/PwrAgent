@@ -1,9 +1,11 @@
 import type {
+  AppServerBackendKind,
   BackendSummary,
   NavigationLaunchpadDraft,
   NavigationThreadSummary,
   ThreadExecutionMode,
 } from "@pwragent/shared";
+import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
 
 export function formatExecutionModeLabel(mode?: ThreadExecutionMode): string {
   return mode === "auto" ? "Auto" : mode === "full-access" ? "Full Access" : "Default Access";
@@ -18,6 +20,26 @@ export function describeCodexExecutionMode(mode: ThreadExecutionMode): string {
     default:
       return "Workspace sandbox; asks you to approve additional access.";
   }
+}
+
+export function describeClaudeExecutionMode(mode: ThreadExecutionMode): string {
+  switch (mode) {
+    case "auto":
+      return "Claude Code's auto mode decides routine permission requests.";
+    case "full-access":
+      return "Runs without permission prompts.";
+    default:
+      return "Asks you to approve edits and commands.";
+  }
+}
+
+export function describeExecutionModeForBackend(
+  backend: AppServerBackendKind,
+  mode: ThreadExecutionMode,
+): string {
+  return backend === "claude"
+    ? describeClaudeExecutionMode(mode)
+    : describeCodexExecutionMode(mode);
 }
 
 export function acpRuntimeModeRequiresFullAccess(value: string): boolean {
@@ -41,7 +63,7 @@ export function getAcpRuntimeModeControl(
     return undefined;
   }
 
-  const modeConfigOption = runtime.configOptions?.find(
+  const modeConfigOption = findAcpPermissionModeConfigOption(runtime) ?? runtime.configOptions?.find(
     (option) => option.category === "mode" && option.values.length > 0,
   );
   if (modeConfigOption) {
@@ -49,6 +71,7 @@ export function getAcpRuntimeModeControl(
       return undefined;
     }
     const currentModeValue =
+      modeConfigOption.id !== findAcpPermissionModeConfigOption(runtime)?.id &&
       settings?.acpRuntime?.currentModeId &&
       modeConfigOption.values.some(
         (option) => option.value === settings.acpRuntime?.currentModeId,

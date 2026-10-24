@@ -84,7 +84,7 @@ type PrAutoDispatchStore = {
     ownerId: string;
   }): Promise<
     | { status: "ready"; attemptCount: number; record: PrAutoDispatchPendingRecord }
-    | { status: "disabled" | "stale" | "attempt-limit" }
+    | { status: "disabled" | "locked" | "stale" | "attempt-limit" }
   >;
   reserveThreadPrAutoDispatchBudget(params: {
     backend: AppServerBackendKind;
@@ -502,7 +502,9 @@ export class PrAutoDispatchCoordinator {
     });
     if (begin.status !== "ready") {
       activity(describePrRepairDecision(begin.status), "warning");
-      if (begin.status === "disabled") {
+      // A lock parks the thread for another agent, so its repair is
+      // dropped rather than retried once the thread is unlocked.
+      if (begin.status === "disabled" || begin.status === "locked") {
         await this.options.store.cancelThreadPrAutoDispatch({
           ...identity,
           fingerprint,
@@ -550,8 +552,9 @@ export class PrAutoDispatchCoordinator {
     }
 
     const stopLeaseHeartbeat = this.startLeaseHeartbeat(identity, fingerprint);
+    let submission: Awaited<ReturnType<PrAutoDispatchRegistry["submitTurnIfIdle"]>>;
     try {
-      const submission = await this.options.registry.submitTurnIfIdle({
+      submission = await this.options.registry.submitTurnIfIdle({
         ...identity,
         input: [{
           type: "text",
@@ -578,26 +581,7 @@ export class PrAutoDispatchCoordinator {
           },
         },
       });
-      if (submission.status === "busy") {
-        if (await this.restoreAfterBusy(identity, fingerprint, now)) {
-          activity("Thread busy: repair refunded, retrying in 30 seconds", "warning", { delta: 1 });
-        }
-        return;
-      }
-      activity(`Repair started (attempt ${begin.attemptCount}/${MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT})`, "active");
-      const completion = await this.options.store.finishThreadPrAutoDispatch({
-        ...identity,
-        budgetConfig: this.budgetConfig(),
-        fingerprint,
-        ownerId: this.ownerId,
-        status: "dispatched",
-        now: this.now(),
-      });
-      if (completion?.budget.paused) {
-        await this.notifyBudgetStatus(completion.budget);
-      }
-      await this.notifyPending(identity, null);
-    } catch {
+    } catch (error) {
       const completion = await this.options.store.finishThreadPrAutoDispatch({
         ...identity,
         budgetConfig: this.budgetConfig(),
@@ -607,15 +591,39 @@ export class PrAutoDispatchCoordinator {
         status: "failed",
         now: this.now(),
       });
-      activity(completion ? "Repair submission failed: repair refunded" : "Repair submission failed; claim ownership changed",
+      const reason = error instanceof Error ? error.message : String(error);
+      activity(`${completion ? "Repair submission failed: repair and attempt refunded" : "Repair submission failed; claim ownership changed"}: ${reason}`,
         "error", completion ? { delta: 1, availableTokens: completion.budget.availableTokens } : undefined);
       if (completion?.budget.paused) {
         await this.notifyBudgetStatus(completion.budget);
       }
       await this.notifyPending(identity, null);
+      return;
     } finally {
       stopLeaseHeartbeat();
     }
+
+    if (submission.status === "busy") {
+      if (await this.restoreAfterBusy(identity, fingerprint, this.now())) {
+        activity("Thread busy: repair refunded, retrying in 30 seconds", "warning", { delta: 1 });
+      }
+      return;
+    }
+    // Submission succeeded. Persistence or notification failures after this
+    // boundary must not be reported or refunded as rejected submissions.
+    const completion = await this.options.store.finishThreadPrAutoDispatch({
+      ...identity,
+      budgetConfig: this.budgetConfig(),
+      fingerprint,
+      ownerId: this.ownerId,
+      status: "dispatched",
+      now: this.now(),
+    });
+    activity(`Repair started (attempt ${begin.attemptCount}/${MAX_PR_AUTO_DISPATCH_ATTEMPTS_PER_INCIDENT})`, "active");
+    if (completion?.budget.paused) {
+      await this.notifyBudgetStatus(completion.budget);
+    }
+    await this.notifyPending(identity, null);
   }
 
   private async restoreAfterBusy(

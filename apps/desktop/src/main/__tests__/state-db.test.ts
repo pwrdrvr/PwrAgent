@@ -4,7 +4,6 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import type BetterSqlite3 from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getNativeBinding } from "../state/native-binding";
 import {
   CURRENT_STATE_DB_USER_VERSION,
   SQLITE_AUTO_VACUUM_INCREMENTAL,
@@ -60,6 +59,137 @@ afterEach(() => {
 });
 
 describe("StateDb", () => {
+  it("adds account attribution to a v70 ledger without relabeling existing usage", () => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec("ALTER TABLE thread_usage_lines DROP COLUMN account_key");
+    stateDb.raw.exec(`INSERT INTO thread_usage_lines (
+      usage_line_id, backend, thread_id, source, scope, status, created_at,
+      input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
+      reasoning_output_tokens, total_tokens, price_status, currency,
+      uncached_input_cost_micros, cached_input_cost_micros, output_cost_micros,
+      total_cost_micros, updated_at
+    ) VALUES ('old-line', 'codex', 'old-thread', 'live', 'turn', 'finalized', 1,
+      100, 0, 100, 20, 0, 120, 'priced', 'USD', 1, 0, 1, 2, 2)`);
+    stateDb.raw.pragma("user_version = 70");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_usage_lines")).toContain("account_key");
+    expect(stateDb.raw.prepare("SELECT account_key, total_tokens, total_cost_micros FROM thread_usage_lines WHERE usage_line_id = 'old-line'").get())
+      .toEqual({ account_key: null, total_tokens: 120, total_cost_micros: 2 });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_usage_lines").filter((column) => column === "account_key")).toHaveLength(1);
+  });
+
+  it("adds the to-do checklist column to a v72 profile and keeps its cards", () => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec("ALTER TABLE thread_todos DROP COLUMN items_json");
+    stateDb.raw.exec(`INSERT INTO thread_todos (
+      todo_id, backend, thread_id, kind, status, title, created_at, updated_at
+    ) VALUES ('old-card', 'codex', 'thread-a', 'reminder', 'open', 'Check the docs', 1, 1)`);
+    stateDb.raw.pragma("user_version = 72");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_todos")).toContain("items_json");
+    expect(stateDb.raw.prepare("SELECT title, items_json FROM thread_todos WHERE todo_id = 'old-card'").get())
+      .toEqual({ title: "Check the docs", items_json: null });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_todos").filter((column) => column === "items_json")).toHaveLength(1);
+  });
+
+  it("adds durable receipts to a v73 profile without changing its checklist items", () => {
+    const dbPath = useFileStateDb();
+    const items = JSON.stringify([{ id: "item-1", text: "Check the docs", checked: false }]);
+    stateDb.raw.prepare(`INSERT INTO thread_todos (
+      todo_id, backend, thread_id, kind, status, title, items_json, created_at, updated_at
+    ) VALUES ('checklist-card', 'codex', 'thread-a', 'reminder', 'open', 'Release checklist', ?, 1, 1)`).run(items);
+    stateDb.raw.exec("DROP TABLE durable_turn_requests");
+    stateDb.raw.pragma("user_version = 73");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("durable_turn_requests")).toContain("receipt_json");
+    expect(stateDb.raw.prepare("SELECT title, items_json FROM thread_todos WHERE todo_id = 'checklist-card'").get())
+      .toEqual({ title: "Release checklist", items_json: items });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("durable_turn_requests").filter((column) => column === "receipt_json")).toHaveLength(1);
+  });
+
+  // Two branches each shipped a table as version 74; a profile can hold
+  // either 74 without the other's table, and both must converge.
+  it.each([
+    ["durable turn requests", "durable_turn_requests", "receipt_json"],
+    ["tracked reviews", "thread_reviews", "payload"],
+  ] as const)("restores %s to a profile whose version 74 lacked them", (_label, table, column) => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec(`DROP TABLE ${table}`);
+    stateDb.raw.pragma("user_version = 74");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames(table)).toContain(column);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+    // A current profile that lost the table converges as well.
+    stateDb.raw.exec(`DROP TABLE ${table}`);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames(table)).toContain(column);
+  });
+
+  // The thread-dependency branch shipped its table as version 76 before main
+  // took 76 for relationship generations; both kinds of v76 profile converge.
+  it("restores thread dependencies and relationship generations to either version 76", () => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec("DROP TABLE thread_dependencies");
+    stateDb.raw.pragma("user_version = 76");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(stateDb.raw.prepare("SELECT name FROM pragma_table_info('thread_dependencies')").all())
+      .toContainEqual({ name: "payload" });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+
+    stateDb.raw.exec(`DROP TRIGGER thread_navigation_relationship_generation_insert;
+      DROP TRIGGER thread_navigation_relationship_generation_update;
+      DROP TRIGGER thread_navigation_relationship_generation_delete;
+      DROP TABLE thread_navigation_relationship_generation;`);
+    stateDb.raw.pragma("user_version = 76");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(stateDb.raw.prepare("SELECT generation FROM thread_navigation_relationship_generation").get())
+      .toEqual({ generation: 0 });
+    expect(stateDb.raw.prepare(
+      "SELECT count(*) AS count FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'thread_navigation_relationship_generation_%'",
+    ).get()).toEqual({ count: 3 });
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+  });
+
+  it("links a v77 profile's to-do cards to the dependency that raised them, one card each", () => {
+    const dbPath = useFileStateDb();
+    stateDb.raw.exec("DROP INDEX idx_thread_todos_dependency");
+    stateDb.raw.exec("ALTER TABLE thread_todos DROP COLUMN dependency_id");
+    stateDb.raw.exec(`INSERT INTO thread_todos (todo_id, backend, thread_id, kind, status, title, created_at, updated_at)
+      VALUES ('old-card', 'codex', 'thread', 'reminder', 'open', 'Check the docs', 1, 1)`);
+    stateDb.raw.pragma("user_version = 77");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(CURRENT_STATE_DB_USER_VERSION);
+    expect(columnNames("thread_todos")).toContain("dependency_id");
+    expect(indexNames("thread_todos")).toContain("idx_thread_todos_dependency");
+    expect(stateDb.raw.prepare("SELECT dependency_id FROM thread_todos WHERE todo_id = 'old-card'").get()).toEqual({ dependency_id: null });
+    const insert = stateDb.raw.prepare(`INSERT INTO thread_todos (todo_id, backend, thread_id, kind, status, title, created_at, updated_at, dependency_id)
+      VALUES (?, 'codex', 'thread', 'reminder', ?, 'Reminder', 2, 2, ?)`);
+    insert.run("first", "done", "dependency-1");
+    // Unlike the open-key index, resolving the first card does not free the dependency.
+    expect(() => insert.run("second", "open", "dependency-1")).toThrow(/UNIQUE/);
+    insert.run("unlinked", "open", null);
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    expect(columnNames("thread_todos").filter((column) => column === "dependency_id")).toHaveLength(1);
+  });
+
   it.each([false, true])("guards corrupt automation runs when upgrading with legacy index present: %s", (legacyIndexPresent) => {
     const dbPath = useFileStateDb();
     stateDb.raw.exec("DROP INDEX IF EXISTS idx_automation_runs_execution_thread");
@@ -763,11 +893,7 @@ describe("StateDb", () => {
     // A database created the way every pre-fix profile was: WAL first, so the
     // `auto_vacuum` assignment lands on a file that already has a header.
     const openLegacyDatabase = (dbPath: string, fragmented = true) => {
-      const nativeBinding = getNativeBinding();
-      const legacy = new Database(
-        dbPath,
-        nativeBinding ? { nativeBinding } : {},
-      );
+      const legacy = new Database(dbPath);
       legacy.pragma("journal_mode = WAL");
       legacy.pragma("auto_vacuum = INCREMENTAL");
       legacy.exec("CREATE TABLE bulk(id INTEGER PRIMARY KEY, blob TEXT)");
@@ -2446,8 +2572,7 @@ function createLegacyThreadSearchFtsDb(
 }
 
 function openRawDb(dbPath: string): BetterSqlite3.Database {
-  const nativeBinding = getNativeBinding();
-  return new Database(dbPath, nativeBinding ? { nativeBinding } : {});
+  return new Database(dbPath);
 }
 
 function existingTables(): string[] {
@@ -2472,10 +2597,13 @@ function existingTables(): string[] {
 
 function columnNames(
   tableName:
+    | "durable_turn_requests"
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "thread_pricing_summaries"
+    | "thread_reviews"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines",
 ): string[] {
   const rows = readTableInfo(tableName);
@@ -2486,6 +2614,7 @@ function indexNames(
   tableName:
     | "messaging_observed_surfaces"
     | "thread_message_origins"
+    | "thread_todos"
     | "thread_tool_invocations"
     | "thread_usage_lines",
 ): string[] {
@@ -2510,13 +2639,20 @@ function queryPlanDetails(sql: string, params: unknown[]): string {
 
 function readTableInfo(
   tableName:
+    | "durable_turn_requests"
     | "pr_lookup_cache"
     | "pr_status_cache"
     | "thread_pricing_summaries"
+    | "thread_reviews"
     | "thread_search_fts"
+    | "thread_todos"
     | "thread_usage_lines",
 ): Array<{ name: string }> {
   switch (tableName) {
+    case "durable_turn_requests":
+      return stateDb.raw
+        .prepare("PRAGMA table_info(durable_turn_requests)")
+        .all() as Array<{ name: string }>;
     case "pr_lookup_cache":
       return stateDb.raw.prepare("PRAGMA table_info(pr_lookup_cache)").all() as Array<{
         name: string;
@@ -2529,9 +2665,17 @@ function readTableInfo(
       return stateDb.raw
         .prepare("PRAGMA table_info(thread_pricing_summaries)")
         .all() as Array<{ name: string }>;
+    case "thread_reviews":
+      return stateDb.raw
+        .prepare("PRAGMA table_info(thread_reviews)")
+        .all() as Array<{ name: string }>;
     case "thread_search_fts":
       return stateDb.raw
         .prepare("PRAGMA table_info(thread_search_fts)")
+        .all() as Array<{ name: string }>;
+    case "thread_todos":
+      return stateDb.raw
+        .prepare("PRAGMA table_info(thread_todos)")
         .all() as Array<{ name: string }>;
     case "thread_usage_lines":
       return stateDb.raw

@@ -31,3 +31,20 @@ export function writeStoredUsageResultsHeight(height: number | undefined): void 
     // A full or blocked store costs the operator their height, nothing more.
   }
 }
+
+/** Space between the slice card and its bar. */
+const CARD_GAP = 8;
+
+/**
+ * Where the slice card goes, in pixels from the plot's left edge: beside its
+ * bar on the side with more room, or, when even that side is too narrow,
+ * inside the plot against that side, over the bar. A bar can span the whole
+ * plot (one slice in a short window), and the window clips anything past the
+ * plot's right edge.
+ */
+export function sliceCardLeft(plot: { left: number; width: number }, bar: { left: number; right: number }, card: number) {
+  const before = bar.left - plot.left - CARD_GAP;
+  const after = plot.left + plot.width - bar.right - CARD_GAP;
+  if (after >= before) return after >= card ? bar.right - plot.left + CARD_GAP : Math.max(0, plot.width - card);
+  return before >= card ? before - card : 0;
+}

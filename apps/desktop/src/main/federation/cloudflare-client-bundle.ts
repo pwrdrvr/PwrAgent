@@ -20,7 +20,16 @@ export type Bundle = {
   privateKey?: string;
   accessClientId?: string;
   accessClientSecret?: string;
+  /**
+   * `oauth` only: the gateway's Managed OAuth grant duration when the file was
+   * written, so the client can ask for a new sign-in before the grant ends.
+   * Absent in older files; readers that predate it ignore it.
+   */
+  signInLifetimeMs?: number;
 };
+
+/** A year: Cloudflare's grant durations are hours to weeks. */
+const MAX_SIGN_IN_LIFETIME_MS = 366 * 24 * 3_600_000;
 
 export function bundleGate(bundle: Pick<Bundle, "gate">): "service-token" | "oauth" | "mtls" {
   return bundle.gate === "service-token" || bundle.gate === "oauth" ? bundle.gate : "mtls";
@@ -57,9 +66,12 @@ export async function decryptCloudflareBundle(text: string, password: string): P
       || url.pathname !== "/" || url.search || url.hash || !/^[a-z0-9-]+\.[a-z0-9.-]+$/.test(url.hostname)
       || typeof bundle.invite !== "string") throw new Error();
     if (bundleGate(bundle) === "oauth") {
-      // Nothing to carry but the endpoint and invite. A credential in an
-      // `oauth` bundle means it was not written by this code.
+      // Nothing to carry but the endpoint, invite, and grant lifetime. A
+      // credential in an `oauth` bundle means it was not written by this code.
       if (bundle.certificate || bundle.privateKey || bundle.accessClientId || bundle.accessClientSecret) throw new Error();
+      if (bundle.signInLifetimeMs !== undefined && !(typeof bundle.signInLifetimeMs === "number"
+        && Number.isFinite(bundle.signInLifetimeMs) && bundle.signInLifetimeMs > 0
+        && bundle.signInLifetimeMs <= MAX_SIGN_IN_LIFETIME_MS)) throw new Error();
       return bundle;
     }
     if (bundleGate(bundle) === "service-token") {

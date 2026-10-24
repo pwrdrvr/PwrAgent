@@ -17,28 +17,52 @@ permissions:
   id-token: none
 
 jobs:
-  prepare:
-    name: Test and prepare signing input
-    # Xcode 26's AssetCatalogAgent links against macOS 26 frameworks. Selecting
-    # Xcode 26 on macos-15 reaches actool but crashes while compiling .icon.
+  install-deps:
+    name: Install macOS dependencies
     runs-on: macos-26
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      id-token: none
-    outputs:
-      signing-input-sha256: ${{ steps.archive.outputs.sha256 }}
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+          sparse-checkout: |
+            **/package.json
+            .pnpmfile.cjs
+            patches/**
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            scripts/linux-sandbox.mjs
+            apps/desktop/scripts/ensure-electron-runtime.mjs
+          sparse-checkout-cone-mode: false
+
+      # As in CI, only populate the dependency cache on a miss. The parallel
+      # consumers restore it after this job (including cache saves) succeeds.
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
+          lookup-only: "true"
+
+  lint:
+    name: Lint and typecheck
+    runs-on: macos-26
+    needs:
+      - install-deps
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@e1bd1cc1494a20f0ee91dae622b0d2523b6fb53c # v1.4.0
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       - name: Check release metadata
@@ -54,27 +78,74 @@ jobs:
           pnpm --silent release:channels --audit > "$RUNNER_TEMP/package-manager-preflight.json"
           cat "$RUNNER_TEMP/package-manager-preflight.json" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Typecheck
+      - name: Lint and typecheck
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: pnpm typecheck
+        run: pnpm lint
+
+  test:
+    name: macOS unit tests (lane ${{ matrix.lane }} of 2)
+    runs-on: macos-26
+    needs:
+      - install-deps
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [1, 2]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
 
       # electron-builder compiles build/icon.icon with actool 26. The macos-26
       # host supplies the matching AssetCatalogAgent runtime; this action
-      # verifies the selected Xcode still has actool 26+. Only the steps that
-      # run actool set DEVELOPER_DIR, so build:native keeps the image toolchain
-      # and SDK. See AGENTS.md "macOS app icon".
+      # verifies the selected Xcode still has actool 26+. Only the test step
+      # sets DEVELOPER_DIR, so native setup keeps the image toolchain and SDK.
       - name: Select an Xcode with actool 26
         id: xcode
         uses: ./.github/actions/select-xcode-for-actool
 
       - name: Test (unit)
         env:
-          # Lets the actool compile test in apps/desktop/scripts/app-icon.test.mjs run instead of skip,
-          # and REQUIRE_ACTOOL makes that suite fail rather than skip if the selection is ever wrong.
+          # Require the icon compile check wherever Vitest assigns its suite.
           DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
           PWRAGENT_REQUIRE_ACTOOL: "1"
-        run: pnpm test
+        run: pnpm test --shard=${{ matrix.lane }}/2
+
+  prepare:
+    name: Prepare macOS signing input
+    # Xcode 26's AssetCatalogAgent links against macOS 26 frameworks. Selecting
+    # Xcode 26 on macos-15 reaches actool but crashes while compiling .icon.
+    runs-on: macos-26
+    needs:
+      - install-deps
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: none
+    outputs:
+      signing-input-sha256: ${{ steps.archive.outputs.sha256 }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
 
       - name: Stage pinned Grok ACP runtime
         env:
@@ -88,7 +159,7 @@ jobs:
         run: node apps/desktop/scripts/release.mjs --prepare-only
 
       - name: Retain darwin-universal debug artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ !cancelled() }}
         with:
           name: desktop-debug-darwin-universal
@@ -111,7 +182,7 @@ jobs:
         run: node apps/desktop/scripts/release.mjs --prepare-only --mac-arch=arm64
 
       - name: Retain darwin-arm64 debug artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ !cancelled() }}
         with:
           name: desktop-debug-darwin-arm64
@@ -138,7 +209,7 @@ jobs:
           printf "%s  desktop-release-signing-input.tgz\n" "$sha256" > "$RUNNER_TEMP/desktop-release-signing-input.tgz.sha256"
 
       - name: Upload signing input
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-release-signing-input
           path: |
@@ -148,10 +219,15 @@ jobs:
 
   sign:
     name: Sign, notarize, package macOS
-    # Keep packaging on the same macOS 26 host used to validate the Icon
-    # Composer package in prepare; Xcode 26's AssetCatalogAgent needs it.
+    # Keep packaging on the same macOS 26 host used by the unit test lanes
+    # to validate Icon Composer; Xcode 26's AssetCatalogAgent needs it.
     runs-on: macos-26
-    needs: prepare
+    # The unsigned stage is prepared in parallel, but signing still requires
+    # every validation lane to pass, including both jobs in the test matrix.
+    needs:
+      - prepare
+      - lint
+      - test
     timeout-minutes: 60
     environment: apple-signing
     permissions:
@@ -217,7 +293,7 @@ jobs:
       # It is intentionally not a best-effort debug upload: publishing must
       # wait until every signed platform payload is available.
       - name: Upload macOS release assets
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-release-artifacts
           path: |
@@ -227,12 +303,15 @@ jobs:
             apps/desktop/release-stage/dist/latest-mac.yml
             apps/desktop/release-stage/dist/PwrAgent-macos-SHA256SUMS
             apps/desktop/release-stage/dist/builder-debug.yml
-          retention-days: 30
+          retention-days: 90
 
   linux-package:
     name: Package Linux (${{ matrix.builder_arch }})
     runs-on: ${{ matrix.runner }}
-    needs: prepare
+    needs:
+      - prepare
+      - lint
+      - test
     timeout-minutes: 45
     permissions:
       contents: read
@@ -249,15 +328,15 @@ jobs:
             runner: ubuntu-24.04-arm
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@e1bd1cc1494a20f0ee91dae622b0d2523b6fb53c # v1.4.0
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.22.1"
           cache-electron: "true"
 
       - name: Check release metadata
@@ -281,7 +360,7 @@ jobs:
         run: node apps/desktop/scripts/release.mjs --linux --no-publish
 
       - name: Retain linux-${{ matrix.builder_arch }} debug artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ !cancelled() }}
         with:
           name: desktop-debug-linux-${{ matrix.builder_arch }}
@@ -297,7 +376,7 @@ jobs:
       # matrix legs write different names, so `merge-multiple` in the
       # publication job cannot collide them.
       - name: Upload Linux package artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: linux-packages-${{ matrix.builder_arch }}
           path: |
@@ -310,11 +389,11 @@ jobs:
 
   windows-prepare:
     name: Prepare Windows signing input
-    # node-pty's Electron rebuild currently pulls node-gyp 11.x, which does
-    # not recognize Visual Studio 2026 on windows-latest/windows-2025.
-    # Keep installer packaging on VS 2022 until that toolchain catches up.
-    runs-on: windows-2022
-    needs: prepare
+    runs-on: windows-latest
+    needs:
+      - prepare
+      - lint
+      - test
     timeout-minutes: 45
     outputs:
       signing-input-sha256: ${{ steps.archive.outputs.sha256 }}
@@ -323,15 +402,15 @@ jobs:
       id-token: none
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
 
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@e1bd1cc1494a20f0ee91dae622b0d2523b6fb53c # v1.4.0
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         with:
-          node-version: "^24.18.0"
+          node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
 
@@ -347,7 +426,7 @@ jobs:
         run: node apps/desktop/scripts/release.mjs --win --prepare-only
 
       - name: Retain win32-x64 debug artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ !cancelled() }}
         with:
           name: desktop-debug-win32-x64
@@ -370,7 +449,7 @@ jobs:
             Set-Content -Path "$archive.sha256" -Encoding ascii
 
       - name: Upload Windows signing input
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-release-signing-input
           path: |
@@ -469,7 +548,7 @@ jobs:
       # above: the alias is a download convenience, while update resolution and
       # delta downloads go through the versioned file and its .blockmap.
       - name: Upload Windows installer artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-installer
           path: |
@@ -477,7 +556,7 @@ jobs:
             apps/desktop/release-stage/dist/*.exe.blockmap
             apps/desktop/release-stage/dist/latest.yml
             apps/desktop/release-stage/dist/SHA256SUMS
-          retention-days: 7
+          retention-days: 90
 
   publish-release-assets:
     name: Publish release assets
@@ -492,7 +571,7 @@ jobs:
       id-token: none
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
@@ -624,7 +703,7 @@ jobs:
             verify-published "$RUNNER_TEMP/release-asset-names.txt" "${RELEASE_TAG#v}"
 
       - name: Upload assembled release artifacts (debug retention)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ !cancelled() }}
         continue-on-error: true
         with:
@@ -639,7 +718,7 @@ jobs:
             linux-dist/latest-linux*.yml
             linux-dist/SHA256SUMS
             debug-dist/*
-          retention-days: 30
+          retention-days: 90
 
   publish-release-notes:
     name: Publish release notes
@@ -652,7 +731,7 @@ jobs:
       id-token: none
     steps:
       - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false

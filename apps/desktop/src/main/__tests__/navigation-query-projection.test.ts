@@ -60,6 +60,45 @@ function request(
 }
 
 describe("navigation query projection", () => {
+  it("carries configured remote identities in the compact directory index", () => {
+    const source = snapshot([]);
+    source.directories[0]!.gitStatus = {
+      originRepository: "github.com/fixture-fork/disktree",
+      remoteRepositories: ["github.com/fixture-fork/disktree", "github.com/fixture-upstream/disktree"],
+    };
+    const page = projectNavigationQuery({ index: source, request: request({ kind: "directory-index" }) });
+
+    expect(page.directories[0]).toMatchObject({
+      repositoryKey: "github.com/fixture-fork/disktree",
+      repositoryKeys: ["github.com/fixture-fork/disktree", "github.com/fixture-upstream/disktree"],
+    });
+  });
+
+  it.each([
+    ["PwrSuiteLab", "pws"], ["PwrAgent", "PA"], ["PwrSnap", "ps"], ["trading-system", "TS"],
+  ])("finds owner threads and directory-index projects by initials: %s / %s", (name, text) => {
+    const source = snapshot([thread("match", { linkedDirectories: [
+      { id: "repo", kind: "local", label: "Project", path: `/repos/${name}` },
+    ] }), thread("unrelated")]);
+    source.directories = [{ ...source.directories[0]!, label: name, path: `/repos/${name}`, threadKeys: ["codex:match"] }];
+    const threads = projectNavigationQuery({ index: source, request: request({ kind: "search", text }) });
+    expect(threads.entries.map(({ row }) => row.id)).toEqual(["match"]);
+    const projects = projectNavigationQuery({ index: source, request: request({ kind: "directory-index", filter: text }) });
+    expect(projects.directories.map((directory) => directory.label)).toEqual([name]);
+  });
+
+  it("scopes owner search to @project mentions", () => {
+    const busy = Array.from({ length: 10 }, (_, index) => thread(`busy-${index}`, { title: `MCP gateway ${index}`,
+      updatedAt: 100 + index, linkedDirectories: [{ id: "busy", kind: "local", label: "media-services", path: "/repos/media-services" }] }));
+    const quiet = thread("quiet", { title: "MCP config", updatedAt: 1,
+      linkedDirectories: [{ id: "quiet", kind: "local", label: "pinecone-api", path: "/repos/pinecone-api" }] });
+    const source = snapshot([...busy, quiet]);
+    const page = (text: string) => projectNavigationQuery({ index: source, request: request({ kind: "search", text }) })
+      .entries.map(({ row }) => row.id);
+    expect(page("@pinecone-api mcp")).toEqual(["quiet"]);
+    expect(page("in:@Pinecone")).toEqual(["quiet"]);
+  });
+
   it("counts worker-only parents once and includes them in Attention without changing turn status", () => {
     const source = snapshot([
       thread("worker-only", { threadStatus: "idle", hasActiveSubAgent: true }),
@@ -118,13 +157,40 @@ describe("navigation query projection", () => {
     expect(attention.entries.find(({ row }) => row.id === "child")?.row.parentThreadInstanceId).toBe("peer");
   });
 
-  it("waits for owner coverage before declaring an Attention parent outside the collection", () => {
-    const source = snapshot([thread("child", { parentThreadId: "parent", inbox: { inInbox: true } })]);
+  it.each(["checking", "degraded", "complete"] as const)("keeps counted Attention children visible during %s discovery", (state) => {
+    const source = snapshot([
+      thread("active-1", { threadStatus: "active" }),
+      thread("active-2", { threadStatus: "active" }),
+      thread("active-3", { threadStatus: "active" }),
+      thread("parent", { threadStatus: "idle", subthreadsCollapsed: true }),
+      thread("child", { parentThreadId: "parent", threadStatus: "active" }),
+      thread("orphan", { parentThreadId: "undiscovered-parent", inbox: { inInbox: true } }),
+    ]);
+    const index = { ...source, coverage: { state } };
+    const attention = projectNavigationQuery({ index, request: request({ kind: "lens", lens: "attention" }) });
+    const population = projectNavigationQuery({ index, request: request({ kind: "directory-index" }) });
+
+    expect(population.counts).toMatchObject({ active: 4, review: 1 });
+    expect(attention.counts).toMatchObject({ active: 4, review: 1 });
+    expect(attention.entries).toHaveLength(5);
+    expect(attention.entries.every((entry) => entry.placement.kind === "root")).toBe(true);
+    expect(attention.entries.find(({ row }) => row.id === "child")?.row.parentThreadId).toBe("parent");
+    expect(attention.entries.find(({ row }) => row.id === "orphan")?.row.parentThreadId).toBe("undiscovered-parent");
+  });
+
+  it.each(["checking", "degraded", "complete"] as const)("regroups an Attention child when its parent qualifies during %s discovery", (state) => {
+    const child = thread("child", { parentThreadId: "parent", threadStatus: "active", updatedAt: 2 });
     const query = request({ kind: "lens", lens: "attention" });
-    const checking = projectNavigationQuery({ index: { ...source, coverage: { state: "checking" } }, request: query });
-    expect(checking.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: "parent" } });
-    const complete = projectNavigationQuery({ index: { ...source, coverage: { state: "complete" } }, request: query });
-    expect(complete.entries[0]?.placement).toEqual({ kind: "root" });
+    const coverage = { state };
+    const project = (threads: NavigationThreadSummary[]) => projectNavigationQuery({ index: { ...snapshot(threads), coverage }, request: query });
+
+    expect(project([child]).entries[0]?.placement).toEqual({ kind: "root" });
+    // A qualifying parent can sort after its child. Discovery coverage must
+    // not change that grouping, and a later idle parent promotes it again.
+    const grouped = project([child, thread("parent", { inbox: { inInbox: true } })]);
+    expect(grouped.entries.map(({ row }) => row.id)).toEqual(["child", "parent"]);
+    expect(grouped.entries[0]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: "parent" } });
+    expect(project([child, thread("parent")]).entries[0]?.placement).toEqual({ kind: "root" });
   });
 
   it("cold_navigation_fetches_only_visible_membership", () => {
@@ -257,6 +323,41 @@ describe("navigation query projection", () => {
       review: 1,
     });
   });
+
+  it.each(["checking", "degraded", "complete"] as const)("shows counted unread children in their own project during %s discovery", (state) => {
+    const parent = thread("parent", { subthreadsCollapsed: true });
+    const source = snapshot([
+      parent,
+      thread("local-unread", { inbox: { inInbox: true } }),
+      thread("research", { source: "acp:grok", parentThreadId: parent.id, parentThreadBackend: "codex",
+        inbox: { inInbox: true } }),
+      thread("pinned-research", { source: "acp:grok", parentThreadId: parent.id, parentThreadBackend: "codex",
+        pinnedRank: "1024", inbox: { inInbox: true } }),
+    ]);
+    source.directories[0]!.threadKeys = ["codex:local-unread", "acp:grok:research", "acp:grok:pinned-research"];
+    source.directories.push({ ...source.directories[0]!, key: "workspace:/scratch", kind: "workspace",
+      label: "Workspaces", path: "/scratch", threadKeys: ["codex:parent"] });
+    const index = { ...source, coverage: { state } };
+    const directoryIndex = projectNavigationQuery({ index, request: request({ kind: "directory-index" }) });
+    expect(directoryIndex.directories[0]).toMatchObject({ counts: { unread: 3, review: 3 },
+      pinnedRootCount: 1, unpinnedRootCount: 2 });
+
+    for (const roots of ["all", "pinned", "unpinned"] as const) {
+      const page = projectNavigationQuery({ index, request: request({ kind: "directory", directoryKey: "directory:/repo", roots }) });
+      const expected = roots === "pinned" ? ["pinned-research"]
+        : roots === "unpinned" ? ["local-unread", "research"] : ["local-unread", "pinned-research", "research"];
+      expect(page.entries.map(({ row }) => row.id).sort()).toEqual(expected);
+      expect(page.counts.review).toBe(3);
+      expect(page.entries.every(({ placement }) => placement.kind === "root")).toBe(true);
+      const child = page.entries.find(({ row }) => row.id === "research" || row.id === "pinned-research");
+      expect(child?.row).toMatchObject({ parentThreadId: "parent", parentThreadBackend: "codex", inbox: { inInbox: true } });
+    }
+
+    // Other lenses and explicit child reads retain the actual group.
+    const children = projectNavigationQuery({ index, request: request({ kind: "children", parent: { backend: "codex", threadId: "parent" } }) });
+    expect(children.entries).toHaveLength(2);
+    expect(children.entries.every(({ placement }) => placement.kind === "child")).toBe(true);
+  });
 });
 
 it("keeps ten-root demand separate from disclosed child pages and pin disclosure", () => {
@@ -358,11 +459,88 @@ it.each([undefined, "199680"])("keeps a local handoff reachable when its remote 
   source.threads.push(remoteRoot);
   expect(project({ kind: "exact", identities: [{ backend: "codex", threadId: child.id }], includeAncestry: true }).entries[0]?.placement)
     .toEqual({ kind: "root" });
-  // Restoring the actual mount restores nesting without rewriting the handoff.
+  // Restoring the mount restores exact ancestry. It must not hide local
+  // directory members until that directory also contains the mounted parent.
   remoteRoot.federation!.ref.target = { scope: "remote", instanceId: "peer" };
   const mounted = project({ kind: "exact", identities: [{ backend: "codex", threadId: child.id }], includeAncestry: true });
   expect(mounted.entries.map((entry) => entry.row.id)).toEqual(["remote-root", "handoff"]);
   expect(mounted.entries[1]?.placement).toEqual({ kind: "child", parent: { backend: "codex", threadId: "remote-root", ownerInstanceId: "peer" } });
-  expect(project({ kind: "directory", directoryKey: "directory:/repo" }).entries).toEqual([]);
+  const directoryRoots = project({ kind: "directory", directoryKey: "directory:/repo" });
+  expect(directoryRoots.entries.map(({ row }) => row.id).sort()).toEqual(["handoff", "launcher"]);
+  expect(directoryRoots.entries.every(({ placement }) => placement.kind === "root")).toBe(true);
+  source.directories[0]!.threadKeys.push("remote:peer:codex:remote-root");
+  expect(project({ kind: "directory", directoryKey: "directory:/repo" }).entries.map(({ row }) => row.id)).toEqual(["remote-root"]);
   expect(child.parentThreadInstanceId).toBeUndefined();
+});
+
+describe("Lens split by root pin", () => {
+  const kept = String(-(2 ** 40));
+  const source = () => snapshot([
+    thread("t1", { pinnedRank: "2048" }),
+    thread("t2"),
+    thread("t3", { pinnedRank: kept }),
+    thread("t4"),
+    // Every pin across projects: one with no linked directory, and a peer's
+    // thread this viewer pinned (its local rank arrives as `pinnedRank`).
+    thread("t5", { pinnedRank: "1024", linkedDirectories: [] }),
+    thread("t6", { pinnedRank: "512", federation: {
+      ref: { backend: "codex", threadId: "t6", target: { scope: "remote", instanceId: "peer" } }, instanceLabel: "Peer",
+    } }),
+    // Children follow their roots, newest first, never by their own pin.
+    thread("t7", { parentThreadId: "t1" }),
+    thread("t8", { parentThreadId: "t2", pinnedRank: "1" }),
+    thread("t9", { parentThreadId: "t1", threadStatus: "active" }),
+  ]);
+  const lens = (roots?: "pinned" | "unpinned", filter?: string) => projectNavigationQuery({
+    index: source(),
+    request: request({ kind: "lens", lens: "recents", ...(roots ? { roots } : {}), ...(filter ? { filter } : {}) }),
+  });
+
+  it("puts every pinned root and its subtree in the pinned bucket, in the global pin order", () => {
+    const pinned = lens("pinned");
+    expect(pinned.entries.map(({ row }) => row.id)).toEqual(["t3", "t6", "t5", "t1", "t9", "t7"]);
+    expect(pinned.entries.filter(({ placement }) => placement.kind === "root").map(({ row }) => row.id))
+      .toEqual(["t3", "t6", "t5", "t1"]);
+  });
+
+  it("keeps the unpinned bucket in creation order, holding no pinned root", () => {
+    expect(lens("unpinned").entries.map(({ row }) => row.id)).toEqual(["t8", "t4", "t2"]);
+  });
+
+  it("acknowledges the split with a root count and scopes counts to the bucket", () => {
+    const pinned = lens("pinned");
+    expect(pinned.collectionSize).toBe(4);
+    expect(pinned.counts).toMatchObject({ total: 6, pinned: 4, active: 1 });
+    expect(lens("unpinned").collectionSize).toBe(2);
+    // An unsplit lens is unchanged: no acknowledgment, whole-owner counts.
+    const unsplit = lens();
+    expect(unsplit.collectionSize).toBeUndefined();
+    expect(unsplit.counts.total).toBe(9);
+    expect(unsplit.entries.map(({ row }) => row.id)).toEqual(["t9", "t8", "t7", "t6", "t5", "t4", "t3", "t2", "t1"]);
+  });
+
+  it("splits Updated the same way, keeping its list in last-update order", () => {
+    // t2 was created early but touched last; Updated lists it first.
+    const updated = (roots: "pinned" | "unpinned") => projectNavigationQuery({
+      index: snapshot([
+        thread("t1", { pinnedRank: "2048", updatedAt: 90 }),
+        thread("t2", { updatedAt: 80 }),
+        thread("t3", { pinnedRank: kept }),
+        thread("t4", { updatedAt: 5 }),
+      ]),
+      request: request({ kind: "lens", lens: "inbox", roots }),
+    });
+    // Pins keep their rank, however recently they changed.
+    expect(updated("pinned").entries.map(({ row }) => row.id)).toEqual(["t3", "t1"]);
+    expect(updated("pinned").collectionSize).toBe(2);
+    expect(updated("unpinned").entries.map(({ row }) => row.id)).toEqual(["t2", "t4"]);
+  });
+
+  it("applies the lens filter to both buckets", () => {
+    expect(lens("pinned", "thread t5").entries.map(({ row }) => row.id)).toEqual(["t5"]);
+    expect(lens("pinned", "thread t5").collectionSize).toBe(1);
+    expect(lens("unpinned", "thread t5").entries).toEqual([]);
+    expect(lens("pinned", "thread t4").entries).toEqual([]);
+    expect(lens("pinned", "thread t4").collectionSize).toBe(0);
+  });
 });

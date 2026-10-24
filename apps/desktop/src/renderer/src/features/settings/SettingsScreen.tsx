@@ -16,9 +16,11 @@ import type {
 import type { AppearanceController } from "../../lib/useAppearance";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { describeGitCommandState } from "./CommandToolsSettings";
+import { claudeProviderStatus } from "./claude-provider-status";
 import type { PwrAgentProfilesState } from "../../lib/usePwrAgentProfiles";
 import type { DesktopSettingsState } from "./useDesktopSettings";
 import { AboutSettings } from "./AboutSettings";
+import { KeyboardSettings } from "./KeyboardSettings";
 import { AccessControlSettings } from "./AccessControlSettings";
 import { ExperimentalSettings } from "./ExperimentalSettings";
 import { FederationSettings } from "./FederationSettings";
@@ -75,6 +77,7 @@ import { BrandLockup } from "../chrome/BrandLockup";
 
 export type SettingsSection =
   | "general"
+  | "keyboard"
   | "updates"
   | "git"
   | "experimental"
@@ -94,6 +97,7 @@ export type SettingsSection =
 
 const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "general", label: "General" },
+  { id: "keyboard", label: "Keyboard" },
   { id: "updates", label: "Updates" },
   { id: "applications", label: "Applications" },
   { id: "plugins", label: "Plugins" },
@@ -114,6 +118,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
 
 const PRIMARY_SECTIONS: SettingsSection[] = [
   "general",
+  "keyboard",
   "updates",
   "applications",
   "plugins",
@@ -281,6 +286,9 @@ export function SettingsScreen(props: {
    *  registry id under "models", a platform kind under "messaging").
    *  Ignored without `initialSection`. */
   initialSubsection?: string;
+  /** Profiles → New Profile…: open the Profiles pane's create form. */
+  profileCreateRequested?: boolean;
+  onProfileCreateRequestHandled?: () => void;
   onClose?: () => void;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
@@ -520,12 +528,22 @@ export function SettingsScreen(props: {
       const codexConfigured = Boolean(
         snapshot?.models.codex.discovery.selectedCommand,
       );
+      const claude = claudeProviderStatus(
+        props.cachedBackends?.find((backend) => backend.kind === "claude")?.claude,
+      );
       return [
         {
           key: "codex",
           label: "Codex",
           sub: "codex",
           dot: snapshot ? (codexConfigured ? "ok" : "off") : undefined,
+        },
+        {
+          key: "claude",
+          label: "Claude",
+          sub: "claude",
+          dot: claude.dot,
+          ...(claude.navChip ? { chip: claude.navChip } : {}),
         },
         ...displayOrderedAcpEntries(acpCatalog.entries).map((entry) => {
           const enabled = acpAgentEnabledInSnapshot(snapshot, entry.registryId);
@@ -830,6 +848,8 @@ export function SettingsScreen(props: {
                 onOpenRoute={openRoute}
                 onOpenThread={props.onOpenThread}
                 onShowNotice={props.onShowNotice}
+                onProfileCreateRequestHandled={props.onProfileCreateRequestHandled}
+                profileCreateRequested={props.profileCreateRequested}
                 profiles={props.profiles}
                 section={section}
                 settings={props.settings}
@@ -866,6 +886,8 @@ function SettingsSectionBody(props: {
     threadId: string;
   }) => void;
   onShowNotice?: (notice: AppNoticeToastNotice) => void;
+  onProfileCreateRequestHandled?: () => void;
+  profileCreateRequested?: boolean;
   profiles?: PwrAgentProfilesState;
   section: SettingsSection;
   settings: DesktopSettingsState;
@@ -874,6 +896,10 @@ function SettingsSectionBody(props: {
 }) {
   if (props.section === "about") {
     return <AboutSettings desktopApi={props.desktopApi} />;
+  }
+
+  if (props.section === "keyboard") {
+    return <KeyboardSettings desktopApi={props.desktopApi} />;
   }
 
   if (props.section === "updates") {
@@ -913,6 +939,14 @@ function SettingsSectionBody(props: {
             general: { attentionPromoteOnTurnEnd },
           });
         }}
+        onPinnedThreadsOnTopChange={async (pinnedThreadsOnTop: boolean) => {
+          await props.settings.writeConfig({
+            general: { pinnedThreadsOnTop },
+          });
+        }}
+        onInteractiveSvgChange={async (patch) => {
+          await props.settings.writeConfig({ general: patch });
+        }}
         onPdfAnalysisEnabledChange={async (pdfAnalysisEnabled) => {
           await props.settings.writeConfig({
             general: { pdfAnalysisEnabled },
@@ -928,6 +962,16 @@ function SettingsSectionBody(props: {
         onNotificationsEnabledChange={async (notificationsEnabled) => {
           await props.settings.writeConfig({
             general: { notificationsEnabled },
+          });
+        }}
+        onThemedDockIconChange={async (themedDockIcon) => {
+          await props.settings.writeConfig({
+            general: { appearance: { themedDockIcon } },
+          });
+        }}
+        onTerminalMinimumContrastChange={async (terminalMinimumContrast) => {
+          await props.settings.writeConfig({
+            general: { appearance: { terminalMinimumContrast } },
           });
         }}
         onClearMessagingAcknowledgment={async () => {
@@ -1388,6 +1432,11 @@ function SettingsSectionBody(props: {
             git: { pausePrAutoDispatchWhenBudgetEmpty: enabled },
           });
         }}
+        onDefaultMergeMethodChange={async (method) => {
+          await props.settings.writeConfig({
+            git: { defaultMergeMethod: method },
+          });
+        }}
         onRefresh={props.settings.refresh}
         onGhStatusChange={(status) => props.onForgeStatusChange("github", status)}
         onGlabStatusChange={(status) => props.onForgeStatusChange("gitlab", status)}
@@ -1424,7 +1473,9 @@ function SettingsSectionBody(props: {
   if (props.section === "profiles") {
     return (
       <ProfilesSettings
+        createRequested={props.profileCreateRequested}
         desktopApi={props.desktopApi}
+        onCreateRequestHandled={props.onProfileCreateRequestHandled}
         profiles={props.profiles}
         snapshot={props.snapshot}
         onSettingsChanged={props.settings.refresh}
@@ -1486,6 +1537,14 @@ function SettingsSectionBody(props: {
           models: { helperModels },
         });
       }}
+      onSaveUsageAccountGroups={async (usageAccountGroups) => {
+        return await props.settings.writeConfig({ models: { usageAccountGroups } });
+      }}
+      onSaveDecisionModels={async (decisionModels) => {
+        return await props.settings.writeConfig({
+          models: { decisionModels },
+        });
+      }}
       onSaveCodexFastAllowed={async (allowFast) => {
         return await props.settings.writeConfig({
           models: {
@@ -1497,6 +1556,13 @@ function SettingsSectionBody(props: {
         return await props.settings.writeConfig({
           models: {
             codex: { managedBuilds },
+          },
+        });
+      }}
+      onManagedCodexBuildChannelChange={async (managedBuildChannel) => {
+        return await props.settings.writeConfig({
+          models: {
+            codex: { managedBuildChannel },
           },
         });
       }}

@@ -9,6 +9,7 @@ import {
   AGENT_TERMINATE_BACKGROUND_TERMINAL_CHANNEL,
 } from "../../shared/ipc";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
+import { getDesktopNavigationQueryPool } from "../app-server/navigation-query-pool";
 import { stageQueuedFileInputs } from "../app-server/turn-input-attachment-files";
 import { rewriteFederatedTranscriptImageUrlForRenderer } from "../transcript-image-protocol";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
@@ -24,6 +25,8 @@ import {
   type ApplyThreadModelMigrationResponse,
   type CancelQueuedTurnRequest,
   type CancelQueuedTurnResponse,
+  type MoveQueuedTurnRequest,
+  type MoveQueuedTurnResponse,
   type ReleaseQueuedTurnRequest,
   type ReleaseQueuedTurnResponse,
   type CancelThreadExecutionModeQueueRequest,
@@ -93,6 +96,8 @@ import {
   type StartThreadResponse,
   type StartTurnRequest,
   type StartTurnResponse,
+  type SubmitThreadReplyRequest,
+  type SubmitThreadReplyResponse,
   type SubmitServerRequestRequest,
   type SubmitServerRequestResponse,
   type TrustCodexProjectRequest,
@@ -105,6 +110,7 @@ import {
   federationEventClassForMethod,
   getDesktopFederationRuntime,
 } from "../federation/federation-runtime";
+import { QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE } from "../federation/federation-backend-bridge";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
@@ -112,6 +118,7 @@ import {
   AGENT_READ_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_RELEASE_QUEUED_TURN_CHANNEL,
+  AGENT_MOVE_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -147,6 +154,7 @@ import {
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
   AGENT_STEER_TURN_CHANNEL,
+  AGENT_SUBMIT_THREAD_REPLY_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
   AGENT_UPDATE_THREAD_EXPECTED_BRANCH_CHANNEL,
@@ -426,7 +434,9 @@ export function broadcastAgentEvent(event: AgentEvent): void {
       ) {
         continue;
       }
-    } else if (windowTarget && hydratedEvent.notification.method !== "federation/shutdown/changed") {
+    } else if (windowTarget
+      && hydratedEvent.notification.method !== "federation/shutdown/changed"
+      && hydratedEvent.notification.method !== "federation/health/changed") {
       continue;
     }
     webContents.send(AGENT_EVENT_CHANNEL, rendererEvent);
@@ -646,6 +656,45 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  // The owner FIFO decides whether an offscreen reply starts, steers or queues.
+  ipcMain.removeHandler(AGENT_SUBMIT_THREAD_REPLY_CHANNEL);
+  ipcMain.handle(
+    AGENT_SUBMIT_THREAD_REPLY_CHANNEL,
+    async (
+      event,
+      request: SubmitThreadReplyRequest,
+    ): Promise<SubmitThreadReplyResponse> => {
+      logDebug("submitThreadReply", {
+        backend: request.backend,
+        threadId: request.threadId,
+        ...summarizeTurnInput(request.input),
+      });
+      try {
+        const { federationTarget, ...local } = request;
+        const target = federationTarget ?? federationTargetForChannelSubscriber(event.sender);
+        if (target) return await getDesktopFederationRuntime().requestOperatorQuestionOperation(target, "reply", local);
+        const submitted = await registry.submitThreadReply({
+          backend: request.backend,
+          threadId: request.threadId,
+          input: request.input,
+        });
+        return {
+          backend: submitted.entry.backend,
+          threadId: submitted.entry.threadId,
+          queueStatus: submitted.status,
+          queueEntryId: submitted.entry.id,
+        };
+      } catch (error) {
+        appServerLog.error("submitThreadReply failed", {
+          backend: request.backend,
+          threadId: request.threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+  );
+
   ipcMain.removeHandler(AGENT_READ_QUEUED_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_READ_QUEUED_TURN_CHANNEL,
@@ -695,6 +744,32 @@ export function registerAgentIpcHandlers(): void {
         "Cancelled from the desktop composer.",
         request.expectedContentHash,
       );
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_MOVE_QUEUED_TURN_CHANNEL);
+  ipcMain.handle(
+    AGENT_MOVE_QUEUED_TURN_CHANNEL,
+    async (
+      _event,
+      request: MoveQueuedTurnRequest,
+    ): Promise<MoveQueuedTurnResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        const { federationTarget, ...remoteRequest } = request;
+        const runtime = getDesktopFederationRuntime();
+        // The renderer offers no drag without the capability; this answers a
+        // stale window without a round trip to an owner that cannot move.
+        if (!runtime.remoteTargetSupportsCapability(federationTarget, "turn_queue_reorder")) {
+          throw new Error(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
+        }
+        return await runtime
+          .remoteBackend(federationTarget)
+          .moveQueuedTurn(remoteRequest);
+      }
+      return await registry.moveQueuedTurn(request);
     },
   );
 
@@ -1212,15 +1287,26 @@ export function registerAgentIpcHandlers(): void {
       _event,
       request: CheckThreadBranchDriftRequest,
     ): Promise<CheckThreadBranchDriftResponse> => {
+      let result: CheckThreadBranchDriftResponse;
       if (
         request.federationTarget &&
         isRemoteFederationTarget(request.federationTarget)
       ) {
-        return await getDesktopFederationRuntime()
+        result = await getDesktopFederationRuntime()
           .remoteBackend(request.federationTarget)
           .checkThreadBranchDrift(stripFederationTarget(request));
+      } else {
+        result = await registry.checkThreadBranchDrift(request);
       }
-      return await registry.checkThreadBranchDrift(request);
+      // The check may persist a newly observed branch while a selected-detail
+      // read is in flight. Fence that read before the renderer refreshes it,
+      // so an older coalesced response cannot erase the drift warning.
+      getDesktopNavigationQueryPool().invalidateExactOwner(
+        request.federationTarget,
+        { backend: request.backend, threadId: request.threadId },
+        "detail",
+      );
+      return result;
     },
   );
 
@@ -1425,6 +1511,7 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(CODEX_MCP_SERVER_LOGIN_CHANNEL);
   ipcMain.removeHandler(CODEX_MCP_SERVER_REMOVE_CHANNEL);
   ipcMain.removeHandler(AGENT_START_TURN_CHANNEL);
+  ipcMain.removeHandler(AGENT_SUBMIT_THREAD_REPLY_CHANNEL);
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);

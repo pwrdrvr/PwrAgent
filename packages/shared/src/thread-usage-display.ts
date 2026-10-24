@@ -276,7 +276,7 @@ export function buildTurnUsageActivityEntryFromLine(params: {
         )} reasoning)`
       : `${formatTokenCount(line.outputTokens)} out`,
     line.priceStatus === "priced"
-      ? `${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} list price`
+      ? `${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} ${line.pricingBasis === "provider-reported" ? "provider estimate" : "list price"}`
       : undefined,
   ].filter((part): part is string => Boolean(part));
   const exactCostsByDetailId = new Map([
@@ -286,12 +286,16 @@ export function buildTurnUsageActivityEntryFromLine(params: {
     [`${id}-output-cost`, line.outputCostMicros],
   ]);
   const details = entry.details
+    .filter((detail) => line.pricingBasis !== "provider-reported" || !exactCostsByDetailId.has(detail.id))
     .filter(
       (detail) =>
         line.priceStatus !== "priced"
         || detail.id !== `${id}-cost-unavailable`,
     )
     .map((detail) => {
+      if (line.pricingBasis === "provider-reported" && detail.id === `${id}-cost`) {
+        return { ...detail, label: `Cost: ${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} provider estimate` };
+      }
       const exactCostMicros = exactCostsByDetailId.get(detail.id);
       // Request components can span context bands. The aggregate estimate's
       // unit rates and band label do not describe these measured costs.
@@ -336,7 +340,7 @@ export function buildTurnUsageActivityEntryFromLine(params: {
     details.push({
       id: `${id}-cost`,
       kind: "read",
-      label: `Cost: ${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} list price`,
+      label: `Cost: ${formatTokenUsageMicrosAsUsd(line.totalCostMicros)} ${line.pricingBasis === "provider-reported" ? "provider estimate" : "list price"}`,
       status: "completed",
     });
   }

@@ -5,6 +5,7 @@ import type {
   PwrAgentStarMapRequest,
   PwrAgentStarMapResponse,
   ReadOperatorFocusToolArgs,
+  OpenThreadToolArgs,
   ReadStarMapViewToolArgs,
   SetStarMapViewToolArgs,
   StarMapThreadOpenMode,
@@ -64,6 +65,7 @@ export function buildPwrAgentStarMapToolDefinitions(
   return PWRAGENT_STAR_MAP_OPERATION_NAMES.map((operation) => ({
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
+    annotations: { readOnlyHint: ["read_star_map_view", "read_operator_focus"].includes(operation) },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     deferLoading: false,
@@ -95,6 +97,8 @@ function descriptionForOperation(
   operation: PwrAgentStarMapOperationName,
 ): string {
   switch (operation) {
+    case "open_thread":
+      return "Open/mount a thread in the local graphical UI. Pass instanceId for a peer. Success confirms selection.";
     case "read_star_map_view":
       return [
         "Read what the operator sees on the PwrAgent Star Map right now.",
@@ -148,15 +152,10 @@ function descriptionForOperation(
       ].join(" ");
     case "read_operator_focus":
       return [
-        "Read what the operator is looking at in the main PwrAgent window.",
-        "Reports the selected thread with its backend, threadId and title.",
-        "A thread owned by a connected peer also carries instanceId and instanceLabel.",
-        "With no thread selected, it can report an open new-thread launchpad instead.",
-        "A launchpad gives the projectKey, an instanceId for a peer machine, and the composer's settings.",
-        "Also reports the open view and the sidebar lens.",
-        "Call this to resolve \"this thread\" or \"the one I'm looking at\" in a request.",
-        "The selection is the operator's, not yours: it can change between calls.",
-        "Fails when no main window has published its focus.",
+        "Read the operator's main-window selection to resolve \"this thread\".",
+        "Returns view, lens, selected backend/threadId/title and instanceId/instanceLabel for a peer.",
+        "A new-thread launchpad reports projectKey, peer instanceId and composer settings instead.",
+        "Selection can change between calls. Fails if no main window has published focus.",
       ].join(" ");
   }
 }
@@ -165,6 +164,17 @@ function inputSchemaForOperation(
   operation: PwrAgentStarMapOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "open_thread":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["backend", "threadId"],
+        properties: {
+          backend: { type: "string" },
+          threadId: { type: "string", minLength: 1 },
+          instanceId: { type: "string", minLength: 1 },
+        },
+      };
     case "read_operator_focus":
       return { type: "object", additionalProperties: false, properties: {} };
     case "read_star_map_view":
@@ -288,6 +298,7 @@ type ParsedArgs =
   | {
       args:
         | ReadStarMapViewToolArgs
+        | OpenThreadToolArgs
         | FlyStarMapToToolArgs
         | HighlightStarMapThreadsToolArgs
         | SetStarMapViewToolArgs
@@ -300,6 +311,20 @@ function parseArgs(
   args: Record<string, unknown>,
 ): ParsedArgs {
   switch (operation) {
+    case "open_thread": {
+      if (Object.keys(args).some((key) => !["backend", "threadId", "instanceId"].includes(key))
+        || typeof args.backend !== "string" || !isAppServerBackendKind(args.backend)
+        || typeof args.threadId !== "string" || !args.threadId.trim() || args.threadId.length > 500
+        || (args.instanceId !== undefined
+          && (typeof args.instanceId !== "string" || !args.instanceId.trim() || args.instanceId.length > 500))) {
+        return { error: "open_thread needs a valid backend, a nonempty threadId, and an optional owning instanceId." };
+      }
+      return { args: {
+        backend: args.backend,
+        threadId: args.threadId.trim(),
+        ...(typeof args.instanceId === "string" ? { instanceId: args.instanceId.trim() } : {}),
+      } };
+    }
     case "read_star_map_view":
       return parseReadArgs(args);
     case "fly_star_map_to":

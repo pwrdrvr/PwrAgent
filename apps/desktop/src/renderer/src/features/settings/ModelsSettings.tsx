@@ -1,18 +1,33 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { formatFilesystemPath, isValidatedDiscoveryCandidate } from "@pwragent/shared";
+import {
+  DECISION_PROVIDER_IDS,
+  formatFilesystemPath,
+  isValidatedDiscoveryCandidate,
+  MANAGED_CODEX_BUILD_CHANNEL_DEFAULT,
+  resolveDecisionModelSettings,
+  resolveDefaultLaunchpadExecutionMode,
+  supportsProviderExecutionModeDefault,
+} from "@pwragent/shared";
 import type {
   BackendModelOption,
   BackendSummary,
   DesktopCodexAuthProfileCandidate,
   DesktopCodexDiscoveryCandidate,
   DesktopHelperModelSettings,
+  DesktopDecisionModelSettings,
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsSecretName,
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
+  ThreadExecutionMode,
 } from "@pwragent/shared";
+import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  describeExecutionModeForBackend,
+  formatExecutionModeLabel,
+} from "../../lib/execution-mode";
 import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { useModalDialog } from "../../lib/useModalDialog";
@@ -22,6 +37,7 @@ import {
   SettingsIndexRow,
   SettingsPanelHead,
   SettingsPendingIndicator,
+  SegmentedField,
   SettingsSection,
   SettingsSectionStack,
   ToggleField,
@@ -33,13 +49,19 @@ import {
 } from "./SettingsPathRow";
 import { SettingsTestBlock } from "./SettingsTestBlock";
 import { sourceBadge } from "./settings-fields";
-import { checkForManagedCodexUpdates } from "./managed-codex-actions";
+import {
+  checkForManagedCodexUpdates,
+  refreshManagedCodexModelCatalog,
+} from "./managed-codex-actions";
 import {
   CodexAuthProfileCreateButton,
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
+import { ClaudeSettings } from "./ClaudeSettings";
+import { claudeProviderStatus } from "./claude-provider-status";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
+import { UsageAccountSettings } from "./UsageAccountSettings";
 import {
   ManagedRuntimeProgressStrip,
   useManagedRuntimeProgress,
@@ -49,13 +71,26 @@ import {
   useProviderCatalogRefresh,
   type ProviderCatalogRefreshController,
 } from "./ProviderCatalogRefresh";
-import { acpRelativeTime, acpStatusLabel } from "./acp-agent-copy";
+import {
+  acpRelativeTime,
+  acpStatusLabel,
+  MANAGED_BUILD_TRACK_SUB,
+  managedBuildTrackOptions,
+  managedBuildVersion,
+} from "./acp-agent-copy";
 import {
   acpAgentEnabledInSnapshot,
   displayOrderedAcpEntries,
   useAcpAgentCatalog,
 } from "./useAcpAgentCatalog";
 import { SettingsSwitch } from "./SettingsSwitch";
+import {
+  DECISION_PROVIDER_FOCUS,
+  DECISION_PROVIDER_NAMES,
+  DecisionModelDefaults,
+  DecisionProviderScreen,
+  decisionSecrets,
+} from "./DecisionModelSettings";
 import {
   commandDiscoveryFailureDetail,
   describeCommandDiscoveryFailure,
@@ -134,9 +169,16 @@ export function ModelsSettings(props: {
   onSaveHelperModels?: (
     helperModels: DesktopHelperModelSettings,
   ) => Promise<unknown>;
+  onSaveUsageAccountGroups?: (groups: Record<string, string>) => Promise<unknown>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
+  /** Persist Defaults → Decisions and the decision provider screens. */
+  onSaveDecisionModels?: (settings: DesktopDecisionModelSettings) => Promise<unknown>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
   onManagedCodexBuildsChange?: (enabled: boolean) => Promise<boolean>;
+  /** Persist which pwrdrvr/codex track the managed runtime follows. */
+  onManagedCodexBuildChannelChange?: (
+    channel: DesktopUpdateChannel,
+  ) => Promise<boolean>;
   /** Jump to Experimental, where Token Miser is switched. */
   onOpenTokenMiser?: () => void;
   /** Persist a per-ACP-agent CLI-path override (also pins a discovered install). */
@@ -153,6 +195,8 @@ export function ModelsSettings(props: {
   const [backends, setBackends] = useState<BackendSummary[]>(
     props.cachedBackends ?? [],
   );
+  const claude = backends.find((backend) => backend.kind === "claude");
+  const claudeStatus = claudeProviderStatus(claude?.claude);
   const [catalogError, setCatalogError] = useState<string | undefined>();
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const [checkingManagedCodex, setCheckingManagedCodex] = useState(false);
@@ -229,6 +273,14 @@ export function ModelsSettings(props: {
     }
     setRefreshingCatalog(true);
     try {
+      if (refreshModels) {
+        if (!props.desktopApi.refreshCodexDiscovery) {
+          throw new Error("Codex executable discovery is unavailable in this build.");
+        }
+        await props.desktopApi.refreshCodexDiscovery({
+          discoveryIntent: "settings-user-action",
+        });
+      }
       const response = await props.desktopApi.listBackends({
         includeUnavailable: true,
         ...(refreshModels
@@ -240,6 +292,9 @@ export function ModelsSettings(props: {
       });
       setBackends(response.backends);
       setCatalogError(undefined);
+      if (refreshModels) {
+        await props.onRefresh();
+      }
       return true;
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
@@ -262,6 +317,40 @@ export function ModelsSettings(props: {
       );
     } finally {
       setCheckingManagedCodex(false);
+    }
+  };
+
+  const changeManagedCodexTrack = async (
+    channel: DesktopUpdateChannel,
+  ): Promise<void> => {
+    setManagedCodexCheckError(undefined);
+    // Between promotions both tracks name the build already running, and a
+    // switch installs nothing. Read before the write, which replaces the
+    // snapshot this closure sees.
+    const trackTag = channel === "latest"
+      ? managedCodexRuntime?.latestTag
+      : managedCodexRuntime?.prereleaseTag;
+    const sameBuild =
+      trackTag !== undefined
+      && managedBuildVersion(trackTag) === managedCodexRuntime?.version;
+    // The write holds until main has checked the track and installed its
+    // build, the same transaction as the PwrAgent build switch.
+    const saved = await props.onManagedCodexBuildChannelChange?.(channel);
+    if (!saved) {
+      return;
+    }
+    await props.onRefresh();
+    if (sameBuild) {
+      return;
+    }
+    try {
+      // The track's build is a different Codex, and its models can differ.
+      await refreshManagedCodexModelCatalog(props.desktopApi);
+      await refreshCatalog();
+    } catch (error) {
+      setManagedCodexCheckError(
+        error instanceof Error ? error.message : String(error),
+      );
     }
   };
 
@@ -366,6 +455,22 @@ export function ModelsSettings(props: {
                   }
                 }) ?? Promise.resolve();
               }}
+            />
+          ) : null}
+          {managedCodexOn && props.onManagedCodexBuildChannelChange ? (
+            <SegmentedField
+              label="Build track"
+              sub={MANAGED_BUILD_TRACK_SUB}
+              disabled={props.saving || catalogBusy || checkingManagedCodex}
+              options={managedBuildTrackOptions(managedCodexRuntime ?? {})}
+              // Same wait as the switch above: the config write, then the
+              // release check that installs and activates the track's build.
+              pendingLabel="Downloading and installing…"
+              value={
+                codex.managedBuildChannel?.value
+                ?? MANAGED_CODEX_BUILD_CHANNEL_DEFAULT
+              }
+              onChange={changeManagedCodexTrack}
             />
           ) : null}
           <SettingsField
@@ -539,6 +644,54 @@ export function ModelsSettings(props: {
       </SettingsSection>
   );
 
+  const saveDecisionModels = async (settings: DesktopDecisionModelSettings) =>
+    await props.onSaveDecisionModels?.(settings);
+  const decisionProvider = DECISION_PROVIDER_IDS.find((id) => DECISION_PROVIDER_FOCUS[id] === props.focus);
+  if (decisionProvider) {
+    return (
+      <DecisionProviderScreen
+        provider={decisionProvider}
+        snapshot={props.snapshot}
+        desktopApi={props.desktopApi}
+        saving={props.saving}
+        onSave={saveDecisionModels}
+        onClearSecret={props.onClearSecret}
+        onReplaceSecret={props.onReplaceSecret}
+      />
+    );
+  }
+
+  if (props.focus === "claude") {
+    return (
+      <SettingsSectionStack paneId="models-claude" aria-label="Claude provider settings">
+        <SettingsPanelHead
+          eyebrow="AI Providers"
+          title="Claude"
+          help="PwrAgent runs Claude Code with your CLI sign-in."
+        />
+        <ProviderDefaultsStrip
+          backendKind="claude"
+          backends={backends}
+          defaults={props.snapshot.models.providerDefaults ?? {}}
+          error={catalogError}
+          onEditDefaults={editDefaults}
+        />
+        <ClaudeSettings
+          backend={claude}
+          desktopApi={props.desktopApi}
+          onChecked={async () => {
+            // The test re-inspected Claude in main; read back the summary it
+            // left so this list, the nav, and the composer agree with it.
+            if (!props.desktopApi?.listBackends) return;
+            const result = await props.desktopApi.listBackends({ includeUnavailable: true });
+            setBackends(result.backends);
+            window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+          }}
+        />
+      </SettingsSectionStack>
+    );
+  }
+
   if (props.focus === "codex") {
     return (
       <SettingsSectionStack
@@ -559,6 +712,14 @@ export function ModelsSettings(props: {
           onEditDefaults={editDefaults}
         />
         {codexSection}
+        {props.onSaveUsageAccountGroups ? (
+          <UsageAccountSettings
+            backend="codex"
+            groups={props.snapshot.models.usageAccountGroups ?? {}}
+            saving={props.saving}
+            onSave={props.onSaveUsageAccountGroups}
+          />
+        ) : null}
       </SettingsSectionStack>
     );
   }
@@ -581,6 +742,14 @@ export function ModelsSettings(props: {
           error={catalogError}
           onEditDefaults={editDefaults}
         />
+        {focusedAcpEntry && props.onSaveUsageAccountGroups ? (
+          <UsageAccountSettings
+            backend={focusedAcpEntry.backendId}
+            groups={props.snapshot.models.usageAccountGroups ?? {}}
+            saving={props.saving}
+            onSave={props.onSaveUsageAccountGroups}
+          />
+        ) : null}
         <AcpAgentsSettings
           catalogRefreshing={catalogBusy}
           desktopApi={props.desktopApi}
@@ -629,6 +798,12 @@ export function ModelsSettings(props: {
         onSave={async (helperModels) => await props.onSaveHelperModels?.(helperModels)}
       />
 
+      <DecisionModelDefaults
+        snapshot={props.snapshot}
+        saving={props.saving}
+        onSave={saveDecisionModels}
+      />
+
       <SettingsSection
         eyebrow="Models"
         title="Providers"
@@ -642,6 +817,14 @@ export function ModelsSettings(props: {
             chip={codex.discovery.selectedCommand ? "Discovered" : "Not found"}
             chipKind={codex.discovery.selectedCommand ? "ok" : "muted"}
             onOpen={() => props.onFocusChange?.("codex")}
+          />
+          <SettingsIndexRow
+            name="Claude"
+            meta={claude?.claude?.executable
+              ?? (claude?.claude ? "Claude Code not found" : "Not checked yet")}
+            chip={claudeStatus.label}
+            chipKind={claudeStatus.tone}
+            onOpen={() => props.onFocusChange?.("claude")}
           />
           {orderedAcpEntries.map((entry) => {
             const enabled = acpAgentEnabledInSnapshot(
@@ -670,6 +853,20 @@ export function ModelsSettings(props: {
                 }
                 off={!enabled}
                 onOpen={() => props.onFocusChange?.(entry.registryId)}
+              />
+            );
+          })}
+          {DECISION_PROVIDER_IDS.map((provider) => {
+            const decision = resolveDecisionModelSettings(props.snapshot.models.decisionModels);
+            const ready = provider === "local" || decisionSecrets(props.snapshot).jevApiKey.configured;
+            return (
+              <SettingsIndexRow
+                key={provider}
+                name={DECISION_PROVIDER_NAMES[provider]}
+                meta={provider === "local" ? decision.localEndpoint : decision.jevModel}
+                chip={decision.model === provider ? "In use" : ready ? "Decision model" : "No API key"}
+                chipKind={decision.model === provider ? "ok" : "muted"}
+                onOpen={() => props.onFocusChange?.(DECISION_PROVIDER_FOCUS[provider])}
               />
             );
           })}
@@ -723,6 +920,11 @@ function ProviderDefaultsStrip(props: {
   const items: ReactNode[] = [modelLabel];
   if (effort) {
     items.push(`${effort} effort`);
+  }
+  if (backend && supportsProviderExecutionModeDefault(backend.kind)) {
+    const access = resolveDefaultLaunchpadExecutionMode(backend.kind, props.defaults);
+    // "Default Access" and "Full Access" already name themselves.
+    items.push(access === "auto" ? "Auto access" : formatExecutionModeLabel(access));
   }
   if (props.codexFastAllowed !== undefined) {
     items.push(props.codexFastAllowed ? "Faster speeds allowed" : "Standard speed only");
@@ -1006,7 +1208,7 @@ function ProviderModelDefaultsSettings(props: {
     <SettingsSection
       eyebrow="Defaults"
       title="New thread defaults"
-      description="Changing a model or reasoning updates all launchpads for that provider in this profile. Existing threads keep their settings."
+      description="Changing a model, reasoning, or access updates all launchpads for that provider in this profile. Existing threads keep their settings."
     >
       <div className="settings-fields">
         {providers.map((backend) => {
@@ -1381,7 +1583,7 @@ function ProviderModelDefaultField(props: {
               onChange={(event) => {
                 const model = event.currentTarget.value;
                 if (!model) {
-                  props.onChange(undefined);
+                  props.onChange(withoutModel(props.defaults));
                   return;
                 }
                 const option = models.find((candidate) => candidate.id === model);
@@ -1394,7 +1596,11 @@ function ProviderModelDefaultField(props: {
                 ) {
                   reasoningEffortsByModel[model] = option.defaultReasoningEffort;
                 }
-                props.onChange({ model, reasoningEffortsByModel });
+                props.onChange({
+                  ...props.defaults,
+                  model,
+                  reasoningEffortsByModel,
+                });
               }}
             >
               <option value="">Provider advertised default</option>
@@ -1424,6 +1630,7 @@ function ProviderModelDefaultField(props: {
                     delete reasoningEffortsByModel[selectedModel];
                   }
                   props.onChange({
+                    ...props.defaults,
                     model: selectedModel,
                     reasoningEffortsByModel,
                   });
@@ -1461,11 +1668,19 @@ function ProviderModelDefaultField(props: {
                 className="button button--ghost"
                 disabled={props.disabled}
                 type="button"
-                onClick={() => props.onChange(undefined)}
+                onClick={() => props.onChange(withoutModel(props.defaults))}
               >
                 Reset
               </button>
             </div>
+          ) : null}
+          {supportsProviderExecutionModeDefault(props.backend.kind) ? (
+            <ProviderAccessDefault
+              backend={props.backend}
+              defaults={props.defaults}
+              disabled={props.disabled}
+              onChange={props.onChange}
+            />
           ) : null}
           {props.fastMode ? (
             <div className="settings-provider-defaults__fast">
@@ -1532,6 +1747,118 @@ function ProviderModelDefaultField(props: {
         </div>
       }
     />
+  );
+}
+
+/** Clears the model choice; the provider's access default stays. */
+function withoutModel(
+  defaults: DesktopProviderModelDefaults | undefined,
+): DesktopProviderModelDefaults | undefined {
+  return defaults?.executionMode
+    ? { reasoningEffortsByModel: {}, executionMode: defaults.executionMode }
+    : undefined;
+}
+
+const ACCESS_DEFAULT_MODES: readonly ThreadExecutionMode[] = [
+  "default",
+  "auto",
+  "full-access",
+];
+
+/**
+ * Access for new threads on this provider. Auto is the built-in default, so
+ * choosing it stores nothing; Full Access asks first, since it reaches every
+ * launchpad that uses the provider.
+ */
+function ProviderAccessDefault(props: {
+  backend: BackendSummary;
+  defaults?: DesktopProviderModelDefaults;
+  disabled: boolean;
+  onChange: (defaults: DesktopProviderModelDefaults | undefined) => void;
+}) {
+  const [confirmingFullAccess, setConfirmingFullAccess] = useState(false);
+  const preferred = resolveDefaultLaunchpadExecutionMode(
+    props.backend.kind,
+    props.defaults ? { [props.backend.kind]: props.defaults } : undefined,
+  );
+  // A Codex too old for Auto starts threads on Default Access. Show that
+  // instead of an Auto that new threads will not get.
+  const unavailableAuto = preferred === "auto"
+    ? props.backend.executionModes.find(
+      (mode) => mode.mode === "auto" && !mode.available,
+    )
+    : undefined;
+  const selected: ThreadExecutionMode = unavailableAuto ? "default" : preferred;
+  const options: SelectOption<ThreadExecutionMode>[] = ACCESS_DEFAULT_MODES.map(
+    (mode) => {
+      const advertised = props.backend.executionModes.find(
+        (candidate) => candidate.mode === mode,
+      );
+      const unavailable = advertised ? !advertised.available : false;
+      return {
+        value: mode,
+        label: formatExecutionModeLabel(mode),
+        description: unavailable
+          ? advertised?.unavailableReason ?? "Unavailable"
+          : describeExecutionModeForBackend(props.backend.kind, mode),
+        disabled: unavailable && mode !== selected,
+      };
+    },
+  );
+  const save = (mode: ThreadExecutionMode): void => {
+    const { executionMode: _previous, ...rest } = props.defaults ?? {
+      reasoningEffortsByModel: {},
+    };
+    const next: DesktopProviderModelDefaults = mode === "auto"
+      ? rest
+      : { ...rest, executionMode: mode };
+    const empty = !next.model
+      && Object.keys(next.reasoningEffortsByModel).length === 0
+      && !next.executionMode;
+    props.onChange(empty ? undefined : next);
+  };
+  return (
+    <div className="settings-provider-defaults__fast">
+      <div className="settings-provider-defaults__fast-copy">
+        <strong>Access</strong>
+        <span>
+          {unavailableAuto
+            ? `${unavailableAuto.unavailableReason ?? "Auto is unavailable."} New threads start on Default Access.`
+            : describeExecutionModeForBackend(props.backend.kind, selected)}
+        </span>
+      </div>
+      {confirmingFullAccess ? (
+        <InlineActionConfirmation
+          applying={props.disabled}
+          confirmLabel="Use Full Access"
+          label={`Start new ${props.backend.label} threads with Full Access?`}
+          sub={`${props.backend.label} will run without permission prompts in every launchpad that uses it. Existing threads keep their access.`}
+          onCancel={() => setConfirmingFullAccess(false)}
+          onConfirm={() => {
+            setConfirmingFullAccess(false);
+            save("full-access");
+          }}
+        />
+      ) : (
+        <div className="settings-inline-actions">
+          <Select
+            aria-label={`${props.backend.label} access for new threads`}
+            className="settings-select settings-select--chip"
+            disabled={props.disabled}
+            value={selected}
+            options={options}
+            onChange={(mode) => {
+              if (mode === selected) return;
+              if (mode === "full-access") {
+                setConfirmingFullAccess(true);
+                return;
+              }
+              save(mode);
+            }}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 

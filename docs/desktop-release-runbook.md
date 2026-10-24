@@ -5,8 +5,8 @@
 This runbook covers cutting v1.x desktop releases. macOS releases ship as
 Apple Silicon (arm64) and universal Apple Silicon + Intel binaries; distribution is outside the Mac App
 Store via signed/notarized DMG with auto-update through `electron-updater`
-against GitHub Releases on `pwrdrvr/PwrAgent`. Linux releases ship as manual
-Debian packages for x64/amd64 and arm64.
+against GitHub Releases on `pwrdrvr/PwrAgent`. Linux releases ship DEB, RPM, pacman, and tar.gz artifacts for x64 and arm64.
+Native packages use `electron-updater`; portable tar.gz builds are updated manually.
 
 ---
 
@@ -198,6 +198,12 @@ Desktop Settings let operators pick a **channel** (Stable or Beta) and a
 | Beta · Latest | `v1.1.0-beta.3` | Pre-release |
 | Beta · Prerelease | `v1.1.0-alpha.7` | Pre-release |
 
+Beta · Prerelease also takes a `-prerelease.N` Stable RC that outranks Stable
+Latest when no alpha or beta is higher, so it never shows an older build than
+Stable · Prerelease. Semver orders `prerelease` after `alpha` and `beta`, so
+after a `v1.2.0-prerelease.N` tag, later `v1.2.0-alpha.N` and `v1.2.0-beta.N`
+tags sort below it and Beta · Prerelease stays on the RC.
+
 CI publishes **every** release as a GitHub `Pre-release`, including a
 suffix-free stable tag. A suffix-free tag left at `prerelease: true` lands in
 Stable · Prerelease, so Stable · Latest keeps serving the previous stable
@@ -261,32 +267,44 @@ git push origin v1.0.0-alpha.7
 ```
 
 The `Release Desktop (macOS universal + arm64 + Windows + Linux DEB)` workflow contains
-seven job definitions (the Linux package job fans out across two architectures):
+ten job definitions (unit tests fan out across two lanes and Linux packaging
+across two architectures). All macOS jobs use standard `macos-26` runners:
 
-1. `Test and prepare signing input`, with `contents: read`, explicit
-   `id-token: none`, no Apple secrets, and checkout credentials disabled. It
-   installs dependencies, runs release metadata checks, typecheck, tests, and
-   `apps/desktop/scripts/release.mjs --prepare-only`.
-2. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
+1. `Install macOS dependencies` populates the dependency and Electron caches
+   on a miss, using the same lookup-only setup as CI.
+2. `Lint and typecheck` restores dependencies, checks release metadata and
+   authoritative Homebrew/Winget channels, and runs `pnpm lint`, including
+   typecheck, licensing, ESLint, and the repository's correctness gates.
+3. `macOS unit tests (lane N of 2)` runs the complete workspace suite split
+   with `pnpm test --shard=<lane>/2`. Both lanes select Xcode with actool 26 and
+   set `PWRAGENT_REQUIRE_ACTOOL=1`, so the icon compile test cannot silently skip.
+4. `Prepare macOS signing input` runs
+   `apps/desktop/scripts/release.mjs --prepare-only` for both architectures.
+   It runs alongside lint/typecheck and the unit test lanes after cache setup.
+   These jobs have `contents: read`, explicit `id-token: none`, no Apple secrets,
+   and checkout credentials disabled. macOS signing, Linux packaging, and
+   Windows preparation require this job, lint/typecheck, and both test lanes
+   to succeed.
+5. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
    environment, with `contents: read` and explicit `id-token: none`. It does
    not check out the repository or run dependency installation/postinstall
    scripts. It downloads the prepared artifact, verifies its SHA-256 digest,
    expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only
    --no-publish`
    with the environment-scoped Apple secrets.
-3. `Package Linux`, running on native Ubuntu x64 and arm64 GitHub-hosted
+6. `Package Linux`, running on native Ubuntu x64 and arm64 GitHub-hosted
    runners. Each job runs `apps/desktop/scripts/release.mjs --linux
    --no-publish`, verifies the packaged ASAR, writes a stable download alias,
    and uploads DEB, RPM, pacman, and tar.gz files as short-retention
    workflow artifacts. The publication job requires both architectures and
    every format (including its stable alias) before hashing or publishing.
-4. `Prepare Windows signing input`, running on Windows without an environment
+7. `Prepare Windows signing input`, running on Windows without an environment
    or signing credentials. It builds a self-contained, hoisted Windows release
    stage that includes the electron-builder toolchain, archives that stage and
    the small signing scripts without workspace `node_modules` links, records
    the archive SHA-256 as a job output, and uploads the archive. This avoids
    Windows tar recursively following pnpm workspace junctions.
-5. `Sign and package Windows installer`, gated by the protected
+8. `Sign and package Windows installer`, gated by the protected
    `windows-signing` environment. It does not check out source or install
    project dependencies/lifecycle scripts. It verifies and expands the exact
    prepared archive, installs `TrustedSigning`, and runs `release.mjs --win
@@ -299,14 +317,14 @@ seven job definitions (the Linux package job fans out across two architectures):
    `PwrAgent.Setup.exe`, and records that copy in the Windows `SHA256SUMS`
    manifest. Cutting the alias here and nowhere earlier is what makes it a copy
    of a signed installer rather than of an unsigned intermediate.
-6. `Publish release assets`, which waits for successful macOS signing, both
+9. `Publish release assets`, which waits for successful macOS signing, both
    Linux packages, and the signed Windows installer. Only then does it create
    the GitHub Release — always as a `Pre-release`, whatever the tag suffix —
    upload every platform's assets, and generate Linux `SHA256SUMS`. The step
    then reads the release back and fails the job if GitHub did not record
    `isPrerelease: true`. The Windows package checksum manifest is uploaded as
    `PwrAgent-windows-SHA256SUMS` so GitHub Release assets have unique names.
-7. `Publish release notes`, which waits for successful all-platform asset
+10. `Publish release notes`, which waits for successful all-platform asset
    publishing, extracts the matching `CHANGELOG.md` section, updates the
    GitHub Release body, and fails the workflow if the body still reads back as
    empty.
@@ -689,9 +707,11 @@ APP=apps/desktop/release-stage/dist/mac-universal/PwrAgent.app
 # Identity must be PwrDrvr LLC
 codesign -dv --verbose=4 "$APP"
 
-# Main executable and native addon must contain both Apple Silicon and Intel slices
+# Main executable and native addons must contain both Apple Silicon and Intel slices
 lipo -archs "$APP/Contents/MacOS/PwrAgent"
 lipo -archs "$APP/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+lipo -archs "$APP/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node"
+lipo -archs "$APP/Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper"
 
 # Gatekeeper-approved (Notarized Developer ID)
 spctl -a -vv "$APP"
@@ -754,7 +774,7 @@ older selected release as a **switch back** rather than "no update":
   points the feed at the selected release, and downloads it. Every check that
   resolves to a newer release sets `allowDowngrade` back to `false`.
 - The offer is made only for an operator-initiated check — the Settings
-  "Check for Update" button, the app menu **Check for Updates**, or the app
+  "Check for Update" button, the menu bar's **Check for Updates…**, or the app
   management tool. Startup and hourly background checks still report
   "You're up to date" so an operator who deliberately installed a newer build
   is not asked to move back down on every poll. Tell an operator who is
@@ -769,10 +789,22 @@ older selected release as a **switch back** rather than "no update":
 Phase 2 distribution channel migration removes the token requirement entirely.
 See [desktop-distribution-phase-2-runbook.md](desktop-distribution-phase-2-runbook.md).
 
-Linux builds intentionally skip `electron-updater`. Operators upgrade by
-installing the newer DEB, RPM, or pacman package, or replacing the
-extracted tar.gz from GitHub Releases; the in-app update status
-reports that Linux packages are updated manually.
+Linux DEB, RPM, and pacman installations use `electron-updater`, which detects
+its backend from electron-builder's `resources/package-type`. Release selection
+requires the running architecture's Linux channel file and installed package
+format. Downloads run on startup and hourly; installation happens only after
+an explicit Restart action, with package-manager administrator authorization.
+Authorization precedes committing quit permission and federation shutdown; a
+failed or canceled authorization resumes automation dispatch and allows retry.
+RPM switch-backs use downgrade-capable package-manager commands.
+Ordinary quit does not install a Linux update. Failed checks and downloads show
+a copyable terminal command for the selected release (or explicitly the latest stable
+release if the feed could not be read).
+
+Portable tar.gz builds retain release discovery and release-note links, but
+still require replacing the extracted directory. An AppImage launched with `APPIMAGE` set can use electron-updater's AppImage
+backend, but this workflow does not yet build or publish AppImages; see the
+runtime distribution requirements above.
 
 ---
 

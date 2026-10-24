@@ -8,10 +8,16 @@ import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 describe("desktop config [federation] section", () => {
   it.each([true, false])("round-trips receiver permissions %s", (allowed) => {
     const original = '# Preserve me\n[federation]\nmode = "dual"\n';
-    const federation = { allowRemoteShells: allowed, allowFilePush: allowed, allowFilePull: allowed, allowFilePullOutsideThreadDirectories: allowed, filePushDirectory: "/tmp/incoming" };
+    const federation = { allowPortForwarding: allowed, allowRemoteShells: allowed, allowFilePush: allowed, allowFilePull: allowed, allowFilePullOutsideThreadDirectories: allowed, filePushDirectory: "/tmp/incoming" };
     const written = applyTomlEdits(original, desktopSettingsPatchToEdits({ federation }));
     expect(written).toContain("# Preserve me");
     expect(parseDesktopSettingsToml(written, "test.toml").federation).toMatchObject({ ...federation, mode: "dual" });
+  });
+
+  it("leaves missing or malformed port-forwarding permission unspecified", () => {
+    for (const src of ["[federation]", '[federation]\nallow_port_forwarding = "true"']) {
+      expect(parseDesktopSettingsToml(src, "test.toml").federation?.allowPortForwarding).toBeUndefined();
+    }
   });
 
   it.each([true, false])("preserves an explicit Cloudflare gateway switch %s", (cloudflareGatewayEnabled) => {
@@ -236,6 +242,32 @@ describe("desktop config [federation] section", () => {
     expect(config.federation?.gatewayEndpoints).toEqual([
       "wss://first.example.com",
     ]);
+  });
+
+  it("drops empty DNS labels from configured and advertised endpoint lists on read and write", () => {
+    const valid = "ws://studio.tail1234.ts.net:47830";
+    const invalid = "ws://studio.tail1234.ts..net:47830";
+    const endpoints = [invalid, valid];
+    const src = [
+      "[federation]",
+      `gateway_endpoints = ${JSON.stringify(endpoints)}`,
+      `advertised_endpoints = ${JSON.stringify(endpoints)}`,
+      "",
+    ].join("\n");
+
+    expect(parseDesktopSettingsToml(src, "test.toml").federation).toMatchObject({
+      gatewayEndpoints: [valid],
+      advertisedEndpoints: [valid],
+    });
+
+    const written = applyTomlEdits("", desktopSettingsPatchToEdits({
+      federation: { gatewayEndpoints: endpoints, advertisedEndpoints: endpoints },
+    }));
+    expect(written).not.toContain(invalid);
+    expect(parseDesktopSettingsToml(written, "test.toml").federation).toMatchObject({
+      gatewayEndpoints: [valid],
+      advertisedEndpoints: [valid],
+    });
   });
 
   it("clearing the endpoint list preserves the legacy gateway_url", () => {

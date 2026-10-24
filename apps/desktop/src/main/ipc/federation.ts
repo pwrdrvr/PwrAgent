@@ -1,5 +1,10 @@
+import { registerFederationServicesIpc } from "./federation-services";
 import { BrowserWindow, ipcMain } from "electron";
 import { registerCloudflareSetupIpc } from "./federation-cloudflare";
+import {
+  disposeComposerFilePushIpc,
+  registerComposerFilePushIpc,
+} from "./federation-composer-file-push";
 import type {
   ReadFederationActivityRequest,
   ConfigureFederationTailscaleRequest,
@@ -103,6 +108,8 @@ let activityToggle: Promise<unknown> = Promise.resolve();
 
 export function registerFederationIpcHandlers(): void {
   registerCloudflareSetupIpc();
+  registerFederationServicesIpc();
+  registerComposerFilePushIpc();
   for (const channel of [
     FEDERATION_READ_ACTIVITY_CHANNEL,
     FEDERATION_RESET_ACTIVITY_CHANNEL,
@@ -531,5 +538,6 @@ export function disposeFederationIpcHandlers(): void {
   ipcMain.removeHandler(FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL);
   ipcMain.removeHandler(FEDERATION_WATCH_DIRECTORY_SET_CHANNEL);
   ipcMain.removeHandler(FEDERATION_PIN_IMPACT_CHANNEL);
+  disposeComposerFilePushIpc();
   rendererSubscriptionCleanupIds.clear();
 }

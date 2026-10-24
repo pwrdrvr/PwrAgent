@@ -511,6 +511,56 @@ describe("ensureManagedGrokRuntime", () => {
     expect(runtime?.metadata.prereleaseTag).toBe("pwragent-v2.1.0-pwragent.1");
   });
 
+  it("checks the new track after an in-flight check for the other one", async () => {
+    // A track switch can land while the old track's check is still running.
+    // Joining that check would hand the switch the build the operator left.
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v2.1.0-pwragent.1";
+    const archiveName = "pwragent-grok-2.1.0-pwragent.1-linux-x86_64.tar.gz";
+    const archive = Buffer.from("prerelease archive bytes");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const installable = releaseFetch(tag, archiveName, archive, digest);
+    let finishLatestCheck!: () => void;
+    const latestCheckGate = new Promise<void>((resolve) => {
+      finishLatestCheck = resolve;
+    });
+    let firstReleaseCheck = true;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input) === MANAGED_GROK_RELEASES_URL && firstReleaseCheck) {
+        firstReleaseCheck = false;
+        await latestCheckGate;
+        return new Response("offline", { status: 503 });
+      }
+      return await installable(input);
+    });
+    const common = {
+      arch: "x64" as const,
+      checkMode: "force" as const,
+      extractArchive: async (_archivePath: string, targetDir: string) => {
+        await writeFakeBundle(targetDir);
+      },
+      fetch: fetchMock as typeof globalThis.fetch,
+      platform: "linux" as const,
+      probeVersion: async () => "grok 2.1.0-test",
+      rootDir,
+    };
+
+    const latest = ensureManagedGrokRuntime({ ...common, channel: "latest" });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const prerelease = ensureManagedGrokRuntime({
+      ...common,
+      channel: "prerelease",
+    });
+    finishLatestCheck();
+
+    // A failed Grok check with nothing cached resolves empty rather than
+    // throwing; the point is that the Prerelease caller did not receive it.
+    await expect(latest).resolves.toBeUndefined();
+    await expect(prerelease).resolves.toMatchObject({
+      metadata: { channel: "prerelease", tag },
+    });
+  });
+
   it("keeps the cached build on Latest when only the feed answers", async () => {
     // The feed cannot say which builds are promoted, so the Latest track has
     // no usable answer this cycle. Installing the newest tag anyway would put

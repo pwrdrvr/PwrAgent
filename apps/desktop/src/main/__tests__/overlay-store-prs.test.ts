@@ -353,7 +353,23 @@ describe("SqliteOverlayStore — thread PRs", () => {
       {
         ...prPassing,
         title: "Explicitly restored PR",
+        explicitlyAttached: true,
       },
+    ]);
+  });
+
+  it("keeps explicit attachment intent through discovery status replacements and reopen", async () => {
+    const dbPath = useFileStateDb();
+    const identity = { backend: "codex" as const, threadId: "explicit-pr" };
+    const discovered = { ...prPassing, headRefName: "main", linkedDirectoryPaths: ["/fixture/repo"] };
+    await store.setThreadPullRequests({ ...identity, prs: [discovered], fetchedAt: 1000 });
+    await store.addThreadPullRequestReference({ ...identity, pr: prPassing });
+    await store.setThreadPullRequests({ ...identity, prs: [{ ...discovered, title: "Refreshed" }], fetchedAt: 2000 });
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    expect((await store.getThreadOverlayState(identity))?.prs).toEqual([
+      { ...discovered, title: "Refreshed", explicitlyAttached: true },
     ]);
   });
 
@@ -430,9 +446,9 @@ describe("SqliteOverlayStore — thread PRs", () => {
     const identity = { backend: "codex" as const, threadId: "overlapping-prs" };
     await store.addThreadPullRequestReference({ ...identity, pr: fork });
     const attached = await store.addThreadPullRequestReference({ ...identity, pr: upstream });
-    expect(attached.prs).toEqual([fork, { ...upstream, org: "upstream", sourceRepository: { provider: "github.com", org: "fork", repo: "diskhound" } }]);
+    expect(attached.prs).toEqual([{ ...fork, explicitlyAttached: true }, { ...upstream, org: "upstream", sourceRepository: { provider: "github.com", org: "fork", repo: "diskhound" }, explicitlyAttached: true }]);
     const detached = await store.detachThreadPullRequest({ ...identity, pr: fork });
-    expect(detached.prs).toEqual([{ ...upstream, org: "upstream", sourceRepository: { provider: "github.com", org: "fork", repo: "diskhound" } }]);
+    expect(detached.prs).toEqual([{ ...upstream, org: "upstream", sourceRepository: { provider: "github.com", org: "fork", repo: "diskhound" }, explicitlyAttached: true }]);
     expect(detached.detachedPrKeys).toEqual(["github.com/fork/diskhound#38"]);
   });
 

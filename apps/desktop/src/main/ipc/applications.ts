@@ -1,6 +1,7 @@
-import { access, readFile, stat } from "node:fs/promises";
+import { access, readFile, realpath, stat } from "node:fs/promises";
 import { BrowserWindow, ipcMain, shell } from "electron";
 import {
+  isFilePreviewPath,
   isRemoteFederationTarget,
   type OpenDesktopApplicationRequest,
   type OpenDesktopApplicationResponse,
@@ -16,6 +17,8 @@ import {
   type OpenPathResponse,
   type ReadMarkdownFileRequest,
   type ReadMarkdownFileResponse,
+  type ResolveTranscriptFilesRequest,
+  type ResolveTranscriptFilesResponse,
   type ReadMarkdownFileViewerSnapshotRequest,
   type ReadMarkdownFileViewerSnapshotResponse,
 } from "@pwragent/shared";
@@ -23,6 +26,7 @@ import {
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
+  TRANSCRIPT_FILES_RESOLVE_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
   PATH_OPEN_CHANNEL,
@@ -37,6 +41,9 @@ import {
   showMarkdownFileViewerWindow,
 } from "../markdown-files-window";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { resolveFilePullThread } from "../federation/federation-file-pull";
+import { resolveTranscriptFiles, transcriptThreadDirectories } from "../transcript-files";
 import { showSubAgentTranscriptWindow } from "../subagent-transcript-window";
 import {
   showThreadFromToolOutputIncidentExplorer,
@@ -47,7 +54,7 @@ import {
   openDesktopApplication,
 } from "../settings/application-discovery";
 
-const MAX_MARKDOWN_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_PREVIEW_FILE_BYTES = 2 * 1024 * 1024;
 
 /**
  * Open a filesystem path with the OS default handler. The fallback the
@@ -92,6 +99,8 @@ async function revealPathInFolder(
   return { opened: true };
 }
 
+// The existing file-viewer channel serves every preview kind, not only
+// Markdown. Keep the channel name stable for preload and federation clients.
 async function readMarkdownFile(
   request: ReadMarkdownFileRequest,
 ): Promise<ReadMarkdownFileResponse> {
@@ -99,7 +108,7 @@ async function readMarkdownFile(
     try {
       return await getDesktopFederationRuntime().pullMarkdownFile(request.federationTarget, request);
     } catch (error) {
-      return { path: request.path, error: error instanceof Error ? error.message : "Remote Markdown file could not be read." };
+      return { path: request.path, error: error instanceof Error ? error.message : "Remote file could not be read." };
     }
   }
   const target = request.path?.trim();
@@ -107,22 +116,28 @@ async function readMarkdownFile(
     return { path: "", error: "No file path was provided." };
   }
 
-  if (!/\.(?:md|markdown)$/i.test(target)) {
-    return { path: target, error: "Only Markdown files can be previewed." };
+  if (!isFilePreviewPath(target)) {
+    return { path: target, error: "This file type cannot be previewed." };
   }
 
   try {
-    const fileStat = await stat(target);
+    // Gate the file a symlink resolves to as well, so a previewable name
+    // cannot reach a `.env` file or a Codex session log.
+    const resolved = await realpath(target);
+    if (!isFilePreviewPath(resolved)) {
+      return { path: target, error: "This file type cannot be previewed." };
+    }
+    const fileStat = await stat(resolved);
     if (!fileStat.isFile()) {
       return { path: target, error: `Path is not a file: ${target}` };
     }
-    if (fileStat.size > MAX_MARKDOWN_FILE_BYTES) {
-      return { path: target, error: "Markdown file is too large to preview." };
+    if (fileStat.size > MAX_PREVIEW_FILE_BYTES) {
+      return { path: target, error: "File is too large to preview." };
     }
 
     return {
       path: target,
-      content: await readFile(target, "utf8"),
+      content: await readFile(resolved, "utf8"),
     };
   } catch {
     return { path: target, error: `Path does not exist: ${target}` };
@@ -155,6 +170,27 @@ async function readApplications(
 }
 
 export function registerApplicationIpcHandlers(): void {
+  ipcMain.removeHandler(TRANSCRIPT_FILES_RESOLVE_CHANNEL);
+  ipcMain.handle(
+    TRANSCRIPT_FILES_RESOLVE_CHANNEL,
+    async (_event, request: ResolveTranscriptFilesRequest): Promise<ResolveTranscriptFilesResponse> => {
+      try {
+        if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+          return await getDesktopFederationRuntime().resolveTranscriptFiles(request.federationTarget, request);
+        }
+        const thread = request.thread
+          ? await resolveFilePullThread(getDesktopBackendRegistry(), request.thread.backend, request.thread.threadId)
+          : undefined;
+        // A missing thread must not fall back to a viewer-supplied root.
+        if (request.thread && !thread) return { files: [] };
+        const directories = thread ? transcriptThreadDirectories(thread) : request.projectPath ? [request.projectPath] : [];
+        return await resolveTranscriptFiles(request, directories);
+      } catch {
+        // Offline/older peers leave code literal and never fall back to local stat.
+        return { files: [] };
+      }
+    },
+  );
   ipcMain.removeHandler(APPLICATIONS_READ_CHANNEL);
   ipcMain.handle(
     APPLICATIONS_READ_CHANNEL,
@@ -256,6 +292,7 @@ export function registerApplicationIpcHandlers(): void {
 }
 
 export function disposeApplicationIpcHandlers(): void {
+  ipcMain.removeHandler(TRANSCRIPT_FILES_RESOLVE_CHANNEL);
   ipcMain.removeHandler(APPLICATION_OPEN_CHANNEL);
   ipcMain.removeHandler(PATH_OPEN_CHANNEL);
   ipcMain.removeHandler(PATH_REVEAL_CHANNEL);

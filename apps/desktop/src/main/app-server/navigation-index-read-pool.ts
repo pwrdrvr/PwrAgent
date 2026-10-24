@@ -68,7 +68,7 @@ export class NavigationIndexReadPool {
     this.evict(key);
   }
 
-  read(key: string, load: (signal: AbortSignal) => Promise<NavigationQueryIndex>, signal?: AbortSignal, version?: string): Promise<NavigationQueryIndex> {
+  read(key: string, load: (signal: AbortSignal, assertCurrent: () => void) => Promise<NavigationQueryIndex>, signal?: AbortSignal, version?: string): Promise<NavigationQueryIndex> {
     signal?.throwIfAborted();
     const retained = this.retained.get(key);
     if (retained && retained.owner.version === version && retained.expires > Date.now()) {
@@ -110,7 +110,12 @@ export class NavigationIndexReadPool {
             const revision = owned.revision;
             let index: NavigationQueryIndex;
             try {
-              index = await load(controller.signal);
+              index = await load(controller.signal, () => {
+                controller.signal.throwIfAborted();
+                if (revision !== owned.revision) {
+                  throw new NavigationQueryError("navigation_busy", "Owner navigation inputs changed before index construction.");
+                }
+              });
             } catch (error) {
               controller.signal.throwIfAborted();
               if (revision !== owned.revision) {

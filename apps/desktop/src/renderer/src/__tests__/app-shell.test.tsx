@@ -25,11 +25,12 @@ import type {
   FederationPeerSummary,
   FederationTarget,
   NavigationSnapshot,
+  NavigationLaunchpadDraft,
   NavigationSelectedDetailRequest,
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   App,
   inferReplayCodexProfileModel,
@@ -250,6 +251,7 @@ function profileSummary(
     },
     default: name === "default",
     profileDir: `/home/example/.pwragent/profiles/${name}`,
+    showInMenu: true,
   };
 }
 
@@ -390,7 +392,7 @@ describe("App", () => {
       expect(selection.toString()).toBe("Keep this paragraph selected.");
       expect(scroll.scrollTop).toBe(640);
       expect(readMarkdownFile).toHaveBeenCalledTimes(1);
-      expect(screen.queryByText("Loading document...")).not.toBeInTheDocument();
+      expect(screen.queryByText("Loading file…")).not.toBeInTheDocument();
     }
     selection.removeAllRanges();
   });
@@ -498,6 +500,129 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  it("puts the caret in the new-thread composer after jumping to a project", async () => {
+    const project = (label: string) => ({
+      key: `directory:/Users/me/repos/${label}`,
+      kind: "directory" as const,
+      label,
+      path: `/Users/me/repos/${label}`,
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 1,
+    });
+    const ensureDirectoryLaunchpad = vi.fn(
+      async (request: EnsureDirectoryLaunchpadRequest) => ({
+        launchpad: {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel,
+          directoryPath: request.directoryPath,
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      }),
+    );
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [project("PwrAgent"), project("PwrSnap")],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+      }),
+    });
+
+    render(<App />);
+
+    const jumpTo = async (label: string): Promise<void> => {
+      fireEvent.keyDown(window, {
+        metaKey: true,
+        code: "KeyK",
+        key: "k",
+      });
+      const quickSearch = await screen.findByRole("dialog", {
+        name: "Jump to thread or project",
+      });
+      const field = within(quickSearch).getByRole("textbox", {
+        name: "Jump to thread or project",
+      });
+      fireEvent.change(field, { target: { value: label } });
+      await within(quickSearch).findByRole("option", { name: new RegExp(label) });
+      await act(async () => {
+        fireEvent.keyDown(field, { key: "Enter" });
+      });
+      await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+        expect.objectContaining({ directoryLabel: label }),
+      ));
+    };
+    // The reveal ends by scrolling the project's row, in the same frame that
+    // used to focus its header, so a scroll of that row is the moment to
+    // check where focus is.
+    const scrollIntoView = vi.fn<(this: HTMLElement) => void>();
+    const scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    onTestFinished(() => {
+      if (scrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", scrollIntoViewDescriptor);
+      } else {
+        delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+      }
+    });
+    const revealed = async (label: string): Promise<void> => {
+      await waitFor(() => {
+        expect(scrollIntoView.mock.contexts.some((row) =>
+          row.querySelector(".directory-row__summary")?.textContent?.includes(label)))
+          .toBe(true);
+      });
+    };
+
+    // The first jump loads the thread view; the second uses the mounted view.
+    // Both the sidebar reveal and scoped composer focus must finish with the
+    // caret where the operator will type.
+    await jumpTo("PwrAgent");
+    // The composer becomes available after deferred readiness and the import
+    // have committed. Await that visible state: awaiting the import inside act
+    // can hold the readiness update that starts the import in act's queue.
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
+    });
+    await revealed("PwrAgent");
+
+    scrollIntoView.mockClear();
+    await jumpTo("PwrSnap");
+    await revealed("PwrSnap");
+    // Changing the composer scope schedules focus in a timer, then Tiptap's
+    // animation frame. The sidebar's reveal frame can finish first.
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "New thread" })).toHaveFocus();
+    });
+  });
+
   // Settings and Automations draw over the whole shell. The sidebar and main
   // go inert under them, so Tab cannot walk the invisible controls behind,
   // and focus goes back to the control that opened the layer on exit.
@@ -603,7 +728,6 @@ describe("App", () => {
 
   it("starts a new thread on a selected federation machine and profile", async () => {
     const federationListeners = new Set<(event: AgentEvent) => void>();
-    const threadViewImported = createDeferred<void>();
     const remoteTarget = { scope: "remote" as const, instanceId: "studio-work" };
     const remoteWorkspace = {
       key: "workspace:new-thread",
@@ -707,11 +831,6 @@ describe("App", () => {
         },
         onWindowFocus: () => () => undefined,
         readFederationHealth,
-        recordStartupProfileEvent: (event: string) => {
-          if (event === "thread-view-import:end") {
-            threadViewImported.resolve(undefined);
-          }
-        },
       }),
     });
 
@@ -741,17 +860,13 @@ describe("App", () => {
       federationTarget: remoteTarget,
       preferredBackend: undefined,
     }));
-    // The menu intentionally fire-and-forgets its async target callback, and
-    // thread detail is loaded after two animation frames. The bridge call can
-    // therefore finish before the composer module is ready on a loaded CI
-    // runner. Synchronize on the app's startup-profile readiness event rather
-    // than extending the query timeout.
-    await threadViewImported.promise;
-    await flushReactUpdates();
+    // The menu fire-and-forgets its target callback and the bridge can finish
+    // before lazy renderer readiness. Await the committed composer; the import
+    // event itself precedes the React update that installs the component.
     expect(await screen.findByRole("textbox", { name: "New thread" }))
       .toBeInTheDocument();
     // The composer says where the thread will start, before anything is sent.
-    expect(screen.getByRole("button", { name: "Machine" }))
+    expect(screen.getByRole("button", { name: /^Machine(?::|$)/ }))
       .toHaveTextContent("Studio Mac / work");
 
     fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
@@ -1026,7 +1141,7 @@ describe("App", () => {
     render(<App />);
     await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
     await clickButton("New thread");
-    const chip = await screen.findByRole("button", { name: "Machine" });
+    const chip = await screen.findByRole("button", { name: /^Machine(?::|$)/ });
     expect(chip).toHaveTextContent("Harold-MBP-M5-Max");
     expect(chip).not.toHaveTextContent("Harold-Mac-Mini-M4");
     expect(chip.closest(".composer-dropdown")).toHaveClass("composer-dropdown--remote");
@@ -1051,9 +1166,9 @@ describe("App", () => {
     }
     pasteComposerText(await screen.findByRole("textbox", { name: "New thread" }), "Create this on the M5");
     if (otherPeers) {
-      fireEvent.click(screen.getByRole("button", { name: "Machine" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Machine(?::|$)/ }));
       fireEvent.click(screen.getByRole("option", { name: "Laptop" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: "Machine" })).toHaveTextContent("Laptop"));
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Machine(?::|$)/ })).toHaveTextContent("Laptop"));
       expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
         federationTarget: { scope: "remote", instanceId: "laptop" },
       }));
@@ -1065,14 +1180,14 @@ describe("App", () => {
             params: { instanceId: target.instanceId, status: ownerStatus } },
         });
       });
-      fireEvent.click(screen.getByRole("button", { name: "Machine" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Machine(?::|$)/ }));
       const disconnectedOwner = await screen.findByRole("option", { name: /Harold-MBP-M5-Max/, description: "Offline" });
       expect(disconnectedOwner).toHaveAttribute("aria-disabled", "true");
       const launchpadReadCount = ensureDirectoryLaunchpad.mock.calls.length;
       fireEvent.click(disconnectedOwner);
       await flushReactUpdates();
       expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(launchpadReadCount);
-      expect(screen.getByRole("button", { name: "Machine" })).toHaveTextContent("Laptop");
+      expect(screen.getByRole("button", { name: /^Machine(?::|$)/ })).toHaveTextContent("Laptop");
       expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
         .toHaveAttribute("data-value", "Create this on the M5");
 
@@ -1085,7 +1200,7 @@ describe("App", () => {
         });
       });
       fireEvent.click(await screen.findByRole("option", { name: /Harold-MBP-M5-Max/, description: "This window" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: "Machine" })).toHaveTextContent("Harold-MBP-M5-Max"));
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Machine(?::|$)/ })).toHaveTextContent("Harold-MBP-M5-Max"));
       expect(getComposerValueHost(screen.getByRole("textbox", { name: "New thread" })))
         .toHaveAttribute("data-value", "Create this on the M5");
     }
@@ -1186,6 +1301,58 @@ describe("App", () => {
       .find((button) => button.classList.contains("settings-nav__button"));
     expect(gitSettingsButton).toBeDefined();
     expect(gitSettingsButton).toHaveAttribute("aria-current", "page");
+  });
+
+  it.each([
+    { action: "Got it", opensSettings: false },
+    { action: "Review access", opensSettings: true },
+  ])("closes the Auto access upgrade notice for good from $action", async ({
+    action,
+    opensSettings,
+  }) => {
+    const dismissLaunchpadAccessNotice = vi.fn(async () => undefined);
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "auto" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        readLaunchpadAccessNoticePending: async () => true,
+        dismissLaunchpadAccessNotice,
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+      }),
+    });
+
+    render(<App />);
+    expect(await screen.findByText("New threads start on Auto")).toBeInTheDocument();
+    expect(dismissLaunchpadAccessNotice).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: action }));
+
+    expect(dismissLaunchpadAccessNotice).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("New threads start on Auto")).not.toBeInTheDocument();
+    if (opensSettings) {
+      await act(async () => {
+        await vi.dynamicImportSettled();
+      });
+      const providersButton = screen
+        .getAllByRole("button", { name: "AI Providers" })
+        .find((button) => button.classList.contains("settings-nav__button"));
+      expect(providersButton).toHaveAttribute("aria-current", "page");
+    }
   });
 
   it.each([
@@ -2008,6 +2175,29 @@ describe("App", () => {
     });
   });
 
+  it("waits for startup settings before reading a buffered Codex config warning", async () => {
+    const readSettings = vi.fn(async () => await new Promise<never>(() => {}));
+    const getLatestCodexConfigWarning = vi.fn(async () => ({
+      event: {
+        backend: "codex" as const,
+        notification: {
+          method: "configWarning" as const,
+          params: { summary: "Unsupported fixture feature", details: null },
+        },
+      },
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({ readSettings, getLatestCodexConfigWarning }),
+    });
+
+    render(<App />);
+    await waitFor(() => expect(readSettings).toHaveBeenCalledOnce());
+    await flushReactUpdates();
+    expect(getLatestCodexConfigWarning).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("surfaces a buffered Codex config warning captured before renderer subscription", async () => {
     const trustCodexProject = vi.fn(
       async (request: { projectPath: string; configPath?: string }) => ({
@@ -2113,6 +2303,10 @@ describe("App", () => {
           value: true,
           source: "default",
         },
+        pinnedThreadsOnTop: {
+          value: true,
+          source: "default",
+        },
         mcpGatewayEnabled: {
           value: true,
           source: "default",
@@ -2168,12 +2362,18 @@ describe("App", () => {
         },
         appearance: {
           theme: { value: "system", source: "default" },
+          darkTheme: { value: "tangerine-dark", source: "default" },
+          lightTheme: { value: "tangerine-light", source: "default" },
+          themedDockIcon: { value: true, source: "default" },
+          terminalMinimumContrast: { value: false, source: "default" },
           density: { value: "mission-control", source: "default" },
           sidebarTextSize: { value: "md", source: "default" },
           transcriptTextSize: { value: "md", source: "default" },
         },
         codexProfileModel: { value: "shared", source: "default" },
         messagingAcknowledgment: { value: null, source: "default" },
+        interactiveSvgSkipNotice: { value: false, source: "default" },
+        interactiveSvgAutoOpen: { value: false, source: "default" },
       },
       onboarding: {
         completed: { value: true, source: "default" },
@@ -2234,6 +2434,7 @@ describe("App", () => {
         listenPort: { value: 47830, source: "default" },
         compressionEnabled: { value: true, source: "default" },
         allowRemoteShells: { value: true, source: "default" },
+        allowPortForwarding: { value: false, source: "default" },
         allowFilePush: { value: false, source: "default" },
         allowFilePull: { value: false, source: "default" },
         allowFilePullOutsideThreadDirectories: { value: false, source: "default" },
@@ -2415,6 +2616,7 @@ describe("App", () => {
           value: true,
           source: "default",
         },
+        defaultMergeMethod: { value: "squash", source: "default" },
       },
       applications: {
         editors: [],
@@ -2484,6 +2686,8 @@ describe("App", () => {
             configRevision: "fixture",
             appearance: {
               theme: "system" as const,
+              darkTheme: "tangerine-dark" as const,
+              lightTheme: "tangerine-light" as const,
               density: "mission-control" as const,
               sidebarTextSize: "md" as const,
               transcriptTextSize: "md" as const,
@@ -2515,6 +2719,10 @@ describe("App", () => {
           general: {
             appearance: {
               theme: { value: "system", source: "default" },
+              darkTheme: { value: "tangerine-dark", source: "default" },
+              lightTheme: { value: "tangerine-light", source: "default" },
+              themedDockIcon: { value: true, source: "default" },
+              terminalMinimumContrast: { value: false, source: "default" },
               density: { value: "mission-control", source: "default" },
               sidebarTextSize: { value: "md", source: "default" },
               transcriptTextSize: { value: "md", source: "default" },
@@ -2537,6 +2745,137 @@ describe("App", () => {
     });
 
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps layout choices made while the startup settings snapshot is being adopted", async () => {
+    // The bootstrap projection opens navigation before the live settings
+    // read answers, so the rail is clickable first. A click that lands after
+    // the read resolves but before App adopts the stored layout prefs must
+    // win: the stored tab is only the starting point, never a later reset.
+    const settings = createDeferred<{ snapshot: DesktopSettingsSnapshot }>();
+    const thread = {
+      id: "rail-tab-thread",
+      title: "Rail tab thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true },
+      updatedAt: 2_000,
+    };
+    const writeSettingsConfig = vi.fn(
+      async () => await new Promise<never>(() => {}),
+    );
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        readConfigBootstrap: vi.fn(async () => ({
+          snapshot: {
+            version: 1,
+            configRevision: "fixture",
+            appearance: {
+              theme: "system" as const,
+              darkTheme: "tangerine-dark" as const,
+              lightTheme: "tangerine-light" as const,
+              density: "mission-control" as const,
+              sidebarTextSize: "md" as const,
+              transcriptTextSize: "md" as const,
+            },
+            onboarding: {
+              completed: true,
+              completedSource: "migrated" as const,
+            },
+          },
+        })),
+        readSettings: () => settings.promise,
+        writeSettingsConfig,
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async (): Promise<NavigationSnapshot> => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:rail-tab-thread"],
+          threads: [{ ...thread }],
+          directories: [],
+          launchpadDefaults: { backend: "codex", executionMode: "default" },
+        }),
+        readThread: async () => ({
+          backend: "codex",
+          fetchedAt: Date.now(),
+          threadId: thread.id,
+          replay: {
+            entries: [],
+            messages: [],
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          },
+        }),
+        onAgentEvent: () => () => undefined,
+      }),
+    });
+
+    render(<App />);
+
+    await screen.findByRole("heading", { level: 2, name: "Rail tab thread" });
+    const context = screen.getByRole("complementary", { name: "Thread context" });
+
+    await act(async () => {
+      settings.resolve({
+        snapshot: {
+          general: {
+            appearance: {
+              theme: { value: "system", source: "default" },
+              darkTheme: { value: "tangerine-dark", source: "default" },
+              lightTheme: { value: "tangerine-light", source: "default" },
+              themedDockIcon: { value: true, source: "default" },
+              terminalMinimumContrast: { value: false, source: "default" },
+              density: { value: "mission-control", source: "default" },
+              sidebarTextSize: { value: "md", source: "default" },
+              transcriptTextSize: { value: "md", source: "default" },
+            },
+          },
+          onboarding: {
+            completed: { value: true, source: "default" },
+          },
+          imageUploads: {
+            pastedImageMaxPatches: { value: 1536, source: "default" },
+          },
+          experimental: {
+            fullAccessRiskWarningDismissed: {
+              value: false,
+              source: "default",
+            },
+          },
+          ui: {
+            sidebarHidden: { value: false, source: "default" },
+            contextRailPinned: { value: true, source: "default" },
+            activeContextTab: { value: "info", source: "default" },
+            editedFilesDock: { value: "above", source: "default" },
+            actionRunsDock: { value: "above", source: "default" },
+          },
+        } as DesktopSettingsSnapshot,
+      });
+      // Let the read land in state; React has not rendered it yet.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      fireEvent.click(within(context).getByRole("tab", { name: "Linked projects" }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Hide sidebar" })[0]!);
+    });
+    await flushReactUpdates();
+
+    expect(writeSettingsConfig).toHaveBeenCalledWith({
+      patch: { ui: { activeContextTab: "projects" } },
+    });
+    expect(writeSettingsConfig).toHaveBeenCalledWith({
+      patch: { ui: { sidebarHidden: true } },
+    });
+    expect(screen.queryByRole("button", { name: "Hide sidebar" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Show sidebar" }).length).toBeGreaterThan(0);
+    expect(
+      within(context).getByRole("tab", { name: "Linked projects" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(
+      within(context).getByRole("heading", { level: 3, name: "Linked projects" }),
+    ).toBeInTheDocument();
   });
 
   it("renders the live thread shell with transcript history", async () => {
@@ -2822,7 +3161,7 @@ describe("App", () => {
     ).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Show selected thread in thread list",
+        name: /^Show selected thread in thread list: /,
       }),
     );
     expect(scrollIntoView).toHaveBeenCalledWith({
@@ -3504,6 +3843,10 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
+                terminalMinimumContrast: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3649,6 +3992,10 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
+                terminalMinimumContrast: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3770,6 +4117,10 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
+                terminalMinimumContrast: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3878,6 +4229,10 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
+                terminalMinimumContrast: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -3976,6 +4331,10 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
+                terminalMinimumContrast: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -4072,6 +4431,10 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
+                terminalMinimumContrast: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -4188,6 +4551,127 @@ describe("App", () => {
     expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
+  it.each(["Cmd+N", "Cmd+K", "workspace menu", "relocated workspace menu"] as const)(
+    "preserves launchpad Auto access when opening from %s",
+    async (entryPoint) => {
+      let openNewThreadListener: (() => void) | undefined;
+      let launchpad: NavigationLaunchpadDraft | undefined;
+      const project = {
+        key: "directory:/repos/Example",
+        kind: "directory" as const,
+        label: "Example",
+        path: "/repos/Example",
+        threadKeys: ["codex:existing-thread"],
+        needsAttentionCount: 0,
+      };
+      const thread = {
+        id: "existing-thread",
+        title: "Existing project thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        executionMode: "full-access" as const,
+        linkedDirectories: [{ id: project.key, kind: "local" as const, label: project.label, path: project.path }],
+        inbox: { inInbox: true },
+        updatedAt: 1,
+      };
+      const defaults = { backend: "codex" as const, executionMode: "default" as const };
+      const ensureDirectoryLaunchpad = vi.fn(async (request: EnsureDirectoryLaunchpadRequest) => {
+        launchpad = {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel,
+          directoryPath: request.directoryPath,
+          backend: "codex",
+          executionMode: "auto",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 2,
+        };
+        return { launchpad, defaults };
+      });
+      const updateDirectoryLaunchpad = vi.fn<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>(async ({ patch }) => {
+        launchpad = { ...launchpad!, ...patch };
+        return { launchpad, defaults };
+      });
+      Object.defineProperty(window, "pwragent", {
+        configurable: true,
+        value: ownerApi({
+          platform: "darwin",
+          listBackends: async () => ({
+            fetchedAt: Date.now(),
+            backends: [{
+              kind: "codex",
+              source: "builtin",
+              label: "OpenAI",
+              available: true,
+              methods: ["thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true, createThread: true, resumeThread: true,
+                renameThread: true, readThread: true, startTurn: true,
+                interruptTurn: true, steerTurn: true, transcriptPagination: true,
+                toolUse: true, approvalRequests: true, multiDirectoryThreads: true,
+              },
+              executionModes: [
+                { mode: "default", label: "Default Access", available: true, isDefault: true },
+                { mode: "auto", label: "Auto", available: true },
+                { mode: "full-access", label: "Full Access", available: true },
+              ],
+            }],
+          }),
+          getNavigationSnapshot: async () => ({
+            backend: "all",
+            fetchedAt: Date.now(),
+            unchanged: false,
+            inboxThreadKeys: ["codex:existing-thread"],
+            threads: [thread],
+            directories: [{ ...project, ...(launchpad?.directoryKey === project.key ? { launchpad } : {}) }],
+            launchpadDefaults: defaults,
+          }),
+          ensureDirectoryLaunchpad,
+          updateDirectoryLaunchpad,
+          onAgentEvent: () => () => undefined,
+          onOpenNewThreadRequested: (listener: () => void) => {
+            openNewThreadListener = listener;
+            return () => { openNewThreadListener = undefined; };
+          },
+        }),
+      });
+
+      const { container } = render(<App />);
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Access mode(?::|$)/ })).toHaveTextContent("Full Access"));
+      if (entryPoint === "Cmd+N") {
+        expect(openNewThreadListener).toBeDefined();
+        await act(async () => { openNewThreadListener!(); });
+      } else if (entryPoint === "Cmd+K") {
+        fireEvent.keyDown(window, { metaKey: true, code: "KeyK", key: "k" });
+        const dialog = await screen.findByRole("dialog", { name: "Jump to thread or project" });
+        const input = within(dialog).getByRole("textbox", { name: "Jump to thread or project" });
+        fireEvent.change(input, { target: { value: project.label } });
+        await within(dialog).findByRole("option", { name: /Example.*Project/ });
+        await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+      } else {
+        if (entryPoint === "relocated workspace menu") {
+          fireEvent.keyDown(window, { metaKey: true, code: "KeyB", key: "b" });
+        }
+        const masthead = entryPoint === "relocated workspace menu"
+          ? container.querySelector<HTMLElement>(".thread-header__masthead")!
+          : screen.getByRole("complementary", { name: "Threads" });
+        expect(masthead).not.toBeNull();
+        const newThreadButton = within(masthead).getByRole("button", { name: "New thread" });
+        fireEvent.mouseEnter(newThreadButton.parentElement!);
+        fireEvent.click(await within(masthead).findByRole("menuitem", { name: "New chat without a directory" }));
+      }
+
+      expect(await screen.findByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+      expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(expect.objectContaining({
+        directoryKey: entryPoint.includes("workspace") ? "workspace:new-thread" : project.key,
+      }));
+      expect(screen.getByRole("button", { name: /^Access mode(?::|$)/ })).toHaveTextContent("Auto");
+      expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes the new-thread menu push into the existing launchpad flow", async () => {
     let openNewThreadListener: (() => void) | undefined;
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
@@ -4216,6 +4700,10 @@ describe("App", () => {
             general: {
               appearance: {
                 theme: { value: "system", source: "default" },
+                darkTheme: { value: "tangerine-dark", source: "default" },
+                lightTheme: { value: "tangerine-light", source: "default" },
+                themedDockIcon: { value: true, source: "default" },
+                terminalMinimumContrast: { value: false, source: "default" },
                 density: { value: "mission-control", source: "default" },
                 sidebarTextSize: { value: "md", source: "default" },
                 transcriptTextSize: { value: "md", source: "default" },
@@ -6017,7 +6505,156 @@ describe("App", () => {
     expect(readThread).toHaveBeenCalledTimes(2);
   });
 
-  it("walks back and forward across threads and search from the title bar", async () => {
+  it.each([".thread-row__open", ".thread-row", ".thread-row__chips", ".thread-row__status-indicator"].flatMap((clickSurface) => [
+    { clickSurface, deferDetail: false, rapid: false },
+    { clickSurface, deferDetail: true, rapid: false },
+    { clickSurface, deferDetail: false, rapid: true },
+  ]))("keeps rename focused after a native double-click from $clickSurface with deferred detail=$deferDetail, rapid=$rapid", async ({ clickSurface, deferDetail, rapid }) => {
+    const detailReady = createDeferred<void>();
+    const deliveredDetail = vi.fn();
+    const threads = ["First thread", "Double-click thread"].map((title, index) => ({
+      id: `thread-${index + 1}`,
+      title,
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      threadStatus: "active" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: true, reason: "new-thread" as const },
+      updatedAt: 3_000 - index,
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        ping: () => "pong",
+        listSkills: async () => ({ backend: "codex", fetchedAt: Date.now(), data: [] }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [{
+            kind: "codex",
+            label: "Codex app server",
+            available: true,
+            methods: ["thread/list", "thread/read", "turn/start"],
+            capabilities: {
+              listThreads: true,
+              createThread: false,
+              resumeThread: true,
+              renameThread: true,
+              readThread: true,
+              startTurn: true,
+              interruptTurn: true,
+              steerTurn: false,
+              transcriptPagination: true,
+              toolUse: false,
+              approvalRequests: false,
+              multiDirectoryThreads: true,
+            },
+            executionModes: [{ mode: "default", label: "Default Access", available: true, isDefault: true }],
+          }],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all",
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
+          directories: [],
+          threads,
+        }),
+        markThreadSeen: async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => ({
+          backend, threadId, seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        platform: "darwin",
+        readThread: async ({ backend, threadId }: { backend: AppServerBackendKind; threadId: string }) => ({
+          backend,
+          fetchedAt: Date.now(),
+          threadId,
+          replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
+        }),
+      }),
+    });
+    const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+    const readSelectedDetail = api.getNavigationSelectedDetail!;
+    api.getNavigationSelectedDetail = async (...args) => {
+      if (args[0].ref.threadId === "thread-2" && deferDetail) {
+        await detailReady.promise;
+      }
+      const response = await readSelectedDetail(...args);
+      if (args[0].ref.threadId === (rapid ? "thread-1" : "thread-2")) {
+        deliveredDetail();
+      }
+      return response;
+    };
+    render(<App />);
+    await screen.findByRole("heading", { level: 2, name: "First thread" });
+    const row = screen.getByRole("button", { name: rapid ? "First thread" : "Double-click thread" });
+    const card = row.closest(".thread-row")!;
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toBeEnabled());
+    const click = (detail: number) => {
+      // Resolve the current surface for each press as navigation publishes.
+      const target = clickSurface === ".thread-row" ? card : card.querySelector<HTMLElement>(clickSurface)!;
+      expect(target).toBeInTheDocument();
+      act(() => {
+        fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseDown(target, { button: 0, detail });
+        // jsdom does not apply the native mouse focus default. Lower row
+        // surfaces blur the previous control; Sidebar focuses the open button.
+        if (target === row) row.focus();
+        else (document.activeElement as HTMLElement).blur();
+        fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+        fireEvent.mouseUp(target, { button: 0, detail });
+        fireEvent.click(target, { button: 0, detail });
+      });
+      return target;
+    };
+    click(1);
+    if (!rapid) {
+      await screen.findByRole("heading", { level: 2, name: "Double-click thread" });
+    }
+    if (!deferDetail && !rapid) {
+      await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
+    }
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
+    const target = click(2);
+    fireEvent.doubleClick(target, { button: 0, detail: 2 });
+    const input = screen.getByRole("textbox", { name: "Thread name" });
+    expect(input).toHaveFocus();
+    act(() => detailReady.resolve());
+    await waitFor(() => expect(deliveredDetail).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toBeEnabled());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Thread name" })).toBeNull();
+    // Returning to the origin after closing must not revive the canceled request.
+    act(() => row.focus());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(row).toHaveFocus();
+  });
+
+  it.each(["title button", "row padding"])("walks back and forward across threads and search after %s clicks", async (clickSurface) => {
+    // Headings and the history cursor commit separately. Observe both history
+    // destinations before the next action consumes or replaces their entries.
+    const waitForHistory = async (back?: string, forward?: string): Promise<void> => {
+      await waitFor(() => {
+        for (const [name, destination] of [["Back", back], ["Forward", forward]] as const) {
+          const button = screen.getByRole("button", { name });
+          if (destination === undefined) {
+            expect(button).toBeDisabled();
+          } else {
+            expect(button).toBeEnabled();
+            expect(button).toHaveAttribute("aria-description", destination);
+          }
+        }
+      });
+    };
+    const secondThreadReady = createDeferred<void>();
+    const deliveredSecondThread = vi.fn();
     const searchThreads = vi.fn(async () => ({
       backend: "all" as const,
       contentMode: "available" as const,
@@ -6095,6 +6732,7 @@ describe("App", () => {
           fetchedAt: Date.now(),
           unchanged: false,
           inboxThreadKeys: ["codex:thread-1"],
+          directories: [],
           threads: [
             {
               id: "thread-1",
@@ -6163,6 +6801,18 @@ describe("App", () => {
       }),
     });
 
+    const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+    const readSelectedDetail = api.getNavigationSelectedDetail!;
+    api.getNavigationSelectedDetail = async (...args) => {
+      if (args[0].ref.threadId === "thread-2") {
+        await secondThreadReady.promise;
+      }
+      const response = await readSelectedDetail(...args);
+      if (args[0].ref.threadId === "thread-2") {
+        deliveredSecondThread();
+      }
+      return response;
+    };
     render(<App />);
 
     await screen.findByRole("heading", {
@@ -6174,15 +6824,65 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Forward" })).toBeDisabled();
 
-    await clickButton(/Second cached thread/i);
+    const secondRow = screen.getByRole("button", { name: /Second cached thread/i });
+    act(() => {
+      secondRow.focus();
+      fireEvent.pointerDown(secondRow, { pointerType: "mouse", button: 0 });
+      fireEvent.pointerUp(secondRow, { pointerType: "mouse", button: 0 });
+      fireEvent.click(secondRow, { detail: 1 });
+    });
     await screen.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
-    expect(screen.getByRole("button", { name: "Back" })).toBeEnabled();
+    // Moving away cancels the pending request even when the operator returns
+    // to its originating row before configuration becomes ready.
+    act(() => {
+      screen.getByRole("button", { name: /First cached thread/i }).focus();
+      secondRow.focus();
+      secondThreadReady.resolve();
+    });
+    await waitFor(() => expect(deliveredSecondThread).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(secondRow).toHaveFocus();
+
+    // A new mouse click on the ready thread still hands off focus.
+    act(() => {
+      const target = clickSurface === "title button" ? secondRow : secondRow.closest(".thread-row")!;
+      fireEvent.pointerDown(target, { pointerType: "mouse", button: 0 });
+      // jsdom does not perform the browser's default pointer focus action.
+      // Clicking non-focusable row padding drops focus from the old control.
+      if (target !== secondRow) secondRow.blur();
+      fireEvent.pointerUp(target, { pointerType: "mouse", button: 0 });
+      fireEvent.click(target, { detail: 1 });
+    });
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Reply" })).toHaveFocus());
+    await waitForHistory("First cached thread");
+
+    // Search unmounts Composer. Keyboard history must not replay the handled
+    // mouse request when it mounts again, even with a sidebar row focused.
+    await clickButton("Search threads");
+    await screen.findByRole("heading", { level: 2, name: "Search" });
+    await waitForHistory("Second cached thread");
+    act(() => {
+      secondRow.focus();
+      fireEvent.keyDown(window, { metaKey: true, code: "BracketLeft", key: "[" });
+    });
+    await screen.findByRole("heading", { level: 2, name: "Second cached thread" });
+    await screen.findByRole("textbox", { name: "Reply" });
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(secondRow).toHaveFocus();
+    await waitForHistory("First cached thread", "Search");
 
     // Search, then open the result (thread 1).
     await clickButton("Search threads");
+    await waitForHistory("Second cached thread");
     fireEvent.change(screen.getByRole("combobox", { name: "Search threads" }), {
       target: { value: "history" },
     });
@@ -6193,10 +6893,12 @@ describe("App", () => {
       level: 2,
       name: "First cached thread",
     });
+    await waitForHistory("Search");
 
     // Back lands on search with the results still populated — no re-query.
     await clickButton("Back");
     await screen.findByRole("heading", { level: 2, name: "Search" });
+    await waitForHistory("Second cached thread", "First cached thread");
     expect(screen.getByText("Opened from search.")).toBeInTheDocument();
     expect(searchThreads).toHaveBeenCalledTimes(1);
 
@@ -6206,6 +6908,7 @@ describe("App", () => {
       level: 2,
       name: "Second cached thread",
     });
+    await waitForHistory("First cached thread", "Search");
 
     // Back to the start, where the affordance bottoms out.
     await clickButton("Back");
@@ -6213,14 +6916,14 @@ describe("App", () => {
       level: 2,
       name: "First cached thread",
     });
-    expect(screen.getByRole("button", { name: "Back" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Forward" })).toBeEnabled();
+    await waitForHistory(undefined, "Second cached thread");
 
     await clickButton("Forward");
     await screen.findByRole("heading", {
       level: 2,
       name: "Second cached thread",
     });
+    await waitForHistory("First cached thread", "Search");
 
     // The window-level chord (⌘[) and the mouse thumb buttons drive the
     // same history.
@@ -6236,6 +6939,7 @@ describe("App", () => {
       level: 2,
       name: "First cached thread",
     });
+    await waitForHistory(undefined, "Second cached thread");
 
     await act(async () => {
       fireEvent.mouseUp(window, { button: 4 });
@@ -6245,6 +6949,7 @@ describe("App", () => {
       level: 2,
       name: "Second cached thread",
     });
+    await waitForHistory("First cached thread", "Search");
   });
 
   it("restores an unsubmitted project launchpad from thread history", async () => {
@@ -6481,6 +7186,14 @@ describe("App", () => {
       level: 2,
       name: "Second project thread",
     });
+    // The heading and the history cursor commit separately. Wait for history
+    // to record the destination before consuming its Back entry.
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description",
+        "New thread in PwrAgent",
+      );
+    });
     await clickButton("Back");
 
     await screen.findByRole("heading", { level: 2, name: "New thread" });
@@ -6490,6 +7203,12 @@ describe("App", () => {
     expect(screen.getAllByText("Full Access").length).toBeGreaterThan(0);
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
 
+    await waitFor(() => {
+      expect(screen.getByTestId("history-nav-back")).toHaveAttribute(
+        "aria-description",
+        "First project thread",
+      );
+    });
     await clickButton("Cancel");
     await screen.findByRole("heading", {
       level: 2,
@@ -6508,13 +7227,17 @@ describe("App", () => {
     fireEvent.click(
       await screen.findByRole("menuitem", { name: "Sub-thread in This Directory" }),
     );
-    await screen.findByRole("heading", { level: 2, name: "New thread" });
+    await screen.findByRole("heading", { level: 2, name: "New sub-thread" });
     expect(
       await screen.findByRole("button", { name: "First project thread" }),
     ).toHaveAttribute("aria-pressed", "false");
     expect(
       await screen.findByRole("button", { name: "Second project thread" }),
     ).toHaveAttribute("aria-pressed", "false");
+    // The selection has a row: the draft, under the thread it came from.
+    expect(
+      await screen.findByRole("button", { name: "New sub-thread draft, under Second project thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
 
     await clickButton("Cancel");
     await screen.findByRole("heading", {
@@ -6524,9 +7247,11 @@ describe("App", () => {
     expect(
       await screen.findByRole("button", { name: "Second project thread" }),
     ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: /sub-thread draft/ })).not.toBeInTheDocument();
   });
 
-  it("renames the selected thread from the sidebar actions menu", async () => {
+  // One Codex thread whose backend renames, reflected by the next snapshot.
+  function installRenamableThreadFixture() {
     let threadTitle = "Build Codex client";
     const renameThread = vi.fn(
       async ({ name }: { backend: "codex"; threadId: string; name: string }) => {
@@ -6640,6 +7365,11 @@ describe("App", () => {
         renameThread,
       }),
     });
+    return { renameThread };
+  }
+
+  it("renames the selected thread from the sidebar actions menu", async () => {
+    const { renameThread } = installRenamableThreadFixture();
 
     render(<App />);
 
@@ -6654,11 +7384,9 @@ describe("App", () => {
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Rename Thread" });
-    fireEvent.change(within(dialog).getByLabelText("Name"), {
-      target: { value: "Renamed Codex client" },
-    });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Rename Thread" }));
+    const input = within(browseSection).getByRole("textbox", { name: "Thread name" });
+    fireEvent.change(input, { target: { value: "Renamed Codex client" } });
+    fireEvent.keyDown(input, { key: "Enter" });
 
     expect(renameThread).toHaveBeenCalledWith({
       backend: "codex",
@@ -6668,6 +7396,32 @@ describe("App", () => {
     await screen.findByRole("heading", {
       level: 2,
       name: "Renamed Codex client",
+    });
+  });
+
+  it("renames the open thread from its title strip on double-click", async () => {
+    const { renameThread } = installRenamableThreadFixture();
+
+    render(<App />);
+
+    const title = await screen.findByRole("heading", {
+      level: 2,
+      name: "Build Codex client",
+    });
+    fireEvent.doubleClick(title);
+    const input = within(title).getByRole("textbox", { name: "Thread name" });
+    expect(input).toHaveFocus();
+    fireEvent.change(input, { target: { value: "Renamed in the title" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(renameThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Renamed in the title",
+    });
+    await screen.findByRole("heading", {
+      level: 2,
+      name: "Renamed in the title",
     });
   });
 });

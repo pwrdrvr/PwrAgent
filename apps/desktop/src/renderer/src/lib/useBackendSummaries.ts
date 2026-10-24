@@ -150,11 +150,11 @@ export function useBackendSummaries(
     if (!enabled) {
       return;
     }
-    window.addEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refresh);
+    window.addEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refreshRateLimits);
     return () => {
-      window.removeEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refresh);
+      window.removeEventListener(BACKEND_SUMMARIES_REFRESH_EVENT, refreshRateLimits);
     };
-  }, [enabled, refresh]);
+  }, [enabled, refreshRateLimits]);
 
   // Settings' "Refresh all providers" runs in main and can outlive the pane
   // that started it, so the window-local refresh event is not enough: re-read

@@ -4,7 +4,7 @@ import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition"
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
-import { gatewayToolRevision, validateGatewayArguments, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
+import { gatewayToolRequiresApproval, gatewayToolRevision, validateGatewayArguments, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { gatewayInvocationName } from "../mcp-connections/mcp-gateway-attribution";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -60,7 +60,7 @@ describe("fixed MCP gateway tools", () => {
         connectionId: entry.connectionId, toolName: entry.toolName, schemaRevision: entry.schemaRevision, arguments: { id: "x" },
       } });
       expect(called._meta?.["pwragent/source"]).toMatchObject({ connectionId: "one", toolName: "late_tool" });
-      expect(f.approve).toHaveBeenCalledWith(expect.objectContaining({ toolName: "late_tool" }), expect.objectContaining({ backend: "acp:fixture", threadId: "thread-a", turnId: "turn-a" }), expect.any(AbortSignal));
+      expect(f.approve).toHaveBeenCalledWith(expect.objectContaining({ toolName: "late_tool" }), expect.objectContaining({ backend: "acp:fixture", threadId: "thread-a", turnId: "turn-a" }), expect.any(AbortSignal), undefined);
     } finally {
       await client.close();
       await server.close();
@@ -106,6 +106,54 @@ describe("fixed MCP gateway tools", () => {
     expect(f.requestGatewayToolOperation.mock.calls.some(([call]) => call.operation === "gateway/tools/call")).toBe(false);
   });
 
+  it("searches four connections in parallel within a 60-second budget", async () => {
+    const f = fixture();
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    f.selected.set("thread-a", ["one", "two", "three", "four", "five", "six", "one"]);
+    let releaseFirst!: () => void;
+    let releaseOthers!: () => void;
+    const first = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const others = new Promise<void>((resolve) => { releaseOthers = resolve; });
+    f.requestGatewayToolOperation.mockImplementation(async ({ connectionId }) => {
+      await (connectionId === "one" ? first : others);
+      if (connectionId === "two") throw new Error("Fixture server unavailable.");
+      return [tool(connectionId)];
+    });
+    const searching = f.service.search({ query: "lookup", limit: 5 }, context);
+    try {
+      await vi.waitFor(() => expect(f.requestGatewayToolOperation).toHaveBeenCalledTimes(4));
+      expect(timeout).toHaveBeenCalledWith(61_000);
+      expect(f.requestGatewayToolOperation.mock.calls.map(([call]) => call.connectionId))
+        .toEqual(["one", "two", "three", "four"]);
+      releaseFirst();
+      await vi.waitFor(() => expect(f.requestGatewayToolOperation).toHaveBeenCalledTimes(5));
+    } finally {
+      releaseFirst();
+      releaseOthers();
+      await searching;
+    }
+    const result = await searching;
+    expect(f.requestGatewayToolOperation).toHaveBeenCalledTimes(6);
+    expect(result.tools).toHaveLength(5);
+    expect(result.unavailable).toEqual([{ connectionId: "two", message: "Fixture server unavailable." }]);
+  });
+
+  it("preserves healthy results when another connection exhausts discovery", async () => {
+    const f = fixture();
+    f.selected.set("thread-a", ["one", "stalled"]);
+    const startedAt = Date.now();
+    f.requestGatewayToolOperation.mockImplementation(async ({ connectionId, deadlineAt, signal }) => {
+      expect(deadlineAt).toBeGreaterThanOrEqual(startedAt + 60_000);
+      expect(deadlineAt).toBeLessThanOrEqual(Date.now() + 60_000);
+      expect(signal.aborted).toBe(false);
+      if (connectionId === "one") return [tool()];
+      throw new McpError(-32000, "stalled: initialize — discovery deadline expired (discovery fixture).");
+    });
+    const result = await f.service.search({ query: "lookup" }, context);
+    expect(result.tools).toMatchObject([{ connectionId: "one" }]);
+    expect(result.unavailable).toEqual([{ connectionId: "stalled", message: expect.stringContaining("initialize — discovery deadline expired") }]);
+  });
+
   it("rejects stale schemas, invalid arguments and denied approvals before dispatch", async () => {
     const f = fixture();
     await expect(f.service.call({ ...f.args, schemaRevision: "stale" }, context)).rejects.toThrow("changed");
@@ -126,6 +174,20 @@ describe("fixed MCP gateway tools", () => {
     expect(() => validateGatewayArguments(b.definition, { id: 4 })).not.toThrow();
     b.definition.inputSchema.$async = true;
     expect(() => validateGatewayArguments(b.definition, { id: "invalid" })).toThrow("Asynchronous schemas");
+  });
+
+  // Codex's requires_mcp_tool_approval_for_mode, case for case.
+  it.each([
+    { mode: "auto", annotations: undefined, asks: true },
+    { mode: "auto", annotations: { readOnlyHint: true }, asks: false },
+    { mode: "auto", annotations: { readOnlyHint: true, destructiveHint: true }, asks: true },
+    { mode: "auto", annotations: { destructiveHint: false }, asks: true },
+    { mode: "auto", annotations: { destructiveHint: false, openWorldHint: false }, asks: false },
+    { mode: "auto", annotations: { openWorldHint: false }, asks: true },
+    { mode: "prompt", annotations: { readOnlyHint: true }, asks: true },
+    { mode: "approve", annotations: { destructiveHint: true }, asks: false },
+  ] as const)("asks for approval in $mode mode for $annotations: $asks", ({ mode, annotations, asks }) => {
+    expect(gatewayToolRequiresApproval(annotations, mode)).toBe(asks);
   });
 
   it("cancels a pending approval on thread changes", async () => {

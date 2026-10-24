@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MessagingCredentialValidationResult } from "@pwragent/messaging-interface";
+import type { BackendSummary } from "@pwragent/shared";
 import { CredentialTester } from "../credential-tester/credential-tester";
 import type { CredentialValidationRequest } from "../messaging/messaging-runtime";
 
@@ -15,6 +16,7 @@ type TesterOptions = {
   resolveFeishuTenantUrl?: () => string | undefined;
   resolveLineChannelAccessToken?: () => string | undefined;
   resolveCodexCommand?: () => Promise<string | undefined>;
+  checkClaude?: () => Promise<BackendSummary["claude"]>;
   runCodexVersion?: (
     command: string,
   ) => Promise<{ stdout: string; stderr: string }>;
@@ -57,6 +59,7 @@ function buildTester(options: TesterOptions = {}) {
       options.resolveLineChannelAccessToken ?? (() => "line-token"),
     resolveCodexCommand: options.resolveCodexCommand ?? (async () => "/usr/local/bin/codex"),
     validateMessagingCredentials,
+    checkClaude: options.checkClaude,
     runCodexVersion:
       options.runCodexVersion
       ?? (async () => ({ stdout: "codex 0.130.0\n", stderr: "" })),
@@ -330,6 +333,37 @@ describe("CredentialTester", () => {
       expect(validateMessagingCredentials).not.toHaveBeenCalled();
     });
   });
+  describe("claude", () => {
+    it("reports the executable and sign-in method when Claude Code is signed in", async () => {
+      const { tester } = buildTester({
+        checkClaude: async () => ({
+          executable: "/usr/local/bin/claude", authStatus: "signed-in", authMethod: "api-key",
+        }),
+      });
+      const result = await tester.test("claude");
+      expect(result).toMatchObject({ status: "ok", account: "/usr/local/bin/claude", detail: "API key" });
+      expect(tester.lastResult("claude")).toBe(result);
+    });
+
+    it("fails with the sign-in state when the CLI is signed out or unverifiable", async () => {
+      const signedOut = await buildTester({
+        checkClaude: async () => ({ executable: "/usr/local/bin/claude", authStatus: "sign-in-required" }),
+      }).tester.test("claude");
+      expect(signedOut).toMatchObject({ status: "failed", errorMessage: "Sign-in required" });
+      const unknown = await buildTester({
+        checkClaude: async () => ({ executable: "/usr/local/bin/claude", authStatus: "unknown" }),
+      }).tester.test("claude");
+      expect(unknown).toMatchObject({ status: "failed", errorMessage: "Could not verify sign-in" });
+    });
+
+    it("is unset when no Claude Code executable is available", async () => {
+      const result = await buildTester({
+        checkClaude: async () => ({ authStatus: "unknown" }),
+      }).tester.test("claude");
+      expect(result.status).toBe("unset");
+    });
+  });
+
   describe("codex", () => {
     it("returns ok with the parsed version when --version succeeds", async () => {
       const { tester } = buildTester({

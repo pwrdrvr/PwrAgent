@@ -20,6 +20,7 @@ import type {
   PrSummary,
   NavigationThreadGitWorkingStateUpdatedNotification,
   ThreadPrAutoDispatchEventKind,
+  ThreadLock,
   ThreadPrAutoDispatchPending,
   ThreadSubAgentSummary,
 } from "./navigation";
@@ -30,7 +31,7 @@ import type {
 } from "../token-usage-pricing";
 import type { ThreadToolIncidentNoticeState } from "./tool-output-incidents";
 
-export type AppServerBuiltinBackendKind = "codex";
+export type AppServerBuiltinBackendKind = "codex" | "claude";
 export type AcpBackendId = `acp:${string}`;
 export type AppServerBackendKind = AppServerBuiltinBackendKind | AcpBackendId;
 export type AppServerBackendScope = AppServerBackendKind | "all";
@@ -192,6 +193,11 @@ export type AppServerReviewFinding = {
   body: string;
   confidence_score: number;
   priority?: number;
+  /**
+   * The kind of problem, as a short slug ("correctness", "efficiency").
+   * Claude Code classifies findings this way instead of by priority.
+   */
+  category?: string;
   code_location: {
     absolute_file_path: string;
     line_range: {
@@ -199,6 +205,16 @@ export type AppServerReviewFinding = {
       end: number;
     };
   };
+};
+
+/**
+ * What a reviewer later reported about one of its own findings, by the
+ * finding's index in the review's output. Claude Code re-reports a review's
+ * findings this way after `/code-review --fix`, or after later work fixes them.
+ */
+export type AppServerReviewFindingOutcome = {
+  index: number;
+  outcome: "fixed" | "skipped" | "no_change_needed";
 };
 
 export type AppServerReviewOutput = {
@@ -355,6 +371,9 @@ export type CodexEnvironmentActionRun = {
   /** Which configured action this is a run of (matches CodexEnvironmentAction.id). */
   actionId: string;
   actionName: string;
+  /** The environment this invocation started in, independent of later selections. */
+  environmentId?: string;
+  environmentName?: string;
   command: string;
   status: "started" | "exited" | "failed";
   pid?: number;
@@ -374,8 +393,9 @@ export type CodexEnvironmentActionRun = {
 };
 
 export type CodexThreadEnvironmentRuntime = {
-  environmentId: string;
-  environmentName: string;
+  /** Absent when no environment is selected but this thread retains action runs. */
+  environmentId?: string;
+  environmentName?: string;
   executionTarget: CodexEnvironmentExecutionTarget;
   selectedActionIdByEnvironmentId?: Record<string, string>;
   /**
@@ -625,6 +645,8 @@ export type AppServerThreadMessageOriginKind =
 
 export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
+  /** Durable cross-thread prerequisite admission. */
+  dependencyId?: string;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence";
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
@@ -922,6 +944,8 @@ export type AppServerThreadReplayPagination = {
 };
 
 export type AppServerThreadReplay = {
+  /** Latest context occupancy; separate from billed token totals. */
+  contextWindow?: { usedTokens: number; modelContextWindow: number };
   entries: AppServerThreadEntry[];
   messages: AppServerThreadMessage[];
   /** Native Codex nickname when a replay belongs to a delegated sub-agent. */
@@ -968,6 +992,8 @@ export type ArchiveThreadRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   federationTarget?: FederationTarget;
+  /** Return after archival; cleanup completion arrives as thread/archiveCleanup/completed. */
+  backgroundCleanup?: boolean;
   /** Group archive admission revalidates the exact persisted parent before mutation. */
   expectedParent?: { threadId: ThreadIdentifier; backend: AppServerBackendKind; instanceId?: FederationInstanceId } | null;
 };
@@ -977,6 +1003,7 @@ export type ArchiveThreadResponse = {
   threadId: ThreadIdentifier;
   archivedAt: number;
   cleanup: ArchiveThreadCleanupResult[];
+  cleanupPending?: boolean;
 };
 
 /**
@@ -1116,7 +1143,16 @@ export type RenameThreadRequest = {
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   name: string;
+  /** Refuse an Undo if the owning thread no longer has this title. */
+  expectedName?: string;
 };
+
+/**
+ * The refusal for a stale `expectedName`. The renderer matches it to tell a
+ * permanent refusal, which no retry can fix, from a transient failure.
+ */
+export const RENAME_THREAD_EXPECTED_NAME_MISMATCH =
+  "The thread title has changed. Undo was not applied.";
 
 export type RenameThreadResponse = {
   backend: AppServerBackendKind;
@@ -1382,7 +1418,7 @@ export type ThreadTokenMiserSavings = {
   withoutGateCostMicros: number;
   /** 2 — what the helper actually charged. */
   gateCostMicros: number;
-  /** 3 — summaries and retrievals the parent did receive, and their replays. */
+  /** 3 — summaries, retrievals and replays, plus full cached prompts on retrieval requests. */
   revealedCostMicros: number;
   /** 1 − 2 − 3. Negative when the gate cost more than it saved. */
   savingsMicros: number;
@@ -1663,7 +1699,27 @@ export type AppServerMcpElicitationRequestNotification = {
 };
 
 export type AppServerNotification =
+  | { method: "thread/operatorQuestions/changed"; params: { backend: AppServerBackendKind; threadId: string } }
+  | { method: "thread/operatorRequests/changed" | "thread/operatorRequestDetails/changed"; params: import("./operator-requests").OperatorRequestsChangedEvent }
+  | { method: "thread/todos/changed" | "thread/todoDetails/changed"; params: import("./thread-todos").ThreadTodosChangedEvent }
+  | {
+      method: "thread/dependencies/updated";
+      params: { threadId: string; dependencyId: string };
+    }
   | NavigationThreadGitWorkingStateUpdatedNotification
+  | {
+      /**
+       * A reviewer reported outcomes for findings of a review it already
+       * completed. `reviewId` is the review entry's id in the transcript.
+       */
+      method: "thread/review/outcomesReported";
+      params: {
+        threadId: string;
+        turnId: string;
+        reviewId: string;
+        outcomes: AppServerReviewFindingOutcome[];
+      };
+    }
   | {
       method: "error";
       params: {
@@ -1731,7 +1787,7 @@ export type AppServerNotification =
         turnId: string;
         turn: {
           id: string;
-          status: "completed";
+          status: "completed" | "interrupted" | "cancelled";
           startedAt?: number | null;
           completedAt?: number | null;
           durationMs?: number | null;
@@ -1740,6 +1796,19 @@ export type AppServerNotification =
             text: string;
           }>;
         };
+      };
+    }
+  | {
+      /**
+       * The model answered again after the backend reported a retry
+       * (`error` with `willRetry`). ACP backends send this because their
+       * first answer can be output the transcript hides, such as Grok's
+       * thoughts.
+       */
+      method: "turn/recovered";
+      params: {
+        threadId: string;
+        turnId: string;
       };
     }
   | {
@@ -1891,6 +1960,15 @@ export type AppServerNotification =
       method: "thread/unarchived";
       params: {
         threadId: string;
+      };
+    }
+  | {
+      method: "thread/archiveCleanup/completed";
+      params: {
+        threadId: string;
+        archivedAt: number;
+        cleanup: ArchiveThreadCleanupResult[];
+        error?: string;
       };
     }
   | {
@@ -2112,6 +2190,10 @@ export type AppServerNotification =
          * and a federated payload is another instance's JSON.
          */
         titleSource?: AppServerRenamedTitleSource;
+        /** Host-attributed Agent tool rename, shown in the notification rail. */
+        renameOrigin?: "agent_tool";
+        /** Previous title, when known, for an in-window Undo action. */
+        previousThreadName?: string;
       };
     }
   | {
@@ -2244,7 +2326,7 @@ export type AppServerNotification =
   | {
       method: "navigation/threadDirectories/updated";
       params: {
-        reason: "selected-thread" | "full-reconcile";
+        reason: "selected-thread" | "full-reconcile" | "thread-created";
         threadIds: string[];
       };
     }
@@ -2312,6 +2394,11 @@ export type AppServerNotification =
         displayText?: string;
         /** The owner replaced pending input, so existing previews must refresh. */
         inputUpdated?: boolean;
+        /**
+         * Generated display title. Sent on a refresh once the helper answers;
+         * an `inputUpdated` refresh without one clears the previous title.
+         */
+        title?: string;
         position?: number;
         turnId?: string;
         automationRunId?: string;
@@ -2320,6 +2407,14 @@ export type AppServerNotification =
         manualReleaseRequired?: boolean;
         finalText?: string;
         terminalStatus?: string;
+      };
+    }
+  | {
+      /** The operator moved a waiting entry; the FIFO now runs in this order. */
+      method: "thread/turnQueue/reordered";
+      params: {
+        threadId: string;
+        queueEntryIds: string[];
       };
     }
   | {
@@ -2334,6 +2429,14 @@ export type AppServerNotification =
         threadId: string;
         /** Complete reaction set, ordered by insertion. */
         reactions: string[];
+      };
+    }
+  | {
+      method: "thread/lock/updated";
+      params: {
+        threadId: string;
+        /** Absent once the thread is unlocked. */
+        lock?: ThreadLock;
       };
     }
   | {
@@ -2465,6 +2568,7 @@ export type AppServerNotification =
       };
     }
   | { method: "federation/shutdown/changed"; params: { notices: FederationPeerShutdown[] } }
+  | { method: "federation/health/changed"; params: Record<string, never> }
   | FederationPeerStatusChangedNotification
   | FederationEventStreamChangedNotification
   | FederationCelestialIconsChangedNotification

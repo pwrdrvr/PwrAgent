@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -26,11 +26,12 @@ const readRendererFederationTarget = vi.fn<
 
 const getNavigationQueryPage = vi.fn<() => Promise<NavigationQueryPage>>();
 const releaseNavigationQuery = vi.fn(async () => undefined);
-const desktopApi = { jumpSearchRemoteThreads, getNavigationQueryPage, releaseNavigationQuery };
+const desktopApi = { jumpSearchRemoteThreads, getNavigationQueryPage, releaseNavigationQuery, platform: "darwin" };
 vi.mock("../../../lib/desktop-api", () => ({ getDesktopApi: () => desktopApi }));
 
 vi.mock("../../../lib/federation-window", () => ({
   readRendererFederationTarget: () => readRendererFederationTarget(),
+  readRendererFederationLabel: () => "Windows workstation",
 }));
 
 function localThread(
@@ -97,6 +98,7 @@ beforeEach(() => {
   jumpSearchRemoteThreads.mockClear();
   jumpSearchRemoteThreads.mockResolvedValue({ results: [] });
   readRendererFederationTarget.mockReturnValue(undefined);
+  desktopApi.platform = "darwin";
   getNavigationQueryPage.mockReset();
   getNavigationQueryPage.mockResolvedValue({ protocol: 2, queryKey: "search", generation: "generation", ownerEpoch: "owner",
     countsRevision: "counts", counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" }, entries: [], complete: true });
@@ -864,6 +866,82 @@ describe("SidebarSearchPopup, focus", () => {
 describe("project destinations", () => {
   const project = { key: "directory:/repos/PwrAgnt", kind: "directory" as const, label: "PwrAgnt", path: "/repos/PwrAgnt" };
 
+  it.each([
+    ["darwin", "C:/PwrLab/repos/PwrAgent", "/Users/example/repos/PwrAgnt", "Windows"],
+    ["linux", "\\\\workstation\\repos\\PwrAgent", "/home/example/repos/PwrAgnt", "Windows"],
+    ["win32", "/Users/example/repos/PwrAgent", "C:/repos/PwrAgnt", "Unix"],
+  ])("prefers local projects on %s and annotates foreign paths", async (platform, foreignPath, localPath, foreignPlatform) => {
+    desktopApi.platform = platform;
+    const foreign = { ...project, key: `directory:${foreignPath}`, label: "PwrAgent", path: foreignPath };
+    const local = { ...project, key: `directory:${localPath}`, path: localPath };
+    const select = vi.fn();
+    render(<SidebarSearchPopup projects={[foreign, local]} threads={[]}
+      onJumpToProject={select} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "pa" } });
+    await settleRemoteSearch();
+    const rows = screen.getAllByRole("option");
+    expect(rows[0]).toHaveTextContent(localPath);
+    expect(within(rows[1]).getByText(`Other machine · ${foreignPlatform}`)).toBeInTheDocument();
+    expect(within(rows[0]).queryByText(/Other machine/)).not.toBeInTheDocument();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(select).toHaveBeenCalledWith(local);
+  });
+
+  it("keeps local projects ahead of exact foreign matches before applying the result limit", async () => {
+    const foreign = Array.from({ length: 8 }, (_, index) => ({ ...project,
+      key: `directory:C:/repos/${index}/PwrAgnt`, path: `C:/repos/${index}/PwrAgnt` }));
+    const local = { ...project, key: "directory:/repos/PwrAgnt-tools", label: "PwrAgnt tools", path: "/repos/PwrAgnt-tools" };
+    const empty = await getNavigationQueryPage();
+    getNavigationQueryPage.mockResolvedValue({ ...empty, directories: foreign.map((directory) => ({ ...directory,
+      counts: empty.counts, pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false })) });
+    render(<SidebarSearchPopup projects={[local]} threads={[]}
+      onJumpToProject={vi.fn()} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "PwrAgnt" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")).toHaveLength(8);
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent(local.path);
+  });
+
+  it("labels project destinations with their known owner in a federation viewer", async () => {
+    readRendererFederationTarget.mockReturnValue({ scope: "remote", instanceId: "windows-peer" });
+    const destination = { ...project, key: "directory:C:/repos/PwrAgent", path: "C:/repos/PwrAgent" };
+    render(<SidebarSearchPopup projects={[destination]} threads={[]}
+      onJumpToProject={vi.fn()} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "pa" } });
+    await settleRemoteSearch();
+    expect(screen.getByLabelText("Runs on Windows workstation")).toBeInTheDocument();
+    expect(screen.queryByText(/Other machine/)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["PwrSuiteLab", "PWS"], ["PwrAgent", "pa"], ["PwrSnap", "Ps"], ["trading-system", "ts"],
+  ])("opens the loaded project %s by initials %s", async (name, query) => {
+    const destination = { ...project, label: name, path: `/repos/${name}` };
+    const select = vi.fn();
+    render(<SidebarSearchPopup projects={[destination]} threads={[]}
+      onJumpToProject={select} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: query } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent(name);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(select).toHaveBeenCalledWith(destination);
+  });
+
+  it("keeps an unloaded owner project when its initials match a mixed-case query", async () => {
+    const destination = { ...project, label: "PwrSuiteLab", path: "/repos/PwrSuiteLab" };
+    getNavigationQueryPage.mockResolvedValue({ protocol: 2, queryKey: "projects", generation: "generation", ownerEpoch: "owner",
+      countsRevision: "counts", counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" },
+      entries: [], directories: [{ ...destination, counts: { total: 0, active: 0, unread: 0, review: 0 },
+        pinnedRootCount: 0, unpinnedRootCount: 0, launchpadPresent: false }], complete: true });
+    render(<SidebarSearchPopup projects={[]} threads={[]}
+      onJumpToProject={vi.fn()} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "PwS" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")[0]).toHaveTextContent("PwrSuiteLab");
+  });
+
   it("ranks a case-insensitive exact project before prefix projects and thread metadata, and Enter opens it", async () => {
     const onJumpToProject = vi.fn();
     const onJumpToThread = vi.fn();
@@ -883,6 +961,76 @@ describe("project destinations", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  // `pwr` is a prefix of every repository under ~/pwrdrvr. Leading with those
+  // rows made Enter open a project launchpad, and switch the sidebar to
+  // Directories, when the operator had typed part of a thread title.
+  it("lists prefix and path project matches after the threads, so Enter opens the thread", async () => {
+    const onJumpToProject = vi.fn();
+    const onJumpToThread = vi.fn();
+    const thread = localThread({ title: "PwrSuite release notes" });
+    const pathOnly = { ...project, key: "docs", label: "docs", path: "/repos/pwrdrvr/docs" };
+    render(<SidebarSearchPopup
+      projects={[project, pathOnly]}
+      threads={[thread]}
+      onJumpToProject={onJumpToProject} onJumpToThread={onJumpToThread} onClose={vi.fn()}
+    />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "pwr" } });
+    await settleRemoteSearch();
+    const rows = screen.getAllByRole("option");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      expect.stringContaining("PwrSuite release notes"),
+      expect.stringContaining("/repos/PwrAgnt"),
+      expect.stringContaining("/repos/pwrdrvr/docs"),
+    ]);
+    // The divider is presentation, outside the options, as "Other instances" is.
+    expect(screen.getByText("Projects")).toHaveAttribute("role", "presentation");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread).toHaveBeenCalledWith(thread);
+    expect(onJumpToProject).not.toHaveBeenCalled();
+
+    // The trailing projects stay reachable from the keyboard.
+    fireEvent.change(input, { target: { value: "pwr " } });
+    await settleRemoteSearch();
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToProject).toHaveBeenCalledWith(project);
+  });
+
+  // A thread the current lens does not hold is not in the loaded rows, so only
+  // the debounced owner search finds it. Until that answers, the path-matching
+  // projects would be the only rows, and an early Enter would open one.
+  it("holds trailing projects until the owner search can offer a thread", async () => {
+    const thread = localThread({ id: "off-lens", title: "PwrSuite release notes" });
+    const row = { ...thread, ref: { backend: "codex" as const, threadId: thread.id }, rowRevision: "revision",
+      ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" as const };
+    const empty = await getNavigationQueryPage();
+    getNavigationQueryPage.mockImplementation((async (request: { query: { kind: string } }) => request.query.kind === "search"
+      ? { ...empty, entries: [{ row, orderKey: "one", placement: { kind: "root" } }] }
+      : empty) as never);
+    const onJumpToProject = vi.fn();
+    const onJumpToThread = vi.fn();
+    render(<SidebarSearchPopup projects={[project]} threads={[]}
+      onJumpToProject={onJumpToProject} onJumpToThread={onJumpToThread} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "pwr" } });
+
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    expect(screen.queryByText("No threads or projects match")).toBeNull();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToProject).not.toHaveBeenCalled();
+
+    await settleRemoteSearch();
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      expect.stringContaining("PwrSuite release notes"),
+      expect.stringContaining("/repos/PwrAgnt"),
+    ]);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread).toHaveBeenCalledWith(expect.objectContaining({ id: thread.id }));
+    expect(onJumpToProject).not.toHaveBeenCalled();
+  });
+
   it("finds an owner project absent from loaded sidebar rows and keeps thread keyboard navigation", async () => {
     getNavigationQueryPage.mockResolvedValue({ protocol: 2, queryKey: "projects", generation: "generation", ownerEpoch: "owner",
       countsRevision: "counts", counts: { total: 0, active: 0, unread: 0, review: 0 }, coverage: { state: "complete" },
@@ -899,5 +1047,77 @@ describe("project destinations", () => {
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onJumpToThread).toHaveBeenCalledWith(thread);
+  });
+});
+
+describe("project mentions", () => {
+  const inProject = (id: string, title: string, label: string, updatedAt: number) => localThread({
+    id, title, updatedAt, linkedDirectories: [{ id, kind: "local", label, path: `/repos/${label}` }],
+  });
+
+  it("scopes threads to an @project mention and offers no project rows", async () => {
+    const busy = Array.from({ length: 10 }, (_, index) =>
+      inProject(`busy-${index}`, `MCP gateway ${index}`, "media-services", 100 + index));
+    const quiet = inProject("quiet", "MCP config", "pinecone-api", 1);
+    const onJumpToThread = vi.fn();
+    render(<SidebarSearchPopup
+      projects={[{ key: "directory:/repos/pinecone-api", kind: "directory", label: "pinecone-api", path: "/repos/pinecone-api" }]}
+      threads={[...busy, quiet]}
+      onJumpToProject={vi.fn()} onJumpToThread={onJumpToThread} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "@pinecone-api mcp" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("option")).toHaveTextContent("MCP config");
+    expect(getNavigationQueryPage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ kind: "directory-index" }) }), expect.any(String));
+    expect(getNavigationQueryPage).toHaveBeenCalledWith(expect.objectContaining({
+      query: { kind: "search", text: "@pinecone-api mcp" } }), expect.any(String));
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread).toHaveBeenCalledWith(quiet);
+  });
+
+  it("lists a project's threads once a bare in:@project mention is complete", async () => {
+    render(<SidebarSearchPopup threads={[
+      inProject("a", "Alpha", "pinecone-api", 2), inProject("b", "Beta", "media-services", 3),
+    ]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "in:@pine " } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([expect.stringContaining("Alpha")]);
+  });
+
+  const directories = [
+    { key: "directory:/repos/pinecone-api", kind: "directory" as const, label: "pinecone-api", path: "/repos/pinecone-api" },
+    { key: "directory:/repos/media-services", kind: "directory" as const, label: "media-services", path: "/repos/media-services" },
+  ];
+
+  it.each([["Enter"], ["Tab"]])("suggests projects for a partial mention and %s completes it", async (key) => {
+    const onJumpToProject = vi.fn();
+    render(<SidebarSearchPopup projects={directories}
+      threads={[inProject("a", "MCP config", "pinecone-api", 2), inProject("b", "MCP gateway", "media-services", 3)]}
+      onJumpToProject={onJumpToProject} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "mcp in:@pin" } });
+    await settleRemoteSearch();
+    expect(screen.getByRole("listbox", { name: "Projects" })).toBeInTheDocument();
+    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([expect.stringContaining("pinecone-api")]);
+    expect(screen.getByText("↵ narrow to project")).toBeInTheDocument();
+    fireEvent.keyDown(input, { key });
+    expect(input.value).toBe("mcp in:@pinecone-api ");
+    expect(input.selectionStart).toBe(input.value.length);
+    expect(onJumpToProject).not.toHaveBeenCalled();
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option").map((row) => row.textContent)).toEqual([expect.stringContaining("MCP config")]);
+  });
+
+  it("lists every project for a bare @ and says when none match", async () => {
+    render(<SidebarSearchPopup projects={directories} threads={[]} onJumpToThread={vi.fn()} onClose={vi.fn()} />);
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "@" } });
+    await settleRemoteSearch();
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    fireEvent.change(input, { target: { value: "@zzz" } });
+    await settleRemoteSearch();
+    expect(screen.getByText("No matching projects")).toBeInTheDocument();
   });
 });

@@ -14,14 +14,19 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
  * They were both on the viewport, which made the empty letterbox around the
  * image — a third of the window for a portrait image — capture the pointer
  * and swallow the click that should have dismissed the lightbox. */
-export function useLightboxGestures() {
+export function useLightboxGestures({ maxFitScale = 1 }: {
+  /** How far "fit" may enlarge a picture smaller than the window. The
+   *  transcript viewer never upscales; the image diff fits a 32px sprite up to
+   *  this, because comparing it at its own size means squinting. */
+  maxFitScale?: number;
+} = {}) {
   const viewport = useRef<HTMLDivElement>(null);
   const [natural, setNatural] = useState({ width: 0, height: 0 });
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [view, setView] = useState(FIT);
   const [panning, setPanning] = useState(false);
   const pan = useRef<{ id: number; x: number; y: number; element: Element } | null>(null);
-  const fit = Math.min(1, size.width / natural.width, size.height / natural.height) || 0;
+  const fit = Math.min(maxFitScale, size.width / natural.width, size.height / natural.height) || 0;
   const width = natural.width * fit;
   const height = natural.height * fit;
   const bound = useCallback((candidate: typeof FIT) => {
@@ -41,6 +46,11 @@ export function useLightboxGestures() {
     return () => observer.disconnect();
   }, []);
   useLayoutEffect(() => { setView((previous) => bound(previous)); }, [bound]);
+
+  const setNaturalSize = useCallback((width: number, height: number) => {
+    setNatural((previous) =>
+      previous.width === width && previous.height === height ? previous : { width, height });
+  }, []);
 
   const zoom = useCallback((factor: number, clientX?: number, clientY?: number) => {
     const rect = viewport.current?.getBoundingClientRect();
@@ -100,7 +110,7 @@ export function useLightboxGestures() {
     return () => window.removeEventListener("blur", cancel);
   }, []);
 
-  const endPan = (event: PointerEvent<HTMLImageElement>) => {
+  const endPan = (event: PointerEvent<HTMLElement>) => {
     event.stopPropagation();
     if (pan.current?.id !== event.pointerId) return;
     pan.current = null;
@@ -123,6 +133,9 @@ export function useLightboxGestures() {
       setView((previous) => bound({ ...previous, x: previous.x + x, y: previous.y + y }));
     },
     onLoad: (image: HTMLImageElement) => setNatural({ width: image.naturalWidth, height: image.naturalHeight }),
+    /** For a caller whose box is not one image's own size — the image diff
+     *  frames every revision in the larger of the two. */
+    setNaturalSize,
     imageStyle: width && height ? { width: width * view.scale, height: height * view.scale, transform: `translate(${view.x}px, ${view.y}px)` } : undefined,
     /** Scale against the image's own pixels, for the toolbar readout — `view.scale`
      *  alone is relative to fit, which says nothing about what the operator sees. */
@@ -130,7 +143,7 @@ export function useLightboxGestures() {
     /** Nothing left for "Fit to window" to do. */
     atFit: view.scale === 1 && view.x === 0 && view.y === 0,
     imageHandlers: {
-      onPointerDown: (event: PointerEvent<HTMLImageElement>) => {
+      onPointerDown: (event: PointerEvent<HTMLElement>) => {
         event.stopPropagation();
         if ((event.button !== 0 && event.button !== 1) || pan.current) return;
         event.preventDefault();
@@ -138,7 +151,7 @@ export function useLightboxGestures() {
         pan.current = { id: event.pointerId, x: event.clientX, y: event.clientY, element: event.currentTarget };
         setPanning(true);
       },
-      onPointerMove: (event: PointerEvent<HTMLImageElement>) => {
+      onPointerMove: (event: PointerEvent<HTMLElement>) => {
         event.stopPropagation();
         const start = pan.current;
         if (!start || start.id !== event.pointerId) return;

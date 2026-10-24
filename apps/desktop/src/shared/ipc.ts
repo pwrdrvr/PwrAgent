@@ -1,3 +1,4 @@
+export const FEDERATION_SERVICES_CHANNEL = "federation:services";
 export const FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL = "federation:set-traffic-capture";
 export const FEDERATION_RESET_ACTIVITY_CHANNEL = "federation:reset-activity";
 export const FEDERATION_READ_ACTIVITY_CHANNEL = "federation:read-activity";
@@ -6,6 +7,8 @@ export const FEDERATION_OPEN_ACTIVITY_CHANNEL = "federation:open-activity";
 export const FEDERATION_ACTIVITY_TOPMOST_CHANNEL = "federation:activity-topmost";
 export const APP_SERVER_LIST_THREADS_CHANNEL = "app-server:list-threads";
 export const THREAD_SEARCH_CHANNEL = "thread-search:search";
+export const THREAD_SEARCH_PROGRESS_CHANNEL = "thread-search:progress";
+export const THREAD_SEARCH_CANCEL_CHANNEL = "thread-search:cancel";
 export const FEDERATION_OPEN_WINDOW_CHANNEL = "federation:open-window";
 export const FEDERATION_GET_HEALTH_CHANNEL = "federation:get-health";
 export const FEDERATION_READ_INSTANCE_LOAD_CHANNEL =
@@ -15,6 +18,12 @@ export const FEDERATION_GENERATE_INVITE_CHANNEL = "federation:generate-invite";
 export const FEDERATION_IMPORT_INVITE_CHANNEL = "federation:import-invite";
 export const FEDERATION_REVOKE_PEER_CHANNEL = "federation:revoke-peer";
 export const FEDERATION_HANDOFF_THREAD_CHANNEL = "federation:handoff-thread";
+export const FEDERATION_PUSH_COMPOSER_FILE_CHANNEL =
+  "federation:push-composer-file";
+export const FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL =
+  "federation:cancel-composer-file-push";
+export const FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL =
+  "federation:composer-file-push-progress";
 export const FEDERATION_RESET_ENROLLMENT_CHANNEL =
   "federation:reset-enrollment";
 export const FEDERATION_PIN_IMPACT_CHANNEL = "federation:pin-impact";
@@ -158,14 +167,41 @@ export const PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL =
 export const AGENT_START_THREAD_CHANNEL = "agent:start-thread";
 export const AGENT_FORK_THREAD_CHANNEL = "agent:fork-thread";
 export const AGENT_START_TURN_CHANNEL = "agent:start-turn";
+export const AGENT_SUBMIT_THREAD_REPLY_CHANNEL = "agent:submit-thread-reply";
 export const AGENT_READ_QUEUED_TURN_CHANNEL = "agent:read-queued-turn";
 export const AGENT_CANCEL_QUEUED_TURN_CHANNEL = "agent:cancel-queued-turn";
 export const AGENT_RELEASE_QUEUED_TURN_CHANNEL = "agent:release-queued-turn";
+export const AGENT_MOVE_QUEUED_TURN_CHANNEL = "agent:move-queued-turn";
 export const SCHEDULED_ACTIONS_LIST_CHANNEL = "scheduled-actions:list";
 export const SCHEDULED_ACTIONS_CREATE_CHANNEL = "scheduled-actions:create";
 export const SCHEDULED_ACTIONS_UPDATE_CHANNEL = "scheduled-actions:update";
 export const SCHEDULED_ACTIONS_CANCEL_CHANNEL = "scheduled-actions:cancel";
 export const SCHEDULED_ACTIONS_SEND_NOW_CHANNEL = "scheduled-actions:send-now";
+export const THREAD_TODOS_LIST_CHANNEL = "thread-todos:list";
+export const THREAD_REVIEWS_LIST_CHANNEL = "thread-reviews:list";
+export const THREAD_REVIEWS_UPDATE_CHANNEL = "thread-reviews:update";
+export const THREAD_TODOS_RESOLVE_CHANNEL = "thread-todos:resolve";
+export const THREAD_TODOS_RUN_ACTION_CHANNEL = "thread-todos:run-action";
+export const THREAD_TODOS_LIST_PROJECTS_CHANNEL = "thread-todos:list-projects";
+export const THREAD_TODOS_SET_PROJECT_CHANNEL = "thread-todos:set-project";
+export const THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL = "thread-todos:set-item-checked";
+/**
+ * Marker event: a thread's to-do cards changed. Listeners refetch with
+ * `thread-todos:list`. Sent to local windows only; a peer's cards stay on
+ * the peer.
+ */
+export const THREAD_TODOS_CHANGED_EVENT_CHANNEL = "thread-todos:changed";
+export const OPERATOR_REQUESTS_LIST_CHANNEL = "operator-requests:list";
+export const OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL = "operator-requests:list-dismissed-questions";
+export const OPERATOR_REQUESTS_MARK_SEEN_CHANNEL = "operator-requests:mark-seen";
+export const OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL =
+  "operator-requests:dismiss-question";
+/**
+ * Marker event: what local threads are waiting on the operator for, or what
+ * the operator has seen, changed. Listeners refetch with
+ * `operator-requests:list`. Scoped question changes also reach owner viewers.
+ */
+export const OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL = "operator-requests:changed";
 export const AGENT_START_REVIEW_CHANNEL = "agent:start-review";
 export const AGENT_COMPACT_THREAD_CHANNEL = "agent:compact-thread";
 export const AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL =
@@ -259,6 +295,8 @@ export const MCP_CONNECTION_SET_ENABLED_CHANNEL =
   "mcp-connection:set-enabled";
 export const MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL =
   "mcp-connection:set-select-for-new-threads";
+export const MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL =
+  "mcp-connection:set-tool-approval";
 export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";
@@ -276,9 +314,12 @@ export const NAVIGATION_QUEUE_PROJECTION_CHANNEL =
   "navigation:get-queue-projection";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";
+export const NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL =
+  "navigation:set-pinned-group-collapsed";
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
+export const NAVIGATION_SET_THREAD_LOCK_CHANNEL = "navigation:set-thread-lock";
 export const NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL =
   "navigation:set-thread-tool-incident-notice";
 export const NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL = "navigation:pending-thread-spend-alerts";
@@ -298,6 +339,8 @@ export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
 export const NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL =
   "navigation:add-remote-thread-pin";
+export const NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL =
+  "navigation:has-remote-thread-pin";
 export const NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL =
   "navigation:remove-remote-thread-pin";
 export const NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL =
@@ -357,6 +400,8 @@ export const NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL =
   "navigation:list-worktree-unpublished-commits";
 export const NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL =
   "navigation:get-worktree-unpublished-commit-diff";
+export const NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL =
+  "navigation:read-worktree-image";
 export const MESSAGING_GET_PLATFORM_STATUSES_CHANNEL =
   "messaging:get-platform-statuses";
 export const MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL =
@@ -646,14 +691,23 @@ export type WindowFrameState = { maximized: boolean };
  */
 export const WINDOW_OPEN_NEW_THREAD_CHANNEL = "window:open-new-thread";
 /**
+ * Main → renderer push: fired from View → Search Threads and View →
+ * Automations. The renderer's `App` shell switches `mainView` to the named
+ * screen. Like Settings, both are in-renderer screens, so main can only ask.
+ */
+export const WINDOW_OPEN_MAIN_VIEW_CHANNEL = "window:open-main-view";
+/** The screens `WINDOW_OPEN_MAIN_VIEW_CHANNEL` can open. */
+export type WindowOpenMainViewRequest = "automations" | "search";
+/**
  * Main -> renderer push: fired when an out-of-app surface, such as a
  * native approval notification, asks the main window to focus a known thread.
  */
 export const WINDOW_SHOW_THREAD_CHANNEL = "window:show-thread";
 /**
  * Main → renderer push: fired when the user invokes the app's
- * "Settings…" menu item (PwrAgent → Settings… on macOS, Help → ...
- * on Linux/Windows). The renderer's `App` shell listens on this
+ * "Settings…" menu item (PwrAgent → Settings… on macOS, File → ...
+ * on Linux/Windows), or a menu item that lands on one section. The
+ * payload is `(section?, subsection?)`. The renderer's `App` shell listens on this
  * channel and switches `mainView` to the Settings overlay, mirroring
  * what the sidebar gear-icon button does. Settings is an in-renderer
  * overlay (not a separate BrowserWindow) so the menu can't open it
@@ -670,6 +724,10 @@ export const WINDOW_REPLAY_ONBOARDING_CHANNEL = "window:replay-onboarding";
 export const WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL =
   "window:copy-local-diagnostics-info";
 export const RUNTIME_IDENTITY_CHANNEL = "runtime:get-identity";
+export const LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL =
+  "launchpad-access-notice:read";
+export const LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL =
+  "launchpad-access-notice:dismiss";
 export const SETTINGS_READ_CHANNEL = "settings:read";
 export const TOKEN_MISER_READ_USAGE_CHANNEL = "token-miser:read-usage";
 export const SETTINGS_READ_BOOTSTRAP_CHANNEL = "settings:read-bootstrap";
@@ -705,6 +763,7 @@ export const APPLICATION_OPEN_CHANNEL = "application:open";
 export const PATH_OPEN_CHANNEL = "path:open";
 export const PATH_REVEAL_CHANNEL = "path:reveal";
 export const MARKDOWN_FILE_READ_CHANNEL = "markdown-file:read";
+export const TRANSCRIPT_FILES_RESOLVE_CHANNEL = "transcript-files:resolve";
 export const MARKDOWN_FILE_VIEWER_OPEN_CHANNEL = "markdown-file-viewer:open";
 export const MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL =
   "markdown-file-viewer:read-snapshot";
@@ -721,6 +780,8 @@ export const TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL =
 export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
   "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";
+export const INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL =
+  "integrated-terminal:context-menu";
 export const INTEGRATED_TERMINAL_RESIZE_CHANNEL =
   "integrated-terminal:resize";
 export const INTEGRATED_TERMINAL_CLOSE_CHANNEL = "integrated-terminal:close";
@@ -792,6 +853,8 @@ export const PROFILES_CREATE_CHANNEL = "profiles:create";
 export const PROFILES_SET_DEFAULT_CHANNEL = "profiles:set-default";
 export const PROFILES_DELETE_CHANNEL = "profiles:delete";
 export const PROFILES_SET_CODEX_PROFILE_CHANNEL = "profiles:set-codex-profile";
+export const PROFILES_REORDER_CHANNEL = "profiles:reorder";
+export const PROFILES_SET_MENU_VISIBILITY_CHANNEL = "profiles:set-menu-visibility";
 export const PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL =
   "profiles:graduate-bootstrap-config";
 export const APP_GET_BOOT_INFO_CHANNEL = "app:get-boot-info";
@@ -821,8 +884,21 @@ export const NAVIGATION_ATTENTION_VIEW_RELEASE_CHANNEL = "navigation:release-att
 
 export const USAGE_ACTIVITY_READ_CHANNEL = "usage-activity:readUsageActivity";
 
+/** Stored pricing totals for a thread and every sub-thread under it. */
+export const THREAD_FAMILY_PRICING_READ_CHANNEL = "pricing:readThreadFamilyPricing";
+
 export const USAGE_ACTIVITY_ANALYZE_CHANNEL = "usage-activity:analyzeUsageActivity";
 /** Spawn or focus the dedicated Usage Activity window. */
 export const USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL = "usage-activity:openWindow";
 /** From the Usage Activity window: focus the main window and open a thread there. */
 export const USAGE_ACTIVITY_OPEN_THREAD_CHANNEL = "usage-activity:openThreadInMainWindow";
+
+// Keyboard shortcuts (see shared/keybindings.ts). `read` returns the stored
+// overrides, `write` applies one change from Settings → Keyboard, and
+// `changed` pushes the new snapshot to every window whenever the file
+// changes, including from another profile's process.
+export const KEYBINDINGS_READ_CHANNEL = "keybindings:read";
+export const KEYBINDINGS_WRITE_CHANNEL = "keybindings:write";
+export const KEYBINDINGS_CHANGED_CHANNEL = "keybindings:changed";
+
+export const INTEGRATED_TERMINAL_RENAME_CHANNEL = "integrated-terminal:rename";

@@ -189,6 +189,17 @@ describe.each<Gate>(["service-token", "mtls"])("Cloudflare provisioning (%s)", (
     expect((await h.service.audit()).every((check) => check.passed)).toBe(true);
   });
 
+  it("still requires an API token to issue client credentials", async () => {
+    const h = harness(gate);
+    await h.connect();
+    await h.provision();
+    h.service.disconnect();
+    const callsBefore = h.calls.length;
+    await expect(h.service.issue("Travel laptop")).rejects.toThrow("Connect a Cloudflare API token");
+    expect(h.calls).toHaveLength(callsBefore);
+    expect(h.state()?.clients).toEqual([]);
+  });
+
   it("refuses to change gate on an existing endpoint", async () => {
     const h = harness(gate);
     await h.connect();
@@ -455,6 +466,27 @@ describe("Cloudflare sign-in (oauth) admission", () => {
     }
   });
 
+  it("reads the sign-in lifetime a setup file states from the live grant", async () => {
+    const h = harness("oauth");
+    await h.connect();
+    await h.provision();
+    // Provisioned at Cloudflare's recommended two weeks.
+    await expect(h.service.signInLifetimeMs()).resolves.toBe(336 * 3_600_000);
+    // The operator may tune it in the dashboard; the file follows the live value.
+    const tuned = { ...(h.resources.get(app(h))!.oauth_configuration as object), grant: { access_token_lifetime: "15m", session_duration: "168h" } };
+    h.resources.set(app(h), { ...h.resources.get(app(h)), oauth_configuration: tuned });
+    await expect(h.service.signInLifetimeMs()).resolves.toBe(168 * 3_600_000);
+    h.resources.set(app(h), { ...h.resources.get(app(h)), oauth_configuration: { ...tuned, grant: {} } });
+    await expect(h.service.signInLifetimeMs()).resolves.toBeUndefined();
+  });
+
+  it("states no sign-in lifetime for a credential gate", async () => {
+    const h = harness("service-token");
+    await h.connect();
+    await h.provision();
+    await expect(h.service.signInLifetimeMs()).resolves.toBeUndefined();
+  });
+
   it("fails the audit when a browser session outlasts a sign-in", async () => {
     for (const duration of ["24h", undefined, "not a duration"]) {
       const h = harness("oauth");
@@ -491,14 +523,40 @@ describe("Cloudflare sign-in (oauth) admission", () => {
     expect(h.state()?.emails).toEqual(["second@example.com", "third@example.com"]);
   });
 
-  it("shares setups without minting a credential per client", async () => {
+  it.each([true, false])("shares sign-in setups locally with API connected=%s", async (connected) => {
     const h = harness("oauth");
     await h.connect();
     await h.provision();
+    if (!connected) h.service.disconnect();
     await expect(h.service.issue("Travel laptop")).rejects.toThrow("sign in as themselves");
-    const tokensBefore = h.calls.filter((call) => call.method === "POST" && call.path.endsWith("/service_tokens")).length;
+    const callsBefore = h.calls.length;
+    const stateBefore = structuredClone(h.state());
     await expect(h.service.assertShareable()).resolves.toMatchObject({ gate: "oauth" });
-    expect(h.calls.filter((call) => call.method === "POST" && call.path.endsWith("/service_tokens"))).toHaveLength(tokensBefore);
+    expect(h.calls).toHaveLength(callsBefore);
+    expect(h.state()).toEqual(stateBefore);
+    expect(h.verifyListener).toHaveBeenLastCalledWith(47830);
+    // Explicit audits remain available and require the administration token.
+    if (!connected) await expect(h.service.audit()).rejects.toThrow("Connect a Cloudflare API token");
+  });
+
+  it.each(["dnsId", "applicationId", "identityPolicyId", "tunnelId", "tunnelToken"] as const)(
+    "refuses a sign-in hand-off when the saved endpoint lacks %s", async (field) => {
+      const h = harness("oauth");
+      await h.connect();
+      await h.provision();
+      h.service.disconnect();
+      delete h.state()![field];
+      await expect(h.service.assertShareable()).rejects.toThrow("Complete endpoint creation");
+    },
+  );
+
+  it("still requires the local gateway listener for sign-in hand-offs", async () => {
+    const h = harness("oauth");
+    await h.connect();
+    await h.provision();
+    h.service.disconnect();
+    h.verifyListener.mockImplementation(() => { throw new Error("wrong listener"); });
+    await expect(h.service.assertShareable()).rejects.toThrow("wrong listener");
   });
 
   it("keeps the allowlist out of the other gates", async () => {

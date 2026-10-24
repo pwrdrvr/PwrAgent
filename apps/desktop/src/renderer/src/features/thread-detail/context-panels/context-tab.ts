@@ -5,6 +5,7 @@
  */
 export type ContextTabId =
   | "info"
+  | "todos"
   | "edits"
   | "pricing"
   | "tool-calls"
@@ -18,6 +19,7 @@ export type ContextTabId =
 
 export const CONTEXT_TAB_IDS: ContextTabId[] = [
   "info",
+  "todos",
   "edits",
   "pricing",
   "tool-calls",

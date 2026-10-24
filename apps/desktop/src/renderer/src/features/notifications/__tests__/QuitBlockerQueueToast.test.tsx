@@ -22,6 +22,21 @@ function snapshot(
 }
 
 describe("QuitBlockerQueueToast", () => {
+  it("shows cleanup-only work and clears the count when it drains", async () => {
+    vi.useFakeTimers();
+    let showQueue!: (snapshot: QuitBlockerQueueSnapshot) => void;
+    let remaining = 130;
+    render(<QuitBlockerQueueToast desktopApi={{
+      onShowQuitBlockersRequested: (callback) => { showQueue = callback; return () => undefined; },
+      readQuitBlockerQueue: async () => ({ ...snapshot([]), archiveCleanupCount: remaining }),
+    }} />);
+    act(() => showQueue({ ...snapshot([]), archiveCleanupCount: remaining }));
+    expect(screen.getByText(/130 worktree cleanups are pending/)).toBeInTheDocument();
+    expect(screen.queryByText("No running work.")).not.toBeInTheDocument();
+    remaining = 0;
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(screen.getByText("No running work.")).toBeInTheDocument();
+  });
   it("keeps a known title when a refresh temporarily omits it", async () => {
     vi.useFakeTimers();
     let showQueue!: (snapshot: QuitBlockerQueueSnapshot) => void;

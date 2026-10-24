@@ -1,107 +1,52 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FederationRemoteTarget } from "@pwragent/shared";
-import type {
-  IntegratedTerminalRemoteInfo,
-  IntegratedTerminalSessionSummary,
-} from "../../../shared/integrated-terminal";
+import type { IntegratedTerminalRemoteInfo, IntegratedTerminalSessionSummary } from "../../../shared/integrated-terminal";
 import type { DesktopApi } from "./desktop-api";
 
-/**
- * Renderer mirror of the main process's live PTY registry.
- *
- * This hook MUST be instantiated above `ThreadView` in the tree. `ThreadView`
- * unmounts on ordinary navigation — opening the search screen, or any refresh
- * that transiently drops the selected thread and flips `threadDetailPending`.
- * Terminal state used to live in its `useState`, so those unmounts silently
- * orphaned every running shell: main kept the PTY, the UI forgot it existed,
- * and the only remaining evidence was the quit dialog's blocker count.
- *
- * Main is now the single owner. We hydrate from `listIntegratedTerminals()` on
- * mount and follow the `sessions` broadcast after that, so a remount — or a
- * full renderer reload — re-discovers whatever is still running and reattaches
- * to it (`createOrAttach` replays the session's scrollback buffer).
- *
- * A "local" pane covers the gap before main has a session to report: the pane
- * has to be mounted for it to call `createIntegratedTerminal` in the first
- * place. Once the session lands, main's record takes over — including the
- * `panelHidden` bit, which is why collapsing a terminal survives a remount.
- */
-
-/**
- * A pane's remote-terminal identity: the target the create request must
- * name (the shell runs on that instance), plus the label + celestial icon
- * that keep the pane visibly branded as the remote machine's shell.
- */
-export type IntegratedTerminalPaneRemote = IntegratedTerminalRemoteInfo & {
-  target: FederationRemoteTarget;
-};
-
-type LocalPane = {
-  threadKey: string;
-  cwd?: string;
-  hidden: boolean;
-  remote?: IntegratedTerminalPaneRemote;
-};
-
+export type IntegratedTerminalPaneRemote = IntegratedTerminalRemoteInfo & { target: FederationRemoteTarget };
 export type IntegratedTerminalPane = {
   threadKey: string;
-  /**
-   * The terminal this pane is showing, once main has reported one. Panes are
-   * still one-per-thread here — a pane keyed by terminal needs the tab strip
-   * that has yet to be built — but every request main answers is addressed by
-   * terminal, so the pane sends this rather than its thread wherever it has
-   * one.
-   */
-  sessionId?: string;
+  sessionId: string;
   cwd?: string;
   remote?: IntegratedTerminalPaneRemote;
+  name?: string;
+  shell?: string;
+  status?: "running" | "exited" | "restored";
+  exitCode?: number | null;
+  pending?: boolean;
+  newSession?: boolean;
 };
-
+type LocalPane = IntegratedTerminalPane & { hidden: boolean };
 export type IntegratedTerminalsController = {
   sessions: IntegratedTerminalSessionSummary[];
-  /** Threads with a live PTY, whether or not the panel is showing. */
   liveThreadKeys: ReadonlySet<string>;
-  /** Threads running a PTY behind a collapsed panel — these need an indicator. */
   hiddenThreadKeys: ReadonlySet<string>;
   panes: IntegratedTerminalPane[];
   heightByThread: Record<string, number>;
+  selectedByThread: Record<string, string>;
+  selectTerminal: (threadKey: string, sessionId: string) => void;
+  createTerminal: (threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote) => void;
+  renameTerminal: (sessionId: string, name: string) => void;
   isPanelOpen: (threadKey: string) => boolean;
-  togglePanel: (
-    threadKey: string,
-    cwd?: string,
-    remote?: IntegratedTerminalPaneRemote,
-  ) => void;
-  /** Show the panel; a no-op when it is already showing. */
-  openPanel: (
-    threadKey: string,
-    cwd?: string,
-    remote?: IntegratedTerminalPaneRemote,
-  ) => void;
+  togglePanel: (threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote) => void;
+  openPanel: (threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote) => void;
   closeTerminal: (pane: { threadKey: string; sessionId?: string }) => void;
   handleExit: (threadKey: string) => void;
   setHeight: (threadKey: string, height: number) => void;
 };
 
-export function useIntegratedTerminals(
-  desktopApi: DesktopApi | undefined,
-): IntegratedTerminalsController {
-  const [sessions, setSessions] = useState<IntegratedTerminalSessionSummary[]>(
-    [],
-  );
+/** Main owns lifetime; this App-level mirror owns only window selection/layout.
+ * Every pane is keyed by terminal, including before its asynchronous spawn. */
+export function useIntegratedTerminals(desktopApi: DesktopApi | undefined): IntegratedTerminalsController {
+  const [sessions, setSessions] = useState<IntegratedTerminalSessionSummary[]>([]);
   const [localPanes, setLocalPanes] = useState<Record<string, LocalPane>>({});
-  // Read by the hand-off effect so it can compute its IPC calls without doing
-  // work inside a setState updater.
-  const localPanesRef = useRef(localPanes);
-  localPanesRef.current = localPanes;
-  const [heightByThread, setHeightByThread] = useState<Record<string, number>>(
-    {},
-  );
+  const [heightByThread, setHeightByThread] = useState<Record<string, number>>({});
+  const [selectedByThread, setSelectedByThread] = useState<Record<string, string>>({});
+  const localRef = useRef(localPanes);
+  localRef.current = localPanes;
 
   useEffect(() => {
     let cancelled = false;
-    // Subscribe BEFORE hydrating, and let any broadcast win over the in-flight
-    // list: a create/exit landing while `listIntegratedTerminals()` is in the
-    // air would otherwise be clobbered by the older snapshot when it resolves.
     let broadcastApplied = false;
     const unsubscribe = desktopApi?.onIntegratedTerminalSessions?.((event) => {
       broadcastApplied = true;
@@ -109,276 +54,104 @@ export function useIntegratedTerminals(
     });
     void desktopApi?.listIntegratedTerminals?.().then((next) => {
       if (!cancelled && !broadcastApplied) setSessions(next);
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
+    }).catch(() => undefined);
+    return () => { cancelled = true; unsubscribe?.(); };
   }, [desktopApi]);
 
-  // Grouped, not one-to-one: a thread owns any number of terminals now, and
-  // the thread-level affordances below (the panel toggle, the "running"
-  // indicator) have to answer for all of them.
-  const sessionsByThread = useMemo(() => {
-    const next = new Map<string, IntegratedTerminalSessionSummary[]>();
-    for (const session of sessions) {
-      const group = next.get(session.threadKey);
-      if (group) {
-        group.push(session);
-      } else {
-        next.set(session.threadKey, [session]);
-      }
-    }
-    return next;
-  }, [sessions]);
-
-  // Hand a thread off to main as soon as it has a session. If the user
-  // collapsed the pane while `create` was still in flight, carry that choice
-  // over rather than letting the arriving session pop it back open.
-  //
-  // The IPC happens in the effect body, NOT inside the updater: updaters must
-  // be pure. StrictMode double-invokes them, so a side effect in there fires
-  // the IPC twice.
   useEffect(() => {
-    const settled = Object.values(localPanesRef.current).filter((pane) =>
-      sessionsByThread.has(pane.threadKey),
-    );
-    if (settled.length === 0) return;
-
-    for (const pane of settled) {
-      if (!pane.hidden) continue;
-      for (const session of sessionsByThread.get(pane.threadKey) ?? []) {
-        if (session.panelHidden) continue;
-        void desktopApi?.setIntegratedTerminalPanelHidden?.({
-          sessionId: session.sessionId,
-          hidden: true,
-        });
+    const settled = sessions.filter((session) => localRef.current[session.sessionId]);
+    if (!settled.length) return;
+    for (const session of settled) {
+      if (localRef.current[session.sessionId]?.hidden) {
+        void desktopApi?.setIntegratedTerminalPanelHidden?.({ sessionId: session.sessionId, hidden: true });
       }
     }
-
-    const settledKeys = new Set(settled.map((pane) => pane.threadKey));
     setLocalPanes((current) => {
       const next = { ...current };
-      let changed = false;
-      for (const threadKey of settledKeys) {
-        if (threadKey in next) {
-          delete next[threadKey];
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-  }, [desktopApi, sessionsByThread]);
-
-  const liveThreadKeys = useMemo(
-    () => new Set(sessions.map((session) => session.threadKey)),
-    [sessions],
-  );
-  // "Running behind a collapsed panel" means the thread is showing none of
-  // its terminals. One visible terminal is not a hidden thread, however many
-  // others sit collapsed beside it.
-  const hiddenThreadKeys = useMemo(() => {
-    const next = new Set<string>();
-    for (const [threadKey, group] of sessionsByThread) {
-      if (group.every((session) => session.panelHidden)) {
-        next.add(threadKey);
-      }
-    }
-    return next;
-  }, [sessionsByThread]);
-
-  const panes = useMemo<IntegratedTerminalPane[]>(
-    () => [
-      // One pane per thread, showing the thread's oldest terminal — the same
-      // one `createOrAttach` picks for a request that names none, so the pane
-      // and main agree on which shell it is. Several panes for one thread is
-      // the tab strip's job, and giving them stable React identities across
-      // the local-pane hand-off is a design that work has to make.
-      // A group is built around its first element, so it is never empty.
-      ...[...sessionsByThread.values()].map((group) => {
-        const session = group[0]!;
-        return {
-          threadKey: session.threadKey,
-          sessionId: session.sessionId,
-          cwd: session.cwd,
-          // A rediscovered remote session (remount, renderer reload) carries
-          // its owning instance in the summary — rebuild the pane's target
-          // from it so re-attaches keep routing to the peer.
-          ...(session.remote
-            ? {
-                remote: {
-                  ...session.remote,
-                  target: {
-                    scope: "remote" as const,
-                    instanceId: session.remote.instanceId,
-                  },
-                },
-              }
-            : {}),
-        };
-      }),
-      ...Object.values(localPanes)
-        .filter((pane) => !sessionsByThread.has(pane.threadKey))
-        .map((pane) => ({
-          threadKey: pane.threadKey,
-          cwd: pane.cwd,
-          ...(pane.remote ? { remote: pane.remote } : {}),
-        })),
-    ],
-    [localPanes, sessionsByThread],
-  );
-
-  const isPanelOpen = useCallback(
-    (threadKey: string): boolean => {
-      const group = sessionsByThread.get(threadKey);
-      // Showing any one of the thread's terminals counts as open: the button
-      // this answers for offers to put them away, and there is something to
-      // put away.
-      if (group) return group.some((session) => !session.panelHidden);
-      const local = localPanes[threadKey];
-      return local ? !local.hidden : false;
-    },
-    [localPanes, sessionsByThread],
-  );
-  const isPanelOpenRef = useRef(isPanelOpen);
-  isPanelOpenRef.current = isPanelOpen;
-
-  const setHidden = useCallback(
-    (
-      threadKey: string,
-      hidden: boolean,
-      cwd?: string,
-      remote?: IntegratedTerminalPaneRemote,
-    ) => {
-      const group = sessionsByThread.get(threadKey);
-      if (group) {
-        // Collapsing is a preference, not a teardown: the PTY keeps running
-        // and main remembers the choice across remounts. Thread-level, so it
-        // moves every terminal the thread owns — the toggle it serves says
-        // "this thread's terminal", not "this shell".
-        for (const session of group) {
-          void desktopApi?.setIntegratedTerminalPanelHidden?.({
-            sessionId: session.sessionId,
-            hidden,
-          });
-        }
-        return;
-      }
-      setLocalPanes((current) => {
-        const existing = current[threadKey];
-        if (existing && existing.hidden === hidden) return current;
-        return {
-          ...current,
-          [threadKey]: {
-            threadKey,
-            cwd: existing?.cwd ?? cwd,
-            hidden,
-            remote: existing?.remote ?? remote,
-          },
-        };
-      });
-    },
-    [desktopApi, sessionsByThread],
-  );
-
-  const togglePanel = useCallback(
-    (threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote) => {
-      setHidden(threadKey, isPanelOpenRef.current(threadKey), cwd, remote);
-    },
-    [setHidden],
-  );
-
-  const openPanel = useCallback(
-    (threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote) => {
-      setHidden(threadKey, false, cwd, remote);
-    },
-    [setHidden],
-  );
-
-  const dropLocalPane = useCallback((threadKey: string) => {
-    setLocalPanes((current) => {
-      if (!(threadKey in current)) return current;
-      const next = { ...current };
-      delete next[threadKey];
+      for (const session of settled) delete next[session.sessionId];
       return next;
     });
+  }, [desktopApi, sessions]);
+
+  const panes = useMemo<IntegratedTerminalPane[]>(() => [
+    ...sessions.map((session) => ({
+      ...session,
+      remote: session.remote ? {
+        ...session.remote,
+        target: { scope: "remote" as const, instanceId: session.remote.instanceId },
+      } : undefined,
+    })),
+    ...Object.values(localPanes).filter((pane) => !sessions.some((session) => session.sessionId === pane.sessionId)),
+  ], [sessions, localPanes]);
+  const liveThreadKeys = useMemo(() => new Set(sessions
+    .filter((session) => !session.status || session.status === "running")
+    .map((session) => session.threadKey)), [sessions]);
+  const hiddenThreadKeys = useMemo(() => new Set(sessions
+    .filter((session) => session.panelHidden && !sessions.some((other) => other.threadKey === session.threadKey && !other.panelHidden))
+    .map((session) => session.threadKey)), [sessions]);
+  const isPanelOpen = useCallback((threadKey: string) =>
+    sessions.some((session) => session.threadKey === threadKey && !session.panelHidden)
+      || Object.values(localPanes).some((pane) => pane.threadKey === threadKey && !pane.hidden),
+  [sessions, localPanes]);
+
+  const selectTerminal = useCallback((threadKey: string, sessionId: string) => {
+    setSelectedByThread((current) => ({ ...current, [threadKey]: sessionId }));
   }, []);
-
-  const closeTerminal = useCallback(
-    (pane: { threadKey: string; sessionId?: string }) => {
-      dropLocalPane(pane.threadKey);
-      // Name the terminal when the pane knows it. The thread key is the
-      // fallback for a pane whose create has yet to resolve, and main reads it
-      // as "close this thread's terminals" — which is what a pane with no id
-      // of its own can ask for.
-      void desktopApi?.closeIntegratedTerminal?.(
-        pane.sessionId
-          ? { sessionId: pane.sessionId }
-          : { threadKey: pane.threadKey },
-      );
-    },
-    [desktopApi, dropLocalPane],
-  );
-
-  // The PTY died on its own. Main drops it from the registry and broadcasts;
-  // all we owe is tearing down any pane we were holding locally.
-  const handleExit = useCallback(
-    (threadKey: string) => {
-      dropLocalPane(threadKey);
-    },
-    [dropLocalPane],
-  );
-
+  const createTerminal = useCallback((threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote, newSession = true) => {
+    const sessionId = crypto.randomUUID();
+    setLocalPanes((current) => ({ ...current, [sessionId]: {
+      threadKey, sessionId, cwd, remote, hidden: false, pending: true, newSession,
+    } }));
+    selectTerminal(threadKey, sessionId);
+  }, [selectTerminal]);
+  const setHidden = useCallback((threadKey: string, hidden: boolean, cwd?: string, remote?: IntegratedTerminalPaneRemote) => {
+    const group = sessions.filter((session) => session.threadKey === threadKey && session.remote?.instanceId === remote?.instanceId);
+    const pending = Object.values(localPanes).filter((pane) => pane.threadKey === threadKey && pane.remote?.instanceId === remote?.instanceId);
+    if (!group.length && !pending.length) {
+      if (!hidden) createTerminal(threadKey, cwd, remote, false);
+      return;
+    }
+    for (const session of group) void desktopApi?.setIntegratedTerminalPanelHidden?.({ sessionId: session.sessionId, hidden });
+    setLocalPanes((current) => {
+      const next = { ...current };
+      for (const pane of pending) next[pane.sessionId] = { ...pane, hidden };
+      return next;
+    });
+  }, [sessions, localPanes, desktopApi, createTerminal]);
+  const togglePanel = useCallback((threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote) => {
+    setHidden(threadKey, isPanelOpen(threadKey), cwd, remote);
+  }, [isPanelOpen, setHidden]);
+  const openPanel = useCallback((threadKey: string, cwd?: string, remote?: IntegratedTerminalPaneRemote) => {
+    setHidden(threadKey, false, cwd, remote);
+  }, [setHidden]);
+  const closeTerminal = useCallback((pane: { threadKey: string; sessionId?: string }) => {
+    if (!pane.sessionId) return;
+    const sessionId = pane.sessionId;
+    setLocalPanes((current) => {
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
+    void desktopApi?.closeIntegratedTerminal?.({ sessionId });
+  }, [desktopApi]);
+  const renameTerminal = useCallback((sessionId: string, name: string) => {
+    void desktopApi?.renameIntegratedTerminal?.({ sessionId, name });
+  }, [desktopApi]);
   const setHeight = useCallback((threadKey: string, height: number) => {
     setHeightByThread((current) => ({ ...current, [threadKey]: height }));
   }, []);
-
-  // The quit dialog's terminal links land here: show me this shell, whatever
-  // the remembered panel state was. Only ever for a session main still has —
-  // acting on an unknown one would reach for a thread this window may not
-  // have, and main already refuses to broadcast for a shell that has exited.
-  const liveSessionIds = useMemo(
-    () => new Set(sessions.map((session) => session.sessionId)),
-    [sessions],
-  );
-  const liveSessionIdsRef = useRef(liveSessionIds);
-  liveSessionIdsRef.current = liveSessionIds;
-  useEffect(() => {
-    const unsubscribe = desktopApi?.onIntegratedTerminalReveal?.((event) => {
-      // Terminal-scoped, and ONLY terminal-scoped. This used to fall back to
-      // `openPanel(event.threadKey)`, which un-hides every terminal the
-      // thread owns — and it fired on the ordinary path, not just in a race,
-      // because `isPanelOpenRef` is a render-time ref that still reads
-      // pre-broadcast when the reveal lands. Revealing one shell popped its
-      // siblings open with it.
-      //
-      // Main un-hid this terminal in `revealSession` before sending the
-      // event, so the call below is normally a no-op that just converges a
-      // renderer whose mirror is momentarily behind.
-      if (!liveSessionIdsRef.current.has(event.sessionId)) {
-        return;
-      }
-      void desktopApi?.setIntegratedTerminalPanelHidden?.({
-        sessionId: event.sessionId,
-        hidden: false,
-      });
-    });
-    return () => {
-      unsubscribe?.();
-    };
-  }, [desktopApi]);
+  useEffect(() => desktopApi?.onIntegratedTerminalReveal?.((event) => {
+    if (!sessions.some((session) => session.sessionId === event.sessionId)) return;
+    selectTerminal(event.threadKey, event.sessionId);
+    void desktopApi?.setIntegratedTerminalPanelHidden?.({ sessionId: event.sessionId, hidden: false });
+  }), [desktopApi, sessions, selectTerminal]);
 
   return {
-    sessions,
-    liveThreadKeys,
-    hiddenThreadKeys,
-    panes,
-    heightByThread,
-    isPanelOpen,
-    togglePanel,
-    openPanel,
-    closeTerminal,
-    handleExit,
+    sessions, liveThreadKeys, hiddenThreadKeys, panes, heightByThread,
+    selectedByThread, selectTerminal, createTerminal, renameTerminal,
+    isPanelOpen, togglePanel, openPanel, closeTerminal,
+    // Natural exit remains a tab containing its last screen.
+    handleExit: () => undefined,
     setHeight,
   };
 }

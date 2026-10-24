@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   type NavigationLaunchpadDraft,
 } from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import {
   createTempStateDb,
   openInMemoryStateDb,
@@ -108,6 +110,126 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     }
   });
 
+  it("starts Codex and Claude launchpads on Auto when nothing is saved", async () => {
+    expect((await store.getLaunchpadDefaults()).executionMode).toBe("auto");
+    expect(listDefaultKeys()).toEqual([]);
+    const claude = await store.setLaunchpadDefaults({ backend: "claude" });
+    expect(claude.executionMode).toBe("auto");
+    const grok = await store.setLaunchpadDefaults({ backend: "acp:grok" });
+    expect(grok.executionMode).toBe("default");
+  });
+
+  it("applies a provider access default to every launchpad without touching models or threads", async () => {
+    await store.setLaunchpadDefaults({ backend: "codex", model: "gpt-6-sol" });
+    const base = {
+      directoryKind: "directory" as const,
+      directoryLabel: "Repo",
+      workMode: "local" as const,
+      prompt: "draft",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    await store.upsertDirectoryLaunchpad({
+      ...base, directoryKey: "directory:/claude", backend: "claude",
+      executionMode: "auto", model: "opus",
+    });
+    // A launchpad that never used Claude still learns the new choice.
+    await store.upsertDirectoryLaunchpad({
+      ...base, directoryKey: "directory:/grok", backend: "acp:grok",
+      executionMode: "default", model: "grok-4",
+    });
+    await store.setThreadExecutionMode({ backend: "claude", threadId: "existing", executionMode: "auto" });
+
+    const claudeFull = { reasoningEffortsByModel: {}, executionMode: "full-access" as const };
+    expect(store.applyProviderModelDefaults({}, { claude: claudeFull })).toBe(2);
+
+    const claudeLaunchpad = await store.getDirectoryLaunchpad({ directoryKey: "directory:/claude" });
+    expect(claudeLaunchpad).toMatchObject({ executionMode: "full-access", model: "opus", prompt: "draft" });
+    const grokLaunchpad = await store.getDirectoryLaunchpad({ directoryKey: "directory:/grok" });
+    expect(grokLaunchpad).toMatchObject({ backend: "acp:grok", executionMode: "default", model: "grok-4" });
+    // A profile setting is not the operator touching this launchpad.
+    expect(grokLaunchpad?.settingsTouchedAt).toBeUndefined();
+    expect(applyNavigationLaunchpadProviderSettingsPatch(grokLaunchpad!, { backend: "claude" }).executionMode)
+      .toBe("full-access");
+    const defaults = await store.getLaunchpadDefaults();
+    expect(defaults).toMatchObject({ backend: "codex", executionMode: "auto", model: "gpt-6-sol" });
+    expect(applyNavigationLaunchpadProviderSettingsPatch(defaults, { backend: "claude" }).executionMode)
+      .toBe("full-access");
+    expect(await store.getThreadOverlayState({ backend: "claude", threadId: "existing" }))
+      .toMatchObject({ executionMode: "auto" });
+
+    // Back to the built-in default.
+    store.applyProviderModelDefaults({ claude: claudeFull }, {});
+    expect((await store.getDirectoryLaunchpad({ directoryKey: "directory:/claude" }))?.executionMode)
+      .toBe("auto");
+  });
+
+  it("forgets the Default Access that older builds saved for Codex and Claude, once", async () => {
+    const insertDefault = stateDb.raw.prepare(
+      "INSERT INTO launchpad_defaults(key, value) VALUES (?, ?)",
+    );
+    insertDefault.run("backend", JSON.stringify("codex"));
+    insertDefault.run("executionMode", JSON.stringify("default"));
+    insertDefault.run("providerSettings", JSON.stringify({
+      codex: { executionMode: "default", model: "gpt-6-sol" },
+      claude: { executionMode: "default" },
+      "acp:grok": { executionMode: "default" },
+    }));
+    const base = {
+      directoryKind: "directory" as const,
+      directoryLabel: "Repo",
+      workMode: "local" as const,
+      prompt: "",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const insertLaunchpad = stateDb.raw.prepare(
+      "INSERT INTO directory_launchpads(directory_path, payload, created_at, updated_at) VALUES (?, ?, 1, 1)",
+    );
+    insertLaunchpad.run("directory:/legacy", JSON.stringify({
+      ...base, directoryKey: "directory:/legacy", backend: "claude", executionMode: "default",
+      providerSettings: { claude: { executionMode: "default" } },
+    }));
+    insertLaunchpad.run("directory:/chosen", JSON.stringify({
+      ...base, directoryKey: "directory:/chosen", backend: "codex", executionMode: "full-access",
+      providerSettings: { codex: { executionMode: "full-access" } },
+    }));
+
+    store.migrateLegacyLaunchpadExecutionModes();
+
+    const defaults = await store.getLaunchpadDefaults();
+    expect(defaults).toMatchObject({ backend: "codex", executionMode: "auto", model: "gpt-6-sol" });
+    expect(defaults.providerSettings?.claude).toBeUndefined();
+    expect(defaults.providerSettings?.["acp:grok"]).toEqual({ executionMode: "default" });
+    expect(await store.getDirectoryLaunchpad({ directoryKey: "directory:/legacy" }))
+      .toMatchObject({ executionMode: "auto" });
+    expect(await store.getDirectoryLaunchpad({ directoryKey: "directory:/chosen" }))
+      .toMatchObject({ executionMode: "full-access" });
+
+    // The upgrade changed saved access, so the notice waits to be closed.
+    expect(store.isLaunchpadAutoAccessNoticePending()).toBe(true);
+    store.dismissLaunchpadAutoAccessNotice();
+    expect(store.isLaunchpadAutoAccessNoticePending()).toBe(false);
+
+    // A Default Access chosen after the migration is kept on later launches.
+    await store.setLaunchpadDefaults({ executionMode: "default" });
+    new SqliteOverlayStore(stateDb).migrateLegacyLaunchpadExecutionModes();
+    expect((await store.getLaunchpadDefaults()).executionMode).toBe("default");
+    // ...and the closed notice does not come back.
+    expect(store.isLaunchpadAutoAccessNoticePending()).toBe(false);
+  });
+
+  it("raises no upgrade notice when the migration changes nothing", async () => {
+    await store.setLaunchpadDefaults({ backend: "claude", executionMode: "full-access" });
+
+    store.migrateLegacyLaunchpadExecutionModes();
+
+    expect(store.isLaunchpadAutoAccessNoticePending()).toBe(false);
+    // Closing a notice that never showed writes nothing.
+    store.dismissLaunchpadAutoAccessNotice();
+    expect(stateDb.getMeta("launchpad_auto_access_notice")).toBeUndefined();
+  });
+
   it("persists and clears a thread's selected MCP connections", async () => {
     await store.setThreadMcpConnectionIds({
       backend: "acp:gemini",
@@ -169,6 +291,49 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     }
   });
 
+  it("persists the Pinned group's collapse with one commit per change", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const { dbPath, tempDir } = createTempStateDb(
+      "pwragent-recents-pinned-collapse-test-",
+    );
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+
+    try {
+      expect(store.getPinnedGroupCollapsedSync()).toBe(false);
+      const { writes } = await measureSqliteWrites(async () => {
+        await expect(store.setPinnedGroupCollapsed(true)).resolves.toBe(true);
+        // A repeat, such as a reveal that finds the group already in the
+        // state it wants, commits nothing.
+        await store.setPinnedGroupCollapsed(true);
+        await store.setPinnedGroupCollapsed(true);
+        await store.setPinnedGroupCollapsed(false);
+        await store.setPinnedGroupCollapsed(false);
+        await store.setPinnedGroupCollapsed(true);
+      });
+      expectSqliteWriteBudget({
+        note: "three header clicks and three repeated writes of the same value: one commit per change, none per repeat; a few clicks a day is well under 1 MB/day of WAL",
+        scenario: "pinned-group-collapse",
+        writes,
+      });
+      stateDb.close();
+
+      const reopenedDb = StateDb.open(dbPath);
+      try {
+        expect(new SqliteOverlayStore(reopenedDb).getPinnedGroupCollapsedSync()).toBe(true);
+      } finally {
+        reopenedDb.close();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      stateDb.close();
+      removeTempStateDbDir(tempDir);
+      stateDb = openInMemoryStateDb();
+      store = new SqliteOverlayStore(stateDb);
+    }
+  });
+
   it("does not persist Codex Fast serviceTier in launchpad defaults", async () => {
     const defaults = await store.setLaunchpadDefaults({
       model: "gpt-5.5",
@@ -179,7 +344,7 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
 
     expect(defaults).toMatchObject({
       backend: "codex",
-      executionMode: "default",
+      executionMode: "auto",
       model: "gpt-5.5",
       reasoningEffort: "medium",
       fastMode: true,

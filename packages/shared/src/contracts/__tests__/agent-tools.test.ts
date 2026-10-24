@@ -23,6 +23,7 @@ describe("agent tool contracts", () => {
       "mcp_connections",
       "token_miser",
       "star_map",
+      "thread_todos",
     ]);
     expect(isAgentToolCatalogId("automation_inspection")).toBe(true);
     expect(isAgentToolCatalogId("app_management")).toBe(true);

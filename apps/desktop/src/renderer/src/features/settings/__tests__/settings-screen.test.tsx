@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -29,8 +30,12 @@ import type {
 } from "@pwragent/shared";
 import { GIT_LFS_UNAVAILABLE_REASON } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
+import type { AppearanceController } from "../../../lib/useAppearance";
 import { SettingsScreen } from "../SettingsScreen";
+import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
+import { CodexLaunchNotice } from "../../notifications/CodexLaunchNotice";
 import type { ConfirmSettingsLeave } from "../UnsavedSettingsChanges";
 import type { DesktopSettingsState } from "../useDesktopSettings";
 
@@ -71,7 +76,7 @@ afterEach(() => {
  */
 function openDiscontinuedDrawer() {
   const header = screen.getByRole("button", {
-    name: "Soon to be discontinued",
+    name: /Soon to be discontinued/,
   });
   if (header.getAttribute("aria-expanded") !== "true") {
     fireEvent.click(header);
@@ -100,6 +105,10 @@ function createSnapshot(
         source: "default",
       },
       attentionPromoteOnTurnEnd: {
+        value: true,
+        source: "default",
+      },
+      pinnedThreadsOnTop: {
         value: true,
         source: "default",
       },
@@ -158,12 +167,18 @@ function createSnapshot(
       },
       appearance: {
         theme: { value: "system", source: "default" },
+        darkTheme: { value: "tangerine-dark", source: "default" },
+        lightTheme: { value: "tangerine-light", source: "default" },
+        themedDockIcon: { value: true, source: "default" },
+        terminalMinimumContrast: { value: false, source: "default" },
         density: { value: "mission-control", source: "default" },
         sidebarTextSize: { value: "md", source: "default" },
         transcriptTextSize: { value: "md", source: "default" },
       },
       codexProfileModel: { value: "shared", source: "default" },
       messagingAcknowledgment: { value: null, source: "default" },
+      interactiveSvgSkipNotice: { value: false, source: "default" },
+      interactiveSvgAutoOpen: { value: false, source: "default" },
     },
     onboarding: {
       completed: { value: true, source: "default" },
@@ -248,6 +263,7 @@ function createSnapshot(
       listenPort: { value: 47830, source: "default" },
       compressionEnabled: { value: true, source: "default" },
       allowRemoteShells: { value: true, source: "default" },
+      allowPortForwarding: { value: false, source: "default" },
       allowFilePush: { value: false, source: "default" },
       allowFilePull: { value: false, source: "default" },
       allowFilePullOutsideThreadDirectories: { value: false, source: "default" },
@@ -467,6 +483,7 @@ function createSnapshot(
         value: true,
         source: "default",
       },
+      defaultMergeMethod: { value: "squash", source: "default" },
     },
     applications: {
       editors: [
@@ -620,6 +637,125 @@ describe("SettingsScreen segmented pending", () => {
   });
 });
 
+describe("SettingsScreen color themes", () => {
+  it("picks the dark and light themes independently", () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    // Each picker offers only its own scheme's themes.
+    const dark = screen.getByRole("combobox", { name: "Dark theme" });
+    const light = screen.getByRole("combobox", { name: "Light theme" });
+    // PwrAgent's own pairs first, then the community palettes.
+    expect(selectOptionLabels(dark)).toEqual([
+      "Tangerine",
+      "Gray",
+      "Blue",
+      "Phosphor",
+      "Catppuccin Mocha",
+      "Solarized Dark",
+    ]);
+    expect(selectOptionLabels(light)).toEqual([
+      "Tangerine",
+      "Gray",
+      "Blue",
+      "Catppuccin Latte",
+      "Solarized Light",
+    ]);
+
+    chooseSelectOption(dark, "Solarized Dark");
+    expect(controller.setDarkTheme).toHaveBeenCalledWith("solarized-dark");
+    expect(controller.setLightTheme).not.toHaveBeenCalled();
+
+    chooseSelectOption(light, /Blue/);
+    expect(controller.setLightTheme).toHaveBeenCalledWith("blue-light");
+  });
+
+  it("marks the row on screen, credits community palettes, and offers the pair", () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "dark",
+        darkTheme: "catppuccin-mocha",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    const darkRow = screen.getByRole("combobox", { name: "Dark theme" })
+      .closest(".settings-field") as HTMLElement;
+    const lightRow = screen.getByRole("combobox", { name: "Light theme" })
+      .closest(".settings-field") as HTMLElement;
+    expect(within(darkRow).getByText("Showing")).toBeInTheDocument();
+    expect(within(lightRow).queryByText("Showing")).toBeNull();
+    expect(within(lightRow).getByText(/Not used while Theme is Dark\./)).toBeInTheDocument();
+    expect(within(darkRow).getByRole("link", { name: "Catppuccin" }))
+      .toHaveAttribute("href", "https://catppuccin.com/licensing/");
+    expect(within(lightRow).queryByRole("link")).toBeNull();
+
+    // Picking a theme offers its pair for the other scheme, and only a
+    // click applies it.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Dark theme" }), "Solarized Dark");
+    expect(controller.setLightTheme).not.toHaveBeenCalled();
+    fireEvent.click(within(darkRow).getByRole("button", { name: "Use Solarized Light" }));
+    expect(controller.setLightTheme).toHaveBeenCalledWith("solarized-light");
+    expect(within(darkRow).queryByRole("button", { name: "Use Solarized Light" })).toBeNull();
+
+    // Catppuccin Latte is already the dark theme's pair, so nothing is offered.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Light theme" }), "Catppuccin Latte");
+    expect(within(lightRow).queryByRole("button", { name: /^Use / })).toBeNull();
+    chooseSelectOption(screen.getByRole("combobox", { name: "Light theme" }), /Blue/);
+    fireEvent.click(within(lightRow).getByRole("button", { name: "Not now" }));
+    expect(controller.setDarkTheme).toHaveBeenCalledTimes(1);
+    expect(within(lightRow).queryByRole("button", { name: /^Use / })).toBeNull();
+
+    // Phosphor is dark only: it has no light pair to offer.
+    chooseSelectOption(screen.getByRole("combobox", { name: "Dark theme" }), /Phosphor/);
+    expect(controller.setDarkTheme).toHaveBeenLastCalledWith("phosphor-dark");
+    expect(within(darkRow).queryByRole("button", { name: /^Use / })).toBeNull();
+  });
+});
+
 function createArchivedSnapshot(
   threadId: string,
   archivedAt: number,
@@ -713,6 +849,68 @@ function messagingRoutesHeader(): Element | null {
 }
 
 describe("SettingsScreen", () => {
+  it("shows and copies a runnable Linux update fallback after a failed check", async () => {
+    const manualUpdate = {
+      description: "Close PwrAgent and run this command in a terminal.",
+      command: "curl -fL -o PwrAgent.deb https://example.test/PwrAgent.deb && sudo apt install ./PwrAgent.deb",
+    };
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({ status: "error" as const, message: "offline", manualUpdate })),
+      copyText: vi.fn(async () => undefined),
+    };
+    render(
+      <SettingsScreen
+        initialSection="updates"
+        desktopApi={desktopApi}
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    const copy = await screen.findByRole("button", { name: "Copy update command" });
+    expect(screen.getByText(manualUpdate.description)).toBeInTheDocument();
+    expect(screen.getByText(manualUpdate.command)).toBeInTheDocument();
+    fireEvent.click(copy);
+    expect(desktopApi.copyText).toHaveBeenCalledWith(manualUpdate.command);
+  });
+
+  it("shows the selected-release fallback when downloading fails after an available check", async () => {
+    let receiveStatus: ((status: import("../../../../../shared/app-metadata").AppUpdateStatus) => void) | undefined;
+    const manualUpdate = {
+      description: "Install v1.1.0-beta.2 from a terminal.",
+      command: "curl -fL https://example.test/v1.1.0-beta.2.deb -o PwrAgent.deb && sudo apt install ./PwrAgent.deb",
+    };
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({ status: "available" as const, version: "1.1.0-beta.2" })),
+      onAppUpdateStatus: vi.fn((listener: NonNullable<typeof receiveStatus>) => { receiveStatus = listener; return () => undefined; }),
+      copyText: vi.fn(async () => undefined),
+    };
+    render(<SettingsScreen initialSection="updates" desktopApi={desktopApi} settings={createSettingsState()} onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    await screen.findByText(/Update available: v1.1.0-beta.2/);
+    act(() => receiveStatus?.({ status: "error", message: "download interrupted", manualUpdate }));
+    expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy update command" }));
+    expect(desktopApi.copyText).toHaveBeenCalledWith(manualUpdate.command);
+  });
+
+  it("keeps terminal fallback instructions when the error event precedes the check result", async () => {
+    let receiveStatus: ((status: import("../../../../../shared/app-metadata").AppUpdateStatus) => void) | undefined;
+    let resolveCheck: ((result: { status: "available"; version: string }) => void) | undefined;
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(() => new Promise<{ status: "available"; version: string }>((resolve) => { resolveCheck = resolve; })),
+      onAppUpdateStatus: (listener: NonNullable<typeof receiveStatus>) => { receiveStatus = listener; return () => undefined; },
+    };
+    render(<SettingsScreen initialSection="updates" desktopApi={desktopApi} settings={createSettingsState()} onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    await act(async () => {
+      receiveStatus?.({ status: "error", message: "download interrupted", manualUpdate: { description: "Install the selected beta.", command: "sudo apt install ./beta.deb" } });
+      resolveCheck?.({ status: "available", version: "1.1.0-beta.2" });
+    });
+    expect(screen.getByText("sudo apt install ./beta.deb")).toBeInTheDocument();
+    expect(screen.getByText(/Update failed: download interrupted/)).toBeInTheDocument();
+  });
+
   it("renders cached provider models and keeps mount-only catalog reads passive", async () => {
     const cachedBackends: BackendSummary[] = [
       {
@@ -1054,7 +1252,32 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("refreshes only Codex from the focused Codex screen", async () => {
+  it("rediscovers a repaired executable before refreshing Codex models and settings", async () => {
+    const repairedSnapshot = createSnapshot();
+    const brokenSnapshot = createSnapshot();
+    const command = repairedSnapshot.models.codex.discovery!.selectedCommand!;
+    brokenSnapshot.models.codex.discovery = {
+      candidates: [{
+        command,
+        executable: false,
+        selected: false,
+        source: "path",
+        failureReason: `Command failed: ${command} --version`,
+      }],
+    };
+    let cachedSnapshot = brokenSnapshot;
+    let finishDiscovery!: () => void;
+    const refreshCodexDiscovery = vi.fn<NonNullable<DesktopApi["refreshCodexDiscovery"]>>(
+      () => new Promise((resolve) => {
+        finishDiscovery = () => {
+          cachedSnapshot = repairedSnapshot;
+          resolve({ snapshot: repairedSnapshot });
+        };
+      }),
+    );
+    const refreshSettings = vi.fn();
+    const noop = () => undefined;
+    const settings = createSettingsState(brokenSnapshot);
     const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
       async () => ({ fetchedAt: 1000, backends: [] }),
     );
@@ -1062,14 +1285,29 @@ describe("SettingsScreen", () => {
       async () => ({ fetchedAt: 1000, entries: [] }),
     );
 
-    render(
-      <SettingsScreen
-        desktopApi={{ listAcpAgents, listBackends }}
-        initialSection="models"
-        settings={createSettingsState()}
-        onClose={() => undefined}
-      />,
-    );
+    const desktopApi = { listAcpAgents, listBackends, refreshCodexDiscovery };
+    function RecoveryHarness() {
+      const [snapshot, setSnapshot] = useState(brokenSnapshot);
+      const [notice, setNotice] = useState<AppNoticeToastNotice>();
+      refreshSettings.mockImplementation(async () => setSnapshot(cachedSnapshot));
+      return (
+        <>
+          <SettingsScreen
+            desktopApi={desktopApi}
+            initialSection="models"
+            settings={{ ...settings, snapshot, refresh: refreshSettings }}
+            onClose={noop}
+          />
+          <CodexLaunchNotice
+            discovery={snapshot.models.codex.discovery}
+            onNoticeChanged={setNotice}
+            onOpenCodexSettings={noop}
+          />
+          <AppNoticeToast notice={notice} onDismiss={noop} />
+        </>
+      );
+    }
+    render(<RecoveryHarness />);
 
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     fireEvent.click(within(nav).getByRole("button", { name: "Codex" }));
@@ -1077,9 +1315,18 @@ describe("SettingsScreen", () => {
       name: "Refresh Codex",
     });
     await waitFor(() => expect(listBackends).toHaveBeenCalled());
+    expect(refreshCodexDiscovery).not.toHaveBeenCalled();
     listBackends.mockClear();
     listAcpAgents.mockClear();
     fireEvent.click(refresh);
+
+    expect(refreshCodexDiscovery).toHaveBeenCalledExactlyOnceWith({
+      discoveryIntent: "settings-user-action",
+    });
+    expect(listBackends).not.toHaveBeenCalled();
+    expect(refreshSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("Codex installation failed to start");
+    await act(async () => finishDiscovery());
 
     await waitFor(() => {
       expect(listBackends).toHaveBeenCalledExactlyOnceWith({
@@ -1088,7 +1335,35 @@ describe("SettingsScreen", () => {
         refreshModels: "codex",
       });
     });
+    await waitFor(() => expect(refreshSettings).toHaveBeenCalledOnce());
+    expect(screen.queryByText("Codex installation failed to start")).not.toBeInTheDocument();
     expect(listAcpAgents).not.toHaveBeenCalled();
+  });
+
+  it("reports executable rediscovery failure without refreshing the stale Codex catalog", async () => {
+    const settings = createSettingsState();
+    const refreshCodexDiscovery = vi.fn(async () => {
+      throw new Error("Codex executable rediscovery failed.");
+    });
+    const listBackends = vi.fn(async () => ({ fetchedAt: 1000, backends: [] }));
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends, refreshCodexDiscovery }}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+    const refresh = await screen.findByRole("button", { name: "Refresh Codex" });
+    await waitFor(() => expect(refresh).toBeEnabled());
+    listBackends.mockClear();
+    fireEvent.click(refresh);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Codex executable rediscovery failed.");
+    expect(listBackends).not.toHaveBeenCalled();
+    expect(settings.refresh).not.toHaveBeenCalled();
+    expect(refresh).toBeEnabled();
   });
 
   it("names the active PwrAgent Codex path environment override", () => {
@@ -1122,6 +1397,78 @@ describe("SettingsScreen", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/PWRDRVR_CODEX_COMMAND/)).not.toBeInTheDocument();
+  });
+
+  it("leaves terminal contrast off by default and writes only the opt-in", async () => {
+    const controller: AppearanceController = {
+      appearance: {
+        theme: "system",
+        darkTheme: "tangerine-dark",
+        lightTheme: "tangerine-light",
+        density: "mission-control",
+        sidebarTextSize: "md",
+        transcriptTextSize: "md",
+        resolvedTheme: "dark",
+      },
+      setTheme: vi.fn(),
+      setDarkTheme: vi.fn(),
+      setLightTheme: vi.fn(),
+      setDensity: vi.fn(),
+      setSidebarTextSize: vi.fn(),
+      setTranscriptTextSize: vi.fn(),
+      setAppearance: vi.fn(),
+    };
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        appearanceController={controller}
+        initialSection="general"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const toggle = screen.getByRole("switch", {
+      name: "Raise low-contrast terminal text",
+    });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { appearance: { terminalMinimumContrast: true } },
+      });
+    });
+  });
+
+  it("turns opening SVGs interactive off with trust in their scripts", async () => {
+    const base = createSnapshot();
+    const settings = createSettingsState(createSnapshot({
+      general: {
+        ...base.general,
+        interactiveSvgSkipNotice: { value: true, source: "config" },
+        interactiveSvgAutoOpen: { value: false, source: "default" },
+      },
+    }));
+    render(
+      <SettingsScreen
+        initialSection="general"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Open SVGs interactive" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { interactiveSvgAutoOpen: true },
+      });
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Run SVG scripts without asking" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { interactiveSvgSkipNotice: false, interactiveSvgAutoOpen: false },
+      });
+    });
   });
 
   it("commits an edited Codex path before an unrelated button action", async () => {
@@ -1313,6 +1660,42 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           attentionPromoteOnTurnEnd: false,
+        },
+      });
+    });
+    expect(
+      screen.getByRole("switch", {
+        name: "Show pinned threads in a group at the top",
+      }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: "Show pinned threads in a group at the top",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          pinnedThreadsOnTop: false,
+        },
+      });
+    });
+    expect(
+      screen.getByRole("switch", { name: "Run SVG scripts without asking" }),
+    ).toHaveAttribute("aria-checked", "false");
+    // Opening interactive runs scripts, so it waits on trust, and says so.
+    expect(
+      screen.getByText(
+        "Needs \u201cRun SVG scripts without asking\u201d: opening an SVG runs its scripts.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Run SVG scripts without asking" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          interactiveSvgSkipNotice: true,
         },
       });
     });
@@ -3144,6 +3527,251 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("sets each provider's access for new threads, defaulting Codex and Claude to Auto", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.providerDefaults = {
+      codex: {
+        model: "gpt-5.6-sol",
+        reasoningEffortsByModel: { "gpt-5.6-sol": "high" },
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const capabilities = {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      renameThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: true,
+      transcriptPagination: true,
+      toolUse: true,
+      approvalRequests: true,
+      multiDirectoryThreads: true,
+    };
+    const accessModes = [
+      { mode: "default" as const, label: "Default", available: true, isDefault: true },
+      { mode: "auto" as const, label: "Auto", available: true },
+      { mode: "full-access" as const, label: "Full Access", available: true },
+    ];
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({ fetchedAt: 1000, entries: [] })),
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [
+          {
+            kind: "codex" as const,
+            label: "Codex",
+            available: true,
+            methods: [],
+            capabilities,
+            executionModes: accessModes,
+            launchpadOptions: {
+              models: [{
+                id: "gpt-5.6-sol",
+                label: "GPT-5.6-Sol",
+                reasoningEfforts: ["low", "high"],
+                supportsReasoning: true,
+              }],
+            },
+          },
+          {
+            kind: "claude" as const,
+            label: "Claude",
+            available: true,
+            methods: [],
+            capabilities,
+            executionModes: accessModes,
+            launchpadOptions: { models: [{ id: "opus", label: "Opus" }] },
+          },
+          {
+            kind: "acp:grok" as const,
+            label: "Grok",
+            available: true,
+            methods: [],
+            capabilities,
+            executionModes: [],
+            launchpadOptions: { models: [{ id: "grok-4", label: "Grok 4" }] },
+          },
+        ],
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { rerender } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+      />,
+    );
+
+    const codexAccess = await screen.findByRole("combobox", {
+      name: "Codex access for new threads",
+    });
+    const claudeAccess = screen.getByRole("combobox", {
+      name: "Claude access for new threads",
+    });
+    expect(codexAccess).toHaveAttribute("data-value", "auto");
+    expect(claudeAccess).toHaveAttribute("data-value", "auto");
+    expect(selectOptionLabels(codexAccess)).toEqual([
+      "Default Access",
+      "Auto",
+      "Full Access",
+    ]);
+    // Providers with their own runtime modes get no access default.
+    expect(
+      screen.queryByRole("combobox", { name: "Grok access for new threads" }),
+    ).not.toBeInTheDocument();
+
+    chooseSelectOption(codexAccess, "Default Access");
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenLastCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              model: "gpt-5.6-sol",
+              reasoningEffortsByModel: { "gpt-5.6-sol": "high" },
+              executionMode: "default",
+            },
+          },
+        },
+      });
+    });
+
+    // Full Access reaches every launchpad for the provider, so it asks first.
+    const writesBefore = vi.mocked(settings.writeConfig).mock.calls.length;
+    chooseSelectOption(claudeAccess, "Full Access");
+    expect(
+      await screen.findByText("Start new Claude threads with Full Access?"),
+    ).toBeInTheDocument();
+    expect(settings.writeConfig).toHaveBeenCalledTimes(writesBefore);
+    fireEvent.click(screen.getByRole("button", { name: "Use Full Access" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenLastCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              model: "gpt-5.6-sol",
+              reasoningEffortsByModel: { "gpt-5.6-sol": "high" },
+            },
+            claude: {
+              reasoningEffortsByModel: {},
+              executionMode: "full-access",
+            },
+          },
+        },
+      });
+    });
+
+    // Clearing the model keeps the provider's access choice.
+    const next = createSnapshot();
+    next.models.providerDefaults = {
+      codex: {
+        model: "gpt-5.6-sol",
+        reasoningEffortsByModel: { "gpt-5.6-sol": "high" },
+        executionMode: "full-access",
+      },
+    };
+    rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={{ ...settings, snapshot: next }}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Codex access for new threads" }),
+    ).toHaveAttribute("data-value", "full-access");
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenLastCalledWith({
+        models: {
+          providerDefaults: {
+            codex: {
+              reasoningEffortsByModel: {},
+              executionMode: "full-access",
+            },
+          },
+        },
+      });
+    });
+  });
+
+  it("shows Default Access when Codex is too old for Auto and holds Full Access while saving", async () => {
+    const snapshot = createSnapshot();
+    const settings = createSettingsState(snapshot);
+    const capabilities = {
+      listThreads: true,
+      createThread: true,
+      resumeThread: true,
+      renameThread: true,
+      readThread: true,
+      startTurn: true,
+      interruptTurn: true,
+      steerTurn: true,
+      transcriptPagination: true,
+      toolUse: true,
+      approvalRequests: true,
+      multiDirectoryThreads: true,
+    };
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({ fetchedAt: 1000, entries: [] })),
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [{
+          kind: "codex" as const,
+          label: "Codex",
+          available: true,
+          methods: [],
+          capabilities,
+          executionModes: [
+            { mode: "default" as const, label: "Default", available: true, isDefault: true },
+            {
+              mode: "auto" as const,
+              label: "Auto",
+              available: false,
+              unavailableReason: "Auto access requires Codex 0.153.0 or later.",
+            },
+            { mode: "full-access" as const, label: "Full Access", available: true },
+          ],
+          launchpadOptions: { models: [{ id: "gpt-5.6-sol", label: "GPT-5.6-Sol" }] },
+        }],
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { rerender } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={settings}
+      />,
+    );
+
+    // New threads will start on Default Access, so the row says so.
+    const codexAccess = await screen.findByRole("combobox", {
+      name: "Codex access for new threads",
+    });
+    expect(codexAccess).toHaveAttribute("data-value", "default");
+    expect(
+      screen.getByText(
+        "Auto access requires Codex 0.153.0 or later. New threads start on Default Access.",
+      ),
+    ).toBeInTheDocument();
+
+    chooseSelectOption(codexAccess, "Full Access");
+    expect(await screen.findByRole("button", { name: "Use Full Access" })).toBeEnabled();
+    rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        settings={{ ...settings, saving: true }}
+      />,
+    );
+    // A save in flight must not be answered by a second write.
+    expect(screen.getByRole("button", { name: "Updating…" })).toBeDisabled();
+  });
+
   it("saves defaults without a separate launchpad action and confirms thread and Fast actions", async () => {
     const snapshot = createSnapshot();
     snapshot.models.providerDefaults = {
@@ -3359,7 +3987,7 @@ describe("SettingsScreen", () => {
     ).not.toBeInTheDocument();
     expect(updateDirectoryLaunchpad).not.toHaveBeenCalled();
     expect(screen.getByText(
-      "Changing a model or reasoning updates all launchpads for that provider in this profile. Existing threads keep their settings.",
+      "Changing a model, reasoning, or access updates all launchpads for that provider in this profile. Existing threads keep their settings.",
     )).toBeInTheDocument();
     expect(
       screen.getByRole("combobox", { name: "Codex default model" }),
@@ -3988,6 +4616,113 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/checked just now/)).toBeInTheDocument();
   });
 
+  it("names both managed Codex tracks and switches to the one picked", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: "0.160.0-pwragent.1",
+        latestTag: "pwragent-v0.160.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.162.0-pwragent.1",
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const track = screen.getByRole("radiogroup", { name: "Build track" });
+    // Each track names the version it resolves to, so the operator can see
+    // what switching would get them before they switch. No config value means
+    // Latest: a build published for testing is opt-in.
+    expect(within(track).getByText("0.160.0-pwragent.1")).toBeInTheDocument();
+    expect(within(track).getByText("0.162.0-pwragent.1")).toBeInTheDocument();
+    expect(within(track).getByRole("radio", { name: /Latest/ }))
+      .toHaveAttribute("aria-checked", "true");
+    await waitFor(() => expect(
+      within(track).getByRole("radio", { name: /Prerelease/ }),
+    ).toBeEnabled());
+    listBackends.mockClear();
+
+    fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
+
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({
+      models: { codex: { managedBuildChannel: "prerelease" } },
+    }));
+    // The track's build is a different Codex, so its models are rediscovered.
+    await waitFor(() => expect(listBackends).toHaveBeenCalledWith({
+      includeUnavailable: true,
+      discoveryIntent: "settings-user-action",
+      refreshModels: "codex",
+    }));
+  });
+
+  it("keeps the Codex models when both tracks name the running build", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      managedCodex: {
+        state: "ready",
+        version: "0.160.0-pwragent.1",
+        latestTag: "pwragent-v0.160.0-pwragent.1",
+        prereleaseTag: "pwragent-v0.160.0-pwragent.1",
+      },
+    };
+    const settings = createSettingsState(snapshot);
+    const listBackends = vi.fn(async () => ({ fetchedAt: Date.now(), backends: [] }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listBackends } as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const track = screen.getByRole("radiogroup", { name: "Build track" });
+    await waitFor(() => expect(
+      within(track).getByRole("radio", { name: /Prerelease/ }),
+    ).toBeEnabled());
+    listBackends.mockClear();
+    fireEvent.click(within(track).getByRole("radio", { name: /Prerelease/ }));
+
+    await waitFor(() => expect(settings.refresh).toHaveBeenCalled());
+    // The switch installed nothing, so there is nothing to rediscover.
+    expect(listBackends).not.toHaveBeenCalledWith(expect.objectContaining({
+      refreshModels: "codex",
+    }));
+  });
+
+  it("offers no managed Codex track while the PwrAgent build is off", () => {
+    const snapshot = createSnapshot();
+    snapshot.models.codex.managedBuilds = { value: false, source: "config" };
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as DesktopApi}
+        initialSection="models"
+        initialSubsection="codex"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("PwrAgent build")).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "Build track" }))
+      .not.toBeInTheDocument();
+  });
+
   it("rediscovers Codex models after installing a newer managed build", async () => {
     const snapshot = createSnapshot();
     snapshot.models.codex.managedBuilds = { value: true, source: "config" };
@@ -4225,6 +4960,7 @@ describe("SettingsScreen", () => {
     expect(within(ghPanel).getAllByText("/opt/homebrew/bin/gh").length).toBeGreaterThanOrEqual(1);
     expect(within(ghPanel).getAllByText("2.88.1").length).toBeGreaterThanOrEqual(1);
     expect(within(ghPanel).getByText("Signed in as")).toBeInTheDocument();
+    expect(within(ghPanel).getByText(/cannot attach images or videos to pull requests/)).toBeInTheDocument();
 
     fireEvent.click(
       within(ghPanel).getByRole("button", {
@@ -4241,6 +4977,86 @@ describe("SettingsScreen", () => {
       });
     });
     expect(getGhStatus).toHaveBeenCalledWith({ recheck: true });
+  });
+
+  it.each(["empty", "unavailable", "installed"] as const)(
+    "shows missing gh installation guidance with checks off and %s discovery",
+    async (discoveryState) => {
+      const snapshot = createSnapshot();
+      snapshot.applications.gh.discovery = {
+        candidates: discoveryState === "empty" ? [] : [{
+          command: "/usr/bin/gh",
+          source: "path",
+          executable: discoveryState === "installed",
+          selected: discoveryState === "installed",
+          version: discoveryState === "installed" ? "2.99.0" : undefined,
+        }],
+      };
+      const getGhStatus = vi.fn();
+      render(
+        <SettingsScreen
+          desktopApi={{ platform: "linux", getGhStatus }}
+          initialSection="git"
+          settings={createSettingsState(snapshot)}
+          onClose={() => undefined}
+        />,
+      );
+      const ghPanel = screen.getByRole("heading", { name: "GitHub CLI (gh)" }).closest("section")!;
+      expect(getGhStatus).not.toHaveBeenCalled();
+      if (discoveryState === "installed") {
+        expect(within(ghPanel).queryByText("Install GitHub CLI")).not.toBeInTheDocument();
+      } else {
+        expect(within(ghPanel).getByText("Install GitHub CLI")).toBeInTheDocument();
+        expect(within(ghPanel).getByText("Ubuntu / Debian commands")).toBeInTheDocument();
+        expect(within(ghPanel).getByText(/enable GitHub checks if they are off/)).toBeInTheDocument();
+      }
+    },
+  );
+
+  it("clears the attachment warning after rechecking an upgraded selected gh", async () => {
+    const snapshot = createSnapshot();
+    const discovery = (version: string) => ({
+      selectedCommand: "/usr/bin/gh",
+      selectedSource: "path" as const,
+      candidates: [
+        { command: "/usr/bin/gh", source: "path" as const, executable: true, selected: true, version },
+        { command: "/usr/local/bin/gh", source: "user" as const, executable: true, selected: false, version: "2.46.0" },
+      ],
+    });
+    snapshot.applications.gh = {
+      enabled: { value: true, source: "default" },
+      path: { value: "", source: "default" },
+      discovery: discovery("2.98.0"),
+    };
+    let version = "2.98.0";
+    const getGhStatus = vi.fn(async () => ({
+      installed: true,
+      loggedIn: true,
+      scopes: ["repo"],
+      hasRepoScope: true,
+      version,
+      discovery: discovery(version),
+    }));
+    render(
+      <SettingsScreen
+        desktopApi={{ platform: "linux", getGhStatus }}
+        initialSection="git"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+    const ghPanel = screen.getByRole("heading", { name: "GitHub CLI (gh)" }).closest("section")!;
+    expect(await within(ghPanel).findByText(/cannot attach images or videos to pull requests/)).toBeInTheDocument();
+    expect(within(ghPanel).getByText("Ubuntu / Debian commands")).toBeInTheDocument();
+    version = "2.99.0";
+    fireEvent.click(within(ghPanel).getByRole("button", { name: "Re-check" }));
+    await waitFor(() => {
+      expect(within(ghPanel).queryByText(/cannot attach images or videos to pull requests/)).not.toBeInTheDocument();
+      expect(within(ghPanel).queryByText("Upgrade GitHub CLI")).not.toBeInTheDocument();
+    });
+    // An older unselected binary keeps its row warning without making the
+    // selected, up-to-date command look unable to upload attachments.
+    expect(within(ghPanel).getAllByText("No PR attachments")).toHaveLength(1);
   });
 
   it("shows resolved glab discovery details and saves an alternate candidate", async () => {
@@ -6206,7 +7022,8 @@ describe("SettingsScreen", () => {
       name: "Slack messaging settings",
     });
     const openSection = (title: string) => {
-      const header = within(pane).getByRole("button", { name: title });
+      const header = within(pane).getByRole("heading", { level: 2, name: title })
+        .closest<HTMLElement>('[role="button"]')!;
       if (header.getAttribute("aria-expanded") !== "true") {
         fireEvent.click(header);
       }
@@ -6333,7 +7150,7 @@ describe("SettingsScreen", () => {
     ).toEqual(["Connect", "Access & responses", "Start talking", "Advanced"]);
 
     const connect = within(pane)
-      .getByRole("button", { name: "Connect" })
+      .getByRole("heading", { level: 2, name: "Connect" })
       .closest("section") as HTMLElement;
     const stages = Array.from(
       connect.querySelectorAll<HTMLElement>(".automation-stage"),
@@ -6426,7 +7243,7 @@ describe("SettingsScreen", () => {
       });
     });
     const connect = screen
-      .getByRole("button", { name: "Connect" })
+      .getByRole("heading", { level: 2, name: "Connect" })
       .closest("section") as HTMLElement;
     const progress = () =>
       Array.from(
@@ -7785,6 +8602,7 @@ describe("SettingsScreen", () => {
               active: true,
               default: false,
               profileDir: "/home/example/.pwragent/profiles/dev",
+              showInMenu: true,
               canDelete: false,
               codexProfile: {
                 name: "",
@@ -7803,6 +8621,7 @@ describe("SettingsScreen", () => {
               active: false,
               default: false,
               profileDir: "/home/example/.pwragent/profiles/work",
+              showInMenu: true,
               canDelete: true,
               codexProfile: {
                 name: "",
@@ -7817,8 +8636,10 @@ describe("SettingsScreen", () => {
             },
           ],
           refresh: vi.fn(async () => undefined),
+          reorderProfiles: vi.fn(async () => undefined),
           setCodexProfile: vi.fn(async () => undefined),
           setDefaultProfile,
+          setShowInMenu: vi.fn(async () => undefined),
         }}
         settings={createSettingsState()}
       />,
@@ -7837,6 +8658,204 @@ describe("SettingsScreen", () => {
     });
   });
 
+  describe("Profiles menu order and visibility", () => {
+    const profile = (
+      name: string,
+      options: { active?: boolean; showInMenu?: boolean } = {},
+    ) => ({
+      name,
+      displayName: name,
+      active: options.active ?? false,
+      default: false,
+      profileDir: `/home/example/.pwragent/profiles/${name}`,
+      showInMenu: options.showInMenu ?? true,
+      canDelete: !options.active,
+      codexProfile: {
+        name: "",
+        displayName: "System default",
+        codexHome: "/home/example/.codex",
+        source: "default" as const,
+        exists: true,
+        selected: true,
+        hasAuthFile: true,
+        hasConfigFile: true,
+      },
+    });
+
+    function renderProfiles(options: {
+      profiles: ReturnType<typeof profile>[];
+      reorderProfiles?: (order: string[]) => Promise<void>;
+      setShowInMenu?: (name: string, showInMenu: boolean) => Promise<void>;
+      profileCreateRequested?: boolean;
+      onProfileCreateRequestHandled?: () => void;
+    }) {
+      return render(
+        <SettingsScreen
+          initialSection="profiles"
+          profileCreateRequested={options.profileCreateRequested}
+          profiles={{
+            activeProfile: "dev",
+            createProfile: vi.fn(async () => undefined),
+            defaultProfile: "dev",
+            deleteProfile: vi.fn(async () => undefined),
+            loading: false,
+            openProfile: vi.fn(async () => undefined),
+            profiles: options.profiles,
+            refresh: vi.fn(async () => undefined),
+            reorderProfiles:
+              options.reorderProfiles ?? vi.fn(async () => undefined),
+            setCodexProfile: vi.fn(async () => undefined),
+            setDefaultProfile: vi.fn(async () => undefined),
+            setShowInMenu: options.setShowInMenu ?? vi.fn(async () => undefined),
+          }}
+          settings={createSettingsState()}
+          onProfileCreateRequestHandled={options.onProfileCreateRequestHandled}
+        />,
+      );
+    }
+
+    const card = (name: string) =>
+      document.querySelector(
+        `.settings-profile-card[data-profile-name="${name}"]`,
+      ) as HTMLElement;
+
+    it("shows each shown profile's menu shortcut, and none for a hidden one", () => {
+      renderProfiles({
+        profiles: [
+          profile("dev", { active: true }),
+          profile("scratch", { showInMenu: false }),
+          profile("work"),
+        ],
+      });
+
+      // No desktop bridge in jsdom, so the shortcut renders in its
+      // Windows/Linux form.
+      expect(
+        within(card("dev")).getByRole("img", {
+          name: "Profiles menu shortcut Ctrl+1",
+        }),
+      ).toBeInTheDocument();
+      expect(
+        within(card("scratch")).queryByRole("img", { name: /shortcut/ }),
+      ).toBeNull();
+      expect(
+        within(card("work")).getByRole("img", {
+          name: "Profiles menu shortcut Ctrl+2",
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("switch", { name: "Show scratch in the Profiles menu" }),
+      ).toHaveAttribute("aria-checked", "false");
+    });
+
+    it("switches a profile out of the Profiles menu", async () => {
+      const setShowInMenu = vi.fn(async () => undefined);
+      renderProfiles({
+        profiles: [profile("dev", { active: true }), profile("work")],
+        setShowInMenu,
+      });
+
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Show work in the Profiles menu" }),
+      );
+
+      await waitFor(() => {
+        expect(setShowInMenu).toHaveBeenCalledWith("work", false);
+      });
+    });
+
+    it("moves a profile with the arrow keys on its grip and announces it", async () => {
+      const reorderProfiles = vi.fn(async (_order: string[]) => undefined);
+      renderProfiles({
+        profiles: [
+          profile("dev", { active: true }),
+          profile("work"),
+          profile("alpha"),
+        ],
+        reorderProfiles,
+      });
+      const grip = screen.getByRole("button", {
+        name: "Move dev. Use the up and down arrow keys.",
+      });
+      grip.focus();
+
+      // Already first: nothing to send.
+      fireEvent.keyDown(grip, { key: "ArrowUp" });
+      expect(reorderProfiles).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(grip, { key: "ArrowDown" });
+
+      await waitFor(() => {
+        expect(reorderProfiles).toHaveBeenCalledWith(["work", "dev", "alpha"]);
+      });
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "dev moved to position 2 of 3.",
+      );
+    });
+
+    it("drops a dragged profile above the card it lands on", async () => {
+      const reorderProfiles = vi.fn(async (_order: string[]) => undefined);
+      renderProfiles({
+        profiles: [
+          profile("dev", { active: true }),
+          profile("work"),
+          profile("alpha"),
+        ],
+        reorderProfiles,
+      });
+      const dataTransfer = {
+        dropEffect: "none",
+        effectAllowed: "all",
+        setData: vi.fn(),
+        setDragImage: vi.fn(),
+      };
+      const target = card("work");
+      target.getBoundingClientRect = () =>
+        ({ top: 100, height: 40, bottom: 140, left: 0, right: 0, width: 0 }) as DOMRect;
+
+      fireEvent.dragStart(
+        screen.getByRole("button", {
+          name: "Move alpha. Use the up and down arrow keys.",
+        }),
+        { dataTransfer },
+      );
+      // jsdom has no DragEvent, so an init dict's clientY never reaches the
+      // handler; set it on the event itself.
+      const pointerEvent = (event: Event) => {
+        Object.defineProperty(event, "clientY", { value: 105 });
+        return event;
+      };
+      fireEvent(target, pointerEvent(createEvent.dragOver(target, { dataTransfer })));
+      expect(target).toHaveClass("is-drop-before");
+      fireEvent(target, pointerEvent(createEvent.drop(target, { dataTransfer })));
+
+      await waitFor(() => {
+        expect(reorderProfiles).toHaveBeenCalledWith(["dev", "alpha", "work"]);
+      });
+      expect(target).not.toHaveClass("is-drop-before");
+    });
+
+    it("offers no grip when there is only one profile to order", () => {
+      renderProfiles({ profiles: [profile("dev", { active: true })] });
+
+      expect(screen.queryByRole("button", { name: /^Move dev/ })).toBeNull();
+    });
+
+    it("opens the create form when Profiles → New Profile… asks, once", async () => {
+      const onProfileCreateRequestHandled = vi.fn();
+      renderProfiles({
+        profiles: [profile("dev", { active: true })],
+        profileCreateRequested: true,
+        onProfileCreateRequestHandled,
+      });
+
+      expect(
+        await screen.findByRole("dialog", { name: "Add PwrAgent profile" }),
+      ).toBeInTheDocument();
+      expect(onProfileCreateRequestHandled).toHaveBeenCalledOnce();
+    });
+  });
+
   it("keeps the profile dialogs keyboard-contained and returns focus to what opened them", async () => {
     const profile = (name: string, active: boolean) => ({
       name,
@@ -7844,6 +8863,7 @@ describe("SettingsScreen", () => {
       active,
       default: false,
       profileDir: `/home/example/.pwragent/profiles/${name}`,
+      showInMenu: true,
       canDelete: !active,
       codexProfile: {
         name: "",
@@ -7868,8 +8888,10 @@ describe("SettingsScreen", () => {
           openProfile: vi.fn(async () => undefined),
           profiles: [profile("dev", true), profile("work", false)],
           refresh: vi.fn(async () => undefined),
+          reorderProfiles: vi.fn(async () => undefined),
           setCodexProfile: vi.fn(async () => undefined),
           setDefaultProfile: vi.fn(async () => undefined),
+          setShowInMenu: vi.fn(async () => undefined),
         }}
         settings={createSettingsState()}
       />,
@@ -8306,6 +9328,7 @@ describe("SettingsScreen", () => {
     expect(buttons).toEqual([
       "← Exit Settings",
       "General",
+      "Keyboard",
       "Updates",
       "Applications",
       "Plugins",
@@ -8793,6 +9816,52 @@ describe("SettingsScreen", () => {
     ).toBe("AI Providers");
   });
 
+  it("names the access default on a provider screen's defaults strip", async () => {
+    const snapshot = createSnapshot();
+    snapshot.models.providerDefaults = {
+      claude: { reasoningEffortsByModel: {}, executionMode: "full-access" },
+    };
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({ fetchedAt: 1000, entries: [] })),
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1000,
+        backends: [{
+          kind: "claude" as const,
+          label: "Claude",
+          available: true,
+          methods: [],
+          capabilities: {},
+          executionModes: [],
+          launchpadOptions: { models: [{ id: "opus", label: "Opus" }] },
+        }],
+      })),
+    } as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"];
+
+    const { rerender } = render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        initialSubsection="claude"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Full Access")).toBeInTheDocument();
+    expect(screen.queryByText(/Access access/)).not.toBeInTheDocument();
+
+    rerender(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        initialSection="models"
+        initialSubsection="claude"
+        settings={createSettingsState(createSnapshot())}
+        onClose={() => undefined}
+      />,
+    );
+    expect(await screen.findByText("Auto access")).toBeInTheDocument();
+  });
+
   it("sorts Gemini CLI last and marks disabled providers off in the nav", async () => {
     const baseSnapshot = createSnapshot();
     const snapshot = createSnapshot({
@@ -8848,7 +9917,7 @@ describe("SettingsScreen", () => {
       nav.querySelectorAll("#settings-nav-sublist-models .settings-nav__sublabel"),
     ).map((label) => label.textContent);
     // Providers only: the Helper model row lives on the AI Providers page.
-    expect(subLabels).toEqual(["Codex", "Grok", "Gemini CLI"]);
+    expect(subLabels).toEqual(["Codex", "Claude", "Grok", "Gemini CLI"]);
     const geminiButton = within(nav).getByRole("button", {
       name: /Gemini CLI/,
     });
@@ -8858,6 +9927,36 @@ describe("SettingsScreen", () => {
     expect(
       geminiButton.querySelector(".settings-nav__subdot--off"),
     ).not.toBeNull();
+  });
+
+  it("updates Claude's nav status from cached installation and authentication without probing", () => {
+    const listBackends = vi.fn();
+    const settings = createSettingsState();
+    const view = (claude: BackendSummary["claude"] | null) => (
+      <SettingsScreen initialSection="general" settings={settings}
+        desktopApi={{ listBackends }}
+        cachedBackends={claude ? [{ kind: "claude", claude } as BackendSummary] : undefined} />
+    );
+    // Before providers load, the row still has a dot instead of looking broken.
+    const { rerender } = render(view(null));
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: /Expand AI Providers/ }));
+    const claudeButton = () => within(nav).getByRole("button", { name: /^Claude/ });
+    expect(claudeButton().querySelector(".settings-nav__subdot--off")).not.toBeNull();
+    expect(claudeButton().querySelector(".settings-nav__subchip")).toBeNull();
+    rerender(view({ authStatus: "unknown" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--off")).not.toBeNull();
+    expect(claudeButton()).toHaveTextContent("not installed");
+    rerender(view({ executable: "/fixture/claude", authStatus: "unknown" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--warn")).not.toBeNull();
+    expect(claudeButton()).toHaveTextContent("check failed");
+    rerender(view({ executable: "/fixture/claude", authStatus: "sign-in-required" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--warn")).not.toBeNull();
+    expect(claudeButton()).toHaveTextContent("sign in");
+    rerender(view({ executable: "/fixture/claude", authStatus: "signed-in", authMethod: "api-key" }));
+    expect(claudeButton().querySelector(".settings-nav__subdot--ok")).not.toBeNull();
+    expect(claudeButton().querySelector(".settings-nav__subchip")).toBeNull();
+    expect(listBackends).not.toHaveBeenCalled();
   });
 
   it("relogs and removes MCP servers from the Plugins settings pane", async () => {

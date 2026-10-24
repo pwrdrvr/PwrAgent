@@ -111,11 +111,11 @@ export function decodeFederationInvite(
   }
   // An invite is attacker-authored input: it is unsigned, and the operator may
   // paste it from anywhere. Its endpoints are dialed by the main process, so
-  // enforce the scheme allowlist here rather than trusting the renderer (which
+  // enforce endpoint validation here rather than trusting the renderer (which
   // this path never passes through).
   if (!isFederationGatewayEndpointUrl(parsed.gatewayUrl)) {
     throw new Error(
-      "Federation invite gateway URL must be a ws://, wss://, or ssh:// endpoint.",
+      "Federation invite gateway URL must be a ws://, wss://, or ssh:// endpoint with a valid hostname.",
     );
   }
   if (
@@ -129,7 +129,7 @@ export function decodeFederationInvite(
       ))
   ) {
     throw new Error(
-      "Federation invite endpoints must all be ws://, wss://, or ssh:// URLs.",
+      "Federation invite endpoints must all be ws://, wss://, or ssh:// URLs with valid hostnames.",
     );
   }
   if (parsed.expiresAt <= now) {

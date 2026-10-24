@@ -88,6 +88,73 @@ function acpSnapshot(
 }
 
 describe("AcpAgentsSettings — Grok build channel", () => {
+  it.each([
+    ["an older promoted build", "pwragent-v1.0.24-pwragent.2"],
+    ["a newer prerelease build", "pwragent-v1.0.45-pwragent.2"],
+    ["no shared install record", undefined],
+  ])("names the active build when the last check reports %s", async (_scenario, installedTag) => {
+    const activeTag = "pwragent-v1.0.38-pwragent.2";
+    const activeCommand = `${MANAGED_VERSIONS}/${activeTag}/grok`;
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1_000,
+      entries: [
+        grokEntry({
+          activeCommand,
+          instances: [
+            {
+              command: activeCommand,
+              version: "1.0.38-pwragent.2",
+              source: "fallback",
+              pwrAgentBuild: true,
+              pwrAgentBuildTag: activeTag,
+            },
+          ],
+          managedBuild: {
+            repository: "pwrdrvr/grok-build",
+            channel: "prerelease" as const,
+            activeTag,
+            installedTag,
+            latestTag: "pwragent-v1.0.24-pwragent.2",
+            prereleaseTag: "pwragent-v1.0.45-pwragent.2",
+            ...(installedTag ? { checkedAt: Date.now() } : {}),
+          },
+        }),
+      ],
+    }));
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        snapshot={acpSnapshot("grok", "")}
+        onManagedGrokBuildsChange={vi.fn(async () => true)}
+        onManagedGrokBuildChannelChange={vi.fn(async () => true)}
+      />,
+    );
+
+    const tag = await screen.findByText(activeTag, { selector: ".acp-build__tag" });
+    const line = tag.closest(".acp-build__line")!;
+    expect(line).toHaveTextContent("in use");
+    if (installedTag) {
+      expect(line).toHaveTextContent(`last check installed ${installedTag}`);
+      expect(line).toHaveTextContent("checked just now");
+    } else {
+      expect(line).not.toHaveTextContent("last check installed");
+      expect(line).not.toHaveTextContent("checked");
+    }
+    expect(line).not.toHaveTextContent("newest verified build");
+    expect(line).not.toHaveTextContent("manual path");
+    expect(screen.queryByRole("button", { name: "Use newest build" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Release notes" })).toHaveAttribute(
+      "href",
+      `https://github.com/pwrdrvr/grok-build/releases/tag/${activeTag}`,
+    );
+    expect(screen.getByRole("radio", { name: /Latest/ }))
+      .toHaveTextContent("1.0.24-pwragent.2");
+    expect(screen.getByRole("radio", { name: /Prerelease/ }))
+      .toHaveTextContent("1.0.45-pwragent.2");
+  });
+
   it("names the installed PwrAgent build and when it was checked", async () => {
     const listAcpAgents = vi.fn(async () => ({
       fetchedAt: 1_000,
@@ -116,6 +183,7 @@ describe("AcpAgentsSettings — Grok build channel", () => {
     expect(await screen.findByText("pwragent-v1.0.4-pwragent.2"))
       .toBeInTheDocument();
     expect(screen.getByText(/checked 2h ago/)).toBeInTheDocument();
+    expect(screen.getByText(/in use · installed and verified/)).toBeInTheDocument();
     // The channel is up to date, so there is nothing to install — PwrAgent
     // already did. Only an explicit re-check is offered.
     expect(
@@ -169,9 +237,15 @@ describe("AcpAgentsSettings — Grok build channel", () => {
       />,
     );
 
-    expect(
-      await screen.findByText(/a manual path pins pwragent-v1\.0\.4-pwragent\.2/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("pwragent-v1.0.4-pwragent.2", {
+      selector: ".acp-build__tag",
+    })).toBeInTheDocument();
+    expect(screen.getByText(/in use · manual path override · last check installed pwragent-v1\.0\.5-pwragent\.1/))
+      .toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Release notes" })).toHaveAttribute(
+      "href",
+      "https://github.com/pwrdrvr/grok-build/releases/tag/pwragent-v1.0.4-pwragent.2",
+    );
     expect(screen.getByText(/This path pins one PwrAgent build/))
       .toBeInTheDocument();
 

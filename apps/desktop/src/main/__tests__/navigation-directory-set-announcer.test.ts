@@ -52,10 +52,19 @@ describe("directorySetFingerprint", () => {
       [{ ...base[0]!, kind: "workspace" }, base[1]!],
       [{ ...base[0]!, localAvailability: "unconfigured" }, base[1]!],
       [{ ...base[0]!, gitStatus: { originRepository: "github.com/acme/project-a" } }, base[1]!],
+      [{ ...base[0]!, gitStatus: { remoteRepositories: ["github.com/acme/project-a"] } }, base[1]!],
     ];
     for (const changed of changes) {
       expect(directorySetFingerprint(changed)).not.toBe(directorySetFingerprint(base));
     }
+  });
+
+  it("ignores the order of configured remote repositories", () => {
+    const remotes = ["github.com/fixture-fork/disktree", "github.com/fixture-upstream/disktree"];
+    const fingerprint = (remoteRepositories: string[]) => directorySetFingerprint([
+      { ...base[0]!, gitStatus: { remoteRepositories } },
+    ]);
+    expect(fingerprint(remotes)).toBe(fingerprint([...remotes].reverse()));
   });
 });
 

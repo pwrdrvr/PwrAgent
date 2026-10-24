@@ -168,7 +168,7 @@ is design and debugging work with better tools already available to it.
 ## Moving, archiving, restoring, pinning and marking read
 
 Individual thread actions use `mutate_thread` fields: `projectPath`, `archive`,
-`pinned` and `unread`. That tool already resolves a thread locally or on the
+`pinned`, `unread`, `locked` and `lockNote`. That tool already resolves a thread locally or on the
 owning peer, supports `dryRun`, and is gated for messaging per field. A field
 whose permission is missing fails to compile, so the new fields could not
 ship ungated.
@@ -208,6 +208,17 @@ read mutation. It does not archive threads or stop turns.
   that until this change, and the cookie came back on the next snapshot.
   Pin and read state share `thread.control.organize`, which Power User
   holds, and on a peer they need only its `thread_navigation` grant.
+- **`locked`** locks or unlocks the thread, and **`lockNote`** says why. A
+  `lockNote` without `locked` locks the thread, or replaces the note of a
+  locked one; it cannot accompany `locked: false`. A locked thread refuses
+  every new, queued, steered or review turn from any source, the operator
+  included, until it is unlocked; a running turn is not interrupted. The
+  registry checks the lock where turns start (`assertThreadNotLocked`), so
+  no automation needs a check of its own. It is gated on
+  `thread.control.handoff`, because parking a thread for another agent is a
+  handoff decision, and on a peer it needs the `turn_control` grant that
+  starting a turn there needs. An unlock runs before a `projectPath` move in
+  the same call, and a lock runs after it, because a lock refuses the move.
 
 Local archives, pins and read marks go through the app's own paths
 (`setAgentThreadActions`), so every window redraws from the same events a

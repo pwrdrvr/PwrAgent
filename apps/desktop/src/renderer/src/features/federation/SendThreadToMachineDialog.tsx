@@ -16,8 +16,8 @@ export type ThreadHandoffOperation = "copy" | "move";
 /** The receiver's checkout for this thread's project, as its index reports it. */
 export type ThreadHandoffRepositoryMatch = {
   path: string;
-  /** Which rule found it: the checkout's origin, or only the project name. */
-  matchedBy: "origin" | "name";
+  /** Which rule found it: origin, another configured remote, or project name. */
+  matchedBy: "origin" | "remote" | "name";
 };
 
 export type FindThreadHandoffRepository = (
@@ -33,7 +33,7 @@ export type SendThreadToMachineRequest = {
 
 export type SendThreadToMachineSource = {
   title: string;
-  /** The thread's Git project. Absent for a Workspaces thread: history only. */
+  /** The thread's Git project. Non-Git workspaces travel as an archive. */
   project?: ProjectIdentity;
   gitBranch?: string;
   gitWorkingState?: ThreadGitWorkingState;
@@ -128,6 +128,7 @@ export function SendThreadToMachineDialog(props: {
   const projectLabel = project?.label;
   const projectPath = project?.path;
   const projectRepositoryKey = project?.repositoryKey;
+  const projectRepositoryKeys = project?.repositoryKeys?.join("\n");
   useEffect(() => {
     if (!findRepository || !projectKind || projectLabel === undefined || !availableIds) {
       return;
@@ -137,6 +138,7 @@ export function SendThreadToMachineDialog(props: {
       label: projectLabel,
       ...(projectPath !== undefined ? { path: projectPath } : {}),
       ...(projectRepositoryKey !== undefined ? { repositoryKey: projectRepositoryKey } : {}),
+      ...(projectRepositoryKeys !== undefined ? { repositoryKeys: projectRepositoryKeys.split("\n") } : {}),
     };
     const ids = availableIds.split("\n");
     let cancelled = false;
@@ -153,7 +155,7 @@ export function SendThreadToMachineDialog(props: {
     return () => {
       cancelled = true;
     };
-  }, [availableIds, findRepository, projectKind, projectLabel, projectPath, projectRepositoryKey]);
+  }, [availableIds, findRepository, projectKind, projectLabel, projectPath, projectRepositoryKey, projectRepositoryKeys]);
 
   const dialogRef = useModalDialog({
     onClose: () => {
@@ -208,8 +210,10 @@ export function SendThreadToMachineDialog(props: {
       : lookup?.state === "found"
         ? `${lookup.match.matchedBy === "origin" && project?.repositoryKey
           ? `Matched by origin ${project.repositoryKey}.`
-          : "Matched by project name. Check that it is a clone of the same repository."
-        } The thread starts in a new detached worktree there.`
+          : lookup.match.matchedBy === "remote"
+            ? "Matched by a configured Git remote."
+            : "Matched by project name. Check that it is a clone of the same repository."
+        } A new worktree uses the source branch when available, or starts detached at the source commit.`
         : `${target.label} has no project ${
           project?.repositoryKey ? "with this origin" : `named ${project?.label ?? "like this one"}`
         }. Enter the path of a clone there that shares this repository's history.`;
@@ -227,7 +231,7 @@ export function SendThreadToMachineDialog(props: {
         <h2>Send to Another Machine</h2>
         <p>
           Continue &ldquo;{source.title}&rdquo; on another PwrAgent with its history
-          {project ? " and uncommitted work" : ""}.
+          {project ? " and published commit" : ""}.
         </p>
         {sending ? (
           <p className="workspace-handoff-dialog__note" role="status">
@@ -307,8 +311,10 @@ export function SendThreadToMachineDialog(props: {
             {!project ? (
               <p className="workspace-handoff-dialog__note">
                 This thread has no Git project. Its history starts in a new workspace
-                {target ? ` on ${target.label}` : ""}. Files in this workspace are not
-                copied.
+                {target ? ` on ${target.label}` : ""}. Any available workspace is also
+                copied, including hidden files. Remove sensitive files before sending.
+                Symlinks pointing outside the workspace are omitted; all symlinks are
+                omitted when Windows is involved.
               </p>
             ) : null}
             <div

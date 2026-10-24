@@ -39,7 +39,7 @@ describe("managed Codex model refresh", () => {
     expect(requests).toEqual([
       { includeUnavailable: true },
       { includeUnavailable: true, refreshModels: "codex", discoveryIntent: "settings-user-action" },
-      { includeUnavailable: true },
+      { includeUnavailable: true, refreshRateLimits: true },
     ]);
   });
 

@@ -6,7 +6,8 @@ import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import {
   applyNavigationPage, beginNavigationPageRead, createNavigationPageState,
-  failNavigationPageRead, isNavigationCursorExpired, navigationIdentityKey, navigationRetainedRange, type NavigationPageState,
+  failNavigationPageRead, isNavigationAnchorMissing, isNavigationCursorExpired, navigationAnchorsEqual,
+  navigationFallbackAnchor, navigationIdentityKey, navigationRetainedRange, type NavigationPageState,
 } from "./navigation-query-state";
 
 const MAX_CONCURRENT_READS = 4;
@@ -266,14 +267,30 @@ export class NavigationWindowQueries {
   }
 
   private eventAffectsResource(resource: Resource, event: AgentEvent): boolean {
-    // A remote row event cannot change membership of an exact identity query.
-    // Collection queries retain conservative invalidation for counts/order.
     const request = resource.value.state.request;
-    if (request.federationTarget?.scope !== "remote" || request.query.kind !== "exact") return true;
-    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown };
+    const params = event.notification.params as { sourceMethod?: unknown; threadId?: unknown; worktreePath?: unknown; directoryKey?: unknown; instanceId?: string };
     const method = event.notification.method === "navigation/invalidated" ? params?.sourceMethod : event.notification.method;
-    if (navigationInvalidationMayChangeMembership(method)) return true;
     const page = resource.value.state.page;
+    if (request.query.kind === "children" && !resource.value.loading && !resource.value.state.stale
+      && page?.complete && (page.rangeStart ?? 0) === 0 && page.coverage.state === "complete"
+      && typeof params?.threadId === "string"
+      && (!navigationInvalidationMayChangeMembership(method)
+        || method === "thread/pin/added" || method === "thread/pin/removed" || method === "navigation/remoteThreadPins/changed")) {
+      // Pins move roots between directory sections, but do not reparent children.
+      // Only a current, settled disclosure can exclude an off-page row safely.
+      // A pending membership refresh may discover rows absent from its baseline;
+      // their subsequent events must fence that read and request a replacement.
+      // Unknown membership events still discover newly created/reparented children.
+      const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId
+        : method === "navigation/remoteThreadPins/changed" ? params.instanceId : undefined;
+      const key = navigationIdentityKey({ backend: event.backend, threadId: params.threadId, ownerInstanceId });
+      return navigationIdentityKey(request.query.parent) === key
+        || page.entries.some(({ row }) => navigationIdentityKey(row.ref) === key);
+    }
+    // A remote row event cannot change membership of an exact identity query.
+    // Other collections retain conservative invalidation for counts/order.
+    if (request.federationTarget?.scope !== "remote" || request.query.kind !== "exact") return true;
+    if (navigationInvalidationMayChangeMembership(method)) return true;
     if (method === "navigation/directoryGitStatus/updated" && typeof params?.directoryKey === "string"
       && page?.coverage.state === "complete" && page.complete) {
       return page.selectionDirectory?.key === params.directoryKey || Boolean(page.directories?.some((directory) => directory.key === params.directoryKey));
@@ -302,7 +319,7 @@ export class NavigationWindowQueries {
     return this.read(resource, false, anchor);
   }
 
-  /** Returning to the start after a removed anchor is an explicit viewer action. */
+  /** The operator's explicit return to the start of a list, discarding its anchor and loaded range. */
   async restart(id: string): Promise<void> {
     const resource = this.resources.get(id);
     if (!resource) return;
@@ -404,6 +421,30 @@ export class NavigationWindowQueries {
             rows = Math.floor(rows / 2);
           }
         };
+        // An anchor is remembered for every later refresh of this resource,
+        // and the row it names can leave the owner's query first: archived,
+        // reparented, moved, or pinned between a selection's exact read and
+        // its directory's. Refusing the read stranded an error card and
+        // blocked every refresh until the operator clicked Reload. Resume at
+        // the nearest surviving row instead, then at the top.
+        const readAround = async (request: NavigationQueryRequest) => {
+          const missing = request.anchor;
+          if (!missing) return readPage(request);
+          for (const anchor of [missing, navigationFallbackAnchor(started.page, missing), undefined]) {
+            if (anchor !== missing && navigationAnchorsEqual(anchor, missing)) continue;
+            try {
+              const page = await readPage(anchor === missing ? request
+                : { ...request, anchor, retainedRange: undefined, completeBaselineRevision: undefined });
+              if (anchor !== missing && navigationAnchorsEqual(resource.anchor, missing)) resource.anchor = anchor;
+              return page;
+            } catch (error) {
+              if (!anchor || !isNavigationAnchorMissing(error)
+                || !this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) throw error;
+              navigationListingDiagnostics.record({ ...this.diagnostic, phase: "retry", logical: diagnostic.logical, attempt: diagnostic.attempt, retry: "anchor-missing" });
+            }
+          }
+          throw new Error("Navigation anchor fallback did not reach the top of its list.");
+        };
         let page: NavigationQueryPage;
         let pageCursor = cursor;
         const restoring = explicitAnchor || fromStart ? 0 : size(started.page);
@@ -423,7 +464,7 @@ export class NavigationWindowQueries {
         // improvement on the button they still have.
         const extendUntil = Date.now() + MAX_LOAD_MORE_MS;
         try {
-          page = await readPage({ ...started.request, cursor, anchor,
+          page = await readAround({ ...started.request, cursor, anchor,
             ...(cursor ? { pageSize: cursorPageSize(size(started.page)) } : {}),
             completeBaselineRevision: !fromStart && !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
             retainedRange: !fromStart && !explicitAnchor && !cursor
@@ -443,7 +484,7 @@ export class NavigationWindowQueries {
           const recoveryAnchor = resource.anchor ?? ((previous?.rangeStart ?? 0) > 0
             ? firstDirectory ? { kind: "directory" as const, key: firstDirectory.key }
               : firstThread ? { kind: "thread" as const, ref: firstThread } : undefined : undefined);
-          page = await readPage({ ...started.request, anchor: recoveryAnchor });
+          page = await readAround({ ...started.request, anchor: recoveryAnchor });
         }
         if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
         let next = applyNavigationPage({ state: resource.value.state, sequence: started.pendingSequence, page, cursor: pageCursor });

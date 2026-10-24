@@ -12,6 +12,7 @@ import {
 import {
   AGENT_EVENT_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
+  KEYBINDINGS_CHANGED_CHANNEL,
   NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
   WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
 } from "../shared/ipc";
@@ -141,12 +142,14 @@ export function showStarMapWindow(source: WindowPlacementSource = {}): void {
   // deliberately registered WITHOUT a federation target: remote-scoped
   // event delivery is gated per-webContents by the renderer's own
   // `setFederationEventSubscriptions` registration instead. The diagnostics
-  // channel lets Help → Copy Local Diagnostics Info describe this focused
+  // channel lets Help → Copy Diagnostics Info describe this focused
   // surface and its active intake target instead of falling back to the main
   // window's selected-thread context.
   registerWindowChannels(window, WINDOW_KIND_STAR_MAP, [
     AGENT_EVENT_CHANNEL,
     APPEARANCE_CHANGED_EVENT_CHANNEL,
+    // The map's Find chip and its jump chord follow keybindings.toml.
+    KEYBINDINGS_CHANGED_CHANNEL,
     NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
     WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
   ]);

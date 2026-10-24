@@ -90,14 +90,15 @@ type FieldValue = string | number | boolean | string[] | null;
 
 export type McpApprovalPersistence = "session" | "always";
 
-// This is a server-owned grant, not a client cache of approvals. Only offer
-// scopes advertised by an approval request; forms and login flows need input.
+// The request's owner (Codex, the gateway or the upstream server) holds the
+// grant. Only offer advertised scopes; forms and login flows need input.
 export function readMcpApprovalPersistence(state: PendingMcpInteractionState): McpApprovalPersistence[] {
   if (state.mode !== "form" || !state.form?.empty) {
     return [];
   }
   const meta = state._meta;
   const isApproval = meta?.codex_approval_kind === "mcp_tool_call"
+    || meta?.pwragent_approval_kind === "mcp_tool_call"
     || ((state.serverName === "browser" || state.serverName === "browser-use")
       && typeof meta?.origin === "string" && meta.origin.trim().length > 0);
   if (!isApproval) {

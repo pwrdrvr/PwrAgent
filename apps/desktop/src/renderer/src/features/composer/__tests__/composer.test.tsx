@@ -4,7 +4,7 @@ import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import { hydrateComposerDraft } from "../composer-draft-hydration";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -19,6 +19,8 @@ import {
   type NavigationLaunchpadDraft,
   type StartReviewRequest,
   type ModelSettingsRecent,
+  type FederationCapability,
+  type MoveQueuedTurnResponse,
   type SetThreadModelSettingsRequest,
   type StartTurnRequest,
   type StartTurnResponse,
@@ -39,6 +41,7 @@ import { FEDERATED_THREAD_SEARCH_DEBOUNCE_MS } from "../../../lib/useFederatedTh
 import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { Composer as ProductionComposer } from "../Composer";
+import { ImageGalleryLayer } from "../../thread-detail/ImageGalleryLayer";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
@@ -174,7 +177,7 @@ afterEach(async () => {
 });
 
 function openDropdown(label: string): HTMLElement {
-  const dropdown = screen.getByLabelText(label);
+  const dropdown = screen.getByRole("button", { name: new RegExp(`^${label}(?::|$)`) });
   fireEvent.click(dropdown);
   return dropdown;
 }
@@ -789,7 +792,7 @@ describe("Composer", () => {
     expect(screen.getByLabelText("New thread")).toHaveValue("Keep this follow-up");
   });
 
-  it("keeps composer focus when handoff replaces the editor within the same component", async () => {
+  it("keeps the focused editor when its launchpad becomes the thread", async () => {
     const store = createComposerDraftStore();
     const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "First message");
     const view = render(<Composer backends={[backendSummary("codex")]}
@@ -807,8 +810,10 @@ describe("Composer", () => {
     view.rerender(<Composer backends={[backendSummary("codex")]}
       thread={thread} draftStore={store} skills={[]} />);
     const reply = screen.getByLabelText("Reply") as HTMLInputElement;
-    expect(reply).not.toBe(input);
-    await waitFor(() => expect(reply).toHaveFocus());
+    // Reconfigured, not replaced: a rebuilt editor drops the caret, and keys
+    // typed while it mounts land nowhere.
+    expect(reply).toBe(input);
+    expect(reply).toHaveFocus();
     expect(reply.selectionStart).toBe(6);
     expect(reply).toHaveValue("Still typing");
   });
@@ -886,7 +891,7 @@ describe("Composer", () => {
     expect(within(screen.getByLabelText("Queued message")).getByRole("button", {
       name: "Steer when ready",
     })).toBeEnabled();
-    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Queued next");
+    expect(screen.getByLabelText("Queued message")).toHaveTextContent("Next");
     expect(onMaterializeLaunchpad).not.toHaveBeenCalled();
   });
 
@@ -1346,7 +1351,7 @@ describe("Composer", () => {
         model: "gpt-6-astra", fastMode: true, linkedDirectories: [], inbox: { inInbox: false },
         federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "speed-fixture", target } },
       }} />);
-    expect(Boolean(screen.queryByLabelText("Speed"))).toBe(allowed);
+    expect(Boolean(screen.queryByLabelText(/^Speed(?::|$)/))).toBe(allowed);
     if (allowed) {
       chooseDropdownOption("Speed", "Ultrafast");
       await waitFor(() => expect(onSetThreadModelSettings).toHaveBeenCalledWith({
@@ -1366,7 +1371,7 @@ describe("Composer", () => {
       }] })]}
       thread={{ id: "speed-look", title: "Speed", titleSource: "explicit", source: "codex",
         model: "gpt-6-astra", ...settings, linkedDirectories: [], inbox: { inInbox: false } }} />);
-    const trigger = screen.getByRole("button", { name: "Speed" });
+    const trigger = screen.getByRole("button", { name: /^Speed(?::|$)/ });
     const dropdown = trigger.closest(".composer-dropdown");
     expect(trigger).toHaveAttribute("aria-description", `Speed: ${label}`);
     // Standard keeps the toggle's icon-only circle; a paid tier is named and lit.
@@ -2077,6 +2082,278 @@ describe("Composer", () => {
     );
   });
 
+  it("runs a sub-thread draft row's Discard as its Cancel, once, for its own launchpad", () => {
+    // The row's menu lives in the sidebar, but the open composer holds the
+    // draft and would save it back on unmount, so the composer runs it.
+    const deleteDraft = vi.fn();
+    const recordHistory = vi.fn();
+    const draftStore: ComposerDraftStore = {
+      hydrationStatus: "memory-only",
+      getDraftScopeKeys: () => [],
+      getQueuedScopeKeys: () => [],
+      delete: deleteDraft,
+      recordHistory,
+      get: () => undefined,
+      popDraft: () => undefined,
+      pushDraft: vi.fn(),
+      deletePendingSteer: vi.fn(),
+      deleteQueuedTurn: vi.fn(),
+      getPendingSteer: () => undefined,
+      getQueuedTurn: () => undefined,
+      getQueuedTurns: () => [],
+      getQueuedTurnVersion: () => 0,
+      subscribeQueuedTurns: () => () => undefined,
+      hasDraftContent: () => false,
+      getDraftPresenceVersion: () => 0,
+      subscribeDraftPresence: () => () => undefined,
+      removeQueuedTurnAt: () => undefined,
+      removeQueuedTurnById: () => undefined,
+      shiftQueuedTurn: () => undefined,
+      setPendingSteer: vi.fn(),
+      setQueuedTurn: vi.fn(),
+      setQueuedTurns: vi.fn(),
+      set: vi.fn(),
+    };
+    const onCancelLaunchpad = vi.fn();
+    const directoryKey = "subthread:codex:thread-parent:local";
+    const props = {
+      backends: [backendSummary("codex")],
+      disabled: false,
+      draftStore,
+      launchpad: {
+        directoryKey,
+        directoryKind: "directory" as const,
+        directoryLabel: "media-service",
+        directoryPath: "/repo",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "Make a PR to swap all the icons",
+        workMode: "local" as const,
+        parentThreadId: "thread-parent",
+        parentThreadTitle: "Swap the icons",
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      onCancelLaunchpad,
+      skills: [],
+    };
+
+    const view = render(
+      <Composer {...props} launchpadCancelRequest={{ directoryKey: "subthread:codex:other:local", id: 1 }} />,
+    );
+    expect(onCancelLaunchpad).not.toHaveBeenCalled();
+
+    view.rerender(<Composer {...props} launchpadCancelRequest={{ directoryKey, id: 2 }} />);
+    expect(recordHistory).toHaveBeenCalledWith(
+      `launchpad:${directoryKey}`,
+      expect.objectContaining({ draft: "Make a PR to swap all the icons" }),
+      "abandoned",
+    );
+    expect(deleteDraft).toHaveBeenCalledWith(`launchpad:${directoryKey}`);
+    expect(onCancelLaunchpad).toHaveBeenCalledTimes(1);
+    expect(onCancelLaunchpad).toHaveBeenCalledWith(directoryKey);
+
+    view.rerender(<Composer {...props} launchpadCancelRequest={{ directoryKey, id: 2 }} />);
+    expect(onCancelLaunchpad).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["empty", "thread-a"])("focuses the replacement editor when opening a ready thread from %s", async (previous) => {
+    const thread = (id: string): NavigationThreadSummary => ({
+      id, source: "codex", title: id, titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+      onFocusRequestHandled: vi.fn(),
+    };
+    const content = (selected?: NavigationThreadSummary, focusRequest?: ComponentProps<typeof Composer>["focusRequest"]) => (
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} thread={selected} focusRequest={focusRequest} />
+      </>
+    );
+    const view = render(content(previous === "empty" ? undefined : thread(previous)));
+    const previousInput = screen.getByLabelText("Reply");
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    act(() => origin.focus());
+
+    view.rerender(content(thread("thread-b"), { threadKey: "codex:thread-b", id: 1, origin }));
+    const replacementInput = screen.getByLabelText("Reply");
+    expect(replacementInput).not.toBe(previousInput);
+    await waitFor(() => expect(replacementInput).toHaveFocus());
+    expect(props.onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(1);
+
+    // The configuration may already be cached when returning to a thread:
+    // every ready-to-ready switch still replaces the keyed editor.
+    act(() => origin.focus());
+    view.rerender(content(thread("thread-c"), { threadKey: "codex:thread-c", id: 2, origin }));
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveFocus());
+    act(() => origin.focus());
+    view.rerender(content(thread("thread-b"), { threadKey: "codex:thread-b", id: 3, origin }));
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveFocus());
+    expect(props.onFocusRequestHandled.mock.calls).toEqual([[1], [2], [3]]);
+  });
+
+  it("focuses a materialized thread whose editor was kept from its launchpad", async () => {
+    const store = createComposerDraftStore();
+    const launchpad = createRetargetingLaunchpad(retargetingPwrSnap, "First message");
+    const props = { backends: [backendSummary("codex")], draftStore: store, skills: [] };
+    const view = render(
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} directory={retargetingPwrSnap} launchpad={launchpad} launchpadMaterializing />
+      </>,
+    );
+    const input = screen.getByLabelText("New thread");
+    const thread: NavigationThreadSummary = {
+      id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    act(() => handoffLaunchpadComposer(store, `launchpad:${launchpad.directoryKey}`, thread));
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    act(() => origin.focus());
+    const onFocusRequestHandled = vi.fn();
+    view.rerender(
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} thread={thread} focusRequest={{ threadKey: "codex:materialized", id: 1, origin }}
+          onFocusRequestHandled={onFocusRequestHandled} />
+      </>,
+    );
+    const reply = screen.getByLabelText("Reply");
+    expect(reply).toBe(input);
+    await waitFor(() => expect(reply).toHaveFocus());
+    expect(onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it("focuses the reply input for a focus request once it shows that thread", async () => {
+    const thread = (id: string) => ({
+      id, source: "codex" as const, title: id, titleSource: "explicit" as const,
+      linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+      onFocusRequestHandled: vi.fn(),
+    };
+    const content = (id: string, disabled = false, focusRequest?: ComponentProps<typeof Composer>["focusRequest"]) => (
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} thread={thread(id)} disabled={disabled} focusRequest={focusRequest} />
+      </>
+    );
+    const view = render(content("thread-a"));
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    act(() => origin.focus());
+    const request = { threadKey: "codex:thread-b", id: 1, origin };
+    view.rerender(content("thread-a", false, request));
+    const reply = screen.getByLabelText("Reply");
+    // Still showing the previous thread: the request waits.
+    expect(reply).not.toHaveFocus();
+
+    view.rerender(content("thread-b", true, request));
+    expect(screen.getByLabelText("Reply")).not.toHaveFocus();
+    expect(props.onFocusRequestHandled).not.toHaveBeenCalled();
+
+    view.rerender(content("thread-b", false, request));
+    await waitFor(() => expect(screen.getByLabelText("Reply")).toHaveFocus());
+    expect(props.onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(request.id);
+
+    // Each id focuses once.
+    act(() => (document.activeElement as HTMLElement).blur());
+    view.rerender(
+      <>
+        <button type="button">Clicked row</button>
+        <Composer {...props} thread={{ ...thread("thread-b"), title: "renamed" }} focusRequest={request} />
+      </>,
+    );
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(screen.getByLabelText("Reply")).not.toHaveFocus();
+  });
+
+  it("preserves a user focus change after acknowledging the handoff and before the next frame", () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-b", source: "codex", title: "B", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+      onFocusRequestHandled: vi.fn(),
+    };
+    const content = (focusRequest?: ComponentProps<typeof Composer>["focusRequest"]) => (
+      <>
+        <button type="button">Clicked row</button>
+        <input aria-label="Another field" />
+        <Composer {...props} thread={thread} focusRequest={focusRequest} />
+      </>
+    );
+    const view = render(content());
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    const elsewhere = screen.getByRole("textbox", { name: "Another field" });
+    act(() => origin.focus());
+    const frames: FrameRequestCallback[] = [];
+    const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      view.rerender(content({ threadKey: "codex:thread-b", id: 1, origin }));
+      expect(props.onFocusRequestHandled).toHaveBeenCalledExactlyOnceWith(1);
+      // The shell clears the acknowledged request, removing its cancellation
+      // listener. A later focus change must survive any already queued frames.
+      view.rerender(content());
+      act(() => elsewhere.focus());
+      act(() => {
+        for (const callback of frames.splice(0)) callback(performance.now());
+      });
+      expect(elsewhere).toHaveFocus();
+    } finally {
+      animationFrame.mockRestore();
+    }
+  });
+
+  it.each(["Another field", "Other row", "Row action"])("leaves focus on %s when the thread becomes ready", async (label) => {
+    const thread = { id: "thread-b", source: "codex" as const, title: "B", titleSource: "explicit" as const,
+      linkedDirectories: [], inbox: { inInbox: false } };
+    const props = {
+      backends: [backendSummary("codex")],
+      draftStore: createComposerDraftStore(),
+      skills: [],
+    };
+    const content = (disabled: boolean, focusRequest?: ComponentProps<typeof Composer>["focusRequest"]) => (
+      <>
+        <div className="thread-row-shell">
+          <button type="button">Clicked row</button>
+          <button type="button">Row action</button>
+        </div>
+        <div className="thread-row-shell"><button type="button">Other row</button></div>
+        <input aria-label="Another field" />
+        <Composer {...props} thread={thread} disabled={disabled} focusRequest={focusRequest} />
+      </>
+    );
+    const view = render(content(true));
+    const origin = screen.getByRole("button", { name: "Clicked row" });
+    act(() => origin.focus());
+    const request = { threadKey: "codex:thread-b", id: 1, origin };
+    view.rerender(content(true, request));
+    const elsewhere = label === "Another field"
+      ? screen.getByRole("textbox", { name: label })
+      : screen.getByRole("button", { name: label });
+    act(() => elsewhere.focus());
+    view.rerender(content(false, request));
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(elsewhere).toHaveFocus();
+  });
+
   it("renders unavailable reason when provided", async () => {
     const unavailableReason = "Codex profile not logged in. Please check your settings.";
     render(
@@ -2357,7 +2634,7 @@ describe("Composer", () => {
         }}
       />,
     );
-    const access = screen.getByRole("button", { name: "Access mode" });
+    const access = screen.getByRole("button", { name: /^Access mode(?::|$)/ });
     expect(access).not.toHaveAttribute("aria-description");
     fireEvent.focus(access);
     expect(screen.queryByRole("tooltip")).toBeNull();
@@ -2367,6 +2644,33 @@ describe("Composer", () => {
     expect(auto).toHaveAttribute("aria-description", available
       ? "Workspace sandbox; Codex reviews eligible permission requests."
       : "Auto requires Codex 0.153.0 or later.");
+  });
+
+  it("describes Claude's access modes in Claude's own terms", () => {
+    render(
+      <Composer
+        backends={[{
+          ...backendSummary("claude"),
+          executionModes: [
+            { mode: "default", label: "Default Access", available: true, isDefault: true },
+            { mode: "auto", label: "Auto", available: true },
+          ],
+        }]}
+        disabled={false}
+        onSetExecutionMode={async () => undefined}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Access", titleSource: "explicit",
+          source: "claude", executionMode: "default",
+          linkedDirectories: [], inbox: { inInbox: false },
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Access mode(?::|$)/ }));
+    expect(screen.getByRole("option", { name: "Auto" })).toHaveAttribute(
+      "aria-description",
+      "Claude Code's auto mode decides routine permission requests.",
+    );
   });
 
   it("flags the access-mode chip as danger when full access is selected", () => {
@@ -2398,7 +2702,7 @@ describe("Composer", () => {
     );
 
     expect(
-      screen.getByLabelText("Access mode").closest(".composer-dropdown"),
+      screen.getByLabelText(/^Access mode(?::|$)/).closest(".composer-dropdown"),
     ).toHaveClass("composer-dropdown--danger");
   });
 
@@ -2743,8 +3047,8 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent(
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent(
       "Dev - Messaging",
     );
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
@@ -2765,6 +3069,252 @@ describe("Composer", () => {
         environmentId: undefined,
         actionId: undefined,
       });
+    });
+  });
+
+  it("shows No environment while retained action runs still expose logs and Stop", () => {
+    const onStopEnvActionRun = vi.fn();
+    const thread: NavigationThreadSummary = {
+      id: "thread-1", title: "Environment actions", titleSource: "explicit", source: "codex",
+      executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+      codexEnvironmentRuntime: {
+        executionTarget: "local",
+        actionRuns: [{
+          runId: "retained-composer-action", actionId: "dev", actionName: "Dev", command: "pnpm dev",
+          environmentId: "original", environmentName: "Original", status: "started", startedAt: Date.now(),
+          output: "server ready", pid: 4242,
+        }],
+      },
+      codexEnvironmentOptions: [{
+        id: "original", name: "Original", sourcePath: "/fixture/environment.toml",
+        actions: [{ id: "dev", name: "Dev", command: "pnpm dev" }],
+      }],
+    };
+    render(<Composer backends={[backendSummary("codex")]} disabled={false} skills={[]}
+      thread={thread} onStopEnvActionRun={onStopEnvActionRun} />);
+
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("No environment");
+    expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+    const row = screen.getByLabelText("Env action running");
+    row.setAttribute("open", "");
+    expect(within(row).getByText(/Dev · Original/)).toBeInTheDocument();
+    expect(within(row).getByText("server ready")).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: "Stop" }));
+    expect(onStopEnvActionRun).toHaveBeenCalledWith(thread.codexEnvironmentRuntime?.actionRuns?.[0], "stop");
+  });
+
+  describe("environment selection in flight", () => {
+    const buildEnvironmentThread = (
+      codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"],
+    ): NavigationThreadSummary => ({
+      id: "thread-1",
+      title: "Environment selection",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [
+        {
+          id: "fixture-repo",
+          label: "FixtureRepo",
+          path: "/repo/FixtureRepo",
+          kind: "local",
+        },
+      ],
+      inbox: { inInbox: false },
+      codexEnvironmentRuntime,
+      codexEnvironmentOptions: [
+        {
+          id: "environment",
+          name: "PwrAgnt",
+          sourcePath: "/repo/.codex/environments/environment.toml",
+          setupScript: "pnpm install",
+          actions: [],
+        },
+      ],
+    });
+    const environmentChip = (): HTMLElement =>
+      screen.getByRole("button", { name: /^Environment(?::|$)/ });
+
+    it("disables the chip with a spinner and shows the target until setup returns", async () => {
+      let finishSelection: () => void = () => undefined;
+      const setCodexThreadEnvironment = vi.fn(
+        () =>
+          new Promise<{ backend: "codex"; threadId: string }>((resolve) => {
+            finishSelection = () =>
+              resolve({ backend: "codex", threadId: "thread-1" });
+          }),
+      );
+      const { container, rerender } = render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread()}
+        />,
+      );
+
+      expect(environmentChip()).toHaveTextContent("No environment");
+      expect(environmentChip()).toBeEnabled();
+
+      chooseDropdownOption("Environment", "PwrAgnt");
+
+      // Main records the runtime only after setup exits, so the thread prop
+      // still has none here: the chip must not fall back to "No environment".
+      expect(setCodexThreadEnvironment).toHaveBeenCalledTimes(1);
+      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toBeDisabled();
+      expect(environmentChip()).toHaveAttribute("aria-busy", "true");
+      expect(
+        container.querySelector(
+          ".composer-dropdown__button[aria-busy='true'] .pending-spinner",
+        ),
+      ).not.toBeNull();
+
+      // The runtime event lands before the IPC call resolves.
+      rerender(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread({
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            actions: [],
+          })}
+        />,
+      );
+      await act(async () => {
+        finishSelection();
+        await Promise.resolve();
+      });
+
+      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toBeEnabled();
+      expect(environmentChip()).not.toHaveAttribute("aria-busy");
+      expect(
+        container.querySelector(".composer-dropdown__button .pending-spinner"),
+      ).toBeNull();
+    });
+
+    it("keeps the target on the chip when the call resolves before the runtime event", async () => {
+      // A federated thread's runtime event rides the peer's notification
+      // stream, which is not ordered against the RPC response.
+      let finishSelection: () => void = () => undefined;
+      const setCodexThreadEnvironment = vi.fn(
+        () =>
+          new Promise<{ backend: "codex"; threadId: string }>((resolve) => {
+            finishSelection = () =>
+              resolve({ backend: "codex", threadId: "thread-1" });
+          }),
+      );
+      const { rerender } = render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread()}
+        />,
+      );
+
+      chooseDropdownOption("Environment", "PwrAgnt");
+      await act(async () => {
+        finishSelection();
+        await Promise.resolve();
+      });
+
+      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toBeEnabled();
+      expect(environmentChip()).not.toHaveAttribute("aria-busy");
+
+      rerender(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread({
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            executionTarget: "local",
+            actions: [],
+          })}
+        />,
+      );
+      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+
+      // Settled: a later change elsewhere back to no environment shows.
+      rerender(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread()}
+        />,
+      );
+      expect(environmentChip()).toHaveTextContent("No environment");
+    });
+
+    it("returns the chip to the recorded environment when the selection fails", async () => {
+      let failSelection: () => void = () => undefined;
+      const setCodexThreadEnvironment = vi.fn(
+        () =>
+          new Promise<{ backend: "codex"; threadId: string }>((_resolve, reject) => {
+            failSelection = () =>
+              reject(new Error("Selected environment is not available for this thread."));
+          }),
+      );
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment }}
+          disabled={false}
+          skills={[]}
+          thread={buildEnvironmentThread()}
+        />,
+      );
+
+      chooseDropdownOption("Environment", "PwrAgnt");
+      expect(environmentChip()).toBeDisabled();
+
+      await act(async () => {
+        failSelection();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(environmentChip()).toHaveTextContent("No environment");
+      expect(environmentChip()).toBeEnabled();
+      expect(environmentChip()).not.toHaveAttribute("aria-busy");
+    });
+
+    it("stays busy on the running setup's environment for a run it did not start", () => {
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+          disabled={false}
+          environmentSetup={{
+            key: "progress:thread:codex:thread-1:1",
+            phase: "setup",
+            status: "running",
+            environmentId: "environment",
+            environmentName: "PwrAgnt",
+            command: "pnpm install",
+            startedAt: 1,
+          }}
+          skills={[]}
+          thread={buildEnvironmentThread()}
+        />,
+      );
+
+      expect(environmentChip()).toHaveTextContent("PwrAgnt");
+      expect(environmentChip()).toBeDisabled();
+      expect(environmentChip()).toHaveAttribute("aria-busy", "true");
     });
   });
 
@@ -2978,7 +3528,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Test");
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Test");
 
     rerender(
       <Composer
@@ -2990,7 +3540,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Dev");
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Dev");
 
     rerender(
       <Composer
@@ -3002,7 +3552,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent("Test");
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Test");
   });
 
   it("persists thread environment command changes without running the action", async () => {
@@ -3111,11 +3661,11 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment command")).toHaveTextContent(
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent(
       "No commands",
     );
-    expect(screen.getByLabelText("Environment command")).toBeDisabled();
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toBeDisabled();
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
   });
 
   it("hides thread environment commands when no environment is selected", () => {
@@ -3151,10 +3701,10 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent(
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
       "No environment",
     );
-    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Environment command(?::|$)/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
   });
 
@@ -3201,9 +3751,9 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("PwrAgnt");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
     expect(screen.queryByText("Run setup")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Environment command(?::|$)/)).not.toBeInTheDocument();
     expect(screen.queryByText("No command")).not.toBeInTheDocument();
   });
 
@@ -4548,7 +5098,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent(
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
       "No environment",
     );
 
@@ -4624,8 +5174,8 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("Lunch");
-    expect(screen.queryByLabelText("Environment command")).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Lunch");
+    expect(screen.queryByLabelText(/^Environment command(?::|$)/)).not.toBeInTheDocument();
 
     chooseDropdownOption("Environment", "Dinner");
 
@@ -4953,8 +5503,8 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.5");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.5");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("medium");
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
     openDropdown("Model");
     expect(screen.getByRole("option", { name: "GPT-5.5" })).toBeVisible();
@@ -4995,7 +5545,7 @@ describe("Composer", () => {
       />,
     );
 
-    const modelButton = screen.getByRole("button", { name: "Model" });
+    const modelButton = screen.getByRole("button", { name: /^Model(?::|$)/ });
     expect(modelButton).toHaveValue("gpt-6.1-sol");
     fireEvent.click(modelButton);
     expect(screen.getAllByRole("option").map((option) =>
@@ -5011,6 +5561,35 @@ describe("Composer", () => {
         expect.anything(),
       );
     });
+  });
+
+  it("shows current Claude families and selects an older model from Other Models", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+    render(<Composer
+      backends={[backendSummary("claude", { models: [
+        { id: "opus", label: "Opus 5.5" },
+        { id: "fable", label: "Fable 5.1", current: true, supportsReasoning: true,
+          defaultReasoningEffort: "default", reasoningEfforts: ["default", "low", "high", "max"] },
+        { id: "sonnet", label: "Sonnet 5.5" },
+        { id: "haiku", label: "Haiku 5.5" },
+        { id: "claude-opus-4-8", label: "Opus 4.8", other: true },
+      ] })]}
+      launchpad={{ directoryKey: "directory:/repo", directoryKind: "directory", directoryLabel: "Repo",
+        directoryPath: "/repo", backend: "claude", executionMode: "default", prompt: "", workMode: "local",
+        branchName: "main", createdAt: 1, updatedAt: 1 }}
+      onUpdateLaunchpad={onUpdateLaunchpad} skills={[]} />);
+    const modelButton = screen.getByRole("button", { name: /^Model(?::|$)/ });
+    expect(modelButton).toHaveValue("fable");
+    fireEvent.click(modelButton);
+    expect(screen.getAllByRole("option").map((option) => option.querySelector(".composer-dropdown__option-label")?.textContent))
+      .toEqual(["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5", "Other Models"]);
+    expect(screen.queryByRole("option", { name: "Opus 4.8" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: "Other Models" }));
+    const submenu = screen.getByRole("listbox", { name: "Model: Other Models" });
+    fireEvent.click(within(submenu).getByRole("option", { name: "Opus 4.8" }));
+    await waitFor(() => expect(onUpdateLaunchpad).toHaveBeenCalledWith(
+      "directory:/repo", expect.objectContaining({ model: "claude-opus-4-8" }), expect.anything(),
+    ));
   });
 
   it("adopts the refreshed ACP default when the provider is selected", async () => {
@@ -5406,21 +5985,21 @@ describe("Composer", () => {
 
     render(<KimiThinkingHarness />);
 
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("max");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("max");
     chooseDropdownOption("Model", "K3-256k");
     await waitFor(() => {
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("low");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");
     });
 
     chooseDropdownOption("Reasoning", "high");
     chooseDropdownOption("Model", "K3");
     await waitFor(() => {
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("max");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("max");
     });
 
     chooseDropdownOption("Model", "K3-256k");
     await waitFor(() => {
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
     });
   });
 
@@ -5459,8 +6038,8 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
   });
 
   it("restores provider-specific launchpad settings across repeated OpenAI and Grok flips", async () => {
@@ -5667,21 +6246,21 @@ describe("Composer", () => {
 
     render(<ProviderSwitchHarness />);
 
-    expect(screen.getByLabelText("Access mode")).toHaveValue("full-access");
-    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-luna");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("high");
+    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.6-luna");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
     expect(screen.getByLabelText("Fast mode")).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("Codex Environment");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
 
     chooseDropdownOption("Model", "GPT-5.6 Sol");
     await waitFor(() => {
-      expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol");
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("ultra");
+      expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.6-sol");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("ultra");
     });
 
     chooseDropdownOption("Provider", "Grok");
     await waitFor(() => {
-      expect(screen.getByLabelText("Provider")).toHaveValue("acp:grok");
+      expect(screen.getByLabelText(/^Provider(?::|$)/)).toHaveValue("acp:grok");
     });
     await waitFor(() => {
       expect(listAcpAgents).not.toHaveBeenCalled();
@@ -5695,46 +6274,46 @@ describe("Composer", () => {
       imageAttachments: undefined,
       prompt: "",
     });
-    expect(screen.getByLabelText("Access mode")).toHaveValue("full-access");
-    expect(screen.getByLabelText("Agent mode")).toHaveValue("yolo");
-    expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5-pro");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("low");
-    expect(screen.getByLabelText("Service tier")).toHaveValue("priority");
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("Grok Environment");
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
-    expect(screen.getByLabelText("Base branch")).toHaveValue(
+    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");
+    expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("priority");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Grok Environment");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
       "feature/provider-memory",
     );
 
     chooseDropdownOption("Reasoning", "medium");
     chooseDropdownOption("Service tier", "standard");
     await waitFor(() => {
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
-      expect(screen.getByLabelText("Service tier")).toHaveValue("standard");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("medium");
+      expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("standard");
     });
 
     chooseDropdownOption("Provider", "OpenAI");
     await waitFor(() => {
-      expect(screen.getByLabelText("Provider")).toHaveValue("codex");
+      expect(screen.getByLabelText(/^Provider(?::|$)/)).toHaveValue("codex");
     });
-    expect(screen.getByLabelText("Access mode")).toHaveValue("full-access");
-    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol");
-    expect(screen.getByLabelText("Reasoning")).toHaveValue("ultra");
+    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
+    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.6-sol");
+    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("ultra");
     expect(screen.getByLabelText("Fast mode")).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Environment")).toHaveTextContent("Codex Environment");
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
-    expect(screen.getByLabelText("Base branch")).toHaveValue(
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
       "feature/provider-memory",
     );
 
     chooseDropdownOption("Provider", "Grok");
     await waitFor(() => {
-      expect(screen.getByLabelText("Provider")).toHaveValue("acp:grok");
-      expect(screen.getByLabelText("Model")).toHaveValue("grok-4.5-pro");
-      expect(screen.getByLabelText("Reasoning")).toHaveValue("medium");
-      expect(screen.getByLabelText("Service tier")).toHaveValue("standard");
-      expect(screen.getByLabelText("Agent mode")).toHaveValue("yolo");
-      expect(screen.getByLabelText("Environment")).toHaveTextContent(
+      expect(screen.getByLabelText(/^Provider(?::|$)/)).toHaveValue("acp:grok");
+      expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
+      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("medium");
+      expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("standard");
+      expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
+      expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
         "Grok Environment",
       );
     });
@@ -6532,7 +7111,7 @@ describe("Composer", () => {
     });
 
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
-      "Queued next",
+      "Next",
     );
     expect(screen.getByLabelText("Queued message")).toHaveTextContent(
       "Wait behind the active backend turn",
@@ -6594,7 +7173,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), { target: { value: "/repo/project" } });
     fireEvent.change(picker, { target: { value: secondaryPr.url } });
     expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/other");
-    expect(screen.getByRole("button", { name: "Review run mode" })).toHaveTextContent("PwrAgent Sub Agent");
+    expect(screen.getByRole("button", { name: /^Review run mode(?::|$)/ })).toHaveTextContent("PwrAgent Sub Agent");
     expect(screen.queryByText(/Reviewing the pull request skips this checkout/)).not.toBeInTheDocument();
     expect(screen.getByText(
       "Reviews in Other. PwrAgent Sub Agent is required because the selected project is not this thread's primary workspace.",
@@ -6602,7 +7181,7 @@ describe("Composer", () => {
     if (project === "primary") {
       fireEvent.change(picker, { target: { value: prs[0].url } });
       expect(screen.getByLabelText("Review project")).toHaveValue("/repo/project");
-      expect(screen.getByRole("button", { name: "Review run mode" })).toHaveTextContent("Codex Sub Agent");
+      expect(screen.getByRole("button", { name: /^Review run mode(?::|$)/ })).toHaveTextContent("Codex Sub Agent");
       expect(screen.queryByText(/^Reviews in /)).not.toBeInTheDocument();
     }
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
@@ -7246,7 +7825,7 @@ describe("Composer", () => {
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
-    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+    expect(screen.queryByText("Next")).not.toBeInTheDocument();
   });
 
   it.each([
@@ -7262,7 +7841,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
     const group = await screen.findByRole("group", { name: "Review target" });
-    const chip = within(group).getByRole("button", { name: "Review run mode" });
+    const chip = within(group).getByRole("button", { name: /^Review run mode(?::|$)/ });
     expect(chip.closest(".composer__review-reviewer")).not.toBeNull();
     expect(chip).toHaveTextContent("Codex Sub Agent");
     fireEvent.click(chip);
@@ -7359,6 +7938,27 @@ describe("Composer", () => {
       expect(startTurn).toHaveBeenCalledTimes(1);
     });
 
+    it("does not dispatch a pending fix or review after switching to the same thread id on another owner", async () => {
+      const target = { scope: "remote" as const, instanceId: "owner" };
+      const remoteThread = { ...thread, federation: { instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: thread.id, target } } };
+      const startTurn = vi.fn();
+      const onReplySubmissionSettled = vi.fn();
+      const props = {
+        backends: [backendSummary("codex")], skills: [],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn }, onReplySubmissionSettled,
+        replySubmission: { id: 1, threadId: thread.id, backend: "codex" as const, text: reply, federationTarget: target },
+        reviewRequest: { id: 1, threadId: thread.id, backend: "codex" as const, federationTarget: target },
+      };
+      const view = render(<Composer {...props} thread={remoteThread} disabled />);
+      view.rerender(<Composer {...props} thread={thread} disabled={false} />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, false));
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Reply")).toHaveValue("");
+      view.rerender(<Composer {...props} thread={remoteThread} disabled={false} />);
+      expect(startTurn).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("Reply")).toHaveValue("");
+    });
+
     it("drops a pending async answer when navigation leaves its thread", async () => {
       const startTurn = vi.fn();
       const onReplySubmissionSettled = vi.fn();
@@ -7437,7 +8037,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
     const group = await screen.findByRole("group", { name: "Review target" });
-    const chip = within(group).getByRole("button", { name: "Review run mode" });
+    const chip = within(group).getByRole("button", { name: /^Review run mode(?::|$)/ });
     fireEvent.click(chip);
     fireEvent.click(within(group).getByRole("option", { name: "PwrAgent Sub Agent" }));
     expect(chip).toHaveTextContent("PwrAgent Sub Agent");
@@ -7466,7 +8066,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "/review" } });
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Reply" }), { key: "Enter" });
     const group = await screen.findByRole("group", { name: "Review target" });
-    const chip = within(group).getByRole("button", { name: "Review run mode" });
+    const chip = within(group).getByRole("button", { name: /^Review run mode(?::|$)/ });
     // The decision still resolves to a mode; the one state the operator cannot
     // change must not also be the one that says the least.
     expect(chip).toHaveTextContent("Owner default · Codex Sub Agent");
@@ -7547,7 +8147,7 @@ describe("Composer", () => {
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     // Defaults to the thread's own provider — the row reads as inherited.
     expect(
-      within(reviewTarget).getByRole("button", { name: "Review provider" })
+      within(reviewTarget).getByRole("button", { name: /^Review provider(?::|$)/ })
     ).toHaveAttribute("data-value", "codex");
     expect(
       within(reviewTarget).queryByRole("button", {
@@ -7556,7 +8156,7 @@ describe("Composer", () => {
     ).not.toBeInTheDocument();
 
     fireEvent.click(
-      within(reviewTarget).getByRole("button", { name: "Review provider" })
+      within(reviewTarget).getByRole("button", { name: /^Review provider(?::|$)/ })
     );
     fireEvent.click(screen.getByRole("option", { name: "Grok" }));
 
@@ -7593,6 +8193,108 @@ describe("Composer", () => {
         }),
       })
     );
+  });
+
+  it("defaults a Claude thread's reviewer to a provider that can run reviews", async () => {
+    const startReview = vi.fn(async () => ({
+      backend: "claude" as const,
+      threadId: "claude-thread",
+      reviewThreadId: "review-1",
+      turnId: "turn-1",
+    }));
+    const recordModelSettingsRecent = vi.fn(async () => undefined);
+    const codex = backendSummary("codex", {
+      models: [{
+        id: "gpt-5.6-sol",
+        label: "GPT-5.6 Sol",
+        current: true,
+        supportsReasoning: true,
+        reasoningEfforts: ["low", "high"],
+        defaultReasoningEffort: "high",
+      }],
+    });
+    codex.label = "OpenAI";
+    codex.capabilities = {
+      ...codex.capabilities,
+      startReview: true,
+      reviewRunner: true,
+      reviewRunMode: true,
+      reviewCodexSubAgent: true,
+    };
+    // Claude advertises a run mode but runs no reviews itself.
+    const claude = backendSummary("claude", {
+      models: [{ id: "opus", label: "Opus 5.5", current: true, supportsImage: true }],
+    });
+    claude.label = "Claude";
+    claude.capabilities = { ...claude.capabilities, reviewRunMode: true };
+
+    render(
+      <Composer
+        backends={[codex, claude]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          listModelSettingsRecents: async () => ({ recents: [] }),
+          recordModelSettingsRecent,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "claude-thread",
+          title: "Claude thread",
+          titleSource: "explicit",
+          source: "claude",
+          model: "opus",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    const reviewTarget = screen.getByRole("group", { name: "Review target" });
+    // The chip must name the provider that will run. It used to read
+    // "OpenAI" while the panel held Claude, which is not a reviewer option.
+    const provider = within(reviewTarget).getByRole("button", {
+      name: /^Review provider(?::|$)/,
+    });
+    expect(provider).toHaveAttribute("data-value", "codex");
+    expect(provider).toHaveTextContent("OpenAI");
+    expect(
+      within(reviewTarget).getByRole("button", { name: /^Review model(?::|$)/ })
+    ).toHaveAttribute("data-value", "gpt-5.6-sol");
+    expect(
+      within(reviewTarget).getByRole("button", { name: /^Review run mode(?::|$)/ })
+    ).toHaveTextContent("PwrAgent Sub Agent");
+    // Nothing was picked, so there is nothing to reset.
+    expect(
+      within(reviewTarget).queryByRole("button", {
+        name: "Reset reviewer to thread settings",
+      })
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(
+        within(reviewTarget).getByRole("button", { name: "Start review" })
+      );
+    });
+
+    expect(startReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "claude",
+        reviewBackend: "codex",
+        runMode: "pwragent-sub-agent",
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+      })
+    );
+    // A default is not a pick, so it must not push real picks off the list.
+    expect(recordModelSettingsRecent).not.toHaveBeenCalled();
   });
 
   it("does not reuse one instance's reviewer recents on another's thread", async () => {
@@ -7662,7 +8364,7 @@ describe("Composer", () => {
       pending.shift()?.({ recents: [{ backend: "acp:grok", model: "grok-4" }] });
     });
     expect(
-      screen.getByRole("button", { name: "Recent reviewer settings" })
+      screen.getByRole("button", { name: /^Recent reviewer settings(?::|$)/ })
     ).toBeInTheDocument();
 
     // Same component, different owning instance. The remembered combination
@@ -7685,7 +8387,7 @@ describe("Composer", () => {
     openReviewPanel("Reply");
 
     expect(
-      screen.queryByRole("button", { name: "Recent reviewer settings" })
+      screen.queryByRole("button", { name: /^Recent reviewer settings(?::|$)/ })
     ).not.toBeInTheDocument();
   });
 
@@ -7742,7 +8444,7 @@ describe("Composer", () => {
     // the row here would accept a reviewer and then drop it.
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     expect(
-      within(reviewTarget).queryByRole("button", { name: "Review provider" })
+      within(reviewTarget).queryByRole("button", { name: /^Review provider(?::|$)/ })
     ).not.toBeInTheDocument();
   });
 
@@ -7776,7 +8478,7 @@ describe("Composer", () => {
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     expect(
-      within(reviewTarget).queryByRole("button", { name: "Review provider" })
+      within(reviewTarget).queryByRole("button", { name: /^Review provider(?::|$)/ })
     ).not.toBeInTheDocument();
   });
 
@@ -7824,7 +8526,7 @@ describe("Composer", () => {
           input: [{ type: "text", text: "Follow up next" }],
         }),
       );
-      expect(screen.getByText("Queued next")).toBeInTheDocument();
+      expect(screen.getByText("Next")).toBeInTheDocument();
       expect(screen.getByText("Follow up next")).toBeInTheDocument();
     });
     expect(textarea).toHaveValue("");
@@ -8868,9 +9570,9 @@ describe("Composer", () => {
       .mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "content-hash", input });
     const cancelQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
     const startTurn = vi.fn().mockResolvedValue({ backend: "codex", threadId: "thread-1", turnId: "new-queue", queueStatus: "queued", queueEntryId: "new-queue" });
-    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+    render(<><Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
       desktopApi={{ readQueuedTurn, cancelQueuedTurn, startTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
-      thread={{ id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }} />);
+      thread={{ id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }} /><ImageGalleryLayer /></>);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await screen.findByText("Owner unavailable");
     expect(cancelQueuedTurn).not.toHaveBeenCalled();
@@ -8921,6 +9623,34 @@ describe("Composer", () => {
     fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
     await waitFor(() => expect(startTurn).toHaveBeenCalled());
     expect(startTurn.mock.calls[0]?.[0].input).toEqual(input);
+  });
+
+  it.each(["Edit", "Delete"])("runs a double-clicked owner-queued %s once", async (action) => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [{ id: "mirror", queueEntryId: "owner-entry", text: "queued words", imageAttachments: [], fileAttachments: [] }]);
+    const readQueuedTurn = vi.fn().mockResolvedValue({ queueEntryId: "owner-entry", contentHash: "hash", input: [{ type: "text", text: "queued words" }] });
+    // The first cancel is held open; once the entry is gone the owner answers not_found.
+    let releaseCancel!: () => void;
+    const cancelQueuedTurn = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        releaseCancel = () => resolve({ queueEntryId: "owner-entry", cancelled: true, disposition: "cancelled" });
+      }))
+      .mockResolvedValue({ queueEntryId: "owner-entry", cancelled: false, disposition: "not_found" });
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ readQueuedTurn, cancelQueuedTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={{ id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }} />);
+    const button = screen.getByRole("button", { name: action });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() => expect(cancelQueuedTurn).toHaveBeenCalled());
+    await act(async () => {
+      releaseCancel();
+    });
+    await waitFor(() => expect(draftStore.getQueuedTurns(scopeKey)).toHaveLength(0));
+    expect(cancelQueuedTurn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("The queued turn is no longer waiting.")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Reply")).toHaveValue(action === "Edit" ? "queued words" : "");
   });
 
   it("cancels the owning peer's queued turn before remote steering", async () => {
@@ -9414,7 +10144,7 @@ describe("Composer", () => {
     expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
   });
 
-  it("shows queued image thumbnails while a turn is active", async () => {
+  it("opens a queued image in a lightbox that outlives its row", async () => {
     const startTurn = vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -9426,7 +10156,7 @@ describe("Composer", () => {
       type: "image/png",
     });
 
-    render(
+    const composer = (
       <Composer
         activeTurnId="turn-1"
         desktopApi={{
@@ -9446,6 +10176,7 @@ describe("Composer", () => {
         }}
       />
     );
+    const view = render(<>{composer}<ImageGalleryLayer /></>);
 
     fireEvent.paste(screen.getByLabelText("Reply"), {
       clipboardData: {
@@ -9465,13 +10196,31 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(startTurn).toHaveBeenCalledTimes(1);
-      expect(screen.getByText("Queued next")).toBeInTheDocument();
+      expect(screen.getByText("Next")).toBeInTheDocument();
       expect(screen.getByText("1 image")).toBeInTheDocument();
       expect(
         screen.getByLabelText("Queued image attachments: 1"),
       ).toBeInTheDocument();
-      expect(screen.getByAltText("queued.png")).toBeInTheDocument();
     });
+
+    // The thumbnail leads the title, clear of the actions over the line's end.
+    const row = screen.getByLabelText("Queued message");
+    const thumbnail = within(row).getByRole("button", { name: "Open image 1 of 1" });
+    expect(
+      thumbnail.compareDocumentPosition(within(row).getByText("1 image"))
+      & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(thumbnail);
+    expect(screen.getByRole("dialog", { name: "Queued image" })).toBeInTheDocument();
+
+    // The message leaves the queue (here, the whole composer goes): the
+    // lightbox holds its own copy of the images and stays.
+    view.rerender(<><ImageGalleryLayer /></>);
+    const dialog = screen.getByRole("dialog", { name: "Queued image" });
+    expect(within(dialog).getByAltText("queued.png")).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("submits a busy-thread queued reply to the backend before navigation", async () => {
@@ -10032,6 +10781,122 @@ describe("Composer", () => {
     expect(
       draftStore.getQueuedTurn(buildThreadComposerScopeKey("codex", "thread-1"))?.scheduledActionId,
     ).toBeUndefined();
+  });
+
+  describe("steer chord by platform", () => {
+    type PwrWindow = Window & { pwragent?: { platform?: string } };
+    afterEach(() => {
+      delete (window as PwrWindow).pwragent;
+    });
+
+    function renderSteerable(platform: string) {
+      (window as PwrWindow).pwragent = { platform };
+      const steerTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const startTurn = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "queue-1",
+        queueStatus: "queued" as const,
+        queueEntryId: "queue-1",
+      }));
+      const element = (activeTurnId: string | undefined) => (
+        <Composer
+          activeTurnId={activeTurnId}
+          backends={[
+            {
+              ...backendSummary("codex", {
+                models: [
+                  {
+                    id: "gpt-5.5",
+                    label: "GPT-5.5",
+                    current: true,
+                    supportsReasoning: true,
+                    supportsSteering: true,
+                  },
+                ],
+              }),
+              capabilities: {
+                ...backendSummary("codex").capabilities,
+                steerTurn: true,
+              },
+            },
+          ]}
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn,
+            steerTurn,
+          }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Steerable thread",
+            titleSource: "explicit",
+            source: "codex",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+      const view = render(element("turn-1"));
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "Change direction" } });
+      return {
+        endTurn: () => view.rerender(element(undefined)),
+        startTurn,
+        steerTurn,
+        textarea,
+      };
+    }
+
+    it("steers on Ctrl+Enter on Windows", async () => {
+      const { startTurn, steerTurn, textarea } = renderSteerable("win32");
+      fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
+
+      await waitFor(() => {
+        expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+          expectedTurnId: "turn-1",
+          input: [{ type: "text", text: "Change direction" }],
+        }));
+      });
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("keeps Ctrl+Enter a plain queue on macOS", async () => {
+      const { startTurn, steerTurn, textarea } = renderSteerable("darwin");
+      fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true });
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledTimes(1);
+      });
+      expect(steerTurn).not.toHaveBeenCalled();
+    });
+
+    it("names the chord in Queue's tooltip", async () => {
+      renderSteerable("win32");
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+      expect((await screen.findByRole("tooltip")).textContent).toBe(
+        "Queue after this turn · Ctrl+Enter to steer it in",
+      );
+    });
+
+    it("takes the tooltip down when the turn ends under the pointer", async () => {
+      const { endTurn } = renderSteerable("darwin");
+      fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
+      expect(await screen.findByRole("tooltip")).toBeInTheDocument();
+
+      endTurn();
+
+      expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      });
+    });
   });
 
   it("steers Command Enter during an active turn when supported", async () => {
@@ -11709,7 +12574,7 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "Pending steer draft" } });
     fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
 
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
     expect(screen.getByText("Queued follow-up")).toBeInTheDocument();
     expect(screen.getByText("Steering now")).toBeInTheDocument();
     expect(steerTurn).toHaveBeenCalledTimes(1);
@@ -11774,7 +12639,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Queued elsewhere" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
 
     const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
     const queued = draftStore.getQueuedTurn(scopeKey);
@@ -11898,7 +12763,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "Queued preflight block" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
 
     rerender(
       <Composer
@@ -12227,7 +13092,7 @@ describe("Composer", () => {
 
     expect(screen.getByLabelText("Review project")).toHaveValue("/worktrees/app");
     await waitFor(() => {
-      expect(screen.getByLabelText("Base branch")).toHaveValue("release");
+      expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("release");
     });
     expect(screen.getByRole("button", { name: "Start review" })).toBeEnabled();
 
@@ -12335,7 +13200,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/main");
 
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
@@ -12345,10 +13210,10 @@ describe("Composer", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+      expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
     });
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
     expect(
       screen.getByRole("option", { name: "origin/develop" }),
     ).toBeInTheDocument();
@@ -12740,7 +13605,7 @@ describe("Composer", () => {
     expect(scheduledApi.createScheduledThreadAction).toHaveBeenCalledTimes(1);
     expect(addOptimisticReviewEntry).toHaveBeenCalledTimes(1);
     expect(startTurn).not.toHaveBeenCalled();
-    expect(screen.getByText("Queued next")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
   });
 
@@ -12959,7 +13824,7 @@ describe("Composer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(await screen.findByText("Queued next")).toBeInTheDocument();
+    expect(await screen.findByText("Next")).toBeInTheDocument();
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Steer" })).not.toBeInTheDocument();
 
@@ -13006,7 +13871,7 @@ describe("Composer", () => {
 
     expect(startReview).not.toHaveBeenCalled();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
-    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+    expect(screen.queryByText("Next")).not.toBeInTheDocument();
   });
 
   it("starts a queued review without clearing the next live draft", async () => {
@@ -13123,7 +13988,7 @@ describe("Composer", () => {
     await clickButton("Queue");
 
     expect(startReview).not.toHaveBeenCalled();
-    expect(screen.queryByText("Queued next")).not.toBeInTheDocument();
+    expect(screen.queryByText("Next")).not.toBeInTheDocument();
     expect(screen.getByText("/review does not accept image attachments.")).toBeInTheDocument();
     expect(screen.getByLabelText("Reply")).toHaveValue("/review main");
     expect(screen.getByAltText("review-image.png")).toBeInTheDocument();
@@ -13186,14 +14051,14 @@ describe("Composer", () => {
       "tabindex",
       "-1",
     );
-    expect(screen.getByLabelText("Base branch")).not.toHaveAttribute(
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).not.toHaveAttribute(
       "tabindex",
       "-1",
     );
     await waitFor(() => {
       expect(baseBranchTarget).toHaveFocus();
     });
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
     expect(startReview).not.toHaveBeenCalled();
 
     fireEvent.keyDown(baseBranchTarget, {
@@ -13458,8 +14323,8 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
     fireEvent.click(screen.getByRole("option", { name: "release" }));
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
@@ -13516,7 +14381,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    const baseBranchInput = screen.getByLabelText("Base branch");
+    const baseBranchInput = screen.getByLabelText(/^Base branch(?::|$)/);
     expect(baseBranchInput).toHaveValue("main");
     fireEvent.click(baseBranchInput);
     fireEvent.change(screen.getByLabelText("Find a branch"), {
@@ -13570,7 +14435,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
     const filterInput = screen.getByLabelText("Find a branch");
     fireEvent.change(filterInput, { target: { value: "no-such-branch" } });
 
@@ -13629,7 +14494,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    const baseBranchInput = screen.getByLabelText("Base branch");
+    const baseBranchInput = screen.getByLabelText(/^Base branch(?::|$)/);
     fireEvent.change(baseBranchInput, {
       target: { value: "origin/releases/2026.07" },
     });
@@ -13707,7 +14572,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/main");
   });
 
   it("falls back to main before unrelated directory branches for review base", async () => {
@@ -13757,7 +14622,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
   });
 
   it("keeps an unrelated directory upstream behind safe review bases", async () => {
@@ -13809,7 +14674,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/main");
   });
 
   it("prefers the thread git-derived worktree base branch over main for reviews", async () => {
@@ -13854,7 +14719,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     const form = reviewTarget.closest("form");
@@ -13933,7 +14798,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
 
@@ -14003,7 +14868,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
   });
 
   it("updates an auto-selected review base when directory branch metadata hydrates", async () => {
@@ -14075,7 +14940,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
 
     rerender(
       <Composer
@@ -14088,7 +14953,7 @@ describe("Composer", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByLabelText("Base branch")).toHaveValue("origin/develop");
+      expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/develop");
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Start review" }));
@@ -14156,7 +15021,7 @@ describe("Composer", () => {
     });
     await clickButton("Send");
 
-    const baseBranchInput = screen.getByLabelText("Base branch");
+    const baseBranchInput = screen.getByLabelText(/^Base branch(?::|$)/);
     fireEvent.change(baseBranchInput, {
       target: { value: "origin/release-candidate" },
     });
@@ -14171,7 +15036,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue(
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
       "origin/release-candidate",
     );
   });
@@ -14484,7 +15349,7 @@ describe("Composer", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByLabelText("Base branch")).toHaveValue("origin/main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("origin/main");
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     const form = reviewTarget.closest("form");
@@ -14560,7 +15425,7 @@ describe("Composer", () => {
       "aria-pressed",
       "true",
     );
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
 
     const reviewTarget = screen.getByRole("group", { name: "Review target" });
     const form = reviewTarget.closest("form");
@@ -14821,6 +15686,255 @@ describe("Composer", () => {
     expect(within(commands).getByText(providerLabel)).toBeInTheDocument();
   });
 
+  describe("fork slash commands", () => {
+    const thread: NavigationThreadSummary = {
+      id: "fork-source",
+      title: "Fork source",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [{ id: "repo", label: "Repo", path: "/fixture/repo", kind: "local" }],
+      inbox: { inInbox: false },
+    };
+    const backend: BackendSummary = {
+      kind: "codex",
+      label: "Codex",
+      available: true,
+      methods: [],
+      executionModes: [],
+      capabilities: {
+        listThreads: true,
+        createThread: true,
+        resumeThread: true,
+        renameThread: true,
+        readThread: true,
+        startTurn: true,
+        interruptTurn: true,
+        steerTurn: true,
+        transcriptPagination: true,
+        toolUse: true,
+        approvalRequests: true,
+        multiDirectoryThreads: true,
+        forkThread: true,
+      },
+    };
+    function renderForkComposer(overrides: Partial<ComponentProps<typeof ProductionComposer>> = {}) {
+      const onForkThread = vi.fn(async () => true);
+      const onCreateSubthread = vi.fn(async () => true);
+      const startTurn = vi.fn();
+      const readThreadWorktreeAvailability = vi.fn(async () => true);
+      const props = {
+        backends: [backend],
+        disabled: false,
+        skills: [],
+        thread,
+        desktopApi: { startTurn, onAgentEvent: () => () => undefined },
+        onForkThread,
+        onCreateSubthread,
+        readThreadWorktreeAvailability,
+        ...overrides,
+      };
+      const view = render(<Composer {...props} />);
+      return { ...view, onForkThread, onCreateSubthread, startTurn, readThreadWorktreeAvailability };
+    }
+
+    it.each([
+      ["/fork", "local", false],
+      ["/fork --wt same", "local", false],
+      ["/fork --wt new", "new-worktree", false],
+      ["/fork --no-history", "local", true],
+      ["/fork --wt new --no-history", "new-worktree", true],
+      ["/fork --no-history --wt same", "local", true],
+    ] as const)("routes %s to the workspace action without starting a turn", async (text, mode, noHistory) => {
+      const { onForkThread, onCreateSubthread, startTurn } = renderForkComposer({ activeTurnId: "running-turn" });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: text } });
+      expect(screen.queryByRole("button", { name: "Schedule send" })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      await waitFor(() => expect(noHistory ? onCreateSubthread : onForkThread).toHaveBeenCalledWith(thread, mode));
+      expect(noHistory ? onForkThread : onCreateSubthread).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+      await waitFor(() => expect(input).toHaveValue(""));
+    });
+
+    it("defaults to the source worktree rather than the repository checkout", async () => {
+      const worktreeThread: NavigationThreadSummary = {
+        ...thread,
+        linkedDirectories: [{ id: "wt", label: "Repo", path: "/fixture/repo", worktreePath: "/fixture/wt", kind: "worktree" }],
+      };
+      const { onForkThread } = renderForkComposer({ thread: worktreeThread });
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      await waitFor(() => expect(onForkThread).toHaveBeenCalledWith(worktreeThread, "same-worktree"));
+    });
+
+    it("offers one plain /fork entry and hints its parameters in the input", async () => {
+      const { onForkThread, onCreateSubthread, startTurn } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      const tiptapInput = screen.getByTestId("composer-tiptap-input");
+      fireEvent.change(input, { target: { value: "/fo" } });
+      const options = within(screen.getByRole("listbox", { name: "Commands" })).getAllByRole("option");
+      expect(options).toHaveLength(1);
+      expect(options[0]).toHaveTextContent("/fork");
+      expect(options[0]).toHaveTextContent("Fork a new child thread, with or without history");
+      expect(options[0]).not.toHaveTextContent("--wt");
+      // The menu owns the row until it closes; no ghost text competes with it.
+      expect(tiptapInput).not.toHaveAttribute("data-inline-hint");
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(input).toHaveValue("/fork ");
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(onCreateSubthread).not.toHaveBeenCalled();
+      await flushReactUpdates();
+      expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
+      expect(tiptapInput).toHaveClass("has-inline-hint");
+      expect(tiptapInput).toHaveAttribute("data-inline-hint", "[--wt same|new] [--no-history]");
+      expect(tiptapInput.style.getPropertyValue("--composer-inline-hint"))
+        .toBe('"[--wt same|new] [--no-history]"');
+
+      fireEvent.change(input, { target: { value: "/fork --wt n" } });
+      expect(tiptapInput).toHaveAttribute("data-inline-hint", "ew [--no-history]");
+      fireEvent.change(input, { target: { value: "/fork --wt new --no-history" } });
+      expect(tiptapInput).not.toHaveAttribute("data-inline-hint");
+      expect(tiptapInput).not.toHaveClass("has-inline-hint");
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(onCreateSubthread).toHaveBeenCalledWith(thread, "new-worktree"));
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it.each(["Tab", "ArrowRight", " "])("accepts the hinted completion with %j at the end of the draft", async (key) => {
+      const { onForkThread, onCreateSubthread } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      const tiptapInput = screen.getByTestId("composer-tiptap-input");
+      fireEvent.change(input, { target: { value: "/fork --no-" } });
+      expect(tiptapInput).toHaveAttribute("data-inline-completion", "history");
+      await flushReactUpdates();
+
+      const event = createEvent.keyDown(input, { key });
+      fireEvent(input, event);
+      expect(event.defaultPrevented).toBe(true);
+      await waitFor(() => expect(input).toHaveValue("/fork --no-history "));
+      expect(tiptapInput).toHaveAttribute("data-inline-hint", "[--wt same|new]");
+      expect(tiptapInput).not.toHaveAttribute("data-inline-completion");
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(onCreateSubthread).not.toHaveBeenCalled();
+    });
+
+    it("leaves Tab alone when the hint has nothing literal to accept", async () => {
+      renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork --wt " } });
+      expect(screen.getByTestId("composer-tiptap-input")).toHaveAttribute("data-inline-hint", "same|new [--no-history]");
+      await flushReactUpdates();
+      const event = createEvent.keyDown(input, { key: "Tab" });
+      fireEvent(input, event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(input).toHaveValue("/fork --wt ");
+    });
+
+    it("sends /fork text as an ordinary turn when the composer has no fork action", async () => {
+      const { onForkThread, startTurn } = renderForkComposer({ onForkThread: undefined, onCreateSubthread: undefined });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork the release plan into two" } });
+      expect(screen.queryByRole("button", { name: "Fork" })).not.toBeInTheDocument();
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(startTurn).toHaveBeenCalled());
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Use \/fork/)).not.toBeInTheDocument();
+    });
+
+    it("draws no parameter hint for ordinary drafts", () => {
+      renderForkComposer();
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Please fork this later" } });
+      expect(screen.getByTestId("composer-tiptap-input")).not.toHaveAttribute("data-inline-hint");
+    });
+
+    it.each(["/fork --wt", "/fork --wt other", "/fork unexpected", "/fork --no-history --no-history"])("retains invalid command %s and never sends it to the agent", async (text) => {
+      const { onForkThread, startTurn } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: text } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("Use /fork [--wt same|new] [--no-history].")).toBeInTheDocument();
+      expect(input).toHaveValue(text);
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("retains the command when a new worktree is unavailable", async () => {
+      const { onForkThread } = renderForkComposer({ readThreadWorktreeAvailability: async () => false });
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork --wt new" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("This thread cannot create a new worktree. Use /fork --wt same.")).toBeInTheDocument();
+      expect(screen.getByLabelText("Reply")).toHaveValue("/fork --wt new");
+      expect(onForkThread).not.toHaveBeenCalled();
+    });
+
+    it("offers fresh sub-threads when history forks are unsupported", async () => {
+      const { onCreateSubthread, startTurn } = renderForkComposer({ backends: [{ ...backend, capabilities: { ...backend.capabilities, forkThread: false } }] });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork" } });
+      const options = within(screen.getByRole("listbox", { name: "Commands" })).getAllByRole("option");
+      expect(options).toHaveLength(1);
+      expect(options[0]).toHaveTextContent("Fork a new child thread, with or without history");
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("This provider cannot fork history. Use /fork --no-history to start a sub-thread.")).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: "/fork --no-history" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      await waitFor(() => expect(onCreateSubthread).toHaveBeenCalledWith(thread, "local"));
+    });
+
+    it("rejects attachments without losing the command or sending a turn", async () => {
+      const { onForkThread, startTurn } = renderForkComposer();
+      const input = screen.getByLabelText("Reply");
+      fireEvent.paste(input, {
+        clipboardData: {
+          files: [new File([new Uint8Array([1, 2, 3])], "fixture.png", { type: "image/png" })],
+          items: [],
+          getData: () => "",
+        },
+      });
+      await screen.findByRole("button", { name: "Remove fixture.png" });
+      fireEvent.change(input, { target: { value: "/fork" } });
+      fireEvent.click(screen.getByRole("button", { name: "Fork" }));
+      expect(await screen.findByText("/fork does not accept attachments or skill references.")).toBeInTheDocument();
+      expect(input).toHaveValue("/fork");
+      expect(onForkThread).not.toHaveBeenCalled();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("preserves a different thread's draft when fork navigation finishes", async () => {
+      const pending = createDeferred<boolean>();
+      const onForkThread = vi.fn(() => pending.promise);
+      const { result } = renderHook(() => useComposerDraftStore());
+      const draftStore = result.current;
+      const deleteDraft = vi.spyOn(draftStore, "delete");
+      const { rerender } = renderForkComposer({ onForkThread, draftStore });
+      // The trailing space closes the command menu, so Enter submits.
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/fork " } });
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+      rerender(<Composer disabled={false} skills={[]} thread={{ ...thread, id: "child" }} draftStore={draftStore} />);
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Child draft" } });
+      await act(async () => pending.resolve(true));
+      expect(screen.getByLabelText("Reply")).toHaveValue("Child draft");
+      expect(deleteDraft).toHaveBeenCalledWith(buildThreadComposerScopeKey("codex", thread.id));
+    });
+
+    it("keeps failed forks editable and prevents duplicate submissions while pending", async () => {
+      const pending = createDeferred<boolean>();
+      const onForkThread = vi.fn(() => pending.promise);
+      renderForkComposer({ onForkThread });
+      const input = screen.getByLabelText("Reply");
+      fireEvent.change(input, { target: { value: "/fork " } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onForkThread).toHaveBeenCalledTimes(1);
+      await act(async () => pending.resolve(false));
+      expect(input).toHaveValue("/fork ");
+      expect(screen.getByRole("button", { name: "Fork" })).toBeEnabled();
+    });
+  });
+
   it("routes Codex compact slash commands to thread compaction", async () => {
     const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
       backend: request.backend,
@@ -14874,6 +15988,106 @@ describe("Composer", () => {
       });
     });
     expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("locks the thread from /lock with the rest of the line as its note", async () => {
+    const onLockThread = vi.fn(async () => undefined);
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    const thread = {
+      id: "thread-1",
+      title: "Lock me",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        onLockThread={onLockThread}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+    const textarea = screen.getByLabelText("Reply");
+
+    fireEvent.change(textarea, { target: { value: "/lo" } });
+    expect(await screen.findByRole("option", { name: /\/lock/ })).toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: "/lock Worktree handed to the repair thread." } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onLockThread).toHaveBeenCalledWith("Worktree handed to the repair thread."));
+    expect(startTurn).not.toHaveBeenCalled();
+    await waitFor(() => expect(textarea).toHaveValue(""));
+  });
+
+  it("does not offer /lock on a peer's thread whose owner withholds turn control", async () => {
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        onLockThread={vi.fn(async () => undefined)}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Peer thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "pwr_owner" } },
+            instanceLabel: "Owner Mac",
+            peerStatus: "connected",
+            capabilities: ["thread_navigation"],
+          } as never,
+        }}
+      />,
+    );
+
+    // "/" opens the menu with every local command, so /review proves it is open.
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/" } });
+    expect(await screen.findByRole("option", { name: /\/review/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /\/lock/ })).toBeNull();
+  });
+
+  it("keeps a /lock draft and shows why when the lock is refused", async () => {
+    const onLockThread = vi.fn(async () => {
+      throw new Error("Owner Mac is unreachable.");
+    });
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined }}
+        disabled={false}
+        onLockThread={onLockThread}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Lock me",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+    const textarea = screen.getByLabelText("Reply");
+
+    fireEvent.change(textarea, { target: { value: "/lock" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(onLockThread).toHaveBeenCalledWith(""));
+    expect(await screen.findByText("Owner Mac is unreachable.")).toBeInTheDocument();
+    expect(textarea).toHaveValue("/lock");
   });
 
   it("opens Codex MCP inventory locally instead of sending a turn", async () => {
@@ -15171,7 +16385,7 @@ describe("Composer", () => {
         } } : {}),
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     fireEvent.focus(destination);
@@ -15215,7 +16429,7 @@ describe("Composer", () => {
         inbox: { inInbox: false },
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     fireEvent.focus(destination);
@@ -15263,7 +16477,7 @@ describe("Composer", () => {
         } } : {}),
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     fireEvent.focus(destination);
@@ -15312,7 +16526,7 @@ describe("Composer", () => {
         inbox: { inInbox: false },
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     // The visible caption labels the field, so clicking it reaches the input.
     const destination = screen.getByRole("combobox", { name: "Destination project" });
@@ -15343,7 +16557,7 @@ describe("Composer", () => {
         },
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     const destination = screen.getByRole("combobox", { name: "Destination project" });
     act(() => destination.focus());
@@ -15372,7 +16586,7 @@ describe("Composer", () => {
         },
       }}
     />);
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     fireEvent.focus(screen.getByRole("combobox", { name: "Destination project" }));
     await screen.findByText("Peer unavailable");
@@ -15394,7 +16608,7 @@ describe("Composer", () => {
         }}
       />
     );
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeDisabled();
     fireEvent.click(screen.getByRole("menuitem", { name: "Move to Project" }));
     expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();
@@ -15407,9 +16621,13 @@ describe("Composer", () => {
   });
 
   it("keeps Move to Project keyboard-contained, and gives Escape to its destination list first", async () => {
-    const getNavigationQueryPage = vi.fn(async (request) => navigationQueryFixture(request, {
-      directories: [{ key: "/projects/demo", kind: "directory", label: "Demo", path: "/projects/demo" }],
-    }));
+    const projectPageReady = createDeferred<void>();
+    const getNavigationQueryPage = vi.fn(async (request) => {
+      await projectPageReady.promise;
+      return navigationQueryFixture(request, {
+        directories: [{ key: "/projects/demo", kind: "directory", label: "Demo", path: "/projects/demo" }],
+      });
+    });
     render(
       <Composer
         backends={[]}
@@ -15423,7 +16641,7 @@ describe("Composer", () => {
         }}
       />
     );
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     workspaceMode.focus();
     act(() => workspaceMode.click());
     const item = screen.getByRole("menuitem", { name: "Move to Project" });
@@ -15435,7 +16653,13 @@ describe("Composer", () => {
 
     const destination = within(dialog).getByRole("combobox", { name: "Destination project" });
     act(() => destination.focus());
-    await within(dialog).findByRole("option", { name: /Demo/ });
+    // A visible option does not guarantee its passive Escape layer has run.
+    // Settle the owner's page and its React effects before pressing the key.
+    await act(async () => {
+      projectPageReady.resolve();
+      await projectPageReady.promise;
+    });
+    expect(within(dialog).getByRole("option", { name: /Demo/ })).toBeInTheDocument();
     pressEscape();
     expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Move to Project" })).toBeInTheDocument();
@@ -15534,14 +16758,14 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Access mode")).toHaveValue("default");
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("default");
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     expect(screen.getByRole("separator")).toBeInTheDocument();
     fireEvent.pointerDown(screen.getByLabelText("Reply"));
     expect(
       screen.queryByRole("menuitem", { name: "Handoff to New Worktree" })
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to New Worktree" });
     expect(dialog).toBeInTheDocument();
@@ -15550,7 +16774,7 @@ describe("Composer", () => {
     expect(
       screen.getByRole("radio", { name: /Handoff to Detached HEAD/ })
     ).toHaveAttribute("aria-checked", "true");
-    expect(screen.queryByLabelText("Leave current checkout on")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Leave current checkout on(?::|$)/)).not.toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Handoff to New Branch/ })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
@@ -15611,7 +16835,7 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Access mode")).toHaveValue("default");
+    expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("default");
 
     chooseDropdownOption("Access mode", "Full Access");
 
@@ -15662,7 +16886,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff to New Branch/ }));
 
@@ -15830,7 +17054,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Workspace mode")).toBeDisabled();
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toBeDisabled();
 
     rerender(
       <Composer
@@ -15843,7 +17067,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Workspace mode")).toBeEnabled();
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toBeEnabled();
   });
 
   it("disables existing thread workspace handoff when the backend marks it unavailable", () => {
@@ -15878,7 +17102,7 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
     fireEvent.click(workspaceMode);
@@ -15957,7 +17181,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     expect(screen.getByRole("menuitem", { name: "Handoff to New Worktree" })).toBeDisabled();
     expect(screen.getByRole("menuitem", { name: "Move to Project" })).toBeEnabled();
 
@@ -16019,16 +17243,14 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
 
-    const leaveOn = screen.getByLabelText("Leave current checkout on");
+    const leaveOn = screen.getByLabelText(/^Leave current checkout on(?::|$)/);
     expect(leaveOn).toHaveAttribute("data-value", "HEAD");
     expect(leaveOn).toHaveTextContent("Detached HEAD");
-    // The aria-label names the field and suppresses the button's content, so
-    // the selection has to reach assistive tech as a description instead.
-    expect(leaveOn).toHaveAccessibleDescription("Detached HEAD");
+    expect(leaveOn).toHaveAccessibleName("Leave current checkout on: Detached HEAD");
     fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
 
     await waitFor(() => {
@@ -16078,10 +17300,10 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
-    const branchButton = screen.getByRole("button", { name: "Leave current checkout on" });
+    const branchButton = screen.getByRole("button", { name: /^Leave current checkout on(?::|$)/ });
     branchButton.focus();
     fireEvent.click(branchButton);
     expect(
@@ -16141,11 +17363,11 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to New Worktree" }));
     fireEvent.click(screen.getByRole("radio", { name: /Handoff Current Branch/ }));
     fireEvent.click(
-      screen.getByRole("button", { name: "Leave current checkout on" })
+      screen.getByRole("button", { name: /^Leave current checkout on(?::|$)/ })
     );
 
     const listbox = screen.getByRole("listbox", {
@@ -16175,7 +17397,7 @@ describe("Composer", () => {
     ).toEqual(["release"]);
 
     fireEvent.click(within(listbox).getByRole("option", { name: "release" }));
-    expect(screen.getByLabelText("Leave current checkout on")).toHaveAttribute(
+    expect(screen.getByLabelText(/^Leave current checkout on(?::|$)/)).toHaveAttribute(
       "data-value",
       "release"
     );
@@ -16258,7 +17480,7 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeEnabled();
     expect(workspaceMode).toHaveValue("local");
     fireEvent.click(workspaceMode);
@@ -16308,10 +17530,10 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toHaveValue("worktree");
     expect(workspaceMode).toHaveTextContent("New worktree");
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
   });
 
   it("does not flip a new-worktree launchpad to local when review draft toggles", async () => {
@@ -16349,8 +17571,8 @@ describe("Composer", () => {
 
     const input = screen.getByLabelText("New thread");
     fireEvent.change(input, { target: { value: "/review" } });
-    await clickButton("Start thread");
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
+    await clickButton("Start sub-thread");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -16369,8 +17591,8 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("worktree");
-    expect(screen.getByLabelText("Workspace mode")).toHaveTextContent("New worktree");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveTextContent("New worktree");
   });
 
   it("locks same-worktree sub-thread launchpads to the shared worktree", () => {
@@ -16403,7 +17625,7 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
     expect(workspaceMode).toHaveTextContent("Same worktree");
@@ -16440,7 +17662,7 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
     expect(workspaceMode).toHaveTextContent("Local");
@@ -16489,7 +17711,7 @@ describe("Composer", () => {
       />
     );
 
-    const workspaceMode = screen.getByLabelText("Workspace mode");
+    const workspaceMode = screen.getByLabelText(/^Workspace mode(?::|$)/);
     expect(workspaceMode).toBeDisabled();
     expect(workspaceMode).toHaveValue("local");
     expect(workspaceMode).toHaveTextContent("Local");
@@ -16541,7 +17763,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(screen.getByRole("listbox").closest(".composer-dropdown")).toHaveClass(
       "composer-dropdown--branch"
@@ -16606,7 +17828,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(screen.getByRole("listbox").parentElement).toHaveStyle({
       transform: "translateX(220px)",
@@ -16669,7 +17891,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(screen.getByRole("listbox").parentElement).toHaveStyle({
       maxWidth: "300px",
@@ -16757,7 +17979,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Workspace mode")).toHaveValue("local");
+    expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("local");
     expect(
       screen.queryByRole("option", { name: "New worktree" }),
     ).not.toBeInTheDocument();
@@ -16816,7 +18038,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     const inUseOption = screen.getByRole("option", {
       name: "feat/telegram-integration",
@@ -16910,7 +18132,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     expect(
       screen.getByRole("option", { name: "fix/upload-mp4-compression" })
@@ -16972,7 +18194,7 @@ describe("Composer", () => {
       />
     );
 
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
 
     const optionNames = screen
       .getAllByRole("option")
@@ -17027,8 +18249,8 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Base branch")).toHaveValue("main");
-    fireEvent.click(screen.getByLabelText("Base branch"));
+    expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
+    fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
     expect(screen.queryByRole("option", { name: "HEAD" })).not.toBeInTheDocument();
   });
 
@@ -17107,7 +18329,7 @@ describe("Composer", () => {
       });
     });
 
-    fireEvent.click(screen.getByLabelText("Workspace mode"));
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
     fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
     const dialog = screen.getByRole("dialog", { name: "Handoff to Local" });
     expect(dialog).toBeInTheDocument();
@@ -23995,4 +25217,145 @@ it("refits skill autocomplete when its composer resizes without a window resize"
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+describe("queued message reordering", () => {
+  const thread = {
+    id: "thread-1", title: "Recipient", titleSource: "explicit" as const, source: "codex" as const,
+    linkedDirectories: [], inbox: { inInbox: false },
+  };
+  const mirror = (id: string, extra: Partial<ComposerQueuedTurnSnapshot> = {}): ComposerQueuedTurnSnapshot => ({
+    id, queueEntryId: id, title: `Message ${id}`, text: id, imageAttachments: [], fileAttachments: [], ...extra,
+  });
+  const order = (): string[] =>
+    screen.getAllByLabelText(/^Queued message|^Held queued message/).map((row) =>
+      row.querySelector(".composer__queued-text")?.textContent ?? "");
+
+  it("moves an owner's queued message with the keyboard and asks the owner to move it", async () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b"), mirror("c")]);
+    let answer!: (response: MoveQueuedTurnResponse) => void;
+    const moveQueuedTurn = vi.fn(() => new Promise<MoveQueuedTurnResponse>((resolve) => { answer = resolve; }));
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ moveQueuedTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    const grip = screen.getByRole("button", { name: "Reorder: Message c" });
+    grip.focus();
+    fireEvent.keyDown(grip, { key: "ArrowUp" });
+
+    expect(order()).toEqual(["Message a", "Message c", "Message b"]);
+    expect(within(screen.getByLabelText("Queued message 2")).getByRole("status")).toHaveTextContent("#2");
+    expect(grip).toHaveFocus();
+    expect(moveQueuedTurn).toHaveBeenCalledWith({ queueEntryId: "c", beforeQueueEntryId: "b" });
+    // Until the owner answers, a queue read that left first cannot undo it.
+    expect(draftStore.getQueuedTurns(scopeKey)[1]).toMatchObject({ id: "c", pendingMove: { beforeQueueEntryId: "b" } });
+
+    await act(async () => { answer({ queueEntryId: "c", disposition: "moved", queueEntryIds: ["a", "c", "b"] }); });
+    expect(draftStore.getQueuedTurns(scopeKey)[1]).not.toHaveProperty("pendingMove");
+
+    fireEvent.keyDown(grip, { key: "ArrowDown", metaKey: true, shiftKey: true });
+    expect(order()).toEqual(["Message a", "Message b", "Message c"]);
+    // To the end: no anchor.
+    expect(moveQueuedTurn).toHaveBeenLastCalledWith({ queueEntryId: "c" });
+    await act(async () => { answer({ queueEntryId: "c", disposition: "held", queueEntryIds: ["a", "c", "b"] }); });
+    expect(await screen.findByText("A message can’t move past one that is held for retry.")).toBeInTheDocument();
+    // Nothing re-reads the queue after a refusal: the band takes the owner's order back.
+    expect(order()).toEqual(["Message a", "Message c", "Message b"]);
+    expect(draftStore.getQueuedTurns(scopeKey).some((queued) => queued.pendingMove)).toBe(false);
+  });
+
+  it("puts the owner's order back when the move request fails outright", async () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b"), mirror("c")]);
+    const moveQueuedTurn = vi.fn(async (): Promise<MoveQueuedTurnResponse> => {
+      throw new Error("Update PwrAgent on the owning instance to reorder its queued messages.");
+    });
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ moveQueuedTurn, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    const grip = screen.getByRole("button", { name: "Reorder: Message c" });
+    grip.focus();
+    fireEvent.keyDown(grip, { key: "ArrowUp" });
+    expect(order()).toEqual(["Message a", "Message c", "Message b"]);
+
+    expect(await screen.findByText("Update PwrAgent on the owning instance to reorder its queued messages."))
+      .toBeInTheDocument();
+    expect(order()).toEqual(["Message a", "Message b", "Message c"]);
+  });
+
+  it("gives held, steering and scheduled rows no grip, and keeps every chevron on one line", () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [
+      mirror("held", { manualReleaseRequired: true, holdReason: "Retry when ready." }),
+      mirror("a"),
+      mirror("b"),
+      mirror("later", { scheduledActionId: "later", scheduledSendAt: Date.now() + 60_000, queueEntryId: undefined }),
+    ]);
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ moveQueuedTurn: vi.fn(), onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    expect(screen.getAllByRole("button", { name: /^Reorder: / }).map((grip) => grip.getAttribute("aria-label")))
+      .toEqual(["Reorder: Message a", "Reorder: Message b"]);
+    const rows = document.querySelectorAll(".composer__queued--message");
+    expect([...rows].every((row) => row.classList.contains("composer__queued--reorderable"))).toBe(true);
+    expect(rows[0]?.querySelector(".composer__queued-grip--empty")).not.toBeNull();
+  });
+
+  it("reorders a peer's queue only when the peer advertises it, and asks that peer", async () => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const remoteThread = (capabilities: FederationCapability[]) => ({
+      ...thread,
+      federation: { instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: "thread-1", target }, capabilities },
+    });
+    const draftStore = createComposerDraftStore();
+    // A peer's queue lives under its owner's scope.
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1", target), [mirror("a"), mirror("b")]);
+    const moveQueuedTurn = vi.fn(async (): Promise<MoveQueuedTurnResponse> =>
+      ({ queueEntryId: "b", disposition: "moved", queueEntryIds: ["b", "a"] }));
+    const desktopApi = { moveQueuedTurn, onAgentEvent: () => () => undefined };
+
+    // An owner on an older build: no drag to snap back, no request.
+    const { rerender } = render(<Composer activeTurnId="active" backends={[backendSummary("codex")]}
+      draftStore={draftStore} desktopApi={desktopApi} disabled={false} skills={[]}
+      thread={remoteThread(["turn_control"])} />);
+    expect(screen.queryByRole("button", { name: /^Reorder: / })).toBeNull();
+    expect(document.querySelector(".composer__queued--reorderable")).toBeNull();
+    fireEvent.keyDown(screen.getByLabelText("Queued message 2"), { key: "ArrowUp", metaKey: true, shiftKey: true });
+    expect(order()).toEqual(["Message a", "Message b"]);
+    expect(moveQueuedTurn).not.toHaveBeenCalled();
+
+    rerender(<Composer activeTurnId="active" backends={[backendSummary("codex")]}
+      draftStore={draftStore} desktopApi={desktopApi} disabled={false} skills={[]}
+      thread={remoteThread(["turn_control", "turn_queue_reorder"])} />);
+    const grip = screen.getByRole("button", { name: "Reorder: Message b" });
+    grip.focus();
+    fireEvent.keyDown(grip, { key: "ArrowUp" });
+    expect(order()).toEqual(["Message b", "Message a"]);
+    await waitFor(() => expect(moveQueuedTurn).toHaveBeenCalledWith({
+      federationTarget: target, queueEntryId: "b", beforeQueueEntryId: "a",
+    }));
+  });
+
+  it("shows no grip for a single message, or for an owner that cannot reorder", () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a")]);
+    const { unmount } = render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ moveQueuedTurn: vi.fn(), onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+    expect(screen.queryByRole("button", { name: /^Reorder: / })).toBeNull();
+    expect(document.querySelector(".composer__queued--reorderable")).toBeNull();
+    unmount();
+
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b")]);
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+    expect(screen.queryByRole("button", { name: /^Reorder: / })).toBeNull();
+  });
 });

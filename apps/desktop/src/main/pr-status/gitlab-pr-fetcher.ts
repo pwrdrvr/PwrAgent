@@ -5,10 +5,34 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverGlabCommands } from "../settings/glab-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveGitLabReposForDirectory } from "./git-remote";
+import { FORGE_JSON_MAX_BYTES, FORGE_LOG_MAX_BYTES } from "./forge-read-limits";
 
 const execFileAsync = promisify(execFile);
 /** Concurrent `glab` subprocesses admitted at once. */
 const API_CONCURRENCY = 3;
+export class GitLabReadError extends Error {
+  constructor(readonly status: number, readonly retryAt?: number) {
+    super(status === 413 ? "GitLab response exceeds the download limit (16 MiB logs, 2 MiB metadata). Open the source URL for the full content." : `GitLab returned HTTP ${status}. Check host login, read_api permission and project/job access.`);
+  }
+}
+
+/** Parse only transport metadata; raw CLI errors may contain credentials. */
+function readApiBody(output: string): string {
+  const status = output.match(/^HTTP\/[\d.]+ (\d{3})[^\r\n]*\r?\n/i);
+  if (!status) return output;
+  const boundary = output.match(/\r?\n\r?\n/);
+  const header = boundary ? output.slice(0, boundary.index) : output;
+  const code = Number(status[1]);
+  if (code >= 400) {
+    const retry = header.match(/^retry-after:\s*([^\r\n]+)/im)?.[1];
+    const delay = retry && Number.isFinite(Number(retry)) ? Date.now() + Number(retry) * 1000 : Date.parse(retry ?? "");
+    const reset = Number(header.match(/^(?:ratelimit-reset|x-ratelimit-reset):\s*(\d+)/im)?.[1]) * 1000;
+    const retryAt = code === 429 ? Math.max(Date.now() + 60_000, reset || 0, delay || 0) : undefined;
+    throw new GitLabReadError(code, retryAt);
+  }
+  return boundary ? output.slice(boundary.index! + boundary[0].length) : output;
+}
+
 export type GitLabRef = { host: string; owner: string; repo: string; number: number };
 
 export function parseGitLabMrUrl(value: string): GitLabRef | undefined {
@@ -105,6 +129,7 @@ export class GitLabPrFetcher {
   private discovery?: { at: number; pending: Promise<DesktopGlabDiscoverySnapshot> };
   private readonly statuses = new Map<string, { at: number; pending: Promise<GlabStatus> }>();
   private readonly requests = new Map<string, Promise<unknown>>();
+  private requestSequence = 0;
   private readonly options: GitLabPrFetcherOptions;
 
   constructor(options: GitLabPrFetcherOptions = {}) {
@@ -135,13 +160,21 @@ export class GitLabPrFetcher {
     return Boolean((await this.discover()).selectedCommand);
   }
 
-  private async api<T>(host: string, endpoint: string, reportFailure = false, requestTokenTaken = false): Promise<T> {
+  /** Fixed, read-only endpoints constructed by first-party adapters, never agent-supplied URLs. */
+  async readApi<T>(host: string, endpoint: string, signal?: AbortSignal, raw = false): Promise<T> {
+    return this.api<T>(host, endpoint, true, false, signal, raw, true);
+  }
+
+  private async api<T>(host: string, endpoint: string, reportFailure = false, requestTokenTaken = false, signal?: AbortSignal, raw = false, includeHeaders = false): Promise<T> {
+    signal?.throwIfAborted();
     if (!/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i.test(host) || host === "github.com") {
       throw new Error("Invalid GitLab hostname.");
     }
     const command = (await this.discover()).selectedCommand;
     if (!command) throw new Error("GitLab CLI is unavailable. Install glab or select its path in Settings → Git.");
-    const key = `${command}\0${host}\0${endpoint}`;
+    signal?.throwIfAborted();
+    // Independently cancellable callers must not abort another caller's request.
+    const key = `${command}\0${host}\0${endpoint}\0${raw}\0${includeHeaders}\0${signal ? ++this.requestSequence : 0}`;
     const existing = this.requests.get(key);
     if (existing) return await existing as T;
     // Reject excess work instead of queueing unbounded subprocesses. Duplicate
@@ -152,17 +185,26 @@ export class GitLabPrFetcher {
     }
     const pending = (async () => {
       try {
-        const args = ["api", "--hostname", host, "--method", "GET", endpoint];
+        const args = ["api", "--hostname", host, "--method", "GET", ...(includeHeaders ? ["--include"] : []), endpoint];
+        const maxBytes = raw ? FORGE_LOG_MAX_BYTES : FORGE_JSON_MAX_BYTES;
         const stdout = this.options.run
           ? await this.options.run(command, args)
           : (await execFileAsync(command, args, {
             env: { ...buildPwrAgentChildProcessEnv(process.env), GLAB_CHECK_UPDATE: "0", GLAB_SEND_SURVEY: "0", GIT_TERMINAL_PROMPT: "0" },
+            signal,
             timeout: 15_000,
-            maxBuffer: 2 * 1024 * 1024,
+            maxBuffer: maxBytes + (includeHeaders ? 64 * 1024 : 0),
             encoding: "utf8",
           })).stdout;
-        return JSON.parse(stdout) as T;
-      } catch {
+        const body = includeHeaders ? readApiBody(stdout) : stdout;
+        if (Buffer.byteLength(body, "utf8") > maxBytes) throw new GitLabReadError(413);
+        return (raw ? body : JSON.parse(body)) as T;
+      } catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") throw new GitLabReadError(413);
+        if (includeHeaders) {
+          if (error instanceof GitLabReadError) throw error;
+          if (error && typeof error === "object" && "stdout" in error && typeof error.stdout === "string") readApiBody(error.stdout);
+        }
         const message = `GitLab request failed on ${host}. Check glab login, read_api permission, project access, and connectivity.`;
         if (reportFailure) this.failures.set(host, message);
         throw new Error(message);

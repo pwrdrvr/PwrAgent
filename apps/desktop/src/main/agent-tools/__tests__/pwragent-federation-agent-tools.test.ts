@@ -355,3 +355,25 @@ it("dispatches file push through the unified catalog", async () => {
   expect(response.success).toBe(true);
   expect(handler).toHaveBeenCalledWith(expect.objectContaining({ operation: "push_instance_file", args: { instanceId: "pwr_remote", sourcePath: "/local/file.txt" } }));
 });
+
+
+describe("thread service tools", () => {
+  it("advertises ordinary tools and binds declarations to trusted call context", async () => {
+    const handler = vi.fn(async () => ({ ok: true as const, data: { services: [] } }));
+    const router = buildPwrAgentFederationToolRouter(handler);
+    const specs = router.buildDynamicToolSpecs();
+    expect(JSON.stringify(specs)).toContain('"name":"advertise_service"');
+    expect(JSON.stringify(specs)).toContain('"name":"list_services"');
+    expect(JSON.stringify(specs)).toContain('"name":"remove_service"');
+    expect(JSON.stringify(specs)).not.toContain('"name":"connect_service"');
+    const call = { threadId: "trusted-thread", turnId: "turn", callId: "call", namespace: "pwragent", tool: "advertise_service",
+      arguments: { port: 3000, name: "Fixture", protocol: "http" } };
+    expect(await router.handleDynamicToolCall({ backend: "codex", call })).toMatchObject({ success: true });
+    expect(handler).toHaveBeenLastCalledWith(expect.objectContaining({ operation: "advertise_service", context: expect.objectContaining({ threadId: "trusted-thread" }) }));
+    handler.mockClear();
+    for (const extra of [{ threadId: "victim" }, { instanceId: "victim" }, { address: "localhost" }, { port: 22 }]) {
+      expect(await router.handleDynamicToolCall({ backend: "codex", call: { ...call, arguments: { ...call.arguments, ...extra } } })).toMatchObject({ success: false });
+    }
+    expect(handler).not.toHaveBeenCalled();
+  });
+});

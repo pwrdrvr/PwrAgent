@@ -23,7 +23,24 @@ import {
   getLaunchpadScopeDirectoryKey,
   isStartingLaunchpadComposerScopeKey,
 } from "./launchpad-composer-scope";
-import { QueuedMessageInspector } from "./QueuedMessageInspector";
+import {
+  QueuedMessageInspector,
+  QueuedRowGrip,
+  QueuedRowIconButton,
+  QueuedRowPositionLabel,
+} from "./QueuedMessageInspector";
+import {
+  planQueuedTurnMove,
+  queuedMoveAnchor,
+  queuedReorderGroup,
+  queuedTurnOwnerCanMove,
+  requestOwnerQueuedTurnMove,
+  settleQueuedTurnMove,
+} from "./queued-turn-move";
+import {
+  type QueuedReorderRow,
+  useQueuedRowReorder,
+} from "./useQueuedRowReorder";
 import { notificationIncludesDraftContent, restoreQueuedMessage } from "./queued-message-content";
 import {
   Fragment,
@@ -80,10 +97,12 @@ import {
   federatedThreadIdentityKey,
   findPreferredReviewWorkspaceCwd,
   findPrimaryReviewWorkspaceCwd,
+  isSubthreadLaunchpadKey,
   normalizeGitOriginUrl,
   parseCodexAsyncQuestionReply,
   readCodexEnvironmentActionRuns,
   summarizeCodexAsyncQuestionReply,
+  withoutSupersededCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import {
   BranchIcon,
@@ -94,29 +113,36 @@ import {
   FolderIcon,
   LightningIcon,
   MoreVerticalIcon,
+  PencilIcon,
   PlanIcon,
   PlayIcon,
   PlusIcon,
   PullRequestIcon,
   SearchIcon,
+  SubthreadIcon,
   ThreadIcon,
+  TrashIcon,
   CelestialIcon,
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import { InstanceChip, InstanceGlyph } from "../federation/InstanceGlyph";
 import { filterAtReferenceCandidates } from "../../lib/instance-references";
 import { ImageLightbox } from "../thread-detail/ImageLightbox";
+import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import { agentEventMatchesThread } from "../../lib/federated-thread-events";
+import {
+  agentEventMatchesThread,
+  threadSummaryIdentityKey,
+} from "../../lib/federated-thread-events";
 import {
   acpRuntimeModeRequiresFullAccess,
   formatExecutionModeLabel,
-  describeCodexExecutionMode,
+  describeExecutionModeForBackend,
   getAcpRuntimeModeControl,
 } from "../../lib/execution-mode";
 import { isSameWorktreeSubthreadLaunchpad } from "../../lib/subthread-launchpads";
@@ -208,6 +234,13 @@ import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./Environmen
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
 import { findSlashCommandTrigger } from "./composer-slash-commands";
+import {
+  forkCommandCompletion,
+  forkCommandHint,
+  parseForkCommand,
+  type ComposerForkCommand,
+} from "./composer-fork-command";
+import type { ThreadWorkspaceMode } from "../../lib/subthread-launchpads";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectDestinationCombobox } from "./ProjectDestinationCombobox";
 import { ProjectPicker } from "./ProjectPicker";
@@ -223,6 +256,18 @@ import {
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
 import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
+import {
+  canPushToRemoteTarget,
+  describeRemoteFilePushRefusal,
+  describeRemoteFilePushTooltip,
+  resolveRemoteFilePushTarget,
+} from "./remote-file-push-availability";
+import {
+  useRemoteFileUploads,
+  type RemoteFileUpload,
+} from "./useRemoteFileUploads";
+import { useFederationHealth } from "../../lib/useFederationHealth";
+import { formatByteCount } from "../../lib/format-bytes";
 import {
   EnvActionRunEntry,
   EnvActionRunsView,
@@ -243,10 +288,12 @@ import {
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
 import { useComposerMentionSources } from "./useComposerMentionSources";
+import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
 import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
+import { useComposerTip } from "./useComposerTip";
 
-type ComposerProps = {
+export type ComposerProps = {
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage?: (
@@ -294,12 +341,40 @@ type ComposerProps = {
     id: number;
     threadId: string;
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     text: string;
   };
   onReplySubmissionSettled?: (id: number, accepted: boolean) => void;
+  /**
+   * Opens the `/review` panel from outside the composer, as a to-do card's
+   * Start review does. The operator still picks the target and reviewer.
+   * Each id opens the panel once.
+   */
+  reviewRequest?: {
+    id: number;
+    threadId: string;
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+  };
+  /** A review this composer submitted was accepted by the backend. */
+  onReviewStarted?: (threadKey: string, requestId?: number) => void;
+  /**
+   * Focus the input once this composer shows the named thread and can take
+   * input. Sent for a mouse click on the thread's sidebar row only; each id
+   * focuses once.
+   */
+  focusRequest?: { threadKey: string; id: number; origin: HTMLElement };
+  onFocusRequestHandled?: (id: number) => void;
   launchpad?: NavigationLaunchpadDraft;
   /** Which machine the launchpad starts its thread on, and how to move it. */
   launchpadMachine?: LaunchpadMachineControl;
+  /**
+   * Where the machine chip renders instead of the settings row. ThreadView
+   * puts it in the title rail, where the thread header names the machine
+   * after creation, so starting a thread neither moves the chip nor changes
+   * the composer's height. `null` while that slot is mounting.
+   */
+  launchpadMachineChipHost?: HTMLElement | null;
   launchpadError?: string;
   launchpadConfigurationError?: string;
   onReloadLaunchpadConfiguration?: () => Promise<void>;
@@ -330,6 +405,16 @@ type ComposerProps = {
   ) => Promise<void>;
   /** Discard this launchpad draft (the "Cancel" button next to "Start thread"). */
   onCancelLaunchpad?: (directoryKey: string) => void;
+  /**
+   * Cancel this launchpad as its Cancel button does, asked from outside the
+   * composer (a sub-thread draft row's menu). The composer must run it: its
+   * unmount would otherwise save the draft it still holds back to the store.
+   */
+  launchpadCancelRequest?: { directoryKey: string; id: number };
+  /** The source row's ×: start this sub-thread as an ordinary thread. */
+  onDetachLaunchpadParent?: (directoryKey: string) => void;
+  /** The source row's parent title: open the parent, keep this draft. */
+  onSelectLaunchpadParent?: (launchpad: NavigationLaunchpadDraft) => void;
   onMoveEnvActionsToSidebar?: () => void;
   onDismissEnvActionRun?: (run: CodexEnvironmentActionRun) => void;
   onStopEnvActionRun?: (
@@ -349,6 +434,15 @@ type ComposerProps = {
    */
   onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
   onRefreshNavigation?: () => Promise<void>;
+  onForkThread?: (
+    thread: NavigationThreadSummary,
+    mode: ThreadWorkspaceMode,
+  ) => Promise<boolean>;
+  onCreateSubthread?: (
+    thread: NavigationThreadSummary,
+    mode: ThreadWorkspaceMode,
+  ) => Promise<boolean>;
+  readThreadWorktreeAvailability?: (thread: NavigationThreadSummary) => Promise<boolean>;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
   /** Token Miser experiment availability gate. */
@@ -423,6 +517,8 @@ type ComposerProps = {
   >;
   onClearPickDirectoryError?: () => void;
   onShowMcpInventory?: (detail: CodexMcpInventoryDetail) => void;
+  /** `/lock [note]`: locks this thread. Rejects with the error to show. */
+  onLockThread?: (note: string) => Promise<void>;
   onShowMcpAccess?: () => void;
   /** Managed connections this thread has selected, for the composer badge. */
   mcpConnectionCount?: number;
@@ -618,11 +714,14 @@ type QueuedTurnDraft = {
   steerDelivery?: "sending" | "accepted";
   backendQueuePending?: boolean;
   queueEntryId?: string;
+  /** See `ComposerQueuedTurnSnapshot.pendingMove`. */
+  pendingMove?: { beforeQueueEntryId?: string; requestId?: number };
   scheduledActionId?: string;
   failedScheduledActionId?: string;
   errorMessage?: string;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  title?: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
@@ -851,6 +950,32 @@ const SLASH_COMMANDS: SlashCommandSuggestion[] = [
   },
 ];
 
+// One plain entry: the parameters are taught by the muted hint the input draws
+// after "/fork ", not by a row per flag combination.
+const FORK_SLASH_COMMAND: SlashCommandSuggestion = {
+  id: "fork",
+  label: "/fork",
+  insertText: "/fork",
+  description: "Fork a new child thread, with or without history",
+  source: "pwragent",
+  sourceLabel: "PwrAgent",
+};
+
+const LOCK_SLASH_COMMAND: SlashCommandSuggestion = {
+  id: "thread-lock",
+  label: "/lock",
+  insertText: "/lock",
+  description: "Lock this thread, with an optional note on why",
+  source: "pwragent",
+  sourceLabel: "PwrAgent",
+};
+
+/** The note of a `/lock [note]` draft, or undefined for any other draft. */
+function parseLockCommandNote(draft: string): string | undefined {
+  const match = /^\/lock(?:\s+([\s\S]*))?$/i.exec(draft.trim());
+  return match ? match[1] ?? "" : undefined;
+}
+
 const CODEX_MCP_SLASH_COMMANDS: SlashCommandSuggestion[] = [
   {
     id: "codex-mcp",
@@ -950,35 +1075,54 @@ function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefine
  * the thread's own settings; with one, every value resolves against the picked
  * provider's catalog so a model from the thread's provider can never leak into
  * another provider's review.
+ *
+ * A thread whose own provider cannot run reviews (Claude) has no settings to
+ * mirror. The row then defaults to the first provider that can, on that
+ * provider's own defaults, and `fallback` tells submit to send it.
  */
 function resolveReviewerSelection(params: {
   backends?: BackendSummary[];
   override?: ModelSettingsRecent;
+  reviewerBackends: BackendSummary[];
   threadBackend?: AppServerBackendKind;
   threadModel?: string;
   threadReasoningEffort?: string;
 }): {
   backend?: AppServerBackendKind;
+  fallback: boolean;
   model?: ModelOption;
   reasoningEffort?: string;
   summary?: BackendSummary;
 } {
-  const backendKind = params.override?.backend ?? params.threadBackend;
+  const threadSummary = params.backends?.find(
+    (candidate) => candidate.kind === params.threadBackend,
+  );
+  const fallbackSummary =
+    !params.override
+    && threadSummary
+    && threadSummary.capabilities.startReview !== true
+      ? params.reviewerBackends.find(
+          (candidate) => candidate.kind !== params.threadBackend,
+        )
+      : undefined;
+  const backendKind =
+    params.override?.backend ?? fallbackSummary?.kind ?? params.threadBackend;
   const summary = params.backends?.find(
     (candidate) => candidate.kind === backendKind,
   );
   const models = summary?.launchpadOptions?.models ?? [];
   const requestedModel = params.override
     ? params.override.model
-    : params.threadModel;
+    : fallbackSummary ? undefined : params.threadModel;
   const model =
     models.find((candidate) => candidate.id === requestedModel)
     ?? getDefaultModelOption(summary);
   const requestedReasoning = params.override
     ? params.override.reasoningEffort
-    : params.threadReasoningEffort;
+    : fallbackSummary ? undefined : params.threadReasoningEffort;
   return {
     backend: backendKind,
+    fallback: Boolean(fallbackSummary),
     model,
     reasoningEffort: getReasoningEffortValue(summary, model, requestedReasoning),
     summary,
@@ -1383,35 +1527,71 @@ function formatDraftPreview(draft: QueuedTurnDraft): string {
   }`;
 }
 
+/**
+ * A queued message's images as thumbnail buttons: the first three, then a +N
+ * for the rest. Each opens the window's image lightbox on that image, paging
+ * through all of them. The lightbox gets its own copy of the list, so the
+ * message can be sent while it is open.
+ */
 function QueuedImageAttachments(props: {
   attachments: ComposerImageAttachment[];
+  /** 30px thumbnails, for the pending steer card. Otherwise 22px, for a row
+   *  that must stay one line tall. */
+  large?: boolean;
+  /** Focus target on close, once the row that opened the lightbox is gone. */
+  onFallbackFocus?: () => void;
 }): ReactNode {
   if (props.attachments.length === 0) {
     return null;
   }
 
+  const total = props.attachments.length;
   const visibleAttachments = props.attachments.slice(0, 3);
-  const overflowCount = props.attachments.length - visibleAttachments.length;
+  const overflowCount = total - visibleAttachments.length;
+  const open = (index: number) => openImageGallery({
+    items: props.attachments.map((attachment, attachmentIndex) => ({
+      alt: formatPastedImageAlt(attachment, attachmentIndex),
+      dialogLabel: "Queued image",
+      src: attachment.url,
+    })),
+    index,
+    ...(props.onFallbackFocus ? { onFallbackFocus: props.onFallbackFocus } : {}),
+  });
+  const openLabel = (index: number) => `Open image ${index + 1} of ${total}`;
 
   return (
-    <div
-      className="composer__queued-images"
-      aria-label={`Queued image attachments: ${props.attachments.length}`}
+    <span
+      className={[
+        "composer__queued-thumbs",
+        props.large ? "composer__queued-thumbs--large" : "",
+      ].filter(Boolean).join(" ")}
+      aria-label={`Queued image attachments: ${total}`}
+      role="group"
     >
       {visibleAttachments.map((attachment, index) => (
-        <img
-          className="composer__queued-image"
+        <button
+          aria-label={openLabel(index)}
+          className="composer__queued-thumb tooltip-target"
+          data-tooltip={openLabel(index)}
           key={attachment.id}
-          src={attachment.url}
-          alt={formatPastedImageAlt(attachment, index)}
-        />
+          type="button"
+          onClick={() => open(index)}
+        >
+          <img src={attachment.url} alt="" />
+        </button>
       ))}
       {overflowCount > 0 ? (
-        <span className="composer__queued-image-count">
+        <button
+          aria-label={openLabel(3)}
+          className="composer__queued-thumb composer__queued-thumb--count tooltip-target"
+          data-tooltip={openLabel(3)}
+          type="button"
+          onClick={() => open(3)}
+        >
           +{overflowCount}
-        </span>
+        </button>
       ) : null}
-    </div>
+    </span>
   );
 }
 
@@ -1420,6 +1600,23 @@ const ENV_ACTION_RUN_CONFIRMATION_MS = 5_000;
 type ThreadEnvActionStartingKey = {
   actionId: string;
   backend: NavigationThreadSummary["source"];
+  threadId: string;
+};
+
+/**
+ * An environment selection in flight on one thread. `environmentId` is the
+ * target (undefined clears the environment), which the chip shows until the
+ * recorded runtime catches up: setup runs before main records the selection.
+ * `applied` marks a call that resolved. A federated thread's runtime event
+ * rides the peer's notification stream, which is not ordered against the RPC
+ * response, so the target stays on the chip, no longer busy, until the
+ * runtime moves off `previousEnvironmentId`.
+ */
+type ThreadEnvSelecting = {
+  applied?: boolean;
+  backend: NavigationThreadSummary["source"];
+  environmentId?: string;
+  previousEnvironmentId?: string;
   threadId: string;
 };
 
@@ -1465,7 +1662,11 @@ export function EnvActionAnchorList(props: {
   onMoveToSidebar?: () => void;
   onStopRun?: (run: CodexEnvironmentActionRun, mode: "stop" | "terminate") => void;
 }): ReactNode {
-  const runs = readCodexEnvironmentActionRuns(props.runtime);
+  // Superseded first, then dismissed: dismissing the newest result must not
+  // bring back the one it replaced.
+  const runs = withoutSupersededCodexEnvironmentActionRuns(
+    readCodexEnvironmentActionRuns(props.runtime),
+  );
   const visible = runs.filter((run) => {
     if (props.hiddenRunIds?.has(run.runId)) return false;
     if (dismissedEnvActionAnchorKeys.has(run.runId)) return false;
@@ -2059,7 +2260,6 @@ function BranchPicker(props: {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const listboxId = useId();
-  const selectedLabelId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
@@ -2230,14 +2430,9 @@ function BranchPicker(props: {
     >
       <button
         aria-controls={open ? listboxId : undefined}
-        // `aria-label` is the field name and overrides the button's content in
-        // the accessible-name computation, so without this the selected branch
-        // is never announced — the native <select> this replaced did announce
-        // its value. Describes rather than renames so by-name queries hold.
-        aria-describedby={selectedLabelId}
         aria-expanded={open}
         aria-haspopup="listbox"
-        aria-label={props.ariaLabel}
+        aria-label={`${props.ariaLabel}: ${selectedOption?.label ?? selectedOption?.name ?? props.value}`}
         className="composer-dropdown__button"
         data-value={props.value}
         disabled={props.disabled || props.options.length === 0}
@@ -2249,7 +2444,7 @@ function BranchPicker(props: {
         <span aria-hidden="true" className="composer-dropdown__icon">
           <BranchIcon size={13} />
         </span>
-        <span className="composer-dropdown__label" id={selectedLabelId}>
+        <span className="composer-dropdown__label">
           {selectedOption?.label ?? selectedOption?.name ?? props.value}
         </span>
         <span aria-hidden="true" className="composer-dropdown__chevron">
@@ -2792,11 +2987,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const recentFileAuthorityKeyRef = useRef(filesystemAuthorityKey);
   recentFileAuthorityKeyRef.current = filesystemAuthorityKey;
   const inputRef = useRef<ComposerInputHandle>(null);
+  // A queued thumbnail's lightbox can close after its row has gone (the
+  // message was sent); focus then comes back to the input.
+  const focusComposerInput = (): void => inputRef.current?.focus();
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const autocompleteListRef = useRef<HTMLDivElement>(null);
   const activeTurnIdRef = useRef<string | undefined>(props.activeTurnId);
   const confirmedActiveTurnIdRef = useRef<string | undefined>(undefined);
   const terminalTurnKeysRef = useRef(new Set<string>());
+  // Queued rows with an owner-side Edit or Delete in flight. A second click
+  // would cancel an entry the first already took and report it as no longer
+  // waiting.
+  const queuedRowActionIdsRef = useRef(new Set<string>());
   const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
   const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
   const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -2858,7 +3060,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           pullRequestLinks,
         );
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
-  const [editorScopeKey, setEditorScopeKey] = useState(composerScopeKey);
+  const [editorScope, setEditorScope] = useState({ key: composerScopeKey, scopeKey: composerScopeKey });
+  const editorScopeKey = editorScope.key;
   useLaunchpadComposerFocusHandoff(draftStore, composerScopeKey, editorScopeKey, inputRef, inputWrapRef);
   const editorRemountSequenceRef = useRef(0);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
@@ -3064,6 +3267,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const setSendError = useCallback((message?: string) => {
     setSendErrorState((current) => ({ message, occurrence: current.occurrence + 1 }));
   }, []);
+  const [forkingScopeKey, setForkingScopeKey] = useState<string>();
+  const forking = forkingScopeKey === composerScopeKey;
+  const forkSubmissionInFlightRef = useRef(false);
   const [agentThreadError, setAgentThreadError] = useState<string>();
   // `selectedEnvironmentId` marks a failed environment selection, so the
   // setup row can claim the one failure it already reports.
@@ -3072,6 +3278,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     selectedEnvironmentId?: string;
   }>();
   const [environmentSetupRetrying, setEnvironmentSetupRetrying] = useState(false);
+  const [threadEnvSelecting, setThreadEnvSelecting] =
+    useState<ThreadEnvSelecting>();
   const [agentThreadSaving, setAgentThreadSaving] = useState(false);
   const [applicationOpenError, setApplicationOpenError] = useState<string>();
   const [threadEnvActionStarting, setThreadEnvActionStartingState] =
@@ -3085,6 +3293,49 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [fileAttachments, setFileAttachments] = useState<ComposerFileAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.fileAttachments ?? []
   );
+  // A remote thread's owner reads attachments from its own disk, so a file
+  // from this machine is first copied there over federation file push.
+  const remoteFileTarget = filesystemFederationTarget?.scope === "remote"
+    ? filesystemFederationTarget
+    : undefined;
+  const { health: remoteFileTargetHealth } = useFederationHealth({
+    desktopApi: props.desktopApi,
+    enabled: remoteFileTarget !== undefined,
+    suspended: remoteFileTarget === undefined,
+  });
+  const remoteFileTargetInstanceId = remoteFileTarget?.instanceId;
+  const remoteFilePushTarget = useMemo(
+    () => remoteFileTargetInstanceId
+      ? resolveRemoteFilePushTarget(remoteFileTargetHealth, remoteFileTargetInstanceId)
+      : undefined,
+    [remoteFileTargetHealth, remoteFileTargetInstanceId],
+  );
+  // Owner path → the local file it was copied from, so dropping the same
+  // file again reuses the copy that is already in the tray.
+  const remoteCopySourcesRef = useRef(new Map<string, string>());
+  const canPushRemoteFiles = Boolean(
+    remoteFilePushTarget
+      && props.desktopApi?.pushComposerFile
+      && canPushToRemoteTarget(remoteFilePushTarget),
+  );
+  const remoteFileUploads = useRemoteFileUploads({
+    desktopApi: props.desktopApi,
+    target: remoteFileTarget,
+    scopeKey: composerScopeKey,
+    onUploaded: (files) => {
+      for (const file of files) {
+        remoteCopySourcesRef.current.set(file.path, file.sourcePath);
+      }
+      attachFilePaths(files.map((file) => file.path));
+    },
+  });
+  // Why the native file actions are off here, or undefined when they work.
+  const nativeFilePickerBlockedReason = !filesystemFederationTarget
+    ? undefined
+    : canPushRemoteFiles
+      ? undefined
+      : (remoteFilePushTarget && describeRemoteFilePushTooltip(remoteFilePushTarget))
+        ?? REMOTE_NATIVE_PICKER_TOOLTIP;
   // Per-attachment content signature (`<size>:<hash>`) cache used to reject
   // exact-duplicate pastes. Computed lazily on first use and kept only in
   // memory — signatures are never part of the persisted draft snapshot.
@@ -3132,6 +3383,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [activeDirectoryRefIndex, setActiveDirectoryRefIndex] = useState(0);
   const [activeHashReferenceIndex, setActiveHashReferenceIndex] = useState(0);
   const [dismissedAutocompleteKey, setDismissedAutocompleteKey] = useState<string>();
+
+  // A settled marker is dropped, so a later runtime change (another window
+  // returning the thread to its old environment) is not read as this
+  // selection still catching up.
+  useEffect(() => {
+    if (!threadEnvSelecting?.applied) {
+      return;
+    }
+    const runtimeEnvironmentId =
+      props.thread?.source === threadEnvSelecting.backend
+      && props.thread.id === threadEnvSelecting.threadId
+        ? props.thread.codexEnvironmentRuntime?.environmentId
+        : undefined;
+    if (
+      runtimeEnvironmentId === threadEnvSelecting.environmentId
+      || runtimeEnvironmentId !== threadEnvSelecting.previousEnvironmentId
+    ) {
+      setThreadEnvSelecting((current) =>
+        current === threadEnvSelecting ? undefined : current,
+      );
+    }
+  }, [props.thread, threadEnvSelecting]);
 
   useEffect(() => {
     setAgentThreadError(undefined);
@@ -3235,16 +3508,37 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       const commandName = command.name.startsWith("/")
         ? command.name.slice(1)
         : command.name;
+      // Claude runs `/compact` itself when it arrives as a prompt; the
+      // compaction API below is Codex's.
       return (
         commandName === "compact" &&
+        command.backend !== "claude" &&
         (!props.thread || !command.backend || command.backend === props.thread.source)
       );
     })
+  );
+  const supportsForkCommand = Boolean(
+    !isLaunchpad
+    && props.thread
+    && backend?.capabilities.forkThread
+    && props.onForkThread,
+  );
+  const supportsSubthreadCommand = Boolean(
+    !isLaunchpad && props.thread && props.onCreateSubthread,
   );
   const supportsMcpInventory =
     !isLaunchpad
     && props.thread?.source === "codex"
     && Boolean(props.onShowMcpInventory);
+  // No `/unlock`: a locked thread's composer is disabled, and its lock card
+  // carries Unlock.
+  const supportsLockCommand =
+    !isLaunchpad
+    && Boolean(props.thread)
+    && Boolean(props.onLockThread)
+    // A peer's thread locks only where the owner grants turn control, as in
+    // the sidebar's menu.
+    && (props.thread?.federation?.capabilities?.includes("turn_control") ?? true);
 
   const selectionStart = Math.min(
     inputRef.current?.selectionStart ?? draft.length,
@@ -3635,6 +3929,24 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     draft.trim().length > 0 || skillTokens.length > 0;
   const queuedTurn = queuedTurns[0];
   const nextReleasableQueuedTurn = getNextReleasableQueuedTurn(queuedTurns);
+  const ownerCanMoveQueuedTurns = queuedTurnOwnerCanMove(props.desktopApi, props.thread);
+  // The composer renders on every keystroke; the rows change with the queue.
+  const queuedReorderRows = useMemo(
+    () => queuedTurns.map((queued): QueuedReorderRow => ({
+      id: queued.id,
+      title: queued.title ?? formatDraftPreview(queued),
+      group: queuedReorderGroup(queued, scheduleNow, ownerCanMoveQueuedTurns),
+    })),
+    [queuedTurns, scheduleNow, ownerCanMoveQueuedTurns],
+  );
+  const queuedReorder = useQueuedRowReorder({
+    rows: queuedReorderRows,
+    onMove: (id, toIndex) =>
+      moveQueuedTurn(id, queuedMoveAnchor(queuedReorderRows.map((row) => row.id), id, toIndex)),
+  });
+  const queuedBandHasMovableRow = queuedTurns.some((queued) =>
+    queuedReorder.canMove(queued.id)
+  );
   const futureScheduledDraftSendAt = getFutureScheduledSendAt(
     scheduledDraftSendAt,
     scheduleNow,
@@ -3788,6 +4100,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
     draftStore.set(scopeKey, state);
   };
+  const requestOwner = (target: FederationTarget | undefined): string | undefined =>
+    target?.scope === "remote" ? target.instanceId : undefined;
+  const composerRequestOwner = requestOwner(props.thread?.federation?.ref.target ?? readRendererFederationTarget());
   useEffect(() => {
     const submission = props.replySubmission;
     if (!submission || appliedReplySubmissionId.current === submission.id) {
@@ -3796,6 +4111,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (
       submission.threadId !== props.thread?.id
       || submission.backend !== props.thread?.source
+      || requestOwner(submission.federationTarget ?? readRendererFederationTarget()) !== composerRequestOwner
     ) {
       appliedReplySubmissionId.current = submission.id;
       props.onReplySubmissionSettled?.(submission.id, false);
@@ -3811,7 +4127,66 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       .then((accepted) => props.onReplySubmissionSettled?.(submission.id, accepted));
     // submitReplyText is recreated each render; the id guard sends once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.replySubmission, props.disabled, props.thread?.id, props.thread?.source]);
+  }, [props.replySubmission, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
+  // A mouse click on a sidebar row. The request can arrive before this
+  // composer shows the clicked thread, or while it is still disabled, so it
+  // waits for readiness and the editor's scope transition to commit. It yields
+  // when focus has moved on from the row, so a slow load never pulls the
+  // operator out of a field they went to since.
+  const handledFocusRequestIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.focusRequest;
+    if (
+      !request
+      || handledFocusRequestIdRef.current === request.id
+      || !props.thread
+      || threadSummaryIdentityKey(props.thread) !== request.threadKey
+      || props.disabled
+      || editorScope.scopeKey !== composerScopeKey
+      || !inputRef.current
+    ) {
+      return;
+    }
+    handledFocusRequestIdRef.current = request.id;
+    if (document.activeElement === request.origin) {
+      inputRef.current.focus({ synchronous: true });
+    }
+    props.onFocusRequestHandled?.(request.id);
+  }, [props.focusRequest, props.onFocusRequestHandled, props.thread, props.disabled, editorScope.scopeKey, composerScopeKey]);
+  const appliedReviewRequestId = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.reviewRequest;
+    if (!request || appliedReviewRequestId.current === request.id) {
+      return;
+    }
+    if (
+      request.threadId !== props.thread?.id
+      || request.backend !== props.thread?.source
+      || requestOwner(request.federationTarget ?? readRendererFederationTarget()) !== composerRequestOwner
+    ) {
+      appliedReviewRequestId.current = request.id;
+      return;
+    }
+    if (props.disabled) return;
+    appliedReviewRequestId.current = request.id;
+    if (reviewConfig) {
+      inputRef.current?.focus();
+      return;
+    }
+    // A draft in progress is parked in the recovery journal, where ArrowUp
+    // brings it back, rather than overwritten by the review command.
+    abandonComposerDraftSnapshot(composerScopeKey);
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: "/review",
+      expectedSkillTokensSignature: getComposerSkillTokensSignature([]),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    enterReviewComposer();
+    requestAnimationFrame(() => inputRef.current?.focus());
+    // The helpers are recreated each render; the id guard opens once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.reviewRequest, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
@@ -4281,6 +4656,52 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setQueuedTurnsState(nextQueuedTurns);
     }
   };
+  /**
+   * Moves the active scope's row `id` in front of row `beforeId` (to the end
+   * without one). A row the owner's FIFO dispatches moves there as well. The
+   * band shows the new order at once and `pendingMove` holds it there until
+   * the owner answers; a refusal puts the owner's order back.
+   */
+  const moveQueuedTurn = (id: string, beforeId: string | undefined): void => {
+    const scopeKey = composerScopeKey;
+    const plan = planQueuedTurnMove(
+      isQueuedTurnStoreScope(scopeKey)
+        ? draftStore.getQueuedTurns(scopeKey)
+        : queuedTurns,
+      id,
+      beforeId,
+    );
+    if (!plan) return;
+    saveQueuedTurnSnapshots(scopeKey, plan.next);
+    setQueuedTurnsState(plan.next);
+    setSendError(undefined);
+    if (!plan.queueEntryId) return;
+    const federationTarget =
+      props.thread?.federation?.ref.target
+      ?? readRendererFederationTarget();
+    void requestOwnerQueuedTurnMove({
+      desktopApi: props.desktopApi,
+      federationTarget,
+      queueEntryId: plan.queueEntryId,
+      beforeQueueEntryId: plan.beforeQueueEntryId,
+      plannedOrder: plan.plannedOrder,
+    }).then((answer) => {
+      if (!isQueuedTurnStoreScope(scopeKey)) return;
+      const settled = settleQueuedTurnMove(
+        draftStore.getQueuedTurns(scopeKey),
+        id,
+        plan.requestId,
+        answer,
+        plan.ownerOrder,
+      );
+      // The row started or was removed, or a later move of it settles it.
+      if (!settled) return;
+      saveQueuedTurnSnapshots(scopeKey, settled);
+      if (activeComposerScopeKeyRef.current !== scopeKey) return;
+      setQueuedTurnsState(settled);
+      if (answer.failure) setSendError(answer.failure);
+    });
+  };
   const preserveCancelledQueuedTurnInScope = (
     scopeKey: string,
     queued: QueuedTurnDraft,
@@ -4386,6 +4807,20 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     } catch (error) {
       reportError(error instanceof Error ? error.message : String(error));
       return "failed";
+    }
+  };
+  /** Runs one owner-side Edit or Delete per row; a click while one runs is dropped. */
+  const runQueuedRowAction = async (
+    queued: QueuedTurnDraft,
+    action: () => Promise<void>,
+  ): Promise<void> => {
+    const inFlight = queuedRowActionIdsRef.current;
+    if (inFlight.has(queued.id)) return;
+    inFlight.add(queued.id);
+    try {
+      await action();
+    } finally {
+      inFlight.delete(queued.id);
     }
   };
   const acknowledgeQueuedFailure = (queued: QueuedTurnDraft): void => {
@@ -4684,12 +5119,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     if (supportsMcpInventory) {
       localCommands.push(...CODEX_MCP_SLASH_COMMANDS);
     }
+    if (supportsForkCommand || supportsSubthreadCommand) {
+      localCommands.push(FORK_SLASH_COMMAND);
+    }
+    if (supportsLockCommand) {
+      localCommands.push(LOCK_SLASH_COMMAND);
+    }
     return [...localCommands, ...commands];
   }, [
     props.backends,
     props.providerCommands,
+    supportsLockCommand,
     supportsMcpInventory,
     supportsReview,
+    supportsForkCommand,
+    supportsSubthreadCommand,
   ]);
   const filteredSlashCommands = useMemo(() => {
     if (!slashTrigger) {
@@ -4984,6 +5428,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   );
   const parsedReviewCommand = supportsReview ? parseReviewCommand(draft) : undefined;
   const isBareReviewCommand = draft.trim() === "/review";
+  // Only a composer that can act on /fork claims it. A launchpad, or a host
+  // that wires no fork action, sends "/fork …" on as ordinary text.
+  const forkCommand = supportsForkCommand || supportsSubthreadCommand
+    ? parseForkCommand(draft)
+    : undefined;
   const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
   const mcpInventoryDetail: CodexMcpInventoryDetail | undefined =
     supportsMcpInventory && draft.trim().toLowerCase() === "/mcp"
@@ -4991,6 +5440,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : supportsMcpInventory && draft.trim().toLowerCase() === "/mcp verbose"
         ? "full"
         : undefined;
+  const lockCommandNote = supportsLockCommand
+    ? parseLockCommandNote(draft)
+    : undefined;
   const isReviewComposerOpen = Boolean(
     supportsReview && reviewConfig && parsedReviewCommand
   );
@@ -5168,13 +5620,25 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       // Nothing to load into it. Returning to a starting thread that holds
       // a follow-up swaps content, which needs the remount.
       && !draftStore.hasDraftContent(composerScopeKey);
-    if (!followsSubmission) {
-      setEditorScopeKey((mounted) =>
-        mounted === composerScopeKey
+    // The second exception: the launchpad this editor was typing into just
+    // became its thread, and `handoffLaunchpadComposer` already moved the
+    // draft to the thread's scope. The editor goes with it. A rebuild would
+    // drop the caret and any keys typed while the new editor mounted.
+    const followsMaterialization =
+      Boolean(props.thread)
+      && resolveLaunchpadComposerScope(draftStore, previousScopeKey)
+        === composerScopeKey;
+    // Track the committed owner separately from the React key: an ordinary
+    // switch replaces the editor, while the two handoffs above reuse it.
+    // Focus requests must wait for this commit in either case.
+    setEditorScope((mounted) => ({
+      key: followsSubmission || followsMaterialization
+        ? mounted.key
+        : mounted.key === composerScopeKey
           ? `${composerScopeKey}#${++editorRemountSequenceRef.current}`
           : composerScopeKey,
-      );
-    }
+      scopeKey: composerScopeKey,
+    }));
     const current = pasteScopeRef.current;
     if (retargetingDraft && current.key === previousScopeKey) {
       current.key = composerScopeKey;
@@ -5515,6 +5979,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ? (event.notification.params as {
               displayText?: unknown;
               inputUpdated?: unknown;
+              title?: unknown;
               errorMessage?: unknown;
               manualReleaseRequired?: unknown;
               queueEntryId?: unknown;
@@ -5553,6 +6018,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           && typeof turnQueueRecord.errorMessage === "string"
             ? turnQueueRecord.errorMessage
             : undefined;
+        const title =
+          typeof turnQueueRecord.title === "string" && turnQueueRecord.title
+            ? turnQueueRecord.title
+            : undefined;
         if (matchingIndex >= 0) {
           const next = mirrorCurrent.map((queued, index) =>
             index === matchingIndex
@@ -5562,6 +6031,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     && typeof turnQueueRecord.displayText === "string"
                     ? { text: turnQueueRecord.displayText }
                     : {}),
+                  // An input edit retires the old title; a title refresh
+                  // brings the new one. Admission events carry neither.
+                  ...(title
+                    ? { title }
+                    : turnQueueRecord.inputUpdated === true
+                      ? { title: undefined }
+                      : {}),
                   manualReleaseRequired,
                   holdReason,
                 }
@@ -5577,6 +6053,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 : {}),
               manualReleaseRequired,
               holdReason,
+              ...(title ? { title } : {}),
               text:
                 typeof turnQueueRecord.displayText === "string"
                   ? turnQueueRecord.displayText
@@ -6008,7 +6485,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // closed by then, so reviewConfig is empty and would silently downgrade the
     // review to the thread's provider. Otherwise take the live panel state,
     // captured before it clears below.
-    const submittedReviewer = reviewCommand.reviewer ?? reviewConfig?.reviewer;
+    const pickedReviewer = reviewCommand.reviewer ?? reviewConfig?.reviewer;
+    // A thread whose provider cannot review sends the row's default reviewer;
+    // omitting it would ask the thread's own provider to review.
+    const submittedReviewer =
+      pickedReviewer
+      ?? (reviewerSelection.fallback && reviewerSelection.backend
+        ? { backend: reviewerSelection.backend }
+        : undefined);
     // A queued reviewer already carries resolved values; only the live panel
     // needs its chips resolved against the picked provider's catalog.
     const submittedModel = reviewCommand.reviewer
@@ -6054,7 +6538,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 : {}),
             }),
       });
-      if (submittedReviewer) {
+      if (pickedReviewer) {
         // Only an explicit pick is worth replaying; recording inherited
         // settings would push real picks off the list.
         void props.desktopApi?.recordModelSettingsRecent?.({
@@ -6066,7 +6550,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             : {}),
           scope: "review",
           recent: {
-            backend: submittedReviewer.backend,
+            backend: pickedReviewer.backend,
             ...(submittedModel ? { model: submittedModel } : {}),
             ...(submittedReasoningEffort
               ? { reasoningEffort: submittedReasoningEffort }
@@ -6075,6 +6559,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         })?.catch(() => undefined);
       }
       inFlightReviewSubmissionKeyRef.current = undefined;
+      props.onReviewStarted?.(threadSummaryIdentityKey(props.thread), props.reviewRequest?.id);
       if (updateActiveTurnId(response.turnId, { review: true })) {
         props.onActiveTurnIdChange?.(response.turnId);
       }
@@ -6208,6 +6693,63 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
   };
 
+  const submitForkCommand = async (command: ComposerForkCommand): Promise<void> => {
+    if (props.disabled || forkSubmissionInFlightRef.current) return;
+    if (command.error) {
+      setSendError(command.error);
+      return;
+    }
+    if (imageAttachments.length > 0 || fileAttachments.length > 0 || skillTokens.length > 0) {
+      setSendError("/fork does not accept attachments or skill references.");
+      return;
+    }
+    const thread = props.thread;
+    const action = command.noHistory ? props.onCreateSubthread : props.onForkThread;
+    if (!thread || isLaunchpad || !action) {
+      setSendError("/fork is only available in an existing thread.");
+      return;
+    }
+    if (!command.noHistory && !supportsForkCommand) {
+      setSendError("This provider cannot fork history. Use /fork --no-history to start a sub-thread.");
+      return;
+    }
+
+    const submittedScopeKey = composerScopeKey;
+    const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
+    forkSubmissionInFlightRef.current = true;
+    setForkingScopeKey(submittedScopeKey);
+    setSendError(undefined);
+    try {
+      const mode: ThreadWorkspaceMode = command.worktree === "new"
+        ? "new-worktree"
+        : thread.linkedDirectories.some((directory) => directory.kind === "worktree")
+          ? "same-worktree"
+          : "local";
+      if (mode === "new-worktree"
+        && !await props.readThreadWorktreeAvailability?.(thread)) {
+        if (latestDraftSnapshotRef.current.scopeKey === submittedScopeKey) {
+          setSendError("This thread cannot create a new worktree. Use /fork --wt same.");
+        }
+        return;
+      }
+      if (!await action(thread, mode)) return;
+      recordComposerDraftHistory(submittedScopeKey, submittedSnapshot, "sent");
+      // Navigation may already have selected the child; clear only the source draft.
+      if (latestDraftSnapshotRef.current.scopeKey === submittedScopeKey) {
+        resetComposerDraftAndState(submittedScopeKey);
+      } else {
+        clearComposerDraftSnapshot(submittedScopeKey);
+      }
+    } catch (error) {
+      if (latestDraftSnapshotRef.current.scopeKey === submittedScopeKey) {
+        setSendError(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      forkSubmissionInFlightRef.current = false;
+      setForkingScopeKey(undefined);
+    }
+  };
+
   const showMcpInventory = (detail: CodexMcpInventoryDetail): void => {
     if (imageAttachments.length > 0 || fileAttachments.length > 0) {
       setSendError("/mcp does not accept attachments.");
@@ -6218,6 +6760,34 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
+    consumeLocalCommandDraft();
+    props.onShowMcpInventory(detail);
+    requestAnimationFrame(() => inputRef.current?.focus());
+  };
+
+  /** Lock this thread from `/lock [note]`; the draft clears once it holds. */
+  const lockThreadFromCommand = async (note: string): Promise<void> => {
+    if (imageAttachments.length > 0 || fileAttachments.length > 0) {
+      setSendError("/lock does not accept attachments.");
+      return;
+    }
+    if (!props.onLockThread) {
+      setSendError("Locking is not available for this thread.");
+      return;
+    }
+    try {
+      await props.onLockThread(note);
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    // Cleared only after the lock holds: a refused lock keeps the note to
+    // retry, and a held one must not reappear as a draft after unlock.
+    consumeLocalCommandDraft();
+  };
+
+  /** Clears a local command's draft and records it in draft history as sent. */
+  const consumeLocalCommandDraft = (): void => {
     const submittedScopeKey = composerScopeKey;
     const submittedSnapshot = latestDraftSnapshotRef.current.snapshot;
     const emptySnapshot = createEmptyComposerDraftSnapshot();
@@ -6242,8 +6812,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     });
     setSendError(undefined);
     recordComposerDraftHistory(submittedScopeKey, submittedSnapshot, "sent");
-    props.onShowMcpInventory(detail);
-    requestAnimationFrame(() => inputRef.current?.focus());
   };
 
   /**
@@ -7215,9 +7783,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           cwd: reviewCommand.cwd,
           // Carry the picked reviewer through the queue so releasing it later
           // does not silently fall back to the thread's own provider.
-          ...(reviewConfig?.reviewer
+          ...((reviewConfig?.reviewer || reviewerSelection.fallback)
+            && reviewerSelection.backend
             ? {
-                reviewBackend: reviewConfig.reviewer.backend,
+                reviewBackend: reviewerSelection.backend,
                 model: reviewerSelection.model?.id,
                 reasoningEffort: reviewerSelection.reasoningEffort,
               }
@@ -7994,6 +8563,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     mode: "default" | "steer" = "default",
     options?: { restoreComposerFocus?: boolean },
   ): Promise<void> => {
+    // The status line under the tray says why: the message would reference
+    // files the owner does not have yet.
+    if (remoteFileUploads.uploads.length > 0) {
+      return;
+    }
+    if (forkCommand) {
+      await submitForkCommand(forkCommand);
+      return;
+    }
     const reviewCommand = parsedReviewCommand;
     if (turnPayloadPreparationInFlightRef.current || sendPreparationRef.current) {
       return;
@@ -8045,6 +8623,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     if (mcpInventoryDetail) {
       showMcpInventory(mcpInventoryDetail);
+      return;
+    }
+    if (lockCommandNote !== undefined) {
+      await lockThreadFromCommand(lockCommandNote);
       return;
     }
 
@@ -8429,7 +9011,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    if (shouldQueueThreadSubmit()) {
+    if (command.id !== FORK_SLASH_COMMAND.id && shouldQueueThreadSubmit()) {
       void queueCurrentDraft();
       return;
     }
@@ -8661,6 +9243,48 @@ export const Composer = memo(function Composer(props: ComposerProps) {
    * at consecutive indexes so the serialized draft reads
    * `chip␠chip␠…chip␠after` with exactly one space after every chip.
    */
+  /** Drop the `@query` an autocomplete pick would have replaced. */
+  const removeReferenceTrigger = (): void => {
+    if (!inputRef.current) {
+      return;
+    }
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const refTrigger =
+      findDirectoryReferenceTrigger(draft, selectionStart)
+      ?? findDirectoryReferenceTrigger(draft, draft.length);
+    if (!refTrigger) {
+      return;
+    }
+    const before = draft.slice(0, refTrigger.start);
+    const nextDraft = `${before}${draft.slice(refTrigger.end)}`;
+    const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
+      currentDraft: draft,
+      nextDraft,
+      skillTokens,
+    });
+    // The same protected update as applyFileReferences below.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveDirectoryRefIndex(0);
+    });
+    requestAnimationFrame(() => {
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(before.length, before.length);
+    });
+  };
+
   const applyFileReferences = (paths: string[]): void => {
     if (!inputRef.current || paths.length === 0) {
       return;
@@ -8735,11 +9359,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
   /** "@ → Add file…" action: OS file picker → file-reference chips. */
   const applyPickedFileReferences = async (): Promise<void> => {
-    if (filesystemFederationTarget) {
+    if (filesystemFederationTarget && !canPushRemoteFiles) {
       return;
     }
     const result = await props.desktopApi?.pickFileFromDisk?.();
     if (!result || result.canceled || result.paths.length === 0) {
+      return;
+    }
+    if (filesystemFederationTarget) {
+      // An inline chip would have to wait for the copy before it has a path
+      // to name, so a remote thread's picked files join the tray instead,
+      // and the `@` query that opened the menu goes away as a chip's would.
+      removeReferenceTrigger();
+      startRemoteFileUploads(result.paths);
       return;
     }
     applyFileReferences(result.paths);
@@ -9053,11 +9685,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
    * Toasts once per batch for unresolvable paths.
    */
   const attachFiles = (files: File[]): void => {
-    if (filesystemFederationTarget) {
-      showComposerNotice({
-        title: "Local files unavailable",
-        message: REMOTE_NATIVE_PICKER_TOOLTIP,
-      });
+    if (filesystemFederationTarget && !canPushRemoteFiles) {
+      showRemoteFilePushRefusal();
       return;
     }
     let unresolvedCount = 0;
@@ -9077,16 +9706,67 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         message: "Could not resolve a path for the dropped file.",
       });
     }
+    if (filesystemFederationTarget) {
+      startRemoteFileUploads(paths);
+      return;
+    }
     attachFilePaths(paths);
+  };
+
+  const showRemoteFilePushRefusal = (): void => {
+    const refusal = remoteFilePushTarget
+      && describeRemoteFilePushRefusal(remoteFilePushTarget);
+    showComposerNotice(refusal ?? {
+      title: "Local files unavailable",
+      message: REMOTE_NATIVE_PICKER_TOOLTIP,
+    });
+  };
+
+  /**
+   * Copy files from this machine to the remote thread's owner. Each one shows
+   * as an uploading pill and joins the tray, at the owner's path, once the
+   * copy lands. Shares the tray's per-message cap.
+   */
+  const startRemoteFileUploads = (paths: string[]): void => {
+    const pending = new Set([
+      ...remoteFileUploads.uploads.map((upload) => upload.sourcePath),
+      ...fileAttachments.flatMap((attachment) => {
+        const source = remoteCopySourcesRef.current.get(attachment.path);
+        return source ? [source] : [];
+      }),
+    ]);
+    const fresh = [...new Set(paths)].filter((path) => path && !pending.has(path));
+    if (fresh.length === 0) {
+      return;
+    }
+    const remaining = MAX_COMPOSER_FILE_ATTACHMENTS
+      - fileAttachments.length
+      - remoteFileUploads.uploads.length;
+    if (fresh.length > remaining) {
+      showComposerNotice({
+        title: "Attachment limit reached",
+        message: `You can attach up to ${MAX_COMPOSER_FILE_ATTACHMENTS} files per message.`,
+      });
+    }
+    remoteFileUploads.start(
+      fresh.slice(0, Math.max(0, remaining)).map((path) => ({
+        label: fileLabelFromPath(path),
+        sourcePath: path,
+      })),
+    );
   };
 
   /** "+"-menu "Add file…" action: OS file picker → tray pills. */
   const attachPickedFilesToTray = async (): Promise<void> => {
-    if (filesystemFederationTarget) {
+    if (filesystemFederationTarget && !canPushRemoteFiles) {
       return;
     }
     const result = await props.desktopApi?.pickFileFromDisk?.();
     if (!result || result.canceled || result.paths.length === 0) {
+      return;
+    }
+    if (filesystemFederationTarget) {
+      startRemoteFileUploads(result.paths);
       return;
     }
     attachFilePaths(result.paths);
@@ -9629,7 +10309,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
+    const selecting: ThreadEnvSelecting = {
+      backend: props.thread.source,
+      environmentId,
+      previousEnvironmentId: props.thread.codexEnvironmentRuntime?.environmentId,
+      threadId: props.thread.id,
+    };
     setEnvironmentError(undefined);
+    setThreadEnvSelecting(selecting);
     props.onPendingStatusChange?.(
       environmentId ? "Selecting environment" : "Clearing environment",
     );
@@ -9642,7 +10329,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         environmentId,
         actionId,
       });
+      // Only this call's own marker: a later selection owns the chip now.
+      setThreadEnvSelecting((current) =>
+        current === selecting ? { ...selecting, applied: true } : current,
+      );
     } catch (error) {
+      setThreadEnvSelecting((current) =>
+        current === selecting ? undefined : current,
+      );
       setEnvironmentError({
         message: error instanceof Error ? error.message : String(error),
         selectedEnvironmentId: environmentId,
@@ -9721,11 +10415,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const modelOptions = backend?.launchpadOptions?.models ?? [];
   const showOlderCodexModelsUnderOther = backend?.kind === "codex"
     && modelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
-  const otherModelOptions = showOlderCodexModelsUnderOther
+  const otherModelOptions = backend?.kind === "claude"
+    ? modelOptions.filter((model) => model.other)
+    : showOlderCodexModelsUnderOther
     ? modelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
     : [];
   const visibleModelOptions = otherModelOptions.length
-    ? modelOptions.filter((model) => !/^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
+    ? modelOptions.filter((model) => !otherModelOptions.includes(model))
     : modelOptions;
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
@@ -9833,6 +10529,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const reviewerSelection = resolveReviewerSelection({
     backends: props.backends,
     override: reviewConfig?.reviewer,
+    reviewerBackends: reviewerOverridesSupported ? reviewerBackendOptions : [],
     threadBackend: props.thread?.source,
     threadModel: selectedModelOption?.id,
     threadReasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
@@ -9939,6 +10636,30 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     Boolean(backend?.capabilities.steerTurn) &&
     selectedModelOption?.supportsSteering !== false;
   const launchpadSubmitting = isLaunchpad && (sending || Boolean(props.launchpadMaterializing));
+  // A launchpad with a parent starts a sub-thread. Detaching clears the
+  // parent, and the copy goes back to a plain new thread.
+  const subthreadParentTitle = isLaunchpad && props.launchpad?.parentThreadId
+    ? props.launchpad.parentThreadTitle || props.launchpad.parentThreadId
+    : undefined;
+  // A Discard asked from outside, run as the Cancel button runs it. Each
+  // request runs once, and only against the launchpad it names.
+  const handledLaunchpadCancelRequestIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const request = props.launchpadCancelRequest;
+    if (!request || handledLaunchpadCancelRequestIdRef.current === request.id) {
+      return;
+    }
+    handledLaunchpadCancelRequestIdRef.current = request.id;
+    if (
+      !props.launchpad
+      || props.launchpad.directoryKey !== request.directoryKey
+      || launchpadSubmitting
+    ) {
+      return;
+    }
+    abandonComposerDraftSnapshot(composerScopeKey);
+    props.onCancelLaunchpad?.(request.directoryKey);
+  }, [props.launchpadCancelRequest]);
   const fiveHourResetAt = getFiveHourRateLimitResetAt({
     backend,
     now: scheduleNow,
@@ -9962,8 +10683,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : []),
   ];
   const sendButtonDisabled =
+    forking ||
     preparingSend ||
     props.disabled ||
+    remoteFileUploads.uploads.length > 0 ||
     steering ||
     (!activeTurnId && sending && !isLaunchpad) ||
     (!hasComposerContent &&
@@ -9974,7 +10697,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     launchpadSubmitting ||
     (!props.thread && !props.launchpad) ||
     Boolean(props.launchpad && !props.onMaterializeLaunchpad) ||
-    isCompactCommand;
+    isCompactCommand || Boolean(forkCommand) ||
+    lockCommandNote !== undefined;
   // Only surface the schedule caret where scheduling actually applies. In the
   // compact command or a thread-less composer there is nothing to schedule,
   // so the split collapses to a plain Send pill instead of parking a
@@ -9985,7 +10709,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     Boolean(
       props.thread
       || (props.launchpad && props.onMaterializeLaunchpad)
-    ) && !isCompactCommand;
+    ) && !isCompactCommand && !forkCommand && lockCommandNote === undefined;
   // A pending draft schedule (e.g. after editing a scheduled item) surfaces as
   // a checkable toggle between the caret and Send rather than hijacking the
   // Send label into a countdown. Armed → Send keeps the schedule; unarmed →
@@ -10000,7 +10724,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const effectiveScheduledSendAt = scheduleArmed
     ? futureScheduledDraftSendAt
     : undefined;
-  const submitButtonLabel = preparingSend
+  const turnSubmitButtonLabel = preparingSend
     ? "Preparing…"
     : launchpadSubmitting ||
       activeTurnId ||
@@ -10014,8 +10738,29 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             ? "Starting…"
             : "Sending…"
           : props.launchpad
-            ? "Start thread"
+            ? subthreadParentTitle ? "Start sub-thread" : "Start thread"
             : "Send";
+  const submitButtonLabel = forking
+    ? "Forking…"
+    : forkCommand
+      ? "Fork"
+      : turnSubmitButtonLabel;
+  // The command menu owns the "/fork" row until it closes; after that the
+  // input draws the parameters still available as muted text after the caret.
+  const forkInlineHint =
+    (supportsForkCommand || supportsSubthreadCommand)
+    && autocompleteKind !== "slash"
+    && !forking
+      ? forkCommandHint(draft)
+      : undefined;
+  const forkInlineCompletion = forkInlineHint
+    ? forkCommandCompletion(draft)
+    : undefined;
+  // Queue is the primary mid-turn; the steer chord is its keyboard-only
+  // sibling, so the button is where it gets named.
+  const submitButtonSteerHint =
+    submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
+  const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -10087,10 +10832,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : selectedThreadCodexEnvironmentOption?.actions ?? [];
   const selectedThreadCodexEnvironmentForAction =
     selectedThreadCodexEnvironmentOption ??
-    (props.thread?.codexEnvironmentRuntime
+    (props.thread?.codexEnvironmentRuntime?.environmentId
       ? {
           id: props.thread.codexEnvironmentRuntime.environmentId,
-          name: props.thread.codexEnvironmentRuntime.environmentName,
+          name: props.thread.codexEnvironmentRuntime.environmentName
+            ?? props.thread.codexEnvironmentRuntime.environmentId,
           sourcePath: props.thread.codexEnvironmentRuntime.sourcePath ?? "",
           actions: threadCodexEnvironmentActions,
         }
@@ -10098,9 +10844,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const selectedThreadCodexActionId = resolveSelectedCodexEnvironmentActionId({
     environment: selectedThreadCodexEnvironmentForAction,
     actionId:
-      props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId?.[
-        props.thread.codexEnvironmentRuntime.environmentId
-      ],
+      props.thread?.codexEnvironmentRuntime?.environmentId
+        ? props.thread.codexEnvironmentRuntime.selectedActionIdByEnvironmentId?.[
+            props.thread.codexEnvironmentRuntime.environmentId
+          ]
+        : undefined,
     actionIdByEnvironmentId:
       props.thread?.codexEnvironmentRuntime?.selectedActionIdByEnvironmentId,
   });
@@ -10120,6 +10868,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     threadEnvActionStarting,
     currentThreadEnvActionStartingKey,
   );
+  // The Environment chip is busy while a selection is in flight here, and
+  // while any setup run streams for this thread. Main records the runtime
+  // only after setup exits, so without this the chip keeps reading the old
+  // value (often "No environment") and stays clickable beside a running
+  // setup row. The stream also covers a run this composer did not start,
+  // such as setup still finishing for a thread whose launch just created it.
+  const threadRuntimeEnvironmentId =
+    props.thread?.codexEnvironmentRuntime?.environmentId;
+  const threadEnvSelectingSettled =
+    threadEnvSelecting?.applied === true
+    && (
+      threadRuntimeEnvironmentId === threadEnvSelecting.environmentId
+      || threadRuntimeEnvironmentId !== threadEnvSelecting.previousEnvironmentId
+    );
+  const currentThreadEnvSelecting =
+    props.thread
+    && threadEnvSelecting?.backend === props.thread.source
+    && threadEnvSelecting.threadId === props.thread.id
+    && !threadEnvSelectingSettled
+      ? threadEnvSelecting
+      : undefined;
+  const runningThreadEnvSetup =
+    props.thread
+    && props.environmentSetup?.phase === "setup"
+    && props.environmentSetup.status === "running"
+      ? props.environmentSetup
+      : undefined;
+  const threadEnvironmentBusy = Boolean(
+    (currentThreadEnvSelecting && !currentThreadEnvSelecting.applied)
+    || runningThreadEnvSetup,
+  );
+  const threadEnvironmentValue = currentThreadEnvSelecting
+    ? currentThreadEnvSelecting.environmentId ?? ""
+    : runningThreadEnvSetup?.environmentId
+      ?? props.thread?.codexEnvironmentRuntime?.environmentId
+      ?? "";
   const threadWorkspace = props.thread ? getThreadWorkspace(props.thread) : undefined;
   const showPrAutoDispatchToggle = Boolean(
     props.thread && getPrimaryWorkspaceRepository(props.thread),
@@ -10541,18 +11325,25 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   // durable text and attachments while federation reconnects.
   const composerDisabled = false;
   const launchpadMachine = props.launchpadMachine;
+  const launchpadMachineChipHost = props.launchpadMachineChipHost;
+  const renderLaunchpadMachineChip = (chip: ReactNode): ReactNode =>
+    launchpadMachineChipHost ? createPortal(chip, launchpadMachineChipHost) : chip;
   const launchpadRemoteMachineLabel = launchpadMachine?.currentInstanceId
     ? launchpadMachine.targets.find(
       (target) => target.instanceId === launchpadMachine.currentInstanceId,
     )?.label ?? launchpadMachine.currentInstanceId
     : undefined;
+  // The reply box doubles as a place to teach one feature at a time.
+  const composerTip = useComposerTip(isLaunchpad ? undefined : composerScopeKey, draft.length === 0);
   const composerPlaceholder = launchpadSubmitting
     ? "Queue a follow-up while this thread starts"
     : isLaunchpad
-    ? `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}${
+    ? `${subthreadParentTitle
+      ? `Start a sub-thread of ${subthreadParentTitle}`
+      : `Start a new thread in ${props.launchpad?.directoryLabel ?? "this directory"}`}${
       launchpadRemoteMachineLabel ? ` on ${launchpadRemoteMachineLabel}` : ""
     }`
-    : "Reply to this thread";
+    : composerTip ?? "Reply to this thread";
   const handleComposerChange = (
     nextDraft: string,
     nextSkillTokens?: ComposerSkillToken[],
@@ -10694,7 +11485,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
       if (event.key === "Enter" && !event.shiftKey && !event.altKey) {
         event.preventDefault();
-        void submitTurn(event.metaKey ? "steer" : "default", {
+        void submitTurn(isSteerShortcut(event) ? "steer" : "default", {
           restoreComposerFocus: true,
         });
       }
@@ -10726,7 +11517,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const hasVisibleAttachments =
     imageAttachments.length > 0
     || visibleFileAttachments.length > 0
-    || pdfPreviewReferences.length > 0;
+    || pdfPreviewReferences.length > 0
+    || remoteFileUploads.uploads.length > 0;
+  const remoteUploadTargetLabel = remoteFilePushTarget?.label ?? "the owning machine";
+  const uploadingRemoteFileCount = remoteFileUploads.uploads.filter(
+    (upload) => upload.status === "uploading",
+  ).length;
+  const failedRemoteFileUploads = remoteFileUploads.uploads.filter(
+    (upload) => upload.status === "failed",
+  );
   // The strip is one gallery: every thumbnail that expands, in the order it
   // is drawn — pasted images, then PDF page previews that are ready. A sent
   // message's images page with the arrow keys; these must too, or the same
@@ -11160,7 +11959,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               {formatDraftPreview(pendingSteer)}
             </span>
           </div>
-          <QueuedImageAttachments attachments={pendingSteer.imageAttachments} />
+          <QueuedImageAttachments
+            attachments={pendingSteer.imageAttachments}
+            large
+            onFallbackFocus={focusComposerInput}
+          />
           <div className="composer__queued-actions">
             {pendingSteer.status === "pending" ? (
               <>
@@ -11309,9 +12112,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           ? "Failed to send"
           : scheduledSendAt
           ? `Scheduled · sends in ${formatScheduledSendCountdown(scheduledSendAt, scheduleNow)}`
-          : index === 0
-            ? "Queued next"
-            : `Queued #${index + 1}`;
+          : undefined;
+        const failed = Boolean(queued.errorMessage || queued.manualReleaseRequired);
+        const movable = queuedReorder.canMove(queued.id);
 
         return (
           <div
@@ -11319,12 +12122,17 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               "composer__queued",
               "composer__queued--message",
               scheduledSendAt ? "composer__queued--scheduled" : "",
-              queued.errorMessage || queued.manualReleaseRequired
-                ? "composer__queued--failed"
-                : "",
+              failed ? "composer__queued--failed" : "",
+              // Rows waiting on an answer keep their actions on screen.
+              failed || scheduledSendAt ? "composer__queued--pinned-actions" : "",
+              queuedBandHasMovableRow ? "composer__queued--reorderable" : "",
+              movable ? "composer__queued--movable" : "",
             ]
               .filter(Boolean)
               .join(" ")}
+            data-queued-reorder-id={queued.id}
+            onKeyDown={(event) => queuedReorder.onKeyDown(event, queued.id)}
+            onPointerDown={(event) => queuedReorder.onPointerDown(event, queued.id)}
             aria-label={
               queued.manualReleaseRequired
                 ? index === 0
@@ -11340,25 +12148,32 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             }
             key={queued.id}
           >
-            <div className="composer__queued-copy">
-              <span className="composer__queued-label" role="status">
-                {queuedLabel}
-              </span>
-              <span className="composer__queued-text">
-                {formatDraftPreview(queued)}
-              </span>
-              {queued.errorMessage ? (
-                <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.errorMessage} />
-              ) : null}
-              {queued.holdReason ? (
-                <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.holdReason} />
-              ) : null}
-            </div>
-            <QueuedImageAttachments attachments={queued.imageAttachments} />
             <QueuedMessageInspector
               load={() => readQueuedMessage(queued)}
               desktopApi={props.desktopApi}
-            >
+              onFallbackFocus={focusComposerInput}
+              leading={queuedBandHasMovableRow ? (
+                // A row that cannot move keeps the slot, so every chevron in
+                // the band stays on one line.
+                movable ? (
+                  <QueuedRowGrip title={queued.title ?? formatDraftPreview(queued)} />
+                ) : (
+                  <span className="composer__queued-grip composer__queued-grip--empty" aria-hidden="true" />
+                )
+              ) : null}
+              detail={
+                queued.errorMessage || queued.holdReason ? (
+                  <div className="composer__queued-detail">
+                    {queued.errorMessage ? (
+                      <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.errorMessage} />
+                    ) : null}
+                    {queued.holdReason ? (
+                      <LinkedTurnFailureMessage scope={failureScope} className="composer__queued-error" message={queued.holdReason} />
+                    ) : null}
+                  </div>
+                ) : null
+              }
+              actions={<>
               {isLaunchpad ? (
                 supportsSteering ? (
                   <button
@@ -11429,10 +12244,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   Send now
                 </button>
               ) : null}
-              <button
-                className="composer__secondary-action"
+              <QueuedRowIconButton
+                label="Edit"
                 disabled={queued.backendQueuePending}
-                type="button"
                 onClick={() => {
                   const editQueuedTurn = (editable = queued): void => {
                     acknowledgeQueuedFailure(queued);
@@ -11469,7 +12283,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     editQueuedTurn();
                     return;
                   }
-                  void (async () => {
+                  void runQueuedRowAction(queued, async () => {
                     let editable: QueuedTurnDraft;
                     let contentHash: string;
                     try {
@@ -11489,22 +12303,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       return;
                     }
                     editQueuedTurn(editable);
-                  })();
+                  });
                 }}
               >
-                Edit
-              </button>
-              <button
-                className="composer__secondary-action"
+                <PencilIcon size={14} />
+              </QueuedRowIconButton>
+              <QueuedRowIconButton
+                label="Delete"
+                tone="danger"
                 disabled={queued.backendQueuePending}
-                type="button"
                 onClick={() => {
                   if (!backendOwned) {
                     acknowledgeQueuedFailure(queued);
                     removeQueuedTurnAt(index);
                     return;
                   }
-                  void (async () => {
+                  void runQueuedRowAction(queued, async () => {
                     const cancellation = await cancelServerManagedQueuedTurn(
                       queued,
                       queuedScopeKey,
@@ -11513,16 +12327,68 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       acknowledgeQueuedFailure(queued);
                       removeQueuedTurnInScope(queuedScopeKey, queued);
                     }
-                  })();
+                  });
                 }}
               >
-                Delete
-              </button>
+                <TrashIcon size={14} />
+              </QueuedRowIconButton>
+              </>}
+            >
+              <span className="composer__queued-label" role="status">
+                {queuedLabel ?? (
+                  <QueuedRowPositionLabel
+                    reorder={queuedReorder}
+                    id={queued.id}
+                    index={index}
+                  />
+                )}
+              </span>
+              {/* Ahead of the title, not after it: the row's actions cover the
+                  end of the line on hover, and stay over it on scheduled,
+                  held and failed rows. Only the title truncates under them. */}
+              <QueuedImageAttachments
+                attachments={queued.imageAttachments}
+                onFallbackFocus={focusComposerInput}
+              />
+              <span
+                className={[
+                  "composer__queued-text",
+                  queued.title ? "" : "composer__queued-text--raw",
+                ].filter(Boolean).join(" ")}
+              >
+                {queued.title ?? formatDraftPreview(queued)}
+              </span>
             </QueuedMessageInspector>
           </div>
         );
       })}
+
+      {/* Last in the band, nearest the input it describes. Hidden once the
+          launchpad is submitted: the starting thread is no longer a draft
+          to detach. */}
+      {subthreadParentTitle && !launchpadSubmitting && !props.launchpadComposerScopeKey ? (
+        <SubthreadSourceRow
+          parentTitle={subthreadParentTitle}
+          onSelectParent={props.onSelectLaunchpadParent
+            ? () => props.onSelectLaunchpadParent?.(props.launchpad!)
+            : undefined}
+          onDetach={props.onDetachLaunchpadParent
+            ? () => {
+                props.onDetachLaunchpadParent?.(props.launchpad!.directoryKey);
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }
+            : undefined}
+        />
+      ) : null}
       </div>
+      {/* Outside the band, which hides itself when it is empty. A bare live
+          region, not role="status": several E2E specs expect the window's
+          only status to be the turn's own. */}
+      <span
+        className="composer__queued-announcer"
+        aria-live="polite"
+        ref={queuedReorder.announcerRef}
+      />
 
       {hasVisibleAttachments ? (
         <div
@@ -11682,6 +12548,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           {visibleFileAttachments.map((attachment) => (
             <AttachmentTooltip
               className="composer__file-attachment"
+              machineLabel={
+                filesystemFederationTarget ? remoteUploadTargetLabel : undefined
+              }
               path={attachment.path}
               key={attachment.id}
             >
@@ -11701,8 +12570,40 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               </button>
             </AttachmentTooltip>
           ))}
+          {remoteFileUploads.uploads.map((upload) => (
+            <RemoteFileUploadPill
+              key={upload.id}
+              targetLabel={remoteUploadTargetLabel}
+              upload={upload}
+              onRemove={() => {
+                remoteFileUploads.remove(upload.id);
+              }}
+              onRetry={() => {
+                remoteFileUploads.retry(upload.id);
+              }}
+            />
+          ))}
         </div>
       ) : null}
+
+      {uploadingRemoteFileCount > 0 ? (
+        <p className="composer__meta" role="status">
+          Copying {uploadingRemoteFileCount === 1
+            ? "1 file"
+            : `${uploadingRemoteFileCount} files`} to {remoteUploadTargetLabel}.
+          {" "}Send waits until {uploadingRemoteFileCount === 1 ? "it finishes" : "they finish"}.
+        </p>
+      ) : null}
+      {failedRemoteFileUploads.map((upload) => (
+        <p
+          className="composer__meta composer__meta--warning"
+          key={upload.id}
+          role="status"
+        >
+          {upload.label} did not copy to {remoteUploadTargetLabel}: {upload.error}
+          {" "}Retry or remove it to send.
+        </p>
+      ))}
 
       {imageAttachments.length > 0 && !imagesSupported ? (
         <p className="composer__meta composer__meta--warning" role="status">
@@ -12109,8 +13010,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             ariaControls={autocompleteListboxId}
             ariaExpanded={Boolean(autocompleteKind)}
             disabled={composerDisabled}
-            readOnly={preparingSend}
+            readOnly={preparingSend || forking}
             label={isLaunchpad ? "New thread" : "Reply"}
+            inlineHint={forkInlineHint}
+            inlineCompletion={forkInlineCompletion}
             markdownConversion
             placeholder={composerPlaceholder}
             resolveThreadLink={(ref) => {
@@ -12345,17 +13248,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             {props.desktopApi?.pickFileFromDisk ? (
               <button
                 className="composer__autocomplete-option composer__autocomplete-option--action"
-                data-tooltip={
-                  filesystemFederationTarget
-                    ? REMOTE_NATIVE_PICKER_TOOLTIP
-                    : undefined
-                }
-                disabled={Boolean(filesystemFederationTarget)}
-                title={
-                  filesystemFederationTarget
-                    ? REMOTE_NATIVE_PICKER_TOOLTIP
-                    : undefined
-                }
+                data-tooltip={nativeFilePickerBlockedReason}
+                disabled={nativeFilePickerBlockedReason !== undefined}
+                title={nativeFilePickerBlockedReason}
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -12545,24 +13440,27 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           className="composer__setup"
           aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
         >
-          {props.launchpad && launchpadMachine ? (
-            <LaunchpadMachineChip
-              control={launchpadMachine}
-              disabled={launchpadSubmitting}
-              onRetarget={(instanceId) => {
-                void (async () => {
-                  const sourceScopeKey = latestDraftSnapshotRef.current.scopeKey;
-                  const plan = await launchpadMachine.planRetarget?.(instanceId);
-                  // The peer read can take a while. A draft only follows the
-                  // operator if they are still on the launchpad it came from.
-                  if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
-                    return;
-                  }
-                  prepareDraftRetarget(plan.directoryKey);
-                  await plan.open();
-                })();
-              }}
-            />
+          {props.launchpad && launchpadMachine && props.launchpadMachineChipHost !== null ? (
+            renderLaunchpadMachineChip(
+              <LaunchpadMachineChip
+                control={launchpadMachine}
+                disabled={launchpadSubmitting}
+                menuPlacement={props.launchpadMachineChipHost ? "below" : undefined}
+                onRetarget={(instanceId) => {
+                  void (async () => {
+                    const sourceScopeKey = latestDraftSnapshotRef.current.scopeKey;
+                    const plan = await launchpadMachine.planRetarget?.(instanceId);
+                    // The peer read can take a while. A draft only follows the
+                    // operator if they are still on the launchpad it came from.
+                    if (!plan || latestDraftSnapshotRef.current.scopeKey !== sourceScopeKey) {
+                      return;
+                    }
+                    prepareDraftRetarget(plan.directoryKey);
+                    await plan.open();
+                  })();
+                }}
+              />,
+            )
           ) : null}
           {props.launchpad && providerOptions.length > 0 ? (
             <ComposerDropdown
@@ -12632,7 +13530,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 value: mode.mode,
                 disabled: !mode.available,
                 tooltip: mode.unavailableReason
-                  ?? (backend?.kind === "codex" ? describeCodexExecutionMode(mode.mode) : undefined),
+                  ?? (backend?.kind === "codex" || backend?.kind === "claude"
+                    ? describeExecutionModeForBackend(backend.kind, mode.mode)
+                    : undefined),
               }))}
               onChange={(value) => {
                 const executionMode = value as ThreadExecutionMode;
@@ -12670,7 +13570,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       currentModeId:
                         acpRuntimeModeControl.source === "mode"
                           ? value
-                          : undefined,
+                          : acpRuntimeModeControl.optionId === "permission_mode"
+                            ? props.launchpad.acpRuntime?.currentModeId
+                            : undefined,
                     },
                   });
                   return;
@@ -12816,7 +13718,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               <button
                 aria-expanded={workspaceMenuOpen}
                 aria-haspopup="menu"
-                aria-label="Workspace mode"
+                aria-label={`Workspace mode: ${workspaceLabel}`}
                 className="composer-dropdown__button"
                 disabled={!canMoveThreadProject}
                 type="button"
@@ -12903,6 +13805,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 label: model.label ?? model.id,
                 value: model.id,
               }))}
+              otherLabel={backend.kind === "claude" ? "Other Models" : undefined}
               onChange={(value) => {
                 const model = value;
                 const nextModelOption = backend.launchpadOptions?.models?.find(
@@ -13108,6 +14011,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               recentFiles={recentFileReferences}
               platform={props.desktopApi?.platform}
               nativePickingDisabled={Boolean(filesystemFederationTarget)}
+              remoteFilePicking={
+                filesystemFederationTarget
+                  ? { disabledReason: nativeFilePickerBlockedReason }
+                  : undefined
+              }
               onSelectDirectory={(directory) => {
                 setAddReferenceMenuOpen(false);
                 applyDirectoryReference(directory);
@@ -13247,12 +14155,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       {!props.skillError && props.skillLoading ? (
         <p className="composer__meta">Loading skills…</p>
       ) : null}
-      {props.launchpad &&
-      launchpadSubmitting &&
-      props.launchpad.codexEnvironmentId &&
-      selectedCodexEnvironment?.setupScript ? (
-        <p className="composer__meta">Running environment setup…</p>
-      ) : null}
       {props.updatingExecutionMode ? (
         <p className="composer__meta">
           Switching to {formatExecutionModeLabel(props.updatingExecutionMode)}…
@@ -13284,6 +14186,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
                 ariaLabel="Environment"
+                busy={
+                  props.environmentSetup?.phase === "setup"
+                  && props.environmentSetup.status === "running"
+                }
                 compact
                 disabled={launchpadSubmitting}
                 icon={FileCodeIcon}
@@ -13313,10 +14219,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             {!props.launchpad && threadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
                 ariaLabel="Environment"
+                busy={threadEnvironmentBusy}
                 compact
                 disabled={!props.desktopApi?.setCodexThreadEnvironment}
                 icon={FileCodeIcon}
-                value={props.thread?.codexEnvironmentRuntime?.environmentId ?? ""}
+                value={threadEnvironmentValue}
                 options={[
                   { label: "No environment", value: "" },
                   ...threadCodexEnvironmentOptions.map((environment) => ({
@@ -13355,6 +14262,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   }
                   disabled={
                     currentThreadEnvActionStarting ||
+                    threadEnvironmentBusy ||
                     !selectedThreadCodexAction ||
                     !props.desktopApi?.runCodexEnvironmentAction
                   }
@@ -13376,6 +14284,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   ariaLabel="Environment command"
                   compact
                   disabled={
+                    threadEnvironmentBusy ||
                     threadCodexEnvironmentActions.length === 0 ||
                     !props.desktopApi?.runCodexEnvironmentAction
                   }
@@ -13546,6 +14455,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 </button>
               ) : null}
               <button
+                {...submitTooltip.buttonProps}
                 className="button composer__send-submit-button"
                 disabled={sendButtonDisabled}
                 type="submit"
@@ -13558,6 +14468,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ) : null}
                 {submitButtonLabel}
               </button>
+              {submitTooltip.tooltipNode}
             </div>
             {scheduleAffordanceVisible && scheduleMenuOpen ? (
               <div className="composer__schedule-menu" role="menu">
@@ -13591,20 +14502,193 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   );
 });
 
+/**
+ * Names the thread a sub-thread launchpad will start under, beside the input
+ * it describes. The parent title opens the parent; × keeps the draft and
+ * drops the link, so the launchpad starts an ordinary thread.
+ */
+function SubthreadSourceRow({
+  parentTitle,
+  onSelectParent,
+  onDetach,
+}: {
+  parentTitle: string;
+  onSelectParent?: () => void;
+  onDetach?: () => void;
+}) {
+  const { show, showAfterDelay, hide, visible, tooltipId, tooltipNode } =
+    useViewportTooltip({ className: "viewport-tooltip" });
+  const detachTooltip = "Start as a regular thread";
+  return (
+    <div className="composer__subthread-source" role="group" aria-label="Sub-thread source">
+      <SubthreadIcon className="composer__subthread-source-icon" size={14} />
+      <span className="composer__subthread-source-label">Sub-thread of</span>
+      {onSelectParent ? (
+        <button
+          aria-label={`Open ${parentTitle}`}
+          className="composer__subthread-source-parent"
+          title={parentTitle}
+          type="button"
+          onClick={onSelectParent}
+        >
+          {parentTitle}
+        </button>
+      ) : (
+        <span className="composer__subthread-source-parent" title={parentTitle}>
+          {parentTitle}
+        </span>
+      )}
+      <span className="composer__subthread-source-meta">· no history</span>
+      {onDetach ? (
+        <button
+          aria-describedby={visible ? tooltipId : undefined}
+          aria-label={`Detach from ${parentTitle}`}
+          className="composer__subthread-source-detach"
+          type="button"
+          onBlur={hide}
+          onClick={() => {
+            hide();
+            onDetach();
+          }}
+          onFocus={(event) => show(event.currentTarget, detachTooltip)}
+          onMouseEnter={(event) => showAfterDelay(event.currentTarget, detachTooltip)}
+          onMouseLeave={hide}
+        >
+          <CloseIcon size={14} />
+        </button>
+      ) : null}
+      {tooltipNode}
+    </div>
+  );
+}
+
+function uploadPercent(upload: RemoteFileUpload): number | undefined {
+  if (!upload.totalBytes) {
+    return upload.totalBytes === 0 ? 100 : undefined;
+  }
+  return Math.min(100, Math.floor((upload.sentBytes / upload.totalBytes) * 100));
+}
+
+/**
+ * A tray pill for a file still on its way to a remote thread's owner. It
+ * becomes an ordinary file pill, pointing at the owner's copy, once the copy
+ * lands. A failed copy keeps its pill so the operator can retry or remove it.
+ */
+function RemoteFileUploadPill({
+  onRemove,
+  onRetry,
+  targetLabel,
+  upload,
+}: {
+  onRemove: () => void;
+  onRetry: () => void;
+  targetLabel: string;
+  upload: RemoteFileUpload;
+}) {
+  const { show, showAfterDelay, hide, update, visible, tooltipId, tooltipNode } =
+    useViewportTooltip({
+      className: "viewport-tooltip composer__attachment-tooltip",
+    });
+  const failed = upload.status === "failed";
+  const percent = uploadPercent(upload);
+  const content = failed
+    ? `Did not copy to ${targetLabel}: ${upload.error ?? "unknown error"}`
+    : upload.totalBytes !== undefined
+      ? `Copying to ${targetLabel} · ${formatByteCount(upload.sentBytes)} of ${formatByteCount(upload.totalBytes)}`
+      : `Copying to ${targetLabel}`;
+  // An open tooltip follows the transfer instead of freezing at hover time.
+  useEffect(() => {
+    if (visible) update(content);
+  }, [content, update, visible]);
+
+  return (
+    <span
+      className={[
+        "composer__file-attachment",
+        "composer__file-upload",
+        failed ? "composer__file-upload--failed" : "",
+      ].filter(Boolean).join(" ")}
+      tabIndex={0}
+      aria-describedby={visible ? tooltipId : undefined}
+      onMouseEnter={(event) => showAfterDelay(event.currentTarget, content)}
+      onMouseLeave={hide}
+      onFocus={(event) => show(event.currentTarget, content)}
+      onBlur={hide}
+    >
+      {failed ? (
+        <FileCodeIcon size={13} aria-hidden="true" />
+      ) : percent === undefined ? (
+        <span
+          aria-hidden="true"
+          className="pending-spinner pending-spinner--sm"
+        />
+      ) : (
+        <svg
+          aria-hidden="true"
+          className="composer__file-upload-ring"
+          height="13"
+          viewBox="0 0 16 16"
+          width="13"
+        >
+          <circle className="composer__file-upload-ring-track" cx="8" cy="8" r="6" />
+          <circle
+            className="composer__file-upload-ring-fill"
+            cx="8"
+            cy="8"
+            pathLength="100"
+            r="6"
+            strokeDasharray={`${percent} 100`}
+          />
+        </svg>
+      )}
+      <span className="composer__file-attachment-label">{upload.label}</span>
+      {failed ? (
+        <button
+          className="composer__file-upload-retry"
+          type="button"
+          onClick={onRetry}
+        >
+          Retry
+        </button>
+      ) : percent === undefined ? null : (
+        <span className="composer__file-upload-percent">{percent}%</span>
+      )}
+      <button
+        aria-label={
+          failed ? `Remove ${upload.label}` : `Cancel copying ${upload.label}`
+        }
+        className="composer__file-attachment-remove"
+        type="button"
+        onClick={onRemove}
+      >
+        <CloseIcon size={12} aria-hidden="true" />
+      </button>
+      {tooltipNode}
+    </span>
+  );
+}
+
 function AttachmentTooltip({
   children,
   className,
+  machineLabel,
   path,
 }: {
   children: ReactNode;
   className: string;
+  /** Names the remote owner whose disk holds `path`. */
+  machineLabel?: string;
   path: string;
 }) {
   const { show, showAfterDelay, hide, visible, tooltipId, tooltipNode } =
     useViewportTooltip({
       className: "viewport-tooltip composer__attachment-tooltip",
     });
-  const content = buildFileReferenceTooltip(path);
+  // This machine's home directory says nothing about the owner's, so a
+  // remote path is shown in full.
+  const content = machineLabel
+    ? `On ${machineLabel}: ${path}`
+    : buildFileReferenceTooltip(path);
 
   return (
     <span
@@ -14034,8 +15118,11 @@ function buildLaunchpadWorkspaceOptions(
       (directory.gitStatus?.worktreeCreationAvailable === true ||
         directory.gitStatus?.currentBranch ||
         (directory.gitStatus?.branches?.length ?? 0) > 0 ||
+        // A sub-thread launchpad, detached or not, was opened from a thread
+        // whose project offered one; detaching keeps its settings.
         (launchpad.workMode === "worktree" &&
-          Boolean(launchpad.parentThreadId)))
+          (Boolean(launchpad.parentThreadId)
+            || isSubthreadLaunchpadKey(launchpad.directoryKey))))
   );
   const options: Array<{ value: NavigationLaunchpadDraft["workMode"]; label: string }> = [
     { value: "local", label: localLabel ?? "Local" },

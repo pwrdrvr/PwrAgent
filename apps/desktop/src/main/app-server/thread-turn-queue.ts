@@ -37,6 +37,11 @@ export type ThreadTurnQueueEntry = {
   automationName?: string;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  /**
+   * Display-only label from `queued-message-title.ts`, set after admission
+   * for messages too long to show as typed. Never sent with the turn.
+   */
+  title?: string;
   createdAt: number;
 };
 
@@ -97,6 +102,15 @@ export type ThreadTurnQueueReleaseResult =
       disposition: "busy" | "not_found" | "not_head" | "not_held";
       entryId: string;
     };
+
+export type ThreadTurnQueueMoveResult = {
+  disposition: "moved" | "unchanged" | "not_found" | "anchor_not_found" | "held";
+  entryId: string;
+  /** Dispatch order after the move, when the entry's FIFO still exists. */
+  entryIds?: string[];
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+};
 
 export type ThreadTurnQueueLifecycleEvent =
   | {
@@ -226,7 +240,7 @@ export class ThreadTurnQueue {
   async submitGroupedSteer(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
-    options?: { deferStart?: boolean },
+    options?: { deferStart?: boolean; onAdmission?: () => void },
   ): Promise<ThreadTurnQueueSubmissionResult> {
     const message: QueuedAgentMessage = {
       input: structuredClone(input.input),
@@ -240,8 +254,10 @@ export class ThreadTurnQueue {
       const current = index >= 0 ? queue[index] : undefined;
       const messages = [...(current?.agentMessages ?? []), message];
       const holdReason = this.heldQueues.get(key);
+      // A title named the batch before this message joined it.
+      const { title: _staleTitle, ...base } = current ?? input;
       const entry: ThreadTurnQueueEntry = {
-        ...(current ?? input),
+        ...base,
         id: current?.id ?? input.id ?? `thread-turn:${randomUUID()}`,
         createdAt: current?.createdAt ?? input.createdAt ?? message.receivedAt,
         delivery: "queued-steer",
@@ -263,13 +279,59 @@ export class ThreadTurnQueue {
         && !this.heldQueues.has(key)
         && !(this.options.isThreadActive?.(entry) ?? false)
       ) {
-        const started = await this.startEntry(entry);
+        const starting = this.startEntry(entry);
+        options?.onAdmission?.();
+        const started = await starting;
         return { status: "started", entry, turnId: started.turnId };
       }
       if (current) queue[index] = entry;
       else queue.push(entry);
+      options?.onAdmission?.();
       const position = current ? index + 1 : queue.length;
       await this.emit({ type: "queued", entry, position, ...(current ? { inputUpdated: true } : {}) });
+      return { status: "queued", entry, position };
+    });
+  }
+
+  /**
+   * Admits one message that joins the running turn once it reaches the FIFO
+   * head, and otherwise starts the next turn, as a composer reply that steers
+   * would. It is its own entry, so a grouped steer never absorbs it.
+   */
+  async submitSteer(
+    input: Omit<ThreadTurnQueueEntry, "id" | "createdAt" | "delivery" | "agentMessages"> &
+      Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    options?: { onAdmission?: () => void },
+  ): Promise<ThreadTurnQueueSubmissionResult> {
+    return await this.withDispatchSuspended(input, async () => {
+      const key = this.keyFor(input);
+      const queue = this.queueFor(key);
+      const holdReason = this.heldQueues.get(key);
+      const entry: ThreadTurnQueueEntry = {
+        ...input,
+        id: input.id ?? `thread-turn:${randomUUID()}`,
+        createdAt: input.createdAt ?? this.now(),
+        delivery: "queued-steer",
+        ...(holdReason ? { manualReleaseRequired: true, holdReason } : {}),
+      };
+      if (
+        queue.length === 0
+        && this.dispatchSuspensions.get(key) === 1
+        && !this.startingKeys.has(key)
+        && !this.runningEntries.has(key)
+        && !holdReason
+        && !(this.options.isThreadActive?.(entry) ?? false)
+      ) {
+        const starting = this.startEntry(entry);
+        options?.onAdmission?.();
+        const started = await starting;
+        return { status: "started", entry, turnId: started.turnId };
+      }
+      // The drain that ends this suspension steers it when it is the head.
+      queue.push(entry);
+      options?.onAdmission?.();
+      const position = queue.length;
+      await this.emit({ type: "queued", entry, position });
       return { status: "queued", entry, position };
     });
   }
@@ -283,6 +345,7 @@ export class ThreadTurnQueue {
   async submit(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    options?: { onAdmission?: () => void },
   ): Promise<ThreadTurnQueueSubmissionResult> {
     const entry: ThreadTurnQueueEntry = {
       ...input,
@@ -302,12 +365,15 @@ export class ThreadTurnQueue {
           }
         : entry;
       queue.push(queuedEntry);
+      options?.onAdmission?.();
       const position = queue.length;
       await this.emit({ type: "queued", entry: queuedEntry, position });
       return { status: "queued", entry: queuedEntry, position };
     }
 
-    const started = await this.startEntry(entry);
+    const starting = this.startEntry(entry);
+    options?.onAdmission?.();
+    const started = await starting;
     return {
       status: "started",
       entry,
@@ -319,6 +385,7 @@ export class ThreadTurnQueue {
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
     reason: string,
+    options?: { onAdmission?: () => void },
   ): Promise<Extract<ThreadTurnQueueSubmissionResult, { status: "queued" }>> {
     const entry: ThreadTurnQueueEntry = {
       ...input,
@@ -336,6 +403,7 @@ export class ThreadTurnQueue {
       ) {
         throw new Error(`Queued turn id ${entry.id} was reused with different input`);
       }
+      options?.onAdmission?.();
       return {
         status: "queued",
         entry: existing.entry,
@@ -347,6 +415,7 @@ export class ThreadTurnQueue {
     this.heldQueues.set(key, reason);
     const queue = this.queueFor(key);
     queue.unshift(entry);
+    options?.onAdmission?.();
     await this.emit({ type: "queued", entry, position: 1 });
     await this.holdQueue(key, reason);
     return {
@@ -364,6 +433,7 @@ export class ThreadTurnQueue {
   async submitIfIdle(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
+    options?: { onAdmission?: () => void },
   ): Promise<ThreadTurnQueueImmediateSubmissionResult> {
     const entry: ThreadTurnQueueEntry = {
       ...input,
@@ -374,9 +444,12 @@ export class ThreadTurnQueue {
       backend: entry.backend,
       threadId: entry.threadId,
     })) {
+      options?.onAdmission?.();
       return { status: "busy" };
     }
-    const started = await this.startEntry(entry);
+    const starting = this.startEntry(entry);
+    options?.onAdmission?.();
+    const started = await starting;
     return {
       status: "started",
       entry,
@@ -436,6 +509,58 @@ export class ThreadTurnQueue {
     return undefined;
   }
 
+  /**
+   * Moves a waiting entry in front of `beforeEntryId`, or to the end of its
+   * FIFO when that is omitted. A held entry stays where it is, and nothing
+   * moves in front of one: a hold waits on the operator's Retry. Dispatch is
+   * suspended for the move, so the head cannot start between the lookup and
+   * the splice; the drain that ends the suspension starts the new head.
+   */
+  async moveEntry(
+    entryId: string,
+    beforeEntryId?: string,
+  ): Promise<ThreadTurnQueueMoveResult> {
+    const found = this.findQueuedEntry(entryId);
+    if (!found) return { disposition: "not_found", entryId };
+    const { backend, threadId } = found.entry;
+    return await this.withDispatchSuspended(found.entry, () => {
+      // Not queueFor: the FIFO can have drained while the move waited, and
+      // a lookup must not leave an empty one behind.
+      const queue = this.queuedEntries.get(found.key) ?? [];
+      const result = (
+        disposition: ThreadTurnQueueMoveResult["disposition"],
+      ): ThreadTurnQueueMoveResult => ({
+        disposition,
+        entryId,
+        entryIds: queue.map((entry) => entry.id),
+        backend,
+        threadId,
+      });
+      // The suspension waited for earlier edits; any of them can have
+      // started, cancelled or moved this entry.
+      const from = queue.findIndex((entry) => entry.id === entryId);
+      const entry = queue[from];
+      if (!entry) return { disposition: "not_found", entryId };
+      if (entry.manualReleaseRequired) return result("held");
+      if (beforeEntryId === entryId) return result("unchanged");
+      const anchor = beforeEntryId === undefined
+        ? queue.length
+        : queue.findIndex((candidate) => candidate.id === beforeEntryId);
+      if (anchor < 0) return result("anchor_not_found");
+      const passed = anchor > from
+        ? queue.slice(from + 1, anchor)
+        : queue.slice(anchor, from);
+      if (passed.some((candidate) => candidate.manualReleaseRequired)) {
+        return result("held");
+      }
+      const to = anchor > from ? anchor - 1 : anchor;
+      if (to === from) return result("unchanged");
+      queue.splice(from, 1);
+      queue.splice(to, 0, entry);
+      return result("moved");
+    });
+  }
+
   cancelEntryWithDisposition(
     entryId: string,
     reason?: string,
@@ -467,8 +592,10 @@ export class ThreadTurnQueue {
       if (index === -1) continue;
       const current = queue[index];
       if (!current) return undefined;
+      // The title named the input being replaced.
+      const { title: _staleTitle, ...rest } = current;
       const updated = {
-        ...current,
+        ...rest,
         input,
         // An operator edit replaces the complete batch. Do not subsequently
         // rebuild it from stale per-sender input when another message arrives.
@@ -497,9 +624,44 @@ export class ThreadTurnQueue {
       return [{ ...message, input }];
     });
     if (!replaced) return undefined;
-    const entry = { ...found.entry, agentMessages: messages, input: groupedAgentInput(messages) };
+    // The title named the input being replaced.
+    const { title: _staleTitle, ...rest } = found.entry;
+    const entry = { ...rest, agentMessages: messages, input: groupedAgentInput(messages) };
     this.queueFor(found.key)[found.position - 1] = entry;
     return entry;
+  }
+
+  /** Sets a still-queued entry's display title. Undefined once it has left. */
+  setQueuedEntryTitle(
+    entryId: string,
+    title: string,
+  ): ThreadTurnQueueEntry | undefined {
+    for (const queue of this.queuedEntries.values()) {
+      const index = queue.findIndex((entry) => entry.id === entryId);
+      if (index === -1) continue;
+      const current = queue[index];
+      if (!current) return undefined;
+      const updated = { ...current, title };
+      queue[index] = updated;
+      return updated;
+    }
+    return undefined;
+  }
+
+  /**
+   * Clears a thread's hold when its reason passes `shouldRelease`, and drains
+   * the queue once the thread is idle. Returns whether a hold was cleared.
+   */
+  async releaseHold(
+    params: { backend: AppServerBackendKind; threadId: string },
+    shouldRelease: (reason: string) => boolean,
+  ): Promise<boolean> {
+    const key = this.keyFor(params);
+    const reason = this.heldQueues.get(key);
+    if (!reason || !shouldRelease(reason)) return false;
+    await this.clearQueueHold(key);
+    this.scheduleDrain(key);
+    return true;
   }
 
   async releaseEntryWithDisposition(
@@ -546,6 +708,14 @@ export class ThreadTurnQueue {
       };
     }
     return { disposition: "busy", entryId };
+  }
+
+  /** Recheck the FIFO after external occupancy changes, preserving running entries and error holds. */
+  scheduleThreadDrain(params: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+  }): void {
+    this.scheduleDrain(this.keyFor(params));
   }
 
   async releaseThread(params: {

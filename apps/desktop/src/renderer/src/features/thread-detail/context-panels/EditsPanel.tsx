@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
   AppServerThreadActivityDetail,
@@ -11,6 +11,7 @@ import type {
 } from "@pwragent/shared";
 import { ArrowUpIcon, EditorIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { formatFileSize } from "../../../lib/format-bytes";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import { DiffStat } from "../../../lib/DiffStat";
 import {
@@ -24,6 +25,21 @@ import {
   type EditedFileGroup,
 } from "../edited-file-groups";
 import type { EditedFilesDock } from "./context-tab";
+import {
+  commitFileImageEntry,
+  isPreviewableImage,
+  otherChangeImageEntry,
+  type ImageDiffEntry,
+  type ImageDiffStop,
+} from "../image-diff/image-diff-model";
+import { createImagePreviewStore, type ImagePreviewStore } from "../image-diff/image-preview-store";
+import {
+  ImageDiffContext,
+  ImageDiffPreview,
+  useImageDiffController,
+  type ImageDiffController,
+} from "../image-diff/ImageDiffPreview";
+import { ImageDiffLightbox } from "../image-diff/ImageDiffLightbox";
 
 type EditsPanelProps = {
   backend?: AppServerBackendKind;
@@ -48,6 +64,7 @@ type EditsPanelProps = {
     | "getWorktreeOtherChangeDiff"
     | "listWorktreeUnpublishedCommits"
     | "getWorktreeUnpublishedCommitDiff"
+    | "readWorktreeImage"
   >;
   workingStateRefreshKey?: string;
 };
@@ -391,21 +408,8 @@ function otherChangesSummary(totalChanges: number): string {
   }`;
 }
 
-function formatByteSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) {
-    return "";
-  }
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
-  }
-  return `${bytes.toLocaleString()} B`;
-}
-
 function FileSizeStat(props: { bytes: number }) {
-  const label = formatByteSize(props.bytes);
+  const label = formatFileSize(props.bytes);
   if (!label) {
     return null;
   }
@@ -414,6 +418,51 @@ function FileSizeStat(props: { bytes: number }) {
       {label}
     </span>
   );
+}
+
+/**
+ * The panel's image previews: one store for the life of the panel, re-reading
+ * the working tree and HEAD whenever the working state refreshes, and the
+ * lightbox's position when one is open.
+ */
+function useImageDiffs(params: {
+  readWorktreeImage?: DesktopApi["readWorktreeImage"];
+  refreshKey?: string;
+}) {
+  const { readWorktreeImage, refreshKey } = params;
+  // Created by the effect that disposes it, not by a memo: StrictMode runs
+  // every cleanup once on mount, and disposing a memoized store revoked every
+  // preview URL while the panel went on using it.
+  const [store, setStore] = useState<ImagePreviewStore>();
+  useEffect(() => {
+    if (!readWorktreeImage) {
+      setStore(undefined);
+      return;
+    }
+    const created = createImagePreviewStore(readWorktreeImage);
+    setStore(created);
+    return () => created.dispose();
+  }, [readWorktreeImage]);
+  const [generation, setGeneration] = useState(0);
+  const lastRefreshKey = useRef(refreshKey);
+  useEffect(() => {
+    if (!store || lastRefreshKey.current === refreshKey) return;
+    lastRefreshKey.current = refreshKey;
+    // Not cancelled by a newer key: a round that swapped a side must still
+    // repaint, or the next round finds nothing changed and never does.
+    void store.revalidateMutable().then((changed) => {
+      if (changed) setGeneration((current) => current + 1);
+    });
+  }, [refreshKey, store]);
+  const [lightbox, setLightbox] = useState<ImageDiffStop>();
+  const closeLightbox = useCallback(() => setLightbox(undefined), []);
+  const controller = useMemo<ImageDiffController | undefined>(
+    () => store
+      ? { store, generation, open: (entryKey, item) => setLightbox({ entryKey, item }) }
+      : undefined,
+    [store, generation],
+  );
+  return { controller, lightbox, closeLightbox };
 }
 
 /**
@@ -464,8 +513,28 @@ export const EditsPanel = memo(function EditsPanel(props: EditsPanelProps) {
   });
   const hasOtherChanges = otherChanges.changes.length > 0;
   const hasUnpublishedCommits = unpublishedCommits.commits.length > 0;
+  const imageDiffs = useImageDiffs({
+    readWorktreeImage: props.desktopApi?.readWorktreeImage,
+    refreshKey: props.workingStateRefreshKey,
+  });
+  // Every image row, in the order the rail lists them: the lightbox's arrows
+  // walk this one list across commits and the working tree alike.
+  const imageEntries = useMemo<ImageDiffEntry[]>(() => {
+    const worktreePath = props.worktreeRoot?.trim();
+    if (!worktreePath) return [];
+    return [
+      ...unpublishedCommits.commits.flatMap((commit) =>
+        commit.files
+          .filter(isPreviewableImage)
+          .map((file) => commitFileImageEntry(commit, file, worktreePath))),
+      ...otherChanges.changes
+        .filter(isPreviewableImage)
+        .map((change) => otherChangeImageEntry(change, worktreePath)),
+    ];
+  }, [otherChanges.changes, props.worktreeRoot, unpublishedCommits.commits]);
 
   return (
+    <ImageDiffContext.Provider value={imageDiffs.controller}>
     <section className="context-panel__section context-panel__section--edits">
       <div className="edits-panel__header">
         <div className="edits-panel__title-group">
@@ -538,7 +607,16 @@ export const EditsPanel = memo(function EditsPanel(props: EditsPanelProps) {
           ) : null
         )}
       </div>
+      {imageDiffs.lightbox && imageDiffs.controller ? (
+        <ImageDiffLightbox
+          entries={imageEntries}
+          controller={imageDiffs.controller}
+          initialStop={imageDiffs.lightbox}
+          onClose={imageDiffs.closeLightbox}
+        />
+      ) : null}
     </section>
+    </ImageDiffContext.Provider>
   );
 });
 
@@ -671,6 +749,7 @@ function UnpublishedCommitSection(props: {
                   <UnpublishedCommitFileRow
                     backend={props.backend}
                     commitSha={props.commit.sha}
+                    commitShortSha={props.commit.shortSha}
                     file={file}
                     worktreeRoot={props.worktreeRoot}
                     desktopApi={props.desktopApi}
@@ -695,6 +774,7 @@ function UnpublishedCommitSection(props: {
 function UnpublishedCommitFileRow(props: {
   backend?: AppServerBackendKind;
   commitSha: string;
+  commitShortSha: string;
   file: WorktreeUnpublishedCommitFile;
   worktreeRoot?: string;
   desktopApi?: Pick<DesktopApi, "getWorktreeUnpublishedCommitDiff">;
@@ -710,9 +790,15 @@ function UnpublishedCommitFileRow(props: {
   const canOpen = Boolean(props.onOpenFile);
   const hasStats =
     props.file.additions !== undefined || props.file.removals !== undefined;
+  const imageController = useImageDiffController();
+  const imageWorktree = props.worktreeRoot?.trim();
+  const imageEntry = imageController && imageWorktree && isPreviewableImage(props.file)
+    ? commitFileImageEntry({ sha: props.commitSha, shortSha: props.commitShortSha }, props.file, imageWorktree)
+    : undefined;
+  const isImage = imageEntry !== undefined;
 
   useEffect(() => {
-    if (!expanded || detail) {
+    if (!expanded || detail || isImage) {
       return;
     }
     const getDiff = props.desktopApi?.getWorktreeUnpublishedCommitDiff;
@@ -730,18 +816,19 @@ function UnpublishedCommitFileRow(props: {
       path: props.file.path,
       maxBytes: OTHER_CHANGE_DIFF_MAX_BYTES,
     })
+      // `loading` clears in the same callback that sets `detail`. From a
+      // `.finally` it ran after the `detail` change had already re-run this
+      // effect and marked the request cancelled, so the row sat on "Loading
+      // diff..." with the diff in hand.
       .then((response) => {
         if (!cancelled) {
           setDetail(response.detail);
+          setLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setDetail(undefined);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
           setLoading(false);
         }
       });
@@ -751,6 +838,7 @@ function UnpublishedCommitFileRow(props: {
   }, [
     detail,
     expanded,
+    isImage,
     props.backend,
     props.commitSha,
     props.desktopApi,
@@ -803,7 +891,9 @@ function UnpublishedCommitFileRow(props: {
                 </button>
               ) : null}
             </div>
-            {loading ? (
+            {imageEntry ? (
+              <ImageDiffPreview entry={imageEntry} />
+            ) : loading ? (
               <p className="other-changes__loading">Loading diff...</p>
             ) : detail ? (
               <TranscriptDiff detail={detail} compact />
@@ -905,9 +995,15 @@ function OtherChangeRow(props: {
     props.change.additions !== undefined || props.change.removals !== undefined;
   const showSize = !hasStats && props.change.sizeBytes !== undefined;
   const label = otherChangeLabel(props.change);
+  const imageController = useImageDiffController();
+  const imageWorktree = props.worktreeRoot?.trim();
+  const imageEntry = imageController && imageWorktree && isPreviewableImage(props.change)
+    ? otherChangeImageEntry(props.change, imageWorktree)
+    : undefined;
+  const isImage = imageEntry !== undefined;
 
   useEffect(() => {
-    if (!expanded || detail) {
+    if (!expanded || detail || isImage) {
       return;
     }
     const getDiff = props.desktopApi?.getWorktreeOtherChangeDiff;
@@ -922,18 +1018,19 @@ function OtherChangeRow(props: {
       path: props.change.path,
       maxBytes: OTHER_CHANGE_DIFF_MAX_BYTES,
     })
+      // `loading` clears in the same callback that sets `detail`. From a
+      // `.finally` it ran after the `detail` change had already re-run this
+      // effect and marked the request cancelled, so the row sat on "Loading
+      // diff..." with the diff in hand.
       .then((response) => {
         if (!cancelled) {
           setDetail(response.detail);
+          setLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
           setDetail(undefined);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
           setLoading(false);
         }
       });
@@ -943,6 +1040,7 @@ function OtherChangeRow(props: {
   }, [
     detail,
     expanded,
+    isImage,
     props.change.path,
     props.desktopApi,
     props.worktreeRoot,
@@ -992,7 +1090,9 @@ function OtherChangeRow(props: {
                 </button>
               ) : null}
             </div>
-            {loading ? (
+            {imageEntry ? (
+              <ImageDiffPreview entry={imageEntry} />
+            ) : loading ? (
               <p className="other-changes__loading">Loading diff...</p>
             ) : detail ? (
               <TranscriptDiff detail={detail} compact />

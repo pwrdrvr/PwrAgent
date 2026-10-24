@@ -5,6 +5,7 @@ import type {
   FederationRemoteTarget,
 } from "@pwragent/shared";
 import { formatFederationPeerDisplayLabel } from "@pwragent/shared";
+import { isThreadLockRefusal } from "@pwragent/shared";
 import {
   PwrAgentFederatedThreadMessageError,
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
@@ -360,11 +361,13 @@ async function controlRemoteThread(
       );
     }
     throw new PwrAgentFederatedThreadMessageError(
-      /unsupported|does not support/i.test(message)
-        ? "unsupported_capability"
-        : /active|expected turn|stale|in progress/i.test(message)
-          ? "stale_target"
-          : "internal_error",
+      isThreadLockRefusal(message)
+        ? "forbidden"
+        : /unsupported|does not support/i.test(message)
+          ? "unsupported_capability"
+          : /active|expected turn|stale|in progress/i.test(message)
+            ? "stale_target"
+            : "internal_error",
       message,
     );
   }

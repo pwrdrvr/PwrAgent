@@ -1,0 +1,51 @@
+name: Publish PwrAgent to Homebrew
+on:
+  release:
+    types: [published, released, edited]
+  workflow_dispatch:
+  schedule:
+    - cron: '13 */6 * * *'
+  pull_request:
+    paths:
+      - .github/workflows/homebrew.yml
+      - scripts/sync-homebrew*
+      - scripts/build-artifact.py
+      - scripts/test_build_artifact.py
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: homebrew-${{ github.event_name == 'pull_request' && github.ref || 'stable' }}
+  cancel-in-progress: false
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "^24.22.1"
+          package-manager-cache: false
+      - run: python3 -m unittest discover -s scripts -p test_build_artifact.py -v
+      - run: node --test scripts/sync-homebrew.node-test.mjs
+  publish:
+    needs: test
+    if: github.event_name != 'pull_request' && (github.event_name != 'release' || (!github.event.release.prerelease && !github.event.release.draft)) && (github.event_name == 'release' || github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "^24.22.1"
+          package-manager-cache: false
+      - name: Dispatch or await tap publication without release downloads
+        env:
+          GH_TOKEN: ${{ secrets.DISTRIBUTION_READ_TOKEN || github.token }}
+          HOMEBREW_TAP_DISPATCH_TOKEN: ${{ secrets.HOMEBREW_TAP_DISPATCH_TOKEN }}
+        run: node scripts/sync-homebrew.mjs

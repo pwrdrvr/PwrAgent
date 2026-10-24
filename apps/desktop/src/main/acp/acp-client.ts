@@ -1,4 +1,5 @@
 import { normalizeAcpMcpServerConfigs, type AcpMcpServerConfig } from "@pwrdrvr/agent-acp";
+import { findAcpPermissionModeConfigOption } from "@pwragent/shared";
 import type {
   AcpBackendId,
   AcpThreadRewindPoint,
@@ -28,6 +29,7 @@ import {
   acpSessionRuntimeStateFromUpdate,
   normalizeAcpRuntimeCapabilities,
 } from "./acp-runtime-capabilities.js";
+import { isPwrAgentGrokBuildVersion } from "./acp-agent-capabilities.js";
 import {
   normalizeGrokBillingStatus,
   type AcpProviderStatus,
@@ -163,6 +165,8 @@ export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
   agentDisplayName?: string;
   initialRuntimeCapabilities?: BackendAcpRuntimeCapabilities;
+  /** Bound to the launched build; vendor Grok does not implement the extension. */
+  supportsTurnSteering?: boolean;
   rolloutStore?: AcpRolloutStoreLike;
   store: AcpSessionStoreLike;
   transport: AcpJsonRpcTransport;
@@ -327,6 +331,12 @@ export class AcpAgentClient {
     return acpRuntimeSupportsSessionLoad(this.runtimeCapabilities);
   }
 
+  supportsTurnSteering(): boolean {
+    return this.options.backendId === "acp:grok"
+      && (this.options.supportsTurnSteering === true
+        || isPwrAgentGrokBuildVersion(this.runtimeCapabilities?.agentInfo?.version));
+  }
+
   // Count the whole public operation, including setup before the transport
   // request and state updates after it, so launch replacement cannot dispose
   // this client at either edge of an in-flight RPC.
@@ -462,6 +472,9 @@ export class AcpAgentClient {
     content: AcpPromptContentBlock[];
     interjectionId: string;
   }): Promise<{ delivery: "currentTurn" | "nextTurn" }> {
+    if (!this.supportsTurnSteering()) {
+      throw new Error("Installed Grok Build does not support turn steering over ACP");
+    }
     return await this.withOperation(async () => {
       const response = asRecord(await this.options.transport.request(
         "_x.ai/session/steer",
@@ -1024,6 +1037,7 @@ export class AcpAgentClient {
   private isRuntimeModeConfigOption(optionId: string): boolean {
     return (
       this.runtimeConfigOption("mode")?.id === optionId
+      && findAcpPermissionModeConfigOption(this.runtimeCapabilities)?.id !== optionId
     );
   }
 

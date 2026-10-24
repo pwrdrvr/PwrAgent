@@ -1,7 +1,16 @@
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type {
   FederationTarget, NavigationDirectoryRow, NavigationIdentity, NavigationQueryRequest,
 } from "@pwragent/shared";
 import { navigationIdentityKey } from "./navigation-query-state";
+
+/** The Updated and Created lenses' Pinned group: its own collection beside `lens`. */
+export const PINNED_GROUP_RESOURCE_ID = "lens-pins";
+
+/** Updated and Created draw a Pinned group while `general.pinned_threads_on_top` is on. */
+export function lensHasPinnedGroup(browseMode: string, pinnedThreadsOnTop: boolean): boolean {
+  return pinnedThreadsOnTop && (browseMode === "inbox" || browseMode === "recents");
+}
 
 /** Demand is explicit window state; a missing page never implies a missing item. */
 export function buildNavigationWindowDemand(params: {
@@ -20,8 +29,10 @@ export function buildNavigationWindowDemand(params: {
   selectedRootRef?: NavigationIdentity;
   selectedContextReady?: boolean;
   disclosedParents?: readonly NavigationIdentity[];
-  /** Viewer-owned draft identities only. Grouped and bounded per owner below; no draft text. */
+  /** Viewer-owned draft identities only, from any owner. Bounded per read below; no draft text. */
   draftRefs?: readonly NavigationIdentity[];
+  /** `general.pinned_threads_on_top`; defaults on, as the setting does. */
+  pinnedThreadsOnTop?: boolean;
 }): Map<string, NavigationQueryRequest> {
   const demand = new Map<string, NavigationQueryRequest>();
   const request = (query: NavigationQueryRequest["query"], pageSize = 10): NavigationQueryRequest => ({
@@ -62,23 +73,30 @@ export function buildNavigationWindowDemand(params: {
     }
 
   } else if (params.browseMode === "drafts") {
-    const owners = new Map<string, NavigationIdentity[]>();
-    for (const ref of params.draftRefs ?? []) {
-      const owner = ref.ownerInstanceId ?? "";
-      const refs = owners.get(owner) ?? [];
-      refs.push(ref);
-      owners.set(owner, refs);
+    // One read names every instance's threads, as the other lenses do. Main
+    // serves peer rows from what it already holds for each owner, including
+    // an offline owner's last rows. A remote window's drafts all belong to
+    // its one owner.
+    const refs = params.draftRefs ?? [];
+    for (let offset = 0; offset < refs.length; offset += 100) {
+      demand.set(`drafts:${offset}`, request({ kind: "exact", identities: refs.slice(offset, offset + 100), includeAncestry: true,
+        ...(params.target?.scope === "remote" ? {} : { resolveFromOwners: true }) }));
     }
-    for (const [owner, refs] of owners) {
-      for (let offset = 0; offset < refs.length; offset += 100) {
-        demand.set(`drafts:${JSON.stringify(owner)}:${offset}`, {
-          ...request({ kind: "exact", identities: refs.slice(offset, offset + 100), includeAncestry: true }),
-          inventory: "owner", federationTarget: owner ? { scope: "remote", instanceId: owner } : undefined,
-        });
-      }
-    }
+  } else if ((params.browseMode === "inbox" || params.browseMode === "recents") && params.pinnedThreadsOnTop !== false) {
+    // Split like a project: the Pinned group pages on its own, so a pin never
+    // waits behind ten newer threads, and the time-sorted list below it
+    // keeps its ordinary first page. The group stays demanded while
+    // collapsed: its header counts running and unread work inside it.
+    const lens = params.browseMode;
+    demand.set(PINNED_GROUP_RESOURCE_ID, request({ kind: "lens", lens, roots: "pinned" }, NAVIGATION_QUERY_MAX_PAGE_ROWS));
+    demand.set("lens", request({ kind: "lens", lens, roots: "unpinned" }));
   } else {
-    demand.set("lens", request({ kind: "lens", lens: params.browseMode }));
+    // Attention is a work queue and its tab badge counts every member, so its
+    // first page asks for the whole queue up to one protocol page. At the
+    // browsing lenses' 10 rows, an 11th running or review thread sat behind
+    // "Load more threads" while the badge still counted it.
+    demand.set("lens", request({ kind: "lens", lens: params.browseMode },
+      params.browseMode === "attention" ? NAVIGATION_QUERY_MAX_PAGE_ROWS : undefined));
   }
   for (const parent of params.disclosedParents ?? []) {
     demand.set(`children:${navigationIdentityKey(parent)}`, { ...request({ kind: "children", parent }),
@@ -94,6 +112,11 @@ export function buildNavigationWindowDemand(params: {
   return demand;
 }
 
+/** The lens collections: Updated and Created add their Pinned group's page beside the list. */
+export function isLensCollectionId(id: string): boolean {
+  return id === "lens" || id === PINNED_GROUP_RESOURCE_ID;
+}
+
 /** Child pages are useful only while their disclosed parent is reachable from a visible collection. */
 export function visibleDisclosedNavigationParents(params: {
   collectionIds: Iterable<string>;
@@ -102,7 +125,7 @@ export function visibleDisclosedNavigationParents(params: {
 }): NavigationIdentity[] {
   const candidates = new Map(params.disclosedParents.map((ref) => [navigationIdentityKey(ref), ref]));
   const visible = new Map<string, NavigationIdentity>();
-  const pending = [...params.collectionIds].filter((id) => id === "lens" || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("drafts:"));
+  const pending = [...params.collectionIds].filter((id) => isLensCollectionId(id) || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("drafts:"));
   // Directory presentation admits an exact selected pin outside its page,
   // and retains an unpinned selected root while Directory threads is closed.
   // Both roots need child demand even though no collection page contains them.
@@ -147,7 +170,7 @@ export function addVisibleMountedOwnerDemand(params: {
   const owners = new Map<string, Map<string, NavigationIdentity>>();
   for (const [id, request] of params.demand) {
     if (request.federationTarget?.scope === "remote"
-      || !(id === "lens" || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("children:"))) continue;
+      || !(isLensCollectionId(id) || (id.startsWith("directory:") || id.startsWith("directory-pins:")) || id.startsWith("children:"))) continue;
     for (const { row } of params.pages.get(id)?.entries ?? []) {
       const owner = row.ref.ownerInstanceId;
       // Selected context already reads this identity from its owner.

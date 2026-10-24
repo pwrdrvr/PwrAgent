@@ -122,6 +122,9 @@ export function initializeAppState(
 
   messagingStore = new SqliteMessagingStore(stateDb);
   overlayStore = new SqliteOverlayStore(stateDb);
+  if (mode !== "bootstrap") {
+    overlayStore.migrateLegacyLaunchpadExecutionModes();
+  }
   runtimeInstanceStore = new AppRuntimeInstanceStore(stateDb);
   automationStore = new AutomationStore(stateDb);
   scheduledThreadActionStore = new ScheduledThreadActionStore(stateDb);

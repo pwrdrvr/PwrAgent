@@ -43,6 +43,14 @@ export type ComposerQueuedTurnSnapshot = {
   queueEntryId?: string;
   /** Owner-clock creation time used to reject older navigation snapshots. */
   queueEntryCreatedAt?: number;
+  /**
+   * The operator moved this entry and the owner has not answered yet. A queue
+   * read that lands first still places the entry in front of this anchor (at
+   * the end without one), so the band does not snap back mid-request.
+   * `requestId` names the request, so only the latest move of a row
+   * settles it.
+   */
+  pendingMove?: { beforeQueueEntryId?: string; requestId?: number };
   /** Durable main-process scheduled action represented by this renderer chip. */
   scheduledActionId?: string;
   /** Terminal scheduled action converted into a locally recoverable draft. */
@@ -50,6 +58,8 @@ export type ComposerQueuedTurnSnapshot = {
   errorMessage?: string;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  /** Owner-generated display title for a long message; see `ThreadQueuedTurnSummary`. */
+  title?: string;
   input?: AppServerTurnInputItem[];
   text: string;
   imageAttachments: NavigationLaunchpadImageAttachment[];
@@ -154,6 +164,12 @@ export type ComposerDraftStore = {
    */
   getDraftPresenceVersion(): number;
   subscribeDraftPresence(listener: () => void): () => void;
+  /**
+   * Every edit to one scope's active draft. The presence channel above is
+   * coarse on purpose; this one lets a single surface follow the typing (a
+   * sub-thread draft row's title) without waking every other subscriber.
+   */
+  subscribeDraft?(scopeKey: string, listener: () => void): () => void;
   /** Remove and return the most recently parked draft beneath this scope. */
   popDraft(scopeKey: string): ComposerDraftSnapshot | undefined;
   /** Park a draft beneath this scope's active draft. */
@@ -249,6 +265,8 @@ export function useComposerDraftStore(): ComposerDraftStore {
   const draftPresenceRef = useRef(new Set<string>());
   const draftPresenceVersionRef = useRef(0);
   const draftPresenceListenersRef = useRef(new Set<() => void>());
+  // Per-scope listeners for `subscribeDraft`, notified on every write.
+  const draftListenersRef = useRef(new Map<string, Set<() => void>>());
 
   return useMemo(() => {
     const getScopeOwner = (scopeKey: string): ComposerThreadOwner | undefined => {
@@ -280,6 +298,11 @@ export function useComposerDraftStore(): ComposerDraftStore {
       }
       const threadOwner = snapshot.threadOwner ?? encodedOwner ?? getScopeOwner(scopeKey);
       return threadOwner && !snapshot.threadOwner ? { ...snapshot, threadOwner } : snapshot;
+    };
+    const notifyDraftChange = (scopeKey: string): void => {
+      for (const listener of draftListenersRef.current.get(scopeKey) ?? []) {
+        listener();
+      }
     };
     const notifyQueuedTurnChange = (): void => {
       queuedTurnVersionRef.current += 1;
@@ -331,6 +354,7 @@ export function useComposerDraftStore(): ComposerDraftStore {
       delete: (scopeKey) => {
         storeRef.current.delete(scopeKey);
         syncDraftPresence(scopeKey);
+        notifyDraftChange(scopeKey);
       },
       get: (scopeKey) => storeRef.current.get(scopeKey),
       hasDraftContent: (scopeKey) => draftPresenceRef.current.has(scopeKey),
@@ -342,6 +366,15 @@ export function useComposerDraftStore(): ComposerDraftStore {
         draftPresenceListenersRef.current.add(listener);
         return () => {
           draftPresenceListenersRef.current.delete(listener);
+        };
+      },
+      subscribeDraft: (scopeKey, listener) => {
+        const listeners = draftListenersRef.current.get(scopeKey) ?? new Set();
+        listeners.add(listener);
+        draftListenersRef.current.set(scopeKey, listeners);
+        return () => {
+          listeners.delete(listener);
+          if (listeners.size === 0) draftListenersRef.current.delete(scopeKey);
         };
       },
       // Presence is synced after the pop, so a scope whose only content was
@@ -450,6 +483,7 @@ export function useComposerDraftStore(): ComposerDraftStore {
       set: (scopeKey, snapshot) => {
         storeRef.current.set(scopeKey, tag(scopeKey, snapshot));
         syncDraftPresence(scopeKey);
+        notifyDraftChange(scopeKey);
       },
     };
   }, []);

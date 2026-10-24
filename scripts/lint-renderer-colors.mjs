@@ -40,11 +40,20 @@ const targetPath = resolve(
 // Matched against the rule's selector text after whitespace
 // normalization. To add a future theme (e.g. high-contrast), drop its
 // selector here AND add the corresponding `:root[data-theme="..."]`
-// block in app.css.
+// block in app.css. A color theme adds `:root[data-color-theme="<id>"]`.
 const ALLOWED_TOP_LEVEL_SELECTORS = new Set([
   ":root",
   ':root[data-theme="light"]',
   ':root[data-theme="dark"]',
+  ':root[data-color-theme="catppuccin-mocha"]',
+  ':root[data-color-theme="catppuccin-latte"]',
+  ':root[data-color-theme="solarized-dark"]',
+  ':root[data-color-theme="solarized-light"]',
+  ':root[data-color-theme="gray-dark"]',
+  ':root[data-color-theme="gray-light"]',
+  ':root[data-color-theme="blue-dark"]',
+  ':root[data-color-theme="blue-light"]',
+  ':root[data-color-theme="phosphor-dark"]',
 ]);
 
 // Selector substrings whose rules are allowed to carry raw color

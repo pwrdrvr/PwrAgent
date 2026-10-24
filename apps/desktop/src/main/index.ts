@@ -6,7 +6,6 @@ import {
   relaunchForLinuxSecretStore,
 } from "./linux-password-store";
 import { app, BrowserWindow, dialog, Menu, nativeImage, safeStorage, shell } from "electron";
-import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   getDesktopBackendRegistry,
@@ -15,6 +14,7 @@ import {
 import { interruptStartupStorageMaintenance, runStartupStorageMaintenance } from "./storage-maintenance";
 import { hadExistingAppStateDatabase, getAppStateDb } from "./state/app-state";
 import { observeStorageArchive } from "./state/storage-maintenance";
+import { runOneTimeArchivedWorktreeRepair } from "./state/archived-worktree-repair";
 import { getDesktopOverlayStore } from "./app-server/desktop-overlay-store";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import type {
@@ -22,6 +22,7 @@ import type {
   PwrAgentFederationContext,
 } from "@pwragent/shared";
 import { createStarMapAgentToolsHandler } from "./star-map/star-map-agent-tools-service";
+import { createOpenThreadInUi } from "./native-voice/open-thread-in-ui";
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
 import { createFederatedThreadInspectionHandler } from "./federation/federated-thread-inspection-service";
 import { createFederatedThreadMutationHandler } from "./federation/federated-thread-mutation-service";
@@ -34,6 +35,8 @@ import {
   disposeScheduledActionIpcHandlers,
   registerScheduledActionIpcHandlers,
 } from "./ipc/scheduled-actions-ipc";
+import { registerThreadTodoIpcHandlers } from "./ipc/thread-todos-ipc";
+import { registerOperatorRequestIpcHandlers } from "./ipc/operator-requests-ipc";
 import {
   disposeScheduledThreadActionService,
 } from "./scheduled-actions/scheduled-thread-action-service";
@@ -138,7 +141,11 @@ import {
   registerProfilesIpcHandlers,
 } from "./ipc/profiles";
 import { buildDockProfileMenuTemplate } from "./dock-menu";
-import { registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
+import { disposeRendererErrorIpcHandlers, registerRendererErrorIpcHandlers } from "./ipc/renderer-error";
+import {
+  disposeLaunchpadAccessNoticeIpcHandlers,
+  registerLaunchpadAccessNoticeIpcHandlers,
+} from "./ipc/launchpad-access-notice";
 import {
   disposeRuntimeIdentityIpcHandlers,
   registerRuntimeIdentityIpcHandlers,
@@ -147,6 +154,12 @@ import {
   disposeSettingsIpcHandlers,
   registerSettingsIpcHandlers,
 } from "./ipc/settings";
+import {
+  disposeKeybindingsIpcHandlers,
+  getKeybindingsSnapshot,
+  onKeybindingsChanged,
+  registerKeybindingsIpcHandlers,
+} from "./ipc/keybindings";
 import {
   disposeWindowPointerIpcHandlers,
   registerWindowPointerIpcHandlers,
@@ -190,12 +203,18 @@ import {
   recordBootDecision,
 } from "./state/app-state";
 import type { AutoVacuumConversion } from "./state/state-db";
-import { createMainWindow, stopWindowDiagnostics } from "./window";
+import {
+  createMainWindow,
+  isFederationWindowWebContents,
+  stopWindowDiagnostics,
+} from "./window";
 import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
 import { registerManagedRuntimeProgressBroadcast } from "./managed-runtime-progress-broadcast";
 import { subscribersForChannel } from "./window-channels";
+import { requestOpenMainView } from "./window-open-main-view";
 import { requestOpenNewThread } from "./window-open-new-thread";
 import { requestOpenSettings } from "./window-open-settings";
+import { PROFILES_SETTINGS_CREATE_SUBSECTION } from "../shared/settings-routes";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { requestCopyLocalDiagnosticsInfo } from "./window-copy-local-diagnostics-info";
 import { buildApplicationMenuTemplate } from "./menu";
@@ -208,6 +227,7 @@ import {
   type QuitRequestSource,
 } from "./quit-manager";
 import { retryQuitAfterDispatch } from "./quit-retry";
+import { watchSystemShutdown } from "./system-shutdown";
 import {
   installTranscriptImageProtocol,
   registerTranscriptImageProtocolScheme,
@@ -243,6 +263,7 @@ import {
   setUpdateInstallPreparationHandler,
 } from "./update-install-state";
 import { createShutdownBarrier } from "./shutdown-barrier";
+import { developmentDockIconPath } from "./themed-dock-icon";
 import {
   createE2eShutdownDiagnosticsRecorder,
   E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
@@ -253,9 +274,11 @@ import {
 configureBundledGit(app.isPackaged ? process.resourcesPath : undefined);
 
 const APP_NAME = "PwrAgent";
-const APP_COPYRIGHT = "Copyright © 2026 PwrDrvr LLC.";
-const PWRAGENT_ISSUE_REPORTER_URL =
-  "https://github.com/pwrdrvr/PwrAgent/issues/new";
+const PWRAGENT_SOURCE_URL = "https://github.com/pwrdrvr/PwrAgent";
+const PWRAGENT_ISSUE_REPORTER_URL = `${PWRAGENT_SOURCE_URL}/issues/new`;
+// GitHub private vulnerability reporting, per SECURITY.md: never a public issue.
+const PWRAGENT_SECURITY_REPORTER_URL =
+  `${PWRAGENT_SOURCE_URL}/security/advisories/new`;
 const isMac = process.platform === "darwin";
 const isDevelopment = process.env.NODE_ENV !== "production";
 const mainLog = getMainLogger("pwragent:main");
@@ -504,6 +527,26 @@ function prewarmInitialThreadList(permit: ProviderDiscoveryPermit): void {
       error: error instanceof Error ? error.message : String(error),
     });
   });
+  void startupProviderRefresh.then(async () => {
+    const registry = getExistingDesktopBackendRegistry();
+    if (!registry) return;
+    await registry.resumeArchiveCleanupsAtStartup();
+    const report = await runOneTimeArchivedWorktreeRepair({
+      db: getAppStateDb().raw,
+      repair: async () => await registry.repairArchivedThreadWorktrees(),
+    });
+    if (report) mainLog.info("archived worktree repair completed", {
+      archivedThreads: report.archivedThreads, candidates: report.candidates.length,
+      removed: report.cleanup.filter((item) => item.removedWorktree).length,
+      protected: report.protectedWorktrees, missing: report.missingWorktrees,
+      emptyContainers: report.emptyContainerCandidates.length,
+      removedContainers: report.containerCleanup.filter((item) => item.removed).length,
+      retainedContainers: report.containerCleanup.filter((item) => !item.removed),
+      retained: report.cleanup.filter((item) => !item.removedWorktree),
+    });
+  }).catch((error) => {
+    mainLog.warn("archived worktree repair interrupted", { error: error instanceof Error ? error.message : String(error) });
+  });
   void startupProviderRefresh
     .then(async () =>
       await getDesktopBackendRegistry().prepareTokenMiserRuntimeAtStartup(),
@@ -599,6 +642,7 @@ function disposeMainProcessResourcesSync(options?: {
   disposeAppUpdateIpcHandlers();
   disposeComposerDraftIpcHandlers();
   disposeDiagnosticsIpcHandlers();
+  disposeRendererErrorIpcHandlers();
   disposeFederationIpcHandlers();
   disposeStarMapIpcHandlers();
   disposeImageNormalizationIpcHandlers();
@@ -621,9 +665,11 @@ function disposeMainProcessResourcesSync(options?: {
   disposeQuitBlockerIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
+  disposeKeybindingsIpcHandlers();
   disposeAppIconDragIpcHandlers();
   disposeDesktopConfigStore();
   disposeWindowPointerIpcHandlers();
+  disposeLaunchpadAccessNoticeIpcHandlers();
   if (isDevelopment) {
     disposeRuntimeIdentityIpcHandlers();
   }
@@ -836,6 +882,13 @@ const flushDiagnostics = createShutdownBarrier({
 
 async function disposeMainProcessResources(source: string): Promise<void> {
   mainProcessShutdownPromise ??= (async () => {
+    // Persist before any bounded shutdown wait can expire. A later registry
+    // close updates the checkpoint after safe in-flight bookkeeping drains.
+    try {
+      getExistingDesktopBackendRegistry()?.checkpointArchiveCleanupsForQuit();
+    } catch (error) {
+      mainLog.error("archive cleanup quit checkpoint failed", { error: error instanceof Error ? error.message : String(error) });
+    }
     // Diagnostics consumes the existing 2s window + 12s resource allowance;
     // it must not add another serial 10s wait to application shutdown.
     const deadline = performance.now()
@@ -1016,7 +1069,7 @@ function installDevelopmentDockIcon(): void {
     return;
   }
 
-  const iconPath = join(app.getAppPath(), "build/icon-macos.png");
+  const iconPath = developmentDockIconPath(app.getAppPath());
   const icon = nativeImage.createFromPath(iconPath);
   if (icon.isEmpty()) {
     mainLog.warn("failed to load development dock icon", { iconPath });
@@ -1109,6 +1162,14 @@ function installApplicationMenu(): void {
     getDesktopConfigStore().read("general").settings.developerMode
     ?? !app.isPackaged;
   const profiles = listDesktopPwrAgentProfiles().profiles;
+  // The Profiles check marks the focused window's profile. A remote
+  // instance's window runs a profile that is not one of these rows.
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  const focusedRemoteWindow = Boolean(
+    focusedWindow
+    && !focusedWindow.isDestroyed()
+    && isFederationWindowWebContents(focusedWindow.webContents),
+  );
   const windows = BrowserWindow.getAllWindows()
     .filter((window) => !window.isDestroyed())
     .map((window) => ({
@@ -1135,6 +1196,8 @@ function installApplicationMenu(): void {
     developerMode,
     isMac,
     federationPeers,
+    focusedRemoteWindow,
+    keybindings: getKeybindingsSnapshot().overrides,
     profiles,
     windows,
     actions: {
@@ -1154,6 +1217,9 @@ function installApplicationMenu(): void {
         window.show();
         window.focus();
       },
+      openAutomations: () => {
+        requestOpenMainView("automations");
+      },
       openDocumentation: async () => {
         await shell.openExternal(PWRAGENT_DOCUMENTATION_URL);
       },
@@ -1170,6 +1236,9 @@ function installApplicationMenu(): void {
       openIssueReporter: async () => {
         await shell.openExternal(PWRAGENT_ISSUE_REPORTER_URL);
       },
+      openNewProfile: () => {
+        requestOpenSettings("profiles", PROFILES_SETTINGS_CREATE_SUBSECTION);
+      },
       openNewThread: () => {
         requestOpenNewThread();
       },
@@ -1179,8 +1248,17 @@ function installApplicationMenu(): void {
       openProfilesSettings: () => {
         requestOpenSettings("profiles");
       },
+      openSecurityReporter: async () => {
+        await shell.openExternal(PWRAGENT_SECURITY_REPORTER_URL);
+      },
       openSettings: () => {
         requestOpenSettings();
+      },
+      openSource: async () => {
+        await shell.openExternal(PWRAGENT_SOURCE_URL);
+      },
+      openThreadSearch: () => {
+        requestOpenMainView("search");
       },
       openWebsite: async () => {
         await shell.openExternal(PWRAGENT_HOMEPAGE_URL);
@@ -1191,8 +1269,10 @@ function installApplicationMenu(): void {
       replayOnboarding: () => {
         requestReplayOnboarding();
       },
-      showAboutPanel: () => {
-        app.showAboutPanel();
+      // The app's own About page on every platform: the native panel shows a
+      // name and a version, and on Linux a bare GTK dialog.
+      showAbout: () => {
+        requestOpenSettings("about");
       },
       showChangelogWindow,
       showLicenseWindow,
@@ -1303,11 +1383,6 @@ export function bootstrapApp(): void {
   setUpdateInstallPreparationHandler(prepareForUpdateInstallShutdown);
   rejectDevOnlyEnvVarsInProduction();
   app.setName(APP_NAME);
-  app.setAboutPanelOptions({
-    applicationName: APP_NAME,
-    applicationVersion: app.getVersion(),
-    copyright: APP_COPYRIGHT,
-  });
   const bootDecision = resolveProfileBootDecision();
   initializeMainLogger({
     profileName: resolveMainLogProfileName(bootDecision),
@@ -1340,6 +1415,12 @@ export function bootstrapApp(): void {
   }
 
   app.whenReady().then(async () => {
+    watchSystemShutdown(() => {
+      beginQuitInProgress("system-shutdown");
+      // Like a process signal, OS shutdown cannot wait for the interactive
+      // running-thread confirmation. before-quit still drains resources.
+      appQuitManager.allowImmediateQuit();
+    });
     if (linuxPasswordStoreRoot && relaunchForLinuxSecretStore({
       platform: process.platform,
       argv: process.argv,
@@ -1480,7 +1561,11 @@ export function bootstrapApp(): void {
     // Reads the view the Star Map renderer publishes, so an Agent turn can
     // resolve "that thread" and "its cloud" against what is on screen.
     getDesktopBackendRegistry().setPwrAgentStarMapHandler(
-      createStarMapAgentToolsHandler(),
+      createStarMapAgentToolsHandler({
+        openThread: createOpenThreadInUi({
+          localInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId,
+        }),
+      }),
     );
     // Injected rather than owned by the registry: the federation runtime
     // already imports the registry, so the reverse import would be a cycle.
@@ -1514,8 +1599,10 @@ export function bootstrapApp(): void {
         });
       },
     };
+    const federationAgentToolsHandler =
+      createFederationAgentToolsHandler(federationAgentToolOptions);
     getDesktopBackendRegistry().setPwrAgentFederationHandler(
-      createFederationAgentToolsHandler(federationAgentToolOptions),
+      federationAgentToolsHandler,
     );
     // The same tools, for the Star Map [+] intake agent — built per intake
     // rather than once, because two of its options are properties of the one
@@ -1577,6 +1664,12 @@ export function bootstrapApp(): void {
     // native title bar — and with it the native menu bar — is hidden).
     wireAppMenuBridge();
     installWindowMenuRefreshHandlers();
+    // keybindings.toml is shared by every profile: a save from any window,
+    // in this process or another, re-labels this process's menu.
+    registerKeybindingsIpcHandlers();
+    onKeybindingsChanged(() => {
+      installApplicationMenu();
+    });
     // Linux: back the caption buttons the renderer paints, and tell every
     // window's renderer when the window manager maximizes it.
     wireWindowControlsBridge();
@@ -1588,13 +1681,16 @@ export function bootstrapApp(): void {
     });
     registerAgentIpcHandlers();
     registerScheduledActionIpcHandlers();
+    // A to-do's "Start thread on" runs through the same federation tools.
+    registerThreadTodoIpcHandlers({ federation: federationAgentToolsHandler });
+    registerOperatorRequestIpcHandlers();
     registerApplicationIpcHandlers();
     registerAutomationIpcHandlers();
     registerAppMetadataIpcHandlers();
     registerClipboardIpcHandlers();
     registerAppUpdateIpcHandlers({
-      requestQuit: async (performQuit) =>
-        await requestQuit({ performQuit, source: "update-install" }),
+      requestQuit: async (performQuit, beforeQuit) =>
+        await requestQuit({ performQuit, beforeQuit, source: "update-install" }),
     });
     registerComposerDraftIpcHandlers();
     registerDiagnosticsIpcHandlers();
@@ -1685,6 +1781,7 @@ export function bootstrapApp(): void {
       },
     );
     registerWindowPointerIpcHandlers();
+    registerLaunchpadAccessNoticeIpcHandlers();
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }

@@ -185,6 +185,39 @@ describe("PwrAgent app management service", () => {
     });
   });
 
+  it("authorizes a downloaded install before the agent-tool quit is deferred", async () => {
+    readAppUpdateStatusMock.mockReturnValue({ status: "downloaded", version: "1.2.4" });
+    const beforeQuit = vi.fn(() => false);
+    const performQuit = vi.fn();
+    requestQuitMock.mockImplementation(async (options) => {
+      expect(options.source).toBe("update-install");
+      expect(options.beforeQuit).toBe(beforeQuit);
+      if (!options.beforeQuit()) return false;
+      options.performQuit();
+      return true;
+    });
+    installDownloadedAppUpdateMock.mockImplementation(async (options) => {
+      const accepted = await options.requestQuit(performQuit, beforeQuit);
+      return accepted ? { status: "restarting" } : { status: "error", message: "Not authorized" };
+    });
+    const { createPwrAgentAppManagementHandler } = await import("../agent-tools/pwragent-app-management-service");
+    const handler = createPwrAgentAppManagementHandler({ startedAt: 1_000 });
+    const response = await handler({ operation: "manage_pwragent", context: {}, args: { action: "restart" } });
+    expect(beforeQuit).toHaveBeenCalledOnce();
+    expect(performQuit).not.toHaveBeenCalled();
+    expect(response).toMatchObject({ data: { result: { status: "cancelled", message: "Not authorized" } } });
+    vi.useFakeTimers();
+    try {
+      beforeQuit.mockReturnValue(true);
+      await handler({ operation: "manage_pwragent", context: {}, args: { action: "restart" } });
+      expect(performQuit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(performQuit).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("uses update install when restarting with a downloaded update", async () => {
     readAppUpdateStatusMock.mockReturnValue({
       status: "downloaded",

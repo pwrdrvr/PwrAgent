@@ -5,6 +5,7 @@ import type {
   ApplyThreadModelMigrationRequest,
   CancelQueuedTurnRequest,
   ReleaseQueuedTurnRequest,
+  MoveQueuedTurnRequest,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadPrAutoDispatchRequest,
   CheckThreadBranchDriftRequest,
@@ -29,6 +30,7 @@ import type {
   StartReviewRequest,
   StartThreadRequest,
   StartTurnRequest,
+  SubmitThreadReplyRequest,
   SteerTurnRequest,
   SubmitServerRequestRequest,
   TrustCodexProjectRequest,
@@ -37,6 +39,7 @@ import type {
 import type { ThreadTurnQueueSubmissionResult } from "../app-server/thread-turn-queue";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const invalidateExactOwner = vi.hoisted(() => vi.fn());
 const send = vi.fn();
 const mockAppServerLog = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -96,6 +99,23 @@ const registry = {
     }),
   ),
   submitHeldTurn: vi.fn(),
+  submitThreadReply: vi.fn(
+    async (
+      request: SubmitThreadReplyRequest,
+    ): Promise<ThreadTurnQueueSubmissionResult> => ({
+      status: "queued" as const,
+      entry: {
+        id: "reply-1",
+        backend: request.backend,
+        createdAt: 3,
+        delivery: "queued-steer" as const,
+        input: request.input,
+        origin: "manual" as const,
+        threadId: request.threadId,
+      },
+      position: 1,
+    }),
+  ),
   startReview: vi.fn(async (request: StartReviewRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -123,6 +143,11 @@ const registry = {
     queueEntryId,
     disposition: "started" as const,
     turnId: "turn-released-1",
+  })),
+  moveQueuedTurn: vi.fn(async (request: MoveQueuedTurnRequest) => ({
+    queueEntryId: request.queueEntryId,
+    disposition: "moved" as const,
+    queueEntryIds: [request.queueEntryId],
   })),
   interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
     backend: request.backend,
@@ -174,6 +199,12 @@ const registry = {
       status: "acknowledged-new-thread" as const,
     }),
   ),
+  checkThreadBranchDrift: vi.fn(async (request: CheckThreadBranchDriftRequest) => ({
+    ...request,
+    checkedAt: 1_000,
+    drifted: true,
+    observedBranch: "main",
+  })),
   setCodexThreadEnvironment: vi.fn(async (
     request: SetCodexThreadEnvironmentRequest,
     _onProgress?: (event: CodexEnvironmentSetupProgressEvent) => void,
@@ -211,6 +242,11 @@ const federationMock = vi.hoisted(() => {
       queueEntryId: request.queueEntryId,
       disposition: "started" as const,
       turnId: "remote-turn-released-1",
+    })),
+    moveQueuedTurn: vi.fn(async (request: MoveQueuedTurnRequest) => ({
+      queueEntryId: request.queueEntryId,
+      disposition: "moved" as const,
+      queueEntryIds: [request.queueEntryId],
     })),
     startReview: vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -373,8 +409,10 @@ const federationMock = vi.hoisted(() => {
   return {
     remoteBackend,
     runtime: {
+      requestOperatorQuestionOperation: vi.fn(async () => ({ backend: "codex", threadId: "thread-1", queueStatus: "queued", queueEntryId: "owner-reply" })),
       hydrateLiveThreadMessageOrigin: vi.fn((event: AgentEvent) => event),
       remoteBackend: vi.fn(() => remoteBackend),
+      remoteTargetSupportsCapability: vi.fn((_target: unknown, _capability: unknown) => true),
       rendererWantsRemoteEvent: vi.fn(() => true),
       setAgentEventPublisher: vi.fn(),
       setEnvironmentSetupProgressPublisher: vi.fn(),
@@ -421,6 +459,10 @@ vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => registry,
 }));
 
+vi.mock("../app-server/navigation-query-pool", () => ({
+  getDesktopNavigationQueryPool: () => ({ invalidateExactOwner }),
+}));
+
 vi.mock("../federation/federation-runtime", () => ({
   federationEventClassForMethod: () => "transcript",
   getDesktopFederationRuntime: () => federationMock.runtime,
@@ -463,6 +505,7 @@ describe("agent ipc", () => {
     registry.cancelQueuedTurn.mockClear();
     registry.cancelQueuedTurnWithDisposition.mockClear();
     registry.releaseQueuedTurnWithDisposition.mockClear();
+    registry.moveQueuedTurn.mockClear();
     registry.interruptTurn.mockClear();
     registry.stopSubAgent.mockClear();
     registry.steerTurn.mockClear();
@@ -471,8 +514,12 @@ describe("agent ipc", () => {
     registry.cancelThreadPrAutoDispatch.mockClear();
     registry.sendThreadPrAutoDispatchNow.mockClear();
     registry.applyThreadModelMigration.mockClear();
+    registry.checkThreadBranchDrift.mockClear();
+    invalidateExactOwner.mockClear();
     registry.setCodexThreadEnvironment.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.remoteTargetSupportsCapability.mockReset();
+    federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(true);
     federationMock.runtime.hydrateLiveThreadMessageOrigin.mockReset();
     federationMock.runtime.hydrateLiveThreadMessageOrigin.mockImplementation(
       (event: AgentEvent) => event,
@@ -498,6 +545,88 @@ describe("agent ipc", () => {
     await handlers.get(AGENT_START_REVIEW_CHANNEL)?.({}, request);
     expect(registry.startReview).toHaveBeenLastCalledWith(request);
     expect(registry.startReview.mock.calls.at(-1)).toHaveLength(1);
+  });
+
+  it("fences only the checked thread's selected detail after a local or remote branch probe", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex" as const,
+      expectedBranch: "feature/old",
+      threadId: "thread-1",
+    };
+    let finish!: () => void;
+    registry.checkThreadBranchDrift.mockImplementationOnce(async (checked) => {
+      await new Promise<void>((resolve) => { finish = resolve; });
+      return { ...checked, checkedAt: 1_000, drifted: true, observedBranch: "main" };
+    });
+    registerAgentIpcHandlers();
+    try {
+      const local = handlers.get(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL)?.({}, request);
+      expect(invalidateExactOwner).not.toHaveBeenCalled();
+      finish();
+      await expect(local).resolves.toMatchObject({ drifted: true });
+      expect(invalidateExactOwner).toHaveBeenLastCalledWith(
+        undefined, { backend: "codex", threadId: "thread-1" }, "detail",
+      );
+
+      const federationTarget = { scope: "remote" as const, instanceId: "owner-one" };
+      await handlers.get(AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL)?.({}, {
+        ...request, federationTarget,
+      });
+      expect(invalidateExactOwner).toHaveBeenLastCalledWith(
+        federationTarget, { backend: "codex", threadId: "thread-1" }, "detail",
+      );
+      expect(invalidateExactOwner).toHaveBeenCalledTimes(2);
+    } finally {
+      disposeAgentIpcHandlers();
+    }
+  });
+
+  it("moves a queued turn in the local queue or on the owning peer", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_MOVE_QUEUED_TURN_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "client_one" };
+    registerAgentIpcHandlers();
+    try {
+      const move = handlers.get(AGENT_MOVE_QUEUED_TURN_CHANNEL)!;
+
+      await expect(move({}, { queueEntryId: "local-c", beforeQueueEntryId: "local-a" })).resolves
+        .toMatchObject({ disposition: "moved" });
+      expect(registry.moveQueuedTurn).toHaveBeenCalledWith({ queueEntryId: "local-c", beforeQueueEntryId: "local-a" });
+      expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+
+      await expect(move({}, { federationTarget, queueEntryId: "c", beforeQueueEntryId: "a" })).resolves
+        .toMatchObject({ disposition: "moved" });
+      expect(federationMock.runtime.remoteTargetSupportsCapability)
+        .toHaveBeenCalledWith(federationTarget, "turn_queue_reorder");
+      expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(federationTarget);
+      // The owner moves its own entry; the viewer's target stays home.
+      expect(federationMock.remoteBackend.moveQueuedTurn).toHaveBeenCalledWith({ queueEntryId: "c", beforeQueueEntryId: "a" });
+      expect(registry.moveQueuedTurn).toHaveBeenCalledTimes(1);
+    } finally {
+      disposeAgentIpcHandlers();
+    }
+  });
+
+  it("refuses a move for a peer that does not advertise reordering, without asking it", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_MOVE_QUEUED_TURN_CHANNEL } = await import("../../shared/ipc");
+    const { QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE } = await import("../federation/federation-backend-bridge");
+    federationMock.runtime.remoteTargetSupportsCapability.mockImplementation(
+      (_target: unknown, capability: unknown) => capability !== "turn_queue_reorder",
+    );
+    registerAgentIpcHandlers();
+    try {
+      await expect(handlers.get(AGENT_MOVE_QUEUED_TURN_CHANNEL)!({}, {
+        federationTarget: { scope: "remote" as const, instanceId: "client_one" },
+        queueEntryId: "c",
+      })).rejects.toThrow(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
+      expect(federationMock.remoteBackend.moveQueuedTurn).not.toHaveBeenCalled();
+      expect(registry.moveQueuedTurn).not.toHaveBeenCalled();
+    } finally {
+      disposeAgentIpcHandlers();
+    }
   });
 
   it("routes remote thread controls through federation without leaking the target", async () => {
@@ -1213,6 +1342,45 @@ describe("agent ipc", () => {
     disposeAgentIpcHandlers();
   });
 
+  it("hands an off-screen reply to the thread's FIFO and says how it was taken", async () => {
+    const { registerAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_SUBMIT_THREAD_REPLY_CHANNEL } = await import("../../shared/ipc");
+    registerAgentIpcHandlers();
+    const input = [{ type: "text" as const, text: "Use the staging bucket" }];
+    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({ sender: { id: 1 } }, {
+      backend: "codex", threadId: "thread-1", input,
+    })).resolves.toEqual({
+      backend: "codex", threadId: "thread-1", queueStatus: "queued", queueEntryId: "reply-1",
+    });
+    expect(registry.submitThreadReply).toHaveBeenCalledWith({
+      backend: "codex", threadId: "thread-1", input,
+    });
+    vi.mocked(registry.submitThreadReply).mockRejectedValueOnce(new Error("This thread is locked: Parked."));
+    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({ sender: { id: 1 } }, {
+      backend: "codex", threadId: "thread-1", input,
+    })).rejects.toThrow("This thread is locked: Parked.");
+  });
+
+  it.each([false, true])("routes offscreen replies to the owner with no local fallback (remote window=%s)", async (remoteWindow) => {
+    const { registerAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_SUBMIT_THREAD_REPLY_CHANNEL } = await import("../../shared/ipc");
+    registerAgentIpcHandlers();
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    if (remoteWindow) channelSubscriberTargets.set(1, target);
+    const local = { backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "staging" }] };
+    const request = { ...local, ...(!remoteWindow ? { federationTarget: target } : {}) };
+    registry.submitThreadReply.mockClear();
+    const send = federationMock.runtime.requestOperatorQuestionOperation;
+    send.mockClear();
+    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({ sender: { id: 1 } }, request))
+      .resolves.toMatchObject({ queueEntryId: "owner-reply" });
+    expect(send).toHaveBeenCalledExactlyOnceWith(target, "reply", local);
+    send.mockRejectedValueOnce(new Error("Owner disconnected"));
+    await expect(handlers.get(AGENT_SUBMIT_THREAD_REPLY_CHANNEL)?.({ sender: { id: 1 } }, request))
+      .rejects.toThrow("Owner disconnected");
+    expect(registry.submitThreadReply).not.toHaveBeenCalled();
+  });
+
   it("routes remote events only to subscribed windows for the owning instance", async () => {
     const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
     const localSend = vi.fn();
@@ -1268,6 +1436,18 @@ describe("agent ipc", () => {
     channelSubscriberTargets.set(2, { scope: "remote", instanceId: "owner_one" });
     federationMock.runtime.rendererWantsRemoteEvent.mockReturnValue(false);
     broadcastAgentEvent({ backend: "codex", notification: { method: "federation/shutdown/changed", params: { notices: [] } } });
+    expect(localSend).toHaveBeenCalledTimes(1);
+    expect(remoteSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers local authentication health changes to remote windows without thread demand", async () => {
+    const { broadcastAgentEvent } = await import("../ipc/agent-ipc");
+    const localSend = vi.fn();
+    const remoteSend = vi.fn();
+    channelSubscribers = [{ id: 1, send: localSend }, { id: 2, send: remoteSend }];
+    channelSubscriberTargets.set(2, { scope: "remote", instanceId: "owner_one" });
+    federationMock.runtime.rendererWantsRemoteEvent.mockReturnValue(false);
+    broadcastAgentEvent({ backend: "codex", notification: { method: "federation/health/changed", params: {} } });
     expect(localSend).toHaveBeenCalledTimes(1);
     expect(remoteSend).toHaveBeenCalledTimes(1);
   });

@@ -1,6 +1,6 @@
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 
-type Event = { at: number; view: number; effect: number; phase: "effect" | "dispose" | "demand" | "dispatch" | "coalesced" | "invalidate" | "cancel" | "retry"; logical?: number; attempt?: number; count?: number; cause?: NavigationDiagnosticCause; retry?: "page-budget" | "cursor-expired" };
+type Event = { at: number; view: number; effect: number; phase: "effect" | "dispose" | "demand" | "dispatch" | "coalesced" | "invalidate" | "cancel" | "retry"; logical?: number; attempt?: number; count?: number; cause?: NavigationDiagnosticCause; retry?: "page-budget" | "cursor-expired" | "anchor-missing" };
 let diagnosticOrigin: string | undefined;
 export function navigationDiagnosticOrigin(): string { return diagnosticOrigin ??= crypto.randomUUID(); }
 

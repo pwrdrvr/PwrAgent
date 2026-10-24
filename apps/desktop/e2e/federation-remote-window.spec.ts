@@ -380,8 +380,9 @@ test.describe("federation remote window", () => {
       });
       const { window } = app;
 
-      const localRow = window.getByRole("button", {
+      const localRow = window.getByRole("region", { name: "Thread browser" }).getByRole("button", {
         name: "Local colliding thread",
+        exact: true,
       });
       await expect(localRow).toBeVisible({ timeout: 30_000 });
       await localRow.click();
@@ -473,6 +474,7 @@ test.describe("federation remote window", () => {
 
       const remoteRow = window.getByRole("button", {
         name: "Remote colliding thread",
+        exact: true,
       }).first();
       await expect(remoteRow).toBeVisible({ timeout: 30_000 });
       await remoteRow.click();
@@ -508,10 +510,12 @@ test.describe("federation remote window", () => {
       await expect(window.getByText("Local thread is ready.")).toBeVisible();
       await expect(window.getByText("#41 · CI failed")).toBeVisible();
       await expect(
-        window.getByRole("button", { name: "Remote colliding thread" }),
+        window.getByRole("region", { name: "Thread browser" })
+          .getByRole("button", { name: "Remote colliding thread" }),
       ).toHaveCount(1);
       await expect(
-        window.getByRole("button", { name: "Local colliding thread" }),
+        window.getByRole("region", { name: "Thread browser" })
+          .getByRole("button", { name: "Local colliding thread" }),
       ).toHaveCount(1);
       await expect(
         window.locator(".thread-row__open[aria-pressed=\"true\"]"),
@@ -870,6 +874,7 @@ test.describe("federation remote window", () => {
       await window.getByRole("button", { name: /Exit Settings/i }).click();
       const locallyMountedRemoteRow = window.getByRole("button", {
         name: "Remote gateway thread one",
+        exact: true,
       });
       // Row state (selection, offline dim) lives on the CARD; the button is
       // only the title line inside it, because the chip flow beside it
@@ -959,7 +964,8 @@ test.describe("federation remote window", () => {
       // Disarm the quit guard before releasing the mounted session and moving
       // on to the dedicated-remote-window coverage below.
       await setQuitConfirmation(window, false);
-      await window.getByRole("button", { name: "Close terminal" }).click();
+      await window.getByRole("region", { name: "Thread terminals", exact: true })
+        .getByRole("tab").press("Delete");
       await expect(
         window.getByLabel("Integrated terminal", { exact: true }),
       ).toHaveCount(0);
@@ -994,11 +1000,14 @@ test.describe("federation remote window", () => {
 
       // Opening a remote thread renders the peer transcript with the
       // remote-PTY terminal toggle enabled (the gateway granted remote_pty).
-      const remoteRowOne = remote.getByRole("button", {
+      const remoteRowOne = remote.getByRole("region", { name: "Thread browser" }).getByRole("button", {
         name: "Remote gateway thread one",
+        exact: true,
       });
       const remoteCardOne = remote.locator(".thread-row", {
-        has: remoteRowOne,
+        // `has` resolves inside each row; the browser-region locator above
+        // cannot resolve there because that region is the row's ancestor.
+        has: remote.getByRole("button", { name: "Remote gateway thread one", exact: true }),
       });
       await remoteRowOne.click();
       await expect(
@@ -1041,7 +1050,8 @@ test.describe("federation remote window", () => {
 
       // Closing the pane releases the remote session (the owner reaps it
       // after its grace period).
-      await remote.getByRole("button", { name: "Close terminal" }).click();
+      await remote.getByRole("region", { name: "Thread terminals", exact: true })
+        .getByRole("tab").press("Delete");
       await expect(
         remote.getByLabel("Integrated terminal", { exact: true }),
       ).toHaveCount(0);
@@ -1179,7 +1189,7 @@ test.describe("federation remote window", () => {
       await expect(childPrompt).toBeVisible();
       const childSettings = remote.getByLabel("New thread settings");
       const childProvider = childSettings.getByRole("button", {
-        name: "Provider",
+        name: /^Provider(?::|$)/,
         exact: true,
       });
       await expect(childProvider).toContainText("Kimi");
@@ -1189,7 +1199,7 @@ test.describe("federation remote window", () => {
 
       const childTools = remote.getByLabel("Composer tools");
       const childEnvironment = childTools.getByRole("button", {
-        name: "Environment",
+        name: /^Environment(?::|$)/,
         exact: true,
       });
       await expect(childEnvironment).toBeVisible();
@@ -1198,7 +1208,7 @@ test.describe("federation remote window", () => {
       await expect(childEnvironment).toContainText("PwrAgent");
 
       await childPrompt.fill("/review");
-      await remote.getByRole("button", { name: "Start thread" }).click();
+      await remote.getByRole("button", { name: "Start sub-thread" }).click();
       const reviewTarget = remote.getByRole("group", { name: "Review target" });
       await expect(reviewTarget).toBeVisible();
       await reviewTarget.getByRole("combobox", { name: "Base branch" }).click();
@@ -1685,6 +1695,25 @@ test.describe("federation remote window", () => {
       expect(relationship.childThread?.parentThreadId).toBeUndefined();
       expect(relationship.childThread?.parentThreadInstanceId).toBeUndefined();
 
+      // Unlink above must not wait for provider listing; on CI it routinely
+      // runs while the relaunched viewer is still checking. Archive must wait.
+      // It discovers the viewer's own children of this parent, and an
+      // unlisted child would be left behind, so it requires complete
+      // coverage. Startup discovery spawns each provider CLI.
+      await expect
+        .poll(
+          async () => await viewer!.window.evaluate(async (parentInstanceId) => {
+            const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+            const page = await api.getNavigationQueryPage!({ protocol: 2, consumer: "main-sidebar", inventory: "viewer",
+              query: { kind: "exact", identities: [
+                { backend: "acp:kimi", threadId: "federated-kimi-parent", ownerInstanceId: parentInstanceId },
+              ] },
+            });
+            return page.coverage.state;
+          }, ownerInstanceId!),
+          { timeout: 60_000 },
+        )
+        .toBe("complete");
       await rightClickThreadRow(viewer.window, /^Remote Kimi parent(, pinned)?$/);
       await viewer.window.getByRole("menuitem", {
         name: "Archive Thread",
@@ -1694,9 +1723,15 @@ test.describe("federation remote window", () => {
         .poll(async () => (await readViewerRelationship()).parentThread)
         .toBeUndefined();
     } finally {
-      await viewer?.close();
-      await owner?.close();
-      await rm(fixtureRoot, { force: true, recursive: true });
+      try {
+        await viewer?.close();
+      } finally {
+        try {
+          await owner?.close();
+        } finally {
+          await rm(fixtureRoot, { force: true, recursive: true });
+        }
+      }
     }
   });
 
@@ -1934,6 +1969,7 @@ test.describe("federation remote window", () => {
 
       const remoteKimiParent = remote.getByRole("button", {
         name: "Remote Kimi parent",
+        exact: true,
       });
       await expect(remoteKimiParent).toBeVisible({ timeout: 30_000 });
       await rightClickThreadRow(remote, "Remote Kimi parent");
@@ -1943,7 +1979,7 @@ test.describe("federation remote window", () => {
 
       const childSettings = remote.getByLabel("New thread settings");
       const childProvider = childSettings.getByRole("button", {
-        name: "Provider",
+        name: /^Provider(?::|$)/,
         exact: true,
       });
       await expect(childProvider).toContainText("Kimi");
@@ -1951,7 +1987,7 @@ test.describe("federation remote window", () => {
       await remote.getByRole("option", { name: "OpenAI", exact: true }).click();
       await expect(childProvider).toContainText("OpenAI");
 
-      const childAccessMode = childSettings.getByLabel("Access mode");
+      const childAccessMode = childSettings.getByLabel(/^Access mode(?::|$)/);
       if (await childAccessMode.getAttribute("data-value") !== "full-access") {
         await childAccessMode.click();
         await remote.getByRole("option", { name: "Full Access" }).click();
@@ -1964,14 +2000,14 @@ test.describe("federation remote window", () => {
 
       const childEnvironment = remote
         .getByLabel("Composer tools")
-        .getByRole("button", { name: "Environment", exact: true });
+        .getByRole("button", { name: /^Environment(?::|$)/, exact: true });
       await expect(childEnvironment).toBeVisible();
       await childEnvironment.click();
       await remote.getByRole("option", { name: "PwrAgent", exact: true }).click();
       await expect(childEnvironment).toContainText("PwrAgent");
 
       await remote.getByRole("textbox", { name: "New thread" }).fill("/review");
-      await remote.getByRole("button", { name: "Start thread" }).click();
+      await remote.getByRole("button", { name: "Start sub-thread" }).click();
       const reviewTarget = remote.getByRole("group", { name: "Review target" });
       await expect(reviewTarget).toBeVisible();
       await reviewTarget.getByRole("combobox", { name: "Base branch" }).click();
@@ -1995,12 +2031,12 @@ test.describe("federation remote window", () => {
                 if (!child) return undefined;
                 const detail = await api.getNavigationSelectedDetail!({ protocol: 2, ref: child.ref });
                 const runtime = detail.thread?.codexEnvironmentRuntime;
-                return runtime && {
+                return runtime?.environmentId ? {
                   environmentId: runtime.environmentId,
                   setupDurationMs: runtime.setupDurationMs,
                   setupOutput: runtime.setupOutput?.slice(-2_000),
                   setupStatus: runtime.setupStatus,
-                };
+                } : undefined;
               },
               { parentThreadId: parent.threadId },
             );

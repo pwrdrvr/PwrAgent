@@ -36,6 +36,7 @@ import {
 } from "../../chrome/ChipContextMenu";
 import { MoreVerticalIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
+import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
   formatTokenCount,
@@ -55,7 +56,8 @@ import { useThreadDisplayResource } from "../../../lib/useThreadDisplayResource"
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
-import { UsagePaceCard } from "./UsagePaceCard";
+import { ThreadFamilyPricingCard } from "./ThreadFamilyPricingCard";
+import { ClaudeUsageLimits, UsagePaceCard } from "./UsagePaceCard";
 import {
   exactSummaryMoneyTitle,
   formatRoundedSummaryMoney,
@@ -99,6 +101,8 @@ type PricingPanelProps = {
    * Supplies each sub-agent row's name and its live/terminal status.
    */
   subAgents?: ThreadSubAgentSummary[];
+  /** Ordinary sub-threads directly under this thread, from its navigation row. */
+  subThreadCount?: number;
   tokenMiserAccounting?: ThreadTokenMiserAccounting;
   threadReasoningEffort?: string;
   turnFailures?: readonly ThreadTurnFailure[];
@@ -301,9 +305,25 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
         <p className="context-empty">No usage pricing recorded yet.</p>
       ) : null}
 
+      {/* Stored totals live on the owning machine, so a peer's thread has no
+          family read here, whether the thread or the whole window fronts the
+          peer. Keyed by thread so nothing read for one shows on the next. */}
+      {id !== undefined && source !== undefined
+        && (federation?.ref.target ?? readRendererFederationTarget())?.scope !== "remote" ? (
+        <ThreadFamilyPricingCard
+          key={JSON.stringify([source, id])}
+          desktopApi={props.desktopApi}
+          backend={source}
+          threadId={id}
+          subThreadCount={props.subThreadCount ?? 0}
+        />
+      ) : null}
+
       {/* This thread's bill; the account's limit and its pace are the card,
           and every thread's spend across instances is the window it opens. */}
-      <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} />
+      {source === "claude"
+        ? <ClaudeUsageLimits backend={props.backends?.find((backend) => backend.kind === "claude")} />
+        : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} />}
 
       {/* Under the spend breakdown, above the turn rows: the gate's result is
           part of reading the bill, not a footnote to one turn of it. */}
@@ -389,11 +409,14 @@ function PricingSnapshotCard(props: { estimate: NonNullable<ThreadPricingDisplay
       <RailSummaryRow label="Output" value={count(tokens?.outputTokens)} />
       <RailSummaryRow label="Reasoning" value={count(tokens?.reasoningOutputTokens)} />
       <p className="context-empty context-empty--warning">
-        {props.estimate.localModel
+        {props.estimate.pricingSource === "provider"
+          ? "Codex estimated this usage from its recorded model and speed groups."
+          : props.estimate.localModel
           ? "Estimate assumes all tokens used the current model, declared local with zero token cost."
           : "Estimate assumes all tokens used the current model at today's list prices."}
         {" "}
-        PwrAgent did not observe the turns, so model switches, speed settings, and earlier provider price changes may make it inaccurate.
+        {props.estimate.pricingSource === "provider" ? "PwrAgent did not observe the individual turns."
+          : "PwrAgent did not observe the turns, so model switches, speed settings, and earlier provider price changes may make it inaccurate."}
       </p>
       {!tokens ? <p className="context-empty">Codex has not provided historical token totals for this thread.</p> : null}
     </div>
@@ -1060,7 +1083,7 @@ function formatUsageLineRunningTotal(params: {
   const estimates: string[] = [];
   if (params.displayOptions.usd && params.lineTotals?.runningCostMicros !== undefined) {
     estimates.push(
-      `${formatMoney(params.lineTotals.runningCostMicros, params.line.currency)} list price`,
+      `${formatMoney(params.lineTotals.runningCostMicros, params.line.currency)} ${params.line.pricingBasis === "provider-reported" ? "provider estimate" : "list price"}`,
     );
   }
   if (
@@ -1338,6 +1361,7 @@ function formatPricingProviderLabel(provider: string): string {
 }
 
 function formatUsageLineCostSuffix(line: PricingUsageLine): string {
+  if (line.pricingBasis === "provider-reported") return "provider estimate this turn";
   if (line.pricingCatalogId === LOCAL_MODEL_PRICING_CATALOG) return "local inference";
   if (isEstimatedUsageGap(line)) {
     return "estimated list price";

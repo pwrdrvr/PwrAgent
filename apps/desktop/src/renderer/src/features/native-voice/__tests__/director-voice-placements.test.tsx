@@ -3,22 +3,37 @@
 // the thread header carries when the sidebar is hidden, and the Windows title
 // bar. Collapsing the sidebar must not take voice away.
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppTitleBar } from "../../chrome/AppTitleBar";
 import { MastheadActions } from "../../chrome/MastheadActions";
 import type { NativeVoiceApi } from "../../../../../shared/native-voice";
-import { DirectorVoiceButton } from "../DirectorVoice";
+import { DirectorVoiceButton, useOperatorFocusPublisher } from "../DirectorVoice";
 
 const mic = <button type="button" aria-label="Director voice" />;
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   Object.defineProperty(window, "pwragent", { configurable: true, value: undefined });
   delete (window as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget;
 });
 
 describe("director voice placements", () => {
+  it("republishes the current selection when a navigation command selects the same thread", async () => {
+    vi.useFakeTimers();
+    const publishOperatorFocus = vi.fn(async () => {});
+    const api = { publishOperatorFocus } as unknown as NativeVoiceApi;
+    const focus = { view: "thread" as const, thread: { backend: "codex" as const, threadId: "fixture", title: "Fixture" } };
+    const hook = renderHook(({ revision }) => useOperatorFocusPublisher(api, focus, revision), { initialProps: { revision: 0 } });
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    expect(publishOperatorFocus).toHaveBeenCalledTimes(1);
+    hook.rerender({ revision: 1 });
+    await act(() => vi.advanceTimersByTimeAsync(150));
+    expect(publishOperatorFocus).toHaveBeenCalledTimes(2);
+    expect(publishOperatorFocus).toHaveBeenLastCalledWith(focus);
+  });
+
   it("leads the relocated masthead the thread header shows with the sidebar hidden", () => {
     render(<MastheadActions voiceControl={mic} onToggleThreadSearch={vi.fn()} />);
     const buttons = screen.getAllByRole("button");

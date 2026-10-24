@@ -4,10 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyCodexEnvironmentActionRunUpdate,
+  withoutSupersededCodexEnvironmentActionRuns,
+  type CodexThreadEnvironmentRuntime,
+} from "@pwragent/shared";
+import {
   applyLocalCodexEnvironmentSelection,
   attachDetachedCommandThreadId,
   buildExitErrorSuffix,
   CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS_ENV,
+  CodexEnvironmentStartupError,
   listRunningDetachedCommands,
   startLocalCodexEnvironmentAction,
   stopCodexEnvironmentDetachedCommand,
@@ -229,6 +235,61 @@ describe("codex environment runtime", () => {
     ).rejects.toThrow(
       "Codex environment working directory does not exist: /definitely/not/a/pwragent/worktree",
     );
+  });
+
+  it.each([
+    { format: "list", spawnFails: false },
+    { format: "list", spawnFails: true },
+    { format: "singular", spawnFails: false },
+    { format: "singular", spawnFails: true },
+  ])("backfills $format provenance before rerunning an action (spawn failure: $spawnFails)", async ({ format, spawnFails }) => {
+    const runtime: CodexThreadEnvironmentRuntime = {
+      environmentId: "original",
+      environmentName: "Original",
+      executionTarget: "local",
+      actions: [{ id: "dev", name: "Dev", command: "pnpm dev" }],
+      ...(format === "list" ? {
+        actionRuns: [{
+          runId: "old", actionId: "dev", actionName: "Dev", command: "pnpm dev",
+          status: "exited" as const, startedAt: 1, exitedAt: 2, output: "old logs",
+        }, {
+          runId: "foreign", actionId: "dev", actionName: "Dev", command: "pnpm dev",
+          environmentId: "other", environmentName: "Other",
+          status: "exited" as const, startedAt: 1, exitedAt: 3,
+        }],
+      } : {
+        actionId: "dev", actionName: "Dev", actionCommand: "pnpm dev",
+        actionStatus: "exited" as const, actionStartedAt: 1, actionExitedAt: 2, actionOutput: "old logs",
+      }),
+    };
+    let next: CodexThreadEnvironmentRuntime;
+    try {
+      next = await startLocalCodexEnvironmentAction({
+        runtime, actionId: "dev", runId: "new",
+        commandRunner: async () => {
+          if (spawnFails) throw new Error("spawn failed");
+          return { pid: 4242 };
+        },
+      });
+      expect(spawnFails).toBe(false);
+    } catch (error) {
+      expect(spawnFails).toBe(true);
+      expect(error).toBeInstanceOf(CodexEnvironmentStartupError);
+      if (!(error instanceof CodexEnvironmentStartupError)) throw error;
+      next = error.runtime;
+    }
+    expect(next.actionRuns?.[0]).toMatchObject({
+      environmentId: "original", environmentName: "Original", output: "old logs",
+    });
+    if (format === "list") {
+      expect(next.actionRuns?.[1]).toEqual(runtime.actionRuns?.[1]);
+      expect(runtime.actionRuns?.[0].environmentId).toBeUndefined();
+    }
+    const finishedRuns = applyCodexEnvironmentActionRunUpdate(next.actionRuns!, {
+      kind: "patch", runId: "new", patch: { status: spawnFails ? "failed" : "exited", exitedAt: Date.now() },
+    });
+    expect(withoutSupersededCodexEnvironmentActionRuns(finishedRuns).map((run) => run.runId))
+      .toEqual(format === "list" ? ["foreign", "new"] : ["new"]);
   });
 
   it("runs detached actions with the provided hydrated environment", async () => {

@@ -8,11 +8,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "1.74.0",
+    "@larksuiteoapi/node-sdk": "1.76.0",
     "@pwragent/messaging-interface": "workspace:*"
   },
   "devDependencies": {
-    "vitest": "^4.1.4"
+    "vitest": "^5.0.1"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

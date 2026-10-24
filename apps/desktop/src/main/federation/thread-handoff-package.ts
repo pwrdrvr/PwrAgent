@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import { gzip, gunzip } from "node:zlib";
-import type { AppServerThreadReplay, ThreadHandoffPackage } from "@pwragent/shared";
+import type { AppServerThreadReplay, ThreadHandoffGitReference, ThreadHandoffPackage } from "@pwragent/shared";
 
 export const THREAD_HANDOFF_MAX_BYTES = 128 * 1024 * 1024;
 const compress = promisify(gzip);
@@ -29,26 +29,29 @@ export function decodeHandoffBytes(value: unknown): Buffer {
   return bytes;
 }
 
-export function validateHandoffFilePaths(files: NonNullable<ThreadHandoffPackage["git"]>["files"]): void {
-  if (!Array.isArray(files) || files.length > 100_000) throw new Error("Invalid handoff file list.");
-  const seen = new Set<string>();
-  for (const file of files) {
-    if (!file || typeof file.path !== "string" || !file.path
-      || file.path.includes("\\") || file.path.includes("\0")
-      || file.path.split("/").some((segment) => !segment || segment === "." || segment === ".." || segment.toLowerCase() === ".git")
-      || (file.mode !== "100644" && file.mode !== "100755")) {
-      throw new Error("Unsafe handoff file path or mode.");
-    }
-    if (process.platform === "win32" && file.path.split("/").some((segment) =>
+export function validateHandoffRelativePath(file: string): void {
+  if (typeof file !== "string" || !file || file.length > 4096
+    || file.includes("\\") || file.includes("\0")
+    || file.split("/").some((segment) => !segment || segment === "." || segment === ".." || segment.toLowerCase() === ".git")) {
+    throw new Error("Unsafe handoff file path.");
+  }
+  if (process.platform === "win32" && file.split("/").some((segment) =>
       /[<>:"|?*]/.test(segment) || Array.from(segment).some((char) => char.charCodeAt(0) < 32) || /[. ]$/.test(segment)
       || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(segment))) {
-      throw new Error("A handoff filename is unsupported on Windows.");
-    }
-    const key = process.platform === "win32" || process.platform === "darwin" ? file.path.toLowerCase() : file.path;
-    if (seen.has(key)) throw new Error("Duplicate or case-colliding handoff file paths.");
-    seen.add(key);
-    decodeHandoffBytes(file.dataBase64);
+    throw new Error("A handoff filename is unsupported on Windows.");
   }
+}
+
+export function validateGitHandoffReference(value: ThreadHandoffGitReference): void {
+  if (!value || typeof value.head !== "string" || !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(value.head)
+    || typeof value.ref !== "string" || !value.ref.startsWith("refs/heads/") || value.ref.length > 1024
+    || /[\s~^:?*\[\\]/.test(value.ref) || value.ref.includes("..") || value.ref.includes("@{")
+    || value.ref.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock") || part.endsWith("."))
+    || typeof value.origin !== "string" || !value.origin || value.origin.length > 4096 || value.origin.includes("\0")
+    || (value.sourceBranch !== undefined && (typeof value.sourceBranch !== "string" || value.sourceBranch.length > 1024))) {
+    throw new Error("Invalid published Git handoff reference.");
+  }
+  if (value.cwdRelative !== undefined) validateHandoffRelativePath(value.cwdRelative);
 }
 
 export async function encodeThreadHandoff(value: ThreadHandoffPackage): Promise<Buffer> {
@@ -60,20 +63,23 @@ export async function encodeThreadHandoff(value: ThreadHandoffPackage): Promise<
 export async function decodeThreadHandoff(bytes: Buffer): Promise<ThreadHandoffPackage> {
   if (bytes.length > THREAD_HANDOFF_MAX_BYTES) throw new Error("The compressed handoff exceeds 128 MiB.");
   const value = JSON.parse((await decompress(bytes, { maxOutputLength: THREAD_HANDOFF_MAX_BYTES })).toString("utf8")) as ThreadHandoffPackage;
-  if (!value || value.version !== 1 || typeof value.handoffId !== "string" || !/^[0-9a-f-]{36}$/.test(value.handoffId)
+  if (!value || value.version !== 2 || typeof value.handoffId !== "string" || !/^[0-9a-f-]{36}$/.test(value.handoffId)
     || typeof value.sourceThreadId !== "string" || !value.sourceThreadId
     || typeof value.historyDigest !== "string" || !/^[0-9a-f]{64}$/.test(value.historyDigest)
     || (value.title !== undefined && (typeof value.title !== "string" || value.title.length > 1000))) {
-    throw new Error("Unsupported or invalid thread handoff package.");
+    throw new Error("Unsupported or invalid thread handoff package. Update PwrAgent on both machines and retry.");
   }
   if (!decodeHandoffBytes(value.rolloutBase64).length) throw new Error("Empty thread handoff history.");
   if (value.git !== undefined) {
-    if (!value.git || ![value.git.head, value.git.indexCommit, value.git.workingCommit].every((oid) => typeof oid === "string" && /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(oid))) {
-      throw new Error("Invalid Git handoff object IDs.");
+    validateGitHandoffReference(value.git);
+  }
+  if (value.workspace !== undefined) {
+    if (value.git || !value.workspace || !["tar.gz", "zip"].includes(value.workspace.format)
+      || !Array.isArray(value.workspace.warnings) || value.workspace.warnings.length > 100
+      || value.workspace.warnings.some((warning) => typeof warning !== "string" || warning.length > 2000)) {
+      throw new Error("Invalid non-Git handoff workspace.");
     }
-    decodeHandoffBytes(value.git.bundleBase64);
-    validateHandoffFilePaths(value.git.files);
-    if (value.git.cwdRelative !== undefined) validateHandoffFilePaths([{ path: value.git.cwdRelative, mode: "100644", dataBase64: "" }]);
+    decodeHandoffBytes(value.workspace.dataBase64);
   }
   return value;
 }

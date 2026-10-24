@@ -22,6 +22,49 @@ describe("directoryIdentityNames", () => {
 });
 
 describe("findPeerCounterpartDirectory", () => {
+  it.each(["local", "peer"])("recognizes a fork through %s configured remotes", (side) => {
+    const fork = "github.com/fixture-fork/disktree";
+    const upstream = "github.com/fixture-upstream/disktree";
+    const directory = { kind: "directory" as const, label: "disktree" };
+    const source = {
+      ...directory,
+      repositoryKey: fork,
+      ...(side === "local" ? { repositoryKeys: [fork, upstream] } : {}),
+    };
+    const peer = {
+      ...directory,
+      key: "peer-project",
+      repositoryKey: upstream,
+      ...(side === "peer" ? { repositoryKeys: [upstream, fork] } : {}),
+    };
+
+    expect(findPeerCounterpartDirectory(source, [peer])?.key).toBe("peer-project");
+  });
+
+  it("prefers the same origin over a checkout sharing another configured remote", () => {
+    const fork = { ...local, repositoryKeys: [local.repositoryKey, "github.com/upstream/project-a"] };
+    const peer = [
+      { ...local, key: "upstream", repositoryKey: "github.com/upstream/project-a" },
+      { ...local, key: "fork" },
+    ];
+
+    expect(findPeerCounterpartDirectory(fork, peer)?.key).toBe("fork");
+  });
+
+  it("matches shared remotes with different folder names and no origin", () => {
+    const source = { ...local, repositoryKey: undefined, repositoryKeys: ["GitHub.com/Example-Org/Project-A"] };
+    const peer = [{ kind: "directory" as const, key: "renamed", label: "Alpha", repositoryKeys: [local.repositoryKey] }];
+
+    expect(findPeerCounterpartDirectory(source, peer)?.key).toBe("renamed");
+  });
+
+  it("rejects same names when configured remotes establish unrelated repositories", () => {
+    const source = { ...local, repositoryKey: undefined, repositoryKeys: [local.repositoryKey] };
+    const peer = [{ ...local, key: "other", repositoryKey: undefined, repositoryKeys: ["github.com/other/project-a"] }];
+
+    expect(findPeerCounterpartDirectory(source, peer)).toBeUndefined();
+  });
+
   it("matches by origin even when the peer named its folder differently", () => {
     const peer = [
       { key: "w", kind: "workspace" as const, label: "Workspaces" },

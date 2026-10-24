@@ -15,6 +15,10 @@ import {
   DesktopMessagingBackendBridge,
   type DesktopMessagingFederationBridge,
 } from "../messaging/desktop-backend-bridge";
+import {
+  toFederatedTranscriptImageProtocolUrl,
+  toTranscriptImageProtocolUrl,
+} from "../transcript-image-protocol";
 
 const {
   getThreadOverlayState,
@@ -1221,6 +1225,110 @@ describe("DesktopMessagingBackendBridge", () => {
     ]);
   });
 
+  it("fetches a peer-owned thread's assistant images from the owning peer", async () => {
+    const ownerImageUrl = toTranscriptImageProtocolUrl(
+      "file:///owner/profiles/work/state/thread-images/codex/thread-1/markdown-a.png",
+    );
+    const unreadableImageUrl = toTranscriptImageProtocolUrl(
+      "file:///owner/profiles/work/state/thread-images/codex/thread-1/markdown-gone.png",
+    );
+    const textImageUrl = toTranscriptImageProtocolUrl(
+      "file:///owner/profiles/work/state/thread-images/codex/thread-1/markdown-text.png",
+    );
+    const response: AppServerReadThreadResponse = {
+      backend: "codex",
+      fetchedAt: 1,
+      threadId: "thread-1",
+      replay: {
+        entries: [
+          {
+            id: "item-final",
+            role: "assistant",
+            text: "![chart](/tmp/charts/chart.png)",
+            type: "message",
+            turn: { id: "turn-1" },
+            parts: [
+              { type: "text", text: "![chart](/tmp/charts/chart.png)" },
+              {
+                type: "image",
+                url: toFederatedTranscriptImageProtocolUrl("peer-a", ownerImageUrl),
+              },
+              {
+                type: "image",
+                url: toFederatedTranscriptImageProtocolUrl("peer-b", ownerImageUrl),
+              },
+              {
+                type: "image",
+                url: toFederatedTranscriptImageProtocolUrl("peer-a", unreadableImageUrl),
+              },
+              {
+                type: "image",
+                url: toFederatedTranscriptImageProtocolUrl("peer-a", textImageUrl),
+              },
+            ],
+          },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    };
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const remoteReadThread = vi.fn(async () => response);
+    const readTranscriptImage = vi.fn(async ({ url }: { url: string }) => {
+      if (url === unreadableImageUrl) {
+        throw new Error("transcript image not found");
+      }
+      return {
+        dataBase64: pngBytes.toString("base64"),
+        mimeType: url === textImageUrl ? "text/html" : "image/png",
+      };
+    });
+    const localReadThread = vi.fn();
+    const bridge = new DesktopMessagingBackendBridge({
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+      readThread: localReadThread,
+    } as unknown as DesktopBackendRegistry, {
+      connectedPeerTargets: () => [{
+        target: { scope: "remote", instanceId: "peer-a" },
+        label: "peer-a",
+        capabilities: ["messaging_route"],
+      }],
+      remoteBackend: () => ({
+        readThread: remoteReadThread,
+        readTranscriptImage,
+      } as unknown as FederationBackendOperations),
+    } as unknown as DesktopMessagingFederationBridge);
+
+    await expect(bridge.resolveAssistantMessageImages({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "peer-a" },
+      itemId: "item-final",
+      text: "![chart](/tmp/charts/chart.png)",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    })).resolves.toEqual([
+      expect.objectContaining({
+        source: "assistant",
+        type: "image",
+        url: `data:image/png;base64,${pngBytes.toString("base64")}`,
+      }),
+    ]);
+    expect(remoteReadThread).toHaveBeenCalledWith({
+      backend: "codex",
+      limit: 20,
+      threadId: "thread-1",
+    });
+    expect(readTranscriptImage.mock.calls.map(([request]) => request.url)).toEqual([
+      ownerImageUrl,
+      unreadableImageUrl,
+      textImageUrl,
+    ]);
+    expect(localReadThread).not.toHaveBeenCalled();
+  });
+
   it("resolves an explicit remote attach target with a federated thread ref", async () => {
     const remoteThread: NavigationSnapshot["threads"][number] = {
       id: "remote-thread",
@@ -1284,6 +1392,46 @@ describe("DesktopMessagingBackendBridge", () => {
         target: { scope: "remote", instanceId: "pwr_remote" },
       },
     });
+  });
+
+  it("locks a local thread as messaging, and hands a remote one to its owner", async () => {
+    const remoteSetThreadLock = vi.fn(async () => ({ backend: "codex" as const, threadId: "remote-thread" }));
+    const federation = {
+      connectedPeerTargets: () => [],
+      health: async () => ({
+        enabled: false,
+        role: "dual" as const,
+        status: "disabled" as const,
+        peers: [],
+      }),
+      onRemoteBackendEvent: () => () => undefined,
+      remoteBackend: () => ({ setThreadLock: remoteSetThreadLock } as unknown as FederationBackendOperations),
+      remoteNavigationSnapshot: vi.fn(),
+    } satisfies DesktopMessagingFederationBridge;
+    const setThreadLock = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1" }));
+    const bridge = new DesktopMessagingBackendBridge(
+      { setThreadLock } as unknown as DesktopBackendRegistry,
+      federation,
+    );
+
+    await bridge.setThreadLock({ backend: "codex", threadId: "thread-1", locked: true });
+    expect(setThreadLock).toHaveBeenCalledWith(
+      { backend: "codex", threadId: "thread-1", locked: true },
+      { source: "messaging" },
+    );
+
+    await bridge.setThreadLock({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "client_one" },
+      threadId: "remote-thread",
+      locked: false,
+    });
+    expect(remoteSetThreadLock).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "remote-thread",
+      locked: false,
+    });
+    expect(setThreadLock).toHaveBeenCalledTimes(1);
   });
 
   it("routes targeted messaging turns and navigation to the remote backend", async () => {

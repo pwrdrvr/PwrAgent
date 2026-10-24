@@ -221,14 +221,19 @@ describe("Federation activity surfaces", () => {
     const trigger = screen.getByRole("button", { name: "Open Star Map" });
     act(() => trigger.focus());
     await screen.findByText("Running · connected");
-    const action = screen.getByRole("button", { name: "Open Federation Activity" });
+    const action = screen.getByRole("button", { name: /Open Federation Activity/ });
     act(() => action.focus());
+    vi.useFakeTimers();
+    fireEvent.pointerLeave(trigger.parentElement!);
+    act(() => vi.advanceTimersByTime(200));
+    expect(action).toHaveFocus();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+    vi.useRealTimers();
     fireEvent.keyDown(action, { key: "Escape" });
     expect(trigger).toHaveFocus();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     fireEvent.pointerEnter(trigger);
-    fireEvent.click(screen.getByRole("button", { name: "Open Federation Activity" }));
+    fireEvent.click(screen.getByRole("button", { name: /Open Federation Activity/ }));
     await waitFor(() => expect(openFederationActivity).toHaveBeenCalledTimes(1));
   });
 
@@ -307,7 +312,7 @@ describe("Federation activity surfaces", () => {
       historyPeerId: "remote", historyView: "logical", includeHistory: undefined,
     }));
     // Endpoints has no aggregate, so the filter offers no All chip there.
-    expect(within(screen.getByRole("group", { name: "Peer" })).getAllByRole("button").map((chip) => chip.textContent))
+    expect(within(screen.getByRole("group", { name: "Peer" })).getAllByRole("button").map((chip) => chip.textContent?.trim()))
       .toEqual(["remote"]);
     expect(screen.getByRole("button", { name: "remote" })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Always on top" }));
@@ -467,9 +472,9 @@ describe("Activity report controls", () => {
     const openFederationActivity = vi.fn(async () => {});
     render(<FederationStatusControl desktopApi={{ readFederationActivity, openFederationActivity }} onOpen={vi.fn()} />);
     fireEvent.focus(screen.getByRole("button", { name: "Open Star Map" }));
-    const card = await screen.findByRole("button", { name: "Open Federation Activity" });
+    const card = await screen.findByRole("button", { name: /Open Federation Activity/ });
     expect(readFederationActivity).toHaveBeenCalledWith(expect.objectContaining({ includeHistory: true, historySeconds: 60 }));
-    expect(card).toHaveAccessibleDescription("↑ 1 KB sent ↓ 2 KB received");
+    expect(card).toHaveAccessibleName(/↑ 1 KB sent ↓ 2 KB received/);
     fireEvent.click(card);
     await waitFor(() => expect(openFederationActivity).toHaveBeenCalledTimes(1));
   });
@@ -494,16 +499,16 @@ describe("Activity report controls", () => {
     const sky = await openSky();
     const buttons = within(sky).getAllByRole("button");
     expect(buttons.map((button) => button.getAttribute("aria-label") ?? button.textContent?.replace("↗", "").trim())).toEqual([
-      "Open Laptop on the Star Map",
-      "Open Travel laptop on the Star Map",
+      "Open Laptop LAN on the Star Map",
+      "Open Travel laptop CF on the Star Map",
       "Open Build VM on the Star Map",
       "Open the Star Map",
     ]);
     // The transport rides on the body; the chip list it replaced is gone.
-    expect(buttons.slice(0, 3).map((button) => button.textContent)).toEqual(["LaptopLAN", "Travel laptopCF", "Build VM"]);
+    expect(buttons.slice(0, 3).map((button) => button.textContent?.trim())).toEqual(["Laptop LAN", "Travel laptop CF", "Build VM"]);
     expect(sky).toHaveTextContent("Star Map · 4 instances · 2 connected");
     expect(screen.queryByRole("list", { name: "Federation instances" })).not.toBeInTheDocument();
-    fireEvent.click(within(sky).getByRole("button", { name: "Open Travel laptop on the Star Map" }));
+    fireEvent.click(within(sky).getByRole("button", { name: "Open Travel laptop CF on the Star Map" }));
     await waitFor(() => expect(openStarMapWindow).toHaveBeenCalledWith({ instanceId: "travel" }));
     expect(onOpen).not.toHaveBeenCalled();
     fireEvent.click(within(await openSky()).getByRole("button", { name: "Open the Star Map" }));
@@ -529,7 +534,7 @@ describe("Activity report controls", () => {
     const sky = await openSky();
     const bodies = within(sky).getAllByRole("button").slice(0, 3);
     expect(bodies.map((body) => body.getAttribute("aria-label"))).toEqual([
-      "Open Studio / default on the Star Map",
+      "Open Studio / default Direct on the Star Map",
       "Open Studio / dev on the Star Map",
       "Open Build VM on the Star Map",
     ]);
@@ -629,15 +634,15 @@ describe("Activity report controls", () => {
     render(<FederationActivityScreen desktopApi={{ readFederationActivity }} />);
     const filter = within(await screen.findByRole("group", { name: "Peer" }));
     // Only peers with a series get a chip: Build VM has none in this view.
-    expect(filter.getAllByRole("button").map((chip) => chip.textContent))
-      .toEqual(["All connections · 2", "Studio MacTS Funnel", "Other peers (attribution limit)"]);
+    expect(filter.getAllByRole("button").map((chip) => chip.textContent?.trim()))
+      .toEqual(["All connections · 2", "Studio Mac TS Funnel", "Other peers (attribution limit)"]);
     expect(filter.getByRole("button", { name: /^All connections/ })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.click(filter.getByRole("button", { name: "Studio Mac" }));
+    fireEvent.click(filter.getByRole("button", { name: "Studio Mac TS Funnel" }));
     await waitFor(() => expect(readFederationActivity).toHaveBeenLastCalledWith({
       historyPeerId: "gateway", historyView: "physical", includeHistory: undefined,
     }));
-    expect(filter.getByRole("button", { name: "Studio Mac" })).toHaveAttribute("aria-pressed", "true");
-    fireEvent.focus(filter.getByRole("button", { name: "Studio Mac" }));
+    expect(filter.getByRole("button", { name: "Studio Mac TS Funnel" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.focus(filter.getByRole("button", { name: "Studio Mac TS Funnel" }));
     expect(await screen.findByRole("tooltip")).toHaveTextContent("Through Tailscale Funnel");
   });
 

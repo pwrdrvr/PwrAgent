@@ -11,6 +11,7 @@ export function scopeDesktopApiToFederationTarget(
   const setThreadAgent = desktopApi.setThreadAgent;
   const setThreadTokenMiser = desktopApi.setThreadTokenMiser;
   const openApplication = desktopApi.openApplication;
+  const resolveTranscriptFiles = desktopApi.resolveTranscriptFiles;
   const readMarkdownFile = desktopApi.readMarkdownFile;
   const openMarkdownFileViewer = desktopApi.openMarkdownFileViewer;
   const refreshDirectoryGitStatuses = desktopApi.refreshDirectoryGitStatuses;
@@ -55,6 +56,9 @@ export function scopeDesktopApiToFederationTarget(
           federationTarget,
         })
       : undefined,
+    // Image bytes come from the viewer's own disk; a remote thread's worktree
+    // lives on its owner, so its rows keep the plain size chip.
+    readWorktreeImage: undefined,
     connectPwrSnap: undefined,
     openPwrSnap: undefined,
     openPwrSnapDownload: undefined,
@@ -75,6 +79,9 @@ export function scopeDesktopApiToFederationTarget(
     onPwrSuiteInstaller: undefined,
     openPath: undefined,
     revealPath: undefined,
+    resolveTranscriptFiles: resolveTranscriptFiles
+      ? async (request) => await resolveTranscriptFiles({ ...request, federationTarget })
+      : undefined,
     readMarkdownFile: readMarkdownFile
       ? async (request) => await readMarkdownFile({ ...request, federationTarget })
       : undefined,

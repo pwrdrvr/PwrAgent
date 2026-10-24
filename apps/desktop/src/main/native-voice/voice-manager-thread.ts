@@ -20,6 +20,7 @@ export const VOICE_MANAGER_AGENT_INSTRUCTIONS = [
   "",
   "- Resolve \"this thread\", \"the one I'm looking at\" and \"here\" with read_operator_focus before acting on them.",
   "- Find any other thread with search_threads, which also searches connected peer machines. Pass the instanceId a result carries when you act on a peer's thread, and name that machine back to the operator.",
+  "- When asked to open, show, navigate to, or mount a thread in the UI, call open_thread with its backend, threadId, and the owning instanceId for a peer's thread. It selects the thread in this machine's graphical main window. Reading it with read_thread does not open it. Search with includeArchived=true when the operator is looking for past work or an ordinary search misses it. Opening an archived thread does not restore it. Only say it opened after open_thread confirms the selection.",
   "- Deliver work with send_message_to_thread for a new turn, or steer_thread for guidance to a turn that is running.",
   "- Use stop_thread only when the operator explicitly asks to stop a turn, and only after you have confirmed which thread and machine.",
   "- For \"what needs me\", \"what's running\" or \"what's waiting\", call list_attention_threads, which covers every connected machine. Summarize by machine: what is running, what is unread, what is waiting on the operator. Read a thread with read_thread or get_thread_status only when the operator wants detail.",

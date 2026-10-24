@@ -207,6 +207,7 @@ describe("FederationSettings", () => {
   });
   it.each([
     ["Allow incoming files", "allowFilePush", true],
+    ["Allow port forwarding", "allowPortForwarding", true],
     ["Allow remote shells", "allowRemoteShells", false],
     ["Allow file pull", "allowFilePull", true],
   ] as const)("saves %s immediately without connection drafts", async (label, key, value) => {
@@ -656,7 +657,11 @@ describe("FederationSettings", () => {
     );
   });
 
-  it("rejects an invalid gateway endpoint before saving", async () => {
+  it.each([
+    ["Gateway endpoints", "https://not-a-federation-endpoint.example"],
+    ["Gateway endpoints", "ws://studio.tail1234.ts..net:47830"],
+    ["Advertised endpoints", "ws://studio.tail1234.ts..net:47830"],
+  ])("rejects invalid %s value %s before saving", async (field, value) => {
     const onWriteConfig = vi.fn(async () => true);
     render(
       <FederationSettings
@@ -679,8 +684,8 @@ describe("FederationSettings", () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText("Gateway endpoints"), {
-      target: { value: "https://not-a-federation-endpoint.example" },
+    fireEvent.change(screen.getByLabelText(field), {
+      target: { value },
     });
     fireEvent.click(
       screen.getByRole("button", { name: "Save federation settings" }),
@@ -1833,6 +1838,7 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
       listenPort: { value: 8765, source: "config" },
       compressionEnabled: { value: true, source: "default" },
       allowRemoteShells: { value: true, source: "default" },
+      allowPortForwarding: { value: false, source: "default" },
       allowFilePush: { value: false, source: "default" },
       allowFilePull: { value: false, source: "default" },
       allowFilePullOutsideThreadDirectories: { value: false, source: "default" },

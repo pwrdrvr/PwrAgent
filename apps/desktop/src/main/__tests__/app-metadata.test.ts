@@ -77,11 +77,16 @@ describe("app metadata", () => {
     readAppBuildIdentity.mockResolvedValueOnce(startupIdentity)
       .mockResolvedValueOnce({ ...startupIdentity, branch: "later-branch" });
     const { registerAppMetadataIpcHandlers, resolveAppMetadata } = await import("../ipc/app-metadata");
+    const { resolveAppBuildMetadata } = await import("../app-build-metadata");
     registerAppMetadataIpcHandlers();
     expect(readAppBuildIdentity).toHaveBeenCalledOnce();
     expect(readAppBuildIdentity).toHaveBeenCalledWith(false, "/repo/apps/desktop");
     expect((await resolveAppMetadata(4101)).buildIdentity).toEqual(startupIdentity);
     expect((await resolveAppMetadata(4102)).buildIdentity).toEqual(startupIdentity);
+    expect(await resolveAppBuildMetadata()).toEqual({
+      applicationVersion: "1.2.3",
+      buildIdentity: startupIdentity,
+    });
     expect(readAppBuildIdentity).toHaveBeenCalledOnce();
   });
 

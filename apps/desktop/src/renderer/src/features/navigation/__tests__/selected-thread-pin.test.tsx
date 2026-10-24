@@ -45,7 +45,7 @@ describe("Selected thread in a collapsed directory", () => {
 
     rerender(<DirectoriesList {...props} directories={fixture.directories.map((directory) => ({ ...directory, directoryThreadsCollapsed: false }))} />);
     const ordinaryRow = screen.getByRole("button", { name: thread.title }).closest('[role="listitem"]') as HTMLElement;
-    expect(ordinaryRow.querySelector(".thread-row__heading-pin")).toBeNull();
+    expect(ordinaryRow.querySelector(".thread-row__pin")).toBeNull();
   });
   it("retains the root and selected child without giving the child a pin action", () => {
     const fixture = buildLargeDirectoryFixture({ pinnedThreadsPerDirectory: 1,

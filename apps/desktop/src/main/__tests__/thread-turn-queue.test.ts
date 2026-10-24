@@ -21,6 +21,48 @@ function buildEntry(
 }
 
 describe("ThreadTurnQueue", () => {
+  it("keeps a display title on a queued entry until its input changes", async () => {
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true,
+      startTurn: async (entry) => ({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        turnId: `turn-${entry.id}`,
+      }),
+    });
+    await queue.submit(buildEntry());
+
+    expect(queue.setQueuedEntryTitle("entry-1", "Greeting")).toMatchObject({ title: "Greeting" });
+    expect(queue.getAllQueuedEntries()[0]?.title).toBe("Greeting");
+    const updated = queue.updateQueuedEntryInput("entry-1", [{ type: "text", text: "goodbye" }]);
+    expect(updated).not.toHaveProperty("title");
+    expect(queue.getAllQueuedEntries()[0]).not.toHaveProperty("title");
+    expect(queue.setQueuedEntryTitle("missing", "Nothing")).toBeUndefined();
+  });
+
+  it("drops a grouped steer's title when another message joins the batch", async () => {
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true,
+      startTurn: async (entry) => ({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        turnId: `turn-${entry.id}`,
+      }),
+    });
+    const first = await queue.submitGroupedSteer(buildEntry({ id: "group" }));
+    expect(first.status).toBe("queued");
+    queue.setQueuedEntryTitle("group", "First report");
+
+    await queue.submitGroupedSteer({
+      ...buildEntry({ id: "second" }),
+      input: [{ type: "text", text: "second report" }],
+    });
+
+    const entries = queue.getAllQueuedEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).not.toHaveProperty("title");
+  });
+
   it("starts idle thread submissions immediately", async () => {
     const startedEntries: string[] = [];
     const events: ThreadTurnQueueLifecycleEvent[] = [];
@@ -770,5 +812,284 @@ describe("grouped queued steering", () => {
     expect(steer).toHaveBeenCalledTimes(1);
     expect(queue.getQueuedEntries(target)[0]?.agentMessages).toHaveLength(2);
     queue.close();
+  });
+});
+
+describe("operator reply steering", () => {
+  const target = { backend: "codex" as const, threadId: "thread-1" };
+  const result = (entry: ThreadTurnQueueEntry) => ({ ...target, turnId: `turn-${entry.id}` });
+  const reply = (id = "reply") => ({
+    ...buildEntry({ id }),
+    input: [{ type: "text" as const, text: "use the staging bucket" }],
+  });
+
+  it("starts a turn at once on an idle thread", async () => {
+    const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const steer = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const queue = new ThreadTurnQueue({ startTurn: start, steerTurn: steer });
+    const submitted = await queue.submitSteer(reply());
+    expect(submitted).toMatchObject({ status: "started", turnId: "turn-reply" });
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0]![0]).toMatchObject({ id: "reply", delivery: "queued-steer" });
+    expect(steer).not.toHaveBeenCalled();
+    queue.close();
+  });
+
+  it("steers into the running turn when it reaches the head", async () => {
+    const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const steer = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true, canSteerThread: () => true, startTurn: start, steerTurn: steer,
+    });
+    const submitted = await queue.submitSteer(reply());
+    expect(submitted.status).toBe("queued");
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1));
+    expect(steer.mock.calls[0]![0]).toMatchObject({
+      id: "reply",
+      input: [{ type: "text", text: "use the staging bucket" }],
+    });
+    expect(steer.mock.calls[0]![0]).not.toHaveProperty("agentMessages");
+    expect(start).not.toHaveBeenCalled();
+    expect(queue.getQueuedEntries(target)).toEqual([]);
+    queue.close();
+  });
+
+  it("waits behind messages queued before it", async () => {
+    const steer = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true, canSteerThread: () => true,
+      startTurn: async (entry) => result(entry), steerTurn: steer,
+    });
+    await queue.submit(buildEntry({ id: "operator" }));
+    await queue.submitSteer(reply());
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(steer).not.toHaveBeenCalled();
+    expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["operator", "reply"]);
+    queue.close();
+  });
+
+  it("is never absorbed into an Agent message batch", async () => {
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true, startTurn: async (entry) => result(entry),
+    });
+    await queue.submitSteer(reply());
+    await queue.submitGroupedSteer({
+      ...buildEntry({ id: "agent" }),
+      input: [{ type: "text", text: "agent report" }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "source" } },
+    });
+    const entries = queue.getQueuedEntries(target);
+    expect(entries.map((entry) => entry.id)).toEqual(["reply", "agent"]);
+    expect(entries[0]!.input).toEqual([{ type: "text", text: "use the staging bucket" }]);
+    expect(entries[0]).not.toHaveProperty("agentMessages");
+    queue.close();
+  });
+
+  it("starts the next turn when the running one cannot take it", async () => {
+    let active = true;
+    const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    // The backend found nothing to steer into, as for a turn that ended first.
+    const steer = vi.fn(async () => undefined);
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => active, canSteerThread: () => active,
+      startTurn: start, steerTurn: steer,
+    });
+    await queue.submitSteer(reply());
+    await vi.waitFor(() => expect(steer).toHaveBeenCalledTimes(1));
+    expect(queue.getQueuedEntries(target).map((entry) => entry.id)).toEqual(["reply"]);
+    active = false;
+    await queue.releaseThread(target);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0]![0].id).toBe("reply");
+    expect(steer).toHaveBeenCalledTimes(1);
+    queue.close();
+  });
+
+  it("joins a held queue as held, behind its head", async () => {
+    const start = vi.fn(async (entry: ThreadTurnQueueEntry) => result(entry));
+    const queue = new ThreadTurnQueue({ startTurn: start });
+    await queue.submit(buildEntry({ id: "running" }));
+    await queue.submit(buildEntry({ id: "queued" }));
+    await queue.releaseThread({
+      ...target,
+      turnId: "turn-running",
+      status: "turn/failed",
+      errorMessage: "Provider unavailable",
+    });
+    await queue.submitSteer(reply());
+    // A failed turn holds the line until the operator releases it.
+    expect(queue.getQueuedEntries(target)).toMatchObject([
+      { id: "queued", manualReleaseRequired: true },
+      { id: "reply", manualReleaseRequired: true, holdReason: "Provider unavailable" },
+    ]);
+    expect(start.mock.calls.map(([entry]) => entry.id)).toEqual(["running"]);
+    queue.close();
+  });
+});
+
+describe("ThreadTurnQueue.moveEntry", () => {
+  const ids = (queue: ThreadTurnQueue): string[] =>
+    queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }).map((entry) => entry.id);
+  const busyQueue = async (
+    entryIds: string[],
+    options: { isThreadActive?: () => boolean; startTurn?: ConstructorParameters<typeof ThreadTurnQueue>[0]["startTurn"] } = {},
+  ): Promise<ThreadTurnQueue> => {
+    const queue = new ThreadTurnQueue({
+      isThreadActive: options.isThreadActive ?? (() => true),
+      startTurn: options.startTurn ?? (async (entry) => ({
+        backend: entry.backend,
+        threadId: entry.threadId,
+        turnId: `turn-${entry.id}`,
+      })),
+    });
+    for (const id of entryIds) await queue.submit(buildEntry({ id }));
+    return queue;
+  };
+
+  it("moves an entry in front of its anchor, or to the end without one", async () => {
+    const queue = await busyQueue(["a", "b", "c", "d"]);
+
+    await expect(queue.moveEntry("d", "a")).resolves.toMatchObject({
+      disposition: "moved",
+      entryIds: ["d", "a", "b", "c"],
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(ids(queue)).toEqual(["d", "a", "b", "c"]);
+
+    await expect(queue.moveEntry("d", "c")).resolves.toMatchObject({ disposition: "moved" });
+    expect(ids(queue)).toEqual(["a", "b", "d", "c"]);
+
+    await expect(queue.moveEntry("a")).resolves.toMatchObject({ disposition: "moved" });
+    expect(ids(queue)).toEqual(["b", "d", "c", "a"]);
+  });
+
+  it("answers unchanged when the entry is already where it was asked to go", async () => {
+    const queue = await busyQueue(["a", "b", "c"]);
+
+    await expect(queue.moveEntry("a", "b")).resolves.toMatchObject({ disposition: "unchanged" });
+    await expect(queue.moveEntry("c")).resolves.toMatchObject({ disposition: "unchanged" });
+    await expect(queue.moveEntry("b", "b")).resolves.toMatchObject({ disposition: "unchanged" });
+    expect(ids(queue)).toEqual(["a", "b", "c"]);
+  });
+
+  it("refuses an entry or an anchor that has left the queue", async () => {
+    const queue = await busyQueue(["a", "b"]);
+
+    await expect(queue.moveEntry("gone", "a")).resolves.toEqual({
+      disposition: "not_found",
+      entryId: "gone",
+    });
+    await expect(queue.moveEntry("b", "gone")).resolves.toMatchObject({
+      disposition: "anchor_not_found",
+      entryIds: ["a", "b"],
+    });
+    expect(ids(queue)).toEqual(["a", "b"]);
+  });
+
+  it("does not move a held entry, so nothing gets around a hold", async () => {
+    const queue = await busyQueue(["queued"]);
+    await queue.submitHeld(buildEntry({ id: "held" }), "The steer target ended.");
+    expect(ids(queue)).toEqual(["held", "queued"]);
+
+    // A hold marks the whole FIFO: every entry waits for Retry.
+    await expect(queue.moveEntry("queued", "held")).resolves.toMatchObject({ disposition: "held" });
+    await expect(queue.moveEntry("held")).resolves.toMatchObject({ disposition: "held" });
+    expect(ids(queue)).toEqual(["held", "queued"]);
+  });
+
+  it("starts the new head when the thread is idle by the time the move ends", async () => {
+    let active = true;
+    const started: string[] = [];
+    const queue = await busyQueue(["a", "b", "c"], {
+      isThreadActive: () => active,
+      startTurn: async (entry) => {
+        started.push(entry.id);
+        return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+      },
+    });
+    active = false;
+
+    await queue.moveEntry("c", "a");
+    await vi.waitFor(() => expect(started).toEqual(["c"]));
+    expect(ids(queue)).toEqual(["a", "b"]);
+    queue.close();
+  });
+
+  describe("while a move is in transit", () => {
+    /** a, b, c queued; the thread goes idle and dispatches a. */
+    const afterHeadDispatched = async (): Promise<{ queue: ThreadTurnQueue; started: string[] }> => {
+      let active = true;
+      const started: string[] = [];
+      const queue = await busyQueue(["a", "b", "c"], {
+        isThreadActive: () => active,
+        startTurn: async (entry) => {
+          started.push(entry.id);
+          active = true;
+          return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+        },
+      });
+      active = false;
+      // Any edit's end drains the idle thread.
+      await queue.moveEntry("b", "b");
+      await vi.waitFor(() => expect(started).toEqual(["a"]));
+      return { queue, started };
+    };
+
+    it("answers anchor_not_found with the current order when the anchor dispatched first", async () => {
+      const { queue, started } = await afterHeadDispatched();
+
+      // The viewer dropped c in front of a, which started before the move landed.
+      await expect(queue.moveEntry("c", "a")).resolves.toMatchObject({
+        disposition: "anchor_not_found",
+        entryIds: ["b", "c"],
+      });
+      expect(ids(queue)).toEqual(["b", "c"]);
+      // Re-aimed at the next entry still queued, the move lands.
+      await expect(queue.moveEntry("c", "b")).resolves.toMatchObject({
+        disposition: "moved",
+        entryIds: ["c", "b"],
+      });
+      expect(started).toEqual(["a"]);
+      queue.close();
+    });
+
+    it("answers not_found when the moved entry itself dispatched first", async () => {
+      const { queue } = await afterHeadDispatched();
+
+      await expect(queue.moveEntry("a", "c")).resolves.toEqual({ disposition: "not_found", entryId: "a" });
+      expect(ids(queue)).toEqual(["b", "c"]);
+      queue.close();
+    });
+
+    it("waits for an edit in progress, then answers for the queue as that edit left it", async () => {
+      const queue = await busyQueue(["a", "b", "c"]);
+      let finishEdit!: () => void;
+      const edit = queue.withDispatchSuspended(
+        { backend: "codex", threadId: "thread-1" },
+        async () => await new Promise<void>((resolve) => { finishEdit = resolve; }),
+      );
+      await vi.waitFor(() => expect(finishEdit).toBeTypeOf("function"));
+      const cancelledMove = queue.moveEntry("c", "a");
+      const anchorLostMove = queue.moveEntry("b", "a");
+      // Another window cancels c, then a, while the edit holds the queue.
+      queue.cancelEntryWithDisposition("c");
+      queue.cancelEntryWithDisposition("a");
+      finishEdit();
+      await edit;
+
+      await expect(cancelledMove).resolves.toEqual({ disposition: "not_found", entryId: "c" });
+      await expect(anchorLostMove).resolves.toMatchObject({ disposition: "anchor_not_found", entryIds: ["b"] });
+      expect(ids(queue)).toEqual(["b"]);
+    });
+
+    it("runs moves in the order they arrived", async () => {
+      const queue = await busyQueue(["a", "b", "c"]);
+
+      const first = queue.moveEntry("c", "a");
+      const second = queue.moveEntry("a");
+      await expect(first).resolves.toMatchObject({ disposition: "moved", entryIds: ["c", "a", "b"] });
+      await expect(second).resolves.toMatchObject({ disposition: "moved", entryIds: ["c", "b", "a"] });
+    });
   });
 });

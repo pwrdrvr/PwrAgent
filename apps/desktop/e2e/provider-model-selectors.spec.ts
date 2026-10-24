@@ -5,6 +5,7 @@ import { expect, test, type Locator } from "@playwright/test";
 import type { NavigationLaunchpadDefaults } from "@pwragent/shared";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { seedProfileOverlayState } from "./fixtures/overlay-state-seeding";
+import { mastheadAction } from "./fixtures/window-chrome";
 
 async function assertTangerineFocusRing(locator: Locator) {
   await expect
@@ -95,13 +96,13 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
   });
 
   try {
-    await app.window.getByRole("button", { name: "New thread" }).click();
+    await mastheadAction(app.window, "New thread").click();
     await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
-    const providerSelect = settings.getByLabel("Provider");
-    const modelSelect = settings.getByLabel("Model", { exact: true });
-    const reasoningSelect = settings.getByLabel("Reasoning", { exact: true });
+    const providerSelect = settings.getByLabel(/^Provider(?::|$)/);
+    const modelSelect = settings.getByLabel(/^Model(?::|$)/, { exact: true });
+    const reasoningSelect = settings.getByLabel(/^Reasoning(?::|$)/, { exact: true });
     await expect(providerSelect).toHaveAttribute("data-value", "codex");
     await expect(modelSelect).toHaveAttribute("data-value", "gpt-5.5");
     await expect(reasoningSelect).toHaveAttribute("data-value", "medium");
@@ -132,15 +133,15 @@ test("OpenAI new-thread launchpad wins when sticky ACP Grok defaults are unavail
   });
 
   try {
-    await app.window.getByRole("button", { name: "New thread" }).click();
+    await mastheadAction(app.window, "New thread").click();
     await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
 
     await expect(app.window.getByText("Grok CLI", { exact: true })).toHaveCount(0);
     await expect(app.window.getByText("OpenAI", { exact: true }).first()).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
-    const providerSelect = settings.getByLabel("Provider");
-    const modelSelect = settings.getByLabel("Model", { exact: true });
+    const providerSelect = settings.getByLabel(/^Provider(?::|$)/);
+    const modelSelect = settings.getByLabel(/^Model(?::|$)/, { exact: true });
     const prompt = app.window.getByRole("textbox", { name: "New thread" });
 
     await expect(providerSelect).toHaveAttribute("data-value", "codex");

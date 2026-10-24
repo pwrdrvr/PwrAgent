@@ -33,12 +33,23 @@ export type UsageLimitObservation = {
  * one line for the thread they worked for. Absent from older peers, which
  * return each run as its own monitor line.
  */
-export type UsageActivityRollup = { kind: string; count: number };
+export type UsageActivityRollup = {
+  kind: string;
+  count: number;
+  /** Identity of the unsplit rollup, for mixed-version ledger deduplication. */
+  groupKey?: string;
+};
 
 export type UsageActivityRow = {
   line: ThreadUsageLineRecord;
   title: string;
   updatedAt: number;
+  /**
+   * Opaque account key captured for the request and retained in its ledger.
+   * Legacy completion readings are a fallback for older rows. Never inferred
+   * from the owner's current login. Scoped by `line.provider`.
+   */
+  accountKey?: string;
   rollup?: UsageActivityRollup;
 };
 

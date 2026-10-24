@@ -65,6 +65,110 @@ describe("native voice ownership", () => {
     expect(f.events.size + f.disconnects.size).toBe(0);
   });
 
+  it("sends opted-in camera observations as developer context and revokes camera access on stop", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    await expect(f.manager.cameraCue(1, { ...f.request, cue: "enthusiastic" })).rejects.toThrow("Enable the camera");
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    expect(f.manager.allowsCamera(1)).toBe(true);
+    expect(f.manager.allowsCamera(2)).toBe(false);
+    await expect(f.manager.cameraCue(2, { ...f.request, cue: "enthusiastic" })).rejects.toThrow("Enable the camera");
+    await f.manager.cameraCue(1, { ...f.request, cue: "enthusiastic" });
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("this is not approval for actions"), "developer");
+    expect(f.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "transcript" }));
+    await f.manager.cameraCue(1, { ...f.request, cue: "stop" });
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("Pause your reply and do not initiate another action"), "developer");
+    await f.manager.stop(1, f.request);
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    await expect(f.manager.cameraCue(1, { ...f.request, cue: "away" })).rejects.toThrow("Enable the camera");
+  });
+
+  it("submits camera status even before a confident frame and invalidates observations on opt-out", async () => {
+    const f = fixture();
+    await f.manager.start(1, { ...f.request, mode: "director" }, f.emit);
+    await expect(f.manager.setCamera(2, f.request.sessionId, true)).rejects.toThrow("No voice session");
+    await expect(f.manager.setCamera(1, "old-session", true)).rejects.toThrow("No voice session");
+    expect(f.backend.text).not.toHaveBeenCalled();
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("no confident observation has been submitted"), "developer");
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    expect(f.backend.text).toHaveBeenCalledTimes(1);
+    await f.manager.cameraCue(1, { ...f.request, cue: "head_nod" });
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("operator nodded yes"), "developer");
+    await f.manager.setCamera(1, f.request.sessionId, false);
+    expect(f.backend.text).toHaveBeenLastCalledWith(f.request.threadId, expect.stringContaining("Previous observations are historical"), "developer");
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    expect(f.manager.allowsMicrophone(1)).toBe(true);
+    await f.manager.stopOwner(1);
+    await f.manager.start(1, { ...f.request, sessionId: "next-session" }, f.emit);
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    await f.manager.stopOwner(1);
+  });
+
+  it("fails camera enable without stopping voice when status context is refused", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    vi.mocked(f.backend.text).mockRejectedValueOnce(new Error("Status refused"));
+    await expect(f.manager.setCamera(1, f.request.sessionId, true)).rejects.toThrow("Status refused");
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    expect(f.manager.allowsMicrophone(1)).toBe(true);
+    await f.manager.stopOwner(1);
+  });
+
+  it("revokes capture before a disabled-status response, including when submission fails", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    const pending = deferred<void>();
+    vi.mocked(f.backend.text).mockReturnValueOnce(pending.promise);
+    const disabled = f.manager.setCamera(1, f.request.sessionId, false);
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    await expect(f.manager.cameraCue(1, { ...f.request, cue: "stop" })).rejects.toThrow("Enable the camera");
+    pending.resolve();
+    await disabled;
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    vi.mocked(f.backend.text).mockRejectedValueOnce(new Error("Status refused"));
+    await expect(f.manager.setCamera(1, f.request.sessionId, false)).rejects.toThrow("Status refused");
+    expect(f.manager.allowsCamera(1)).toBe(false);
+    expect(f.manager.allowsMicrophone(1)).toBe(true);
+    await f.manager.stopOwner(1);
+  });
+
+  it("does not let an earlier enable failure revoke a later enable", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    let reject!: (error: Error) => void;
+    vi.mocked(f.backend.text).mockReturnValueOnce(new Promise<void>((_, no) => { reject = no; }));
+    const enabled = f.manager.setCamera(1, f.request.sessionId, true);
+    const refused = expect(enabled).rejects.toThrow("Earlier failure");
+    await f.manager.setCamera(1, f.request.sessionId, false);
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    reject(new Error("Earlier failure"));
+    await refused;
+    expect(f.manager.allowsCamera(1)).toBe(true);
+    await f.manager.stopOwner(1);
+  });
+
+  it("awaits camera appendText acknowledgment on the owning thread and propagates rejection", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    await f.manager.setCamera(1, f.request.sessionId, true);
+    const pending = deferred<void>();
+    vi.mocked(f.backend.text).mockImplementationOnce(() => pending.promise);
+    let acknowledged = false;
+    const cue = f.manager.cameraCue(1, { ...f.request, cue: "neutral" }).then(() => { acknowledged = true; });
+    await Promise.resolve();
+    expect(f.backend.text).toHaveBeenCalledWith("fixture-thread", expect.stringContaining("operator is visible"), "developer");
+    expect(acknowledged).toBe(false);
+    pending.resolve();
+    await cue;
+    expect(acknowledged).toBe(true);
+    vi.mocked(f.backend.text).mockRejectedValueOnce(new Error("RPC rejected"));
+    await expect(f.manager.cameraCue(1, { ...f.request, cue: "bored" })).rejects.toThrow("RPC rejected");
+    expect(f.manager.allowsMicrophone(1)).toBe(true);
+    await f.manager.stop(1, f.request);
+  });
+
   it("rejects duplicate starts and refuses controls from another window or stale session", async () => {
     const f = fixture();
     await f.manager.start(1, f.request, f.emit);
@@ -143,14 +247,18 @@ describe("native voice ownership", () => {
     const result = (data: unknown, success = true) => ({ success, contentItems: [{ type: "inputText", text: JSON.stringify(data) }] });
     f.call({ threadId: "other-thread", tool: "steer_thread", response: result({ disposition: "steered" }) });
     expect(f.emit).not.toHaveBeenCalled();
+    const sent = { threadLink: "[Sample target](pwragent://thread/codex/sample)", queueStatus: "queued", instanceId: "sample-peer" };
     f.call({
       threadId: f.request.threadId,
       tool: "send_message_to_thread",
-      response: result({ threadLink: "[Sample target](pwragent://thread/codex/sample)", queueStatus: "queued", instanceId: "sample-peer" }),
+      namespace: "pwragent",
+      arguments: { threadId: "sample", prompt: "Rerun the checks." },
+      response: result(sent),
     });
     expect(f.emit).toHaveBeenCalledWith({
       sessionId: f.request.sessionId, type: "action", tool: "send_message_to_thread", ok: true,
       target: "Sample target", instance: "sample-peer", outcome: "queued",
+      namespace: "pwragent", arguments: { threadId: "sample", prompt: "Rerun the checks." }, output: JSON.stringify(sent),
     });
     await f.manager.stop(1, f.request);
     expect(f.toolCalls.size).toBe(0);
@@ -161,12 +269,53 @@ describe("native voice receipts", () => {
   it("reads disposition and title from PwrAgent tool results and never more than the tool said", () => {
     const response = (text: string, success = true) => ({ success, contentItems: [{ type: "inputText", text }] });
     expect(describeNativeVoiceAction({ threadId: "t", tool: "steer_thread", response: response(JSON.stringify({ disposition: "started" })) }))
-      .toEqual({ tool: "steer_thread", ok: true, outcome: "started" });
+      .toEqual({ tool: "steer_thread", ok: true, outcome: "started", output: "{\"disposition\":\"started\"}" });
     expect(describeNativeVoiceAction({ threadId: "t", tool: "handoff_task", response: response(JSON.stringify({ title: "Sample handoff" })) }))
-      .toEqual({ tool: "handoff_task", ok: true, target: "Sample handoff" });
+      .toEqual({ tool: "handoff_task", ok: true, target: "Sample handoff", output: "{\"title\":\"Sample handoff\"}" });
     expect(describeNativeVoiceAction({ threadId: "t", tool: "stop_thread", response: response("not json", false) }))
-      .toEqual({ tool: "stop_thread", ok: false });
+      .toEqual({ tool: "stop_thread", ok: false, output: "not json" });
     expect(describeNativeVoiceAction({ threadId: "t", tool: "read_thread", response: undefined }))
       .toEqual({ tool: "read_thread", ok: false });
+  });
+});
+
+describe("native voice receipt details", () => {
+  const response = (text: string) => ({ success: true, contentItems: [{ type: "inputText", text }] });
+
+  // The panel expands a receipt into the call it made, so the receipt
+  // carries the arguments and result: read_thread names its thread there.
+  it("carries the call's arguments, from an object or Codex's JSON string", () => {
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "read_thread", arguments: { threadId: "sample" }, response: response("{}") }))
+      .toMatchObject({ arguments: { threadId: "sample" } });
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "read_thread", arguments: "{\"threadId\":\"sample\"}", response: response("{}") }))
+      .toMatchObject({ arguments: { threadId: "sample" } });
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "read_thread", arguments: "not json", response: response("{}") }))
+      .not.toHaveProperty("arguments");
+  });
+
+  // Receipts are memory-only but cross IPC once per call; a large thread
+  // read must not ride along whole, and a cut argument object would misstate
+  // the call, so arguments are kept whole or dropped.
+  it("bounds the result and keeps arguments whole or not at all", () => {
+    const read = describeNativeVoiceAction({ threadId: "t", tool: "read_thread", response: response("x".repeat(60_000)) });
+    expect(read.output?.startsWith("x".repeat(48_000))).toBe(true);
+    expect(read.output).toMatch(/\n… 12,000 more characters$/);
+    expect(describeNativeVoiceAction({ threadId: "t", tool: "handoff_task", arguments: { prompt: "y".repeat(5_000) }, response: response("{}") }))
+      .not.toHaveProperty("arguments");
+  });
+
+  // read_thread returns up to 4,000 characters per message, so a cut would
+  // land mid-JSON and the panel could no longer name the thread it read.
+  it("keeps an over-bound JSON result parseable by dropping its oldest list items", () => {
+    const messages = Array.from({ length: 40 }, (_, index) => ({ role: "assistant", text: `${index}:${"z".repeat(3_000)}` }));
+    const read = describeNativeVoiceAction({
+      threadId: "t", tool: "read_thread",
+      response: response(JSON.stringify({ read: { threadId: "sample", title: "Sample thread", messages } })),
+    });
+    expect(read.output!.length).toBeLessThanOrEqual(48_000);
+    const parsed = JSON.parse(read.output!) as { read: { title: string; messages: Array<{ text: string }> }; receiptOmittedItems: number };
+    expect(parsed.read.title).toBe("Sample thread");
+    expect(parsed.read.messages.at(-1)!.text.startsWith("39:")).toBe(true);
+    expect(parsed.receiptOmittedItems).toBe(40 - parsed.read.messages.length);
   });
 });

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, realpath, stat, writeFile, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readlink, realpath, stat, writeFile, mkdir, rm, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -9,7 +9,12 @@ import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 const execFileAsync = promisify(execFile);
 
 async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
+  // A fixture commit can start maintenance. Keep it in the awaited process
+  // lifetime so it cannot write packfiles while the test removes its repo.
+  const { stdout } = await execFileAsync("git", [
+    "-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false",
+    "-C", cwd, ...args,
+  ], {
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 10,
   });
@@ -30,6 +35,70 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 describe("WorktreeArchiveService", () => {
+  it.runIf(process.platform === "win32").each([false, true])("preserves ignored links when Git locks the worktree (lock during admission: %s)", async (lockDuringAdmission) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-locked-junction-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    const target = path.join(root, "dependency");
+    const link = path.join(worktreePath, "node_modules", "dependency");
+    try {
+      await mkdir(repoPath);
+      await git(repoPath, ["init", "-b", "main"]);
+      await git(repoPath, ["-c", "user.email=test@example.com", "-c", "user.name=Test User", "commit", "--allow-empty", "-m", "initial"]);
+      await git(repoPath, ["worktree", "add", "--detach", worktreePath]);
+      await writeFile(path.join(worktreePath, ".gitignore"), "node_modules/\n");
+      await mkdir(path.dirname(link));
+      await mkdir(target);
+      await writeFile(path.join(target, "keep.txt"), "keep");
+      await symlink(target, link, "junction");
+      const originalTarget = await readlink(link);
+      const lock = async () => { await git(repoPath, ["worktree", "lock", "--reason", "fixture lock", worktreePath]); };
+      if (!lockDuringAdmission) await lock();
+
+      await expect(new WorktreeArchiveService().archive({
+        backend: "codex", threadId: "locked-owner", repositoryPath: repoPath, worktreePath,
+        beforeRemove: lockDuringAdmission ? async () => { await lock(); return () => {}; } : undefined,
+      })).rejects.toThrow(/locked/i);
+      expect(await readlink(link)).toBe(originalTarget);
+      expect(await readFile(path.join(link, "keep.txt"), "utf8")).toBe("keep");
+      expect(await git(repoPath, ["worktree", "list", "--porcelain"])).toContain("locked fixture lock");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform === "win32")("removes dependency junctions without traversing their targets", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-junction-archive-"));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    const externalPath = path.join(root, "external");
+    try {
+      await mkdir(repoPath);
+      await git(repoPath, ["init", "-b", "main"]);
+      await git(repoPath, ["-c", "user.email=test@example.com", "-c", "user.name=Test User", "commit", "--allow-empty", "-m", "initial"]);
+      await git(repoPath, ["worktree", "add", "--detach", worktreePath]);
+      await writeFile(path.join(worktreePath, ".gitignore"), "node_modules/\n");
+      const target = path.join(worktreePath, "node_modules", ".pnpm", "target");
+      await mkdir(target, { recursive: true });
+      await writeFile(path.join(target, "dependency.txt"), "dependency");
+      await mkdir(externalPath);
+      await writeFile(path.join(externalPath, "keep.txt"), "keep");
+      await symlink(target, path.join(worktreePath, "node_modules", "internal"), "junction");
+      await symlink(externalPath, path.join(worktreePath, "node_modules", "external"), "junction");
+      await symlink(path.join(root, "missing"), path.join(worktreePath, "node_modules", "dangling"), "junction");
+      await writeFile(path.join(worktreePath, "zzz.txt"), "snapshot me");
+
+      const service = new WorktreeArchiveService();
+      const snapshot = await service.archive({ backend: "codex", threadId: "junction-owner", repositoryPath: repoPath, worktreePath });
+      expect(await pathExists(worktreePath)).toBe(false);
+      expect(await readFile(path.join(externalPath, "keep.txt"), "utf8")).toBe("keep");
+      expect(await git(repoPath, ["worktree", "list", "--porcelain"])).not.toContain(worktreePath.replace(/\\/g, "/"));
+      expect(await git(repoPath, ["show", `${snapshot.snapshotRef}:zzz.txt`])).toBe("snapshot me");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("snapshots tracked and untracked worktree changes, removes the worktree, and restores it", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-worktree-archive-"));
     const repoPath = path.join(root, "repo");
@@ -53,6 +122,23 @@ describe("WorktreeArchiveService", () => {
     await writeFile(path.join(worktreePath, "node_modules", "left-out.txt"), "ignored\n", "utf8");
 
     const service = new WorktreeArchiveService();
+    for (const denyAtDispatch of [false, true]) {
+      let removalAdmissions = 0;
+      const beforeRemove = async () => {
+        // Admission runs after the snapshot ref exists and can still refuse
+        // the destructive dispatch after its awaited discovery settles.
+        expect(await git(repoPath, ["for-each-ref", "--format=%(refname)", "refs/codex/snapshots/"])).not.toBe("");
+        if (!denyAtDispatch) throw new Error("active shared checkout");
+        return () => {
+          removalAdmissions += 1;
+          if (removalAdmissions === 2) throw new Error("ownership changed after admission");
+        };
+      };
+      await expect(service.archive({ backend: "codex", threadId: "thread-1", worktreePath, repositoryPath: repoPath, beforeRemove }))
+        .rejects.toThrow(denyAtDispatch ? "ownership changed" : "active shared checkout");
+      expect(await pathExists(worktreePath)).toBe(true);
+      expect(await readFile(path.join(worktreePath, "notes.txt"), "utf8")).toBe("untracked note\n");
+    }
     const snapshot = await service.archive({
       backend: "codex",
       threadId: "thread-1",

@@ -191,7 +191,12 @@ describe("owner index source event admission", () => {
   });
 });
 
-it("bounds physical listing work for a turn start across directory, children and exact consumers", async () => {
+it.each([
+  ["title change", ["thread/name/updated"]],
+  ["pin action", ["thread/pin/added"]],
+  ["mark seen", ["navigation/thread/seen"]],
+  ["turn start", ["turn/started", "thread/status/changed", "thread/subAgents/updated"]],
+])("bounds physical listing work for %s across directory, children and exact consumers", async (_scenario, methods) => {
   const originalProjection = mocks.store.readNavigationQueryIndex.getMockImplementation();
   mocks.store.readNavigationQueryIndex.mockClear();
   const parent: NavigationThreadSummary = { id: "parent", source: "codex", title: "before", titleSource: "explicit",
@@ -252,11 +257,12 @@ it("bounds physical listing work for a turn start across directory, children and
     const pending = [read(0)];
     await firstStart;
     current = { ...parent, title: "after", threadStatus: "active" };
-    for (const [index, method] of ["turn/started", "thread/status/changed", "thread/subAgents/updated"].entries()) {
+    for (const [index, method] of methods.entries()) {
       emit(method);
       pending.push(read(index + 1));
       await Promise.resolve();
     }
+    for (let index = pending.length; index < requests.length; index++) pending.push(read(index));
     releaseFirst();
     const pages = await Promise.all(pending);
     expect(pages[2]!.entries[0]?.row.title).toBe("after");
@@ -280,4 +286,42 @@ it("bounds physical listing work for a turn start across directory, children and
     for (let index = 0; index < requests.length; index++) pool.release(`sidebar-${index}`);
     mocks.store.readNavigationQueryIndex.mockImplementation(originalProjection!);
   }
+});
+
+describe("owner index coverage", () => {
+  function readCoverage(params: {
+    startup?: { state: "checking" | "degraded" | "ready"; failedProviders?: number };
+    incomplete: boolean;
+  }) {
+    const listed: NavigationThreadSummary[] = [];
+    const registry = {
+      listThreads: async () => listed,
+      isIncompleteThreadList: (threads: unknown) => params.incomplete && threads === listed,
+      getStartupProviderRefreshStatus: () => params.startup,
+      onEvent: () => () => {},
+      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      hydrateThreadGitWorkingStates: async (threads: []) => threads,
+      withNavigationSubAgentActivity: (threads: []) => threads,
+      getNavigationInputRequestThreadKeys: () => new Set<string>(),
+    } as unknown as DesktopBackendRegistry;
+    return loadLocalNavigationQueryIndex({ registry, callerReason: "coverage-regression" })
+      .then((index) => index.coverage);
+  }
+
+  it("completes an index built from a complete listing after a degraded startup", async () => {
+    // A Claude or ACP discovery failure at startup, or a Codex failure that has
+    // since recovered, must not block group archive for the whole session.
+    await expect(readCoverage({ startup: { state: "degraded", failedProviders: 2 }, incomplete: false }))
+      .resolves.toEqual({ state: "complete" });
+  });
+
+  it("degrades an index whose listing stood in an empty Codex inventory after a ready startup", async () => {
+    await expect(readCoverage({ startup: { state: "ready" }, incomplete: true }))
+      .resolves.toEqual({ state: "degraded", failedProviders: 1 });
+  });
+
+  it("keeps an index checking until the startup provider refresh settles", async () => {
+    await expect(readCoverage({ startup: { state: "checking" }, incomplete: false }))
+      .resolves.toEqual({ state: "checking" });
+  });
 });

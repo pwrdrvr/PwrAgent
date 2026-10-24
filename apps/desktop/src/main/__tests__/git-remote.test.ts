@@ -3,12 +3,21 @@ import {
   type GitRemote,
   clearGitHubRemoteCache,
   hasGitHubRemoteForDirectory,
+  parseForgeRemote,
   parseGitHubRemote,
   resolveGitHubRepoForDirectory,
   resolveGitHubReposForDirectory,
 } from "../pr-status/git-remote";
 
 describe("parseGitHubRemote", () => {
+  it.each(["C:/owner/repo.git", "C:\\owner\\repo.git", "C:/owner\\repo.git"])(
+    "does not interpret a Windows local remote as an SSH repository: %s",
+    (remote) => {
+      expect(parseForgeRemote(remote)).toBeUndefined();
+      expect(parseGitHubRemote(remote)).toBeUndefined();
+    },
+  );
+
   it.each([
     ["git@github.com:pwrdrvr/PwrAgent.git", "pwrdrvr", "PwrAgent"],
     ["git@github.com:pwrdrvr/PwrAgent", "pwrdrvr", "PwrAgent"],
@@ -68,6 +77,18 @@ describe("resolveGitHubRepoForDirectory", () => {
   beforeEach(() => {
     clearGitHubRemoteCache();
   });
+
+  it.each(["C:/owner/repo.git", "C:\\owner\\repo.git", "C:/owner\\repo.git"])(
+    "does not probe SSH configuration for a Windows local remote: %s",
+    async (url) => {
+      const resolveSshHostname = vi.fn(async () => "github.com");
+      await expect(resolveGitHubRepoForDirectory("/repo", {
+        readRemotes: async () => [{ name: "origin", url }],
+        resolveSshHostname,
+      })).resolves.toBeUndefined();
+      expect(resolveSshHostname).not.toHaveBeenCalled();
+    },
+  );
 
   function deferred<T>() {
     let resolve!: (value: T) => void;

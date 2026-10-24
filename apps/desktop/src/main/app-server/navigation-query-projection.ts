@@ -24,6 +24,7 @@ import {
   passesNavigationStarMapFilters,
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
   rankThreadJumpMatches,
+  textMatchesJumpQuery,
 } from "@pwragent/shared";
 import {
   navigationAttentionIdentity,
@@ -124,6 +125,33 @@ function isOrdinaryThread(thread: NavigationThreadSummary): boolean {
   return thread.codexNativeSubAgent === undefined;
 }
 
+/**
+ * The top-level row a lens renders a thread under: its oldest ancestor in the
+ * complete inventory. A parent that is absent leaves the thread its own root,
+ * and the walk stops at the same 32 levels the group budget allows.
+ */
+function lensRootResolver(params: {
+  threadsByIdentity: ReadonlyMap<string, NavigationThreadSummary>;
+  parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
+}): (thread: NavigationThreadSummary) => NavigationThreadSummary {
+  const roots = new Map<NavigationThreadSummary, NavigationThreadSummary>();
+  return (thread) => {
+    const known = roots.get(thread);
+    if (known) return known;
+    let root = thread;
+    const visited = new Set<NavigationThreadSummary>([thread]);
+    for (let depth = 0; depth < 32; depth += 1) {
+      const parent = parentIdentity(root, params.parentCandidates);
+      const parentThread = parent ? params.threadsByIdentity.get(identityKey(parent)) : undefined;
+      if (!parentThread || visited.has(parentThread)) break;
+      visited.add(parentThread);
+      root = parentThread;
+    }
+    roots.set(thread, root);
+    return root;
+  };
+}
+
 /** Resolve reachability against the complete inventory, never a loaded page.
  * A local child can outlive a viewer mount of its remote parent. Keep the
  * relationship on its row, but give directory/selection queries a root to
@@ -140,6 +168,31 @@ function availableParentIdentity(
   if (coverage && coverage.state !== "complete") return parent;
   const candidates = candidatesByOwner.get(JSON.stringify([parent.ownerInstanceId ?? null, parent.threadId])) ?? [];
   return candidates.some((candidate) => candidate.source === parent.backend) ? parent : undefined;
+}
+
+/** Directory grouping can only hide a child under a parent in that directory.
+ * Use complete membership, before pin splitting or pagination, so a parent
+ * in another project cannot leave a counted child without a visible root.
+ * The row keeps its actual relationship for other lenses and group actions.
+ */
+function directoryParentResolver(
+  members: readonly NavigationThreadSummary[],
+  parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>,
+): (thread: NavigationThreadSummary) => NavigationIdentity | undefined {
+  const memberKeys = new Set(members.map(threadKey));
+  return (thread) => {
+    const parent = parentIdentity(thread, parentCandidates);
+    return parent && memberKeys.has(identityKey(parent)) ? parent : undefined;
+  };
+}
+
+function directoryMemberThreads(
+  directory: NavigationDirectorySummary | undefined,
+  threadsByLegacyKey: ReadonlyMap<string, NavigationThreadSummary>,
+): NavigationThreadSummary[] {
+  return directory?.threadKeys
+    .map((key) => threadsByLegacyKey.get(key))
+    .filter((thread): thread is NavigationThreadSummary => Boolean(thread)) ?? [];
 }
 
 function isActive(thread: NavigationThreadSummary): boolean {
@@ -269,6 +322,7 @@ function projectNavigationRow(params: {
       : {}),
     ...(reactions.items ? { reactions: reactions.items } : {}),
     ...(reactions.truncated ? { reactionsTruncated: true } : {}),
+    ...(thread.lock ? { lock: thread.lock } : {}),
     ...(prs.items ? { prs: prs.items } : {}),
     ...(prs.truncated ? { prsTruncated: true } : {}),
     ...(messagingBindings.items
@@ -353,10 +407,9 @@ function buildDirectoryRows(params: {
   parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
 }): NavigationDirectoryRow[] {
   return params.snapshot.directories.map((directory) => {
-    const memberThreads = directory.threadKeys
-      .map((key) => params.threadsByLegacyKey.get(key))
-      .filter((thread): thread is NavigationThreadSummary => Boolean(thread));
-    const rootThreads = memberThreads.filter((thread) => !availableParentIdentity(thread, params.parentCandidates, params.snapshot.coverage));
+    const memberThreads = directoryMemberThreads(directory, params.threadsByLegacyKey);
+    const parentOf = directoryParentResolver(memberThreads, params.parentCandidates);
+    const rootThreads = memberThreads.filter((thread) => !parentOf(thread));
     const pinnedRootCount = rootThreads.filter((thread) => thread.pinnedRank).length;
     const gitStatus = projectDirectoryGitStatus(directory);
     return {
@@ -366,6 +419,9 @@ function buildDirectoryRows(params: {
       ...(directory.path ? { path: directory.path } : {}),
       ...(directory.gitStatus?.originRepository
         ? { repositoryKey: directory.gitStatus.originRepository }
+        : {}),
+      ...(directory.gitStatus?.remoteRepositories?.length
+        ? { repositoryKeys: directory.gitStatus.remoteRepositories }
         : {}),
       ...(directory.localAvailability
         ? { localAvailability: directory.localAvailability }
@@ -573,6 +629,8 @@ function selectQueryThreads(params: {
   threadsByIdentity: Map<string, NavigationThreadSummary>;
   threadsByLegacyKey: Map<string, NavigationThreadSummary>;
   parentCandidates: ReadonlyMap<string, readonly NavigationThreadSummary[]>;
+  /** A split lens's root resolver, shared with the page's collection size. */
+  lensRootOf?: (thread: NavigationThreadSummary) => NavigationThreadSummary;
 }): NavigationThreadSummary[] {
   const ordinaryThreads = params.index.threads.filter(isOrdinaryThread);
   const query = params.query;
@@ -609,17 +667,32 @@ function selectQueryThreads(params: {
   }
   if (query.kind === "lens") {
     const filter = query.filter?.trim().toLowerCase();
-    return ordinaryThreads
+    const rootOf = params.lensRootOf;
+    const threads = ordinaryThreads
       .filter((thread) => {
         if (query.lens === "attention") {
           if (!isActive(thread) && !thread.inbox.inInbox) return false;
         }
+        // A subtree follows its root, so a pinned thread's children render
+        // in its tray in the Pinned group and never orphaned in the list.
+        if (rootOf && (rootOf(thread).pinnedRank !== undefined) !== (query.roots === "pinned")) return false;
         if (!filter) return true;
         return thread.title.toLowerCase().includes(filter)
           || thread.linkedDirectories.some((directory) =>
             directory.path.toLowerCase().includes(filter));
-      })
-      .sort(query.lens === "recents" ? compareCreated : compareUpdated);
+      });
+    if (rootOf && query.roots === "pinned") {
+      // One global pin order, the same rank Directories edits. A root's
+      // descendants sort directly behind it, in creation order.
+      return threads.sort((left, right) => {
+        const leftRoot = rootOf(left);
+        const rightRoot = rootOf(right);
+        if (leftRoot !== rightRoot) return comparePinnedThreads(leftRoot, rightRoot);
+        if ((left === leftRoot) !== (right === rightRoot)) return left === leftRoot ? -1 : 1;
+        return compareCreated(left, right);
+      });
+    }
+    return threads.sort(query.lens === "recents" ? compareCreated : compareUpdated);
   }
   if (query.kind === "directory") {
     const directory = params.index.directories.find(
@@ -627,11 +700,11 @@ function selectQueryThreads(params: {
     );
     if (!directory) return [];
     const disclosedParents = new Set(query.disclosedParentThreadKeys ?? []);
-    return directory.threadKeys
-      .map((key) => params.threadsByLegacyKey.get(key))
-      .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
+    const members = directoryMemberThreads(directory, params.threadsByLegacyKey);
+    const parentOf = directoryParentResolver(members, params.parentCandidates);
+    return members
       .filter((thread) => {
-        const parent = availableParentIdentity(thread, params.parentCandidates, params.index.coverage);
+        const parent = parentOf(thread);
         if (parent) return disclosedParents.has(buildThreadIdentityKey(parent.backend, parent.threadId));
         return query.roots === "pinned" ? thread.pinnedRank !== undefined
           : query.roots === "unpinned" ? thread.pinnedRank === undefined : true;
@@ -715,6 +788,85 @@ function buildModelInventory(threads: readonly NavigationThreadSummary[]): Navig
   return [...groups].sort(([left], [right]) => left.localeCompare(right)).map(([, group]) => group);
 }
 
+function buildThreadsByLegacyKey(index: NavigationQueryIndex): Map<string, NavigationThreadSummary> {
+  return new Map(
+    index.threads.map((thread) => [
+      thread.federation?.ref.target.scope === "remote" ? federatedThreadIdentityKey(thread.federation.ref) : buildThreadIdentityKey(thread.source, thread.id),
+      thread,
+    ]),
+  );
+}
+
+function buildParentCandidates(index: NavigationQueryIndex): Map<string, NavigationThreadSummary[]> {
+  const parentCandidates = new Map<string, NavigationThreadSummary[]>();
+  for (const thread of index.threads) {
+    const ref = navigationIdentity(thread);
+    const key = JSON.stringify([ref.ownerInstanceId ?? null, ref.threadId]);
+    const candidates = parentCandidates.get(key) ?? [];
+    candidates.push(thread);
+    parentCandidates.set(key, candidates);
+    // Federation relationships carry an absolute owner ID, including when
+    // that owner is this viewer. Alias only our known identity to local rows.
+    if (!ref.ownerInstanceId && index.localInstanceId) {
+      parentCandidates.set(JSON.stringify([index.localInstanceId, ref.threadId]), candidates);
+    }
+  }
+  return parentCandidates;
+}
+
+/** Code vocabulary only: a reason never carries a thread ID, title or path. */
+export type NavigationAnchorMissingReason =
+  | "not-indexed"
+  | "other-owner"
+  | "archived"
+  | "directory-not-indexed"
+  | "other-directory"
+  | "child"
+  | "pinned"
+  | "unpinned"
+  | "filtered"
+  | "ref-mismatch";
+
+/**
+ * Why an anchor is absent from the query it was resolved against, judged by
+ * the same index and membership rules the projection used. `ref-mismatch`
+ * means the row passes every directory membership rule and still did not
+ * match: an identity disagreement between viewer and owner, not a change.
+ */
+export function explainMissingNavigationAnchor(params: {
+  index: NavigationQueryIndex;
+  request: NavigationQueryRequest;
+}): NavigationAnchorMissingReason {
+  const { anchor, query } = params.request;
+  if (anchor?.kind !== "thread") {
+    return anchor && !params.index.directories.some((directory) => directory.key === anchor.key)
+      ? "directory-not-indexed" : "filtered";
+  }
+  const thread = params.index.threads.find((candidate) => threadKey(candidate) === identityKey(anchor.ref));
+  if (!thread) {
+    const sameId = params.index.threads.filter((candidate) => candidate.source === anchor.ref.backend && candidate.id === anchor.ref.threadId);
+    // A local row named by this owner's own instance ID is one identity
+    // spelled two ways, not a row that belongs to another owner.
+    if (anchor.ref.ownerInstanceId && anchor.ref.ownerInstanceId === params.index.localInstanceId
+      && sameId.some((candidate) => !navigationIdentity(candidate).ownerInstanceId)) return "ref-mismatch";
+    return sameId.length ? "other-owner" : "not-indexed";
+  }
+  // Directory membership ignores archive state, so it names only filtered queries.
+  if (query.kind !== "directory") return thread.archivedAt !== undefined ? "archived" : "filtered";
+  const directory = params.index.directories.find((candidate) => candidate.key === query.directoryKey);
+  if (!directory) return "directory-not-indexed";
+  const threadsByLegacyKey = buildThreadsByLegacyKey(params.index);
+  if (!directory.threadKeys.some((key) => threadsByLegacyKey.get(key) === thread)) return "other-directory";
+  const parent = directoryParentResolver(directoryMemberThreads(directory, threadsByLegacyKey), buildParentCandidates(params.index))(thread);
+  if (parent) {
+    return query.disclosedParentThreadKeys?.includes(buildThreadIdentityKey(parent.backend, parent.threadId))
+      ? "ref-mismatch" : "child";
+  }
+  if (query.roots === "unpinned" && thread.pinnedRank !== undefined) return "pinned";
+  if (query.roots === "pinned" && thread.pinnedRank === undefined) return "unpinned";
+  return "ref-mismatch";
+}
+
 export function projectNavigationQuery(params: {
   index: NavigationQueryIndex;
   request: NavigationQueryRequest;
@@ -729,25 +881,8 @@ export function projectNavigationQuery(params: {
   const threadsByIdentity = new Map(
     params.index.threads.map((thread) => [threadKey(thread), thread]),
   );
-  const threadsByLegacyKey = new Map(
-    params.index.threads.map((thread) => [
-      thread.federation?.ref.target.scope === "remote" ? federatedThreadIdentityKey(thread.federation.ref) : buildThreadIdentityKey(thread.source, thread.id),
-      thread,
-    ]),
-  );
-  const parentCandidates = new Map<string, NavigationThreadSummary[]>();
-  for (const thread of params.index.threads) {
-    const ref = navigationIdentity(thread);
-    const key = JSON.stringify([ref.ownerInstanceId ?? null, ref.threadId]);
-    const candidates = parentCandidates.get(key) ?? [];
-    candidates.push(thread);
-    parentCandidates.set(key, candidates);
-    // Federation relationships carry an absolute owner ID, including when
-    // that owner is this viewer. Alias only our known identity to local rows.
-    if (!ref.ownerInstanceId && params.index.localInstanceId) {
-      parentCandidates.set(JSON.stringify([params.index.localInstanceId, ref.threadId]), candidates);
-    }
-  }
+  const threadsByLegacyKey = buildThreadsByLegacyKey(params.index);
+  const parentCandidates = buildParentCandidates(params.index);
   const childCountByParent = new Map<string, number>();
   const viewerChildCountByParent = new Map<string, number>();
   for (const thread of params.index.threads) {
@@ -759,12 +894,15 @@ export function projectNavigationQuery(params: {
       viewerChildCountByParent.set(key, (viewerChildCountByParent.get(key) ?? 0) + 1);
     }
   }
+  const lensRootOf = query.kind === "lens" && query.roots
+    ? lensRootResolver({ threadsByIdentity, parentCandidates }) : undefined;
   const selectedThreads = selectQueryThreads({
     query,
     index: params.index,
     threadsByIdentity,
     threadsByLegacyKey,
     parentCandidates,
+    lensRootOf,
   });
   if (((query.kind === "lens" && query.lens === "attention")
     || (query.kind === "star-map" && query.filters.attention === "include")) && params.attentionOrder) {
@@ -801,17 +939,23 @@ export function projectNavigationQuery(params: {
       collectionSize: directories.length, directories, entries: [], queryKey: navigationQueryKey(params.request) };
   }
   // Attention can include a child while excluding its idle/read parent. Base
-  // placement on the complete filtered membership, before pagination: such a
+  // placement on the current filtered membership, before pagination: such a
   // child needs its own row, but a qualifying parent on a later page must keep
-  // its group. Preserve the actual relationship in row metadata for actions.
+  // its group. Incomplete provider discovery must not hide known active/unread
+  // children while their missing or idle parents cannot render. A later index
+  // can regroup them. Preserve the actual relationship in row metadata for actions.
   const attentionMemberKeys = query.kind === "lens" && query.lens === "attention"
-    && (!params.index.coverage || params.index.coverage.state === "complete")
     ? new Set(selectedThreads.map(threadKey)) : undefined;
+  const directoryMembers = query.kind === "directory"
+    ? directoryMemberThreads(params.index.directories.find((directory) => directory.key === query.directoryKey), threadsByLegacyKey)
+    : undefined;
+  const directoryParentOf = directoryMembers ? directoryParentResolver(directoryMembers, parentCandidates) : undefined;
   const entries = selectedThreads.map((thread, index): NavigationQueryEntry => {
     const parent = parentIdentity(thread, parentCandidates);
     const placementParent = attentionMemberKeys && parent && !attentionMemberKeys.has(identityKey(parent))
       ? undefined
-      : query.kind === "directory" || (query.kind === "exact" && query.includeAncestry)
+      : directoryParentOf ? directoryParentOf(thread)
+      : query.kind === "exact" && query.includeAncestry
       ? availableParentIdentity(thread, parentCandidates, params.index.coverage) : parent;
     return {
       row: projectNavigationRow({
@@ -834,12 +978,7 @@ export function projectNavigationQuery(params: {
   const includeDirectories = query.kind === "directory-index"
     || query.kind === "star-map-geometry";
   const countsThreads = query.kind === "directory"
-    ? params.index.directories
-        .find((directory) => directory.key === query.directoryKey)
-        ?.threadKeys
-        .map((key) => threadsByLegacyKey.get(key))
-        .filter((thread): thread is NavigationThreadSummary => Boolean(thread))
-      ?? []
+    ? directoryMembers ?? []
     : query.kind === "star-map"
       ? (query.projectKey === undefined ? params.index.threads.filter(isStarMapOwnerThread) : selectedThreads)
       : query.kind === "exact"
@@ -847,6 +986,9 @@ export function projectNavigationQuery(params: {
       || query.kind === "messaging-threads"
       || query.kind === "children"
       || query.kind === "group-members"
+      // A split lens counts its own bucket: the Pinned group's collapsed
+      // header reports running and unread work inside it alone.
+      || (query.kind === "lens" && query.roots !== undefined)
       ? selectedThreads
       : params.index.threads;
   return {
@@ -859,6 +1001,10 @@ export function projectNavigationQuery(params: {
         directories: params.index.directories.filter((directory) => directory.threadKeys.some((key) =>
           selectedThreads[0] === threadsByLegacyKey.get(key))) }, threadsByLegacyKey, parentCandidates })[0],
     } : {}),
+    // The split's acknowledgment as well as its size: an owner that predates
+    // `roots` sets no collection size on a lens page, so the viewer knows to
+    // filter that page itself.
+    ...(lensRootOf ? { collectionSize: selectedThreads.filter((thread) => lensRootOf(thread) === thread).length } : {}),
     ...(query.kind === "messaging-threads" ? { collectionSize: entries.length,
       ...(query.directoryKey ? { selectionDirectory: buildDirectoryRows({ snapshot: { ...params.index, directories: params.index.directories.filter((directory) =>
           directory.key === query.directoryKey || directory.path === query.directoryKey) }, threadsByLegacyKey, parentCandidates })
@@ -877,8 +1023,8 @@ export function projectNavigationQuery(params: {
             || query.keys?.includes(directory.key) || (directory.path !== undefined && query.paths?.includes(directory.path))))
           .filter((directory) => query.kind !== "directory-index"
             || !query.filter?.trim()
-            || `${directory.label}\n${directory.path ?? ""}`.toLowerCase()
-              .includes(query.filter.trim().toLowerCase()))
+            || [directory.label, directory.path]
+              .some((value) => textMatchesJumpQuery(value, query.filter ?? "")))
       : [],
     entries,
     queryKey: navigationQueryKey(params.request),

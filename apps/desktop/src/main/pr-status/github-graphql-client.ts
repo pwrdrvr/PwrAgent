@@ -70,8 +70,9 @@ function findGithubToken(output: { stdout: string; stderr?: string }): string | 
 }
 
 /** Export the credential for the same host this client queries. */
-export async function readGithubDotComAuthToken(
+export async function readGithubAuthToken(
   command: string,
+  host: string,
   run: GhAuthTokenRunner = async (executable, args) =>
     await execFileAsync(executable, args, {
       env: buildPwrAgentChildProcessEnv(process.env),
@@ -84,7 +85,7 @@ export async function readGithubDotComAuthToken(
       "auth",
       "token",
       "--hostname",
-      "github.com",
+      host,
     ]);
     const token = output.stdout.trim();
     if (token) {
@@ -99,7 +100,7 @@ export async function readGithubDotComAuthToken(
       "auth",
       "status",
       "--hostname",
-      "github.com",
+      host,
       "--show-token",
     ]);
     return findGithubToken(output);
@@ -108,6 +109,10 @@ export async function readGithubDotComAuthToken(
     // Never propagate its stdout, stderr, or exec error message.
     throw new Error("GitHub CLI authentication status check failed");
   }
+}
+
+export async function readGithubDotComAuthToken(command: string, run?: GhAuthTokenRunner): Promise<string | null> {
+  return readGithubAuthToken(command, "github.com", run);
 }
 
 /**

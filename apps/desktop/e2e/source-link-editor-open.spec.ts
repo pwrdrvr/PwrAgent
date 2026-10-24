@@ -101,6 +101,9 @@ test("opens transcript source links with VS Code line metadata", async () => {
     const reviewCard = app.window.getByRole("group", { name: "Code review" }).last();
     await expect(reviewCard).toContainText("Open this source link");
     await expect(reviewCard).toContainText("Line 12");
+    // This undated historical artifact remains readable in the transcript,
+    // without creating a tracked To-do just because the thread was opened.
+    await expect(app.window.getByRole("region", { name: "To-dos for this thread" })).toHaveCount(0);
 
     await reviewCard.locator("a.transcript-review__location-path").click();
 

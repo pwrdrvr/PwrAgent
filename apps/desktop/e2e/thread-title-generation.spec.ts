@@ -93,6 +93,8 @@ async function createThreadTitleGenerationFixture(): Promise<{
             id: "thread-list-title-current",
             kind: "response",
             method: "thread/list",
+            // Startup refreshes must not consume the title-generation lookups.
+            afterResponseId: "turn-start-1",
             result: [
               {
                 id: "thread-title",
@@ -110,6 +112,7 @@ async function createThreadTitleGenerationFixture(): Promise<{
             id: "thread-list-title-latest-empty",
             kind: "response",
             method: "thread/list",
+            afterResponseId: "thread-list-title-current",
             result: [],
           },
         ],
@@ -145,7 +148,7 @@ test("applies a generated title even when the latest title lookup has not caught
       })
     ).toBeVisible();
 
-    await app.window.getByLabel("Reply").fill(PROMPT);
+    await app.window.getByRole("textbox", { name: "Reply", exact: true }).fill(PROMPT);
     await app.window.getByRole("button", { name: "Send" }).click();
 
     await expect

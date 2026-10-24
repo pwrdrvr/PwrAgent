@@ -585,8 +585,9 @@ export function buildThreadPricingDisplay(params: {
 
 export type ThreadPricingDisplay = ReturnType<typeof buildThreadPricingDisplay>;
 
-/** Apply today's rates to the whole thread without manufacturing observed rows. */
+/** Use the provider estimate or today's rates without manufacturing observed rows. */
 export function buildThreadPricingSnapshotEstimate(snapshot: ThreadPricingSnapshot, at = Date.now()) {
+  if (snapshot.pricingSource === "provider") return { ...snapshot, totalCostMicros: snapshot.estimatedCostMicros };
   if (snapshot.localModel) return { ...snapshot, totalCostMicros: 0 };
   const { model, tokens } = snapshot;
   const validCount = (count: number | undefined): count is number =>

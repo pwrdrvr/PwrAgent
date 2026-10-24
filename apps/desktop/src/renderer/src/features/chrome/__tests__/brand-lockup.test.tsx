@@ -82,8 +82,7 @@ describe("BrandLockup", () => {
     // A hand-written `<p className="sidebar__brand">` renders the wordmark
     // without the mark, which is how one window ends up branded differently
     // from the rest. The Windows/Linux painted strip (`.app-titlebar__brand`)
-    // and the storage-maintenance splash are not title chrome on macOS and
-    // keep their own markup.
+    // is not title chrome on macOS and keeps its own markup.
     const offenders: string[] = [];
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir)) {
@@ -93,7 +92,6 @@ describe("BrandLockup", () => {
           continue;
         }
         if (!full.endsWith(".tsx") || full.endsWith("BrandLockup.tsx")) continue;
-        if (full.endsWith(path.join("storage-maintenance", "StorageMaintenance.tsx"))) continue;
         const source = readFileSync(full, "utf8");
         if (/className="(sidebar|settings-nav|activity-titlebar)__brand"/.test(source)) {
           offenders.push(path.relative(rendererSrc, full));

@@ -1,3 +1,9 @@
+import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
+import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
+import {
+  NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL,
+  type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraRepeatCheck,
+} from "../shared/native-voice-camera";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -19,12 +25,44 @@ import {
 } from "../shared/native-voice";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
+import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
+import type {
+  ListThreadTodoProjectsResponse,
+  ListThreadTodoProjectsRequest,
+  ListThreadTodosRequest,
+  ListThreadTodosResponse,
+  ResolveThreadTodoRequest,
+  RunThreadTodoActionRequest,
+  SetThreadTodoItemCheckedRequest,
+  SetThreadTodoProjectRequest,
+  ThreadTodoMutationResponse,
+  ThreadTodosChangedEvent,
+  ThreadReview,
+  ListThreadReviewsRequest,
+  UpdateThreadReviewRequest,
+  DismissOperatorQuestionRequest,
+  OperatorQuestionThreadRequest,
+  ListOperatorRequestsResponse,
+  ListOperatorRequestsRequest,
+  MarkOperatorItemsSeenRequest,
+  OperatorRequestsChangedEvent,
+} from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
 import { subscribeGithubPrAuthenticationFailure } from "./github-pr-authentication-notice";
 import { unwrapNavigationRead } from "../shared/navigation-ipc-result";
+import {
+  KEYBINDINGS_CHANGED_CHANNEL,
+  KEYBINDINGS_READ_CHANNEL,
+  KEYBINDINGS_WRITE_CHANNEL,
+} from "../shared/ipc";
+import type {
+  KeybindingWriteRequest,
+  KeybindingsSnapshot,
+} from "../shared/keybindings";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
 import type { RemoveNavigationDirectoryRequest, RemoveNavigationDirectoryResponse } from "@pwragent/shared";
@@ -32,7 +70,11 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   DEFAULT_NAVIGATION_BROWSE_MODE,
   DESKTOP_UI_LAYOUT_DEFAULTS,
+  DESKTOP_DARK_THEME_DEFAULT,
+  DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopDarkTheme,
+  isDesktopLightTheme,
   isDesktopTextSize,
   normalizeNavigationBrowseMode,
 } from "@pwragent/shared";
@@ -56,6 +98,8 @@ import type {
   ReadQueuedTurnResponse,
   CancelQueuedTurnRequest,
   CancelQueuedTurnResponse,
+  MoveQueuedTurnRequest,
+  MoveQueuedTurnResponse,
   ReleaseQueuedTurnRequest,
   ReleaseQueuedTurnResponse,
   CreateScheduledThreadActionRequest,
@@ -69,6 +113,8 @@ import type {
   DescribeThreadMcpConnectionsRequest,
   DescribeThreadMcpConnectionsResponse,
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopTextSize,
   CancelThreadExecutionModeQueueRequest,
@@ -96,6 +142,7 @@ import type {
   ListAutomationsResponse,
   ListBackendsRequest,
   ListBackendsResponse,
+  ListMcpConnectionsRequest,
   ListMcpConnectionsResponse,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
@@ -115,6 +162,7 @@ import type {
   RemoveMcpConnectionRequest,
   SetMcpConnectionEnabledRequest,
   SetMcpConnectionSelectForNewThreadsRequest,
+  SetMcpConnectionToolApprovalRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
@@ -214,6 +262,7 @@ import type {
   MarkThreadSeenRequest,
   MarkThreadSeenResponse,
   RemoveRemoteThreadPinRequest,
+  HasRemoteThreadPinRequest,
   RemoveRemoteThreadPinResponse,
   SetRemoteThreadLocalPinRequest,
   SetRemoteThreadLocalPinResponse,
@@ -233,6 +282,8 @@ import type {
   SetThreadPinResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadLockRequest,
+  SetThreadLockResponse,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
@@ -340,6 +391,8 @@ import type {
   ListWorktreeUnpublishedCommitsResponse,
   GetWorktreeUnpublishedCommitDiffRequest,
   GetWorktreeUnpublishedCommitDiffResponse,
+  ReadWorktreeImageRequest,
+  ReadWorktreeImageResponse,
   NavigationSnapshot,
   NavigationSnapshotTransportResponse,
   ResetDirectoryLaunchpadRequest,
@@ -368,6 +421,8 @@ import type {
   StartThreadRequest,
   StartThreadResponse,
   StartTurnRequest,
+  SubmitThreadReplyRequest,
+  SubmitThreadReplyResponse,
   StartTurnResponse,
   ScheduledThreadActionIdRequest,
   ScheduledThreadActionMutationResponse,
@@ -422,10 +477,16 @@ import type {
   OpenPathResponse,
   ReadMarkdownFileRequest,
   ReadMarkdownFileResponse,
+  ResolveTranscriptFilesRequest,
+  ResolveTranscriptFilesResponse,
   ReadMarkdownFileViewerSnapshotRequest,
   ReadMarkdownFileViewerSnapshotResponse,
   OpenDesktopPwrAgentProfileRequest,
   OpenDesktopPwrAgentProfileResponse,
+  ReorderDesktopPwrAgentProfilesRequest,
+  ReorderDesktopPwrAgentProfilesResponse,
+  SetDesktopPwrAgentProfileMenuVisibilityRequest,
+  SetDesktopPwrAgentProfileMenuVisibilityResponse,
   ReadFederationActivityRequest,
   ReadFederationActivityResponse,
   ReadFederationHealthRequest,
@@ -444,6 +505,10 @@ import type {
   RevokeFederationPeerResponse,
   HandoffInstanceThreadRequest,
   HandoffInstanceThreadResult,
+  CancelComposerFilePushRequest,
+  ComposerFilePushProgress,
+  PushComposerFileRequest,
+  PushComposerFileResult,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
   SetFederationShortNameRequest,
@@ -503,6 +568,8 @@ import type {
   SetDefaultDesktopPwrAgentProfileResponse,
   SetNavigationBrowseModeRequest,
   SetNavigationBrowseModeResponse,
+  SetPinnedGroupCollapsedRequest,
+  SetPinnedGroupCollapsedResponse,
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
   UpdateDirectoryLaunchpadRequest,
@@ -513,7 +580,7 @@ import type {
   UpdateThreadExpectedBranchResponse,
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
-import type { WindowControlAction } from "../shared/ipc";
+import type { WindowControlAction, WindowOpenMainViewRequest } from "../shared/ipc";
 import type { StarMapIntakeDispatchRequest } from "../shared/star-map-intake";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
@@ -548,7 +615,9 @@ import type {
   CodexProtocolCaptureStatus,
 } from "../shared/codex-protocol-capture";
 import type {
+  IntegratedTerminalRenameRequest,
   IntegratedTerminalCloseRequest,
+  IntegratedTerminalContextMenuRequest,
   IntegratedTerminalCreateRequest,
   IntegratedTerminalCreateResponse,
   IntegratedTerminalErrorEvent,
@@ -570,11 +639,26 @@ import {
   AGENT_READ_QUEUED_TURN_CHANNEL,
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_RELEASE_QUEUED_TURN_CHANNEL,
+  AGENT_MOVE_QUEUED_TURN_CHANNEL,
   SCHEDULED_ACTIONS_CANCEL_CHANNEL,
   SCHEDULED_ACTIONS_CREATE_CHANNEL,
   SCHEDULED_ACTIONS_LIST_CHANNEL,
   SCHEDULED_ACTIONS_SEND_NOW_CHANNEL,
   SCHEDULED_ACTIONS_UPDATE_CHANNEL,
+  THREAD_TODOS_CHANGED_EVENT_CHANNEL,
+  THREAD_TODOS_LIST_CHANNEL,
+  THREAD_REVIEWS_LIST_CHANNEL,
+  THREAD_REVIEWS_UPDATE_CHANNEL,
+  THREAD_TODOS_LIST_PROJECTS_CHANNEL,
+  THREAD_TODOS_RESOLVE_CHANNEL,
+  THREAD_TODOS_RUN_ACTION_CHANNEL,
+  THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL,
+  THREAD_TODOS_SET_PROJECT_CHANNEL,
+  OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
+  OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL,
+  OPERATOR_REQUESTS_LIST_CHANNEL,
+  OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL,
+  OPERATOR_REQUESTS_MARK_SEEN_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -610,6 +694,7 @@ import {
   AGENT_START_THREAD_CHANNEL,
   AGENT_START_REVIEW_CHANNEL,
   AGENT_START_TURN_CHANNEL,
+  AGENT_SUBMIT_THREAD_REPLY_CHANNEL,
   AGENT_STEER_TURN_CHANNEL,
   AGENT_SUBMIT_SERVER_REQUEST_CHANNEL,
   AGENT_TRUST_CODEX_PROJECT_CHANNEL,
@@ -672,6 +757,8 @@ import {
   MANAGED_RUNTIME_PROGRESS_READ_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
+  THREAD_SEARCH_PROGRESS_CHANNEL,
+  THREAD_SEARCH_CANCEL_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
@@ -687,6 +774,7 @@ import {
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
   MARKDOWN_FILE_READ_CHANNEL,
+  TRANSCRIPT_FILES_RESOLVE_CHANNEL,
   MARKDOWN_FILE_VIEWER_OPEN_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
@@ -699,7 +787,9 @@ import {
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
   DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL,
+  INTEGRATED_TERMINAL_RENAME_CHANNEL,
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
+  INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
   INTEGRATED_TERMINAL_ERROR_CHANNEL,
   INTEGRATED_TERMINAL_EXIT_CHANNEL,
@@ -729,6 +819,9 @@ import {
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_HANDOFF_THREAD_CHANNEL,
+  FEDERATION_PUSH_COMPOSER_FILE_CHANNEL,
+  FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL,
+  FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_SHORT_NAME_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
@@ -782,6 +875,7 @@ import {
   MCP_CONNECTION_REMOVE_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
+  MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
@@ -843,16 +937,19 @@ import {
   NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
   NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
   NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
+  NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
   FEDERATION_JUMP_SEARCH_PROGRESS_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_REMOVE_REMOTE_THREAD_PIN_CHANNEL,
+  NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_REMOTE_THREAD_LOCAL_PIN_CHANNEL,
   NAVIGATION_REORDER_DIRECTORY_PINS_CHANNEL,
   NAVIGATION_REORDER_THREAD_PINS_CHANNEL,
   NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
   NAVIGATION_MARK_THREAD_SEEN_CHANNEL,
   NAVIGATION_SET_BROWSE_MODE_CHANNEL,
+  NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL,
   NAVIGATION_SET_SUBTHREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_DIRECTORY_PIN_CHANNEL,
   NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
@@ -862,6 +959,7 @@ import {
   NAVIGATION_SET_THREAD_MONITOR_JOB_SUGGESTIONS_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_THREAD_LOCK_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
@@ -892,11 +990,15 @@ import {
   PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
   PROFILES_LIST_CHANNEL,
   PROFILES_OPEN_CHANNEL,
+  PROFILES_REORDER_CHANNEL,
   PROFILES_SET_CODEX_PROFILE_CHANNEL,
   PROFILES_SET_DEFAULT_CHANNEL,
+  PROFILES_SET_MENU_VISIBILITY_CHANNEL,
   PROFILES_WRITE_SECRETS_CHANNEL,
   RENDERER_ERROR_REPORT_CHANNEL,
   RUNTIME_IDENTITY_CHANNEL,
+  LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL,
+  LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
@@ -933,6 +1035,7 @@ import {
   WINDOW_FULLSCREEN_SYNC_CHANNEL,
   WINDOW_CONTROL_CHANNEL,
   WINDOW_FRAME_SYNC_CHANNEL,
+  WINDOW_OPEN_MAIN_VIEW_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
   WINDOW_OPEN_SETTINGS_CHANNEL,
   WINDOW_POINTER_SNAPSHOT_CHANNEL,
@@ -1060,11 +1163,18 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
 );
 
 let federationJumpSearchRequestSequence = 0;
+let threadSearchRequestSequence = 0;
 
 const desktopApi = Object.freeze({
+  manageThreadDependencies: async (request: import("@pwragent/shared").ManageThreadDependenciesRequest): Promise<import("@pwragent/shared").ManageThreadDependenciesResponse> =>
+    await ipcRenderer.invoke("thread:dependencies", request),
   nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
   startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
   stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
+  sendNativeVoiceCameraCue: (request: VoiceCameraCue) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_CUE_CHANNEL, request),
+  setNativeVoiceCamera: (request: VoiceCameraRequest) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_CHANNEL, request),
+  analyzeNativeVoiceCamera: (request: VoiceCameraFrame) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_FRAME_CHANNEL, request),
+  checkNativeVoiceCameraRepeat: (request: VoiceCameraRepeatCheck) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_REPEAT_CHANNEL, request),
   sendNativeVoiceText: (request: NativeVoiceText) => ipcRenderer.invoke(NATIVE_VOICE_TEXT_CHANNEL, request),
   openVoiceManager: (): Promise<OpenVoiceManagerResponse> => ipcRenderer.invoke(NATIVE_VOICE_OPEN_MANAGER_CHANNEL),
   publishOperatorFocus: (focus: OperatorFocusSnapshot): Promise<void> => ipcRenderer.invoke(OPERATOR_FOCUS_PUBLISH_CHANNEL, focus),
@@ -1085,8 +1195,8 @@ const desktopApi = Object.freeze({
   },
   readTranscriptImage: async (url: string): Promise<{ dataBase64: string; mimeType: string }> =>
     await ipcRenderer.invoke(TRANSCRIPT_IMAGE_READ_CHANNEL, url),
-  listMcpConnections: async (): Promise<ListMcpConnectionsResponse> =>
-    await ipcRenderer.invoke(MCP_CONNECTION_LIST_CHANNEL),
+  listMcpConnections: async (request?: ListMcpConnectionsRequest): Promise<ListMcpConnectionsResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_LIST_CHANNEL, request),
   createMcpConnection: async (
     request: CreateMcpConnectionRequest,
   ): Promise<CreateMcpConnectionResponse> =>
@@ -1126,6 +1236,10 @@ const desktopApi = Object.freeze({
       MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
       request,
     ),
+  setMcpConnectionToolApproval: async (
+    request: SetMcpConnectionToolApprovalRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL, request),
   listMcpConnectionTools: async (
     request: ListMcpConnectionToolsRequest,
   ): Promise<ListMcpConnectionToolsResponse> =>
@@ -1351,6 +1465,14 @@ const desktopApi = Object.freeze({
     request: SetDesktopPwrAgentProfileCodexProfileRequest,
   ): Promise<SetDesktopPwrAgentProfileCodexProfileResponse> =>
     await ipcRenderer.invoke(PROFILES_SET_CODEX_PROFILE_CHANNEL, request),
+  reorderPwrAgentProfiles: async (
+    request: ReorderDesktopPwrAgentProfilesRequest,
+  ): Promise<ReorderDesktopPwrAgentProfilesResponse> =>
+    await ipcRenderer.invoke(PROFILES_REORDER_CHANNEL, request),
+  setPwrAgentProfileMenuVisibility: async (
+    request: SetDesktopPwrAgentProfileMenuVisibilityRequest,
+  ): Promise<SetDesktopPwrAgentProfileMenuVisibilityResponse> =>
+    await ipcRenderer.invoke(PROFILES_SET_MENU_VISIBILITY_CHANNEL, request),
   graduateBootstrapConfigToProfile: async (
     request: GraduateDesktopBootstrapConfigToProfileRequest,
   ): Promise<GraduateDesktopBootstrapConfigToProfileResponse> =>
@@ -1375,6 +1497,8 @@ const desktopApi = Object.freeze({
     request: WaitForDesktopProfileAliveRequest,
   ): Promise<WaitForDesktopProfileAliveResponse> =>
     await ipcRenderer.invoke(APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL, request),
+  threadServices: async (request: ServiceUiRequest): Promise<ServiceUiResponse> =>
+    await ipcRenderer.invoke(FEDERATION_SERVICES_CHANNEL, request),
   openFederationWindow: async (
     request: OpenFederationWindowRequest,
   ): Promise<OpenFederationWindowResponse> =>
@@ -1419,6 +1543,26 @@ const desktopApi = Object.freeze({
     request: HandoffInstanceThreadRequest,
   ): Promise<HandoffInstanceThreadResult> =>
     await ipcRenderer.invoke(FEDERATION_HANDOFF_THREAD_CHANNEL, request),
+  pushComposerFile: async (
+    request: PushComposerFileRequest,
+  ): Promise<PushComposerFileResult> =>
+    await ipcRenderer.invoke(FEDERATION_PUSH_COMPOSER_FILE_CHANNEL, request),
+  cancelComposerFilePush: async (
+    request: CancelComposerFilePushRequest,
+  ): Promise<void> =>
+    await ipcRenderer.invoke(FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL, request),
+  onComposerFilePushProgress: (
+    callback: (progress: ComposerFilePushProgress) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ComposerFilePushProgress,
+    ) => callback(payload);
+    ipcRenderer.on(FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL, listener);
+    };
+  },
   resetFederationEnrollment: async (
     request?: ResetFederationEnrollmentRequest,
   ): Promise<ResetFederationEnrollmentResponse> =>
@@ -1502,6 +1646,11 @@ const desktopApi = Object.freeze({
   focusMainWindowFromStarMap: async (): Promise<void> => {
     await ipcRenderer.invoke(STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL);
   },
+  readLaunchpadAccessNoticePending: async (): Promise<boolean> =>
+    await ipcRenderer.invoke(LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL),
+  dismissLaunchpadAccessNotice: async (): Promise<void> => {
+    await ipcRenderer.invoke(LAUNCHPAD_ACCESS_NOTICE_DISMISS_CHANNEL);
+  },
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
@@ -1518,8 +1667,22 @@ const desktopApi = Object.freeze({
     ),
   searchThreads: async (
     request?: ThreadSearchRequest,
-  ): Promise<ThreadSearchResponse> =>
-    await ipcRenderer.invoke(THREAD_SEARCH_CHANNEL, request),
+    onProgress?: (response: ThreadSearchResponse) => void,
+  ): Promise<ThreadSearchResponse> => {
+    const searchId = ++threadSearchRequestSequence;
+    const listener = (_event: Electron.IpcRendererEvent, update: { searchId: number; response: ThreadSearchResponse }): void => {
+      if (update.searchId === searchId) onProgress?.(update.response);
+    };
+    ipcRenderer.on(THREAD_SEARCH_PROGRESS_CHANNEL, listener);
+    try {
+      return await ipcRenderer.invoke(THREAD_SEARCH_CHANNEL, request, searchId);
+    } finally {
+      ipcRenderer.removeListener(THREAD_SEARCH_PROGRESS_CHANNEL, listener);
+    }
+  },
+  cancelThreadSearch: async (): Promise<void> => {
+    await ipcRenderer.invoke(THREAD_SEARCH_CANCEL_CHANNEL);
+  },
   listSkills: async (
     request?: AppServerListSkillsRequest
   ): Promise<AppServerListSkillsResponse> =>
@@ -1585,6 +1748,28 @@ const desktopApi = Object.freeze({
       SETTINGS_READ_CHANNEL,
       request,
     ),
+  readKeybindings: async (): Promise<KeybindingsSnapshot> =>
+    await invokeWithStartupProfileTiming(
+      "readKeybindings",
+      KEYBINDINGS_READ_CHANNEL,
+    ),
+  writeKeybindings: async (
+    request: KeybindingWriteRequest,
+  ): Promise<KeybindingsSnapshot> =>
+    await ipcRenderer.invoke(KEYBINDINGS_WRITE_CHANNEL, request),
+  onKeybindingsChanged: (
+    callback: (snapshot: KeybindingsSnapshot) => void,
+  ): (() => void) => {
+    // keybindings.toml changed: a save in any window, or a hand edit.
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      snapshot: KeybindingsSnapshot,
+    ) => callback(snapshot);
+    ipcRenderer.on(KEYBINDINGS_CHANGED_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(KEYBINDINGS_CHANGED_CHANNEL, listener);
+    };
+  },
   readConfigBootstrap: async (): Promise<ReadDesktopConfigBootstrapResponse> =>
     await invokeWithStartupProfileTiming(
       "readConfigBootstrap",
@@ -1708,6 +1893,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(PATH_REVEAL_CHANNEL, request),
   receivingFolder: async (request: ReceivingFolderRequest): Promise<ReceivingFolderResponse> =>
     await ipcRenderer.invoke(SETTINGS_RECEIVING_FOLDER_CHANNEL, request),
+  resolveTranscriptFiles: async (
+    request: ResolveTranscriptFilesRequest,
+  ): Promise<ResolveTranscriptFilesResponse> =>
+    await ipcRenderer.invoke(TRANSCRIPT_FILES_RESOLVE_CHANNEL, request),
   readMarkdownFile: async (
     request: ReadMarkdownFileRequest,
   ): Promise<ReadMarkdownFileResponse> =>
@@ -1771,10 +1960,17 @@ const desktopApi = Object.freeze({
       request,
     );
   },
+  renameIntegratedTerminal: async (request: IntegratedTerminalRenameRequest): Promise<void> =>
+    ipcRenderer.invoke(INTEGRATED_TERMINAL_RENAME_CHANNEL, request),
   createIntegratedTerminal: async (
     request: IntegratedTerminalCreateRequest,
   ): Promise<IntegratedTerminalCreateResponse> =>
     await ipcRenderer.invoke(INTEGRATED_TERMINAL_CREATE_CHANNEL, request),
+  showIntegratedTerminalContextMenu: async (
+    request: IntegratedTerminalContextMenuRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(INTEGRATED_TERMINAL_CONTEXT_MENU_CHANNEL, request);
+  },
   writeIntegratedTerminal: async (
     request: IntegratedTerminalWriteRequest,
   ): Promise<void> => {
@@ -1902,6 +2098,8 @@ const desktopApi = Object.freeze({
     ),
   readUsageActivity: async (request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_READ_CHANNEL, request),
+  readThreadFamilyPricing: async (request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> =>
+    await ipcRenderer.invoke(THREAD_FAMILY_PRICING_READ_CHANNEL, request),
   analyzeUsageActivity: async (request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_ANALYZE_CHANNEL, request),
   openUsageActivity: async (): Promise<void> =>
@@ -2023,6 +2221,10 @@ const desktopApi = Object.freeze({
     request: StartTurnRequest
   ): Promise<StartTurnResponse> =>
     await ipcRenderer.invoke(AGENT_START_TURN_CHANNEL, request),
+  submitThreadReply: async (
+    request: SubmitThreadReplyRequest,
+  ): Promise<SubmitThreadReplyResponse> =>
+    await ipcRenderer.invoke(AGENT_SUBMIT_THREAD_REPLY_CHANNEL, request),
   readQueuedTurn: async (
     request: ReadQueuedTurnRequest,
   ): Promise<ReadQueuedTurnResponse> =>
@@ -2035,6 +2237,72 @@ const desktopApi = Object.freeze({
     request: ReleaseQueuedTurnRequest,
   ): Promise<ReleaseQueuedTurnResponse> =>
     await ipcRenderer.invoke(AGENT_RELEASE_QUEUED_TURN_CHANNEL, request),
+  moveQueuedTurn: async (
+    request: MoveQueuedTurnRequest,
+  ): Promise<MoveQueuedTurnResponse> =>
+    await ipcRenderer.invoke(AGENT_MOVE_QUEUED_TURN_CHANNEL, request),
+  listThreadTodos: async (
+    request?: ListThreadTodosRequest,
+  ): Promise<ListThreadTodosResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_LIST_CHANNEL, request ?? {}),
+  listThreadReviews: async (request?: ListThreadReviewsRequest): Promise<{ reviews: ThreadReview[] }> =>
+    await ipcRenderer.invoke(THREAD_REVIEWS_LIST_CHANNEL, request ?? {}),
+  updateThreadReview: async (request: UpdateThreadReviewRequest): Promise<{ review: ThreadReview }> =>
+    await ipcRenderer.invoke(THREAD_REVIEWS_UPDATE_CHANNEL, request),
+  resolveThreadTodo: async (
+    request: ResolveThreadTodoRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_RESOLVE_CHANNEL, request),
+  runThreadTodoAction: async (
+    request: RunThreadTodoActionRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_RUN_ACTION_CHANNEL, request),
+  listThreadTodoProjects: async (request?: ListThreadTodoProjectsRequest): Promise<ListThreadTodoProjectsResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_LIST_PROJECTS_CHANNEL, request ?? {}),
+  setThreadTodoProject: async (
+    request: SetThreadTodoProjectRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_SET_PROJECT_CHANNEL, request),
+  setThreadTodoItemChecked: async (
+    request: SetThreadTodoItemCheckedRequest,
+  ): Promise<ThreadTodoMutationResponse> =>
+    await ipcRenderer.invoke(THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL, request),
+  onThreadTodosChanged: (
+    callback: (event: ThreadTodosChangedEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ThreadTodosChangedEvent,
+    ) => callback(payload);
+    ipcRenderer.on(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  listOperatorRequests: async (request?: ListOperatorRequestsRequest): Promise<ListOperatorRequestsResponse> =>
+    await ipcRenderer.invoke(OPERATOR_REQUESTS_LIST_CHANNEL, request),
+  listDismissedOperatorQuestions: async (request: OperatorQuestionThreadRequest): Promise<string[]> =>
+    await ipcRenderer.invoke(OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL, request),
+  markOperatorItemsSeen: async (
+    request: MarkOperatorItemsSeenRequest,
+  ): Promise<void> =>
+    await ipcRenderer.invoke(OPERATOR_REQUESTS_MARK_SEEN_CHANNEL, request),
+  dismissOperatorQuestion: async (
+    request: DismissOperatorQuestionRequest,
+  ): Promise<void> =>
+    await ipcRenderer.invoke(OPERATOR_REQUESTS_DISMISS_QUESTION_CHANNEL, request),
+  onOperatorRequestsChanged: (
+    callback: (event: OperatorRequestsChangedEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: OperatorRequestsChangedEvent,
+    ) => callback(payload);
+    ipcRenderer.on(OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
   listScheduledThreadActions: async (
     request?: ListScheduledThreadActionsRequest,
     consumerId?: string,
@@ -2244,6 +2512,10 @@ const desktopApi = Object.freeze({
     request: SetNavigationBrowseModeRequest,
   ): Promise<SetNavigationBrowseModeResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_BROWSE_MODE_CHANNEL, request),
+  setPinnedGroupCollapsed: async (
+    request: SetPinnedGroupCollapsedRequest,
+  ): Promise<SetPinnedGroupCollapsedResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_PINNED_GROUP_COLLAPSED_CHANNEL, request),
   markThreadSeen: async (
     request: MarkThreadSeenRequest,
   ): Promise<MarkThreadSeenResponse> =>
@@ -2252,6 +2524,10 @@ const desktopApi = Object.freeze({
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_REACTION_CHANNEL, request),
+  setThreadLock: async (
+    request: SetThreadLockRequest,
+  ): Promise<SetThreadLockResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_LOCK_CHANNEL, request),
   setThreadToolIncidentNotice: async (
     request: SetThreadToolIncidentNoticeRequest,
   ): Promise<SetThreadToolIncidentNoticeResponse> =>
@@ -2295,6 +2571,8 @@ const desktopApi = Object.freeze({
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REORDER_THREAD_PINS_CHANNEL, request),
+  hasRemoteThreadPin: async (request: HasRemoteThreadPinRequest): Promise<boolean> =>
+    await ipcRenderer.invoke(NAVIGATION_HAS_REMOTE_THREAD_PIN_CHANNEL, request),
   addRemoteThreadPin: async (
     request: AddRemoteThreadPinRequest,
   ): Promise<AddRemoteThreadPinResponse> =>
@@ -2455,6 +2733,10 @@ const desktopApi = Object.freeze({
       NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
       request,
     ),
+  readWorktreeImage: async (
+    request: ReadWorktreeImageRequest,
+  ): Promise<ReadWorktreeImageResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_READ_WORKTREE_IMAGE_CHANNEL, request),
   getGhStatus: async (request?: GetGhStatusRequest): Promise<GhStatus> =>
     await invokeWithStartupProfileTiming(
       "getGhStatus",
@@ -2660,15 +2942,36 @@ const desktopApi = Object.freeze({
     };
   },
   onOpenSettingsRequested: (
-    callback: (section?: string) => void,
+    callback: (section?: string, subsection?: string) => void,
   ): (() => void) => {
     // Main → renderer push from the PwrAgent → Settings… menu item.
     // App.tsx subscribes and switches `mainView` to "settings".
-    const listener = (_event: Electron.IpcRendererEvent, section?: unknown) =>
-      callback(typeof section === "string" ? section : undefined);
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      section?: unknown,
+      subsection?: unknown,
+    ) =>
+      callback(
+        typeof section === "string" ? section : undefined,
+        typeof subsection === "string" ? subsection : undefined,
+      );
     ipcRenderer.on(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_OPEN_SETTINGS_CHANNEL, listener);
+    };
+  },
+  onOpenMainViewRequested: (
+    callback: (view: WindowOpenMainViewRequest) => void,
+  ): (() => void) => {
+    // Main → renderer push from View → Search Threads / View → Automations.
+    const listener = (_event: Electron.IpcRendererEvent, view: unknown) => {
+      if (view === "automations" || view === "search") {
+        callback(view);
+      }
+    };
+    ipcRenderer.on(WINDOW_OPEN_MAIN_VIEW_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_OPEN_MAIN_VIEW_CHANNEL, listener);
     };
   },
   onOpenNewThreadRequested: (callback: () => void): (() => void) => {
@@ -2808,6 +3111,8 @@ const desktopApi = Object.freeze({
   onAppearanceChanged: (
     callback: (appearance: {
       theme: DesktopAppearanceTheme;
+      darkTheme: DesktopDarkTheme;
+      lightTheme: DesktopLightTheme;
       density: DesktopAppearanceDensity;
       sidebarTextSize: DesktopTextSize;
       transcriptTextSize: DesktopTextSize;
@@ -2817,6 +3122,8 @@ const desktopApi = Object.freeze({
       _event: Electron.IpcRendererEvent,
       payload: {
         theme: DesktopAppearanceTheme;
+        darkTheme: DesktopDarkTheme;
+        lightTheme: DesktopLightTheme;
         density: DesktopAppearanceDensity;
         sidebarTextSize: DesktopTextSize;
         transcriptTextSize: DesktopTextSize;
@@ -3025,6 +3332,8 @@ const desktopApi = Object.freeze({
 const APPEARANCE_ARG_PREFIX = "--pwragent-appearance=";
 function readBootstrapAppearance(): {
   theme: "system" | "dark" | "light";
+  darkTheme: DesktopDarkTheme;
+  lightTheme: DesktopLightTheme;
   density: "mission-control" | "compact";
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
@@ -3037,6 +3346,16 @@ function readBootstrapAppearance(): {
         raw && (raw.theme === "system" || raw.theme === "dark" || raw.theme === "light")
           ? raw.theme
           : "system";
+      const darkTheme =
+        raw && typeof raw.darkTheme === "string"
+          && isDesktopDarkTheme(raw.darkTheme)
+          ? raw.darkTheme
+          : DESKTOP_DARK_THEME_DEFAULT;
+      const lightTheme =
+        raw && typeof raw.lightTheme === "string"
+          && isDesktopLightTheme(raw.lightTheme)
+          ? raw.lightTheme
+          : DESKTOP_LIGHT_THEME_DEFAULT;
       const density =
         raw && (raw.density === "mission-control" || raw.density === "compact")
           ? raw.density
@@ -3054,13 +3373,22 @@ function readBootstrapAppearance(): {
           && isDesktopTextSize(raw.transcriptTextSize)
           ? raw.transcriptTextSize
           : DESKTOP_TEXT_SIZE_DEFAULT;
-      return { theme, density, sidebarTextSize, transcriptTextSize };
+      return {
+        theme,
+        darkTheme,
+        lightTheme,
+        density,
+        sidebarTextSize,
+        transcriptTextSize,
+      };
     } catch {
       break;
     }
   }
   return {
     theme: "system",
+    darkTheme: DESKTOP_DARK_THEME_DEFAULT,
+    lightTheme: DESKTOP_LIGHT_THEME_DEFAULT,
     density: "mission-control",
     sidebarTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
     transcriptTextSize: DESKTOP_TEXT_SIZE_DEFAULT,
@@ -3074,6 +3402,8 @@ const bootstrapAppearance = readBootstrapAppearance();
 const NAVIGATION_ARG_PREFIX = "--pwragent-navigation-preferences=";
 function readBootstrapNavigationPreferences(): {
   browseMode: NavigationBrowseMode;
+  pinnedGroupCollapsed: boolean;
+  pinnedThreadsOnTop: boolean;
 } {
   for (const arg of process.argv) {
     if (!arg.startsWith(NAVIGATION_ARG_PREFIX)) continue;
@@ -3083,12 +3413,16 @@ function readBootstrapNavigationPreferences(): {
       // only inbox/recents/directories, so an operator whose saved lens was
       // Attention got Inbox at first paint and then a visible jump — the
       // exact flicker this bootstrap hint exists to prevent.
-      return { browseMode: normalizeNavigationBrowseMode(raw?.browseMode) };
+      return {
+        browseMode: normalizeNavigationBrowseMode(raw?.browseMode),
+        pinnedGroupCollapsed: raw?.pinnedGroupCollapsed === true,
+        pinnedThreadsOnTop: raw?.pinnedThreadsOnTop !== false,
+      };
     } catch {
       break;
     }
   }
-  return { browseMode: DEFAULT_NAVIGATION_BROWSE_MODE };
+  return { browseMode: DEFAULT_NAVIGATION_BROWSE_MODE, pinnedGroupCollapsed: false, pinnedThreadsOnTop: true };
 }
 const bootstrapNavigationPreferences = readBootstrapNavigationPreferences();
 

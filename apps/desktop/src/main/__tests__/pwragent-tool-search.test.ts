@@ -89,6 +89,8 @@ describe("PwrAgent tool discovery", () => {
     ["handoff child thread", "handoff_task"],
     ["split parallel tasks", "handoff_task"],
     ["close thread", "mutate_thread"],
+    ["rename this thread", "rename_current_thread"],
+    ["name my thread", "rename_current_thread"],
     ["mark project read", "mark_project_read"],
     ["clear all unread items in repository", "mark_project_read"],
     ["bulk dismiss unread folder", "mark_project_read"],

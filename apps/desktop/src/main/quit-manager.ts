@@ -50,6 +50,8 @@ export type QuitRequestSource =
 
 export type RequestQuitOptions = {
   performQuit?: () => void;
+  /** Authorize an update after confirmation, before committing shutdown. */
+  beforeQuit?: () => boolean;
   source: QuitRequestSource;
 };
 
@@ -60,6 +62,7 @@ export type QuitBlockerSnapshot = {
   threadIds: string[];
   actionRunCount: number;
   automationRunCount?: number;
+  archiveCleanupCount?: number;
   items: QuitBlockerItem[];
 };
 
@@ -71,6 +74,7 @@ export type QuitManagerDependencies = {
     inProgressThreadCount: number;
     terminalSessionCount: number;
     actionRunCount?: number;
+    archiveCleanupCount?: number;
     items?: QuitBlockerItem[];
     refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
   }) => Promise<QuitConfirmationDialogResult>;
@@ -115,6 +119,7 @@ export function createQuitManager(
   dependencies: QuitManagerDependencies,
 ): QuitManager {
   let quitAllowed = false;
+  let pendingBeforeQuit: (() => boolean) | undefined;
   let pendingPerformQuit: (() => void) | undefined;
   let promptPromise: Promise<boolean> | undefined;
   let activePromptId = 0;
@@ -135,6 +140,7 @@ export function createQuitManager(
 
   const requestQuit = async (options: RequestQuitOptions): Promise<boolean> => {
     if (quitAllowed) {
+      if (options.beforeQuit && !options.beforeQuit()) return false;
       (options.performQuit ?? dependencies.performQuit)();
       return true;
     }
@@ -145,6 +151,7 @@ export function createQuitManager(
       dependencies.log.info?.("quit requested with no active work", {
         source: options.source,
       });
+      if (options.beforeQuit && !options.beforeQuit()) return false;
       quitAllowed = true;
       (options.performQuit ?? dependencies.performQuit)();
       return true;
@@ -156,6 +163,7 @@ export function createQuitManager(
         {
           count: snapshot.count,
           actionRunCount: snapshot.actionRunCount,
+          ...(snapshot.archiveCleanupCount ? { archiveCleanupCount: snapshot.archiveCleanupCount } : {}),
           automationRunCount: snapshot.automationRunCount ?? 0,
           source: options.source,
           terminalSessionCount: snapshot.terminalSessionCount,
@@ -163,6 +171,7 @@ export function createQuitManager(
           threadIds: snapshot.threadIds,
         },
       );
+      if (options.beforeQuit && !options.beforeQuit()) return false;
       quitAllowed = true;
       (options.performQuit ?? dependencies.performQuit)();
       return true;
@@ -171,6 +180,7 @@ export function createQuitManager(
     if (promptPromise) {
       if (options.performQuit) {
         pendingPerformQuit = options.performQuit;
+        pendingBeforeQuit = options.beforeQuit;
       }
       // Asking again has to do *something*. Any deliberate interaction with the
       // prompt — a click, a scroll, a keystroke — cancels its countdown for
@@ -190,6 +200,7 @@ export function createQuitManager(
     dependencies.log.warn?.("quit requested with active work", {
       count: snapshot.count,
       actionRunCount: snapshot.actionRunCount,
+      ...(snapshot.archiveCleanupCount ? { archiveCleanupCount: snapshot.archiveCleanupCount } : {}),
       automationRunCount: snapshot.automationRunCount ?? 0,
       source: options.source,
       terminalSessionCount: snapshot.terminalSessionCount,
@@ -198,6 +209,7 @@ export function createQuitManager(
     });
 
     pendingPerformQuit = options.performQuit ?? dependencies.performQuit;
+    pendingBeforeQuit = options.beforeQuit;
     const promptId = nextPromptId + 1;
     nextPromptId = promptId;
     activePromptId = promptId;
@@ -228,6 +240,7 @@ export function createQuitManager(
           automationRunCount: snapshot.automationRunCount ?? 0,
           terminalSessionCount: snapshot.terminalSessionCount,
           actionRunCount: snapshot.actionRunCount,
+          ...(snapshot.archiveCleanupCount ? { archiveCleanupCount: snapshot.archiveCleanupCount } : {}),
           items,
           refresh: async () =>
             await buildQuitConfirmationSnapshot(
@@ -236,8 +249,13 @@ export function createQuitManager(
               dependencies.log,
             ),
         });
+        if (resolution !== "manual-cancel" && pendingBeforeQuit && !pendingBeforeQuit()) {
+          resolution = "manual-cancel";
+        }
       } catch (error) {
         dependencies.cancelShutdown?.();
+        pendingBeforeQuit = undefined;
+        pendingPerformQuit = undefined;
         clearPrompt();
         resumeAutomationDispatchAfterPrompt(resumeAutomationDispatch);
         throw error;
@@ -245,6 +263,7 @@ export function createQuitManager(
       dependencies.log.warn?.("quit confirmation resolved", {
         count: snapshot.count,
         actionRunCount: snapshot.actionRunCount,
+        ...(snapshot.archiveCleanupCount ? { archiveCleanupCount: snapshot.archiveCleanupCount } : {}),
         automationRunCount: snapshot.automationRunCount ?? 0,
         resolution,
         source: options.source,
@@ -255,6 +274,7 @@ export function createQuitManager(
       if (resolution === "manual-cancel") {
         dependencies.cancelShutdown?.();
         pendingPerformQuit = undefined;
+        pendingBeforeQuit = undefined;
         // The dialog is already gone. Release this prompt before gates and
         // backend submissions resume so a new quit request can open a visible
         // confirmation instead of joining work nobody can see.
@@ -266,6 +286,7 @@ export function createQuitManager(
       quitAllowed = true;
       (pendingPerformQuit ?? dependencies.performQuit)();
       pendingPerformQuit = undefined;
+      pendingBeforeQuit = undefined;
       return true;
     })();
     promptPromise = currentPrompt;
@@ -300,6 +321,7 @@ export async function buildQuitConfirmationSnapshot(
     automationRunCount: snapshot.automationRunCount ?? 0,
     terminalSessionCount: snapshot.terminalSessionCount,
     actionRunCount: snapshot.actionRunCount,
+    ...(snapshot.archiveCleanupCount ? { archiveCleanupCount: snapshot.archiveCleanupCount } : {}),
     items,
   };
 }
@@ -323,6 +345,7 @@ export function buildQuitBlockerSnapshot(params: {
     threads: IntegratedTerminalQuitThread[];
   };
   actionRuns?: DetachedCommandSummary[];
+  archiveCleanupCount?: number;
 }): QuitBlockerSnapshot {
   const threadIds = [...params.inProgressThreads.threadIds].sort();
   const terminalThreads = [...params.terminalSessions.threads].sort(
@@ -391,11 +414,13 @@ export function buildQuitBlockerSnapshot(params: {
       threadIds.length
       + automationRuns.length
       + params.terminalSessions.count
-      + actionRuns.length,
+      + actionRuns.length
+      + (params.archiveCleanupCount ?? 0),
     terminalSessionCount: params.terminalSessions.count,
     terminalThreadKeys,
     threadIds,
     actionRunCount: actionRuns.length,
+    ...(params.archiveCleanupCount ? { archiveCleanupCount: params.archiveCleanupCount } : {}),
     automationRunCount: automationRuns.length,
     items,
   };
@@ -628,6 +653,7 @@ export function getCurrentQuitBlockers(): QuitBlockerSnapshot {
       getDesktopBackendRegistry().getInProgressThreadSnapshotForQuit(),
     terminalSessions: getIntegratedTerminalQuitSnapshot(),
     actionRuns: listRunningDetachedCommands(),
+    archiveCleanupCount: getDesktopBackendRegistry().getArchiveCleanupCountForQuit(),
   });
 }
 

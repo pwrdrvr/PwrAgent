@@ -1,21 +1,25 @@
-import type { DesktopThreadArchivePolicy } from "@pwragent/shared";
-import { validateLocalModelIds } from "@pwragent/shared";
+import type { DesktopThreadArchivePolicy, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
+import { isAcpBackendId, isThreadTodoMergeMethod, validateLocalModelIds } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import os from "node:os";
 import path from "node:path";
 import type {
   DesktopAppearanceDensity,
+  DesktopDarkTheme,
+  DesktopLightTheme,
   DesktopAppearanceTheme,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
   DesktopCodexProfileModel,
+  DesktopDecisionModelSettings,
   DesktopFederationMode,
   DesktopHelperModelChoice,
   DesktopHelperModelSettings,
   DesktopHotCpuProfileStartDelayMs,
   DesktopHotCpuProfileTriggerMode,
   DesktopIntegratedTerminalWindowsShell,
+  DesktopLogsViewerPreferences,
   DesktopMessagingAcknowledgment,
   DesktopMessagingAuthorizationMode,
   DesktopMessagingFullAccessWarningGlobalPolicy,
@@ -40,21 +44,30 @@ import type {
 } from "@pwragent/shared";
 import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
+  DESKTOP_DARK_THEME_DEFAULT,
+  DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   isDesktopAppearanceDensity,
+  isDesktopDarkTheme,
+  isDesktopLightTheme,
   isDesktopAppearanceTheme,
   isDesktopTextSize,
   isDesktopCodexProfileModel,
   isDesktopFederationMode,
   isFederationGatewayEndpointUrl,
+  normalizeDecisionModelSettings,
   isDesktopHotCpuProfileStartDelayMs,
   isDesktopHotCpuProfileTriggerMode,
   isDesktopIntegratedTerminalWindowsShell,
+  isDesktopLogsContextLines,
+  isDesktopLogsSearchMode,
+  isDesktopLogsStoredLevel,
   isDesktopOnboardingCompletedSource,
+  DESKTOP_LOGS_VIEWER_DEFAULTS,
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateSelectionSource,
   isDesktopUpdateTrain,
@@ -99,6 +112,9 @@ export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    pinnedThreadsOnTop?: boolean;
+    interactiveSvgSkipNotice?: boolean;
+    interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
@@ -115,6 +131,10 @@ export type DesktopSettingsConfig = {
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
+      darkTheme?: DesktopDarkTheme;
+      lightTheme?: DesktopLightTheme;
+      themedDockIcon?: boolean;
+      terminalMinimumContrast?: boolean;
       density?: DesktopAppearanceDensity;
       sidebarTextSize?: DesktopTextSize;
       transcriptTextSize?: DesktopTextSize;
@@ -143,6 +163,7 @@ export type DesktopSettingsConfig = {
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     codexSkillQuestionsWarningDismissed?: boolean;
+    codexConfigWarningsDismissed?: string[];
     managedReview?: boolean;
     diffCondensation?: {
       enabled?: boolean;
@@ -168,6 +189,7 @@ export type DesktopSettingsConfig = {
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
+    logs?: Partial<DesktopLogsViewerPreferences>;
   };
   federation?: {
     mode?: DesktopFederationMode;
@@ -177,6 +199,7 @@ export type DesktopSettingsConfig = {
     listenPort?: number;
     compressionEnabled?: boolean;
     allowRemoteShells?: boolean;
+    allowPortForwarding?: boolean;
     allowFilePush?: boolean;
     allowFilePull?: boolean;
     allowFilePullOutsideThreadDirectories?: boolean;
@@ -277,18 +300,23 @@ export type DesktopSettingsConfig = {
     };
   };
   models?: {
+    usageAccountGroups?: Record<string, string>;
+    usageAccountNames?: Record<string, string>;
     providerDefaults?: Record<string, DesktopProviderModelDefaults>;
     providerThreadMigrations?: Record<
       string,
       DesktopProviderThreadModelMigration
     >;
     helperModels?: DesktopHelperModelSettings;
+    decisionModels?: DesktopDecisionModelSettings;
     codex?: {
       path?: string;
       profile?: string;
       allowFast?: boolean;
       /** Download and use PwrAgent's own Codex build. Token Miser implies it. */
       managedBuilds?: boolean;
+      /** Which pwrdrvr/codex track the managed runtime follows. */
+      managedBuildChannel?: DesktopUpdateChannel;
       configOverrides?: string[];
       localModelIds?: string[];
     };
@@ -320,6 +348,7 @@ export type DesktopSettingsConfig = {
     prAutoDispatchBudgetCapacity?: number;
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;
+    defaultMergeMethod?: ThreadTodoMergeMethod;
   };
   applications?: {
     editor?: {
@@ -636,6 +665,24 @@ export function desktopSettingsPatchToEdits(
       patch.general.attentionPromoteOnTurnEnd,
     );
   }
+  if (patch.general?.pinnedThreadsOnTop !== undefined) {
+    set(
+      ["general", "pinned_threads_on_top"],
+      patch.general.pinnedThreadsOnTop,
+    );
+  }
+  if (patch.general?.interactiveSvgSkipNotice !== undefined) {
+    set(
+      ["general", "interactive_svg_skip_notice"],
+      patch.general.interactiveSvgSkipNotice,
+    );
+  }
+  if (patch.general?.interactiveSvgAutoOpen !== undefined) {
+    set(
+      ["general", "interactive_svg_auto_open"],
+      patch.general.interactiveSvgAutoOpen,
+    );
+  }
   if (patch.general?.mcpGatewayEnabled !== undefined) {
     set(["general", "mcp_gateway_enabled"], patch.general.mcpGatewayEnabled);
   }
@@ -829,6 +876,12 @@ export function desktopSettingsPatchToEdits(
       patch.experimental.codexSkillQuestionsWarningDismissed,
     );
   }
+  if (patch.experimental?.codexConfigWarningsDismissed !== undefined) {
+    set(
+      ["experimental", "codex_config_warnings_dismissed"],
+      [...new Set(patch.experimental.codexConfigWarningsDismissed)],
+    );
+  }
   if (patch.experimental?.managedReview !== undefined) {
     set(
       ["experimental", "managed_review"],
@@ -840,6 +893,57 @@ export function desktopSettingsPatchToEdits(
       edits.push({ op: "delete", path: ["general", "appearance", "theme"] });
     } else {
       set(["general", "appearance", "theme"], patch.general.appearance.theme);
+    }
+  }
+  if (patch.general?.appearance?.darkTheme !== undefined) {
+    if (patch.general.appearance.darkTheme === DESKTOP_DARK_THEME_DEFAULT) {
+      edits.push({ op: "delete", path: ["general", "appearance", "dark_theme"] });
+    } else {
+      set(
+        ["general", "appearance", "dark_theme"],
+        patch.general.appearance.darkTheme,
+      );
+    }
+  }
+  if (patch.general?.appearance?.lightTheme !== undefined) {
+    if (patch.general.appearance.lightTheme === DESKTOP_LIGHT_THEME_DEFAULT) {
+      edits.push({ op: "delete", path: ["general", "appearance", "light_theme"] });
+    } else {
+      set(
+        ["general", "appearance", "light_theme"],
+        patch.general.appearance.lightTheme,
+      );
+    }
+  }
+  if (
+    patch.general?.appearance?.darkTheme !== undefined
+    || patch.general?.appearance?.lightTheme !== undefined
+  ) {
+    // `palette` was a development-only key that dark_theme / light_theme
+    // replaced before any release read it. Drop it once the operator picks
+    // a theme so it does not linger as a setting nothing reads.
+    edits.push({ op: "delete", path: ["general", "appearance", "palette"] });
+  }
+  if (patch.general?.appearance?.themedDockIcon !== undefined) {
+    // On by default, so only the opt-out is written.
+    if (patch.general.appearance.themedDockIcon) {
+      edits.push({
+        op: "delete",
+        path: ["general", "appearance", "themed_dock_icon"],
+      });
+    } else {
+      set(["general", "appearance", "themed_dock_icon"], false);
+    }
+  }
+  if (patch.general?.appearance?.terminalMinimumContrast !== undefined) {
+    // Off by default, so only the opt-in is written.
+    if (patch.general.appearance.terminalMinimumContrast) {
+      set(["general", "appearance", "terminal_minimum_contrast"], true);
+    } else {
+      edits.push({
+        op: "delete",
+        path: ["general", "appearance", "terminal_minimum_contrast"],
+      });
     }
   }
   if (patch.onboarding?.completed !== undefined) {
@@ -1035,6 +1139,53 @@ export function desktopSettingsPatchToEdits(
       set(["ui", "action_runs_dock"], patch.ui.actionRunsDock);
     }
   }
+  // Help → Logs viewer prefs: same delete-on-default rule, in [ui.logs].
+  const logsPatch = patch.ui?.logs;
+  if (logsPatch) {
+    const setLogsKey = (
+      key: string,
+      value: boolean | number | string | readonly string[] | undefined,
+      isDefault: boolean,
+    ): void => {
+      if (value === undefined) return;
+      if (isDefault) {
+        edits.push({ op: "delete", path: ["ui", "logs", key] });
+      } else {
+        set(["ui", "logs", key], value);
+      }
+    };
+    setLogsKey(
+      "wrap",
+      logsPatch.wrap,
+      logsPatch.wrap === DESKTOP_LOGS_VIEWER_DEFAULTS.wrap,
+    );
+    setLogsKey(
+      "search_mode",
+      logsPatch.searchMode,
+      logsPatch.searchMode === DESKTOP_LOGS_VIEWER_DEFAULTS.searchMode,
+    );
+    setLogsKey(
+      "context_lines",
+      logsPatch.contextLines,
+      logsPatch.contextLines === DESKTOP_LOGS_VIEWER_DEFAULTS.contextLines,
+    );
+    setLogsKey(
+      "include_diagnostics",
+      logsPatch.includeDiagnostics,
+      logsPatch.includeDiagnostics
+        === DESKTOP_LOGS_VIEWER_DEFAULTS.includeDiagnostics,
+    );
+    if (logsPatch.levels !== undefined) {
+      const levels = DESKTOP_LOGS_VIEWER_DEFAULTS.levels.filter((level) =>
+        logsPatch.levels?.includes(level),
+      );
+      setLogsKey(
+        "levels",
+        levels,
+        levels.length === DESKTOP_LOGS_VIEWER_DEFAULTS.levels.length,
+      );
+    }
+  }
 
   if (patch.federation?.mode !== undefined) {
     if (patch.federation.mode === DESKTOP_FEDERATION_MODE_DEFAULT) {
@@ -1063,6 +1214,9 @@ export function desktopSettingsPatchToEdits(
     } else {
       set(["federation", "listen_host"], patch.federation.listenHost);
     }
+  }
+  if (patch.federation?.allowPortForwarding !== undefined) {
+    set(["federation", "allow_port_forwarding"], patch.federation.allowPortForwarding);
   }
   if (patch.federation?.allowRemoteShells !== undefined) {
     set(["federation", "allow_remote_shells"], patch.federation.allowRemoteShells);
@@ -1578,6 +1732,12 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.managedBuilds !== undefined) {
     set(["models", "codex", "managed_builds"], patch.models.codex.managedBuilds);
   }
+  if (patch.models?.codex?.managedBuildChannel !== undefined) {
+    set(
+      ["models", "codex", "managed_build_channel"],
+      patch.models.codex.managedBuildChannel,
+    );
+  }
   if (patch.models?.providerDefaults !== undefined) {
     const providerDefaults = normalizeProviderModelDefaults(
       patch.models.providerDefaults,
@@ -1588,6 +1748,9 @@ export function desktopSettingsPatchToEdits(
         provider,
         ...(defaults.model ? { model: defaults.model } : {}),
         reasoning_efforts: JSON.stringify(defaults.reasoningEffortsByModel),
+        ...(defaults.executionMode
+          ? { execution_mode: defaults.executionMode }
+          : {}),
       }));
     if (entries.length > 0) {
       edits.push({
@@ -1601,6 +1764,24 @@ export function desktopSettingsPatchToEdits(
         path: ["models", "provider_defaults"],
       });
     }
+  }
+  if (patch.models?.usageAccountGroups !== undefined) {
+    const groups = readUsageAccountGroups(patch.models.usageAccountGroups);
+    const entries = Object.entries(groups ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([backend, group]) => ({ backend, group }));
+    edits.push(entries.length
+      ? { op: "setTableArray", path: ["models", "usage_account_groups"], value: entries }
+      : { op: "deleteTableArray", path: ["models", "usage_account_groups"] });
+  }
+  if (patch.models?.usageAccountNames !== undefined) {
+    const names = readUsageAccountNames(patch.models.usageAccountNames);
+    const entries = Object.entries(names ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([account, name]) => ({ account, name }));
+    edits.push(entries.length
+      ? { op: "setTableArray", path: ["models", "usage_account_names"], value: entries }
+      : { op: "deleteTableArray", path: ["models", "usage_account_names"] });
   }
   if (patch.models?.helperModels !== undefined) {
     const helperModels = normalizeHelperModelSettings(patch.models.helperModels);
@@ -1641,6 +1822,29 @@ export function desktopSettingsPatchToEdits(
         op: "deleteTableArray",
         path: ["models", "helper_models"],
       });
+    }
+  }
+  if (patch.models?.decisionModels !== undefined) {
+    // `[models.decision]`: new keys with no legacy shape. A key left at its
+    // default is removed rather than written.
+    const decision = patch.models.decisionModels;
+    const normalized = normalizeDecisionModelSettings({
+      model: decision.model,
+      cameraCues: decision.cameraCues,
+      localEndpoint: decision.local?.endpoint,
+      localModel: decision.local?.model,
+      jevModel: decision.jev?.model,
+    });
+    const keys: [string, string | boolean | undefined][] = [
+      ["model", normalized?.model],
+      ["camera_cues", normalized?.cameraCues],
+      ["local_endpoint", normalized?.local?.endpoint],
+      ["local_model", normalized?.local?.model],
+      ["jev_model", normalized?.jev?.model],
+    ];
+    for (const [key, value] of keys) {
+      if (value === undefined) edits.push({ op: "delete", path: ["models", "decision", key] });
+      else set(["models", "decision", key], value);
     }
   }
   if (patch.models?.providerThreadMigrations !== undefined) {
@@ -1766,6 +1970,9 @@ export function desktopSettingsPatchToEdits(
       patch.git.pausePrAutoDispatchWhenBudgetEmpty,
     );
   }
+  if (patch.git?.defaultMergeMethod !== undefined) {
+    set(["git", "default_merge_method"], patch.git.defaultMergeMethod);
+  }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
@@ -1834,6 +2041,7 @@ function normalizeDesktopConfig(
   const updates = tables["updates"];
   const integratedTerminal = tables["integrated_terminal"];
   const ui = tables["ui"];
+  const uiLogs = tables["ui.logs"];
   const federation = tables["federation"];
   const messaging = tables["messaging"];
   const attachments = tables["messaging.attachments"];
@@ -1845,6 +2053,7 @@ function normalizeDesktopConfig(
   const line = tables["messaging.line"];
   const models = tables["models"];
   const codex = tables["models.codex"];
+  const decision = tables["models.decision"];
   const acpAgentsGemini = tables["acp_agents.gemini"];
   const acpAgentsGrok = tables["acp_agents.grok"];
   const acpAgentsKimi = tables["acp_agents.kimi"];
@@ -1866,6 +2075,11 @@ function normalizeDesktopConfig(
       attentionPromoteOnTurnEnd: readBoolean(
         general?.attention_promote_on_turn_end,
       ),
+      pinnedThreadsOnTop: readBoolean(general?.pinned_threads_on_top),
+      interactiveSvgSkipNotice: readBoolean(
+        general?.interactive_svg_skip_notice,
+      ),
+      interactiveSvgAutoOpen: readBoolean(general?.interactive_svg_auto_open),
       mcpGatewayEnabled: readBoolean(general?.mcp_gateway_enabled),
       pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
@@ -1922,6 +2136,12 @@ function normalizeDesktopConfig(
       },
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
+        darkTheme: readDarkTheme(generalAppearance?.dark_theme),
+        lightTheme: readLightTheme(generalAppearance?.light_theme),
+        themedDockIcon: readBoolean(generalAppearance?.themed_dock_icon),
+        terminalMinimumContrast: readBoolean(
+          generalAppearance?.terminal_minimum_contrast,
+        ),
         density: readAppearanceDensity(generalAppearance?.density),
         sidebarTextSize: readTextSize(
           generalAppearance?.sidebar_text_size,
@@ -1978,6 +2198,9 @@ function normalizeDesktopConfig(
       codexSkillQuestionsWarningDismissed: readBoolean(
         experimental?.codex_skill_questions_warning_dismissed,
       ),
+      codexConfigWarningsDismissed: readStringArray(
+        experimental?.codex_config_warnings_dismissed,
+      ),
       managedReview: readBoolean(experimental?.managed_review),
       diffCondensation: {
         enabled: readBoolean(diffCondensation?.enabled),
@@ -2004,6 +2227,7 @@ function normalizeDesktopConfig(
       activeContextTab: readString(ui?.active_context_tab),
       editedFilesDock: readString(ui?.edited_files_dock),
       actionRunsDock: readString(ui?.action_runs_dock),
+      logs: readLogsViewerConfig(uiLogs),
     },
     federation: {
       mode: readFederationMode(federation?.mode),
@@ -2013,6 +2237,7 @@ function normalizeDesktopConfig(
       listenPort: readNumber(federation?.listen_port),
       compressionEnabled: readBoolean(federation?.compression_enabled),
       allowRemoteShells: readBoolean(federation?.allow_remote_shells),
+      allowPortForwarding: readBoolean(federation?.allow_port_forwarding),
       allowFilePush: readBoolean(federation?.allow_file_push),
       allowFilePull: readBoolean(federation?.allow_file_pull),
       allowFilePullOutsideThreadDirectories: readBoolean(federation?.allow_file_pull_outside_thread_directories),
@@ -2194,6 +2419,8 @@ function normalizeDesktopConfig(
       },
     },
     models: {
+      usageAccountGroups: readUsageAccountGroups(models?.usage_account_groups),
+      usageAccountNames: readUsageAccountNames(models?.usage_account_names),
       providerDefaults: readProviderModelDefaults(models?.provider_defaults),
       providerThreadMigrations: readProviderThreadModelMigrations(
         models?.provider_thread_migrations,
@@ -2203,11 +2430,19 @@ function normalizeDesktopConfig(
         models?.helper_default_reasoning_effort,
         models?.helper_models,
       ),
+      decisionModels: normalizeDecisionModelSettings({
+        model: decision?.model,
+        cameraCues: decision?.camera_cues,
+        localEndpoint: decision?.local_endpoint,
+        localModel: decision?.local_model,
+        jevModel: decision?.jev_model,
+      }),
       codex: {
         path: readString(codex?.path),
         profile: readString(codex?.profile),
         allowFast: readBoolean(codex?.allow_fast),
         managedBuilds: readBoolean(codex?.managed_builds),
+        managedBuildChannel: readUpdateChannel(codex?.managed_build_channel),
         localModelIds: codex?.local_model_ids === undefined ? undefined : validateLocalModelIds(codex.local_model_ids),
         configOverrides: codex?.config_overrides === undefined
           ? undefined
@@ -2253,6 +2488,7 @@ function normalizeDesktopConfig(
       pausePrAutoDispatchWhenBudgetEmpty: readBoolean(
         git?.pause_pr_auto_dispatch_when_budget_empty,
       ),
+      defaultMergeMethod: readMergeMethod(git?.default_merge_method),
     },
     applications: {
       editor: {
@@ -2305,6 +2541,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const confirmQuitWithInProgressThreads =
     config.general?.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
+  const pinnedThreadsOnTop = config.general?.pinnedThreadsOnTop;
+  const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
+  const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
   const toolOutputAlerts = config.general?.toolOutputAlerts;
@@ -2326,6 +2565,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     hotCpuProfilingHeapSnapshotLimit !== undefined ||
     confirmQuitWithInProgressThreads !== undefined ||
     attentionPromoteOnTurnEnd !== undefined ||
+    pinnedThreadsOnTop !== undefined ||
+    interactiveSvgSkipNotice !== undefined ||
+    interactiveSvgAutoOpen !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     toolOutputAlertsDefined ||
@@ -2365,6 +2607,15 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (attentionPromoteOnTurnEnd !== undefined) {
       pruned.general.attentionPromoteOnTurnEnd = attentionPromoteOnTurnEnd;
+    }
+    if (pinnedThreadsOnTop !== undefined) {
+      pruned.general.pinnedThreadsOnTop = pinnedThreadsOnTop;
+    }
+    if (interactiveSvgSkipNotice !== undefined) {
+      pruned.general.interactiveSvgSkipNotice = interactiveSvgSkipNotice;
+    }
+    if (interactiveSvgAutoOpen !== undefined) {
+      pruned.general.interactiveSvgAutoOpen = interactiveSvgAutoOpen;
     }
     if (pdfAnalysisEnabled !== undefined) {
       pruned.general.pdfAnalysisEnabled = pdfAnalysisEnabled;
@@ -2519,6 +2770,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const providerDefaults = config.models?.providerDefaults;
   const providerThreadMigrations = config.models?.providerThreadMigrations;
   const helperModels = config.models?.helperModels;
+  const usageAccountGroups = config.models?.usageAccountGroups;
+  const usageAccountNames = config.models?.usageAccountNames;
+  const decisionModels = config.models?.decisionModels;
   const hasHelperModels = Boolean(
     helperModels
     && (
@@ -2535,9 +2789,15 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       && Object.keys(providerThreadMigrations).length > 0
     )
     || hasHelperModels
+    || (usageAccountGroups && Object.keys(usageAccountGroups).length > 0)
+    || (usageAccountNames && Object.keys(usageAccountNames).length > 0)
+    || decisionModels
   ) {
     pruned.models = {
+      ...(usageAccountGroups && Object.keys(usageAccountGroups).length > 0 ? { usageAccountGroups } : {}),
+      ...(usageAccountNames && Object.keys(usageAccountNames).length > 0 ? { usageAccountNames } : {}),
       ...(hasHelperModels ? { helperModels } : {}),
+      ...(decisionModels ? { decisionModels } : {}),
       ...(providerDefaults && Object.keys(providerDefaults).length > 0
         ? { providerDefaults }
         : {}),
@@ -2672,6 +2932,22 @@ function readAppearanceTheme(
     : undefined;
 }
 
+function readDarkTheme(
+  value: TomlScalar | undefined,
+): DesktopDarkTheme | undefined {
+  return typeof value === "string" && isDesktopDarkTheme(value)
+    ? value
+    : undefined;
+}
+
+function readLightTheme(
+  value: TomlScalar | undefined,
+): DesktopLightTheme | undefined {
+  return typeof value === "string" && isDesktopLightTheme(value)
+    ? value
+    : undefined;
+}
+
 function readAppearanceDensity(
   value: TomlScalar | undefined,
 ): DesktopAppearanceDensity | undefined {
@@ -2719,6 +2995,12 @@ function readHotCpuProfileStartDelayMs(
   return typeof value === "number" && isDesktopHotCpuProfileStartDelayMs(value)
     ? value
     : undefined;
+}
+
+function readMergeMethod(
+  value: TomlScalar | undefined,
+): ThreadTodoMergeMethod | undefined {
+  return isThreadTodoMergeMethod(value) ? value : undefined;
 }
 
 function readHotCpuProfileTriggerMode(
@@ -2882,6 +3164,29 @@ function isFullAccessWarningUserPolicy(
   );
 }
 
+function readLogsViewerConfig(
+  table: Record<string, TomlScalar> | undefined,
+): Partial<DesktopLogsViewerPreferences> | undefined {
+  if (!table) return undefined;
+  const logs: Partial<DesktopLogsViewerPreferences> = {};
+  const wrap = readBoolean(table.wrap);
+  if (wrap !== undefined) logs.wrap = wrap;
+  const searchMode = readString(table.search_mode);
+  if (isDesktopLogsSearchMode(searchMode)) logs.searchMode = searchMode;
+  if (isDesktopLogsContextLines(table.context_lines)) {
+    logs.contextLines = table.context_lines;
+  }
+  const includeDiagnostics = readBoolean(table.include_diagnostics);
+  if (includeDiagnostics !== undefined) {
+    logs.includeDiagnostics = includeDiagnostics;
+  }
+  const levels = readStringArray(table.levels);
+  if (levels !== undefined) {
+    logs.levels = levels.filter(isDesktopLogsStoredLevel);
+  }
+  return hasDefinedValue(logs) ? logs : undefined;
+}
+
 function readBoolean(value: TomlScalar | undefined): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
@@ -2916,6 +3221,40 @@ function normalizeHelperModelChoice(
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
   };
+}
+
+// Additive setting: older builds ignore these rows. Reading never rewrites
+// config, and saving replaces only this table array.
+function readUsageAccountGroups(value: unknown): Record<string, string> | undefined {
+  const entries = Array.isArray(value)
+    ? value.map((row) => [readString(row?.backend), readString(row?.group)])
+    : value && typeof value === "object"
+      ? Object.entries(value)
+      : [];
+  const groups: Record<string, string> = {};
+  for (const [backend, group] of entries) {
+    if (typeof backend !== "string" || (backend !== "codex" && !isAcpBackendId(backend))
+      || typeof group !== "string" || !group.trim() || group.trim().length > 120) continue;
+    groups[backend] = group.trim();
+  }
+  return Object.keys(groups).length ? groups : undefined;
+}
+
+// Additive setting, like account groups. Names are local presentation only:
+// keyed by provider and opaque account key, and never sent to peers.
+function readUsageAccountNames(value: unknown): Record<string, string> | undefined {
+  const entries = Array.isArray(value)
+    ? value.map((row) => [readString(row?.account), readString(row?.name)])
+    : value && typeof value === "object"
+      ? Object.entries(value)
+      : [];
+  const names: Record<string, string> = {};
+  for (const [account, name] of entries) {
+    if (typeof account !== "string" || !/^[a-z0-9_-]+:[A-Za-z0-9_-]{1,64}$/.test(account)
+      || typeof name !== "string" || !name.trim() || name.trim().length > 60) continue;
+    names[account] = name.trim();
+  }
+  return Object.keys(names).length ? names : undefined;
 }
 
 function normalizeHelperModelSettings(
@@ -2997,7 +3336,12 @@ function normalizeProviderModelDefaults(
           },
         ),
       );
-      if (!model && Object.keys(reasoningEffortsByModel).length === 0) {
+      const executionMode = readThreadExecutionMode(defaults.executionMode);
+      if (
+        !model
+        && Object.keys(reasoningEffortsByModel).length === 0
+        && !executionMode
+      ) {
         return [];
       }
       return [[
@@ -3005,10 +3349,20 @@ function normalizeProviderModelDefaults(
         {
           ...(model ? { model } : {}),
           reasoningEffortsByModel,
+          ...(executionMode ? { executionMode } : {}),
         },
       ]];
     }),
   );
+}
+
+/** Unknown or misspelled values read as unset, so the built-in default applies. */
+function readThreadExecutionMode(
+  value: unknown,
+): ThreadExecutionMode | undefined {
+  return value === "default" || value === "auto" || value === "full-access"
+    ? value
+    : undefined;
 }
 
 function readProviderModelDefaults(
@@ -3041,10 +3395,16 @@ function readProviderModelDefaults(
         reasoningEffortsByModel = {};
       }
     }
-    if (model || Object.keys(reasoningEffortsByModel).length > 0) {
+    const executionMode = readThreadExecutionMode(item.execution_mode);
+    if (
+      model
+      || Object.keys(reasoningEffortsByModel).length > 0
+      || executionMode
+    ) {
       defaults[provider] = {
         ...(model ? { model } : {}),
         reasoningEffortsByModel,
+        ...(executionMode ? { executionMode } : {}),
       };
     }
   }

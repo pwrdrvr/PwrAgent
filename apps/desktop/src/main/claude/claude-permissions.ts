@@ -1,0 +1,95 @@
+import { randomUUID } from "node:crypto";
+import type { CanUseTool, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
+import type { AppServerPendingRequestNotification, ThreadExecutionMode } from "@pwragent/shared";
+
+export function claudePermissionMode(mode: ThreadExecutionMode): PermissionMode {
+  switch (mode) {
+    case "default": return "default";
+    case "auto": return "auto";
+    case "full-access": return "bypassPermissions";
+  }
+}
+
+export function createClaudePermissionHandler(options: {
+  threadId: string;
+  turnId: string;
+  request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
+  cancelRequest: (requestId: string) => Promise<void>;
+}): CanUseTool {
+  return async (toolName, input, context) => {
+    if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
+    const requestId = randomUUID();
+    const request: AppServerPendingRequestNotification = toolName === "AskUserQuestion"
+      ? {
+          method: "item/tool/requestUserInput",
+          params: {
+            threadId: options.threadId,
+            turnId: options.turnId,
+            requestId,
+            questions: Array.isArray(input.questions) ? input.questions.map((value, index) => {
+              const question = value as Record<string, unknown>;
+              return {
+                id: String(index),
+                header: String(question.header ?? "Claude"),
+                question: String(question.question ?? ""),
+                isOther: true,
+                isSecret: false,
+                options: question.options ?? null,
+              };
+            }) : [],
+          },
+        }
+      : {
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: options.threadId,
+            turnId: options.turnId,
+            requestId,
+            itemId: context.toolUseID,
+            toolName,
+            arguments: input,
+            command: toolName === "Bash" ? String(input.command ?? "") : `${toolName}: ${JSON.stringify(input)}`,
+            reason: context.decisionReason ?? `Claude requests permission to use ${toolName}.`,
+            availableDecisions: ["accept", "decline", "cancel"],
+          },
+        };
+    let abort: (() => void) | undefined;
+    try {
+      const response = await Promise.race([
+        options.request(request, context.signal),
+        new Promise<undefined>((resolve) => {
+          abort = () => {
+            void options.cancelRequest(requestId).then(() => resolve(undefined), () => resolve(undefined));
+          };
+          context.signal.addEventListener("abort", abort, { once: true });
+          if (context.signal.aborted) abort();
+        }),
+      ]);
+      if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
+      if (!response || typeof response !== "object") {
+        return { behavior: "deny", message: "Permission was not granted." };
+      }
+      if (toolName === "AskUserQuestion" && "answers" in response
+        && response.answers && typeof response.answers === "object") {
+        const answers: Record<string, string> = {};
+        for (const [index, value] of Object.entries(response.answers)) {
+          const question = Array.isArray(input.questions) ? input.questions[Number(index)] : undefined;
+          if (question && typeof question === "object" && "question" in question
+            && value && typeof value === "object" && "answers" in value && Array.isArray(value.answers)) {
+            answers[String(question.question)] = value.answers.map(String).join(", ");
+          }
+        }
+        if (Object.keys(answers).length) return { behavior: "allow", updatedInput: { ...input, answers } };
+      }
+      const decision = "decision" in response ? response.decision : undefined;
+      // Only explicitly offered one-shot approval can authorize execution.
+      // Never turn a generic UI response into a saved CLI permission rule.
+      if (decision === "accept" || decision === "approve") {
+        return { behavior: "allow", updatedInput: input };
+      }
+      return { behavior: "deny", message: "Permission denied by the operator.", interrupt: decision === "cancel" };
+    } finally {
+      if (abort) context.signal.removeEventListener("abort", abort);
+    }
+  };
+}

@@ -84,10 +84,11 @@ export type PricingSpendModelResolver = (
 
 /**
  * Monitor ids in this namespace belong to helpers PwrAgent runs for itself —
- * `system:token-miser:` gates and `system:title-helper:` — never to something
- * the operator asked for. `subagent-kind.ts` makes the same split on the
- * sub-agent summaries; this is the same rule applied to the usage rows, which
- * arrive before their summaries do.
+ * `system:token-miser:` gates, `system:title-helper:` and
+ * `system:queued-message-titles:` — never to something the operator asked
+ * for. `subagent-kind.ts` makes the same split on the sub-agent summaries;
+ * this is the same rule applied to the usage rows, which arrive before their
+ * summaries do.
  */
 const SYSTEM_HELPER_SOURCE_PREFIX = "system:";
 

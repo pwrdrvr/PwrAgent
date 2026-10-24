@@ -64,6 +64,18 @@ describe("federation config subscription", () => {
     expect(runtime.applyCloudflareGatewaySetting).not.toHaveBeenCalled();
   });
 
+  it("restarts Federation for saved and externally revoked port-forwarding permission", async () => {
+    const { configPath, store, runtime } = fixture();
+    await store.write({ federation: { allowPortForwarding: true } }, ["federation"]);
+    expect(runtime.restart).toHaveBeenCalledOnce();
+    writeFileSync(configPath, '[federation]\nmode = "dual"\nlisten_port = 47830\nallow_port_forwarding = false\n');
+    store.reloadFromDisk("watch");
+    expect(runtime.restart).toHaveBeenCalledTimes(2);
+    await applyFederationConfigPatch(runtime, { allowPortForwarding: false });
+    expect(runtime.restart).toHaveBeenCalledTimes(3);
+    expect(runtime.applyCloudflareGatewaySetting).not.toHaveBeenCalled();
+  });
+
   it("reports targeted refresh failures", async () => {
     const { store, runtime, onError } = fixture();
     const error = new Error("connector failed");

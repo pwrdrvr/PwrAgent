@@ -1,3 +1,4 @@
+import type { AdvertiseServiceArgs, ThreadService } from "./federation-services";
 import type { FederationReceiverPermissions } from "./federation";
 import type {
   FederatedSearchInstanceSummary,
@@ -22,6 +23,9 @@ import type { CodexEnvironmentStartupFailure } from "./agent";
 import type { HandoffInstanceThreadToolArgs, HandoffInstanceThreadResult } from "./thread-instance-handoff";
 
 export const PWRAGENT_FEDERATION_OPERATION_NAMES = [
+  "advertise_service",
+  "list_services",
+  "remove_service",
   "list_federation_instances",
   "list_instance_projects",
   "create_instance_thread",
@@ -326,6 +330,9 @@ export type ListAttentionThreadsResult = {
 export type PwrAgentFederationToolArgs<
   TOperation extends PwrAgentFederationOperationName,
 > = {
+  advertise_service: AdvertiseServiceArgs;
+  list_services: Record<string, never>;
+  remove_service: { serviceId: string };
   list_federation_instances: ListFederationInstancesToolArgs;
   list_instance_projects: ListInstanceProjectsToolArgs;
   push_instance_file: PushInstanceFileToolArgs;
@@ -350,6 +357,9 @@ export type PwrAgentFederationResponse =
   | {
       ok: true;
       data:
+        | ThreadService
+        | { services: ThreadService[] }
+        | { removed: true }
         | ListFederationInstancesResult
         | PushInstanceFileResult
         | (HandoffInstanceThreadResult & { threadLink: string })

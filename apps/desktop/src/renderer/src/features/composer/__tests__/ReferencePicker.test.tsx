@@ -290,6 +290,43 @@ describe("ReferencePicker", () => {
     expect(onPickFileFromDisk).not.toHaveBeenCalled();
   });
 
+  it("offers Add file in a remote viewer whose owner can receive files", () => {
+    const onPickFromDisk = vi.fn();
+    const onPickDirectoryFromDisk = vi.fn();
+    const onPickFileFromDisk = vi.fn();
+    renderPicker({
+      platform: "darwin",
+      nativePickingDisabled: true,
+      remoteFilePicking: {},
+      onPickFromDisk,
+      onPickDirectoryFromDisk,
+      onPickFileFromDisk,
+    });
+
+    // The combined dialog can return directories, so it splits.
+    expect(
+      screen.queryByRole("button", { name: "Add file or directory…" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add directory…" })).toBeDisabled();
+    const file = screen.getByRole("button", { name: "Add file…" });
+    expect(file).toBeEnabled();
+    fireEvent.click(file);
+    expect(onPickFileFromDisk).toHaveBeenCalledOnce();
+  });
+
+  it("names the owner's reason on Add file when it cannot receive", () => {
+    renderPicker({
+      nativePickingDisabled: true,
+      remoteFilePicking: { disabledReason: "Can't send files to studio. Offline." },
+      onPickDirectoryFromDisk: vi.fn(),
+      onPickFileFromDisk: vi.fn(),
+    });
+
+    const file = screen.getByRole("button", { name: "Add file…" });
+    expect(file).toBeDisabled();
+    expect(file).toHaveAttribute("data-tooltip", "Can't send files to studio. Offline.");
+  });
+
   it("calls onClose when Escape is pressed", () => {
     const onClose = vi.fn();
     renderPicker({ onClose });

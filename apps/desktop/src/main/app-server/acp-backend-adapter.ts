@@ -1,8 +1,10 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { app } from "electron";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
+  findAcpPermissionModeConfigOption,
   type AcpBackendId,
   type AcpThreadRewindPoint,
   type AgentEvent,
@@ -32,6 +34,7 @@ import {
 import { isBannedAcpRegistryId } from "../acp/acp-agent-allowlist";
 import {
   acpAgentCapabilitiesForRegistryId,
+  isPwrAgentGrokBuildVersion,
   type AcpAgentCapabilities,
 } from "../acp/acp-agent-capabilities";
 import {
@@ -42,7 +45,12 @@ import {
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
-import { MAX_TURN_INPUT_ATTACHMENT_BYTES } from "./turn-input-attachment-files";
+import {
+  MAX_TURN_INPUT_ATTACHMENT_BYTES,
+  stageLocalTurnInputAttachment,
+} from "./turn-input-attachment-files";
+import type { ThreadAssetOwner } from "./thread-assets";
+import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import {
   acpRuntimeSupportsHttpMcp,
   buildAutomationInspectionAcpMcpServers,
@@ -65,6 +73,7 @@ import {
 } from "../settings/config-store/provider-runtime-config";
 import {
   AcpLiveToolUpdateResolver,
+  AcpModelRetryTracker,
   acpContextWindowFill,
   acpContextWindowNotification,
   acpToolUpdateNotifications,
@@ -172,6 +181,7 @@ export type AcpRuntimeClient = Pick<
       | "setRuntimeOption"
       | "steerSession"
       | "supportsSessionLoad"
+      | "supportsTurnSteering"
       | "rewindSession"
     >
   >;
@@ -262,7 +272,7 @@ export const noLocalAcpAgentDiscovery: LocalAcpDiscovery = async () => [];
 
 export type AcpSessionStoreLike =
   Pick<AcpSessionStoreContract, "getSession" | "listSessions"> &
-  Partial<Pick<AcpSessionStoreContract, "upsertSession" | "deleteSession">>;
+  Partial<Pick<AcpSessionStoreContract, "upsertSession" | "deleteSession" | "listArchiveCleanupSessionsPage">>;
 
 type AcpClientEntry = {
   client: AcpRuntimeClient;
@@ -567,6 +577,13 @@ function effectiveAcpAgentCapabilities(
   };
   return {
     ...configured,
+    // The extension is downstream-only. Ignore the unconditional steerTurn
+    // value persisted by older catalog/discovery records for vendor Grok.
+    steerTurn: agent.registryId === "grok"
+      && (isPwrAgentOwnedGrokRuntime(agent)
+        || isPwrAgentGrokBuildVersion(
+          agent.runtimeCapabilities?.agentInfo?.version ?? agent.version,
+        )),
     liveWorkspaceHandoff:
       configured.liveWorkspaceHandoff ||
       agent.runtimeCapabilities?.agentCapabilities?.loadSession === true,
@@ -618,10 +635,11 @@ function buildAcpExecutionModes(
   // Default/Full Access modes on top produced TWO overlapping mode dropdowns
   // (#658) that mirror each other — and the legacy slash-command path they
   // drive (kimi `/yolo`) is rejected by current kimi, failing the launch.
-  // Defer entirely to the runtime modes whenever the agent advertises a
-  // selector; only fall back to these hardcoded modes for agents (e.g. grok)
-  // that expose no runtime mode selector of their own.
-  if (acpAdvertisesRuntimeModeSelector(agent.runtimeCapabilities)) {
+  // Grok's native modes control planning. Only its explicit permission_mode
+  // config can replace the slash-driven permission control.
+  if (agent.registryId === "grok"
+    ? (findAcpPermissionModeConfigOption(agent.runtimeCapabilities)?.values.length ?? 0) >= 2
+    : acpAdvertisesRuntimeModeSelector(agent.runtimeCapabilities)) {
     return [];
   }
   return [
@@ -946,6 +964,16 @@ export function acpSessionHasConversationHistory(
 
 export async function inputToAcpPrompt(
   input: AppServerTurnInputItem[],
+  options?: {
+    /**
+     * The thread whose asset store keeps a copy of each local image. The
+     * recorded prompt replays from these parts, so an image part must point
+     * at a file that outlives the turn: a federated image arrives in an
+     * expiring receive folder, and a picked file can move.
+     */
+    owner?: ThreadAssetOwner;
+    privateStorageRoots?: readonly string[];
+  },
 ): Promise<AcpPromptPayload | undefined> {
   const promptContent: AcpPromptContentBlock[] = [];
   const parts: AppServerThreadMessagePart[] = [];
@@ -999,17 +1027,28 @@ export async function inputToAcpPrompt(
     }
 
     const fileName = item.name?.trim() || path.basename(item.path);
-    const text = `[Local image: ${fileName}]`;
-    promptContent.push({ type: "text", text });
-    parts.push({ type: "text", text });
-    const fileInfo = await stat(item.path);
+    const imagePath = options?.owner
+      ? (await stageLocalTurnInputAttachment(item, {
+          owner: options.owner,
+          privateStorageRoots: options.privateStorageRoots,
+        })).path
+      : item.path;
+    promptContent.push({ type: "text", text: `[Local image: ${fileName}]` });
+    // Record the image itself, as the inline-image branch does. A text
+    // placeholder here was all a reopened thread could show.
+    parts.push({
+      type: "image",
+      alt: fileName,
+      url: toTranscriptImageProtocolUrl(pathToFileURL(imagePath).toString()),
+    });
+    const fileInfo = await stat(imagePath);
     if (
       !fileInfo.isFile()
       || fileInfo.size > MAX_TURN_INPUT_ATTACHMENT_BYTES
     ) {
       throw new Error(`Invalid local image attachment: ${fileName}`);
     }
-    const data = await readFile(item.path);
+    const data = await readFile(imagePath);
     const mimeType = detectLocalImageMimeType(data);
     if (!mimeType) {
       throw new Error(`Unsupported local image attachment: ${fileName}`);
@@ -1172,6 +1211,7 @@ export class AcpBackendAdapter {
     Promise<AcpRuntimeClient>
   >();
   private readonly liveToolUpdateResolver = new AcpLiveToolUpdateResolver();
+  private readonly modelRetryTracker = new AcpModelRetryTracker();
   private readonly liveNotificationFingerprints = new Map<string, string>();
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
@@ -1431,6 +1471,20 @@ export class AcpBackendAdapter {
     return this.acpSessionStore?.listSessions(backendId, options) ?? [];
   }
 
+  listArchiveCleanupSessionsPage(backendId: AcpBackendId, params: {
+    archived: boolean; after?: string; limit: number;
+  }): { sessions: AcpSessionMetadata[]; nextCursor?: string } {
+    if (this.acpSessionStore?.listArchiveCleanupSessionsPage) {
+      return this.acpSessionStore.listArchiveCleanupSessionsPage(backendId, params);
+    }
+    // Alternate in-memory stores retain their contract; the shipped SQLite
+    // store always uses bounded identity pages above.
+    const sessions = this.listSessions(backendId, { archived: params.archived })
+      .filter((session) => !params.after || session.sessionId > params.after)
+      .sort((left, right) => left.sessionId.localeCompare(right.sessionId)).slice(0, params.limit);
+    return { sessions, nextCursor: sessions.length === params.limit ? sessions.at(-1)?.sessionId : undefined };
+  }
+
   getSession(
     backendId: AcpBackendId,
     sessionId: string,
@@ -1685,7 +1739,7 @@ export class AcpBackendAdapter {
       params.backend,
       params.sessionId,
     );
-    if (!client.steerSession) {
+    if (!client.steerSession || client.supportsTurnSteering?.() !== true) {
       throw new Error("Installed Grok Build does not support turn steering over ACP");
     }
     return await client.steerSession({
@@ -2731,6 +2785,7 @@ export class AcpBackendAdapter {
       backendId: agent.backendId,
       agentDisplayName: agent.name,
       initialRuntimeCapabilities: acpRuntimeCapabilitiesForAgent(agent),
+      supportsTurnSteering: effectiveAcpAgentCapabilities(agent).steerTurn,
       rolloutStore: this.acpRolloutStore,
       store: this.acpSessionStore as AcpSessionStoreContract,
       transport:
@@ -2890,6 +2945,22 @@ export class AcpBackendAdapter {
             },
           });
         }
+        // Session-load replay is history: a retry it repeats is long over.
+        const modelRetryNotification =
+          turnId && !fromSessionLoad
+            ? this.modelRetryTracker.observe({
+                backendId: agent.backendId,
+                threadId: sessionId,
+                turnId,
+                update,
+              })
+            : undefined;
+        if (modelRetryNotification) {
+          await this.emit({
+            backend: agent.backendId,
+            notification: modelRetryNotification,
+          });
+        }
         const kimiYoloExecutionMode =
           agent.registryId === "kimi"
             ? readKimiYoloExecutionModeFromText(readAcpUpdateText(update) ?? "")
@@ -2999,6 +3070,11 @@ export class AcpBackendAdapter {
             threadId: sessionId,
             turnId,
           });
+          this.modelRetryTracker.clearTurn({
+            backendId: agent.backendId,
+            threadId: sessionId,
+            turnId,
+          });
           const outputText = readAcpUpdateText(update);
           // session/cancel settles the prompt with stopReason cancelled: the
           // turn stopped, it did not complete. An operator stop has already
@@ -3034,24 +3110,22 @@ export class AcpBackendAdapter {
                 },
           });
         }
-        await this.emit({
-          backend: agent.backendId,
-          notification: {
-            method: "thread/status/changed",
-            params: {
-              threadId: sessionId,
-              status: {
-                type: replay.threadStatus ?? "unknown",
-              },
-            },
-          },
-        });
+        // Replay status belongs to the snapshot captured when this update
+        // arrived. Metadata and session-load callbacks can finish after a
+        // newer prompt starts; publishing their old idle snapshot would retire
+        // that running turn. Live lifecycle is owned by turn/started and the
+        // prompt-settled terminal events, not transcript replay snapshots.
       },
       onPromptError: async ({ sessionId, turnId, error }) => {
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
         );
         this.liveToolUpdateResolver.clearTurn({
+          backendId: agent.backendId,
+          threadId: sessionId,
+          turnId,
+        });
+        this.modelRetryTracker.clearTurn({
           backendId: agent.backendId,
           threadId: sessionId,
           turnId,
@@ -3071,16 +3145,6 @@ export class AcpBackendAdapter {
                   message: error instanceof Error ? error.message : String(error),
                 },
               },
-            },
-          },
-        });
-        await this.emit({
-          backend: agent.backendId,
-          notification: {
-            method: "thread/status/changed",
-            params: {
-              threadId: sessionId,
-              status: { type: "idle" },
             },
           },
         });
