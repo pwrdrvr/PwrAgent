@@ -27,6 +27,8 @@ import {
   type CancelQueuedTurnResponse,
   type MoveQueuedTurnRequest,
   type MoveQueuedTurnResponse,
+  type SetQueuedTurnPausedRequest,
+  type SetQueuedTurnPausedResponse,
   type ReleaseQueuedTurnRequest,
   type ReleaseQueuedTurnResponse,
   type CancelThreadExecutionModeQueueRequest,
@@ -110,7 +112,10 @@ import {
   federationEventClassForMethod,
   getDesktopFederationRuntime,
 } from "../federation/federation-runtime";
-import { QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE } from "../federation/federation-backend-bridge";
+import {
+  QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE,
+  QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE,
+} from "../federation/federation-backend-bridge";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
@@ -119,6 +124,7 @@ import {
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_RELEASE_QUEUED_TURN_CHANNEL,
   AGENT_MOVE_QUEUED_TURN_CHANNEL,
+  AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
@@ -770,6 +776,32 @@ export function registerAgentIpcHandlers(): void {
           .moveQueuedTurn(remoteRequest);
       }
       return await registry.moveQueuedTurn(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL);
+  ipcMain.handle(
+    AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL,
+    async (
+      _event,
+      request: SetQueuedTurnPausedRequest,
+    ): Promise<SetQueuedTurnPausedResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        const { federationTarget, ...remoteRequest } = request;
+        const runtime = getDesktopFederationRuntime();
+        // The renderer offers no pause without the capability; this answers
+        // a stale window without a round trip to an owner that cannot pause.
+        if (!runtime.remoteTargetSupportsCapability(federationTarget, "turn_queue_pause")) {
+          throw new Error(QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE);
+        }
+        return await runtime
+          .remoteBackend(federationTarget)
+          .setQueuedTurnPaused(remoteRequest);
+      }
+      return await registry.setQueuedTurnPaused(request);
     },
   );
 

@@ -96,6 +96,23 @@ describe("independent complete FIFO projection", () => {
       .map((turn) => turn.id)).toEqual(["a", "b", "c"]);
   });
 
+  it("takes each entry's pause from the owner's queue", () => {
+    const entry = (queueEntryId: string, position: number, paused?: boolean) => ({
+      queueEntryId, createdAt: 1, displayText: queueEntryId, origin: "manual" as const, position,
+      ...(paused ? { paused } : {}),
+    });
+    const current = [queued("a"), { ...queued("b"), paused: true }];
+
+    const reconciled = reconcileCompleteNavigationQueue({
+      owner,
+      projection: projection({ entries: [entry("a", 0, true), entry("b", 1)] }),
+      atReadStart: current,
+      current,
+    });
+
+    expect(reconciled.map((turn) => [turn.id, Boolean(turn.paused)])).toEqual([["a", true], ["b", false]]);
+  });
+
   it("keeps a scheduled review that waits outside the turn FIFO", () => {
     const review: ComposerQueuedTurnSnapshot = {
       ...queued("pending-review:1"),

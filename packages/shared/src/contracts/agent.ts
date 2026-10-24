@@ -352,6 +352,24 @@ export type MoveQueuedTurnResponse = {
   queueEntryIds?: string[];
 };
 
+export type SetQueuedTurnPausedRequest = {
+  federationTarget?: FederationTarget;
+  queueEntryId: string;
+  /** True holds the entry back from dispatch; false puts it back in line. */
+  paused: boolean;
+};
+
+export type SetQueuedTurnPausedResponse = {
+  queueEntryId: string;
+  /**
+   * `held`: the entry is held for retry and cannot pause until Retry or
+   * Delete answers it. `not_found`: it already started or was removed.
+   */
+  disposition: "updated" | "unchanged" | "not_found" | "held";
+  /** Whether the entry is paused after the request, while it is queued. */
+  paused?: boolean;
+};
+
 export type ReleaseQueuedTurnRequest = {
   federationTarget?: FederationTarget;
   queueEntryId: string;

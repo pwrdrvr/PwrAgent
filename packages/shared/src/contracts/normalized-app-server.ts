@@ -2405,6 +2405,11 @@ export type AppServerNotification =
         automationName?: string;
         errorMessage?: string;
         manualReleaseRequired?: boolean;
+        /**
+         * On "queued" and "held" events: the operator paused the entry.
+         * Owners that predate pausing never send it.
+         */
+        paused?: boolean;
         finalText?: string;
         terminalStatus?: string;
       };

@@ -37594,6 +37594,34 @@ button.pricing-token-miser__folded:focus-visible {
   color: var(--status-error);
 }
 
+/* A paused row is in the band but out of line. A dashed edge marks it rather
+   than a new color: the band already spends danger on held rows and the
+   accent on scheduled ones. */
+.composer__queued--message.composer__queued--paused {
+  --queued-row-bg: var(--bg-panel);
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.composer__queued--message.composer__queued--paused:hover {
+  border-color: var(--text-muted);
+}
+
+.composer__queued--paused .composer__queued-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.composer__queued--paused .composer__queued-text {
+  color: var(--text-secondary);
+}
+
+.composer__queued-pause-glyph {
+  flex: none;
+}
+
 /* A queued row's tint is translucent (the soft tokens carry alpha), and the
    actions' fade takes the row's color to hide the end of the title. So both
    paint the tint over the opaque elevated panel: on the tint alone a

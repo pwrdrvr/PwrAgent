@@ -303,6 +303,8 @@ export type ThreadQueuedTurnSummary = {
   position: number;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  /** The operator paused it; dispatch passes over it until it is resumed. */
+  paused?: boolean;
   /**
    * Generated display title for a message too long to show as typed. Absent
    * until the helper answers, and from owners that predate it; show

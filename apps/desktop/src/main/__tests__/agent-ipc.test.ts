@@ -6,6 +6,7 @@ import type {
   CancelQueuedTurnRequest,
   ReleaseQueuedTurnRequest,
   MoveQueuedTurnRequest,
+  SetQueuedTurnPausedRequest,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadPrAutoDispatchRequest,
   CheckThreadBranchDriftRequest,
@@ -149,6 +150,11 @@ const registry = {
     disposition: "moved" as const,
     queueEntryIds: [request.queueEntryId],
   })),
+  setQueuedTurnPaused: vi.fn(async (request: SetQueuedTurnPausedRequest) => ({
+    queueEntryId: request.queueEntryId,
+    disposition: "updated" as const,
+    paused: request.paused,
+  })),
   interruptTurn: vi.fn(async (request: InterruptTurnRequest) => ({
     backend: request.backend,
     threadId: request.threadId,
@@ -247,6 +253,11 @@ const federationMock = vi.hoisted(() => {
       queueEntryId: request.queueEntryId,
       disposition: "moved" as const,
       queueEntryIds: [request.queueEntryId],
+    })),
+    setQueuedTurnPaused: vi.fn(async (request: SetQueuedTurnPausedRequest) => ({
+      queueEntryId: request.queueEntryId,
+      disposition: "updated" as const,
+      paused: request.paused,
     })),
     startReview: vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -506,6 +517,7 @@ describe("agent ipc", () => {
     registry.cancelQueuedTurnWithDisposition.mockClear();
     registry.releaseQueuedTurnWithDisposition.mockClear();
     registry.moveQueuedTurn.mockClear();
+    registry.setQueuedTurnPaused.mockClear();
     registry.interruptTurn.mockClear();
     registry.stopSubAgent.mockClear();
     registry.steerTurn.mockClear();
@@ -624,6 +636,54 @@ describe("agent ipc", () => {
       })).rejects.toThrow(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
       expect(federationMock.remoteBackend.moveQueuedTurn).not.toHaveBeenCalled();
       expect(registry.moveQueuedTurn).not.toHaveBeenCalled();
+    } finally {
+      disposeAgentIpcHandlers();
+    }
+  });
+
+  it("pauses a queued turn in the local queue or on the owning peer", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "client_one" };
+    federationMock.remoteBackend.setQueuedTurnPaused.mockClear();
+    registerAgentIpcHandlers();
+    try {
+      const pause = handlers.get(AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL)!;
+
+      await expect(pause({}, { queueEntryId: "local-a", paused: true })).resolves
+        .toMatchObject({ disposition: "updated", paused: true });
+      expect(registry.setQueuedTurnPaused).toHaveBeenCalledWith({ queueEntryId: "local-a", paused: true });
+      expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+
+      await expect(pause({}, { federationTarget, queueEntryId: "a", paused: false })).resolves
+        .toMatchObject({ disposition: "updated", paused: false });
+      expect(federationMock.runtime.remoteTargetSupportsCapability)
+        .toHaveBeenCalledWith(federationTarget, "turn_queue_pause");
+      // The owner pauses its own entry; the viewer's target stays home.
+      expect(federationMock.remoteBackend.setQueuedTurnPaused).toHaveBeenCalledWith({ queueEntryId: "a", paused: false });
+      expect(registry.setQueuedTurnPaused).toHaveBeenCalledTimes(1);
+    } finally {
+      disposeAgentIpcHandlers();
+    }
+  });
+
+  it("refuses a pause for a peer that does not advertise pausing, without asking it", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = await import("../ipc/agent-ipc");
+    const { AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL } = await import("../../shared/ipc");
+    const { QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE } = await import("../federation/federation-backend-bridge");
+    federationMock.remoteBackend.setQueuedTurnPaused.mockClear();
+    federationMock.runtime.remoteTargetSupportsCapability.mockImplementation(
+      (_target: unknown, capability: unknown) => capability !== "turn_queue_pause",
+    );
+    registerAgentIpcHandlers();
+    try {
+      await expect(handlers.get(AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL)!({}, {
+        federationTarget: { scope: "remote" as const, instanceId: "client_one" },
+        queueEntryId: "a",
+        paused: true,
+      })).rejects.toThrow(QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE);
+      expect(federationMock.remoteBackend.setQueuedTurnPaused).not.toHaveBeenCalled();
+      expect(registry.setQueuedTurnPaused).not.toHaveBeenCalled();
     } finally {
       disposeAgentIpcHandlers();
     }

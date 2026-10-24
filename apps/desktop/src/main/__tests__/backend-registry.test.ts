@@ -64192,3 +64192,55 @@ describe("DesktopBackendRegistry queued turn reordering", () => {
     expect(events.filter((event) => event.notification.method === "thread/turnQueue/reordered")).toHaveLength(reorders);
   });
 });
+
+describe("DesktopBackendRegistry queued turn pausing", () => {
+  it("pauses a waiting entry, tells every window, and sends the next one instead", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "busy", title: "busy", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "busy", turnId: "active", turn: { id: "active" } },
+    } });
+    for (const id of ["first", "second"]) {
+      expect(await registry.submitTurn({
+        backend: "codex", threadId: "busy", queueEntryId: id, input: [{ type: "text", text: id }],
+      })).toMatchObject({ status: "queued" });
+    }
+    const snapshot = () => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "busy")] ?? [];
+    const pauseEvents = () => events.filter((event) =>
+      event.notification.method === "thread/turnQueue/updated"
+      && (event.notification.params as { queueEntryId?: string }).queueEntryId === "first"
+      && (event.notification.params as { status?: string }).status === "queued"
+    );
+    const queuedBefore = pauseEvents().length;
+
+    await expect(registry.setQueuedTurnPaused({ queueEntryId: "first", paused: true }))
+      .resolves.toEqual({ queueEntryId: "first", disposition: "updated", paused: true });
+    expect(snapshot()).toEqual([
+      expect.objectContaining({ queueEntryId: "first", paused: true }),
+      expect.not.objectContaining({ paused: true }),
+    ]);
+    expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" })[0]).toMatchObject({ paused: true });
+    expect(pauseEvents()).toHaveLength(queuedBefore + 1);
+    expect(pauseEvents().at(-1)?.notification.params).toMatchObject({ threadId: "busy", paused: true });
+
+    // Only a change is news.
+    await expect(registry.setQueuedTurnPaused({ queueEntryId: "first", paused: true }))
+      .resolves.toMatchObject({ disposition: "unchanged", paused: true });
+    await expect(registry.setQueuedTurnPaused({ queueEntryId: "gone", paused: true }))
+      .resolves.toEqual({ queueEntryId: "gone", disposition: "not_found" });
+    expect(pauseEvents()).toHaveLength(queuedBefore + 1);
+
+    await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/completed", params: {
+      threadId: "busy", turnId: "active", turn: { id: "active", status: "completed", output: [] },
+    } } });
+    await vi.waitFor(() => expect(snapshot().map((entry) => entry.queueEntryId)).toEqual(["first"]));
+    await vi.waitFor(() => expect(codexClient.startTurnCalls).toHaveLength(1));
+    expect(codexClient.startTurnCalls[0]?.input).toEqual([{ type: "text", text: "second" }]);
+  });
+});

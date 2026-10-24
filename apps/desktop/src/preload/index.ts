@@ -100,6 +100,8 @@ import type {
   CancelQueuedTurnResponse,
   MoveQueuedTurnRequest,
   MoveQueuedTurnResponse,
+  SetQueuedTurnPausedRequest,
+  SetQueuedTurnPausedResponse,
   ReleaseQueuedTurnRequest,
   ReleaseQueuedTurnResponse,
   CreateScheduledThreadActionRequest,
@@ -644,6 +646,7 @@ import {
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_RELEASE_QUEUED_TURN_CHANNEL,
   AGENT_MOVE_QUEUED_TURN_CHANNEL,
+  AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL,
   SCHEDULED_ACTIONS_CANCEL_CHANNEL,
   SCHEDULED_ACTIONS_CREATE_CHANNEL,
   SCHEDULED_ACTIONS_LIST_CHANNEL,
@@ -2253,6 +2256,10 @@ const desktopApi = Object.freeze({
     request: MoveQueuedTurnRequest,
   ): Promise<MoveQueuedTurnResponse> =>
     await ipcRenderer.invoke(AGENT_MOVE_QUEUED_TURN_CHANNEL, request),
+  setQueuedTurnPaused: async (
+    request: SetQueuedTurnPausedRequest,
+  ): Promise<SetQueuedTurnPausedResponse> =>
+    await ipcRenderer.invoke(AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL, request),
   listThreadTodos: async (
     request?: ListThreadTodosRequest,
   ): Promise<ListThreadTodosResponse> =>
