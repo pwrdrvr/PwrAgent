@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ManageThreadDependenciesRequest, PrSummary, ThreadDependency, ThreadDependencyCondition, ThreadTodosChangedEvent } from "@pwragent/shared";
+import { summarizeThreadDependencyPrompt } from "@pwragent/shared";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
 import {
@@ -127,6 +128,40 @@ describe("durable thread dependencies", () => {
     expect(failure).toContain("Report the prerequisite failure.");
     expect(failure).toContain(`The work planned for success, not to start now:\n${plan}`);
     expect(buildDependencyPrompt({ ...base, continuation: undefined })).toContain("Continue the previously authorized work");
+  });
+
+  it("builds prompts the transcript can summarize back", () => {
+    const plan = "Retarget this PR to main.\nThen replay our commits.";
+    const evidence = (threadId: string, title: string, state: "satisfied" | "failed" | "waiting", reason: string) => ({
+      condition: { ...condition(threadId), title }, state, reason, observedAt: 1,
+      prUrl: "https://github.com/example/fixture/pull/1",
+    });
+    const base: ThreadDependency = {
+      id: "summarized", backend: "codex", threadId: "consumer", status: "dispatching", mode: "all", onFailure: "notify",
+      conditions: [{ ...condition("foundation"), title: "Bump driver" }],
+      evidence: [evidence("foundation", "Bump driver", "satisfied", "CI passed for the current head")],
+      continuation: plan, outcome: "success", createdAt: 1, updatedAt: 1,
+    };
+    expect(summarizeThreadDependencyPrompt(buildDependencyPrompt(base))).toEqual({
+      outcome: "success", summary: "\"Bump driver\" passes CI", plan: "Retarget this PR to main.",
+    });
+    expect(summarizeThreadDependencyPrompt(buildDependencyPrompt({
+      ...base, outcome: "failure", evidence: [evidence("foundation", "Bump driver", "failed", "CI failed")],
+    }))).toEqual({
+      outcome: "failure", summary: "\"Bump driver\" passes CI — CI failed", plan: "Retarget this PR to main.",
+    });
+    const two = {
+      ...base,
+      conditions: [...base.conditions, { ...condition("second"), title: "Docs" }],
+      evidence: [...base.evidence, evidence("second", "Docs", "waiting", "Waiting for CI to pass")],
+      continuation: undefined,
+    };
+    expect(summarizeThreadDependencyPrompt(buildDependencyPrompt(two))).toEqual({
+      outcome: "success", summary: "2 prerequisites met",
+    });
+    expect(summarizeThreadDependencyPrompt(buildDependencyPrompt({ ...two, mode: "any" }))).toEqual({
+      outcome: "success", summary: "One of 2 prerequisites met",
+    });
   });
 
   it("rechecks every PR observed by one poll in a single pass", async () => {

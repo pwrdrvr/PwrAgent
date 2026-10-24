@@ -620,6 +620,33 @@ describe("TranscriptList", () => {
     expect(screen.queryByText("PwrAgent")).not.toBeInTheDocument();
   });
 
+  it("collapses a dependency continuation to its prerequisite, outcome, and plan", () => {
+    const prompt = [
+      "PwrAgent resumed this thread because its prerequisites were met (all of 1).",
+      "- \"Focused counters\" finishes its turn: Turn abc completed",
+      "",
+      "Do what was planned when this dependency was registered:",
+      "Review the new profile once.",
+      "",
+      "Recheck the prerequisite head before using it; a new commit can arrive after this notification.",
+      "Do not poll this dependency or start a Job Monitor for it.",
+    ].join("\n");
+    render(<TranscriptList
+      entries={[{ type: "message", id: "continuation", role: "user", text: prompt,
+        origin: { kind: "pwragent", dependencyId: "dependency-1" } }]}
+      loading={false} loadingMore={false} onLoadOlder={async () => undefined}
+    />);
+    const toggle = screen.getByRole("button", { name: "\"Focused counters\" finishes its turn" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Met")).toBeInTheDocument();
+    expect(screen.getByText("Next:")).toBeInTheDocument();
+    expect(screen.getByText(/Review the new profile once\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Do not poll this dependency/)).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/Do not poll this dependency/)).toBeInTheDocument();
+  });
+
   it("renders PR automation prompts as compact expandable PwrAgent cards", () => {
     const rawPrompt = [
       "PwrAgent scheduled this bounded repair turn because an attached pull request needs attention.",
