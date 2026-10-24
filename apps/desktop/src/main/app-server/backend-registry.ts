@@ -8296,6 +8296,7 @@ type PendingThreadMessageContext = {
   text?: string;
   threadId: string;
   turnId?: string;
+  turnEnded?: boolean;
 };
 
 async function pendingThreadMessageImageParts(
@@ -20449,7 +20450,7 @@ export class DesktopBackendRegistry {
       return undefined;
     }
     // Codex can defer a steer behind a long-running tool for more than ten
-    // minutes. Keep its origin until the item completes or its turn ends;
+    // minutes. Keep its origin until the item completes;
     // another thread's activity must not expire an accepted message's sender.
     const id = randomUUID();
     this.pendingThreadMessageContexts.set(id, {
@@ -20511,6 +20512,13 @@ export class DesktopBackendRegistry {
           pending.backend === params.backend
           && pending.threadId === params.threadId
           && (!pending.messageId || pending.messageId === params.messageId)
+          // After turn-end, text alone cannot distinguish a delayed item
+          // from a later manual message. Require its turn or bound item id.
+          && (
+            !pending.turnEnded
+            || Boolean(params.turnId)
+            || Boolean(pending.messageId && pending.messageId === params.messageId)
+          )
           && (
             !pending.turnId
             || !params.turnId
@@ -46183,11 +46191,13 @@ export class DesktopBackendRegistry {
       const completedTurnId = turnIdFromTerminalNotification(event.notification);
       this.mcpGatewayTools?.cancel(event.backend, event.notification.params.threadId, completedTurnId);
       if (completedTurnId) {
-        for (const [id, pending] of this.pendingThreadMessageContexts) {
+        for (const pending of this.pendingThreadMessageContexts.values()) {
           if (pending.backend === event.backend
             && pending.threadId === event.notification.params.threadId
             && pending.turnId === completedTurnId) {
-            this.pendingThreadMessageContexts.delete(id);
+            // Turn completion does not confirm admission or cancellation of
+            // an accepted steer. Keep attribution for delayed user items.
+            pending.turnEnded = true;
           }
         }
         // An MCP elicitation cannot keep its provider turn alive after that

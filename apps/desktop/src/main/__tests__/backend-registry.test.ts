@@ -45455,7 +45455,9 @@ script = "printf setup"
     expect(response.replay.messages[0]).toMatchObject({ id: message.id, origin });
   });
 
-  it.each(["turn/completed", "turn/failed", "turn/cancelled"] as const)("releases undelivered steer provenance on %s", async (method) => {
+  it.each((["turn/completed", "turn/failed", "turn/cancelled"] as const).flatMap((method) =>
+    [false, true].map((itemStarted) => ({ method, itemStarted }))
+  ))("retains pending steer provenance after $method (item started=$itemStarted)", async ({ method, itemStarted }) => {
     const codexClient = new MockBackendClient({});
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
@@ -45466,10 +45468,20 @@ script = "printf setup"
       backend: "codex", threadId: "target-thread", input: [{ type: "text", text: "Collect observations." }],
     });
     const text = "Continue.";
+    const origin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "parent-thread" } };
     await registry.steerTurn({
       backend: "codex", threadId: turn.threadId, expectedTurnId: turn.turnId,
       input: [{ type: "text", text }], requestId: "undelivered-steer",
-    }, { kind: "agent", sourceThread: { backend: "codex", threadId: "parent-thread" } });
+    }, origin);
+    if (itemStarted) {
+      await codexClient.emit({
+        method: "item/started",
+        params: {
+          threadId: turn.threadId, turnId: turn.turnId,
+          item: { id: "delayed-message", type: "userMessage", content: [{ type: "text", text }] },
+        },
+      });
+    }
     const terminal: AppServerNotification = method === "turn/completed"
       ? { method, params: { threadId: turn.threadId, turnId: turn.turnId,
           turn: { id: turn.turnId, status: "completed", output: [] } } }
@@ -45498,6 +45510,26 @@ script = "printf setup"
     expect(overlayStore.upsertThreadMessageOrigin).not.toHaveBeenCalledWith(
       expect.objectContaining({ messageId: "manual-message" }),
     );
+
+    // A terminal turn notification is not proof that Codex discarded a
+    // pending user item. Preserve its sender when that item arrives later.
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: turn.threadId,
+        ...(itemStarted ? {} : { turnId: turn.turnId }),
+        item: { id: "delayed-message", type: "userMessage", content: [{ type: "text", text }] },
+      },
+    });
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ notification: {
+        method: "item/completed",
+        params: expect.objectContaining({ item: expect.objectContaining({ id: "delayed-message", origin }) }),
+      } }),
+    ]));
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex", threadId: turn.threadId, messageId: "delayed-message", origin,
+    });
   });
 
   it("binds pending provenance to the started item when identical steers complete out of order", async () => {
