@@ -1969,6 +1969,7 @@ test.describe("federation remote window", () => {
 
       const remoteKimiParent = remote.getByRole("button", {
         name: "Remote Kimi parent",
+        exact: true,
       });
       await expect(remoteKimiParent).toBeVisible({ timeout: 30_000 });
       await rightClickThreadRow(remote, "Remote Kimi parent");
