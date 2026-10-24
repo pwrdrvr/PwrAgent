@@ -440,6 +440,9 @@ async function listInstanceBackends(
             backend: summary.kind,
             label: summary.label,
             models: models.map((model) => model.id),
+            // Labels can carry a version that the launch alias does not. Keep
+            // the UI's mapping rather than making callers guess a model ID.
+            modelOptions: models,
             ...(defaultModel ? { defaultModel } : {}),
           };
         }),

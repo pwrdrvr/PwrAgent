@@ -328,7 +328,7 @@ function inputSchemaForOperation(
           model: {
             type: "string",
             description:
-              "Exact model ID for the selected backend. list_instance_projects lists each backend's model IDs.",
+              "Exact model ID for the selected backend. Match the requested UI label in list_instance_projects backends[].modelOptions and pass its id. IDs may be aliases. backends[].models also lists the exact IDs.",
           },
           reasoningEffort: { type: "string" },
           serviceTier: { type: "string" },

@@ -7,6 +7,7 @@ import type {
   ListAttentionThreadsResult,
   ListFederationInstancesResult,
   ListInstanceProjectsResult,
+  ListBackendsRequest,
   MaterializeDirectoryLaunchpadRequest,
   NavigationSnapshot,
   NavigationThreadSummary,
@@ -16,9 +17,17 @@ import type {
   SearchFederationThreadsResult,
 } from "@pwragent/shared";
 import { projectNavigationQuery } from "../app-server/navigation-query-projection";
-import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
+import { claudeModelOptions } from "../claude/claude-models";
+import {
+  FEDERATION_BACKEND_METHOD_CAPABILITIES,
+  FederationRemoteBackendClient,
+  registerFederationBackendHandlers,
+  type FederationBackendOperations,
+} from "../federation/federation-backend-bridge";
 import { createFederationAgentToolsHandler } from "../federation/federation-agent-tools-service";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
+import { FederationRouter } from "../federation/federation-router";
+import { FederationRpcEndpoint } from "../federation/federation-rpc";
 
 const localHostInfo: FederationHostInfo = {
   platform: "darwin",
@@ -599,9 +608,56 @@ describe("federation agent tools service", () => {
 
     expect(listBackends).toHaveBeenCalledWith({});
     expect((response as { ok: true; data: ListInstanceProjectsResult }).data.backends).toEqual([
-      { backend: "codex", label: "OpenAI", models: ["sample-codex-a", "sample-codex-b"], defaultModel: "sample-codex-a" },
-      { backend: "acp:grok", label: "Grok", models: ["sample-grok-a"] },
+      { backend: "codex", label: "OpenAI", models: ["sample-codex-a", "sample-codex-b"],
+        modelOptions: [{ id: "sample-codex-a", current: true }, { id: "sample-codex-b" }], defaultModel: "sample-codex-a" },
+      { backend: "acp:grok", label: "Grok", models: ["sample-grok-a"], modelOptions: [{ id: "sample-grok-a" }] },
     ]);
+  });
+
+  it.each(["local", "remote"])("preserves Claude picker labels and launch aliases in %s project discovery", async (location) => {
+    // Initialize metadata names the latest model through `opus`, while the
+    // explicit claude-opus-5 entry is an older, separately selectable version.
+    const models = claudeModelOptions([
+      { value: "default", displayName: "Default (recommended)", description: "", resolvedModel: "claude-opus-5-5" },
+      { value: "opus", displayName: "Opus 5.5", description: "", resolvedModel: "claude-opus-5-5",
+        supportsEffort: true, supportedEffortLevels: ["low", "high", "max"] },
+      { value: "claude-opus-5", displayName: "Opus 5", description: "", resolvedModel: "claude-opus-5" },
+      { value: "deployment-id", displayName: "Organization model", description: "" },
+    ]);
+    const listBackends = vi.fn(async () => ({ fetchedAt: 1, backends: [
+      { kind: "claude" as const, label: "Claude", available: true, launchpadOptions: { models } },
+    ] }));
+    const source = { readPopulation: async () => buildSnapshot({ directories: [] }), listBackends };
+    const router = new FederationRouter({ localInstanceId: "pwr_studio", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({ peerId: "pwr_local", capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(JSON.parse(JSON.stringify(envelope))); } });
+    registerFederationBackendHandlers({ router, backend: source as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "pwr_local", remoteInstanceId: "pwr_studio",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope: JSON.parse(JSON.stringify(envelope)), sourcePeerId: "pwr_local" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth({ peers: [
+          { id: "pwr_studio", label: "Studio Mac", role: "client", status: "connected", capabilities: ["thread_navigation", "thread_detail"] },
+        ] }),
+        localBackend: (() => source) as never,
+        remoteBackend: (() => ({ readPopulation: source.readPopulation,
+          listBackends: (request?: ListBackendsRequest) => client.listBackends(request) })) as never,
+      }),
+    });
+
+    const response = await handler({ operation: "list_instance_projects", context,
+      args: { instanceId: location === "local" ? "pwr_local" : "pwr_studio" } });
+    expect(response).toMatchObject({ ok: true, data: { backends: [{
+      backend: "claude", label: "Claude", defaultModel: "opus",
+      models: ["opus", "claude-opus-5", "deployment-id"],
+      modelOptions: models,
+    }] } });
+    expect(models.find((model) => model.label === "Opus 5.5")?.id).toBe("opus");
+    expect(models.find((model) => model.id === "claude-opus-5")?.other).toBe(true);
+    expect(listBackends).toHaveBeenCalledExactlyOnceWith({});
   });
 
   it("still lists projects when the instance cannot list its backends", async () => {
