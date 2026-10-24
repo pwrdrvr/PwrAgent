@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  forgetRecentThreadLockNote,
   isThreadLockRefusal,
   normalizeRecentThreadLockNote,
   normalizeThreadLockNote,
@@ -45,6 +46,11 @@ describe("recent thread lock notes", () => {
   it("leaves the list alone for a note that does not qualify", () => {
     expect(rememberRecentThreadLockNote(["A"], "Two\nlines")).toEqual(["A"]);
     expect(rememberRecentThreadLockNote(["A"], "")).toEqual(["A"]);
+  });
+
+  it("forgets a note, and leaves the list alone for one it does not hold", () => {
+    expect(forgetRecentThreadLockNote(["A", "Claude Design", "B"], " Claude Design ")).toEqual(["A", "B"]);
+    expect(forgetRecentThreadLockNote(["A"], "Missing")).toEqual(["A"]);
   });
 
   it("reads a stored list defensively", () => {

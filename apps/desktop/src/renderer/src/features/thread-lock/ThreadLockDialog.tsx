@@ -11,7 +11,10 @@ import { THREAD_LOCK_NOTE_MAX_LENGTH } from "@pwragent/shared";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { useModalDialog } from "../../lib/useModalDialog";
 
-type RecentNotesApi = Pick<DesktopApi, "listRecentThreadLockNotes" | "rememberThreadLockNote">;
+type RecentNotesApi = Pick<
+  DesktopApi,
+  "listRecentThreadLockNotes" | "rememberThreadLockNote" | "forgetThreadLockNote"
+>;
 
 export type ThreadLockDialogProps = {
   threadTitle: string;
@@ -35,7 +38,9 @@ export type ThreadLockDialogProps = {
  * The operator's recent short notes sit under the field as chips. The row is
  * one Tab stop; the arrows move inside it, and Enter, Space or a click fills
  * the note and moves focus to the primary button, so a repeat reason is Tab,
- * Enter, Enter. ⌘1–⌘9 are not used: they switch profiles.
+ * Enter, Enter. ⌘1–⌘9 are not used: they switch profiles. Each chip's ×
+ * forgets the note; it is not a Tab stop, so Delete or Backspace on the chip
+ * does the same from the keyboard.
  */
 export function ThreadLockDialog(props: ThreadLockDialogProps) {
   const titleId = useId();
@@ -45,8 +50,11 @@ export function ThreadLockDialog(props: ThreadLockDialogProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const recentNotesApi = props.recentNotesApi ?? getDesktopApi();
-  const recentNotes = useRecentThreadLockNotes(recentNotesApi);
+  const [recentNotes, setRecentNotes] = useRecentThreadLockNotes(recentNotesApi);
   const [rovingIndex, setRovingIndex] = useState<number>();
+  // Where focus goes once a removed chip has left the DOM: a chip index, or
+  // the note field when the row is gone.
+  const [focusAfterRemoval, setFocusAfterRemoval] = useState<number | "note">();
   const recentRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const submitRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useModalDialog<HTMLElement>({
@@ -91,7 +99,32 @@ export function ThreadLockDialog(props: ThreadLockDialogProps) {
     submitRef.current?.focus();
   };
 
+  const removeRecent = (index: number) => {
+    const recent = recentNotes[index];
+    if (recent === undefined || busy) return;
+    const remaining = recentNotes.filter((_, at) => at !== index);
+    // Focus stays in the row on the chip that took this one's place, or the
+    // one before it at the end, so removing several is one key repeated.
+    const nextIndex = Math.min(index, remaining.length - 1);
+    setRecentNotes(remaining);
+    setRovingIndex(nextIndex >= 0 ? nextIndex : undefined);
+    setFocusAfterRemoval(nextIndex >= 0 ? nextIndex : "note");
+    void recentNotesApi?.forgetThreadLockNote?.({ note: recent }).catch(() => undefined);
+  };
+
+  useEffect(() => {
+    if (focusAfterRemoval === undefined) return;
+    if (focusAfterRemoval === "note") noteRef.current?.focus();
+    else recentRefs.current[focusAfterRemoval]?.focus();
+    setFocusAfterRemoval(undefined);
+  }, [focusAfterRemoval]);
+
   const moveInRecents = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      removeRecent(index);
+      return;
+    }
     const last = recentNotes.length - 1;
     const target =
       event.key === "ArrowLeft" || event.key === "ArrowUp" ? Math.max(index - 1, 0)
@@ -149,22 +182,35 @@ export function ThreadLockDialog(props: ThreadLockDialogProps) {
           >
             <span aria-hidden="true" className="thread-lock-dialog__recents-label">Recent</span>
             {recentNotes.map((recent, index) => (
-              <button
-                key={recent}
-                ref={(element) => {
-                  recentRefs.current[index] = element;
-                }}
-                aria-pressed={index === selectedIndex}
-                className="thread-lock-dialog__recent"
-                disabled={busy}
-                tabIndex={index === tabStop ? 0 : -1}
-                type="button"
-                onClick={() => pickRecent(index)}
-                onFocus={() => setRovingIndex(index)}
-                onKeyDown={(event) => moveInRecents(event, index)}
-              >
-                {recent}
-              </button>
+              <span key={recent} className="thread-lock-dialog__recent">
+                <button
+                  ref={(element) => {
+                    recentRefs.current[index] = element;
+                  }}
+                  aria-keyshortcuts="Delete"
+                  aria-pressed={index === selectedIndex}
+                  className="thread-lock-dialog__recent-pick"
+                  disabled={busy}
+                  tabIndex={index === tabStop ? 0 : -1}
+                  type="button"
+                  onClick={() => pickRecent(index)}
+                  onFocus={() => setRovingIndex(index)}
+                  onKeyDown={(event) => moveInRecents(event, index)}
+                >
+                  {recent}
+                </button>
+                <button
+                  aria-label={`Remove “${recent}” from recent notes`}
+                  className="thread-lock-dialog__recent-remove tooltip-target"
+                  data-tooltip="Remove"
+                  disabled={busy}
+                  tabIndex={-1}
+                  type="button"
+                  onClick={() => removeRecent(index)}
+                >
+                  ×
+                </button>
+              </span>
             ))}
           </div>
         ) : null}
@@ -214,7 +260,9 @@ export function ThreadLockDialog(props: ThreadLockDialogProps) {
  * The operator's recent lock notes, read once as the dialog opens. A window
  * without the bridge, or a failed read, offers none rather than an error.
  */
-function useRecentThreadLockNotes(api: RecentNotesApi | undefined): string[] {
+function useRecentThreadLockNotes(
+  api: RecentNotesApi | undefined,
+): [string[], (notes: string[]) => void] {
   const [notes, setNotes] = useState<string[]>([]);
   const list = api?.listRecentThreadLockNotes;
   useEffect(() => {
@@ -229,5 +277,5 @@ function useRecentThreadLockNotes(api: RecentNotesApi | undefined): string[] {
       cancelled = true;
     };
   }, [list]);
-  return notes;
+  return [notes, setNotes];
 }

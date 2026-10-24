@@ -2380,6 +2380,10 @@ export type RememberThreadLockNoteRequest = {
   note: string;
 };
 
+export type ForgetThreadLockNoteRequest = {
+  note: string;
+};
+
 export type SetThreadPinRequest = {
   backend?: AppServerBackendKind;
   federationTarget?: FederationTarget;

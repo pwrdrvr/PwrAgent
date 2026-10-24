@@ -324,6 +324,8 @@ export const NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL =
   "navigation:recent-thread-lock-notes";
 export const NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL =
   "navigation:remember-thread-lock-note";
+export const NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL =
+  "navigation:forget-thread-lock-note";
 export const NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL =
   "navigation:set-thread-tool-incident-notice";
 export const NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL = "navigation:pending-thread-spend-alerts";

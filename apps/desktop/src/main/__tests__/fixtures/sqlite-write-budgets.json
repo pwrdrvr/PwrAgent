@@ -876,11 +876,11 @@
     "statements": 3
   },
   "recent-thread-lock-notes": {
-    "commits": 3,
-    "note": "three saved lock notes that change the list and three that do not: one commit per change, none per repeat; a few locks a day is well under 1 MB/day of WAL",
-    "observedWalBytes": 24720,
-    "rowsChanged": 3,
-    "statements": 3
+    "commits": 5,
+    "note": "five list changes (four saved notes, one removed chip) and five no-ops (repeats, unofferable notes, absent removals): one commit per change, none per no-op; a few locks a day is well under 1 MB/day of WAL",
+    "observedWalBytes": 41200,
+    "rowsChanged": 5,
+    "statements": 5
   },
   "registered-project-launchpad-submit": {
     "commits": 1,

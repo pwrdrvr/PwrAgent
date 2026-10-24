@@ -334,7 +334,7 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     }
   });
 
-  it("remembers recent lock notes with one commit per change", async () => {
+  it("remembers and forgets recent lock notes with one commit per change", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const { dbPath, tempDir } = createTempStateDb(
       "pwragent-recent-lock-notes-test-",
@@ -358,9 +358,18 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
         await store.rememberRecentThreadLockNote("Two\nlines");
         // An older note moves back to the front.
         await store.rememberRecentThreadLockNote("Waiting on PR review");
+        // A chip's remove button forgets a note; forgetting it twice, or a
+        // note never remembered, commits nothing.
+        await store.rememberRecentThreadLockNote("Pairing");
+        await expect(store.forgetRecentThreadLockNote("Pairing")).resolves.toEqual([
+          "Waiting on PR review",
+          "Claude Design",
+        ]);
+        await store.forgetRecentThreadLockNote("Pairing");
+        await store.forgetRecentThreadLockNote("Never saved");
       });
       expectSqliteWriteBudget({
-        note: "three saved lock notes that change the list and three that do not: one commit per change, none per repeat; a few locks a day is well under 1 MB/day of WAL",
+        note: "five list changes (four saved notes, one removed chip) and five no-ops (repeats, unofferable notes, absent removals): one commit per change, none per no-op; a few locks a day is well under 1 MB/day of WAL",
         scenario: "recent-thread-lock-notes",
         writes,
       });

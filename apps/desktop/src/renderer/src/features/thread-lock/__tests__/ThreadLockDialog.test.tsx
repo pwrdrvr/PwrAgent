@@ -9,6 +9,9 @@ function recentNotesApi(notes: string[] = RECENTS) {
   return {
     listRecentThreadLockNotes: vi.fn(async () => ({ notes })),
     rememberThreadLockNote: vi.fn(async ({ note }: { note: string }) => ({ notes: [note, ...notes] })),
+    forgetThreadLockNote: vi.fn(async ({ note }: { note: string }) => ({
+      notes: notes.filter((existing) => existing !== note),
+    })),
   };
 }
 
@@ -46,8 +49,10 @@ describe("ThreadLockDialog recent notes", () => {
   it("offers recent notes as chips, none of them chosen on an empty note", async () => {
     await renderDialog();
     const group = screen.getByRole("group", { name: "Recent notes" });
-    const chips = within(group).getAllByRole("button");
+    const chips = within(group).getAllByRole("button", { pressed: false });
     expect(chips.map((button) => button.textContent)).toEqual(RECENTS);
+    expect(within(group).getAllByRole("button", { name: /^Remove / }).map((button) => button.getAttribute("aria-label")))
+      .toEqual(RECENTS.map((recent) => `Remove “${recent}” from recent notes`));
     expect(chips.map((button) => button.getAttribute("aria-pressed"))).toEqual(["false", "false", "false"]);
   });
 
@@ -122,6 +127,49 @@ describe("ThreadLockDialog recent notes", () => {
       fireEvent.click(lock);
     });
     expect(props.onSubmit).toHaveBeenCalledWith("Waiting on PR review");
+  });
+
+  it("removes a chip with its × and forgets the note, keeping focus in the row", async () => {
+    const api = recentNotesApi();
+    await renderDialog({ recentNotesApi: api });
+    fireEvent.click(screen.getByRole("button", { name: "Remove “Waiting on PR review” from recent notes" }));
+
+    const group = screen.getByRole("group", { name: "Recent notes" });
+    expect(within(group).getAllByRole("button", { pressed: false }).map((button) => button.textContent))
+      .toEqual(["Claude Design", "Handed to repair thread"]);
+    expect(api.forgetThreadLockNote).toHaveBeenCalledWith({ note: "Waiting on PR review" });
+    await waitFor(() => expect(document.activeElement).toBe(chip("Handed to repair thread")));
+    // Removing never touches the note being typed.
+    expect((screen.getByRole("textbox", { name: "Note" }) as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("keeps the × out of the Tab order and removes with Delete or Backspace instead", async () => {
+    const api = recentNotesApi();
+    await renderDialog({ recentNotesApi: api });
+    pressTab();
+    press("End");
+    expect(document.activeElement).toBe(chip("Handed to repair thread"));
+
+    press("Delete");
+    await waitFor(() => expect(document.activeElement).toBe(chip("Waiting on PR review")));
+    press("Backspace");
+    await waitFor(() => expect(document.activeElement).toBe(chip("Claude Design")));
+    press("Delete");
+    expect(api.forgetThreadLockNote.mock.calls.map(([request]) => request.note))
+      .toEqual(["Handed to repair thread", "Waiting on PR review", "Claude Design"]);
+
+    // The row is gone with its last chip, and focus returns to the note.
+    expect(screen.queryByRole("group", { name: "Recent notes" })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Note" })));
+  });
+
+  it("still removes the chip when forgetting the note fails", async () => {
+    const api = recentNotesApi();
+    api.forgetThreadLockNote.mockRejectedValue(new Error("database is locked"));
+    await renderDialog({ recentNotesApi: api });
+    fireEvent.click(screen.getByRole("button", { name: "Remove “Claude Design” from recent notes" }));
+    expect(screen.queryByRole("button", { name: "Claude Design" })).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("remembers a note only once the lock is saved", async () => {

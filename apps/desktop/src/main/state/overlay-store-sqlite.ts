@@ -101,6 +101,7 @@ import {
   isRemoteFederationTarget,
   normalizeNavigationBrowseMode,
   normalizeThreadIdentityKey,
+  forgetRecentThreadLockNote,
   parseRecentThreadLockNotes,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
@@ -617,8 +618,8 @@ const LAUNCHPAD_AUTO_ACCESS_NOTICE_META_KEY = "launchpad_auto_access_notice";
 const NAVIGATION_PINNED_GROUP_COLLAPSED_META_KEY = "navigation_pinned_group_collapsed";
 /**
  * The operator's recent short lock notes, offered as chips in the lock
- * dialog. Written only when the dialog saves a note, and not at all when the
- * list would not change.
+ * dialog. Written only when the dialog saves a note or a chip is removed, and
+ * not at all when the list would not change.
  */
 const THREAD_LOCK_RECENT_NOTES_META_KEY = "thread_lock_recent_notes";
 /**
@@ -7779,9 +7780,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   async rememberRecentThreadLockNote(note: string): Promise<string[]> {
-    const current = this.listRecentThreadLockNotes();
-    const next = rememberRecentThreadLockNote(current, note);
     // Saving the newest note again commits nothing.
+    return this.writeRecentThreadLockNotes((current) => rememberRecentThreadLockNote(current, note));
+  }
+
+  async forgetRecentThreadLockNote(note: string): Promise<string[]> {
+    // Removing a note that is already gone commits nothing.
+    return this.writeRecentThreadLockNotes((current) => forgetRecentThreadLockNote(current, note));
+  }
+
+  private writeRecentThreadLockNotes(change: (current: string[]) => string[]): string[] {
+    const current = this.listRecentThreadLockNotes();
+    const next = change(current);
     if (next.length !== current.length || next.some((entry, index) => entry !== current[index])) {
       this.stateDb.setMeta(THREAD_LOCK_RECENT_NOTES_META_KEY, JSON.stringify(next));
     }
@@ -9947,6 +9957,7 @@ export type OverlayStoreLike = Pick<
   setPinnedGroupCollapsed?: SqliteOverlayStore["setPinnedGroupCollapsed"];
   listRecentThreadLockNotes?: SqliteOverlayStore["listRecentThreadLockNotes"];
   rememberRecentThreadLockNote?: SqliteOverlayStore["rememberRecentThreadLockNote"];
+  forgetRecentThreadLockNote?: SqliteOverlayStore["forgetRecentThreadLockNote"];
 };
 
 function reliableSubAgentCompletionBoundary(

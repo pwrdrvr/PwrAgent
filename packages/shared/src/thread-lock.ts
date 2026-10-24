@@ -54,6 +54,15 @@ export function rememberRecentThreadLockNote(
     .slice(0, THREAD_LOCK_RECENT_NOTES_LIMIT);
 }
 
+/** Drops a note from the recent-notes list, as its chip's remove button does. */
+export function forgetRecentThreadLockNote(
+  notes: readonly string[],
+  note: string | undefined,
+): string[] {
+  const normalized = normalizeThreadLockNote(note);
+  return notes.filter((existing) => existing !== normalized);
+}
+
 const THREAD_LOCK_REFUSAL_PREFIX = "This thread is locked";
 
 /**
