@@ -111,6 +111,19 @@ function isScheduledReview(entry: ComposerQueuedTurnSnapshot): boolean {
 }
 
 /**
+ * A held scheduled action is durable, and the owner's FIFO is process-local:
+ * after the owner restarts, the action stays held but no FIFO page reports its
+ * entry. Its absence from a complete FIFO is no evidence that it is gone.
+ * Pruning it here fought the scheduled-action projection, which adds it back
+ * on its next read, so the row's Queued chip flashed on and off. The
+ * scheduled-action projection removes it once it is retried, fails, or is
+ * cancelled.
+ */
+function isHeldScheduledAction(entry: ComposerQueuedTurnSnapshot): boolean {
+  return Boolean(entry.scheduledActionId && entry.manualReleaseRequired);
+}
+
+/**
  * Places each entry the operator moved, whose move the owner has not answered,
  * in front of its anchor, as the owner will once the move lands. An anchor
  * that is gone leaves the entry where the owner has it.
@@ -148,6 +161,7 @@ export function reconcileCompleteNavigationQueue(params: {
     || JSON.stringify(entry.threadOwner) !== ownerKey
     || entry.backendQueuePending
     || isScheduledReview(entry)
+    || isHeldScheduledAction(entry)
     || ownerById.has(entry.queueEntryId)
     || capturedById.get(entry.id) !== entry);
   const mirrorsById = new Map(retained

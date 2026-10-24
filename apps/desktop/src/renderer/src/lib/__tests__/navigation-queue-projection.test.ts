@@ -123,6 +123,26 @@ describe("independent complete FIFO projection", () => {
     expect(reconciled[0]).toBe(review);
   });
 
+  it("keeps a held scheduled steer whose FIFO entry did not survive a restart", () => {
+    // The durable held action outlives the owner's process-local FIFO. Only
+    // the scheduled-action projection may remove it: once it is retried,
+    // cancelled, or fails.
+    const held: ComposerQueuedTurnSnapshot = {
+      ...queued("scheduled-turn:held"),
+      id: "scheduled-projection:held",
+      scheduledActionId: "held",
+      manualReleaseRequired: true,
+      holdReason: "This steering message was held after its target turn ended.",
+    };
+    const dispatched = { ...queued("scheduled-turn:sent"), id: "scheduled-projection:sent", scheduledActionId: "sent" };
+    const current = [held, dispatched];
+    const reconciled = reconcileCompleteNavigationQueue({
+      owner, projection: projection(), atReadStart: current, current,
+    });
+    expect(reconciled.map((entry) => entry.id)).toEqual([held.id]);
+    expect(reconciled[0]).toBe(held);
+  });
+
   it("does not infer an owner from legacy scope or remove another owner's entry", () => {
     const legacy = { ...queued("legacy"), threadOwner: undefined };
     const foreign = { ...queued("foreign"), threadOwner: { ...owner, target: { scope: "local" as const } } };
