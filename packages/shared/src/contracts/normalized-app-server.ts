@@ -512,6 +512,28 @@ export function normalizeRenamedTitleSource(
 
 export type AppServerThreadStatus = "active" | "idle" | "notLoaded" | "unknown";
 
+/**
+ * A live command owned by the agent backend, not a PwrAgent environment
+ * action. Codex reports background terminals; Claude reports its running
+ * tasks (shell commands and sub-agents) in the same shape.
+ */
+export type AppServerBackgroundTask = {
+  itemId: string;
+  /** Opaque backend handle (Codex session, Claude task id); never an OS PID. */
+  processId: string;
+  command: string;
+  cwd: string;
+  osPid?: number;
+  cpuPercent?: number;
+  memoryKb?: number;
+  /** Absent for a shell command. */
+  kind?: "command" | "agent" | "task";
+  /** A sub-agent's type, such as `general-purpose`. */
+  agentType?: string;
+  /** The task's latest progress line, as its backend reported it. */
+  progress?: string;
+};
+
 /** Provider provenance carried by a native Codex `spawn_agent` thread. */
 export type CodexNativeSubAgentProvenance = {
   parentThreadId: ThreadIdentifier;
@@ -2334,6 +2356,18 @@ export type AppServerNotification =
       method: "thread/automations/updated";
       params: {
         threadId: string;
+      };
+    }
+  | {
+      /**
+       * The full set of commands and sub-agents a backend reports running for
+       * the thread. Replaces the previous set. Claude only; Codex terminals
+       * are read on demand.
+       */
+      method: "thread/backgroundTasks/updated";
+      params: {
+        threadId: string;
+        tasks: AppServerBackgroundTask[];
       };
     }
   | {

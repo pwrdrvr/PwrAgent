@@ -1010,7 +1010,7 @@ describe("Claude SDK backend", () => {
     await backend.startThread({ cwd: f.root, executionMode: "default" });
     expect(discoverModels).not.toHaveBeenCalled();
     await backend.discover();
-    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: { PATH: "/fixture", CLAUDE_CODE_REPORT_FINDINGS: "1" } });
+    expect(discoverModels).toHaveBeenCalledWith({ executable: "/fixture/claude", env: { PATH: "/fixture", CLAUDE_CODE_REPORT_FINDINGS: "1", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1" } });
     expect(backend.summary().launchpadOptions?.models).toEqual(models);
     expect(f.events).toEqual([{ backend: "claude", notification: {
       method: "backend/providerStatus/updated", params: { backend: "claude" },
@@ -1456,6 +1456,256 @@ describe("Claude SDK backend", () => {
     expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
       turn: { error: { message: "Claude exited before completing the turn." } },
     } });
+  });
+
+  it("keeps the turn and its query open while a background command runs, then finishes after Claude's follow-up", async () => {
+    const commandDone = Promise.withResolvers<void>();
+    const stopTask = vi.fn().mockResolvedValue(undefined);
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "launch", content: [{ type: "tool_use", id: "tool-bash", name: "Bash", input: { command: "pnpm test --watch=false", run_in_background: true } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "task-1", tool_use_id: "tool-bash",
+        description: "Run the tests", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [
+        { task_id: "task-1", task_type: "local_bash", description: "Run the tests" },
+      ] } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "task-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-bash", content: "Command running in background with ID: task-1" }] } } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "waiting", content: [{ type: "text", text: "The tests are running. I'll resume when they report back." }],
+      } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+      await commandDone.promise;
+      yield { type: "system", subtype: "task_notification", task_id: "task-1", tool_use_id: "tool-bash",
+        status: "completed", output_file: "", summary: "Tests passed" } as SDKMessage;
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [] } as unknown as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "resumed", content: [{ type: "text", text: "All tests passed." }],
+      } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    }, { stopTask });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Run the tests" }] });
+    await vi.waitFor(() => expect(f.events.some((event) => event.notification.method === "item/completed"
+      && JSON.stringify(event.notification.params).includes("resume when they report back"))).toBe(true));
+    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
+      itemId: "tool-bash", processId: "task-1", command: "pnpm test --watch=false", cwd: f.root,
+    }]));
+    expect(f.events.some((event) => event.notification.method === "thread/backgroundTasks/updated"
+      && (event.notification.params as { tasks: unknown[] }).tasks.length === 1)).toBe(true);
+    expect(f.events.some((event) => ["turn/completed", "turn/failed"].includes(event.notification.method))).toBe(false);
+    expect(f.close).not.toHaveBeenCalled();
+    expect((await f.backend.readThread(threadId)).threadStatus).toBe("active");
+    // The placeholder result does not complete the command's row.
+    expect(f.events.some((event) => event.notification.method === "item/completed"
+      && (event.notification.params.item as { id?: string }).id === "tool-bash")).toBe(false);
+    await f.backend.stopBackgroundTask(threadId, "task-1");
+    expect(stopTask).toHaveBeenCalledWith("task-1");
+
+    commandDone.resolve();
+    await f.waitForTurn();
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+    const command = f.events.find((event) => event.notification.method === "item/completed"
+      && (event.notification.params.item as { id?: string }).id === "tool-bash");
+    expect(command?.notification.params).toMatchObject({ item: { status: "completed", aggregatedOutput: expect.stringContaining("Tests passed") } });
+    expect(f.events.filter((event) => event.notification.method === "thread/backgroundTasks/updated").at(-1)?.notification.params)
+      .toMatchObject({ tasks: [] });
+    expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([]);
+    const replay = await f.backend.readThread(threadId);
+    expect(replay.threadStatus).toBe("idle");
+    expect(replay.lastAssistantMessage).toBe("All tests passed.");
+  });
+
+  it("follows Claude Code 2.1.301's captured background-command sequence to its follow-up turn", async () => {
+    // Recorded from the bundled CLI with session state events enabled.
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "session_state_changed", state: "running" } as SDKMessage;
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "launch", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "sleep 4; echo probe-finished", run_in_background: true } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [
+        { task_id: "bh1fh5c3h", run_id: "run-1", task_type: "local_bash", description: "Sleep 4 seconds then echo probe-finished" },
+      ] } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "bh1fh5c3h", run_id: "run-1", tool_use_id: "toolu_1",
+        description: "Sleep 4 seconds then echo probe-finished", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "bh1fh5c3h" },
+        message: { content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "Command running in background with ID: bh1fh5c3h" }] } } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "waiting", content: [{ type: "text", text: "WAITING" }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "WAITING" } as SDKMessage;
+      yield { type: "system", subtype: "session_state_changed", state: "idle" } as SDKMessage;
+      yield { type: "system", subtype: "task_updated", task_id: "bh1fh5c3h", run_id: "run-1", patch: { status: "completed", end_time: 1 } } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "bh1fh5c3h", run_id: "run-1", tool_use_id: "toolu_1",
+        status: "completed", output_file: "", summary: "Background command completed" } as SDKMessage;
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [] } as unknown as SDKMessage;
+      yield { type: "system", subtype: "session_state_changed", state: "running" } as SDKMessage;
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "done", content: [{ type: "text", text: "DONE" }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "DONE" } as SDKMessage;
+      yield { type: "system", subtype: "session_state_changed", state: "idle" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Probe" }] });
+    await f.waitForTurn();
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
+    expect((await f.backend.readThread(threadId)).lastAssistantMessage).toBe("DONE");
+    expect(f.events.find((event) => event.notification.method === "item/completed"
+      && (event.notification.params.item as { id?: string }).id === "toolu_1")?.notification.params)
+      .toMatchObject({ item: { status: "completed" } });
+  });
+
+  it("keeps a background monitor the live set names running past its native result", async () => {
+    const monitorDone = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [
+        { task_id: "monitor-1", task_type: "monitor_mcp", description: "Watch the deploy" },
+      ] } as SDKMessage;
+      // Monitors carry no is_backgrounded flag.
+      yield { type: "system", subtype: "task_started", task_id: "monitor-1", description: "Watch the deploy", task_type: "monitor_mcp" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "watching" } as SDKMessage;
+      await monitorDone.promise;
+      yield { type: "system", subtype: "task_notification", task_id: "monitor-1", status: "completed", output_file: "", summary: "Deployed" } as SDKMessage;
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [] } as unknown as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "done", content: [{ type: "text", text: "Deployed." }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Watch" }] });
+    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toMatchObject([{ processId: "monitor-1", kind: "task" }]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
+    monitorDone.resolve();
+    await f.waitForTurn();
+    expect((await f.backend.readThread(threadId)).lastAssistantMessage).toBe("Deployed.");
+  });
+
+  it("records an intermediate result's totals when the turn is stopped during a background wait", async () => {
+    const model = { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      costUSD: 2, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 };
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "task-1", description: "sleep", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting", modelUsage: { opus: model } } as unknown as SDKMessage;
+      await new Promise<void>((resolve) => {
+        options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
+    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toHaveLength(1));
+    await f.backend.interruptTurn(turn);
+    expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
+    expect((await f.store.read(threadId)).modelUsage?.opus.costUSD).toBe(2);
+  });
+
+  it("closes a background launch row that no task event ever settled", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "launch", content: [{ type: "tool_use", id: "tool-bg", name: "Bash", input: { command: "sleep 60", run_in_background: true } }],
+      } } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "bg-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-bg", content: "Command running in background with ID: bg-1" }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "started" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }] });
+    await f.waitForTurn();
+    const row = (await f.backend.readThread(threadId)).entries.find((entry) => entry.type === "activity");
+    expect(row).toMatchObject({ status: "failed" });
+  });
+
+  it("reports a background sub-agent as running work with its progress", async () => {
+    const agentDone = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "spawn", content: [{ type: "tool_use", id: "tool-agent", name: "Agent", input: { description: "Audit the SDK", prompt: "..." } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+        task_type: "local_agent", subagent_type: "Explore", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1", description: "Audit the SDK", prompt: "..." },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+      yield { type: "system", subtype: "task_progress", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
+        usage: { total_tokens: 10, tool_uses: 3, duration_ms: 5 }, last_tool_name: "Grep" } as SDKMessage;
+      await agentDone.promise;
+      yield { type: "system", subtype: "task_notification", task_id: "agent-1", tool_use_id: "tool-agent",
+        status: "stopped", output_file: "", summary: "Stopped" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "noted" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
+      itemId: "tool-agent", processId: "agent-1", command: "Audit the SDK", cwd: f.root,
+      kind: "agent", agentType: "Explore", progress: "3 tool uses · last Grep",
+    }]));
+    agentDone.resolve();
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+    expect(f.events.find((event) => event.notification.method === "item/completed"
+      && (event.notification.params.item as { id?: string }).id === "tool-agent")?.notification.params)
+      .toMatchObject({ item: { status: "cancelled" } });
+  });
+
+  it("does not wait on a foreground task that sends no notification", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "run", content: [{ type: "tool_use", id: "tool-fg", name: "Bash", input: { command: "ls" } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "fg-1", tool_use_id: "tool-fg", description: "ls",
+        task_type: "local_bash", is_backgrounded: false } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, message: { content: [{ type: "tool_result", tool_use_id: "tool-fg", content: "README.md" }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "List" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+    expect(f.events.find((event) => event.notification.method === "item/completed"
+      && (event.notification.params.item as { id?: string }).id === "tool-fg")?.notification.params)
+      .toMatchObject({ item: { status: "completed" } });
+  });
+
+  it("ends the turn at Claude's idle state once it reports one", async () => {
+    const idle = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "system", subtype: "session_state_changed", state: "running" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+      await idle.promise;
+      yield { type: "system", subtype: "session_state_changed", state: "idle" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hello" }] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
+    idle.resolve();
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
+  it("ends the turn when Claude runs no follow-up for a settled task", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "task-1", description: "sleep", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "task-1", status: "completed", output_file: "", summary: "done" } as SDKMessage;
+      // The CLI stays connected; nothing else arrives.
+      await new Promise<void>(() => {});
+    });
+    const backend = new ClaudeBackend({ ...f.backendOptions, taskFollowUpGraceMs: 50 });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    const started = Date.now();
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
+    await f.waitForTurn();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(45);
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
   });
 
   it("reports Claude's error when a turn fails before acknowledging a steer", async () => {
