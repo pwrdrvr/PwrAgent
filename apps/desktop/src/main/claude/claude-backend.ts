@@ -47,6 +47,8 @@ export type ClaudeBackendOptions = {
   cancelRequest: (threadId: string, turnId: string, requestId: string) => Promise<void>;
   /** Overrides CLAUDE_TASK_FOLLOW_UP_GRACE_MS. */
   taskFollowUpGraceMs?: number;
+  /** Overrides CLAUDE_INTERRUPT_GRACE_MS. */
+  interruptGraceMs?: number;
   /** Workspace, branch, and pull request for a review card. Never fails a review. */
   resolveReviewContext?: (params: { threadId: string; cwd: string }) => Promise<AppServerReviewContext | undefined>;
 };
@@ -82,6 +84,20 @@ function claudeExceptionMessage(error: unknown, stderr: string): string {
  * of its own; this bounds the wait when it does not.
  */
 const CLAUDE_TASK_FOLLOW_UP_GRACE_MS = 5_000;
+
+/**
+ * How long Stop waits for Claude to end an interrupted turn before ending it
+ * locally. The process stays up either way, for the tasks it runs.
+ */
+const CLAUDE_INTERRUPT_GRACE_MS = 5_000;
+
+/** The CLI drops queued messages along with the interrupted turn. */
+const CLAUDE_INTERRUPT_CANCEL_QUEUED = "interrupt_cancel_queued_v1";
+
+/** The SDK sends cancelQueued, which its declared signature omits. */
+type ClaudeInterruptQuery = Query & {
+  interrupt(options?: { cancelQueued?: boolean }): ReturnType<Query["interrupt"]>;
+};
 
 const CLAUDE_WAKE = Symbol("claude-wake");
 
@@ -148,6 +164,12 @@ type RunningTurn = {
   usageBaseline?: ClaudeSession["modelUsage"];
   /** An old session with no baseline cannot attribute its first totals. */
   needsUsageBaseline: boolean;
+  /** Stop interrupted Claude rather than ending the query, so the turn ends cancelled. */
+  interrupted?: boolean;
+  /** Claude did not answer the interrupt in time; the turn ends without it. */
+  abandoned?: boolean;
+  /** Settles once the turn has reported its end. */
+  ended: { promise: Promise<void>; resolve: () => void };
 };
 
 /** What a live session was launched with, compared when a turn reuses it. */
@@ -210,6 +232,8 @@ type LiveSession = {
   followUpWaivedAt?: number;
   /** Keep only a bounded tail; emit it only when a turn fails. */
   stderr: string;
+  /** Protocol features the CLI advertised at init. */
+  capabilities?: string[];
 };
 
 /** A turn is already open for the thread, so the message must wait in the queue. */
@@ -238,7 +262,10 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
 
 /** A session read before the turn has no baseline yet; the caller sets it. */
 function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => { resolve = settle; });
   return {
+    ended: { promise, resolve },
     turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), pendingSteers: new Set(),
     completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
@@ -601,10 +628,8 @@ export class ClaudeBackend {
     if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
     const content = await claudeInput(params.input);
     if (!live.closing && !await this.reconfigure(live, claudeSessionConfig(params, session))) {
-      // Only a new process takes this setting, and closing this one stops its tasks.
-      claudeBackendLog.info("Relaunching Claude to apply the turn's settings", {
-        threadId, taskCount: live.tasks.active().length,
-      });
+      // Only a new process takes this setting, and this one runs no task.
+      claudeBackendLog.info("Relaunching Claude to apply the turn's settings", { threadId });
       await this.closeSession(live);
       return undefined;
     }
@@ -639,11 +664,23 @@ export class ClaudeBackend {
     return { backend: "claude", threadId, turnId: turn.turnId };
   }
 
-  /** Apply a turn's settings to a live session; false when only a relaunch can. */
+  /**
+   * Apply a turn's settings to a live session; false when it must relaunch.
+   * A relaunch stops the session's tasks, so with tasks running a setting
+   * only a new process takes waits for one, and a rejected change fails the
+   * turn instead.
+   */
   private async reconfigure(live: LiveSession, config: ClaudeSessionConfig): Promise<boolean> {
     const query = live.query;
+    if (!query) return false;
+    const keepTasks = live.tasks.active().length > 0;
     // The system prompt is fixed when the process starts.
-    if (!query || config.instructions !== live.config.instructions) return false;
+    if (config.instructions !== live.config.instructions) {
+      if (!keepTasks) return false;
+      claudeBackendLog.info("Deferring new Claude instructions until the session relaunches", {
+        threadId: live.session.thread.id, taskCount: live.tasks.active().length,
+      });
+    }
     try {
       if (config.model !== live.config.model) {
         await query.setModel(config.model);
@@ -665,10 +702,12 @@ export class ClaudeBackend {
       }
       return true;
     } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
       claudeBackendLog.warn("Could not apply turn settings to the live Claude session", {
-        threadId: live.session.thread.id, error: error instanceof Error ? error.message : String(error),
+        threadId: live.session.thread.id, keepTasks, error: detail,
       });
-      return false;
+      if (!keepTasks) return false;
+      throw new Error(`Claude could not apply this message's settings while its background tasks run: ${detail}`, { cause: error });
     }
   }
 
@@ -715,6 +754,7 @@ export class ClaudeBackend {
       threadId, turnId: turn.turnId,
       turn: { id: turn.turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure } },
     } });
+    turn.ended.resolve();
   }
 
   private async emit(notification: AgentEvent["notification"]): Promise<void> {
@@ -766,6 +806,9 @@ export class ClaudeBackend {
         let step: IteratorResult<SDKMessage, void> | typeof CLAUDE_WAKE;
         while ((step = await Promise.race([pending, live.wake.promise])) === CLAUDE_WAKE) {
           live.wake = claudeWakeSignal();
+          // Claude did not answer a Stop in time. End the turn here; the
+          // session stays up for its tasks.
+          if (live.turn?.abandoned) await this.endTurn(live, live.turn);
           if (!live.turn && this.sessionSettled(live)) break;
         }
         if (step === CLAUDE_WAKE || step.done) break;
@@ -803,6 +846,7 @@ export class ClaudeBackend {
           // turns named after the raw prompt for their entire duration.
           if (turn) turn.titleUpdate ??= this.updateTitle(live, turn);
           if (message.terminal_slash_commands) this.terminalCommands = new Set(message.terminal_slash_commands);
+          live.capabilities = message.capabilities ?? [];
           if (firstInit) await Promise.all([
             // A probe that finds no windows keeps the last reading, so the
             // account must be confirmed first.
@@ -1050,7 +1094,7 @@ export class ClaudeBackend {
   ): Promise<void> {
     const threadId = live.session.thread.id;
     const { turnId } = turn;
-    const { cancelled } = outcome;
+    const cancelled = outcome.cancelled || turn.interrupted === true;
     let { failure } = outcome;
     const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
     for (const entry of turn.entries.values()) {
@@ -1089,6 +1133,7 @@ export class ClaudeBackend {
         output: [...turn.entries.values()].flatMap((entry) => entry.type === "message" && entry.role === "assistant" ? [{ type: "text" as const, text: entry.text }] : []),
       } } });
     }
+    turn.ended.resolve();
   }
 
   /** Re-read metadata so a live rename/mode change cannot be overwritten. */
@@ -1646,10 +1691,46 @@ export class ClaudeBackend {
 
   async interruptTurn(params: { threadId: string; turnId: string }): Promise<typeof params> {
     const live = this.sessions.get(params.threadId);
-    if (live?.turn && live.turn.turnId !== params.turnId) throw new Error("The active Claude turn has changed.");
-    // Stop ends the query, and with it every task the session runs.
-    if (live?.turn) await this.closeSession(live);
+    const turn = live?.turn;
+    if (turn && turn.turnId !== params.turnId) throw new Error("The active Claude turn has changed.");
+    if (!live || !turn) return params;
+    // Without tasks to keep, ending the query is the surest stop.
+    if (!await this.interruptKeepingTasks(live, turn)) await this.closeSession(live);
     return params;
+  }
+
+  /**
+   * Stop the turn but keep the process, and the background tasks it runs.
+   * Returns false when only ending the query can stop the turn.
+   */
+  private async interruptKeepingTasks(live: LiveSession, turn: RunningTurn): Promise<boolean> {
+    // A CLI that cannot drop queued messages would run the steers being stopped.
+    if (!live.query || live.closing || live.tasks.active().length === 0
+      || !live.capabilities?.includes(CLAUDE_INTERRUPT_CANCEL_QUEUED)) return false;
+    turn.interrupted = true;
+    try {
+      await (live.query as ClaudeInterruptQuery).interrupt({ cancelQueued: true });
+    } catch (error) {
+      claudeBackendLog.warn("Claude rejected an interrupt; ending its session", {
+        threadId: live.session.thread.id, error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answered = await Promise.race([
+      turn.ended.promise.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), this.options.interruptGraceMs ?? CLAUDE_INTERRUPT_GRACE_MS);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (!answered && live.turn === turn) {
+      turn.abandoned = true;
+      live.wake.wake();
+    }
+    await turn.ended.promise;
+    return true;
   }
 
   /** Close the query, and with it the CLI process and every task it runs. */

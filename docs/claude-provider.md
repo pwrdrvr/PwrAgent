@@ -115,8 +115,8 @@ and ends that native turn with an `error_during_execution` result.
 PwrAgent keeps the turn open until result UUIDs acknowledge every accepted
 steer, and treats those results as one logical desktop turn. Usage is recorded
 once per desktop turn from the final cumulative result, less the totals when
-the turn began. Stop closes the stream and aborts the query, including pending
-input. Request IDs deduplicate retries; attachment
+the turn began. Stop ends the turn and drops its pending input; see below for
+when it keeps the process. Request IDs deduplicate retries; attachment
 parts and message origins survive replay. A steer with an agent origin writes
 one SQLite commit (~12 KB, or ~1.24 MB/day at 100 steers/day); a duplicate
 request adds no write, and there are no idle writes.
@@ -156,10 +156,13 @@ A message sent while the session is live goes into the same input stream with
 changed model, effort, permission mode, or MCP server set is applied first
 through `setModel`, `applyFlagSettings({ effortLevel })`, `setPermissionMode`,
 and `setMcpServers`. New agent instructions change the system prompt, which
-only a new process takes, so that turn closes the session, stopping its
-tasks, and resumes in a new query. So does a control the CLI rejects. MCP
-grants the registry issues for a turn are revoked when the session that uses
-them closes, not when the turn ends.
+only a new process takes. A relaunch would stop the session's tasks, so while
+a task runs the new instructions wait for the next launch; with none running,
+the turn closes the session and resumes in a new query. A control the CLI
+rejects relaunches the same way when no task runs, and otherwise fails the
+message, leaving the session and its settings as they were. MCP grants the
+registry issues for a turn are revoked when the session that uses them
+closes, not when the turn ends.
 
 Between turns the thread reads as idle in the thread list and Attention. The
 quit prompt and auto-archive still count it as busy, as they count a Codex
@@ -170,8 +173,16 @@ A permission request or MCP elicitation from a task between turns belongs to
 the latest turn. Running tasks are published as
 `thread/backgroundTasks/updated` and listed in the Executions rail beside
 Codex background terminals, with the sub-agent type and the latest
-`task_progress` line. Stop on a row calls `Query.stopTask`. Stop on a turn
-ends the query and every task, as does quitting.
+`task_progress` line. Stop on a row calls `Query.stopTask`.
+
+Stop on a turn keeps the session's tasks when it can. While a task runs and
+the CLI advertises `interrupt_cancel_queued_v1` at init, Stop sends
+`interrupt` with `cancelQueued: true`, which ends Claude's native turn and
+drops steers still queued for it. The desktop turn ends `cancelled` at the
+interrupted result, or after five seconds if Claude sends none; the process
+and its tasks stay up. With no task running, or a CLI without that
+capability, Stop closes the query, since a plain interrupt would leave queued
+steers to run after the stop. Quitting closes every session and its tasks.
 
 ## Usage, context, and MCP
 
