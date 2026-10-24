@@ -1332,6 +1332,18 @@ describe("Claude SDK backend", () => {
       turn: { error: { message: "Claude API request failed" } },
     } });
   });
+
+  it("fails a turn whose error result has no text", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [] } as unknown as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Claude ended the turn with an error." } },
+    } });
+  });
 });
 
 describe("Claude permission bridge", () => {

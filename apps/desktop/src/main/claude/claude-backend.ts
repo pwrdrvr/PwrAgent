@@ -535,7 +535,11 @@ export class ClaudeBackend {
               await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
             }
           }
-          if (message.is_error) failure = message.subtype === "success" ? message.result : message.errors.join("\n");
+          if (message.is_error) {
+            const text = message.subtype === "success" ? message.result : message.errors.join("\n");
+            // An error result without text still failed the turn.
+            failure = text.trim() || "Claude ended the turn with an error.";
+          }
           if (finished) break;
         }
       }
