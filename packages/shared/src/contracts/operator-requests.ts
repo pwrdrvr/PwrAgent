@@ -1,5 +1,6 @@
 import type { CodexAsyncQuestion } from "../codex-async-questions";
 import type { FederationRemoteTarget } from "./federation";
+import type { TodoUnavailableInstance } from "./thread-todos";
 import type {
   AppServerBackendKind,
   AppServerPendingRequestNotification,
@@ -43,6 +44,7 @@ export type OperatorAsyncQuestion = {
 export type ListOperatorRequestsResponse = {
   /** Mounted owners whose queues could not be read. */
   errors?: string[];
+  unavailableInstances?: TodoUnavailableInstance[];
   serverRequests: OperatorServerRequest[];
   questions: OperatorAsyncQuestion[];
   /** Item keys the operator has seen. */

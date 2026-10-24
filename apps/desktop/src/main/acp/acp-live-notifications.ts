@@ -3,6 +3,8 @@ import {
   type AppServerNotification,
 } from "@pwragent/shared";
 import {
+  isAcpModelProgressUpdate,
+  isAcpRetryStateUpdateKind,
   isAcpUsageUpdateKind,
   readAcpContentText,
   readAcpTopicTitle,
@@ -24,6 +26,83 @@ import {
   type AcpTokenUsage,
   type AcpUsageEnvelope,
 } from "./acp-usage.js";
+
+/**
+ * Turns an ACP provider's model retries into the stream-notice signals Codex
+ * produces: an `error` with `willRetry` per attempt, then `turn/recovered` on
+ * the first model output after one. Grok sends `retry_state`; its first output
+ * after a retry is often a thought that the transcript hides, so recovery has
+ * to be judged here, from the raw update, not by the renderer.
+ */
+export class AcpModelRetryTracker {
+  private readonly retryingTurns = new Set<string>();
+
+  observe(params: {
+    backendId: string;
+    threadId: string;
+    turnId: string;
+    update: Record<string, unknown>;
+  }): AppServerNotification | undefined {
+    const key = retryTurnKey(params);
+    const kind = readKind(params.update);
+    if (isAcpRetryStateUpdateKind(kind)) {
+      this.retryingTurns.add(key);
+      const attempt = readFiniteNumber(params.update, "attempt");
+      const maxRetries =
+        readFiniteNumber(params.update, "max_retries")
+        ?? readFiniteNumber(params.update, "maxRetries");
+      const reason = readString(params.update, "reason")?.trim();
+      const details = attempt === undefined
+        ? undefined
+        : maxRetries === undefined
+          ? `Attempt ${attempt}.`
+          : `Attempt ${attempt} of ${maxRetries}.`;
+      return {
+        method: "error",
+        params: {
+          threadId: params.threadId,
+          turnId: params.turnId,
+          willRetry: true,
+          error: {
+            message: reason || "The model request failed.",
+            ...(details ? { additionalDetails: details } : {}),
+          },
+        },
+      };
+    }
+    if (
+      !this.retryingTurns.has(key)
+      || !isAcpModelProgressUpdate(kind, params.update)
+    ) {
+      return undefined;
+    }
+    this.retryingTurns.delete(key);
+    return {
+      method: "turn/recovered",
+      params: { threadId: params.threadId, turnId: params.turnId },
+    };
+  }
+
+  clearTurn(params: { backendId: string; threadId: string; turnId: string }): void {
+    this.retryingTurns.delete(retryTurnKey(params));
+  }
+}
+
+function retryTurnKey(params: {
+  backendId: string;
+  threadId: string;
+  turnId: string;
+}): string {
+  return JSON.stringify([params.backendId, params.threadId, params.turnId]);
+}
+
+function readFiniteNumber(
+  record: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 
 /**
  * ACP frequently sends the useful title/input in `tool_call`, then reports

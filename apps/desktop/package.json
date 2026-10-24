@@ -1,7 +1,7 @@
 {
   "name": "@pwragent/desktop",
   "productName": "PwrAgent",
-  "version": "1.3.0-prerelease.4",
+  "version": "1.3.1",
   "private": true,
   "description": "Thread-centric coding agent desktop app",
   "homepage": "https://pwragent.ai",
@@ -57,6 +57,7 @@
     "typecheck": "node ../../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@ai-markdown/engine": "3.4.2",
     "@anthropic-ai/claude-agent-sdk": "0.3.301",
     "@fontsource/geist-mono": "^5.3.0",
     "@fontsource/geist-sans": "^5.3.0",
@@ -94,6 +95,7 @@
     "electron-log": "^5.4.3",
     "electron-updater": "6.8.9",
     "fflate": "^0.8.3",
+    "hast-util-to-jsx-runtime": "2.3.6",
     "katex": "^0.19.0",
     "mdast-util-from-markdown": "^2.0.3",
     "mermaid": "11.17.2",
@@ -113,6 +115,7 @@
     "remark-math": "^6.0.0",
     "sigstore": "5.0.0",
     "tar": "^7.5.22",
+    "unist-util-visit": "5.1.0",
     "ws": "8.22.0"
   },
   "devDependencies": {

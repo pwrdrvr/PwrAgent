@@ -22,6 +22,7 @@ import {
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-permit";
+import { threadAssetRoot } from "../app-server/thread-assets";
 
 const fixtureDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -54,6 +55,50 @@ describe("inputToAcpPrompt", () => {
       });
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("inputToAcpPrompt local image replay", () => {
+  it("records an image part backed by the thread's own asset copy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-image-"));
+    // A federated image arrives in an expiring receive folder like this one.
+    const imagePath = path.join(root, "received.png");
+    const imageBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 4, 5, 6,
+    ]);
+    const owner = { backend: "acp:grok" as const, threadId: "thread-replay" };
+    try {
+      await writeFile(imagePath, imageBytes);
+
+      const payload = await inputToAcpPrompt([
+        { type: "text", text: "What is this?" },
+        { type: "localImage", name: "screenshot.png", path: imagePath },
+      ], { owner, privateStorageRoots: [] });
+
+      const imagePart = payload?.parts.find((part) => part.type === "image");
+      expect(payload?.parts.map((part) => part.type)).toEqual(["text", "image"]);
+      expect(payload?.parts).not.toContainEqual(
+        { type: "text", text: "[Local image: screenshot.png]" },
+      );
+      expect(imagePart).toMatchObject({ type: "image", alt: "screenshot.png" });
+      const prefix = "pwragent-image://file/";
+      const url = (imagePart as { url: string }).url;
+      expect(url.startsWith(prefix)).toBe(true);
+      const assetPath = fileURLToPath(decodeURIComponent(url.slice(prefix.length)));
+      expect(assetPath.startsWith(threadAssetRoot(owner))).toBe(true);
+
+      // The replayed part must survive the receive folder's cleanup.
+      await rm(root, { recursive: true, force: true });
+      expect(readFileSync(assetPath)).toEqual(imageBytes);
+      expect(payload?.promptContent).toContainEqual({
+        type: "image",
+        mimeType: "image/png",
+        data: imageBytes.toString("base64"),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(threadAssetRoot(owner), { recursive: true, force: true });
     }
   });
 });
@@ -474,6 +519,28 @@ describe("describeInstalledAcpBackend", () => {
     });
 
     expect(backend.executionModes).toEqual([]);
+  });
+
+  it("keeps Grok permission controls when only a planning config selector is advertised", () => {
+    const backend = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:grok",
+      registryId: "grok",
+      name: "Grok",
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        configOptions: [{
+          id: "planning_mode",
+          category: "mode",
+          label: "Planning",
+          type: "select",
+          currentValue: "default",
+          values: [{ value: "default", label: "Default" }, { value: "plan", label: "Plan" }],
+        }],
+      },
+    });
+    expect(backend.executionModes.map((mode) => mode.mode)).toEqual(["default", "full-access"]);
   });
 
   it("keeps execution modes when only a single runtime mode is advertised", () => {
@@ -1286,6 +1353,112 @@ describe("AcpBackendAdapter", () => {
         },
       });
     });
+
+    await adapter.close();
+  });
+
+  it("reports Grok model retries and the recovery for stream notices", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: ["agent", "stdio"],
+        env: {},
+      },
+    };
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Research MCP tasks",
+      turnId: "turn-1",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "retry_state",
+      type: "retrying",
+      attempt: 1,
+      max_retries: 15,
+      reason: "API error (status 500 Internal Server Error): Service temporarily unavailable.",
+      error_type: "api",
+    });
+    // Grok hides thoughts, so no message delta follows this; only the
+    // recovery signal tells the renderer the model answered.
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Reading the spec." },
+    });
+
+    const streamNotices = () => events
+      .map((event) => event.notification)
+      .filter((notification) =>
+        notification.method === "error" || notification.method === "turn/recovered"
+      );
+    await vi.waitFor(() => {
+      expect(streamNotices()).toEqual([
+        {
+          method: "error",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            willRetry: true,
+            error: {
+              message: "API error (status 500 Internal Server Error): Service temporarily unavailable.",
+              additionalDetails: "Attempt 1 of 15.",
+            },
+          },
+        },
+        {
+          method: "turn/recovered",
+          params: { threadId: session.sessionId, turnId: "turn-1" },
+        },
+      ]);
+    });
+    expect(events.some((event) =>
+      event.notification.method === "item/agentMessage/delta"
+    )).toBe(false);
 
     await adapter.close();
   });

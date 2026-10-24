@@ -1,0 +1,12 @@
+{
+  "historyRefreshes": { "parses": 6, "characters": 12000, "nodes": 1686 },
+  "stream16": { "parses": 3, "characters": 1400, "nodes": 199 },
+  "stream32": { "parses": 5, "characters": 4800, "nodes": 677 },
+  "stream64": { "parses": 8, "characters": 14050, "nodes": 1975 },
+  "slowStream16": { "parses": 16, "characters": 6800, "nodes": 968 },
+  "slowStream32": { "parses": 32, "characters": 26400, "nodes": 3728 },
+  "slowStream64": { "parses": 64, "characters": 104000, "nodes": 14624 },
+  "proseStream16": { "parses": 16, "characters": 592, "nodes": 128 },
+  "proseStream32": { "parses": 32, "characters": 1184, "nodes": 256 },
+  "proseStream64": { "parses": 64, "characters": 2368, "nodes": 512 }
+}

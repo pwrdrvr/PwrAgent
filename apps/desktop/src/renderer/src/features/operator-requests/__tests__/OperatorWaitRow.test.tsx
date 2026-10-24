@@ -6,25 +6,40 @@ import { buildOperatorWaits } from "../operator-waits";
 
 afterEach(cleanup);
 
-describe("OperatorWaitRow MCP login", () => {
-  it.each(["Allow", "Decline"])("can %s a URL elicitation in the selected thread", async (label) => {
-    const [wait] = buildOperatorWaits({ serverRequests: [{
-      backend: "codex", createdAt: Date.now(), notification: {
-        method: "mcpServer/elicitation/request", params: {
-          threadId: "thread-1", turnId: "turn-1", requestId: "57",
-          serverName: "codex_apps", mode: "url", message: "Reconnect GitHub",
-          url: "https://chatgpt.com/connector", elicitationId: "57",
-        },
+describe("OperatorWaitRow MCP link", () => {
+  const urlWait = () => buildOperatorWaits({ serverRequests: [{
+    backend: "codex", createdAt: Date.now(), notification: {
+      method: "mcpServer/elicitation/request", params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "57",
+        serverName: "codex_apps", mode: "url", message: "Reconnect GitHub",
+        url: "https://chatgpt.com/connector?state=opaque", _meta: null,
       },
-    }], questions: [], seenKeys: [] });
+    },
+  }], questions: [], seenKeys: [] })[0]!;
+
+  it("sends the operator to the card, which shows the full address, before anything opens", () => {
+    const wait = urlWait();
     const respond = vi.fn(async () => undefined);
-    render(<OperatorWaitRow wait={wait!} current unread={false} respond={respond}
+    const openWait = vi.fn();
+    render(<OperatorWaitRow wait={wait} current unread={false} respond={respond}
+      dismissQuestion={vi.fn()} openWait={openWait} />);
+
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Review link" }));
+    expect(openWait).toHaveBeenCalledWith(wait);
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("can decline a URL elicitation from the row", async () => {
+    const wait = urlWait();
+    const respond = vi.fn(async () => undefined);
+    render(<OperatorWaitRow wait={wait} current unread={false} respond={respond}
       dismissQuestion={vi.fn()} openWait={vi.fn()} />);
-    expect(screen.getByRole("link", { name: "Open" }).getAttribute("href"))
-      .toBe("https://chatgpt.com/connector");
-    fireEvent.click(screen.getByRole("button", { name: label }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Decline" }));
     await waitFor(() => expect(respond).toHaveBeenCalledWith(wait, {
-      action: label === "Allow" ? "accept" : "decline", content: label === "Allow" ? {} : null, _meta: null,
+      action: "decline", content: null, _meta: null,
     }));
   });
 });

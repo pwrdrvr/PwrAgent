@@ -5,6 +5,7 @@ import {
   buildOperatorWaits,
   isBlockingWait,
   leadingOperatorWait,
+  operatorWaitLabel,
 } from "../operator-waits";
 
 function serverRequest(
@@ -76,6 +77,12 @@ describe("buildOperatorWaits", () => {
       ["mcp-input", "Authorize GitHub access.", "opens example.test"],
       ["mcp-input", "Pick a branch", "playwright · 1 field"],
     ]);
+    // Each surface names a request as its card does; an empty form from a
+    // server is a confirmation, not a tool approval.
+    expect(waits.map(operatorWaitLabel)).toEqual(["MCP confirmation", "MCP link", "MCP input"]);
+    const [approval] = waitsFor([mcpRequest({ _meta: { codex_approval_kind: "mcp_tool_call" } }, 1)]);
+    expect(operatorWaitLabel(approval!)).toBe("Tool approval");
+    expect(operatorWaitLabel({ kind: "approval" })).toBe("Approval");
   });
 
   it("names a questionnaire by its first question", () => {

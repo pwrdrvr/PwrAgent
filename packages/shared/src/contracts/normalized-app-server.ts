@@ -193,6 +193,11 @@ export type AppServerReviewFinding = {
   body: string;
   confidence_score: number;
   priority?: number;
+  /**
+   * The kind of problem, as a short slug ("correctness", "efficiency").
+   * Claude Code classifies findings this way instead of by priority.
+   */
+  category?: string;
   code_location: {
     absolute_file_path: string;
     line_range: {
@@ -1791,6 +1796,19 @@ export type AppServerNotification =
             text: string;
           }>;
         };
+      };
+    }
+  | {
+      /**
+       * The model answered again after the backend reported a retry
+       * (`error` with `willRetry`). ACP backends send this because their
+       * first answer can be output the transcript hides, such as Grok's
+       * thoughts.
+       */
+      method: "turn/recovered";
+      params: {
+        threadId: string;
+        turnId: string;
       };
     }
   | {

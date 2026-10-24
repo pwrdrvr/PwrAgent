@@ -9364,7 +9364,8 @@ export function useThreadNavigation(
               }
             : thread.acpRuntime?.configValues,
         currentModeId:
-          params.source === "mode" || params.source === "configOption"
+          params.source === "mode"
+            || (params.source === "configOption" && params.optionId !== "permission_mode")
             ? params.value
             : thread.acpRuntime?.currentModeId,
         updatedAt: Date.now(),

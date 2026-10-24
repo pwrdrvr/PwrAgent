@@ -143,19 +143,24 @@ export function ThreadTodoCard(props: ThreadTodoCardProps) {
 /** Rows a review card shows before "Show N more". */
 const REVIEW_CARD_ROWS = 4;
 
-/** A finding's priority and title; the title's tooltip shows it unclipped. */
-function ReviewTodoFindingLabel(props: { item: ThreadReviewItem }) {
+/**
+ * A finding's priority and title; the title's tooltip shows it unclipped.
+ * A review that ranks nothing has no priority column at all.
+ */
+function ReviewTodoFindingLabel(props: { item: ThreadReviewItem; ranked: boolean }) {
   const { item } = props;
   const priority = typeof item.priority === "number" && item.priority >= 0 && item.priority <= 3
     ? item.priority
     : undefined;
   return (
     <>
-      <span
-        className={`review-todo__priority${priority === undefined ? "" : ` review-todo__priority--p${priority}`}`}
-      >
-        {priority === undefined ? "–" : `P${priority}`}
-      </span>
+      {props.ranked ? (
+        <span
+          className={`review-todo__priority${priority === undefined ? "" : ` review-todo__priority--p${priority}`}`}
+        >
+          {priority === undefined ? "–" : `P${priority}`}
+        </span>
+      ) : null}
       <span className="review-todo__finding-title tooltip-target" data-tooltip={item.title}>
         {item.title}
       </span>
@@ -192,6 +197,8 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
     return next;
   });
   const shown = expanded ? items : items.slice(0, REVIEW_CARD_ROWS);
+  // A review whose reviewer ranks nothing shows no "–" placeholders.
+  const ranked = items.some((item) => typeof item.priority === "number");
   const hidden = items.length - shown.length;
   const onDoHere = props.onDoHere;
   const busy = tracking.busy || sending;
@@ -298,7 +305,11 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
           </p>
         ) : null}
         {shown.length > 0 && review ? (
-          <ul className="review-todo__findings" aria-label="Findings">
+          <ul
+            className="review-todo__findings"
+            aria-label="Findings"
+            data-unranked={ranked ? undefined : "true"}
+          >
             {shown.map((item) => {
               const isSelected = item.status === "open" && selected.has(item.id);
               return (
@@ -308,7 +319,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
                   data-status={item.status}
                   data-selected={isSelected ? "true" : undefined}
                 >
-                  <ReviewTodoFindingLabel item={item} />
+                  <ReviewTodoFindingLabel item={item} ranked={ranked} />
                   <span className="review-todo__state">
                     {isSelected ? "Selected" : null}
                     {item.status === "addressed" ? <><CheckIcon size={11} />Addressed</> : null}

@@ -1,12 +1,19 @@
-import type {
-  AppServerMcpElicitationRequestNotification,
-  AppServerMcpElicitationResponse,
+import {
+  isSecretFieldLabel,
+  isSecretFieldName,
+  mcpElicitationPurpose,
+  type AppServerMcpElicitationRequestNotification,
+  type AppServerMcpElicitationResponse,
+  type McpElicitationPurpose,
 } from "@pwragent/shared";
 
 export type PendingMcpFieldOption = {
   value: string;
   label: string;
 };
+
+/** The string formats the MCP elicitation schema allows. */
+export type McpStringFormat = "email" | "uri" | "date" | "date-time";
 
 export type PendingMcpField =
   | {
@@ -17,6 +24,7 @@ export type PendingMcpField =
       required: boolean;
       minLength?: number;
       maxLength?: number;
+      format?: McpStringFormat;
       value: string;
     }
   | {
@@ -64,7 +72,34 @@ export type PendingMcpField =
       label: string;
       description: string;
       required: boolean;
+    }
+  | {
+      // A password, key, token or payment credential. The MCP spec forbids
+      // collecting these in form mode, because form values reach the client
+      // and can land in the transcript. The server must use URL mode.
+      kind: "secret";
+      key: string;
+      label: string;
+      description: string;
+      required: boolean;
     };
+
+export type PendingMcpUrl = {
+  url: string;
+  /**
+   * The address as the browser will read it. A lookalike host shows as
+   * punycode here, where the raw string would show the imitated name.
+   */
+  fullUrl: string;
+  /** Only the 2025-11-25 revision sends one; 2026-07-28 removed it. */
+  elicitationId?: string;
+  /** The ASCII hostname the browser will contact. */
+  host: string;
+  /** A label is punycode: the host may imitate another site. */
+  internationalHost: boolean;
+  /** Why PwrAgent will not open this URL, if it will not. */
+  blockedReason?: string;
+};
 
 export type PendingMcpInteractionState = {
   method: "mcpServer/elicitation/request";
@@ -74,16 +109,14 @@ export type PendingMcpInteractionState = {
   serverName: string;
   message: string;
   mode: "form" | "url";
+  /** See `mcpElicitationPurpose` in `@pwragent/shared`. */
+  purpose: McpElicitationPurpose;
   _meta: Record<string, unknown> | null;
   form: {
     empty: boolean;
     fields: PendingMcpField[];
   } | null;
-  url: {
-    url: string;
-    displayUrl: string;
-    elicitationId: string;
-  } | null;
+  url: PendingMcpUrl | null;
 };
 
 type FieldValue = string | number | boolean | string[] | null;
@@ -93,22 +126,34 @@ export type McpApprovalPersistence = "session" | "always";
 // The request's owner (Codex, the gateway or the upstream server) holds the
 // grant. Only offer advertised scopes; forms and login flows need input.
 export function readMcpApprovalPersistence(state: PendingMcpInteractionState): McpApprovalPersistence[] {
-  if (state.mode !== "form" || !state.form?.empty) {
+  if (!isMcpToolApproval(state)) {
     return [];
   }
   const meta = state._meta;
-  const isApproval = meta?.codex_approval_kind === "mcp_tool_call"
-    || meta?.pwragent_approval_kind === "mcp_tool_call"
-    || ((state.serverName === "browser" || state.serverName === "browser-use")
-      && typeof meta?.origin === "string" && meta.origin.trim().length > 0);
-  if (!isApproval) {
-    return [];
-  }
   const modes = Array.isArray(meta?.persist) ? meta.persist : [meta?.persist];
   if (modes.length === 0 || modes.some((mode) => mode !== "session" && mode !== "always")) {
     return [];
   }
   return [...new Set(modes)] as McpApprovalPersistence[];
+}
+
+/** Permission to run a tool, not a request for data. */
+export function isMcpToolApproval(state: PendingMcpInteractionState): boolean {
+  return state.purpose === "tool-approval";
+}
+
+export function mcpElicitationPurposeLabel(purpose: McpElicitationPurpose): string {
+  switch (purpose) {
+    case "tool-approval": return "Tool approval";
+    case "confirmation": return "MCP confirmation";
+    case "form": return "MCP input";
+    case "url": return "MCP link";
+  }
+}
+
+/** The form fields that make this request impossible to submit. */
+export function mcpSecretFields(state: PendingMcpInteractionState): PendingMcpField[] {
+  return state.form?.fields.filter((field) => field.kind === "secret") ?? [];
 }
 
 export function createMcpElicitationState(
@@ -124,18 +169,13 @@ export function createMcpElicitationState(
 
   if (request.params.mode === "url") {
     const url = trimString(request.params.url);
-    const elicitationId = trimString(request.params.elicitationId);
-    if (!url || !elicitationId) {
+    if (!url) {
       return undefined;
     }
 
     return baseState(request, {
       form: null,
-      url: {
-        url,
-        displayUrl: redactUrl(url),
-        elicitationId,
-      },
+      url: readElicitationUrl(url, trimString(request.params.elicitationId)),
     });
   }
 
@@ -173,7 +213,7 @@ export function updateMcpFieldValue(
     form: {
       ...state.form,
       fields: state.form.fields.map((field) => {
-        if (field.key !== key || field.kind === "unsupported") {
+        if (field.key !== key || field.kind === "unsupported" || field.kind === "secret") {
           return field;
         }
         return updateFieldValue(field, value);
@@ -186,7 +226,7 @@ export function canAcceptMcpElicitation(
   state: PendingMcpInteractionState
 ): boolean {
   if (state.mode === "url") {
-    return Boolean(state.url?.url);
+    return Boolean(state.url?.url) && !state.url?.blockedReason;
   }
   if (!state.form) {
     return false;
@@ -226,8 +266,9 @@ export function buildMcpElicitationResponse(
     action,
     content: Object.fromEntries(
       state.form?.fields
-        .filter((field) => field.kind !== "unsupported")
-        .map((field) => [field.key, fieldContentValue(field)]) ?? []
+        .flatMap((field) => field.kind === "unsupported" || field.kind === "secret"
+          ? []
+          : [[field.key, fieldContentValue(field)] as const]) ?? []
     ),
     _meta: persist ? { persist } : null,
   };
@@ -257,6 +298,7 @@ function baseState(
     serverName: request.params.serverName,
     message: request.params.message.trim(),
     mode: request.params.mode,
+    purpose: mcpElicitationPurpose(request.params),
     _meta: asRecord(request.params._meta),
     ...modeState,
   };
@@ -269,6 +311,10 @@ function buildField(
 ): PendingMcpField {
   const label = trimString(schema.title) || key;
   const description = trimString(schema.description);
+
+  if (isSecretField(key, label, schema)) {
+    return { kind: "secret", key, label, description, required };
+  }
 
   if (schema.type === "string") {
     const enumOptions = readStringOptions(schema);
@@ -292,6 +338,7 @@ function buildField(
       required,
       minLength: readNumber(schema.minLength),
       maxLength: readNumber(schema.maxLength),
+      ...(isStringFormat(schema.format) ? { format: schema.format } : {}),
       value: trimString(schema.default),
     };
   }
@@ -349,7 +396,7 @@ function buildField(
   };
 }
 
-function updateFieldValue(field: Exclude<PendingMcpField, { kind: "unsupported" }>, value: FieldValue): PendingMcpField {
+function updateFieldValue(field: Exclude<PendingMcpField, { kind: "unsupported" | "secret" }>, value: FieldValue): PendingMcpField {
   if (field.kind === "string" && typeof value === "string") {
     return { ...field, value };
   }
@@ -373,6 +420,9 @@ function updateFieldValue(field: Exclude<PendingMcpField, { kind: "unsupported" 
 }
 
 function fieldIsValid(field: PendingMcpField): boolean {
+  if (field.kind === "secret") {
+    return false;
+  }
   if (field.kind === "unsupported") {
     return !field.required;
   }
@@ -420,6 +470,9 @@ function fieldIsValid(field: PendingMcpField): boolean {
     if (field.maxLength != null && value.length > field.maxLength) {
       return false;
     }
+    if (value && field.format && !matchesStringFormat(value, field.format)) {
+      return false;
+    }
   }
   if (field.kind === "singleSelect" && value) {
     return field.options.some((option) => option.value === value);
@@ -427,7 +480,113 @@ function fieldIsValid(field: PendingMcpField): boolean {
   return true;
 }
 
-function fieldContentValue(field: Exclude<PendingMcpField, { kind: "unsupported" }>): unknown {
+/** The message for a string field whose value does not match its format. */
+export function mcpFieldFormatError(field: PendingMcpField): string | undefined {
+  if (field.kind !== "string" || !field.format) {
+    return undefined;
+  }
+  const value = field.value.trim();
+  if (!value || matchesStringFormat(value, field.format)) {
+    return undefined;
+  }
+  return STRING_FORMAT_ERRORS[field.format];
+}
+
+export function mcpFieldFormatPlaceholder(field: PendingMcpField): string | undefined {
+  return field.kind === "string" && field.format ? STRING_FORMAT_PLACEHOLDERS[field.format] : undefined;
+}
+
+const STRING_FORMAT_ERRORS: Record<McpStringFormat, string> = {
+  email: "Enter an email address.",
+  uri: "Enter a full address, such as https://example.com.",
+  date: "Enter a date as YYYY-MM-DD.",
+  "date-time": "Enter a date and time as YYYY-MM-DDTHH:MM:SSZ.",
+};
+
+const STRING_FORMAT_PLACEHOLDERS: Record<McpStringFormat, string> = {
+  email: "name@example.com",
+  uri: "https://",
+  date: "YYYY-MM-DD",
+  "date-time": "YYYY-MM-DDTHH:MM:SSZ",
+};
+
+function isStringFormat(value: unknown): value is McpStringFormat {
+  return value === "email" || value === "uri" || value === "date" || value === "date-time";
+}
+
+function matchesStringFormat(value: string, format: McpStringFormat): boolean {
+  switch (format) {
+    case "email":
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
+    case "uri":
+      return /^[A-Za-z][A-Za-z0-9+.-]*:\S+$/u.test(value) && canParseUrl(value);
+    case "date":
+      return /^\d{4}-\d{2}-\d{2}$/u.test(value) && isCalendarDate(value);
+    case "date-time": {
+      // RFC 3339: seconds and an offset are required.
+      const match = /^(\d{4}-\d{2}-\d{2})[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/u.exec(value);
+      return match !== null && isCalendarDate(match[1]!) && !Number.isNaN(Date.parse(value));
+    }
+  }
+}
+
+function isCalendarDate(value: string): boolean {
+  const [year, month, day] = value.split("-").map(Number) as [number, number, number];
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function canParseUrl(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Only free text can carry a credential; a boolean or a fixed choice cannot.
+function isSecretField(key: string, label: string, schema: Record<string, unknown>): boolean {
+  if (schema.type !== "string" || readStringOptions(schema).length > 0) {
+    return false;
+  }
+  return schema.format === "password"
+    || schema.writeOnly === true
+    || isSecretFieldName(key)
+    || isSecretFieldName(label)
+    || isSecretFieldLabel(label);
+}
+
+function readElicitationUrl(url: string, elicitationId: string): PendingMcpUrl {
+  const base = {
+    url,
+    ...(elicitationId ? { elicitationId } : {}),
+  };
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return {
+      ...base, fullUrl: url, host: "", internationalHost: false,
+      blockedReason: "This is not a valid web address.",
+    };
+  }
+  const host = parsed.hostname;
+  const internationalHost = host.split(".").some((label) => label.toLowerCase().startsWith("xn--"));
+  const loopback = host === "localhost" || host.endsWith(".localhost") || host === "127.0.0.1" || host === "[::1]";
+  const blockedReason = parsed.username || parsed.password
+    ? "This address carries a user name or password."
+    : parsed.protocol === "https:" || (parsed.protocol === "http:" && loopback)
+      ? undefined
+      : "PwrAgent opens only https addresses from MCP servers.";
+  return { ...base, fullUrl: parsed.href, host, internationalHost, ...(blockedReason ? { blockedReason } : {}) };
+}
+
+function fieldContentValue(field: Exclude<PendingMcpField, { kind: "unsupported" | "secret" }>): unknown {
+  // A formatted value was validated trimmed; send what was validated.
+  if (field.kind === "string" && field.format) {
+    return field.value.trim();
+  }
   if (field.kind === "string" || field.kind === "singleSelect") {
     return field.value;
   }

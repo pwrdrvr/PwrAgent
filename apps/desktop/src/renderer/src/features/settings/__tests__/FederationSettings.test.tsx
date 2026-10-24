@@ -207,6 +207,7 @@ describe("FederationSettings", () => {
   });
   it.each([
     ["Allow incoming files", "allowFilePush", true],
+    ["Allow port forwarding", "allowPortForwarding", true],
     ["Allow remote shells", "allowRemoteShells", false],
     ["Allow file pull", "allowFilePull", true],
   ] as const)("saves %s immediately without connection drafts", async (label, key, value) => {
@@ -1837,6 +1838,7 @@ function settingsSnapshot(): DesktopSettingsSnapshot {
       listenPort: { value: 8765, source: "config" },
       compressionEnabled: { value: true, source: "default" },
       allowRemoteShells: { value: true, source: "default" },
+      allowPortForwarding: { value: false, source: "default" },
       allowFilePush: { value: false, source: "default" },
       allowFilePull: { value: false, source: "default" },
       allowFilePullOutsideThreadDirectories: { value: false, source: "default" },

@@ -8,10 +8,16 @@ import { applyTomlEdits, parseTomlTables } from "../settings/toml-editor";
 describe("desktop config [federation] section", () => {
   it.each([true, false])("round-trips receiver permissions %s", (allowed) => {
     const original = '# Preserve me\n[federation]\nmode = "dual"\n';
-    const federation = { allowRemoteShells: allowed, allowFilePush: allowed, allowFilePull: allowed, allowFilePullOutsideThreadDirectories: allowed, filePushDirectory: "/tmp/incoming" };
+    const federation = { allowPortForwarding: allowed, allowRemoteShells: allowed, allowFilePush: allowed, allowFilePull: allowed, allowFilePullOutsideThreadDirectories: allowed, filePushDirectory: "/tmp/incoming" };
     const written = applyTomlEdits(original, desktopSettingsPatchToEdits({ federation }));
     expect(written).toContain("# Preserve me");
     expect(parseDesktopSettingsToml(written, "test.toml").federation).toMatchObject({ ...federation, mode: "dual" });
+  });
+
+  it("leaves missing or malformed port-forwarding permission unspecified", () => {
+    for (const src of ["[federation]", '[federation]\nallow_port_forwarding = "true"']) {
+      expect(parseDesktopSettingsToml(src, "test.toml").federation?.allowPortForwarding).toBeUndefined();
+    }
   });
 
   it.each([true, false])("preserves an explicit Cloudflare gateway switch %s", (cloudflareGatewayEnabled) => {

@@ -481,6 +481,67 @@ describe("AcpRolloutStore", () => {
     expect(fs.readFileSync(rolloutPath, "utf8")).toBe(contents);
   });
 
+  it("replays stored Grok retry_state updates as one retry row", () => {
+    // Retries stay in the rollout so a reloaded thread still shows that the
+    // turn waited on the model. They must replay as one row, not one
+    // "Unknown ACP session update" row per attempt.
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:grok" as AcpBackendId;
+    const updates: Record<string, unknown>[] = [
+      { kind: "pwragent_user_prompt", prompt: "Research MCP tasks", turnId: "turn-1" },
+      ...[1, 2, 3].map((attempt) => ({
+        sessionUpdate: "retry_state",
+        type: "retrying",
+        attempt,
+        max_retries: 15,
+        reason: "API error (status 500 Internal Server Error)",
+        error_type: "api",
+      })),
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Found it." } },
+      { sessionUpdate: "turn_completed", stopReason: "end_turn" },
+    ];
+    updates.forEach((update, index) => {
+      store.appendUpdate({
+        backendId,
+        sessionId: "session-1",
+        receivedAt: 1000 + index,
+        update,
+      });
+    });
+
+    const replay = store.readReplay({ backendId, sessionId: "session-1" });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({ type: "message", role: "user" }),
+      expect.objectContaining({
+        type: "activity",
+        summary: "Retried model request 3 times",
+        status: "completed",
+        tone: "warning",
+      }),
+      expect.objectContaining({ type: "message", role: "assistant", text: "Found it." }),
+    ]);
+  });
+
+  it("does not persist Grok background task snapshots", () => {
+    // Each snapshot repeats every background command in full, and the tool
+    // calls that launched and read them are already in the rollout.
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:grok" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "background_tasks",
+        tasks: [{ task_id: "call-1-10", command: "du -sh ~/Library", status: "running" }],
+      },
+    });
+
+    expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([]);
+  });
+
   it("does not persist context usage updates", () => {
     // Kimi Code 2.x sends one after every turn. It is session state for the
     // context indicator, and replay discards it.

@@ -7,6 +7,7 @@ import type { AgentEvent, BackendModelOption } from "@pwragent/shared";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { createClaudePermissionHandler, claudePermissionMode } from "../claude/claude-permissions";
+import { createClaudeElicitationHandler } from "../claude/claude-elicitation";
 import { buildLiveToolDetails, getNotificationItem } from "../../renderer/src/features/thread-detail/live-transcript-activity";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
 
@@ -83,6 +84,93 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
 }
 
 describe("Claude SDK backend", () => {
+  it("publishes a native title during the first turn without blocking assistant streaming", async () => {
+    const pendingTitle = Promise.withResolvers<string>();
+    const finishTurn = Promise.withResolvers<void>();
+    const generateSessionTitle = vi.fn(() => pendingTitle.promise);
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "stream_event", parent_tool_use_id: null, event: {
+        type: "message_start", message: { id: "answer" },
+      } } as SDKMessage;
+      yield { type: "stream_event", parent_tool_use_id: null, event: {
+        type: "content_block_delta", delta: { type: "text_delta", text: "Still working" },
+      } } as SDKMessage;
+      await finishTurn.promise;
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    }, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    try {
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+      await vi.waitFor(() => {
+        expect(generateSessionTitle).toHaveBeenCalledOnce();
+        expect(f.events.some((event) => event.notification.method === "item/agentMessage/delta")).toBe(true);
+      });
+      pendingTitle.resolve("Fix Claude naming");
+      await vi.waitFor(() => expect(f.events.some((event) => event.notification.method === "thread/name/updated"
+        && event.notification.params.threadName === "Fix Claude naming")).toBe(true));
+      expect((await f.store.read(threadId)).thread.title).toBe("Fix Claude naming");
+      expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
+      expect(f.close).not.toHaveBeenCalled();
+    } finally {
+      pendingTitle.resolve("Fix Claude naming");
+      finishTurn.resolve();
+      await f.waitForTurn();
+    }
+    expect(generateSessionTitle).toHaveBeenCalledOnce();
+    expect(f.run).toHaveBeenCalledOnce();
+  });
+
+  it("requests a native title in the query account without reading another config directory", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("Account-scoped title");
+    const f = await fixture(undefined, { generateSessionTitle });
+    f.backendOptions.resolveEnv = async () => ({ PATH: "/fixture", CLAUDE_CONFIG_DIR: path.join(f.root, "claude-account") });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect(f.backendOptions.getSessionInfo).not.toHaveBeenCalled();
+    expect(generateSessionTitle).toHaveBeenCalledOnce();
+    expect((await f.store.read(threadId)).thread.title).toBe("Account-scoped title");
+  });
+
+  it("adopts a provider title at turn end if the early request returned no title", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue(null);
+    const f = await fixture(undefined, { generateSessionTitle });
+    f.backendOptions.getSessionInfo.mockResolvedValueOnce(undefined).mockResolvedValue({ customTitle: "Late provider title" });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+    await f.waitForTurn();
+    expect((await f.store.read(threadId)).thread.title).toBe("Late provider title");
+    expect(generateSessionTitle).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a pending title request and prevents late persistence after interruption", async () => {
+    const pendingTitle = Promise.withResolvers<string>();
+    const generateSessionTitle = vi.fn(() => pendingTitle.promise);
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      await new Promise<void>((resolve) => {
+        const signal = options.abortController!.signal;
+        if (signal.aborted) resolve();
+        else signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    }, { generateSessionTitle });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    try {
+      const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
+      await vi.waitFor(() => expect(generateSessionTitle).toHaveBeenCalledOnce());
+      await f.backend.interruptTurn(turn);
+      pendingTitle.resolve("Too late");
+      expect((await f.store.read(threadId)).thread.title).toBe("Investigate title behavior");
+      expect(f.events.some((event) => event.notification.method === "turn/cancelled")).toBe(true);
+      expect(f.events.some((event) => event.notification.method === "thread/name/updated"
+        && event.notification.params.threadName === "Too late")).toBe(false);
+    } finally {
+      pendingTitle.resolve("Too late");
+      await f.backend.close();
+    }
+  });
+
   it("consumes a stored provider title without another title request", async () => {
     const generateSessionTitle = vi.fn().mockResolvedValue("Redundant title");
     const f = await fixture(undefined, { generateSessionTitle });
@@ -179,14 +267,15 @@ describe("Claude SDK backend", () => {
     expect(f.run).toHaveBeenCalledOnce();
   });
 
-  it("does not request a speculative title when provider metadata cannot be read", async () => {
-    const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
+  it("requests a native title even when provider metadata cannot be read", async () => {
+    const generateSessionTitle = vi.fn().mockResolvedValue("Native title");
     const f = await fixture(undefined, { generateSessionTitle });
     f.backendOptions.getSessionInfo.mockRejectedValue(new Error("unreadable session"));
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
     await f.waitForTurn();
-    expect(generateSessionTitle).not.toHaveBeenCalled();
+    expect(generateSessionTitle).toHaveBeenCalledOnce();
+    expect((await f.store.read(threadId)).thread.title).toBe("Native title");
     expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(true);
   });
 
@@ -234,17 +323,23 @@ describe("Claude SDK backend", () => {
     expect(generateSessionTitle).toHaveBeenCalledOnce();
   });
 
-  it("does not request a native title after a failed turn", async () => {
-    const generateSessionTitle = vi.fn().mockResolvedValue("Unwanted title");
+  it("does not let a background title failure mask a failed turn", async () => {
+    const generateSessionTitle = vi.fn().mockRejectedValue(new Error("title unavailable"));
+    const totals = { haiku: { inputTokens: 25, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      costUSD: 0.002, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 } };
     const f = await fixture(async function* () {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
       yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["usage limit"] } as SDKMessage;
-    }, { generateSessionTitle });
+    }, { generateSessionTitle,
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn().mockResolvedValue({ session: { model_usage: totals } }),
+    });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate title behavior" }] });
     await f.waitForTurn();
-    expect(generateSessionTitle).not.toHaveBeenCalled();
+    expect(generateSessionTitle).toHaveBeenCalledOnce();
     expect(f.events.some((event) => event.notification.method === "turn/failed")).toBe(true);
+    expect(f.events.find((event) => event.notification.method === "thread/tokenUsage/updated")?.notification)
+      .toMatchObject({ params: { tokenUsage: { claudeCostUSD: 0.002 } } });
   });
 
   it("waits for the current turn when an earlier turn already completed", async () => {
@@ -1263,5 +1358,92 @@ describe("Claude permission bridge", () => {
     await expect(handler("AskUserQuestion", { questions: [{ question: "Color?", header: "Color", options: [{ label: "Blue", description: "Blue" }] }] },
       { signal: new AbortController().signal, toolUseID: "question", requestId: "sdk-request" }))
       .resolves.toMatchObject({ behavior: "allow", updatedInput: { answers: { "Color?": "Blue" } } });
+  });
+});
+
+describe("Claude MCP elicitation bridge", () => {
+  const signal = () => ({ signal: new AbortController().signal, requestId: "sdk-request" });
+
+  it("shows a turn's MCP elicitation on the operator's card instead of declining it", async () => {
+    const f = await fixture();
+    const request = vi.fn().mockResolvedValue({ action: "accept", content: { region: "us-east-1" }, _meta: null });
+    f.backendOptions.request = request;
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const { turnId } = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Deploy" }] });
+    await f.waitForTurn();
+
+    const onElicitation = f.queries[0]?.onElicitation;
+    expect(onElicitation).toBeTypeOf("function");
+    await expect(onElicitation!({
+      serverName: "deploy", message: "Which region?", mode: "form",
+      requestedSchema: { type: "object", properties: { region: { type: "string" } }, required: ["region"] },
+    }, signal())).resolves.toEqual({ action: "accept", content: { region: "us-east-1" } });
+    expect(request).toHaveBeenCalledWith({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId, turnId, requestId: expect.any(String), serverName: "deploy", mode: "form",
+        message: "Which region?", _meta: null,
+        requestedSchema: { type: "object", properties: { region: { type: "string" } }, required: ["region"] },
+      },
+    }, expect.any(AbortSignal));
+  });
+
+  it("sends a 2026-07-28 URL request without an elicitationId and accepts it without content", async () => {
+    const request = vi.fn().mockResolvedValue({ action: "accept", content: {}, _meta: null });
+    const handler = createClaudeElicitationHandler({ threadId: "thread", turnId: "turn", request, cancelRequest: async () => {} });
+
+    await expect(handler({
+      serverName: "billing", message: "Confirm the refund.", mode: "url",
+      url: "https://pay.example.com/refunds/4417", displayName: "Billing",
+    }, signal())).resolves.toEqual({ action: "accept" });
+    expect(request.mock.calls[0]?.[0]).toEqual({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread", turnId: "turn", requestId: expect.any(String), serverName: "billing", mode: "url",
+        message: "Confirm the refund.", url: "https://pay.example.com/refunds/4417",
+        _meta: { connector_name: "Billing" },
+      },
+    });
+  });
+
+  it("treats a schema-less form as a confirmation", async () => {
+    const request = vi.fn().mockResolvedValue({ action: "accept", content: {}, _meta: null });
+    const handler = createClaudeElicitationHandler({ threadId: "thread", turnId: "turn", request, cancelRequest: async () => {} });
+
+    await expect(handler({ serverName: "crm", message: "Close the ticket?" }, signal()))
+      .resolves.toEqual({ action: "accept", content: {} });
+    expect(request.mock.calls[0]?.[0].params).toMatchObject({
+      mode: "form", requestedSchema: { type: "object", properties: {} },
+    });
+  });
+
+  it.each([
+    [{ action: "decline", content: null, _meta: null }, { action: "decline" }],
+    [{ action: "cancel", content: null, _meta: null }, { action: "cancel" }],
+    // The registry settles a withdrawn request with a generic cancel.
+    [{ decision: "cancel" }, { action: "cancel" }],
+    [undefined, { action: "cancel" }],
+  ])("returns %o as %o with no content", async (response, expected) => {
+    const handler = createClaudeElicitationHandler({
+      threadId: "thread", turnId: "turn", cancelRequest: async () => {},
+      request: vi.fn().mockResolvedValue(response),
+    });
+
+    await expect(handler({ serverName: "crm", message: "Continue?", mode: "form",
+      requestedSchema: { type: "object", properties: {} } }, signal())).resolves.toEqual(expected);
+  });
+
+  it("withdraws the card and dismisses the request when the turn stops", async () => {
+    const controller = new AbortController();
+    const cancelRequest = vi.fn().mockResolvedValue(undefined);
+    const handler = createClaudeElicitationHandler({
+      threadId: "thread", turnId: "turn", cancelRequest,
+      request: async () => await new Promise(() => {}),
+    });
+    const result = handler({ serverName: "crm", message: "Continue?" }, { signal: controller.signal, requestId: "sdk-request" });
+    controller.abort();
+
+    await expect(result).resolves.toEqual({ action: "cancel" });
+    expect(cancelRequest).toHaveBeenCalledOnce();
   });
 });

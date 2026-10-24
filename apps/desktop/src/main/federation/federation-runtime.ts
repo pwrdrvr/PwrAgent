@@ -7,6 +7,10 @@ import { localThreadTodoOperations } from "../thread-todos/thread-todo-operation
 import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
+import type { ServiceThread, ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
+import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY } from "@pwragent/shared";
+import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES, serviceThread } from "./federation-services";
+import { FederationServiceForwarder } from "./federation-service-forwarder";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -24,6 +28,7 @@ import {
   FILE_PUSH_METHOD_CAPABILITIES,
   registerFilePushHandlers,
   pushFederationFile,
+  type PushFederationFileOptions,
 } from "./federation-file-push";
 import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { FederationShutdown } from "./federation-shutdown";
@@ -84,6 +89,7 @@ import type {
   FederationInstanceRole,
   FederationLoadStatus,
   FederationPeerSummary,
+  TodoUnavailableInstance,
   FederationPinDisposition,
   FederationProtocolEnvelope,
   FederationSessionId,
@@ -584,6 +590,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // permits code execution via agent turns, so the direct shell defaults to
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
+  FEDERATION_SERVICE_CAPABILITY,
   "file_push",
   "thread_handoff",
   "file_pull",
@@ -1187,6 +1194,9 @@ export class DesktopFederationRuntime {
     event: CodexEnvironmentSetupProgressEvent,
   ) => void;
   private ptyService?: FederationPtyService;
+  private services?: FederationServices;
+  private readonly serviceForwarder = new FederationServiceForwarder();
+  private readonly serviceViews = new Map<number, { viewId: string; instanceId: string; thread: ServiceThread }>();
   private releaseWorktreeTerminalOwner?: () => void;
   private filePushReceiver?: FederationFilePushReceiver;
   private threadHandoffService?: ThreadInstanceHandoffService;
@@ -1606,6 +1616,10 @@ export class DesktopFederationRuntime {
     this.filePushReceiver = undefined;
     this.threadHandoffService = undefined;
     this.handoffFileReceipts.clear();
+    this.serviceViews.clear();
+    this.serviceForwarder.dispose();
+    this.services?.dispose();
+    this.services = undefined;
     this.releaseWorktreeTerminalOwner?.();
     this.releaseWorktreeTerminalOwner = undefined;
     await this.ptyService?.disposeAll();
@@ -2311,7 +2325,12 @@ export class DesktopFederationRuntime {
   async requestThreadTodoOperation<K extends ThreadTodoOperation>(
     target: FederationRemoteTarget, operation: K, request: ThreadTodoOperationRequest<K>,
   ): Promise<ThreadTodoOperationResponse<K>> {
-    if (!this.remotePeerAdvertisesCapability(target.instanceId, "thread_todos")) {
+    const unavailable = this.todoQueueUnavailableInstance(target, "thread_todos");
+    if (unavailable) {
+      if (operation === "listTodos") {
+        return { todos: [], unavailableInstances: [unavailable] } as ThreadTodoOperationResponse<K>;
+      }
+      if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
       throw new Error("This Federation owner does not support To-dos. Update that PwrAgent instance.");
     }
     return await this.rpcFor(target).request({ method: FEDERATION_THREAD_TODO_METHODS[operation], params: request,
@@ -2323,7 +2342,13 @@ export class DesktopFederationRuntime {
     target: FederationRemoteTarget, operation: K, request: OperatorQuestionOperationRequest<K>,
   ): Promise<OperatorQuestionOperationResponse<K>> {
     const queueOperation = operation === "list" || operation === "listPending" || operation === "markSeen" || operation === "reply";
-    if (!this.remotePeerAdvertisesCapability(target.instanceId, queueOperation ? "operator_requests" : "operator_questions")) {
+    const unavailable = this.todoQueueUnavailableInstance(target, queueOperation ? "operator_requests" : "operator_questions");
+    if (unavailable) {
+      if (operation === "list") {
+        return { serverRequests: [], questions: [], seenKeys: [], unavailableInstances: [unavailable] } as OperatorQuestionOperationResponse<K>;
+      }
+      if (operation === "listPending") return [] as OperatorQuestionOperationResponse<K>;
+      if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
       throw new Error(`This Federation owner does not support ${queueOperation ? "the operator request queue" : "question dismissals"}. Update that PwrAgent instance.`);
     }
     if (operation === "listPending" && !this.remotePeerAdvertisesCapability(target.instanceId, "pending_request_control")) {
@@ -2570,10 +2595,114 @@ export class DesktopFederationRuntime {
     return localBackendOperations();
   }
 
+  threadServices(): FederationServices {
+    this.services ??= new FederationServices({
+      instanceId: this.ensureLocalInstanceId(),
+      allowForwarding: () => this.receiverPermissions().portForwarding,
+      blockedPorts: () => [getDesktopSettingsService().readFederationConfig().listenPort ?? 47830],
+      threadExists: async (thread) => await getDesktopBackendRegistry().isThreadActiveForService(thread),
+    });
+    return this.services;
+  }
+
+  leaveThreadServices(windowId: number, thread?: ServiceThread, instanceId?: string): void {
+    this.serviceForwarder.leave(windowId, thread, instanceId);
+    if (!thread) this.serviceViews.delete(windowId);
+  }
+
+  async threadServiceAction(windowId: number, input: ServiceUiRequest): Promise<ServiceUiResponse> {
+    const thread = serviceThread(input);
+    const instanceId = input.instanceId ?? this.ensureLocalInstanceId();
+    const remote = instanceId !== this.ensureLocalInstanceId();
+    const previousView = this.serviceViews.get(windowId);
+    if (input.action === "watch" && (!previousView || previousView.viewId !== input.viewId
+      || previousView.instanceId !== instanceId || previousView.thread.backend !== thread.backend
+      || previousView.thread.threadId !== thread.threadId)) {
+      this.leaveThreadServices(windowId);
+      this.serviceViews.set(windowId, { viewId: input.viewId, instanceId, thread });
+    }
+    const view = this.serviceViews.get(windowId);
+    const assertViewing = (): void => {
+      if (!view || view.viewId !== input.viewId || view.instanceId !== instanceId
+        || view.thread.backend !== thread.backend || view.thread.threadId !== thread.threadId
+        || this.serviceViews.get(windowId) !== view) throw new Error("Service viewer closed or changed thread.");
+    };
+    if (input.action === "leave") {
+      if (view?.viewId === input.viewId) this.leaveThreadServices(windowId);
+      return { services: [], forwards: [] };
+    }
+    assertViewing();
+    if (input.action === "disconnect") {
+      if (typeof input.forwardId !== "string") throw new Error("Select a forward to disconnect.");
+      this.serviceForwarder.disconnect(windowId, input.forwardId);
+    }
+    if (remote) {
+      const peer = this.visiblePeers().find((candidate) => candidate.id === instanceId);
+      if (peer?.status !== "connected" || !this.viewerCapabilitiesFor(instanceId, peer).includes(FEDERATION_SERVICE_CAPABILITY)) {
+        throw new Error("Service forwarding requires a connected owner and gateway with service_forward_v1 support.");
+      }
+    }
+    if (remote && input.action === "connect"
+      && this.visiblePeers().find((peer) => peer.id === instanceId)?.receiverPermissions?.portForwarding === false) {
+      throw new Error("Port forwarding is disabled on the owning machine. Enable Allow port forwarding in its Federation settings.");
+    }
+    const rpc = remote ? this.rpcFor({ scope: "remote", instanceId }) : undefined;
+    if (input.action === "remove") {
+      if (typeof input.serviceId !== "string") throw new Error("Select a service to remove.");
+      if (rpc) await rpc.request({ method: FEDERATION_SERVICE_METHODS.remove, params: { ...thread, serviceId: input.serviceId } });
+      else this.threadServices().remove(thread, input.serviceId);
+    }
+    const services = rpc
+      ? await rpc.request<import("@pwragent/shared").ThreadService[]>({ method: FEDERATION_SERVICE_METHODS.list, params: thread, timeoutMs: 5000 })
+      : await this.threadServices().list(thread);
+    assertViewing();
+    // Never use caller-supplied owner/address/protocol to construct a listener or URL.
+    if (!Array.isArray(services) || services.length > 64 || services.some((service) => service.ownerInstanceId !== instanceId
+      || service.backend !== thread.backend || service.threadId !== thread.threadId
+      || !["http", "https", "tcp"].includes(service.protocol))) throw new Error("Invalid service inventory from owner.");
+    for (const forward of this.serviceForwarder.list(windowId, instanceId, thread)) {
+      if (!services.some((service) => service.serviceId === forward.service.serviceId)) this.serviceForwarder.disconnect(windowId, forward.forwardId);
+    }
+    if (input.action === "connect") {
+      if (!rpc) throw new Error("This service already runs on this machine. Connect from a remote thread viewer.");
+      const service = services.find((entry) => entry.serviceId === input.serviceId);
+      if (!service) throw new Error("Service is no longer advertised.");
+      const forward = await this.serviceForwarder.connect(windowId, service, rpc);
+      try { assertViewing(); }
+      catch (error) { this.serviceForwarder.disconnect(windowId, forward.forwardId); throw error; }
+    }
+    const forwards = this.serviceForwarder.list(windowId, instanceId, thread);
+    // Most threads advertise nothing; their viewers poll without reading
+    // permissions or peers.
+    if (!services.length) return { services, forwards };
+    if (remote) {
+      const allowed = this.visiblePeers().find((peer) => peer.id === instanceId)?.receiverPermissions?.portForwarding;
+      return { services, forwards, forwarding: allowed === undefined ? "unknown" : allowed ? "allowed" : "blocked" };
+    }
+    // The owner shows which peers hold a lease, so its operator can see that
+    // a port is in use. Lease state is in memory; this reads no storage.
+    const peers = this.visiblePeers();
+    const peerLabel = (peerId: string): string => {
+      const peer = peers.find((candidate) => candidate.id === peerId);
+      return peer?.shortLabel ?? peer?.label ?? "Federation peer";
+    };
+    const inbound = services.flatMap((service) => {
+      const holders = this.threadServices().leaseHolders(service.serviceId);
+      return holders.length ? [{ serviceId: service.serviceId, peerLabels: holders.map(peerLabel) }] : [];
+    });
+    return {
+      services,
+      forwards,
+      forwarding: this.receiverPermissions().portForwarding ? "allowed" : "blocked",
+      inbound,
+    };
+  }
+
   receiverPermissions() {
     const config = getDesktopSettingsService().readFederationConfig();
     return {
       remoteShells: config.allowRemoteShells !== false,
+      portForwarding: config.allowPortForwarding === true,
       filePush: config.allowFilePush === true,
       filePull: config.allowFilePull === true,
       filePullOutsideThreadDirectories: config.allowFilePullOutsideThreadDirectories === true,
@@ -2601,11 +2730,11 @@ export class DesktopFederationRuntime {
     });
   }
 
-  async pushFile(target: FederationRemoteTarget, sourcePath: string, name?: string) {
+  async pushFile(target: FederationRemoteTarget, sourcePath: string, name?: string, options?: PushFederationFileOptions) {
     const peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
     if (!peer?.capabilities.includes("file_push")) throw new Error("The target does not support file push.");
     if (peer.receiverPermissions?.filePush !== true) throw new Error("The target does not allow incoming files.");
-    return await pushFederationFile(this.rpcFor(target), sourcePath, name);
+    return await pushFederationFile(this.rpcFor(target), sourcePath, name, options);
   }
 
   async handoffInstanceThread(request: HandoffInstanceThreadRequest, sourceInstanceId?: string): Promise<HandoffInstanceThreadResult> {
@@ -2851,6 +2980,23 @@ export class DesktopFederationRuntime {
     } catch {
       return instanceId;
     }
+  }
+
+  private todoQueueUnavailableInstance(
+    target: FederationRemoteTarget,
+    capability: FederationCapability,
+  ): TodoUnavailableInstance | undefined {
+    let peer: FederationPeerSummary | undefined;
+    try {
+      peer = this.visiblePeers().find((candidate) => candidate.id === target.instanceId);
+    } catch {
+      // Direct connections are also authoritative during startup.
+    }
+    const connected = this.router?.getConnection(target.instanceId) || peer?.status === "connected";
+    const reason = !connected ? "disconnected"
+      : !this.viewerCapabilitiesFor(target.instanceId, peer).includes(capability) ? "unsupported"
+        : undefined;
+    return reason ? { instanceId: target.instanceId, label: this.diagnosticInstanceLabel(target.instanceId), reason } : undefined;
   }
 
   private remotePeerAdvertisesCapability(
@@ -3357,6 +3503,7 @@ export class DesktopFederationRuntime {
         ...FEDERATION_THREAD_TODO_CAPABILITIES,
         ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
+        ...SERVICE_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
         [THREAD_HANDOFF_METHODS.send]: "thread_handoff",
         [THREAD_HANDOFF_METHODS.import]: "thread_handoff",
@@ -3501,6 +3648,7 @@ export class DesktopFederationRuntime {
     });
     this.releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(this.ptyService);
     registerFederationPtyHandlers({ router, service: this.ptyService });
+    registerFederationServices(router, this.threadServices());
     this.router = router;
     this.subscribeLocalBackendEvents();
 
@@ -4327,6 +4475,8 @@ export class DesktopFederationRuntime {
   }
 
   private unregisterPeer(peerId: FederationInstanceId): void {
+    this.services?.disconnect(peerId);
+    this.serviceForwarder.disconnectPeer(peerId);
     this.shutdown.disconnected(peerId);
     this.peerDirectoryReceivers.delete(peerId);
     this.removeEventSubscriptionsForPeer(peerId);
@@ -6058,6 +6208,10 @@ export class DesktopFederationRuntime {
     status: FederationConnectionState,
     unavailableReason?: string,
   ): void {
+    if (status !== "connected") {
+      this.services?.disconnect(instanceId);
+      this.serviceForwarder.disconnectPeer(instanceId);
+    }
     const previous = this.publishedPeerStatuses.get(instanceId);
     if (
       previous?.status === status

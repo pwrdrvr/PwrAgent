@@ -2941,11 +2941,13 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads.find((thread) => !thread.federation)).toEqual(before);
   });
 
-  it.each(["model", "acp"] as const)("scopes optimistic %s settings and the RPC to the owner", async (control) => {
+  it.each(["model", "acp", "grok-permissions"] as const)("scopes optimistic %s settings and the RPC to the owner", async (control) => {
     const target = { scope: "remote" as const, instanceId: "owner" };
-    const source = control === "model" ? "codex" as const : "acp:gemini" as const;
+    const source = control === "model" ? "codex" as const
+      : control === "acp" ? "acp:gemini" as const : "acp:grok" as const;
     const local = { id: "collision", title: "Local", titleSource: "explicit" as const, source, linkedDirectories: [], inbox: { inInbox: false } };
-    const remote = { ...local, title: "Remote", federation: { instanceLabel: "Owner", ref: { backend: source, threadId: "collision", target } } };
+    const remote = { ...local, title: "Remote",
+      ...(control === "grok-permissions" ? { acpRuntime: { currentModeId: "plan", configValues: { permission_mode: "default" } } } : {}), federation: { instanceLabel: "Owner", ref: { backend: source, threadId: "collision", target } } };
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });
     const change = vi.fn(async (request) => { await pending; return { ...request, updatedAt: 1 }; });
@@ -2959,13 +2961,15 @@ describe("useThreadNavigation", () => {
       await act(async () => {
         operation = control === "model"
           ? result.current.setThreadModelSettings(remote, { model: "owner-model", fastMode: true })
-          : result.current.setAcpSessionRuntimeOption(remote, { source: "configOption", optionId: "mode", value: "owner-mode" });
+          : result.current.setAcpSessionRuntimeOption(remote, { source: "configOption", optionId: control === "grok-permissions" ? "permission_mode" : "mode", value: "owner-mode" });
       });
       await waitFor(() => expect(change).toHaveBeenCalledWith(expect.objectContaining({ backend: source, threadId: "collision", federationTarget: target })));
       expect(result.current.threads.find((thread) => !thread.federation)).toEqual(before);
       expect(result.current.threads.find((thread) => thread.federation)).toMatchObject(control === "model"
         ? { model: "owner-model", fastMode: true }
-        : { acpRuntime: { configValues: { mode: "owner-mode" } } });
+        : control === "grok-permissions"
+          ? { acpRuntime: { currentModeId: "plan", configValues: { permission_mode: "owner-mode" } } }
+          : { acpRuntime: { configValues: { mode: "owner-mode" } } });
     } finally {
       await act(async () => { finish(); await operation; });
     }

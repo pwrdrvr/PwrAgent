@@ -2011,6 +2011,483 @@ describe("AcpSessionReplayNormalizer", () => {
     }
   });
 
+  describe("Grok retry_state", () => {
+    // Shapes captured from Grok Build 1.0.45 rollouts. Grok sends one per
+    // upstream retry while the turn stays active, then resumes streaming.
+    const retry = (attempt: number, reason = "API error (status 500 Internal Server Error): error: Service temporarily unavailable.") => ({
+      sessionUpdate: "retry_state",
+      type: "retrying",
+      attempt,
+      max_retries: 15,
+      reason,
+      error_type: "api",
+    });
+
+    const startTurn = (): AcpSessionReplayNormalizer => {
+      const normalizer = new AcpSessionReplayNormalizer({
+        surfaceThoughtsAsMessages: false,
+      });
+      normalizer.recordUserPrompt({
+        sessionId: "session-1",
+        prompt: "Research MCP tasks",
+        turnId: "turn-1",
+        receivedAt: 1000,
+        waitingForAgent: true,
+      });
+      return normalizer;
+    };
+
+    const activities = (normalizer: AcpSessionReplayNormalizer) =>
+      normalizer.replay().entries.filter((entry) => entry.type === "activity");
+
+    it("folds consecutive retries into one updating warning row", () => {
+      const normalizer = startTurn();
+      for (const attempt of [1, 2, 3]) {
+        normalizer.apply({
+          sessionId: "session-1",
+          receivedAt: 1000 + attempt,
+          update: retry(attempt),
+        });
+      }
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Retrying model request · attempt 3 of 15",
+          tone: "warning",
+          status: "in_progress",
+          createdAt: 1001,
+          turn: expect.objectContaining({ id: "turn-1", status: "in_progress" }),
+          details: [
+            expect.objectContaining({
+              label: "API error (status 500 Internal Server Error): error: Service temporarily unavailable.",
+            }),
+          ],
+        }),
+      ]);
+      expect(JSON.stringify(normalizer.replay())).not.toContain("Unknown ACP session update");
+      expect(normalizer.replay().threadStatus).toBe("active");
+    });
+
+    it("settles the row when the model responds again", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1002, update: retry(2) });
+      // Grok hides thoughts, but a thought still proves the model answered.
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1003,
+        update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Reading" } },
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Retried model request 2 times",
+          tone: "warning",
+          status: "completed",
+        }),
+      ]);
+    });
+
+    it("starts a new row for a later retry run in the same turn", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1002,
+        update: { sessionUpdate: "agent_message_chunk", content: "Partial answer." },
+      });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1003,
+        update: retry(1, "empty response from model (reasoning_only)"),
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Retried model request 1 time",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          summary: "Retrying model request · attempt 1 of 15",
+          status: "in_progress",
+          details: [
+            expect.objectContaining({ label: "empty response from model (reasoning_only)" }),
+          ],
+        }),
+      ]);
+    });
+
+    it("starts a new row when the attempt counter restarts", () => {
+      // Grok counts attempts per model request. A reset means the previous
+      // request succeeded, even if nothing visible streamed in between.
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1002, update: retry(2) });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1003, update: retry(1) });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({ summary: "Retried model request 2 times", status: "completed" }),
+        expect.objectContaining({ summary: "Retrying model request · attempt 1 of 15", status: "in_progress" }),
+      ]);
+    });
+
+    it("settles the row when Grok reports a completed model response", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1002,
+        update: { sessionUpdate: "response_completed" },
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({ summary: "Retried model request 1 time", status: "completed" }),
+      ]);
+    });
+
+    it("marks the row failed when the turn fails while retrying", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(14) });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1002, update: retry(15) });
+      normalizer.recordTurnFailed({
+        sessionId: "session-1",
+        turnId: "turn-1",
+        error: "Model unavailable.",
+        receivedAt: 1003,
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Model request failed after 15 retries",
+          status: "failed",
+        }),
+        expect.objectContaining({ id: "turn-failed:turn-1" }),
+      ]);
+    });
+
+    it("settles an open retry row when the turn finishes", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.recordTurnFinished("turn-1", 1002, "completed");
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Retried model request 1 time",
+          status: "completed",
+        }),
+      ]);
+    });
+
+    it("marks the row stopped when the operator stops the turn mid-retry", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1002, update: retry(2) });
+      normalizer.recordTurnFinished("turn-1", 1003, "interrupted");
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Stopped after 2 retries",
+          status: "cancelled",
+        }),
+      ]);
+    });
+
+    it("keeps retrying through local tool progress", () => {
+      // A background command can keep reporting while the model is down.
+      const normalizer = startTurn();
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1001,
+        update: { sessionUpdate: "tool_call", toolCallId: "bg-1", title: "run_terminal_command" },
+      });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1002, update: retry(1) });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1003,
+        update: { sessionUpdate: "tool_call_update", toolCallId: "bg-1", status: "in_progress" },
+      });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1004, update: retry(2) });
+
+      expect(activities(normalizer).filter((entry) => entry.id.startsWith("acp-retry:")))
+        .toEqual([
+          expect.objectContaining({
+            summary: "Retrying model request · attempt 2 of 15",
+            status: "in_progress",
+          }),
+        ]);
+    });
+  });
+
+  describe("Grok extension updates", () => {
+    // Shapes captured from Grok Build 1.0.44/1.0.45 rollouts.
+    const startTurn = (): AcpSessionReplayNormalizer => {
+      const normalizer = new AcpSessionReplayNormalizer({
+        surfaceThoughtsAsMessages: false,
+      });
+      normalizer.recordUserPrompt({
+        sessionId: "session-1",
+        prompt: "Review the PR",
+        turnId: "turn-1",
+        receivedAt: 1000,
+      });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1001,
+        update: { sessionUpdate: "agent_message_chunk", content: "Working " },
+      });
+      return normalizer;
+    };
+    const apply = (
+      normalizer: AcpSessionReplayNormalizer,
+      receivedAt: number,
+      update: Record<string, unknown>,
+    ) => normalizer.apply({ sessionId: "session-1", receivedAt, update });
+    const activities = (normalizer: AcpSessionReplayNormalizer) =>
+      normalizer.replay().entries.filter((entry) => entry.type === "activity");
+    const expectStreamingBubbleKept = (normalizer: AcpSessionReplayNormalizer) => {
+      const replay = apply(normalizer, 9000, {
+        sessionUpdate: "agent_message_chunk",
+        content: "on it.",
+      });
+      expect(replay.messages.filter((message) => message.role === "assistant"))
+        .toEqual([expect.objectContaining({ text: "Working on it." })]);
+      expect(JSON.stringify(replay)).not.toContain("Unknown ACP session update");
+    };
+
+    it("keeps background task snapshots out of the transcript", () => {
+      // The launch, output, and kill of a background command are already
+      // tool calls. This snapshot repeats them, including the full command.
+      const normalizer = startTurn();
+      const before = structuredClone(normalizer.replay());
+      for (const status of ["running", "completed"]) {
+        expect(apply(normalizer, 1002, {
+          sessionUpdate: "background_tasks",
+          tasks: [{
+            task_id: "call-1-10",
+            command: "du -sh ~/Library/Caches",
+            description: "Measure caches",
+            kind: "bash",
+            status,
+            started_at: "2026-09-27T22:34:00.000000+00:00",
+          }],
+        })).toEqual(before);
+      }
+      expectStreamingBubbleKept(normalizer);
+    });
+
+    it("shows a dropped image as a warning", () => {
+      const normalizer = startTurn();
+      apply(normalizer, 1002, {
+        sessionUpdate: "image_dropped",
+        notes: ["Image 1 was dropped before send: integrity check failed: image bytes are truncated."],
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Image not sent",
+          tone: "warning",
+          details: [
+            expect.objectContaining({
+              label: "Image 1 was dropped before send: integrity check failed: image bytes are truncated.",
+            }),
+          ],
+        }),
+      ]);
+      expectStreamingBubbleKept(normalizer);
+    });
+
+    it("keeps two dropped-image reports from the same millisecond apart", () => {
+      const normalizer = startTurn();
+      for (const note of ["Image 1 was dropped before send.", "Image 2 was dropped before send."]) {
+        apply(normalizer, 1002, { sessionUpdate: "image_dropped", notes: [note] });
+      }
+
+      expect(activities(normalizer).map((entry) =>
+        entry.type === "activity" ? entry.details.map((detail) => detail.label) : []
+      )).toEqual([
+        ["Image 1 was dropped before send."],
+        ["Image 2 was dropped before send."],
+      ]);
+    });
+
+    it("shows automatic compaction as one row that settles", () => {
+      const normalizer = startTurn();
+      apply(normalizer, 1002, {
+        sessionUpdate: "auto_compact_started",
+        tokens_used: 206562,
+        context_window: 256000,
+        percentage: 81,
+        reason: "Context window 81% full",
+      });
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Compacting context",
+          status: "in_progress",
+          details: [expect.objectContaining({ label: "Context window 81% full" })],
+        }),
+      ]);
+
+      apply(normalizer, 1003, {
+        sessionUpdate: "auto_compact_completed",
+        tokens_before: 206562,
+        tokens_after: 16989,
+        elapsed_ms: 89920,
+        summary_preview: null,
+      });
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Compacted context",
+          status: "completed",
+          createdAt: 1002,
+          details: [
+            expect.objectContaining({ label: "206,562 → 16,989 tokens in 1m 30s" }),
+          ],
+        }),
+      ]);
+      expectStreamingBubbleKept(normalizer);
+    });
+
+    it.each([
+      ["interrupted", "cancelled", "Context compaction stopped"],
+      ["failed", "failed", "Context compaction failed"],
+    ] as const)("settles an open compaction when the turn is %s", (ending, status, summary) => {
+      const normalizer = startTurn();
+      apply(normalizer, 1002, {
+        sessionUpdate: "auto_compact_started",
+        percentage: 81,
+        reason: "Context window 81% full",
+      });
+      if (ending === "failed") {
+        normalizer.recordTurnFailed({
+          sessionId: "session-1",
+          turnId: "turn-1",
+          error: "Model unavailable.",
+          receivedAt: 1003,
+        });
+      } else {
+        normalizer.recordTurnFinished("turn-1", 1003, "interrupted");
+      }
+
+      expect(activities(normalizer)[0]).toMatchObject({ summary, status });
+
+      // A later completion must not land on the old turn's row.
+      normalizer.recordUserPrompt({
+        sessionId: "session-1",
+        prompt: "Continue",
+        turnId: "turn-2",
+        receivedAt: 1004,
+      });
+      apply(normalizer, 1005, { sessionUpdate: "auto_compact_completed", tokens_before: 10, tokens_after: 5 });
+      expect(activities(normalizer).filter((entry) => entry.id.startsWith("acp-compact:")))
+        .toHaveLength(2);
+    });
+
+    it("shows a compaction completion without a start", () => {
+      const normalizer = startTurn();
+      apply(normalizer, 1002, {
+        sessionUpdate: "auto_compact_completed",
+        tokens_before: 206562,
+        tokens_after: 16989,
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Compacted context",
+          status: "completed",
+          details: [expect.objectContaining({ label: "206,562 → 16,989 tokens" })],
+        }),
+      ]);
+    });
+
+    it("shows a sub-agent as one live row", () => {
+      const normalizer = startTurn();
+      const ids = {
+        subagent_id: "01a00b9a-e40a-79a1-a2eb-12b0377bc897",
+        child_session_id: "01a00b9a-e40a-79a1-a2eb-12b0377bc897",
+      };
+      apply(normalizer, 1002, {
+        sessionUpdate: "subagent_spawned",
+        ...ids,
+        parent_session_id: "session-1",
+        subagent_type: "general-purpose",
+        description: "[reviewer] pr #1644",
+        model: "grok-4.6",
+      });
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Sub-agent: [reviewer] pr #1644",
+          status: "in_progress",
+          details: [expect.objectContaining({ label: "general-purpose · grok-4.6" })],
+        }),
+      ]);
+
+      apply(normalizer, 1003, {
+        sessionUpdate: "subagent_progress",
+        ...ids,
+        duration_ms: 62082,
+        turn_count: 1,
+        tool_call_count: 12,
+        tokens_used: 48705,
+        error_count: 0,
+      });
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Sub-agent: [reviewer] pr #1644",
+          status: "in_progress",
+          details: [
+            expect.objectContaining({
+              label: "general-purpose · grok-4.6 · 12 tool calls · 48,705 tokens · 1m 2s",
+            }),
+          ],
+        }),
+      ]);
+
+      apply(normalizer, 1004, {
+        sessionUpdate: "subagent_finished",
+        ...ids,
+        status: "completed",
+        tool_calls: 82,
+        turns: 1,
+        duration_ms: 346690,
+        tokens_used: 152074,
+        output: "Review written to /tmp/review.md",
+      });
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          createdAt: 1002,
+          summary: "Sub-agent finished: [reviewer] pr #1644",
+          status: "completed",
+          details: [
+            expect.objectContaining({
+              label: "general-purpose · grok-4.6 · 82 tool calls · 152,074 tokens · 5m 47s",
+            }),
+          ],
+        }),
+      ]);
+      expectStreamingBubbleKept(normalizer);
+    });
+
+    it("marks a sub-agent failed when it does not complete", () => {
+      const normalizer = startTurn();
+      apply(normalizer, 1002, {
+        sessionUpdate: "subagent_finished",
+        subagent_id: "sub-2",
+        status: "failed",
+        tool_calls: 3,
+        duration_ms: 2000,
+        tokens_used: 900,
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Sub-agent failed",
+          status: "failed",
+          details: [expect.objectContaining({ label: "3 tool calls · 900 tokens · 2s" })],
+        }),
+      ]);
+    });
+  });
+
   it("updates known tool progress without splitting a streaming assistant message", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

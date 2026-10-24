@@ -25,7 +25,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
+import ReactMarkdown, { type Components, type Options, type UrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AppIcon } from "../../components/AppIcon";
@@ -39,7 +39,8 @@ import {
   protectComposerHyphenListItems,
   repairNestedLanguageFences,
 } from "../../lib/markdown-fences";
-import { useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
+import { useIncrementalMarkdownRenderer, useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
+import type { MarkdownMathRuntime } from "../../lib/markdown-math-runtime";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -711,6 +712,39 @@ const markdownComponents: Components = {
   },
 };
 
+// Parsing belongs to the document text and parser configuration, not the
+// surrounding application snapshot, file hydration, or document-viewer state.
+// Context consumers below this boundary still update their links and controls.
+const MarkdownDocument = memo(function MarkdownDocument(props: {
+  text: string;
+  mathRuntime?: MarkdownMathRuntime;
+}) {
+  const IncrementalRenderer = useIncrementalMarkdownRenderer();
+  const remarkPlugins = useMemo<Options["remarkPlugins"]>(() => [
+    ...(props.mathRuntime?.remarkPlugins ?? []),
+    remarkBreaks,
+    [remarkGfm, { singleTilde: false }],
+    remarkPullRequestReferences,
+    remarkTableProfile,
+  ], [props.mathRuntime]);
+  const options = {
+    components: markdownComponents,
+    rehypePlugins: props.mathRuntime?.rehypePlugins,
+    remarkPlugins,
+    urlTransform: normalizeMarkdownUrl,
+  };
+  return IncrementalRenderer ? (
+    <IncrementalRenderer
+      mathFlow={Boolean(props.mathRuntime)}
+      {...options}
+    >
+      {props.text}
+    </IncrementalRenderer>
+  ) : (
+    <ReactMarkdown {...options}>{props.text}</ReactMarkdown>
+  );
+});
+
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
   const sourceMarkdownText = useMemo(
     () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
@@ -889,21 +923,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       <MarkdownRenderContext.Provider value={renderState}>
         <TranscriptFileRegistrationContext.Provider value={registerInlineFile}>
           <MarkdownCodeApiContext.Provider value={props.desktopApi}>
-            <ReactMarkdown
-              components={markdownComponents}
-              rehypePlugins={mathRuntime?.rehypePlugins}
-              remarkPlugins={[
-                ...(mathRuntime?.remarkPlugins ?? []),
-                remarkBreaks,
-                // Single tildes are common in home paths and approximate values.
-                [remarkGfm, { singleTilde: false }],
-                remarkPullRequestReferences,
-                remarkTableProfile,
-              ]}
-              urlTransform={normalizeMarkdownUrl}
-            >
-              {markdownText}
-            </ReactMarkdown>
+            <MarkdownDocument text={markdownText} mathRuntime={mathRuntime} />
           </MarkdownCodeApiContext.Provider>
         </TranscriptFileRegistrationContext.Provider>
       </MarkdownRenderContext.Provider>

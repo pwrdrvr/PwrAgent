@@ -3299,7 +3299,8 @@ describe("DesktopBackendRegistry", () => {
         await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
       }
       expect(revokeBridge).toHaveBeenCalledTimes(2);
-      expect(getSessionInfo).toHaveBeenCalledTimes(2);
+      // Each turn checks for a title at initialization and again at completion.
+      expect(getSessionInfo).toHaveBeenCalledTimes(4);
       expect(optionsSeen[1].resume).toBe(threadId);
       expect(optionsSeen.map(({ model, effort }) => ({ model, effort }))).toEqual([
         { model: "claude-custom-fixture", effort: "max" }, { model: "claude-opus-4-8", effort: "max" },
@@ -3347,6 +3348,31 @@ describe("DesktopBackendRegistry", () => {
       await registry.close();
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("checks service thread membership without trusting error-tolerant navigation inventory", async () => {
+    const thread: AppServerThreadSummary = { id: "service-thread", title: "Preview", titleSource: "explicit", source: "codex", linkedDirectories: [] };
+    const client = new MockBackendClient({ threads: [thread] });
+    const registry = new DesktopBackendRegistry({ codexClient: client, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const list = vi.spyOn(client, "listThreads").mockRejectedValue(new Error("Provider temporarily unavailable"));
+    const target = { backend: "codex" as const, threadId: thread.id };
+    // The ordinary navigation path swallows the error and caches an empty list.
+    await expect(registry.listThreads({ backend: "codex", callerReason: "federation-services" })).resolves.toEqual([]);
+    await expect(registry.isThreadActiveForService(target)).rejects.toThrow("Provider temporarily unavailable");
+    list.mockResolvedValue([thread]);
+    await expect(registry.isThreadActiveForService(target)).resolves.toBe(true);
+    expect(list).toHaveBeenLastCalledWith({ archived: false, enrichDirectories: false,
+      skipArchivedMetadataRefresh: true, requireComplete: true }, { callerReason: "federation-services" });
+    list.mockResolvedValue([]);
+    const descendants = vi.spyOn(client, "listNativeSubAgentThreads").mockRejectedValue(new Error("Descendant discovery incomplete"));
+    await expect(registry.isThreadActiveForService(target)).rejects.toThrow("Descendant discovery incomplete");
+    descendants.mockResolvedValue([thread]);
+    await expect(registry.isThreadActiveForService(target)).resolves.toBe(true);
+    descendants.mockResolvedValue([]);
+    await expect(registry.isThreadActiveForService(target)).resolves.toBe(false);
+    list.mockResolvedValue([{ ...thread, archivedAt: 1000 }]);
+    await expect(registry.isThreadActiveForService(target)).resolves.toBe(false);
   });
 
   it("exports the authoritative handoff workspace while provider cwd synchronization is pending", async () => {
@@ -12619,13 +12645,10 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("does not send /yolo for Kimi once it advertises runtime modes (#658)", async () => {
-    // The #658 fix: when kimi exposes its own runtime modes, approval policy is
-    // controlled via the runtime "yolo" mode (session/set_mode), NOT the legacy
-    // /yolo slash command (which current kimi rejects). So the registry must
-    // suppress the hardcoded execution modes AND never send /yolo.
+  it.each(["kimi", "grok"])("uses the native %s permission selector without legacy slash commands", async (registryId) => {
     const sessions: AcpSessionMetadata[] = [];
-    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const acpBackendId = `acp:${registryId}` as AcpBackendId;
+    const optionId = registryId === "grok" ? "permission_mode" : "approval-mode";
     const sendControlPrompt = vi.fn(async () => ({ text: "" }));
     const acpClient = {
       initialize: vi.fn(async () => undefined),
@@ -12633,7 +12656,7 @@ describe("DesktopBackendRegistry", () => {
       startSession: vi.fn(async (params: { cwd?: string; executionMode: "default" | "auto" | "full-access" }) => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
-          sessionId: "kimi-session-1",
+          sessionId: "native-permission-session",
           title: "ACP session",
           cwd: params.cwd,
           createdAt: 1000,
@@ -12657,8 +12680,8 @@ describe("DesktopBackendRegistry", () => {
       cancelSession: vi.fn(),
       setRuntimeOption: vi.fn(
         async (): Promise<BackendAcpSessionRuntimeState> => ({
-          configValues: { "approval-mode": "yolo" },
-          currentModeId: "yolo",
+          configValues: { [optionId]: "yolo" },
+          currentModeId: registryId === "grok" ? "default" : "yolo",
           updatedAt: 2000,
         }),
       ),
@@ -12676,15 +12699,15 @@ describe("DesktopBackendRegistry", () => {
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
-          registryId: "kimi",
-          name: "Kimi Code CLI",
+          registryId,
+          name: registryId,
           version: "1.44.0",
           distributionKind: "local",
-          distributionSource: "kimi acp",
+          distributionSource: `${registryId} acp`,
           installStatus: "installed",
           authStatus: "not-required",
           verificationStatus: "not-applicable",
-          allowlistRuleId: "local-kimi-cli",
+          allowlistRuleId: `local-${registryId}-cli`,
           installedAt: 1000,
           updatedAt: 2000,
           runtimeCapabilities: {
@@ -12693,13 +12716,14 @@ describe("DesktopBackendRegistry", () => {
             checkedAt: 1000,
             configOptions: [
               {
-                id: "approval-mode",
+                id: optionId,
                 label: "Permission mode",
                 type: "select",
                 category: "mode",
                 currentValue: "default",
                 values: [
                   { value: "default", label: "Default" },
+                  { value: "auto", label: "Auto" },
                   { value: "yolo", label: "Yolo" },
                 ],
               },
@@ -12707,9 +12731,9 @@ describe("DesktopBackendRegistry", () => {
           },
           launchDescriptor: {
             backendId: acpBackendId,
-            registryId: "kimi",
+            registryId,
             distributionKind: "local",
-            command: "kimi",
+            command: registryId,
             args: ["acp"],
             env: {},
           },
@@ -12727,7 +12751,7 @@ describe("DesktopBackendRegistry", () => {
         ?.executionModes,
     ).toEqual([]);
 
-    // Even a full-access thread + an execution-mode change must NOT send /yolo.
+    // A stored Full Access selection must not drive the legacy slash path.
     await registry.startThread({
       backend: acpBackendId,
       cwd: "/repo/project",
@@ -12735,37 +12759,134 @@ describe("DesktopBackendRegistry", () => {
     });
     await registry.setThreadExecutionMode({
       backend: acpBackendId,
-      threadId: "kimi-session-1",
+      threadId: "native-permission-session",
       executionMode: "default",
     });
     await registry.setAcpSessionRuntimeOption({
       backend: acpBackendId,
-      threadId: "kimi-session-1",
+      threadId: "native-permission-session",
       source: "configOption",
-      optionId: "approval-mode",
+      optionId,
       value: "yolo",
     });
     expect(sendControlPrompt).not.toHaveBeenCalled();
     expect(acpClient.setRuntimeOption).toHaveBeenCalledWith({
-      sessionId: "kimi-session-1",
+      sessionId: "native-permission-session",
       source: "configOption",
-      optionId: "approval-mode",
+      optionId,
       value: "yolo",
       rejectUnofferedThoughtLevel: true,
     });
     await expect(
       overlayStore.getThreadOverlayState({
         backend: acpBackendId,
-        threadId: "kimi-session-1",
+        threadId: "native-permission-session",
       }),
     ).resolves.toMatchObject({
       executionMode: "full-access",
     });
 
+    acpClient.setRuntimeOption.mockResolvedValueOnce({
+      configValues: { [optionId]: "auto" },
+      currentModeId: registryId === "grok" ? "default" : "auto",
+      updatedAt: 3000,
+    });
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "native-permission-session",
+      source: "configOption",
+      optionId,
+      value: "auto",
+    });
+    expect(sendControlPrompt).not.toHaveBeenCalled();
+    expect(sessions[0]?.acpRuntime?.currentModeId).toBe(registryId === "grok" ? "default" : "auto");
+    expect(sessions[0]?.acpRuntime?.configValues?.[optionId]).toBe("auto");
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "native-permission-session",
+      }),
+    ).resolves.toMatchObject({ executionMode: "default" });
+
+    acpClient.setRuntimeOption.mockResolvedValueOnce({
+      configValues: { [optionId]: "default" },
+      currentModeId: "default",
+      updatedAt: 4000,
+    });
+    await registry.setAcpSessionRuntimeOption({
+      backend: acpBackendId,
+      threadId: "native-permission-session",
+      source: "configOption",
+      optionId,
+      value: "default",
+    });
+    expect(acpClient.setRuntimeOption).toHaveBeenLastCalledWith({
+      sessionId: "native-permission-session",
+      source: "configOption",
+      optionId,
+      value: "default",
+      rejectUnofferedThoughtLevel: true,
+    });
+    expect(sessions[0]?.acpRuntime?.configValues?.[optionId]).toBe("default");
+
     await registry.close();
   });
 
-  it("runs Grok ACP execution mode changes through /always-approve slash control prompts", async () => {
+  it.each(["default", "plan"])("restores Grok Auto independently of inherited %s planning mode", async (planningMode) => {
+    const backend = "acp:grok" as AcpBackendId;
+    const runtimeCapabilities: BackendAcpRuntimeCapabilities = {
+      schemaVersion: 1,
+      status: "discovered",
+      modes: {
+        currentModeId: planningMode,
+        availableModes: [{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }],
+      },
+      configOptions: [{
+        id: "permission_mode",
+        label: "Permissions",
+        category: "mode",
+        type: "select",
+        currentValue: "default",
+        values: [
+          { value: "default", label: "Default Access" },
+          { value: "auto", label: "Auto" },
+          { value: "yolo", label: "Full Access" },
+        ],
+      }],
+    };
+    const { registry, acpClient, sendControlPrompt } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent: {
+        ...createKimiAgentRecord(backend, runtimeCapabilities),
+        registryId: "grok",
+        name: "Grok",
+      },
+    });
+    await registry.startThread({
+      backend,
+      cwd: "/repo/project",
+      acpRuntime: {
+        currentModeId: planningMode,
+        configValues: { permission_mode: "auto" },
+        updatedAt: 1000,
+      },
+    });
+    expect(acpClient.setRuntimeOption.mock.calls).toEqual([[{
+      sessionId: "kimi-session-1",
+      source: "configOption",
+      optionId: "permission_mode",
+      value: "auto",
+    }], [{
+      sessionId: "kimi-session-1",
+      source: "mode",
+      optionId: "mode",
+      value: planningMode,
+    }]]);
+    expect(sendControlPrompt).not.toHaveBeenCalled();
+    await registry.close();
+  });
+
+  it.each([false, true])("runs Grok slash permission controls with planning modes advertised=%s", async (planningModes) => {
     // Regression test for the Grok-ACP Full Access bug: creating a Grok
     // thread with executionMode="full-access" must persist that mode to
     // session metadata AND surface it via listThreads, so the chip and
@@ -12796,12 +12917,17 @@ describe("DesktopBackendRegistry", () => {
           // here is whatever startAcpSession passes, NOT the
           // user-requested target.
           executionMode: params.executionMode,
+          ...(planningModes ? { acpRuntime: { currentModeId: "plan", updatedAt: 1000 } } : {}),
           status: "idle",
         };
         sessions.push(metadata);
         return metadata;
       }),
       startPrompt: vi.fn(),
+      setRuntimeOption: vi.fn(async (): Promise<BackendAcpSessionRuntimeState> => ({
+        currentModeId: "default",
+        updatedAt: 2000,
+      })),
       sendControlPrompt,
       ensureSession: vi.fn(async () => undefined),
       loadSession: vi.fn(async (): Promise<AppServerThreadReplay> => ({
@@ -12829,6 +12955,16 @@ describe("DesktopBackendRegistry", () => {
           registryId: "grok",
           name: "Grok",
           version: "0.2.3",
+          ...(planningModes ? {
+            runtimeCapabilities: {
+              schemaVersion: 1 as const,
+              status: "discovered" as const,
+              modes: {
+                currentModeId: "default",
+                availableModes: [{ id: "default", label: "Default" }, { id: "plan", label: "Plan" }],
+              },
+            },
+          } : {}),
           distributionKind: "local",
           distributionSource: "grok agent stdio",
           installStatus: "installed",
@@ -12895,6 +13031,21 @@ describe("DesktopBackendRegistry", () => {
     );
     expect(thread).toBeDefined();
     expect(thread?.executionMode).toBe("full-access");
+
+    if (planningModes) {
+      await registry.setAcpSessionRuntimeOption({
+        backend: acpBackendId,
+        threadId: "grok-session-1",
+        source: "mode",
+        optionId: "mode",
+        value: "default",
+      });
+      expect(sessions[0]?.executionMode).toBe("full-access");
+      await expect(overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: "grok-session-1",
+      })).resolves.toMatchObject({ executionMode: "full-access" });
+    }
 
     const permissionEvents: AgentEvent[] = [];
     const unsubscribe = registry.onEvent((event) => {
@@ -14739,22 +14890,22 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("does not auto-approve ACP permission requests for Auto runtime sessions", async () => {
-    const acpBackendId = "acp:qwen" as AcpBackendId;
+  it.each(["qwen", "grok"])("keeps human approvals for requests escalated by %s Auto", async (registryId) => {
+    const acpBackendId = `acp:${registryId}` as AcpBackendId;
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([
         {
           backendId: acpBackendId,
-          registryId: "qwen",
-          name: "Qwen Code",
+          registryId,
+          name: registryId,
           distributionKind: "local",
-          distributionSource: "qwen --experimental-acp",
+          distributionSource: `${registryId} acp`,
           installStatus: "installed",
           authStatus: "not-required",
           verificationStatus: "not-applicable",
-          allowlistRuleId: "local-qwen-cli",
+          allowlistRuleId: `local-${registryId}-cli`,
           installedAt: 1000,
           updatedAt: 2000,
           runtimeCapabilities: {
@@ -14782,8 +14933,8 @@ describe("DesktopBackendRegistry", () => {
       acpSessionStore: createAcpSessionStoreMock([
         {
           backendId: acpBackendId,
-          sessionId: "qwen-session-1",
-          title: "Qwen thread",
+          sessionId: "auto-session-1",
+          title: "Auto thread",
           cwd: "/repo/project",
           createdAt: 1000,
           updatedAt: 2000,
@@ -14805,7 +14956,7 @@ describe("DesktopBackendRegistry", () => {
     const request: AppServerPendingRequestNotification = {
       method: "item/commandExecution/requestApproval",
       params: {
-        threadId: "qwen-session-1",
+        threadId: "auto-session-1",
         turnId: "turn-1",
         requestId: "approval-1",
         acpMethod: "session/request_permission",
@@ -14834,7 +14985,7 @@ describe("DesktopBackendRegistry", () => {
     });
     await registry.submitServerRequest({
       backend: acpBackendId,
-      threadId: "qwen-session-1",
+      threadId: "auto-session-1",
       requestId: "approval-1",
       response: { decision: "approve" },
     });
@@ -50801,6 +50952,174 @@ script = "printf setup"
       model: expected,
       reasoningEffort: "low",
     });
+
+    await registry.close();
+  });
+
+  // A parent on GPT-6-Astra xhigh once passed its own model and effort to
+  // every monitor it created, and each ran for minutes at the parent's price.
+  // An agent may steer a monitor only toward a cheaper setting.
+  it.each([
+    {
+      requested: "gpt-5.5",
+      requestedEffort: "xhigh",
+      expected: "gpt-6-luna",
+      expectedEffort: "medium",
+    },
+    {
+      requested: "gpt-5.5",
+      requestedEffort: "low",
+      expected: "gpt-6-luna",
+      expectedEffort: "low",
+    },
+    {
+      requested: "gpt-6-luna",
+      requestedEffort: "xhigh",
+      expected: "gpt-6-luna",
+      expectedEffort: "medium",
+    },
+    {
+      requested: "gemini-3-pro",
+      requestedEffort: "low",
+      expected: "gpt-6-luna",
+      expectedEffort: "low",
+    },
+    {
+      requested: "gpt-5.4-mini",
+      requestedEffort: "high",
+      expected: "gpt-5.4-mini",
+      expectedEffort: "medium",
+    },
+    {
+      requested: "gpt-6-luna",
+      requestedEffort: "max",
+      expected: "gpt-6-luna",
+      expectedEffort: "medium",
+    },
+    {
+      requested: "gpt-5.4-mini",
+      requestedEffort: "low",
+      expected: "gpt-5.4-mini",
+      expectedEffort: "low",
+    },
+  ])("does not let an agent run a monitor on $requested $requestedEffort", async ({
+    requested, requestedEffort, expected, expectedEffort,
+  }) => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: [
+        // GPT-6 catalogs offer `max`, so the cap must refuse it by name.
+        {
+          id: "gpt-6-luna",
+          label: "GPT-6-Luna",
+          supportsReasoning: true,
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        },
+        { id: "gpt-5.5", label: "GPT-5.5", supportsReasoning: true },
+        { id: "gpt-5.4-mini", label: "GPT-5.4-Mini", supportsReasoning: true },
+        { id: "gemini-3-pro", label: "Gemini 3 Pro", supportsReasoning: true },
+      ],
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-model",
+          turnId: "turn-model",
+          turn: { id: "turn-model" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-model",
+        turnId: "turn-model",
+        callId: "call-model",
+        requestId: "call-model",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR checks until they finish.",
+          preferredModel: requested,
+          preferredReasoningEffort: requestedEffort,
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(response).toMatchObject({ success: true });
+    expect(payload.preferredModel).toBe(expected);
+    expect(payload.preferredReasoningEffort).toBe(expectedEffort);
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      model: expected,
+      reasoningEffort: expectedEffort,
+    });
+
+    await registry.close();
+  });
+
+  it("still runs a monitor on the operator's own Task monitors model", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      models: [
+        { id: "gpt-6-luna", label: "GPT-6-Luna", supportsReasoning: true },
+        { id: "gpt-5.5", label: "GPT-5.5", supportsReasoning: true },
+      ],
+      startThreadResult: { threadId: "monitor-thread" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      resolveHelperModelSettings: () => ({
+        helpers: {
+          task_monitors: { model: "gpt-5.5", reasoningEffort: "high" },
+        },
+      }),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-model",
+          turnId: "turn-model",
+          turn: { id: "turn-model" },
+        },
+      },
+    });
+
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-model",
+        turnId: "turn-model",
+        callId: "call-model",
+        requestId: "call-model",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: {
+          task: "Watch PR checks until they finish.",
+          preferredModel: "gpt-5.5",
+          preferredReasoningEffort: "xhigh",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
+    ) as Record<string, unknown>;
+
+    expect(payload.preferredModel).toBe("gpt-5.5");
+    expect(payload.preferredReasoningEffort).toBe("high");
 
     await registry.close();
   });

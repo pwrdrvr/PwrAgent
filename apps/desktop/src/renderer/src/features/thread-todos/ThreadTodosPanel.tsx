@@ -24,6 +24,7 @@ import { isBlockingWait, type OperatorWait } from "../operator-requests/operator
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
 import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
 import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
+import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
 
 export type ThreadTodoScope = "thread" | "project" | "all";
 
@@ -110,6 +111,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
   const [actionError, setActionError] = useState<string>();
   const [resolved, setResolved] = useState<ThreadTodo[]>();
   const controlId = useId();
+  const coverageTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const listResolved = view.listResolved;
   const scopes = projectKey ? SCOPES : SCOPES.filter((entry) => entry.id !== "project");
   const activeScope = scope === "project" && !projectKey ? "thread" : scope;
@@ -224,6 +226,19 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
       : activeScope === "project"
         ? "No to-dos for this project."
         : "Nothing to do.";
+  const unavailableInstances = [...new Map(
+    view.unavailableInstances?.map((instance) => [instance.instanceId, instance]),
+  ).values()].sort((left, right) => left.label.localeCompare(right.label));
+  const hasDisconnected = unavailableInstances.some((instance) => instance.reason === "disconnected");
+  const hasUnsupported = unavailableInstances.some((instance) => instance.reason === "unsupported");
+  const coverageNote = hasDisconnected && hasUnsupported
+    ? "Some instances are disconnected or do not support to-dos."
+    : hasDisconnected
+      ? "Some instances are disconnected."
+      : "Some instances do not support to-dos.";
+  const coverageDetails = unavailableInstances.map((instance) =>
+    `${instance.label} — ${instance.reason === "disconnected" ? "Disconnected" : "To-dos unavailable; update PwrAgent on this instance"}`,
+  ).join("\n");
 
   return (
     <section className="context-panel__section thread-todos-panel">
@@ -398,6 +413,21 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
           ))
         )}
       </div>
+      {unavailableInstances.length > 0 ? (
+        <footer className="thread-todos-panel__footnote">
+          <button
+            type="button"
+            className="thread-todos-panel__coverage-note"
+            aria-label={`${coverageNote} Show affected instances`}
+            aria-describedby={coverageTooltip.visible ? coverageTooltip.tooltipId : undefined}
+            {...tooltipHandlers(coverageTooltip, coverageDetails)}
+            onClick={(event) => coverageTooltip.show(event.currentTarget, coverageDetails)}
+          >
+            {coverageNote}
+          </button>
+          {coverageTooltip.tooltipNode}
+        </footer>
+      ) : null}
     </section>
   );
 }

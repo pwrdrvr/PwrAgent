@@ -16,9 +16,9 @@ import { readRendererFederationTarget } from "../../lib/federation-window";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { useThreadTodosForKey } from "../thread-todos/useThreadTodos";
 import {
-  OPERATOR_WAIT_LABELS,
   isBlockingWait,
   leadingOperatorWait,
+  operatorWaitLabel,
   type OperatorWait,
 } from "../operator-requests/operator-waits";
 import { useOperatorWaitsContext } from "../operator-requests/useOperatorRequests";
@@ -348,7 +348,7 @@ export function ThreadMetaChips({
 
       {leadWait ? (
         <span
-          aria-label={`${OPERATOR_WAIT_LABELS[leadWait.kind]}: ${leadWait.title}`}
+          aria-label={`${operatorWaitLabel(leadWait)}: ${leadWait.title}`}
           role="img"
           className={`thread-row__chip ${
             isBlockingWait(leadWait) ? "thread-row__chip--approval" : "thread-row__chip--question"
@@ -359,7 +359,7 @@ export function ThreadMetaChips({
           }
           onMouseLeave={waitTooltip.hide}
         >
-          {OPERATOR_WAIT_LABELS[leadWait.kind]}
+          {operatorWaitLabel(leadWait)}
         </span>
       ) : null}
       {waitTooltip.tooltipNode}
@@ -728,7 +728,7 @@ function formatTodoTooltip(titles: string[], noun: string, unread: number): stri
 }
 
 function formatWaitTooltip(waits: readonly OperatorWait[]): string {
-  const shown = waits.slice(0, 3).map((wait) => `• ${OPERATOR_WAIT_LABELS[wait.kind]}: ${wait.title}`);
+  const shown = waits.slice(0, 3).map((wait) => `• ${operatorWaitLabel(wait)}: ${wait.title}`);
   const more = waits.length - shown.length;
   return [
     waits.some(isBlockingWait) ? "Waiting on you" : "Asked you",

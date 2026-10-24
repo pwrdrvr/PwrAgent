@@ -53,7 +53,7 @@ async function openMcpElicitationReplay(gatewayApproval = false, urlLogin = fals
     name: "Pending MCP interaction"
   });
   await expect(pendingMcp).toBeVisible();
-  await expect(pendingMcp.getByText(urlLogin ? "MCP login" : "MCP approval")).toBeVisible();
+  await expect(pendingMcp.getByText(urlLogin ? "MCP link" : "Tool approval")).toBeVisible();
   await expect(pendingMcp.getByText(urlLogin ? /restore access to repositories/ : /browser_tabs/)).toBeVisible();
   await expect(app.window.getByRole("group", { name: "Pending input" })).toHaveCount(0);
   await expect(app.window.getByRole("group", { name: "Pending approval" })).toHaveCount(0);
@@ -73,8 +73,9 @@ test("recovers concurrent MCP login prompts and answers from To-dos", async ({ b
       id: "mcp-login-2", kind: "request", request: {
         method: "mcpServer/elicitation/request", params: {
           threadId: "thread-mcp-elicitation", turnId: "turn-mcp-2", requestId: "mcp-login-request-2",
+          // A 2026-07-28 server sends no elicitationId.
           serverName: "codex_apps", mode: "url", message: "Reconnect GitHub to inspect pull requests.",
-          url: "https://chatgpt.com/connector", elicitationId: "mcp-login-2",
+          url: "https://chatgpt.com/connector",
         },
       },
     });
@@ -91,8 +92,9 @@ test("recovers concurrent MCP login prompts and answers from To-dos", async ({ b
     await app.window.getByRole("tab", { name: /^To-dos/ }).click();
     const row = app.window.locator('.thread-todos-panel__row[data-wait-kind="mcp-input"]');
     await expect(row).toContainText("restore access to repositories");
-    await expect(row.getByRole("link", { name: "Open", exact: true })).toBeVisible();
-    await expect(row.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
+    // The row cannot show the full address, so consent happens on the card.
+    await expect(row.getByRole("link")).toHaveCount(0);
+    await expect(row.getByRole("button", { name: "Review link", exact: true })).toBeVisible();
     await expect(row.getByRole("button", { name: "Decline", exact: true })).toBeVisible();
     await app.window.screenshot({ path: testInfo.outputPath("mcp-login-recovered.png") });
     await row.getByRole("button", { name: "Decline", exact: true }).click();

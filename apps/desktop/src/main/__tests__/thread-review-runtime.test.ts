@@ -96,7 +96,7 @@ describe("review tracking runtime eligibility", () => {
     install();
     const claude = { backend: "claude" as const, threadId: "claude-owner" };
     const reviewOutput = claudeReviewOutput({ findings: [
-      { file: "src/a.ts", line: 3, summary: "First.", failureScenario: "Breaks." },
+      { file: "src/a.ts", line: 3, summary: "First.", failureScenario: "Breaks.", category: "correctness" },
       { file: "src/b.ts", line: 9, summary: "Second.", failureScenario: "Breaks too." },
     ] }, "/repo");
     onEvent({ backend: "claude", notification: {
@@ -107,6 +107,7 @@ describe("review tracking runtime eligibility", () => {
     const [review] = getThreadReviewService().list();
     expect(review).toMatchObject({ ...claude, sourceKey: "toolu_review", origin: "automatic" });
     expect(review!.items.map((item) => [item.title, item.status])).toEqual([["First.", "open"], ["Second.", "open"]]);
+    expect(review!.items.map((item) => item.category)).toEqual(["correctness", undefined]);
 
     const outcomes = { threadId: claude.threadId, turnId: "turn-2", reviewId: "toolu_review", outcomes: [{ index: 1, outcome: "fixed" as const }] };
     // A peer's event never settles local work.

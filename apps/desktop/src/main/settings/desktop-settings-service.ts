@@ -1113,6 +1113,10 @@ export class DesktopSettingsService {
           config.experimental?.markdownMathRendering,
           true,
         ),
+        incrementalMarkdownRendering: this.resolveConfigBoolean(
+          config.experimental?.incrementalMarkdownRendering,
+          false,
+        ),
         threadPricingSummary: this.resolveConfigBoolean(
           config.experimental?.threadPricingSummary,
           true,
@@ -1229,6 +1233,7 @@ export class DesktopSettingsService {
           true,
         ),
         allowRemoteShells: this.resolveConfigBoolean(config.federation?.allowRemoteShells, true),
+        allowPortForwarding: this.resolveConfigBoolean(config.federation?.allowPortForwarding, false),
         allowFilePush: this.resolveConfigBoolean(config.federation?.allowFilePush, false),
         allowFilePull: this.resolveConfigBoolean(config.federation?.allowFilePull, false),
         allowFilePullOutsideThreadDirectories: this.resolveConfigBoolean(config.federation?.allowFilePullOutsideThreadDirectories, false),

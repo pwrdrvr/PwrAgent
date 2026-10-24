@@ -1,3 +1,5 @@
+import type { ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
+import { FEDERATION_SERVICES_CHANNEL } from "../shared/ipc";
 import {
   NATIVE_VOICE_CAMERA_CHANNEL, NATIVE_VOICE_CAMERA_FRAME_CHANNEL, NATIVE_VOICE_CAMERA_CUE_CHANNEL, NATIVE_VOICE_CAMERA_REPEAT_CHANNEL,
   type VoiceCameraRequest, type VoiceCameraFrame, type VoiceCameraCue, type VoiceCameraRepeatCheck,
@@ -503,6 +505,10 @@ import type {
   RevokeFederationPeerResponse,
   HandoffInstanceThreadRequest,
   HandoffInstanceThreadResult,
+  CancelComposerFilePushRequest,
+  ComposerFilePushProgress,
+  PushComposerFileRequest,
+  PushComposerFileResult,
   SetCelestialIconRequest,
   SetCelestialIconResponse,
   SetFederationShortNameRequest,
@@ -813,6 +819,9 @@ import {
   FEDERATION_RESET_ENROLLMENT_CHANNEL,
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_HANDOFF_THREAD_CHANNEL,
+  FEDERATION_PUSH_COMPOSER_FILE_CHANNEL,
+  FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL,
+  FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_SHORT_NAME_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
@@ -1488,6 +1497,8 @@ const desktopApi = Object.freeze({
     request: WaitForDesktopProfileAliveRequest,
   ): Promise<WaitForDesktopProfileAliveResponse> =>
     await ipcRenderer.invoke(APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL, request),
+  threadServices: async (request: ServiceUiRequest): Promise<ServiceUiResponse> =>
+    await ipcRenderer.invoke(FEDERATION_SERVICES_CHANNEL, request),
   openFederationWindow: async (
     request: OpenFederationWindowRequest,
   ): Promise<OpenFederationWindowResponse> =>
@@ -1532,6 +1543,26 @@ const desktopApi = Object.freeze({
     request: HandoffInstanceThreadRequest,
   ): Promise<HandoffInstanceThreadResult> =>
     await ipcRenderer.invoke(FEDERATION_HANDOFF_THREAD_CHANNEL, request),
+  pushComposerFile: async (
+    request: PushComposerFileRequest,
+  ): Promise<PushComposerFileResult> =>
+    await ipcRenderer.invoke(FEDERATION_PUSH_COMPOSER_FILE_CHANNEL, request),
+  cancelComposerFilePush: async (
+    request: CancelComposerFilePushRequest,
+  ): Promise<void> =>
+    await ipcRenderer.invoke(FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL, request),
+  onComposerFilePushProgress: (
+    callback: (progress: ComposerFilePushProgress) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ComposerFilePushProgress,
+    ) => callback(payload);
+    ipcRenderer.on(FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL, listener);
+    };
+  },
   resetFederationEnrollment: async (
     request?: ResetFederationEnrollmentRequest,
   ): Promise<ResetFederationEnrollmentResponse> =>

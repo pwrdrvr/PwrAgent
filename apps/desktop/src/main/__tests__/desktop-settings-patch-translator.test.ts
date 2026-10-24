@@ -343,6 +343,16 @@ describe("desktopSettingsPatchToEdits — experimental", () => {
     ]);
   });
 
+  it("writes the incremental Markdown rendering flag", () => {
+    expect(desktopSettingsPatchToEdits({
+      experimental: { incrementalMarkdownRendering: true },
+    })).toEqual([{
+      op: "set",
+      path: ["experimental", "incremental_markdown_rendering"],
+      value: true,
+    }]);
+  });
+
   it("writes the thread pricing summary flag", () => {
     const edits = desktopSettingsPatchToEdits({
       experimental: {

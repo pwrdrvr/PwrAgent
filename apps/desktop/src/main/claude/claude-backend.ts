@@ -14,6 +14,7 @@ import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import { createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
+import { createClaudeElicitationHandler } from "./claude-elicitation";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
 import {
@@ -81,6 +82,8 @@ type RunningTurn = {
   contextRefresh?: { promise: Promise<void>; again: boolean };
   titlePrompt?: string;
   titleEnv?: NodeJS.ProcessEnv;
+  /** Owned by the turn, but never awaited by the streaming message pump. */
+  titleUpdate?: Promise<boolean>;
 };
 
 /** One input pump owns the SDK's stdin until the logical turn finishes. */
@@ -348,6 +351,11 @@ export class ClaudeBackend {
           request: this.options.request,
           cancelRequest: (requestId) => this.options.cancelRequest(params.threadId, running.turnId, requestId),
         }),
+        onElicitation: createClaudeElicitationHandler({
+          threadId: params.threadId, turnId: running.turnId,
+          request: this.options.request,
+          cancelRequest: (requestId) => this.options.cancelRequest(params.threadId, running.turnId, requestId),
+        }),
       };
       let releasePrompt!: () => void;
       const promptReady = new Promise<void>((resolve) => { releasePrompt = resolve; });
@@ -442,6 +450,10 @@ export class ClaudeBackend {
           const current = await this.store.read(threadId);
           current.sdkSessionId = message.session_id;
           await this.store.save(current);
+          // The native control request returns Claude's stored/in-flight title
+          // while inference continues. Waiting for result leaves long first
+          // turns named after the raw prompt for their entire duration.
+          running.titleUpdate ??= this.updateTitle(session, running);
           if (message.terminal_slash_commands) this.terminalCommands = new Set(message.terminal_slash_commands);
           await Promise.all([
             // A probe that finds no windows keeps the last reading, so the
@@ -491,8 +503,20 @@ export class ClaudeBackend {
           const finished = message.is_error || running.pendingSteers.size === 0;
           if (finished) running.ending = true;
           receivedResult = true;
-          const requestedTitle = finished && !message.is_error && !running.controller.signal.aborted
-            ? await this.updateTitle(session, running) : false;
+          // Even a failed turn may already have requested its title at init;
+          // join it before taking the final usage snapshot as well.
+          let requestedTitle = false;
+          if (finished) {
+            if (!running.titleUpdate && !message.is_error && !running.controller.signal.aborted) {
+              running.titleUpdate = this.updateTitle(session, running);
+            }
+            requestedTitle = await running.titleUpdate ?? false;
+          }
+          if (finished && !message.is_error && !running.controller.signal.aborted) {
+            // A native request can time out before Claude persists its title.
+            // Keep the result-boundary adoption, without another model request.
+            await this.updateTitle(session, running, false);
+          }
           await running.contextRefresh?.promise;
           const [, usage] = await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
           // Native title generation shares this session's account and model
@@ -523,6 +547,9 @@ export class ClaudeBackend {
       running.input.close();
       await this.settleInputWrites(running);
       await running.contextRefresh?.promise;
+      // Join metadata reads and title persistence before closing the query or
+      // releasing the workspace, including failed and interrupted turns.
+      await running.titleUpdate;
       try { running.query?.close(); }
       catch (error) { failure ??= error instanceof Error ? error.message : String(error); }
       const cancelled = running.controller.signal.aborted;
@@ -556,27 +583,34 @@ export class ClaudeBackend {
     }
   }
 
-  /** Prefer a durable provider title; SDK headless sessions otherwise need an explicit control request. */
-  private async updateTitle(session: ClaudeSession, running: RunningTurn): Promise<boolean> {
+  /** Retrieve Claude's native title without holding up the active turn. */
+  private async updateTitle(session: ClaudeSession, running: RunningTurn, allowRequest = true): Promise<boolean> {
     const threadId = session.thread.id;
     try {
       let current = await this.store.read(threadId);
-      if (current.thread.titleSource === "explicit" || !session.sdkSessionId) return false;
+      if (current.thread.titleSource === "explicit" || !session.sdkSessionId || running.controller.signal.aborted) return false;
       // getSessionInfo uses the SDK host's config directory, not Options.env.
       // Do not inspect a different account's session store.
-      if (running.titleEnv?.CLAUDE_CONFIG_DIR !== process.env.CLAUDE_CONFIG_DIR) return false;
       // The SDK may spawn Git in this workspace (with its own timeout).
       // Unlike query telemetry, this read cannot be cancelled by closing the
       // query. Keep it owned by the turn so shutdown cannot release the
       // workspace while an abandoned read still holds its directory open.
-      const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, { dir: session.cwd });
-      let title = normalizeClaudeTitle(info?.customTitle);
+      let title: string | undefined;
+      if (running.titleEnv?.CLAUDE_CONFIG_DIR === process.env.CLAUDE_CONFIG_DIR) {
+        try {
+          const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, { dir: session.cwd });
+          title = normalizeClaudeTitle(info?.customTitle);
+        } catch {
+          // Missing/unreadable metadata must not disable the query's native
+          // title control, which always uses the correct session and account.
+        }
+      }
       current = await this.store.read(threadId);
       if (current.thread.titleSource === "explicit") return false;
       const query = running.query as ClaudeTitleQuery;
       const disabled = ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"]
         .some((key) => ["1", "true", "yes", "on"].includes(running.titleEnv?.[key]?.trim().toLowerCase() ?? ""));
-      const canRequest = !title && !current.titleGenerationAttempted && !disabled && typeof query.generateSessionTitle === "function"
+      const canRequest = allowRequest && !title && !current.titleGenerationAttempted && !disabled && typeof query.generateSessionTitle === "function"
         && Boolean(running.titlePrompt?.trim()) && !running.controller.signal.aborted;
       if (!title && !canRequest) return false;
       // Persist the attempt before spending quota so failure/restart cannot
@@ -597,8 +631,7 @@ export class ClaudeBackend {
       }
       return canRequest;
     } catch {
-      // An unreadable provider session must not trigger a speculative title
-      // request or fail the actual turn. The local prompt name remains usable.
+      // Naming must not fail the actual turn. The local prompt name remains usable.
       return false;
     }
   }

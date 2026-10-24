@@ -301,6 +301,78 @@ function applyEventSubscription(params: {
 }
 
 describe("DesktopFederationRuntime", () => {
+  it("advertises owner permission separately from support and enforces the disabled default", async () => {
+    const config: { allowPortForwarding?: boolean } = {};
+    const settings = vi.spyOn(desktopSettingsSingleton, "getDesktopSettingsService").mockReturnValue({
+      readFederationConfig: () => config,
+    } as unknown as ReturnType<typeof desktopSettingsSingleton.getDesktopSettingsService>);
+    const runtime = new DesktopFederationRuntime();
+    (runtime as unknown as RuntimeHarness).localInstanceId = "service-owner";
+    try {
+      expect(DEFAULT_CAPABILITIES).toContain("service_forward_v1");
+      expect(runtime.receiverPermissions().portForwarding).toBe(false);
+      const services = runtime.threadServices();
+      const thread = { backend: "codex" as const, threadId: "service-thread" };
+      await expect(services.lease("viewer", thread, "service")).rejects.toThrow("Allow port forwarding");
+      config.allowPortForwarding = true;
+      expect(runtime.receiverPermissions().portForwarding).toBe(true);
+      await expect(services.lease("viewer", thread, "service")).rejects.toThrow("no longer advertised");
+      config.allowPortForwarding = false;
+      await expect(services.lease("viewer", thread, "service")).rejects.toThrow("Allow port forwarding");
+    } finally {
+      await runtime.stop();
+      settings.mockRestore();
+    }
+  });
+
+  it("tells the owner whether forwarding is allowed and which peers are forwarding each port", async () => {
+    const runtime = new DesktopFederationRuntime();
+    (runtime as unknown as RuntimeHarness).localInstanceId = "service-owner";
+    const advertised = {
+      backend: "codex" as const, threadId: "service-thread", serviceId: "service", ownerInstanceId: "service-owner",
+      ownerSessionId: "session", address: "127.0.0.1" as const, port: 3000, name: "Preview", description: "",
+      protocol: "http" as const, createdAt: 1, expiresAt: 2,
+    };
+    vi.spyOn(runtime, "threadServices").mockReturnValue({
+      list: async () => [advertised],
+      leaseHolders: () => ["peer-laptop", "peer-unlisted"],
+    } as never);
+    vi.spyOn(runtime as unknown as { visiblePeers: () => unknown[] }, "visiblePeers")
+      .mockReturnValue([{ id: "peer-laptop", label: "Fixture Laptop", shortLabel: "Laptop" }]);
+    vi.spyOn(runtime, "receiverPermissions").mockReturnValue({
+      remoteShells: false, portForwarding: true, filePush: false, filePull: false, filePullOutsideThreadDirectories: false,
+    });
+    const watch = { action: "watch" as const, viewId: "owner-view", backend: "codex" as const, threadId: "service-thread" };
+    try {
+      await expect(runtime.threadServiceAction(1, watch)).resolves.toEqual({
+        services: [advertised],
+        forwards: [],
+        forwarding: "allowed",
+        inbound: [{ serviceId: "service", peerLabels: ["Laptop", "Federation peer"] }],
+      });
+    } finally { await runtime.stop(); }
+  });
+
+  it("keeps repeated service watches intact and registers them again after stop", async () => {
+    const runtime = new DesktopFederationRuntime();
+    (runtime as unknown as RuntimeHarness).localInstanceId = "service-owner";
+    vi.spyOn(runtime, "threadServices").mockReturnValue({ list: async () => [] } as never);
+    const leave = vi.spyOn(runtime, "leaveThreadServices");
+    const watch = { action: "watch" as const, viewId: "mounted-view", backend: "codex" as const, threadId: "service-thread" };
+    try {
+      await runtime.threadServiceAction(1, watch);
+      await runtime.threadServiceAction(1, watch);
+      // Re-registering the same viewer must not tear down its active forwards.
+      expect(leave).toHaveBeenCalledTimes(1);
+      await runtime.stop();
+      await expect(runtime.threadServiceAction(1, { ...watch, action: "list" })).rejects.toThrow("Service viewer closed");
+      await expect(runtime.threadServiceAction(1, watch)).resolves.toEqual({ services: [], forwards: [] });
+      expect(leave).toHaveBeenCalledTimes(2);
+      await runtime.threadServiceAction(1, { ...watch, threadId: "different-thread" });
+      expect(leave).toHaveBeenCalledTimes(3);
+    } finally { await runtime.stop(); }
+  });
+
   it("detaches owner secondary repositories while preserving primary and last-directory guards", async () => {
     const stateDb = openInMemoryStateDb();
     const overlayStore = new SqliteOverlayStore(stateDb);
@@ -1869,9 +1941,39 @@ describe("DesktopFederationRuntime", () => {
     await expect(runtime.requestOperatorQuestionOperation(target, "listPending", {})).resolves.toEqual([]);
     expect(send).not.toHaveBeenCalled();
     harness.router.registerConnection(createConnection({ peerId: "owner", capabilities: ["thread_detail", "turn_control", "operator_questions"], sendEnvelope: send }));
-    await expect(runtime.requestOperatorQuestionOperation(target, "list", {})).rejects.toThrow("Update that PwrAgent instance.");
+    await expect(runtime.requestOperatorQuestionOperation(target, "list", {})).resolves.toMatchObject({
+      questions: [], serverRequests: [], seenKeys: [],
+      unavailableInstances: [{ instanceId: "owner", reason: "unsupported" }],
+    });
     await expect(runtime.requestOperatorQuestionOperation(target, "reply", { backend: "codex", threadId: "thread", input: [] }))
       .rejects.toThrow("Update that PwrAgent instance.");
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes disconnected To-do owners from connected owners without queue support", async () => {
+    const runtime = new DesktopFederationRuntime();
+    const harness = runtime as unknown as RuntimeHarness;
+    harness.localInstanceId = "viewer";
+    harness.router = new FederationRouter({ localInstanceId: "viewer" });
+    harness.store = () => ({ listPeers: () => [], getPeer: () => undefined });
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const send = vi.fn();
+    // Remembered capabilities are not evidence of a live connection.
+    harness.remotePeerDirectory.set("owner", {
+      id: "owner", label: "Studio Mac", status: "disconnected", capabilities: ["thread_todos", "operator_requests"],
+    });
+    for (const response of [await runtime.requestThreadTodoOperation(target, "listTodos", {}),
+      await runtime.requestOperatorQuestionOperation(target, "list", {})]) {
+      expect(response.unavailableInstances).toMatchObject([{ instanceId: "owner", label: expect.stringContaining("Studio Mac"), reason: "disconnected" }]);
+      expect(response.errors).toBeUndefined();
+    }
+    harness.router.registerConnection(createConnection({ peerId: "owner", capabilities: ["thread_detail"], sendEnvelope: send }));
+    expect((await runtime.requestThreadTodoOperation(target, "listTodos", {})).unavailableInstances)
+      .toMatchObject([{ instanceId: "owner", reason: "unsupported" }]);
+    expect((await runtime.requestOperatorQuestionOperation(target, "list", {})).unavailableInstances)
+      .toMatchObject([{ instanceId: "owner", reason: "unsupported" }]);
+    await expect(runtime.requestThreadTodoOperation(target, "resolveTodo", { id: "card", status: "done" }))
+      .rejects.toThrow("does not support To-dos");
     expect(send).not.toHaveBeenCalled();
   });
 

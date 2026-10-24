@@ -143,6 +143,12 @@ export function createFederationAgentToolsHandler(
   const cursors = new Map<string, InstanceListCursorEntry>();
   return async (request) => {
     try {
+      if (request.operation === "advertise_service") return ok(await runtime().threadServices().advertise(request.context, request.args));
+      if (request.operation === "list_services") return ok({ services: await runtime().threadServices().list(request.context) });
+      if (request.operation === "remove_service") {
+        runtime().threadServices().remove(request.context, request.args.serviceId);
+        return ok({ removed: true });
+      }
       if (request.operation === "handoff_instance_thread") {
         const result = await runtime().handoffInstanceThread(request.args, request.args.sourceInstanceId);
         const ref = {
@@ -815,7 +821,7 @@ async function localInstanceDescriptor(
     // listener, not this instance's ability to take work.
     status: "connected",
     capabilities: [...FEDERATION_CAPABILITIES],
-    receiverPermissions: { remoteShells: federation.allowRemoteShells !== false, filePush: federation.allowFilePush === true, filePull: federation.allowFilePull === true, filePullOutsideThreadDirectories: federation.allowFilePullOutsideThreadDirectories === true },
+    receiverPermissions: { remoteShells: federation.allowRemoteShells !== false, portForwarding: federation.allowPortForwarding === true, filePush: federation.allowFilePush === true, filePull: federation.allowFilePull === true, filePullOutsideThreadDirectories: federation.allowFilePullOutsideThreadDirectories === true },
     role: health.role,
     notes: federation.instanceNotes?.trim() || undefined,
     icon: health.localCelestialIcon,

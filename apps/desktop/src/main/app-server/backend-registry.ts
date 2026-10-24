@@ -5,6 +5,7 @@ import { ForgeReadError, validateForgeReadArgs, type ForgeReadRequest } from "..
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
+  findAcpPermissionModeConfigOption,
   DEFAULT_THREAD_ARCHIVE_POLICY,
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
   classifyDirectory,
@@ -2336,10 +2337,13 @@ function acpRuntimeModeDefaultsFromCapabilities(
         : [],
     ),
   );
+  const hasMirroredModeConfigOption = modeConfigOptions.some(
+    (option) => option.id !== findAcpPermissionModeConfigOption(runtimeCapabilities)?.id,
+  );
   const state: BackendAcpSessionRuntimeState = {
     updatedAt: now,
     ...(Object.keys(configValues).length > 0 ? { configValues } : {}),
-    ...(modeConfigOptions.length === 0 && runtimeCapabilities?.modes?.currentModeId
+    ...(!hasMirroredModeConfigOption && runtimeCapabilities?.modes?.currentModeId
       ? { currentModeId: runtimeCapabilities.modes.currentModeId }
       : {}),
   };
@@ -2701,12 +2705,17 @@ function pendingRequestDecisionFromMessagingApproval(
 }
 
 function acpRuntimeHasExecutionModeSelection(params: {
+  registryId?: string;
   runtime?: BackendAcpSessionRuntimeState;
   runtimeCapabilities?: BackendAcpRuntimeCapabilities;
 }): boolean {
   const { runtime, runtimeCapabilities } = params;
   if (!runtime) {
     return false;
+  }
+  if (params.registryId === "grok") {
+    const permissionOption = findAcpPermissionModeConfigOption(runtimeCapabilities);
+    return Boolean(permissionOption && runtime.configValues?.[permissionOption.id]);
   }
   if (runtime.currentModeId) {
     return true;
@@ -7339,8 +7348,23 @@ const MONITOR_REASONING_EFFORT_ORDER = [
   "xhigh",
 ] as const;
 
+// Whole name segments only: "gemini-3-pro" must not pass as "mini".
 function isLightweightMonitorModel(modelId: string): boolean {
-  return /(?:mini|lite|flash|haiku|small|nano)/iu.test(modelId);
+  return /(?:^|[^a-z])(?:mini|lite|flash|haiku|small|nano|luna)(?:$|[^a-z])/iu
+    .test(modelId);
+}
+
+/**
+ * The highest effort an agent may request for a Codex monitor. An effort
+ * this list does not know, such as `max`, is never accepted.
+ */
+const MAX_REQUESTED_MONITOR_REASONING_EFFORT = "medium";
+
+function isLightweightMonitorReasoningEffort(effort: string): boolean {
+  const order: readonly string[] = MONITOR_REASONING_EFFORT_ORDER;
+  const index = order.indexOf(effort.toLowerCase());
+  return index !== -1
+    && index <= order.indexOf(MAX_REQUESTED_MONITOR_REASONING_EFFORT);
 }
 
 function readAcpThoughtLevelValues(
@@ -12010,6 +12034,35 @@ export class DesktopBackendRegistry {
     return result;
   }
 
+  /** Service revocation needs complete inventory, never navigation's cached
+   * or error-tolerant empty lists. A failed lookup must remain a failure. */
+  async isThreadActiveForService({ backend, threadId }: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<boolean> {
+    await this.subAgentStartupReconciliation;
+    this.assertNotBootstrap("isThreadActiveForService");
+    if (this.closed || (backend === "codex" && this.isCodexBootstrapDeferredFn())) {
+      throw new Error("Thread discovery is unavailable during startup or shutdown.");
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
+    if (overlay?.archiveTombstonedAt !== undefined) return false;
+    if (isAcpBackendId(backend)) {
+      const session = this.acpBackend.getSession(backend, threadId);
+      return session !== undefined && session.archivedAt === undefined;
+    }
+    const diagnostics = { callerReason: "federation-services" };
+    const threads = await this.codexClient.listThreads({
+      archived: false, enrichDirectories: false, skipArchivedMetadataRefresh: true, requireComplete: true,
+    }, diagnostics);
+    if (threads.some((thread) => thread.id === threadId && thread.archivedAt === undefined)) return true;
+    if (!this.codexClient.listNativeSubAgentThreads) {
+      throw new Error("Complete descendant discovery is unavailable.");
+    }
+    const descendants = await this.codexClient.listNativeSubAgentThreads({ all: true, archived: false }, diagnostics);
+    return descendants.some((thread) => thread.id === threadId && thread.archivedAt === undefined);
+  }
+
   async listThreads(params: {
     archived?: boolean;
     backend?: AppServerBackendKind;
@@ -13710,7 +13763,10 @@ export class DesktopBackendRegistry {
     model?: string;
     reasoningEffort?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    const promptPayload = await inputToAcpPrompt(params.input);
+    const promptPayload = await inputToAcpPrompt(params.input, {
+      owner: { backend: params.backend, threadId: params.threadId },
+      privateStorageRoots: this.localFilePrivateStorageRoots,
+    });
     if (!promptPayload) {
       throw new Error("ACP turns require text or image input");
     }
@@ -13858,10 +13914,21 @@ export class DesktopBackendRegistry {
     // model's option has to be written first. `configValues` carries whatever
     // insertion order earlier merges left, and a level measured against the
     // agent's default model is dropped by the session's own menu.
-    const thoughtLevelOptionId = findAcpThoughtLevelConfigOption(
-      this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
-    )?.id;
-    const configValues = Object.entries(runtime?.configValues ?? {}).sort(
+    const capabilities = this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
+    const thoughtLevelOptionId = findAcpThoughtLevelConfigOption(capabilities)?.id;
+    const modeConfigOption = capabilities?.configOptions?.find(
+      (option) => option.category === "mode"
+        && option.id !== findAcpPermissionModeConfigOption(capabilities)?.id
+        && option.values.some((value) => value.value === runtime?.currentModeId),
+    );
+    // Legacy mode selectors mirror currentModeId. The independent permission
+    // config owns its value in configValues; currentModeId remains planning.
+    const configValues = Object.entries({
+      ...runtime?.configValues,
+      ...(modeConfigOption && runtime?.currentModeId
+        ? { [modeConfigOption.id]: runtime.currentModeId }
+        : {}),
+    }).sort(
       ([left], [right]) =>
         Number(left === thoughtLevelOptionId)
         - Number(right === thoughtLevelOptionId),
@@ -13874,7 +13941,7 @@ export class DesktopBackendRegistry {
         value,
       });
     }
-    if (runtime?.currentModeId) {
+    if (runtime?.currentModeId && !modeConfigOption) {
       await client.setRuntimeOption?.({
         sessionId,
         source: "mode",
@@ -14017,7 +14084,8 @@ export class DesktopBackendRegistry {
       }),
     );
     const mergedRuntime = mergeAcpRuntimeState(session.acpRuntime, runtimeState);
-    const nextExecutionMode = this.isAcpRuntimeExecutionModeOption(params)
+    const changesExecutionMode = this.isAcpRuntimeExecutionModeOption(params);
+    const nextExecutionMode = changesExecutionMode
       ? acpRuntimeValueLooksPrivileged(params.value)
         ? "full-access"
         : "default"
@@ -14032,7 +14100,7 @@ export class DesktopBackendRegistry {
       executionMode: nextExecutionMode,
       updatedAt,
     });
-    if (this.isAcpRuntimeExecutionModeOption(params)) {
+    if (changesExecutionMode) {
       await this.overlayStore.setThreadExecutionMode({
         backend: params.backend,
         threadId: params.threadId,
@@ -14052,12 +14120,10 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       transition: {
         id: randomUUID(),
-        fromExecutionMode: acpRuntimeValueLooksPrivileged(fromValue)
-          ? "full-access"
-          : "default",
-        toExecutionMode: acpRuntimeValueLooksPrivileged(params.value)
-          ? "full-access"
-          : "default",
+        fromExecutionMode: changesExecutionMode
+          ? acpRuntimeValueLooksPrivileged(fromValue) ? "full-access" : "default"
+          : session.executionMode ?? "default",
+        toExecutionMode: nextExecutionMode ?? "default",
         fromLabel,
         toLabel,
         status: "applied",
@@ -14215,7 +14281,7 @@ export class DesktopBackendRegistry {
     if (
       params.source === "configOption" &&
       runtime?.currentModeId &&
-      this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+      this.acpRuntimeConfigOptionMirrorsMode(params.backend, params.optionId)
     ) {
       return runtime.currentModeId;
     }
@@ -14239,7 +14305,7 @@ export class DesktopBackendRegistry {
             updatedAt,
           }
         : params.source === "mode" ||
-            this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
+            this.acpRuntimeConfigOptionMirrorsMode(params.backend, params.optionId)
           ? {
               configValues:
                 params.source === "configOption"
@@ -14270,9 +14336,27 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private acpRuntimeConfigOptionMirrorsMode(
+    backend: AppServerBackendKind,
+    optionId: string,
+  ): boolean {
+    const capabilities = isAcpBackendId(backend)
+      ? this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities
+      : undefined;
+    return this.isAcpRuntimeModeConfigOption(backend, optionId)
+      && findAcpPermissionModeConfigOption(capabilities)?.id !== optionId;
+  }
+
   private isAcpRuntimeExecutionModeOption(
     params: Pick<SetAcpSessionRuntimeOptionRequest, "backend" | "source" | "optionId">,
   ): boolean {
+    const agent = isAcpBackendId(params.backend)
+      ? this.acpBackend.getInstalledAgent(params.backend)
+      : undefined;
+    if (agent?.registryId === "grok") {
+      return params.source === "configOption"
+        && params.optionId === findAcpPermissionModeConfigOption(agent.runtimeCapabilities)?.id;
+    }
     return (
       params.source === "mode" ||
       this.isAcpRuntimeModeConfigOption(params.backend, params.optionId)
@@ -22367,7 +22451,10 @@ export class DesktopBackendRegistry {
     }
     if (isAcpBackendId(params.backend)) {
       const acpBackend = params.backend;
-      const promptPayload = await inputToAcpPrompt(input);
+      const promptPayload = await inputToAcpPrompt(input, {
+        owner: { backend: acpBackend, threadId: params.threadId },
+        privateStorageRoots: this.localFilePrivateStorageRoots,
+      });
       if (!promptPayload) {
         throw new Error("ACP steering requires text or image input");
       }
@@ -22776,10 +22863,15 @@ export class DesktopBackendRegistry {
   private usesGrokSlashExecutionModes(
     backend: AppServerBackendKind,
   ): backend is AcpBackendId {
-    return (
-      isAcpBackendId(backend) &&
-      this.acpBackend.getInstalledAgent(backend)?.registryId === "grok"
-    );
+    if (!isAcpBackendId(backend)) {
+      return false;
+    }
+    const agent = this.acpBackend.getInstalledAgent(backend);
+    // A native permission selector can include Grok's Auto reviewer. Once
+    // advertised, it owns permission state; /always-approve cannot represent
+    // Auto and must not overwrite it during launch or mode changes.
+    return agent?.registryId === "grok"
+      && (findAcpPermissionModeConfigOption(agent.runtimeCapabilities)?.values.length ?? 0) < 2;
   }
 
   /**
@@ -37366,6 +37458,7 @@ export class DesktopBackendRegistry {
       const runtimeCapabilities =
         this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities;
       const runtimeControlsExecutionMode = acpRuntimeHasExecutionModeSelection({
+        registryId: this.acpBackend.getInstalledAgent(backend)?.registryId,
         runtime: session?.acpRuntime,
         runtimeCapabilities,
       });
@@ -38121,6 +38214,7 @@ export class DesktopBackendRegistry {
       // Match ACP permission approvals: a runtime selector is authoritative
       // over a stale session executionMode value.
       return acpRuntimeHasExecutionModeSelection({
+        registryId: this.acpBackend.getInstalledAgent(context.backend)?.registryId,
         runtime: session?.acpRuntime,
         runtimeCapabilities,
       })
@@ -41366,6 +41460,7 @@ export class DesktopBackendRegistry {
       preferredModel !== requestedModel ||
       preferredReasoningEffort !== requestedReasoningEffort
     ) {
+      const codexMonitor = !isAcpBackendId(context.backend);
       backendRegistryLog.info("adjusted task monitor model settings", {
         monitorId,
         parentThreadId,
@@ -41373,6 +41468,14 @@ export class DesktopBackendRegistry {
         preferredReasoningEffort,
         requestedModel,
         requestedReasoningEffort,
+        ...(codexMonitor && requestedModel && !isLightweightMonitorModel(requestedModel)
+          ? { declinedRequestedModel: true }
+          : {}),
+        ...(codexMonitor
+          && requestedReasoningEffort
+          && !isLightweightMonitorReasoningEffort(requestedReasoningEffort)
+          ? { declinedRequestedReasoningEffort: true }
+          : {}),
       });
     }
     const record: TaskMonitorDelegationRecord = {
@@ -41704,8 +41807,20 @@ export class DesktopBackendRegistry {
         "No available Codex models were discovered for task monitor delegation.",
       );
     }
-    // The agent's requested model wins when Codex offers it; otherwise the
-    // Helper model setting decides.
+    // An agent may steer a monitor only toward a cheaper setting: a
+    // lightweight model, at medium effort or lower. A parent on GPT-6-Astra
+    // xhigh once passed its own settings to every monitor it created. A
+    // request Codex offers wins; otherwise the Helper model setting decides,
+    // and the operator's Task monitors row may still name any model.
+    const requestedModel =
+      params.preferredModel && isLightweightMonitorModel(params.preferredModel)
+        ? params.preferredModel
+        : undefined;
+    const requestedReasoningEffort =
+      params.preferredReasoningEffort
+      && isLightweightMonitorReasoningEffort(params.preferredReasoningEffort)
+        ? params.preferredReasoningEffort
+        : undefined;
     const selection = resolveHelperModel({
       helper: "task_monitors",
       settings: this.resolveHelperModelSettingsFn(),
@@ -41715,8 +41830,8 @@ export class DesktopBackendRegistry {
           ?? options?.reasoningEfforts
           ?? OPENAI_REASONING_EFFORTS,
       })),
-      requestedModel: params.preferredModel,
-      requestedReasoningEffort: params.preferredReasoningEffort,
+      requestedModel,
+      requestedReasoningEffort,
     });
 
     return {

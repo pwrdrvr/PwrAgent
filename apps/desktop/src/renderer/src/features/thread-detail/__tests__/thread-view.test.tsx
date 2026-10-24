@@ -5706,6 +5706,7 @@ describe("ThreadView", () => {
       serverName: "playwright",
       message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
       mode: "form",
+      purpose: persist ? "tool-approval" : "confirmation",
       _meta: {
         tool_description: "List, create, close, or select a browser tab.",
         ...(persist ? { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"] } : {}),

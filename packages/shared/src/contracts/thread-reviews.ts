@@ -28,6 +28,7 @@ export type ThreadReviewItem = {
   title: string;
   body?: string;
   priority?: number;
+  category?: AppServerReviewFinding["category"];
   codeLocation?: AppServerReviewFinding["code_location"];
   status: ThreadReviewItemStatus;
   createdAt: number;
@@ -53,7 +54,7 @@ export type ThreadReview = ThreadReviewIdentity & {
 };
 
 export type RecordThreadReviewInput = Pick<ThreadReview, "sourceKey" | "sourceUrl" | "title" | "summary" | "context"> & {
-  items: Array<Pick<ThreadReviewItem, "title" | "body" | "priority" | "codeLocation">>;
+  items: Array<Pick<ThreadReviewItem, "title" | "body" | "priority" | "category" | "codeLocation">>;
   /** Only a structured review with no findings is automatically handled. */
   clean?: boolean;
   createdAt?: number;

@@ -407,6 +407,82 @@ function costNotice(params: {
 }
 
 
+describe("ACP stream notices", () => {
+  // Grok reports upstream model retries over ACP. Main turns them into the
+  // same `error` + `willRetry` shape Codex sends, plus `turn/recovered` once
+  // the model answers, because Grok's first answer is often a hidden thought.
+  const event = (method: string, params: Record<string, unknown> = {}) => ({
+    type: "codex-stream-event" as const,
+    backend: "acp:grok" as const,
+    notification: {
+      method,
+      params: { threadId: "session-a", turnId: "turn-1", ...params },
+    },
+    threadLabel: "MCP Tasks research",
+  });
+  const retry = (params: Record<string, unknown> = {}) => event("error", {
+    willRetry: true,
+    error: {
+      message: "API error (status 500 Internal Server Error): The model is currently at capacity.",
+      additionalDetails: "Attempt 4 of 15.",
+    },
+    ...params,
+  });
+
+  it("names the provider and links the ACP thread", () => {
+    const state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+    expect(state.durable).toEqual([
+      expect.objectContaining({
+        title: "Grok is retrying",
+        message: "API error (status 500 Internal Server Error): The model is currently at capacity.\nAttempt 4 of 15.",
+        tone: "warning",
+        autoDismiss: false,
+        status: {
+          label: "The turn is still active. Grok will retry automatically.",
+          state: "progress",
+        },
+        threadLink: expect.objectContaining({ backend: "acp:grok", threadId: "session-a" }),
+      }),
+    ]);
+  });
+
+  it("reports recovery when main says the model answered", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+    state = appNoticeReducer(state, event("turn/recovered"));
+    expect(state.durable).toEqual([]);
+    expect(state.transient).toEqual([
+      expect.objectContaining({
+        title: "Grok resumed",
+        message: "Grok is producing output again.",
+        tone: "success",
+        autoDismiss: true,
+      }),
+    ]);
+  });
+
+  it("reports a completed turn with the provider's name", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+    state = appNoticeReducer(state, event("turn/completed", { turn: { status: "completed" } }));
+    expect(state.transient[0]).toMatchObject({ title: "Grok turn completed" });
+  });
+
+  it("dismisses the retry when the turn fails", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+    state = appNoticeReducer(state, event("turn/failed"));
+    expect(state.durable).toEqual([]);
+    expect(state.transient).toEqual([]);
+  });
+
+  it("keeps a Codex thread's notice separate from an ACP thread with the same IDs", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, retry());
+    state = appNoticeReducer(state, { ...retry(), backend: "codex" as const });
+    expect(state.durable.map((notice) => notice.title))
+      .toEqual(["Grok is retrying", "Codex is retrying"]);
+    state = appNoticeReducer(state, event("turn/recovered"));
+    expect(state.durable.map((notice) => notice.title)).toEqual(["Codex is retrying"]);
+  });
+});
+
 describe("Codex stream notices", () => {
   const event = (method: string, params: Record<string, unknown> = {}) => ({
     type: "codex-stream-event" as const,

@@ -107,6 +107,31 @@ describe("ThreadTodoStack", () => {
     expect(screen.getByRole("button", { name: /Fix 1 selected/ }).hasAttribute("disabled")).toBe(false);
   });
 
+  it("gives a review that ranks nothing no priority column, and keeps it for one that does", async () => {
+    const review = (id: string, priority?: number): ThreadReview => ({
+      id, backend: "claude", threadId: "thread-a", sourceKey: id,
+      title: "Review", status: "open", createdAt: 1, updatedAt: 1,
+      items: [
+        { id: `${id}-a`, title: "Duplicate CSS rule", category: "simplification", status: "open", createdAt: 1, updatedAt: 1 },
+        { id: `${id}-b`, title: "Ranked finding", ...(priority === undefined ? {} : { priority }), status: "open", createdAt: 1, updatedAt: 1 },
+      ],
+    });
+    for (const [entry, ranked] of [[review("unranked"), false], [review("ranked", 1), true]] as const) {
+      Object.assign(window, { pwragent: {
+        listThreadReviews: vi.fn(async () => ({ reviews: [entry] })),
+        onThreadTodosChanged: () => () => {},
+      } });
+      const card = threadReviewTodo(entry);
+      render(<ThreadTodoStack threadKey={threadTodoThreadKey(card)} todos={[card]}
+        view={createView([card])} onStartReview={vi.fn()} onDoHere={vi.fn()} />);
+      const list = await screen.findByRole("list", { name: "Findings" });
+      expect(list.hasAttribute("data-unranked")).toBe(!ranked);
+      expect(list.querySelectorAll(".review-todo__priority").length).toBe(ranked ? 2 : 0);
+      expect(within(list).queryByText("P?")).toBeNull();
+      cleanup();
+    }
+  });
+
   it("pages through this thread's cards", () => {
     const todos = [todo({ id: "1" }), todo({ id: "2" }), todo({ id: "3" })];
     render(
@@ -728,6 +753,35 @@ describe("thread to-do checklists", () => {
 });
 
 describe("ThreadTodosPanel", () => {
+  it("keeps missing instance coverage in a quiet, deduplicated footnote and clears it after recovery", async () => {
+    const disconnected = { instanceId: "studio", label: "Studio Mac", reason: "disconnected" as const };
+    const unsupported = { instanceId: "mini", label: "Build Mini", reason: "unsupported" as const };
+    const view = createView([todo({ id: "available", title: "Available work" })], {
+      unavailableInstances: [disconnected, unsupported, disconnected, unsupported],
+    });
+    const { rerender } = render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("heading", { name: "Available work" })).toBeTruthy();
+    const note = screen.getByRole("button", { name: /Show affected instances/ });
+    expect(note.textContent).toBe("Some instances are disconnected or do not support to-dos.");
+    await act(async () => { fireEvent.click(note); });
+    expect(screen.getByRole("tooltip").textContent).toBe("Build Mini — To-dos unavailable; update PwrAgent on this instance\nStudio Mac — Disconnected");
+    expect(note.closest("footer")).toBeTruthy();
+    await act(async () => {
+      rerender(<ThreadTodosPanel view={{ ...view, unavailableInstances: [] }} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    });
+    expect(screen.queryByRole("button", { name: /Show affected instances/ })).toBeNull();
+  });
+
+  it.each(["disconnected", "unsupported"] as const)("explains %s coverage without an error alert", (reason) => {
+    const view = createView([], { unavailableInstances: [{ instanceId: "mini", label: "Build Mini", reason }] });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: /Show affected instances/ }).textContent).toBe(reason === "disconnected"
+      ? "Some instances are disconnected." : "Some instances do not support to-dos.");
+    expect(screen.getByText("No to-dos for this thread.")).toBeTruthy();
+  });
+
   it("puts this thread first and opens another thread from its row", () => {
     const other = todo({ id: "o", threadId: "thread-b", title: "Elsewhere" });
     const mine = todo({ id: "a", title: "Mine" });

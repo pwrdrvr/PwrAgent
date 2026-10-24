@@ -7,6 +7,7 @@ import type {
   ThreadTodoProject,
   ThreadTodoResolution,
   ThreadTodoStatus,
+  TodoUnavailableInstance,
 } from "@pwragent/shared";
 import type { OperatorWait } from "../operator-requests/operator-waits";
 import type { OperatorQuestionTarget } from "../operator-requests/useOperatorRequests";
@@ -81,6 +82,8 @@ export type ThreadTodosView = {
   listResolved?: () => Promise<ThreadTodo[]>;
   /** What threads are waiting on the operator for, most urgent first. */
   queueError?: string;
+  /** Expected gaps in peer coverage, shown quietly below the queue. */
+  unavailableInstances?: TodoUnavailableInstance[];
   waits: OperatorWait[];
   waitsByThreadKey: ReadonlyMap<string, OperatorWait[]>;
   /** Item keys the operator has had on screen: waits and cards. */

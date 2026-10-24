@@ -1,3 +1,4 @@
+export const FEDERATION_SERVICES_CHANNEL = "federation:services";
 export const FEDERATION_SET_TRAFFIC_CAPTURE_CHANNEL = "federation:set-traffic-capture";
 export const FEDERATION_RESET_ACTIVITY_CHANNEL = "federation:reset-activity";
 export const FEDERATION_READ_ACTIVITY_CHANNEL = "federation:read-activity";
@@ -17,6 +18,12 @@ export const FEDERATION_GENERATE_INVITE_CHANNEL = "federation:generate-invite";
 export const FEDERATION_IMPORT_INVITE_CHANNEL = "federation:import-invite";
 export const FEDERATION_REVOKE_PEER_CHANNEL = "federation:revoke-peer";
 export const FEDERATION_HANDOFF_THREAD_CHANNEL = "federation:handoff-thread";
+export const FEDERATION_PUSH_COMPOSER_FILE_CHANNEL =
+  "federation:push-composer-file";
+export const FEDERATION_CANCEL_COMPOSER_FILE_PUSH_CHANNEL =
+  "federation:cancel-composer-file-push";
+export const FEDERATION_COMPOSER_FILE_PUSH_PROGRESS_CHANNEL =
+  "federation:composer-file-push-progress";
 export const FEDERATION_RESET_ENROLLMENT_CHANNEL =
   "federation:reset-enrollment";
 export const FEDERATION_PIN_IMPACT_CHANNEL = "federation:pin-impact";

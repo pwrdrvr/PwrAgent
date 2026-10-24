@@ -257,6 +257,18 @@ import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
 import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 import {
+  canPushToRemoteTarget,
+  describeRemoteFilePushRefusal,
+  describeRemoteFilePushTooltip,
+  resolveRemoteFilePushTarget,
+} from "./remote-file-push-availability";
+import {
+  useRemoteFileUploads,
+  type RemoteFileUpload,
+} from "./useRemoteFileUploads";
+import { useFederationHealth } from "../../lib/useFederationHealth";
+import { formatByteCount } from "../../lib/format-bytes";
+import {
   EnvActionRunEntry,
   EnvActionRunsView,
   formatDurationMs,
@@ -3281,6 +3293,49 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [fileAttachments, setFileAttachments] = useState<ComposerFileAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.fileAttachments ?? []
   );
+  // A remote thread's owner reads attachments from its own disk, so a file
+  // from this machine is first copied there over federation file push.
+  const remoteFileTarget = filesystemFederationTarget?.scope === "remote"
+    ? filesystemFederationTarget
+    : undefined;
+  const { health: remoteFileTargetHealth } = useFederationHealth({
+    desktopApi: props.desktopApi,
+    enabled: remoteFileTarget !== undefined,
+    suspended: remoteFileTarget === undefined,
+  });
+  const remoteFileTargetInstanceId = remoteFileTarget?.instanceId;
+  const remoteFilePushTarget = useMemo(
+    () => remoteFileTargetInstanceId
+      ? resolveRemoteFilePushTarget(remoteFileTargetHealth, remoteFileTargetInstanceId)
+      : undefined,
+    [remoteFileTargetHealth, remoteFileTargetInstanceId],
+  );
+  // Owner path → the local file it was copied from, so dropping the same
+  // file again reuses the copy that is already in the tray.
+  const remoteCopySourcesRef = useRef(new Map<string, string>());
+  const canPushRemoteFiles = Boolean(
+    remoteFilePushTarget
+      && props.desktopApi?.pushComposerFile
+      && canPushToRemoteTarget(remoteFilePushTarget),
+  );
+  const remoteFileUploads = useRemoteFileUploads({
+    desktopApi: props.desktopApi,
+    target: remoteFileTarget,
+    scopeKey: composerScopeKey,
+    onUploaded: (files) => {
+      for (const file of files) {
+        remoteCopySourcesRef.current.set(file.path, file.sourcePath);
+      }
+      attachFilePaths(files.map((file) => file.path));
+    },
+  });
+  // Why the native file actions are off here, or undefined when they work.
+  const nativeFilePickerBlockedReason = !filesystemFederationTarget
+    ? undefined
+    : canPushRemoteFiles
+      ? undefined
+      : (remoteFilePushTarget && describeRemoteFilePushTooltip(remoteFilePushTarget))
+        ?? REMOTE_NATIVE_PICKER_TOOLTIP;
   // Per-attachment content signature (`<size>:<hash>`) cache used to reject
   // exact-duplicate pastes. Computed lazily on first use and kept only in
   // memory — signatures are never part of the persisted draft snapshot.
@@ -8508,6 +8563,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     mode: "default" | "steer" = "default",
     options?: { restoreComposerFocus?: boolean },
   ): Promise<void> => {
+    // The status line under the tray says why: the message would reference
+    // files the owner does not have yet.
+    if (remoteFileUploads.uploads.length > 0) {
+      return;
+    }
     if (forkCommand) {
       await submitForkCommand(forkCommand);
       return;
@@ -9183,6 +9243,48 @@ export const Composer = memo(function Composer(props: ComposerProps) {
    * at consecutive indexes so the serialized draft reads
    * `chip␠chip␠…chip␠after` with exactly one space after every chip.
    */
+  /** Drop the `@query` an autocomplete pick would have replaced. */
+  const removeReferenceTrigger = (): void => {
+    if (!inputRef.current) {
+      return;
+    }
+    const selectionStart = Math.min(
+      inputRef.current.selectionStart ?? draft.length,
+      draft.length,
+    );
+    const refTrigger =
+      findDirectoryReferenceTrigger(draft, selectionStart)
+      ?? findDirectoryReferenceTrigger(draft, draft.length);
+    if (!refTrigger) {
+      return;
+    }
+    const before = draft.slice(0, refTrigger.start);
+    const nextDraft = `${before}${draft.slice(refTrigger.end)}`;
+    const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
+      currentDraft: draft,
+      nextDraft,
+      skillTokens,
+    });
+    // The same protected update as applyFileReferences below.
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: nextDraft,
+      expectedSkillTokensSignature:
+        getComposerSkillTokensSignature(nextSkillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    flushSync(() => {
+      setSkillTokens(nextSkillTokens);
+      setDraft(nextDraft);
+      setActiveDirectoryRefIndex(0);
+    });
+    requestAnimationFrame(() => {
+      if (inputRef.current?.value !== nextDraft) return;
+      inputRef.current.focus();
+      inputRef.current.setSelectionRange(before.length, before.length);
+    });
+  };
+
   const applyFileReferences = (paths: string[]): void => {
     if (!inputRef.current || paths.length === 0) {
       return;
@@ -9257,11 +9359,19 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
   /** "@ → Add file…" action: OS file picker → file-reference chips. */
   const applyPickedFileReferences = async (): Promise<void> => {
-    if (filesystemFederationTarget) {
+    if (filesystemFederationTarget && !canPushRemoteFiles) {
       return;
     }
     const result = await props.desktopApi?.pickFileFromDisk?.();
     if (!result || result.canceled || result.paths.length === 0) {
+      return;
+    }
+    if (filesystemFederationTarget) {
+      // An inline chip would have to wait for the copy before it has a path
+      // to name, so a remote thread's picked files join the tray instead,
+      // and the `@` query that opened the menu goes away as a chip's would.
+      removeReferenceTrigger();
+      startRemoteFileUploads(result.paths);
       return;
     }
     applyFileReferences(result.paths);
@@ -9575,11 +9685,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
    * Toasts once per batch for unresolvable paths.
    */
   const attachFiles = (files: File[]): void => {
-    if (filesystemFederationTarget) {
-      showComposerNotice({
-        title: "Local files unavailable",
-        message: REMOTE_NATIVE_PICKER_TOOLTIP,
-      });
+    if (filesystemFederationTarget && !canPushRemoteFiles) {
+      showRemoteFilePushRefusal();
       return;
     }
     let unresolvedCount = 0;
@@ -9599,16 +9706,67 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         message: "Could not resolve a path for the dropped file.",
       });
     }
+    if (filesystemFederationTarget) {
+      startRemoteFileUploads(paths);
+      return;
+    }
     attachFilePaths(paths);
+  };
+
+  const showRemoteFilePushRefusal = (): void => {
+    const refusal = remoteFilePushTarget
+      && describeRemoteFilePushRefusal(remoteFilePushTarget);
+    showComposerNotice(refusal ?? {
+      title: "Local files unavailable",
+      message: REMOTE_NATIVE_PICKER_TOOLTIP,
+    });
+  };
+
+  /**
+   * Copy files from this machine to the remote thread's owner. Each one shows
+   * as an uploading pill and joins the tray, at the owner's path, once the
+   * copy lands. Shares the tray's per-message cap.
+   */
+  const startRemoteFileUploads = (paths: string[]): void => {
+    const pending = new Set([
+      ...remoteFileUploads.uploads.map((upload) => upload.sourcePath),
+      ...fileAttachments.flatMap((attachment) => {
+        const source = remoteCopySourcesRef.current.get(attachment.path);
+        return source ? [source] : [];
+      }),
+    ]);
+    const fresh = [...new Set(paths)].filter((path) => path && !pending.has(path));
+    if (fresh.length === 0) {
+      return;
+    }
+    const remaining = MAX_COMPOSER_FILE_ATTACHMENTS
+      - fileAttachments.length
+      - remoteFileUploads.uploads.length;
+    if (fresh.length > remaining) {
+      showComposerNotice({
+        title: "Attachment limit reached",
+        message: `You can attach up to ${MAX_COMPOSER_FILE_ATTACHMENTS} files per message.`,
+      });
+    }
+    remoteFileUploads.start(
+      fresh.slice(0, Math.max(0, remaining)).map((path) => ({
+        label: fileLabelFromPath(path),
+        sourcePath: path,
+      })),
+    );
   };
 
   /** "+"-menu "Add file…" action: OS file picker → tray pills. */
   const attachPickedFilesToTray = async (): Promise<void> => {
-    if (filesystemFederationTarget) {
+    if (filesystemFederationTarget && !canPushRemoteFiles) {
       return;
     }
     const result = await props.desktopApi?.pickFileFromDisk?.();
     if (!result || result.canceled || result.paths.length === 0) {
+      return;
+    }
+    if (filesystemFederationTarget) {
+      startRemoteFileUploads(result.paths);
       return;
     }
     attachFilePaths(result.paths);
@@ -10528,6 +10686,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     forking ||
     preparingSend ||
     props.disabled ||
+    remoteFileUploads.uploads.length > 0 ||
     steering ||
     (!activeTurnId && sending && !isLaunchpad) ||
     (!hasComposerContent &&
@@ -11358,7 +11517,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const hasVisibleAttachments =
     imageAttachments.length > 0
     || visibleFileAttachments.length > 0
-    || pdfPreviewReferences.length > 0;
+    || pdfPreviewReferences.length > 0
+    || remoteFileUploads.uploads.length > 0;
+  const remoteUploadTargetLabel = remoteFilePushTarget?.label ?? "the owning machine";
+  const uploadingRemoteFileCount = remoteFileUploads.uploads.filter(
+    (upload) => upload.status === "uploading",
+  ).length;
+  const failedRemoteFileUploads = remoteFileUploads.uploads.filter(
+    (upload) => upload.status === "failed",
+  );
   // The strip is one gallery: every thumbnail that expands, in the order it
   // is drawn — pasted images, then PDF page previews that are ready. A sent
   // message's images page with the arrow keys; these must too, or the same
@@ -12381,6 +12548,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           {visibleFileAttachments.map((attachment) => (
             <AttachmentTooltip
               className="composer__file-attachment"
+              machineLabel={
+                filesystemFederationTarget ? remoteUploadTargetLabel : undefined
+              }
               path={attachment.path}
               key={attachment.id}
             >
@@ -12400,8 +12570,40 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               </button>
             </AttachmentTooltip>
           ))}
+          {remoteFileUploads.uploads.map((upload) => (
+            <RemoteFileUploadPill
+              key={upload.id}
+              targetLabel={remoteUploadTargetLabel}
+              upload={upload}
+              onRemove={() => {
+                remoteFileUploads.remove(upload.id);
+              }}
+              onRetry={() => {
+                remoteFileUploads.retry(upload.id);
+              }}
+            />
+          ))}
         </div>
       ) : null}
+
+      {uploadingRemoteFileCount > 0 ? (
+        <p className="composer__meta" role="status">
+          Copying {uploadingRemoteFileCount === 1
+            ? "1 file"
+            : `${uploadingRemoteFileCount} files`} to {remoteUploadTargetLabel}.
+          {" "}Send waits until {uploadingRemoteFileCount === 1 ? "it finishes" : "they finish"}.
+        </p>
+      ) : null}
+      {failedRemoteFileUploads.map((upload) => (
+        <p
+          className="composer__meta composer__meta--warning"
+          key={upload.id}
+          role="status"
+        >
+          {upload.label} did not copy to {remoteUploadTargetLabel}: {upload.error}
+          {" "}Retry or remove it to send.
+        </p>
+      ))}
 
       {imageAttachments.length > 0 && !imagesSupported ? (
         <p className="composer__meta composer__meta--warning" role="status">
@@ -13046,17 +13248,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             {props.desktopApi?.pickFileFromDisk ? (
               <button
                 className="composer__autocomplete-option composer__autocomplete-option--action"
-                data-tooltip={
-                  filesystemFederationTarget
-                    ? REMOTE_NATIVE_PICKER_TOOLTIP
-                    : undefined
-                }
-                disabled={Boolean(filesystemFederationTarget)}
-                title={
-                  filesystemFederationTarget
-                    ? REMOTE_NATIVE_PICKER_TOOLTIP
-                    : undefined
-                }
+                data-tooltip={nativeFilePickerBlockedReason}
+                disabled={nativeFilePickerBlockedReason !== undefined}
+                title={nativeFilePickerBlockedReason}
                 type="button"
                 onMouseDown={(event) => {
                   event.preventDefault();
@@ -13376,7 +13570,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       currentModeId:
                         acpRuntimeModeControl.source === "mode"
                           ? value
-                          : undefined,
+                          : acpRuntimeModeControl.optionId === "permission_mode"
+                            ? props.launchpad.acpRuntime?.currentModeId
+                            : undefined,
                     },
                   });
                   return;
@@ -13815,6 +14011,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               recentFiles={recentFileReferences}
               platform={props.desktopApi?.platform}
               nativePickingDisabled={Boolean(filesystemFederationTarget)}
+              remoteFilePicking={
+                filesystemFederationTarget
+                  ? { disabledReason: nativeFilePickerBlockedReason }
+                  : undefined
+              }
               onSelectDirectory={(directory) => {
                 setAddReferenceMenuOpen(false);
                 applyDirectoryReference(directory);
@@ -14361,20 +14562,133 @@ function SubthreadSourceRow({
   );
 }
 
+function uploadPercent(upload: RemoteFileUpload): number | undefined {
+  if (!upload.totalBytes) {
+    return upload.totalBytes === 0 ? 100 : undefined;
+  }
+  return Math.min(100, Math.floor((upload.sentBytes / upload.totalBytes) * 100));
+}
+
+/**
+ * A tray pill for a file still on its way to a remote thread's owner. It
+ * becomes an ordinary file pill, pointing at the owner's copy, once the copy
+ * lands. A failed copy keeps its pill so the operator can retry or remove it.
+ */
+function RemoteFileUploadPill({
+  onRemove,
+  onRetry,
+  targetLabel,
+  upload,
+}: {
+  onRemove: () => void;
+  onRetry: () => void;
+  targetLabel: string;
+  upload: RemoteFileUpload;
+}) {
+  const { show, showAfterDelay, hide, update, visible, tooltipId, tooltipNode } =
+    useViewportTooltip({
+      className: "viewport-tooltip composer__attachment-tooltip",
+    });
+  const failed = upload.status === "failed";
+  const percent = uploadPercent(upload);
+  const content = failed
+    ? `Did not copy to ${targetLabel}: ${upload.error ?? "unknown error"}`
+    : upload.totalBytes !== undefined
+      ? `Copying to ${targetLabel} · ${formatByteCount(upload.sentBytes)} of ${formatByteCount(upload.totalBytes)}`
+      : `Copying to ${targetLabel}`;
+  // An open tooltip follows the transfer instead of freezing at hover time.
+  useEffect(() => {
+    if (visible) update(content);
+  }, [content, update, visible]);
+
+  return (
+    <span
+      className={[
+        "composer__file-attachment",
+        "composer__file-upload",
+        failed ? "composer__file-upload--failed" : "",
+      ].filter(Boolean).join(" ")}
+      tabIndex={0}
+      aria-describedby={visible ? tooltipId : undefined}
+      onMouseEnter={(event) => showAfterDelay(event.currentTarget, content)}
+      onMouseLeave={hide}
+      onFocus={(event) => show(event.currentTarget, content)}
+      onBlur={hide}
+    >
+      {failed ? (
+        <FileCodeIcon size={13} aria-hidden="true" />
+      ) : percent === undefined ? (
+        <span
+          aria-hidden="true"
+          className="pending-spinner pending-spinner--sm"
+        />
+      ) : (
+        <svg
+          aria-hidden="true"
+          className="composer__file-upload-ring"
+          height="13"
+          viewBox="0 0 16 16"
+          width="13"
+        >
+          <circle className="composer__file-upload-ring-track" cx="8" cy="8" r="6" />
+          <circle
+            className="composer__file-upload-ring-fill"
+            cx="8"
+            cy="8"
+            pathLength="100"
+            r="6"
+            strokeDasharray={`${percent} 100`}
+          />
+        </svg>
+      )}
+      <span className="composer__file-attachment-label">{upload.label}</span>
+      {failed ? (
+        <button
+          className="composer__file-upload-retry"
+          type="button"
+          onClick={onRetry}
+        >
+          Retry
+        </button>
+      ) : percent === undefined ? null : (
+        <span className="composer__file-upload-percent">{percent}%</span>
+      )}
+      <button
+        aria-label={
+          failed ? `Remove ${upload.label}` : `Cancel copying ${upload.label}`
+        }
+        className="composer__file-attachment-remove"
+        type="button"
+        onClick={onRemove}
+      >
+        <CloseIcon size={12} aria-hidden="true" />
+      </button>
+      {tooltipNode}
+    </span>
+  );
+}
+
 function AttachmentTooltip({
   children,
   className,
+  machineLabel,
   path,
 }: {
   children: ReactNode;
   className: string;
+  /** Names the remote owner whose disk holds `path`. */
+  machineLabel?: string;
   path: string;
 }) {
   const { show, showAfterDelay, hide, visible, tooltipId, tooltipNode } =
     useViewportTooltip({
       className: "viewport-tooltip composer__attachment-tooltip",
     });
-  const content = buildFileReferenceTooltip(path);
+  // This machine's home directory says nothing about the owner's, so a
+  // remote path is shown in full.
+  const content = machineLabel
+    ? `On ${machineLabel}: ${path}`
+    : buildFileReferenceTooltip(path);
 
   return (
     <span

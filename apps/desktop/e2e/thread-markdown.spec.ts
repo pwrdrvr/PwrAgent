@@ -2,18 +2,34 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 
 const threadMarkdownSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
-test("renders markdown content in transcript messages", async () => {
+test("renders markdown content in transcript messages (standard)", () => assertMarkdownRendering(false));
+test("renders markdown content in transcript messages (incremental)", () => assertMarkdownRendering(true));
+
+async function assertMarkdownRendering(incrementalEnabled: boolean) {
   const app = await launchElectronApp({
     fixturePath: path.resolve(
       threadMarkdownSpecDir,
       "fixtures/thread-markdown/replay.fixture.json"
-    )
+    ),
+    preLaunchHook: (homeRoot) => {
+      applyDesktopSettingsPatch(path.join(homeRoot, ".pwragent/profiles/default/config.toml"), {
+        experimental: { incrementalMarkdownRendering: incrementalEnabled },
+      });
+    },
   });
 
   try {
+    const parsedScripts = new Set<string>();
+    const cdp = await app.window.context().newCDPSession(app.window);
+    cdp.on("Debugger.scriptParsed", ({ url }) => parsedScripts.add(url));
+    // Resource Timing omits file:// modules. Debugger.enable also reports
+    // scripts parsed before attachment, including an already-loaded renderer.
+    await cdp.send("Debugger.enable");
+
     await app.window
       .getByRole("button", { name: /Markdown replay thread/i })
       .first()
@@ -71,7 +87,10 @@ test("renders markdown content in transcript messages", async () => {
     await expect(transcript.getByText("Preserves file links")).toBeVisible();
     await expect(transcript).toContainText("Keeps");
     await expect(transcript).toContainText("inert");
+    await expect.poll(() => [...parsedScripts].some((url) =>
+      url.includes("/IncrementalMarkdown-")
+    )).toBe(incrementalEnabled);
   } finally {
     await app.close();
   }
-});
+}

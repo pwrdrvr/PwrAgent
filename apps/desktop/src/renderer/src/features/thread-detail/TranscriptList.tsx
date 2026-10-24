@@ -67,6 +67,7 @@ import {
 } from "./transcript-render-items";
 import { approvalDisplayCommand } from "./approval-display-command";
 import { readRendererSequence } from "./live-transcript-activity";
+import { usePendingMarkdownPreview } from "./usePendingMarkdownPreview";
 
 type TranscriptViewport = {
   distanceFromBottom: number;
@@ -647,6 +648,7 @@ function ApprovalDiffDisclosures(props: {
 }
 
 export function TranscriptList(props: TranscriptListProps) {
+  const pendingAssistantPreview = usePendingMarkdownPreview(props.threadId, props.pendingAssistantMessage);
   const skills = props.skills ?? EMPTY_SKILLS;
   const agentCommandsStatus = props.pendingStatusText
     ? undefined
@@ -829,7 +831,7 @@ export function TranscriptList(props: TranscriptListProps) {
       props.pendingActivityEntry,
       props.pendingProtocolActivityEntry,
       props.pendingUsageActivityEntry,
-      props.pendingAssistantMessage,
+      pendingAssistantPreview,
       ...transientMessageEntries,
     ])) {
       insertPendingEntry(entries, pendingEntry);
@@ -849,7 +851,7 @@ export function TranscriptList(props: TranscriptListProps) {
     props.pendingActivityEntry,
     props.pendingProtocolActivityEntry,
     props.pendingUsageActivityEntry,
-    props.pendingAssistantMessage,
+    pendingAssistantPreview,
     props.transientMessage,
     props.transientMessages,
     props.pendingPlanEntry,

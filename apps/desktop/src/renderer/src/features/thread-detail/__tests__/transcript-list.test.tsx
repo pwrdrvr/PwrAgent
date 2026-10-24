@@ -4262,6 +4262,7 @@ Implementation notes remain in a readable bubble.`;
   });
 
   it("keeps following after a new prompt is appended to a long bottom-pinned chat", () => {
+    vi.useFakeTimers();
     const entries = Array.from({ length: 32 }, (_, index) => ({
       type: "message" as const,
       id: `long-message-${index + 1}`,
@@ -4351,6 +4352,10 @@ Implementation notes remain in a readable bubble.`;
       />
     );
 
+    // The growing assistant preview is admitted on its next render interval.
+    // Assert follow after that DOM update, rather than after raw input alone.
+    expect(list.scrollTop).toBe(960);
+    act(() => vi.advanceTimersByTime(100));
     expect(list.scrollTop).toBe(1340);
   });
 
@@ -5524,6 +5529,7 @@ Implementation notes remain in a readable bubble.`;
           message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
           mode: "form",
           turnId: "turn-1",
+          purpose: "confirmation",
           _meta: {
             tool_description: "List, create, close, or select a browser tab.",
           },
@@ -5541,7 +5547,7 @@ Implementation notes remain in a readable bubble.`;
     expect(
       screen.getByRole("group", { name: "Pending MCP interaction" })
     ).toBeInTheDocument();
-    expect(screen.getByText("MCP approval")).toBeInTheDocument();
+    expect(screen.getByText("MCP confirmation")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
   });

@@ -1811,8 +1811,8 @@ describe("DesktopMessagingRuntime", () => {
     expect(adapter.delivered.find((intent) => intent.kind === "approval"))
       .toMatchObject({
         kind: "approval",
-        title: "MCP Login",
-        body: expect.stringContaining("https://example.test/oauth/start?state=opaque"),
+        title: "MCP Link",
+        body: expect.stringContaining("github asks to open a page on `example.test`."),
         requestContext: {
           backend: "codex",
           method: "mcpServer/elicitation/request",

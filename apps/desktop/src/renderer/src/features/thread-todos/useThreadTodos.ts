@@ -13,6 +13,7 @@ import type {
   ThreadTodo,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoStatus,
+  TodoUnavailableInstance,
 } from "@pwragent/shared";
 import { threadTodoThreadKey } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -20,6 +21,7 @@ import type { ThreadTodoResolveOptions } from "./thread-todos-view";
 
 export type ThreadTodosController = {
   error?: string;
+  unavailableInstances: TodoUnavailableInstance[];
   /** Open cards, newest first. */
   openTodos: ThreadTodo[];
   /** Open cards per `backend:threadId`, newest first. */
@@ -62,6 +64,7 @@ type ThreadTodosApi = Pick<
 const EMPTY_TODOS: ThreadTodo[] = [];
 const EMPTY_MAP: ReadonlyMap<string, ThreadTodo[]> = new Map();
 const EMPTY_SET: ReadonlySet<string> = new Set();
+const EMPTY_UNAVAILABLE: TodoUnavailableInstance[] = [];
 
 /**
  * Open thread to-dos for this window, routed to each owning instance.
@@ -75,6 +78,7 @@ export function useThreadTodos(
 ): ThreadTodosController {
   const api = desktopApi;
   const [error, setError] = useState<string>();
+  const [unavailableInstances, setUnavailableInstances] = useState(EMPTY_UNAVAILABLE);
   const [openTodos, setOpenTodos] = useState<ThreadTodo[]>(EMPTY_TODOS);
   const [revision, setRevision] = useState(0);
   const [mergeMethods, setMergeMethods] = useState<ThreadTodoMergeMethodPreferences>();
@@ -96,6 +100,7 @@ export function useThreadTodos(
         try {
           const response = await list({ status: "open" });
           setError(response.errors?.join("\n"));
+          setUnavailableInstances(response.unavailableInstances ?? EMPTY_UNAVAILABLE);
           setOpenTodos(response.todos.length > 0 ? response.todos : EMPTY_TODOS);
           if (response.mergeMethods) setMergeMethods(response.mergeMethods);
         } catch (error) {
@@ -175,6 +180,7 @@ export function useThreadTodos(
   return useMemo(
     () => ({
       error,
+      unavailableInstances,
       openTodos,
       openByThreadKey,
       revision,
@@ -186,6 +192,7 @@ export function useThreadTodos(
     }),
     [
       error,
+      unavailableInstances,
       openTodos,
       openByThreadKey,
       revision,

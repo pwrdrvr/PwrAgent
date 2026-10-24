@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 
 describe("buildApprovalIntent", () => {
-  it("renders URL-mode MCP login requests with MCP-shaped responses", () => {
+  it.each([
+    { label: "with", elicitationId: "elicitation-1" },
+    { label: "without", elicitationId: undefined },
+  ])("sends URL-mode MCP requests to the desktop, $label an elicitation id", ({ elicitationId }) => {
     const intent = buildApprovalIntent({
       id: "mcp-login-1",
       createdAt: 1000,
@@ -17,49 +20,66 @@ describe("buildApprovalIntent", () => {
           _meta: null,
           message: "Reconnect GitHub to restore access.",
           url: "https://example.test/oauth/start?state=opaque",
-          elicitationId: "elicitation-1",
+          ...(elicitationId ? { elicitationId } : {}),
         },
       },
     });
 
+    // Consent needs the full address, which a chat message must not carry:
+    // history keeps the query, and link previews fetch the page.
     expect(intent).toMatchObject({
       kind: "approval",
-      title: "MCP Login",
+      title: "MCP Link",
       decisions: [
-        {
-          id: "approval:mcp:accept",
-          label: "Allow",
-          decision: "accept",
-          response: {
-            action: "accept",
-            content: {},
-            _meta: null,
-          },
-        },
         {
           id: "approval:mcp:decline",
           decision: "decline",
-          response: {
-            action: "decline",
-            content: null,
-            _meta: null,
-          },
+          response: { action: "decline", content: null, _meta: null },
         },
         {
           id: "approval:mcp:cancel",
           decision: "cancel",
-          response: {
-            action: "cancel",
-            content: null,
-            _meta: null,
-          },
+          response: { action: "cancel", content: null, _meta: null },
         },
       ],
     });
+    expect(intent.decisions).toHaveLength(2);
     expect(intent.body).toContain("Reconnect GitHub to restore access.");
-    expect(intent.body).toContain(
-      "Open login: https://example.test/oauth/start?state=opaque",
-    );
+    expect(intent.body).toContain("github asks to open a page on `example.test`.");
+    expect(intent.body).toContain("Open it from PwrAgent desktop");
+    expect(intent.body).not.toContain("https://");
+    expect(intent.body).not.toContain("opaque");
+  });
+
+  it.each([
+    { title: "Tool Approval", params: { _meta: { codex_approval_kind: "mcp_tool_call" } } },
+    { title: "Tool Approval", params: { _meta: { pwragent_approval_kind: "mcp_tool_call" } } },
+    { title: "MCP Confirmation", params: {} },
+    {
+      title: "MCP Input",
+      params: { requestedSchema: { type: "object" as const, properties: { region: { type: "string" } } } },
+    },
+  ])("titles an MCP request $title", ({ title, params }) => {
+    const intent = buildApprovalIntent({
+      id: "mcp-title",
+      createdAt: 1000,
+      request: {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          requestId: "request-mcp-title",
+          serverName: "example",
+          mode: "form",
+          _meta: null,
+          message: "Continue?",
+          requestedSchema: { type: "object", properties: {} },
+          ...params,
+        },
+      },
+    });
+
+    expect(intent.title).toBe(title);
   });
 
   it("keeps required MCP forms visible without offering an invalid empty approval", () => {
@@ -97,16 +117,6 @@ describe("buildApprovalIntent", () => {
   });
 
   it.each([
-    {
-      label: "URL mode without an elicitation id",
-      params: {
-        serverName: "github",
-        mode: "url" as const,
-        _meta: null,
-        message: "Reconnect GitHub to restore access.",
-        url: "https://example.test/oauth/start?state=opaque",
-      },
-    },
     {
       label: "form mode without a requested schema",
       params: {
@@ -164,6 +174,9 @@ describe("buildApprovalIntent", () => {
               { name: "header", value: "Bearer fixture-token" },
               { name: "headers", value: "{\"Authorization\":\"Bearer nested-token\",\"Accept\":\"json\"}" },
               { name: "max_tokens", value: "500" },
+              // The same names the desktop card refuses to collect.
+              { name: "card_number", value: "4111111111111111" },
+              { name: "pw", label: "Password (required)", value: "hunter2" },
             ],
           },
         },
@@ -178,8 +191,12 @@ describe("buildApprovalIntent", () => {
       "header: [redacted]",
       "headers: {\"Authorization\":\"[redacted]\",\"Accept\":\"json\"}",
       "max_tokens: 500",
+      "card_number: [redacted]",
+      "Password (required): [redacted]",
     ].join("\n"));
     expect(intent.body).not.toContain("nested-token");
+    expect(intent.body).not.toContain("4111111111111111");
+    expect(intent.body).not.toContain("hunter2");
     expect(intent.body).not.toContain("fixture-key");
     expect(intent.body).not.toContain("fixture-token");
   });

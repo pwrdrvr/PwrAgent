@@ -151,6 +151,7 @@ export type DesktopSettingsConfig = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     markdownMathRendering?: boolean;
+    incrementalMarkdownRendering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -199,6 +200,7 @@ export type DesktopSettingsConfig = {
     listenPort?: number;
     compressionEnabled?: boolean;
     allowRemoteShells?: boolean;
+    allowPortForwarding?: boolean;
     allowFilePush?: boolean;
     allowFilePull?: boolean;
     allowFilePullOutsideThreadDirectories?: boolean;
@@ -782,6 +784,12 @@ export function desktopSettingsPatchToEdits(
       patch.experimental.liveTranscriptEventFiltering,
     );
   }
+  if (patch.experimental?.incrementalMarkdownRendering !== undefined) {
+    set(
+      ["experimental", "incremental_markdown_rendering"],
+      patch.experimental.incrementalMarkdownRendering,
+    );
+  }
   if (patch.experimental?.markdownMathRendering !== undefined) {
     set(
       ["experimental", "markdown_math_rendering"],
@@ -1213,6 +1221,9 @@ export function desktopSettingsPatchToEdits(
     } else {
       set(["federation", "listen_host"], patch.federation.listenHost);
     }
+  }
+  if (patch.federation?.allowPortForwarding !== undefined) {
+    set(["federation", "allow_port_forwarding"], patch.federation.allowPortForwarding);
   }
   if (patch.federation?.allowRemoteShells !== undefined) {
     set(["federation", "allow_remote_shells"], patch.federation.allowRemoteShells);
@@ -2168,6 +2179,9 @@ function normalizeDesktopConfig(
       markdownMathRendering: readBoolean(
         experimental?.markdown_math_rendering,
       ),
+      incrementalMarkdownRendering: readBoolean(
+        experimental?.incremental_markdown_rendering,
+      ),
       threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
       threadPricingDisplayUsd: readBoolean(
         experimental?.thread_pricing_display_usd,
@@ -2233,6 +2247,7 @@ function normalizeDesktopConfig(
       listenPort: readNumber(federation?.listen_port),
       compressionEnabled: readBoolean(federation?.compression_enabled),
       allowRemoteShells: readBoolean(federation?.allow_remote_shells),
+      allowPortForwarding: readBoolean(federation?.allow_port_forwarding),
       allowFilePush: readBoolean(federation?.allow_file_push),
       allowFilePull: readBoolean(federation?.allow_file_pull),
       allowFilePullOutsideThreadDirectories: readBoolean(federation?.allow_file_pull_outside_thread_directories),
