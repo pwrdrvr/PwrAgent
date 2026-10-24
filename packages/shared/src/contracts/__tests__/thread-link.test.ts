@@ -5,6 +5,7 @@ import {
   isThreadLinkId,
   isThreadUrl,
   parseThreadUrl,
+  qualifyThreadUrlsInText,
 } from "../thread-link";
 
 describe("buildThreadUrl", () => {
@@ -179,5 +180,29 @@ describe("buildThreadMarkdownLink", () => {
     expect(
       buildThreadMarkdownLink({ threadId: "019f5d79", title: "one\ntwo" }),
     ).toBe("[one two](pwragent://thread/019f5d79)");
+  });
+});
+
+describe("qualifyThreadUrlsInText", () => {
+  const local = "pwr_c9a3be06-b652-48df-9ea0-0a165344f86b";
+
+  it("stamps the sender's instance onto bare links in markdown and prose", () => {
+    expect(qualifyThreadUrlsInText(
+      "see [Claude exit on early steer](pwragent://thread/2eb5e094?backend=claude) and pwragent://thread/01a169e5 too",
+      local,
+    )).toBe(
+      `see [Claude exit on early steer](pwragent://thread/2eb5e094?backend=claude&instanceId=${local})`
+      + ` and pwragent://thread/01a169e5?instanceId=${local} too`,
+    );
+  });
+
+  it("leaves links that already name an instance, and non-links, untouched", () => {
+    const text = "[M2](pwragent://thread/fe70ae26?backend=claude&instanceId=pwr_490f7727) pwragent://thread/a/b plain";
+    expect(qualifyThreadUrlsInText(text, local)).toBe(text);
+  });
+
+  it("keeps the message and profile of a bare link", () => {
+    expect(qualifyThreadUrlsInText("(pwragent://thread/t1?backend=codex&messageId=m1&profile=dev)", local))
+      .toBe(`(pwragent://thread/t1?backend=codex&instanceId=${local}&messageId=m1&profile=dev)`);
   });
 });
