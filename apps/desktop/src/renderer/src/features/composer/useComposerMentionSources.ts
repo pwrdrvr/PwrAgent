@@ -51,11 +51,16 @@ export function useComposerMentionSources(params: {
     remoteInstanceId !== undefined ? { scope: "remote", instanceId: remoteInstanceId }
       : localTarget ? { scope: "local" } : undefined,
   [localTarget, remoteInstanceId]);
-  const ownerKey = remoteInstanceId === undefined ? "local" : `remote:${remoteInstanceId}`;
   const viewerInstanceId = readRendererFederationTarget()?.instanceId;
   const viewerTarget = useMemo<FederationTarget | undefined>(() =>
     viewerInstanceId !== undefined ? { scope: "remote", instanceId: viewerInstanceId } : undefined,
   [viewerInstanceId]);
+  // The cached population depends on both owners: directories come from the
+  // thread's owner, threads from the window's (a remote viewer's peer).
+  const ownerKey = JSON.stringify([
+    remoteInstanceId === undefined ? "local" : `remote:${remoteInstanceId}`,
+    viewerInstanceId ?? "local",
+  ]);
   const consumerId = useId();
   const [demand, setDemand] = useState<string>();
   const { health } = useFederationHealth({
