@@ -362,6 +362,8 @@ import type {
   ConnectPwrSnapResponse,
   ConnectPwrGitResponse,
   OpenPwrGitResponse,
+  OpenSandboxerLinkResponse,
+  SandboxerLinkTarget,
   PwrGitConnectionStatus,
   OpenPwrSnapResponse,
   PwrSnapConnectionStatus,
@@ -665,6 +667,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   connectPwrGit?: () => Promise<ConnectPwrGitResponse>;
   openPwrGit?: () => Promise<OpenPwrGitResponse>;
   openPwrGitDownload?: () => Promise<OpenPwrGitResponse>;
+  openSandboxerLink?: (target: SandboxerLinkTarget) => Promise<OpenSandboxerLinkResponse>;
   readPwrSuiteInstaller?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;
   startPwrSuiteDownload?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;
   cancelPwrSuiteDownload?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;

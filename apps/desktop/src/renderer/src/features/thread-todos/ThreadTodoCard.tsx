@@ -1,4 +1,11 @@
-import { useEffect, useId, useRef, useState, type ComponentType } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentType,
+} from "react";
 import type {
   ThreadReviewItem,
   ThreadTodo,
@@ -18,6 +25,7 @@ import {
   ArrowUpIcon,
   BanIcon,
   CheckIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronUpIcon,
@@ -63,6 +71,9 @@ const MERGE_METHOD_LABELS: Record<
 };
 
 const COPIED_MS = 1_500;
+
+/** Steps a resting card shows; the toggle opens the rest. */
+const RESTING_STEP_ROWS = 3;
 
 export type ThreadTodoCardHandlers = {
   /** Merge or start-thread, in the main process. */
@@ -492,6 +503,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const wasConfirmingRef = useRef(false);
   const confirmTextId = useId();
   const [promptExpanded, setPromptExpanded] = useState(false);
+  const resting = useRestingCard(todo);
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
@@ -768,12 +780,22 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       />
 
       {todo.detail || progress || facts.length > 0 || prompt || todo.error ? (
-        <div className="thread-todo-card__body">
-          {todo.detail ? <p className="thread-todo-card__detail">{todo.detail}</p> : null}
-          {todo.items && progress ? (
+        <div
+          id={resting.bodyId}
+          className={`thread-todo-card__body${resting.expanded ? " is-expanded" : ""}`}
+        >
+          {todo.detail ? (
+            <p
+              ref={resting.detailRef}
+              className={`thread-todo-card__detail${resting.expanded ? "" : " is-clamped"}`}
+            >
+              {todo.detail}
+            </p>
+          ) : null}
+          {resting.steps.length > 0 && progress ? (
             <ThreadTodoChecklist
               todo={todo}
-              items={todo.items}
+              items={resting.steps}
               progress={progress}
               onSetItemChecked={props.onSetItemChecked}
             />
@@ -815,6 +837,19 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           ) : null}
         </div>
       ) : null}
+      {/* Outside the body, so Show less stays put while the body scrolls. */}
+      {resting.toggleLabel ? (
+        <button
+          type="button"
+          className="thread-todo-card__more"
+          aria-expanded={resting.expanded}
+          aria-controls={resting.bodyId}
+          onClick={resting.toggle}
+        >
+          {resting.expanded ? <ChevronUpIcon size={11} /> : <ChevronDownIcon size={11} />}
+          {resting.toggleLabel}
+        </button>
+      ) : null}
 
       {confirmingMerge && action?.type === "merge_pull_request" ? (
         <p className="thread-todo-card__confirm">
@@ -834,6 +869,67 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       </div>
     </article>
   );
+}
+
+/**
+ * Where a resting card's step window starts: the first open step, moved
+ * back so the window stays full near the end of the list.
+ */
+function restingStepStart(items: ThreadTodoItem[]): number {
+  const firstOpen = items.findIndex((item) => !item.checked);
+  return Math.max(0, Math.min(firstOpen < 0 ? 0 : firstOpen, items.length - RESTING_STEP_ROWS));
+}
+
+/**
+ * A card's resting height. Until the operator opens it, the description is
+ * clamped to three lines and the checklist shows a window of steps from the
+ * first open one; the toggle under the body opens the rest. A tick inside
+ * the window leaves it in place, so a mis-click can be undone where it
+ * happened, and the window moves on once every step in it is checked.
+ */
+function useRestingCard(todo: ThreadTodo) {
+  const items = todo.items ?? [];
+  const [expanded, setExpanded] = useState(false);
+  const [anchor, setAnchor] = useState(() => restingStepStart(items));
+  const [detailCut, setDetailCut] = useState(false);
+  const detailRef = useRef<HTMLParagraphElement>(null);
+  const bodyId = useId();
+
+  let start = Math.max(0, Math.min(anchor, items.length - RESTING_STEP_ROWS));
+  const inWindow = items.slice(start, start + RESTING_STEP_ROWS);
+  if (inWindow.every((item) => item.checked) && items.some((item) => !item.checked)) {
+    start = restingStepStart(items);
+    if (start !== anchor) setAnchor(start);
+  }
+  const hiddenSteps = expanded ? 0 : Math.max(0, items.length - RESTING_STEP_ROWS);
+
+  // Measured, not guessed from the length: the clamp cuts at the card's
+  // width, which the rail and the transcript corner set differently.
+  useLayoutEffect(() => {
+    const detail = detailRef.current;
+    if (expanded || !detail) return;
+    const measure = () => setDetailCut(detail.scrollHeight > detail.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(detail);
+    return () => observer.disconnect();
+  }, [expanded, todo.detail]);
+
+  const toggleLabel = expanded
+    ? "Show less"
+    : hiddenSteps > 0
+      ? `Show all ${items.length} steps`
+      : detailCut ? "Show more" : undefined;
+
+  return {
+    expanded,
+    bodyId,
+    detailRef,
+    steps: expanded ? items : items.slice(start, start + RESTING_STEP_ROWS),
+    toggleLabel,
+    toggle: () => setExpanded((current) => !current),
+  };
 }
 
 /** The override only when the operator confirmed it; nothing otherwise. */

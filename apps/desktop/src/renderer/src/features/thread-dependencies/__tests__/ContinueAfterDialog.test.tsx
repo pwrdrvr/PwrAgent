@@ -43,7 +43,9 @@ describe("Continue After dialog", () => {
     const api = { manageThreadDependencies: manage, getNavigationQueryPage: query, releaseNavigationQuery: release } as unknown as DesktopApi;
     renderDialog(api);
     await waitFor(() => expect(manage).toHaveBeenCalledWith({ action: "list", backend: "codex", threadId: "waiting" }));
-    expect(dialog()).toHaveAccessibleDescription("Choose what “Dependencies” waits for, and what it does next.");
+    // The dialog stays in its loading view until the list response resolves;
+    // the call alone does not mean the form has rendered.
+    await waitFor(() => expect(dialog()).toHaveAccessibleDescription("Choose what “Dependencies” waits for, and what it does next."));
     const results = await screen.findByRole("list", { name: "Threads" });
     await waitFor(() => expect(release).toHaveBeenCalledWith(query.mock.calls[0]![1]));
     expect(query).toHaveBeenCalledWith({ protocol: 2, consumer: "search", inventory: "owner", query: { kind: "lens", lens: "recents" }, pageSize: 100 }, expect.any(String));

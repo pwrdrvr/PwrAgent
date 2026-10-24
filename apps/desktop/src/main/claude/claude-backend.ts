@@ -576,8 +576,10 @@ export class ClaudeBackend {
         this.armTaskFollowUpGrace(running);
       }
       if (!running.controller.signal.aborted) {
-        if (!running.lastResult || running.pendingSteers.size > 0) failure = "Claude exited before completing the turn.";
-        else failure = await this.finishResult(session, running, running.lastResult, needsUsageBaseline, usageBaseline);
+        // An error result already says why the turn ended; keep its text.
+        if (!running.lastResult || (running.pendingSteers.size > 0 && !running.lastResult.is_error)) {
+          failure = "Claude exited before completing the turn.";
+        } else failure = await this.finishResult(session, running, running.lastResult, needsUsageBaseline, usageBaseline);
       }
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
@@ -639,9 +641,10 @@ export class ClaudeBackend {
    */
   private turnSettled(running: RunningTurn): boolean {
     const result = running.lastResult;
-    if (!result || running.pendingSteers.size > 0) return false;
+    if (!result) return false;
+    // An error result ends the turn, even before it acknowledges a steer.
     if (result.is_error) return true;
-    if (running.tasks.active().length > 0) return false;
+    if (running.pendingSteers.size > 0 || running.tasks.active().length > 0) return false;
     // The CLI goes idle after its own background-agent loop. A CLI that does
     // not report session state is idle once it reports a result.
     if (running.sessionState !== undefined && running.sessionState !== "idle") return false;
@@ -704,8 +707,10 @@ export class ClaudeBackend {
         await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
       }
     }
-    if (message.is_error) return message.subtype === "success" ? message.result : message.errors.join("\n");
-    return undefined;
+    if (!message.is_error) return undefined;
+    const text = message.subtype === "success" ? message.result : message.errors.join("\n");
+    // An error result without text still failed the turn.
+    return text.trim() || "Claude ended the turn with an error.";
   }
 
   /** Track Claude's tasks and settle the tool calls that started them. */
@@ -1229,7 +1234,9 @@ export class ClaudeBackend {
       // history is written, and a rejected steer must leave no transcript row.
       running.entries.set(messageId, entry);
       running.pendingSteers.add(uuid);
-      running.input.push({ type: "user", uuid, priority: "now", parent_tool_use_id: null,
+      // "next" joins the running turn at its next boundary. "now" aborts the
+      // in-flight response and ends that native turn with an error result.
+      running.input.push({ type: "user", uuid, priority: "next", parent_tool_use_id: null,
         message: { role: "user", content } });
       // The message is already sent; turn completion persists every entry,
       // so an early-write failure must not report the steer as rejected.

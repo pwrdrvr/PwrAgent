@@ -1,3 +1,4 @@
+import { sandboxerStub } from "./helpers/sandboxer-stub";
 import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -250,7 +251,7 @@ describe("sqlite write metrics", () => {
       expect(prompts.map((prompt) => prompt.message.content)).toEqual([
         [{ type: "text", text: "Start" }], [{ type: "text", text: "Focus on the PR" }], [{ type: "text", text: "Next queued task" }],
       ]);
-      expect(prompts[1].priority).toBe("now");
+      expect(prompts[1].priority).toBe("next");
       const replay = await registry.readThread(identity);
       expect(replay.replay.messages.find((message) => message.text === "Focus on the PR")?.origin).toEqual(origin);
       expect(registry.getActiveTurnForThread(identity)).toBeUndefined();
@@ -3129,12 +3130,14 @@ describe("sqlite write metrics", () => {
       store: instances,
     });
     const owner = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       brokerDiscovery: discovery,
       leaseManager: ownerLeases,
       registry,
       settings,
     });
     const viewer = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       brokerDiscovery: discovery,
       leaseManager: viewerLeases,
       registry,

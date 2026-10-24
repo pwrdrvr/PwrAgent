@@ -1,4 +1,4 @@
-import { readNavigationPresentationOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
+import { readNavigationPresentationOrder, readOwnerChildOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { comparePinnedThreads, isPinnedThread } from "@pwragent/shared";
@@ -10,6 +10,8 @@ export type PagedDirectoryPresentation = {
   unpinnedThreads: NavigationThreadSummary[];
   selectedUnpinnedThreads: NavigationThreadSummary[];
   childThreadsByParentKey: Map<string, NavigationThreadSummary[]>;
+  /** Each parent's child keys in its owner's saved order. */
+  ownerChildOrder: Map<string, string[]>;
   directoryThreadsCollapsed: boolean;
   directoryUnpinnedThreadCount: number;
 };
@@ -85,7 +87,8 @@ export function buildPagedDirectoryPresentation(params: {
     }
   }
   return {
-    directoryPinnedThreads, unpinnedThreads, selectedUnpinnedThreads, childThreadsByParentKey, directoryThreadsCollapsed,
+    directoryPinnedThreads, unpinnedThreads, selectedUnpinnedThreads, childThreadsByParentKey,
+    ownerChildOrder: readOwnerChildOrder(params.resources, presentation), directoryThreadsCollapsed,
     directoryUnpinnedThreadCount: params.directory.unpinnedRootCount ?? 0,
   };
 }

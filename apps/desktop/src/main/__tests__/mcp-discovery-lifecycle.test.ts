@@ -1,3 +1,4 @@
+import { sandboxerStub } from "./helpers/sandboxer-stub";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -59,6 +60,7 @@ function fixture() {
   let storedCredential: string | undefined;
   const credential = JSON.stringify({ tokens: { access_token: secret, token_type: "bearer" } });
   const service = new McpConnectionGatewayService({
+    sandboxer: sandboxerStub(),
     registry, leaseManager: null, readGatewaySelection: async () => ["pwrsnap"], fetchFn,
     settings: {
       resolvePwrSnapMcpCredential: async () => credential,

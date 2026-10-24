@@ -1,4 +1,11 @@
-import type { FederationRemoteTarget } from "@pwragent/shared";
+import type {
+  FederationRemoteTarget,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  isRemoteFederationTarget,
+} from "@pwragent/shared";
 
 export function readRendererFederationTarget(): FederationRemoteTarget | undefined {
   const target = (window as typeof window & {
@@ -23,6 +30,38 @@ export function readRendererFederationTarget(): FederationRemoteTarget | undefin
  */
 export function isFederationViewerWindow(): boolean {
   return readRendererFederationTarget() !== undefined;
+}
+
+/**
+ * The instance that owns a thread's checkout: the thread's own remote ref,
+ * else the peer this window fronts. Undefined means this instance.
+ */
+export function resolveThreadOwnerFederationTarget(
+  thread: NavigationThreadSummary,
+  federationWindowInstanceId?: string,
+): FederationRemoteTarget | undefined {
+  const threadTarget = thread.federation?.ref.target;
+  if (threadTarget && isRemoteFederationTarget(threadTarget)) {
+    return threadTarget;
+  }
+  return federationWindowInstanceId
+    ? { scope: "remote", instanceId: federationWindowInstanceId }
+    : undefined;
+}
+
+/** A thread key that keeps one owner's thread apart from another's. */
+export function buildThreadOwnerKey(
+  thread: NavigationThreadSummary,
+  federationWindowInstanceId?: string,
+): string {
+  const federationTarget = resolveThreadOwnerFederationTarget(
+    thread,
+    federationWindowInstanceId,
+  );
+  return `${federationTarget?.instanceId ?? "local"}:${buildThreadIdentityKey(
+    thread.source,
+    thread.id,
+  )}`;
 }
 
 export function readRendererFederationLabel(): string | undefined {

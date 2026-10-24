@@ -219,7 +219,7 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
                   type="button"
                   onClick={props.onOpenSettings}
                 >
-                  Authorize
+                  {connection.kind === "sandboxer" ? "Set up in Settings" : "Authorize"}
                 </button>
               ) : null;
               return (

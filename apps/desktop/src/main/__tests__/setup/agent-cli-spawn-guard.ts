@@ -1,5 +1,5 @@
-// Fails any test that spawns a real coding-agent CLI from the machine running
-// the suite.
+// Fails any test that spawns a real coding-agent or Sandboxer CLI from the
+// machine running the suite. Sandboxer can start billable compute.
 //
 // Agent discovery probes far more than `env.PATH`: the ACP kit also scans
 // well-known `$HOME` bin dirs and each strategy's absolute fallback candidates
@@ -36,7 +36,7 @@ import { isPathWithin } from "../../../shared/path-within";
 
 /** `codex`, `kimi-code`, `grok-absolute-override`, `codex-beta`, … */
 const AGENT_CLI_PATTERN =
-  /^(claude|codex|gemini|grok|kimi|qwen)(-[\w.-]+)?(\.(exe|cmd|bat))?$/i;
+  /^(claude|codex|gemini|grok|kimi|qwen|sbx)(-[\w.-]+)?(\.(exe|cmd|bat))?$/i;
 
 /**
  * Only the OS temp dir. Every fixture in this suite builds its fake agent

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, onTestFinished } from "vitest";
 import type { AppServerThreadMessageEntry, AppServerThreadReplay } from "@pwragent/shared";
+import { parseThreadCorrespondenceMessage } from "@pwragent/shared";
 import { ThreadCorrespondenceStore, type CorrespondenceRecord } from "../app-server/thread-correspondence-store";
 import { extractThreadReplayFromReadResult } from "../codex-app-server/client";
 
@@ -262,5 +263,24 @@ describe("PwrAgent correspondence persistence", () => {
     const entry = store.appendToReplay(message.source, emptyReplay).messages[0];
     expect(entry?.text).toContain("**Message to [Recipient]");
     expect(entry?.text).toContain("Receiving thread started work");
+  });
+
+  it("writes a heading the transcript can parse back", () => {
+    const store = new ThreadCorrespondenceStore();
+    const message = record();
+    store.record(message);
+    store.update(message.source, message.id, { state: "started", turnId: "turn-one" });
+    const entry = store.appendToReplay(message.source, emptyReplay).messages[0];
+    const parsed = parseThreadCorrespondenceMessage(entry?.text ?? "");
+    expect(parsed).toMatchObject({
+      destination: {
+        backend: message.destination.backend,
+        threadId: message.destination.threadId,
+        messageId: "user:turn-one",
+        title: "Recipient",
+      },
+      state: "started",
+    });
+    expect(parsed?.body).toBe(message.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n"));
   });
 });

@@ -5,6 +5,8 @@ import {
   MCP_CONNECTION_IDS,
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
+  SANDBOXER_MCP_CONNECTION_ID,
+  isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
   type McpConnectionRecord,
   type McpConnectionToolApproval,
@@ -27,11 +29,13 @@ const PWRSNAP_ENABLED_PATH = ["mcp_connections", "pwrsnap_enabled"] as const;
 const BUILT_IN_SELECT_FOR_NEW_THREADS_KEYS = {
   [PWRSNAP_MCP_CONNECTION_ID]: "pwrsnap_select_for_new_threads",
   [PWRGIT_MCP_CONNECTION_ID]: "pwrgit_select_for_new_threads",
+  [SANDBOXER_MCP_CONNECTION_ID]: "sandboxer_select_for_new_threads",
 } as const;
 // And the tool approval mode, the third.
 const BUILT_IN_TOOL_APPROVAL_KEYS = {
   [PWRSNAP_MCP_CONNECTION_ID]: "pwrsnap_tool_approval",
   [PWRGIT_MCP_CONNECTION_ID]: "pwrgit_tool_approval",
+  [SANDBOXER_MCP_CONNECTION_ID]: "sandboxer_tool_approval",
 } as const;
 const CONNECTION_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const PWRSNAP_SERVER_URL = "http://127.0.0.1:51729/mcp";
@@ -67,6 +71,7 @@ export class McpConnectionRegistry {
     return [
       this.pwrSnapConnection(table),
       this.pwrGitConnection(table),
+      this.sandboxerConnection(table),
       ...this.readStoredConnections(table),
     ];
   }
@@ -83,6 +88,10 @@ export class McpConnectionRegistry {
    * and `remove`, which discards the connection outright.
    */
   setEnabled(connectionId: string, enabled: boolean): McpConnectionRecord {
+    if (connectionId === SANDBOXER_MCP_CONNECTION_ID) {
+      this.writeScalar(["mcp_connections", "sandboxer_enabled"], enabled);
+      return this.sandboxerConnection();
+    }
     if (connectionId === PWRGIT_MCP_CONNECTION_ID) {
       this.writeScalar(["mcp_connections", "pwrgit_enabled"], enabled);
       return this.pwrGitConnection();
@@ -122,17 +131,12 @@ export class McpConnectionRegistry {
     connectionId: string,
     selectForNewThreads: boolean,
   ): McpConnectionRecord {
-    if (
-      connectionId === PWRSNAP_MCP_CONNECTION_ID
-      || connectionId === PWRGIT_MCP_CONNECTION_ID
-    ) {
+    if (isBuiltInMcpConnectionId(connectionId)) {
       this.writeScalar(
         ["mcp_connections", BUILT_IN_SELECT_FOR_NEW_THREADS_KEYS[connectionId]],
         selectForNewThreads,
       );
-      return connectionId === PWRGIT_MCP_CONNECTION_ID
-        ? this.pwrGitConnection()
-        : this.pwrSnapConnection();
+      return this.get(connectionId)!;
     }
     const current = this.readStoredConnections();
     const target = current.find((connection) => connection.id === connectionId);
@@ -156,26 +160,21 @@ export class McpConnectionRegistry {
   /**
    * Choose when a gateway call to this connection asks first.
    *
-   * `auto` is stored as absence, like the other defaults, so a row written
-   * before this key existed and one set back to the default read the same.
+   * The default is stored as absence: `auto` except for Sandboxer's `prompt`.
+   * Older rows and a connection reset to its default therefore read the same.
    */
   setToolApproval(
     connectionId: string,
     toolApproval: McpConnectionToolApproval,
   ): McpConnectionRecord {
-    if (
-      connectionId === PWRSNAP_MCP_CONNECTION_ID
-      || connectionId === PWRGIT_MCP_CONNECTION_ID
-    ) {
+    if (isBuiltInMcpConnectionId(connectionId)) {
       const path = ["mcp_connections", BUILT_IN_TOOL_APPROVAL_KEYS[connectionId]];
       this.writeConfig((source) =>
-        applyTomlEdits(source, [toolApproval === "auto"
+        applyTomlEdits(source, [toolApproval === (connectionId === SANDBOXER_MCP_CONNECTION_ID ? "prompt" : "auto")
           ? { op: "delete", path }
           : { op: "set", path, value: toolApproval }]),
       );
-      return connectionId === PWRGIT_MCP_CONNECTION_ID
-        ? this.pwrGitConnection()
-        : this.pwrSnapConnection();
+      return this.get(connectionId)!;
     }
     const current = this.readStoredConnections();
     const target = current.find((connection) => connection.id === connectionId);
@@ -233,6 +232,24 @@ export class McpConnectionRegistry {
     };
   }
 
+  private sandboxerConnection(table = this.readConnectionsTable()): McpConnectionRecord {
+    return {
+      id: SANDBOXER_MCP_CONNECTION_ID,
+      displayName: "Sandboxer",
+      // A built-in identity, never fetched or accepted by the URL form.
+      serverUrl: "sandboxer:compute",
+      authMode: "local_cli",
+      kind: "sandboxer",
+      sandboxerRole: "compute",
+      enabled: table?.sandboxer_enabled === true,
+      selectForNewThreads: table?.sandboxer_select_for_new_threads === true,
+      toolApproval: isMcpConnectionToolApproval(table?.sandboxer_tool_approval)
+        ? table.sandboxer_tool_approval : "prompt",
+      createdAt: 0,
+      updatedAt: 0,
+    };
+  }
+
   private writeScalar(path: readonly string[], value: boolean): void {
     this.writeConfig((source) =>
       applyTomlEdits(source, [{ op: "set", path, value }]),
@@ -255,6 +272,7 @@ export class McpConnectionRegistry {
     const duplicate = [
       this.pwrSnapConnection(table),
       this.pwrGitConnection(table),
+      this.sandboxerConnection(table),
       ...current,
     ].find((connection) => connection.serverUrl === serverUrl);
     if (duplicate) {
@@ -293,10 +311,7 @@ export class McpConnectionRegistry {
     displayName?: string;
     serverUrl?: string;
   }): { connection: McpConnectionRecord; serverUrlChanged: boolean } {
-    if (
-      input.connectionId === PWRSNAP_MCP_CONNECTION_ID
-      || input.connectionId === PWRGIT_MCP_CONNECTION_ID
-    ) {
+    if (isBuiltInMcpConnectionId(input.connectionId)) {
       throw new Error("Built-in MCP connections cannot be edited.");
     }
     const current = this.readStoredConnections();
@@ -333,7 +348,7 @@ export class McpConnectionRegistry {
   }
 
   remove(connectionId: string): boolean {
-    if (connectionId === PWRSNAP_MCP_CONNECTION_ID || connectionId === PWRGIT_MCP_CONNECTION_ID) {
+    if (isBuiltInMcpConnectionId(connectionId)) {
       throw new Error("Built-in MCP connections cannot be removed.");
     }
     const current = this.readStoredConnections();
