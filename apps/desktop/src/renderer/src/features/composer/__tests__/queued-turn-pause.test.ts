@@ -155,8 +155,11 @@ describe("withOwnerPause", () => {
   });
 
   it("applies every read from an owner that predates revisions", () => {
-    expect(withOwnerPause({ id: "x" }, { paused: true })).toEqual({ id: "x", paused: true });
-    expect(withOwnerPause({ id: "x", paused: true }, {})).toEqual({ id: "x" });
+    const unpaused: { id: string; paused?: boolean } = { id: "x" };
+    const paused: { id: string; paused?: boolean } = { id: "x", paused: true };
+
+    expect(withOwnerPause(unpaused, { paused: true })).toEqual({ id: "x", paused: true });
+    expect(withOwnerPause(paused, {})).toEqual({ id: "x" });
   });
 });
 
