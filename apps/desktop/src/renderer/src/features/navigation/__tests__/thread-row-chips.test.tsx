@@ -1444,8 +1444,23 @@ describe("ThreadRow chip flow", () => {
     expect(container.querySelector(".thread-row__chip--scheduled")).toBeNull();
   });
 
+  it("renders a danger-outlined Held chip when a queued message waits on the operator", () => {
+    const { container } = renderRow({
+      queuedMessageThreadKeys: { "codex:thread-chips": "held" },
+    });
+    const chip = container.querySelector(".thread-row__chip--held");
+    expect(chip).not.toBeNull();
+    expect(chip).toHaveTextContent("Held");
+    expect(chip).toHaveClass("thread-row__chip--persistent");
+    expect(chip).toHaveAttribute("aria-label", "A message is held");
+    expect(chip?.querySelector("svg")).not.toBeNull();
+    expect(container.querySelector(".thread-row__chip--queued")).toBeNull();
+    expect(container.querySelector(".thread-row__chip--scheduled")).toBeNull();
+  });
+
   it("renders no pending-send chip when the thread has no queued message", () => {
     const { container } = renderRow({ queuedMessageThreadKeys: {} });
+    expect(container.querySelector(".thread-row__chip--held")).toBeNull();
     expect(container.querySelector(".thread-row__chip--scheduled")).toBeNull();
     expect(container.querySelector(".thread-row__chip--queued")).toBeNull();
   });

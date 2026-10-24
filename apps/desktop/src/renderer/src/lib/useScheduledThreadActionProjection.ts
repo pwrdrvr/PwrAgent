@@ -94,7 +94,7 @@ function startScheduledThreadActionProjection(params: {
   onThreadLifecycleChanged?: () => void;
 }): () => void {
   let refreshSequence = 0;
-  let projectedScopeKeys = new Set<string>();
+  let projectedScopeKeys: Set<string> | undefined;
   const projectedFailures = new Map<string, ScheduledThreadAction>();
   const dismissedFailures = new Set<string>();
   let terminalUpdatedAfter: number | undefined;
@@ -156,7 +156,8 @@ function startScheduledThreadActionProjection(params: {
       projectedScopeKeys = syncScheduledActionProjections(
         params.composerDraftStore,
         visibleActions,
-        projectedScopeKeys,
+        projectedScopeKeys
+          ?? scopesHoldingScheduledProjections(params.composerDraftStore, params.federationTarget),
         params.federationTarget,
       );
       lastWarnedFailure = undefined;
@@ -232,6 +233,31 @@ function startScheduledThreadActionProjection(params: {
     navigationScheduledProjectionBudget.release(budgetKey);
     unsubscribe?.();
   };
+}
+
+/**
+ * The scopes for `target` whose rows an earlier projection placed. A
+ * projection that starts fresh, such as after its source list changed,
+ * reconciles them on its first read, or a row whose action was cancelled or
+ * started while no projection was listening would stay in the composer and
+ * keep its sidebar chip. Every read returns every live action, so a row the
+ * read omits is stale.
+ */
+function scopesHoldingScheduledProjections(
+  store: ComposerDraftStore,
+  target: FederationTarget = { scope: "local" },
+): Set<string> {
+  const scopes = new Set<string>();
+  for (const scopeKey of store.getQueuedScopeKeys()) {
+    if (!store.getQueuedTurns(scopeKey).some((entry) =>
+      entry.scheduledActionId || entry.failedScheduledActionId)) continue;
+    const resolved = resolveComposerScopeOwner(store, scopeKey);
+    if (resolved.state !== "known") continue;
+    // A key rebuilt for `target` matches only when the scope is that target's.
+    const { backend, threadId } = resolved.owner;
+    if (buildThreadComposerScopeKey(backend, threadId, target) === scopeKey) scopes.add(scopeKey);
+  }
+  return scopes;
 }
 
 export function syncScheduledActionProjections(

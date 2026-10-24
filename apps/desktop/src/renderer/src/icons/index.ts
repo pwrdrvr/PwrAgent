@@ -47,6 +47,7 @@ export { NewThreadIcon } from "./NewThreadIcon";
 export { OpenAIIcon } from "./OpenAIIcon";
 export { PackageIcon } from "./PackageIcon";
 export { LockIcon } from "./LockIcon";
+export { PauseIcon } from "./PauseIcon";
 export { PencilIcon } from "./PencilIcon";
 export { PinIcon } from "./PinIcon";
 export { PlanIcon } from "./PlanIcon";

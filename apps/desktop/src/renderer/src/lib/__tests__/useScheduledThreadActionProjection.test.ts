@@ -524,6 +524,55 @@ describe("scheduled thread action projections", () => {
     ]);
   });
 
+  it("removes a held row a restarted projection no longer receives", async () => {
+    const { result } = renderHook(() => useComposerDraftStore());
+    const store = result.current;
+    const localScope = buildThreadComposerScopeKey("codex", "thread-1");
+    const remoteTarget = { scope: "remote" as const, instanceId: "peer-1" };
+    const remoteScope = buildThreadComposerScopeKey("codex", "thread-1", remoteTarget);
+    const held = scheduledAction({
+      id: "held-1",
+      status: "held",
+      queueEntryId: "scheduled-turn:held-1",
+      manualReleaseRequired: true,
+    });
+    // An earlier projection placed both held rows, then unmounted. The local
+    // action was cancelled while nothing was listening.
+    syncScheduledActionProjections(store, [held]);
+    syncScheduledActionProjections(store, [held], new Set(), remoteTarget);
+    const failedScope = buildThreadComposerScopeKey("codex", "thread-2");
+    syncScheduledActionProjections(store, [scheduledAction({
+      id: "failed-1", threadId: "thread-2", status: "failed", errorMessage: "rejected",
+    })]);
+    act(() => {
+      store.setQueuedTurns(localScope, [
+        ...store.getQueuedTurns(localScope),
+        { id: "local-draft", text: "typed here", imageAttachments: [], fileAttachments: [] },
+      ]);
+    });
+    const listScheduledThreadActions = vi.fn(async (request: { federationTarget?: unknown }) => ({
+      actions: request.federationTarget ? [held] : [],
+      projectionProtocol: 2, revision: "after-cancel", complete: true, observedAt: 2_000,
+    }));
+    const projection = renderHook(() => useScheduledThreadActionProjection({
+      composerDraftStore: store,
+      desktopApi: {
+        listScheduledThreadActions,
+        onAgentEvent: () => () => undefined,
+      } as unknown as DesktopApi,
+    }));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(store.getQueuedTurns(localScope).map((entry) => entry.id)).toEqual(["local-draft"]);
+    expect(store.getQueuedTurns(failedScope)).toEqual([]);
+    expect(store.getQueuedTurns(remoteScope).map((entry) => entry.id))
+      .toEqual(["scheduled-projection:held-1"]);
+    projection.unmount();
+  });
+
   it("removes stale projections when a refresh no longer returns their scope", () => {
     const { result } = renderHook(() => useComposerDraftStore());
     const store = result.current;
