@@ -4262,6 +4262,7 @@ Implementation notes remain in a readable bubble.`;
   });
 
   it("keeps following after a new prompt is appended to a long bottom-pinned chat", () => {
+    vi.useFakeTimers();
     const entries = Array.from({ length: 32 }, (_, index) => ({
       type: "message" as const,
       id: `long-message-${index + 1}`,
@@ -4351,6 +4352,10 @@ Implementation notes remain in a readable bubble.`;
       />
     );
 
+    // The growing assistant preview is admitted on its next render interval.
+    // Assert follow after that DOM update, rather than after raw input alone.
+    expect(list.scrollTop).toBe(960);
+    act(() => vi.advanceTimersByTime(100));
     expect(list.scrollTop).toBe(1340);
   });
 
