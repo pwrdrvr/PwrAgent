@@ -535,11 +535,18 @@ export class ClaudeBackend {
               await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
             }
           }
-          if (message.is_error) failure = message.subtype === "success" ? message.result : message.errors.join("\n");
+          if (message.is_error) {
+            const text = message.subtype === "success" ? message.result : message.errors.join("\n");
+            // An error result without text still failed the turn.
+            failure = text.trim() || "Claude ended the turn with an error.";
+          }
           if (finished) break;
         }
       }
-      if ((!receivedResult || running.pendingSteers.size > 0) && !running.controller.signal.aborted) failure = "Claude exited before completing the turn.";
+      // An error result already says why the turn ended; keep its text.
+      if (!failure && (!receivedResult || running.pendingSteers.size > 0) && !running.controller.signal.aborted) {
+        failure = "Claude exited before completing the turn.";
+      }
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     } finally {
@@ -1023,7 +1030,9 @@ export class ClaudeBackend {
       // history is written, and a rejected steer must leave no transcript row.
       running.entries.set(messageId, entry);
       running.pendingSteers.add(uuid);
-      running.input.push({ type: "user", uuid, priority: "now", parent_tool_use_id: null,
+      // "next" joins the running turn at its next boundary. "now" aborts the
+      // in-flight response and ends that native turn with an error result.
+      running.input.push({ type: "user", uuid, priority: "next", parent_tool_use_id: null,
         message: { role: "user", content } });
       // The message is already sent; turn completion persists every entry,
       // so an early-write failure must not report the steer as rejected.

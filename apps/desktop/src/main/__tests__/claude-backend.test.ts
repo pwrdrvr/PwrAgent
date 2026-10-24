@@ -648,7 +648,7 @@ describe("Claude SDK backend", () => {
       input: [{ type: "text", text: "Focus on the PR" }, { type: "image", url: "data:image/png;base64,aGVsbG8=" }] });
     const streamed = (await iterator.next()).value;
     steerUuid = streamed.uuid;
-    expect(streamed).toMatchObject({ type: "user", priority: "now", uuid: expect.any(String),
+    expect(streamed).toMatchObject({ type: "user", priority: "next", uuid: expect.any(String),
       message: { content: [{ type: "text", text: "Focus on the PR" }, { type: "image" }] } });
     expect(f.backend.summary().capabilities.steerTurn).toBe(true);
     firstResult.resolve();
@@ -1313,6 +1313,35 @@ describe("Claude SDK backend", () => {
     await f.waitForTurn();
     expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
       turn: { error: { message: "Claude exited before completing the turn." } },
+    } });
+  });
+
+  it("reports Claude's error when a turn fails before acknowledging a steer", async () => {
+    const finish = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      await finish.promise;
+      yield { type: "result", subtype: "error_during_execution", is_error: true,
+        errors: ["Claude API request failed"] } as unknown as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }] });
+    await f.backend.steerTurn({ threadId, expectedTurnId: turn.turnId, input: [{ type: "text", text: "Correction" }] });
+    finish.resolve();
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Claude API request failed" } },
+    } });
+  });
+
+  it("fails a turn whose error result has no text", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [] } as unknown as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Claude ended the turn with an error." } },
     } });
   });
 });

@@ -108,8 +108,10 @@ pagination are not advertised.
 
 Queue uses PwrAgent's shared FIFO and resumes the SDK session after the active
 turn finishes. Steer sends an additional native user message through the same
-open SDK input stream with `priority: "now"`. Claude chooses the delivery
-boundary; an input racing completion can become a subsequent native turn.
+open SDK input stream with `priority: "next"`. Claude adds it to the running
+turn at the next tool boundary, or starts a native turn with it once the
+current response ends. Do not use `"now"`: it aborts the in-flight response
+and ends that native turn with an `error_during_execution` result.
 PwrAgent keeps the query open until result UUIDs acknowledge every accepted
 steer, and treats those results as one logical desktop turn. Usage is recorded
 once from the final cumulative result. Stop closes the stream and aborts the
