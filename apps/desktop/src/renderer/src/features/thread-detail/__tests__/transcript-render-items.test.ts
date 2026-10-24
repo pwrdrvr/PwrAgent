@@ -544,6 +544,52 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("keeps the active work group when the turn's total follows it", () => {
+    // A turn total always sits at the end of its own turn, including while
+    // the turn is still streaming; the live work above it is still bottom work.
+    const turn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+    const first = commentary("c1", "First scan.", turn);
+    const activity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Read one file",
+      details: [],
+      turn,
+    };
+    const usage: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-turn-usage-turn-1",
+      summary: "Turn usage: 1,200 uncached in",
+      status: "completed",
+      details: [],
+      createdAt: 30_000,
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [first, activity, usage],
+      activeTurnId: "turn-1",
+      now: 62_000,
+    });
+
+    expect(items).toEqual([
+      { type: "entry", entry: first },
+      {
+        type: "workPhaseGroup",
+        activeStartedAt: 1_000,
+        id: "work:turn-1:active",
+        collapsible: false,
+        entries: [activity],
+        label: "Working for 1m 01s",
+      },
+      { type: "entry", entry: usage },
+    ]);
+  });
+
   it("does not show an active elapsed label when active work is no longer at the bottom", () => {
     const turn = {
       id: "turn-1",

@@ -3,6 +3,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessage,
 } from "@pwragent/shared";
+import { turnUsageEntryTurnId } from "@pwragent/shared";
 import {
   addTranscriptReviewSegmentToIndex,
   createTranscriptReviewHistoryIndex,
@@ -543,20 +544,37 @@ function transcriptEntryTime(entry: AppServerThreadEntry): number | undefined {
   return entry.createdAt ?? entry.turn?.completedAt ?? entry.turn?.startedAt;
 }
 
+/**
+ * The time a retained row is placed by. A turn total has none: its place is
+ * after the last entry of its turn, wherever its own clock landed.
+ */
+function retainedPlacementTime(entry: AppServerThreadEntry): number | undefined {
+  return turnUsageEntryTurnId(entry) === undefined
+    ? transcriptEntryTime(entry)
+    : undefined;
+}
+
 function findHistoryInsertionPoint(
   entry: AppServerThreadEntry,
   turnPages: TranscriptHistoryTurnPage[],
 ): TranscriptHistoryInsertionPoint | undefined {
-  const entryTime = transcriptEntryTime(entry);
+  const entryTime = retainedPlacementTime(entry);
   let lastTurnEntry:
     | { entryIndex: number; page: TranscriptHistoryPage }
     | undefined;
+  let firstTurnTotal: TranscriptHistoryInsertionPoint | undefined;
 
   for (let pageIndex = turnPages.length - 1; pageIndex >= 0; pageIndex -= 1) {
     const turnPage = turnPages[pageIndex]!;
     for (const entryIndex of turnPage.entryIndexes) {
       const historyEntry = turnPage.page.entries[entryIndex];
       if (!historyEntry) {
+        continue;
+      }
+      // The page's own turn total is no anchor: retained work belongs above
+      // it, and a retained total beside it.
+      if (turnUsageEntryTurnId(historyEntry) !== undefined) {
+        firstTurnTotal ??= { entryIndex, page: turnPage.page };
         continue;
       }
       const historyEntryTime = transcriptEntryTime(historyEntry);
@@ -571,12 +589,14 @@ function findHistoryInsertionPoint(
     }
   }
 
+  // A page split inside the turn can carry only the turn's total; the row
+  // still belongs with its turn, just above that total.
   return lastTurnEntry
     ? {
         entryIndex: lastTurnEntry.entryIndex + 1,
         page: lastTurnEntry.page,
       }
-    : undefined;
+    : firstTurnTotal;
 }
 
 function retainedEntryInsertionPoint(
@@ -585,7 +605,7 @@ function retainedEntryInsertionPoint(
   turnId: string,
   turnPages: TranscriptHistoryTurnPage[],
 ): TranscriptHistoryInsertionPoint | undefined {
-  const entryTime = transcriptEntryTime(entry);
+  const entryTime = retainedPlacementTime(entry);
   const cached = index.retainedEntryPlacements.get(entry.id);
   if (
     cached
