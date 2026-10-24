@@ -4805,7 +4805,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("probes a worktree shared by many threads once, whichever lane asks", async () => {
+  it("probes a worktree shared by many threads once, whichever registry lane asks", async () => {
     // Two dozen threads open in one checkout is an ordinary day, and every row
     // shows that checkout's +/- chips. Everything here that names a thread —
     // the fleet round, each thread's PR heads, the durable row, the
@@ -4938,7 +4938,7 @@ describe("DesktopBackendRegistry", () => {
         async () => probesOf(sharedPath),
         budget.probesPerRound + 1,
       );
-      for (const _thread of sharedThreads.slice(1)) {
+      for (let request = 1; request < sharedThreads.length; request += 1) {
         registry.invalidateWorktreeWorkingState(sharedPath);
         expect(registry.scheduleWorktreeGitWorkingStateRefresh({
           worktreePath: sharedPath,
