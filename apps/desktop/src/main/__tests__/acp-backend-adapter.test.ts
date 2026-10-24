@@ -1357,6 +1357,112 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("reports Grok model retries and the recovery for stream notices", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const transport = new FakeAcpAgentTransport();
+    const events: AgentEvent[] = [];
+    const sessions: AcpSessionMetadata[] = [];
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+      launchDescriptor: {
+        backendId,
+        registryId: "grok",
+        distributionKind: "local",
+        command: "grok",
+        args: ["agent", "stdio"],
+        env: {},
+      },
+    };
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => sessions,
+        getSession: (_backendId, sessionId) =>
+          sessions.find((session) => session.sessionId === sessionId),
+        upsertSession: (metadata) => {
+          const index = sessions.findIndex(
+            (session) => session.sessionId === metadata.sessionId,
+          );
+          if (index >= 0) {
+            sessions[index] = metadata;
+          } else {
+            sessions.push(metadata);
+          }
+        },
+      },
+      captureStores: [],
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        events.push(event);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    const client = await adapter.getClient(backendId);
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Research MCP tasks",
+      turnId: "turn-1",
+    });
+
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "retry_state",
+      type: "retrying",
+      attempt: 1,
+      max_retries: 15,
+      reason: "API error (status 500 Internal Server Error): Service temporarily unavailable.",
+      error_type: "api",
+    });
+    // Grok hides thoughts, so no message delta follows this; only the
+    // recovery signal tells the renderer the model answered.
+    transport.emitSessionUpdate(session.sessionId, {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Reading the spec." },
+    });
+
+    const streamNotices = () => events
+      .map((event) => event.notification)
+      .filter((notification) =>
+        notification.method === "error" || notification.method === "turn/recovered"
+      );
+    await vi.waitFor(() => {
+      expect(streamNotices()).toEqual([
+        {
+          method: "error",
+          params: {
+            threadId: session.sessionId,
+            turnId: "turn-1",
+            willRetry: true,
+            error: {
+              message: "API error (status 500 Internal Server Error): Service temporarily unavailable.",
+              additionalDetails: "Attempt 1 of 15.",
+            },
+          },
+        },
+        {
+          method: "turn/recovered",
+          params: { threadId: session.sessionId, turnId: "turn-1" },
+        },
+      ]);
+    });
+    expect(events.some((event) =>
+      event.notification.method === "item/agentMessage/delta"
+    )).toBe(false);
+
+    await adapter.close();
+  });
+
   it("emits ACP thought chunks with the same commentary phase used in replay", async () => {
     const backendId = "acp:kimi" as AcpBackendId;
     const transport = new FakeAcpAgentTransport();

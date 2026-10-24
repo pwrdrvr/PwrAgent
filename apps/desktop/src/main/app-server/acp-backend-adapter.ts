@@ -73,6 +73,7 @@ import {
 } from "../settings/config-store/provider-runtime-config";
 import {
   AcpLiveToolUpdateResolver,
+  AcpModelRetryTracker,
   acpContextWindowFill,
   acpContextWindowNotification,
   acpToolUpdateNotifications,
@@ -1210,6 +1211,7 @@ export class AcpBackendAdapter {
     Promise<AcpRuntimeClient>
   >();
   private readonly liveToolUpdateResolver = new AcpLiveToolUpdateResolver();
+  private readonly modelRetryTracker = new AcpModelRetryTracker();
   private readonly liveNotificationFingerprints = new Map<string, string>();
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
@@ -2943,6 +2945,22 @@ export class AcpBackendAdapter {
             },
           });
         }
+        // Session-load replay is history: a retry it repeats is long over.
+        const modelRetryNotification =
+          turnId && !fromSessionLoad
+            ? this.modelRetryTracker.observe({
+                backendId: agent.backendId,
+                threadId: sessionId,
+                turnId,
+                update,
+              })
+            : undefined;
+        if (modelRetryNotification) {
+          await this.emit({
+            backend: agent.backendId,
+            notification: modelRetryNotification,
+          });
+        }
         const kimiYoloExecutionMode =
           agent.registryId === "kimi"
             ? readKimiYoloExecutionModeFromText(readAcpUpdateText(update) ?? "")
@@ -3052,6 +3070,11 @@ export class AcpBackendAdapter {
             threadId: sessionId,
             turnId,
           });
+          this.modelRetryTracker.clearTurn({
+            backendId: agent.backendId,
+            threadId: sessionId,
+            turnId,
+          });
           const outputText = readAcpUpdateText(update);
           // session/cancel settles the prompt with stopReason cancelled: the
           // turn stopped, it did not complete. An operator stop has already
@@ -3098,6 +3121,11 @@ export class AcpBackendAdapter {
           [agent.backendId, sessionId, turnId].join(":"),
         );
         this.liveToolUpdateResolver.clearTurn({
+          backendId: agent.backendId,
+          threadId: sessionId,
+          turnId,
+        });
+        this.modelRetryTracker.clearTurn({
           backendId: agent.backendId,
           threadId: sessionId,
           turnId,

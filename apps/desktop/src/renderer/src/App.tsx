@@ -5,6 +5,7 @@ import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
+import { formatBackendLabel } from "./lib/backend-label";
 import { classifyDirectory, operatorTodoItemKey } from "@pwragent/shared";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "./lib/navigation-loaded-rows";
 import {
@@ -189,7 +190,7 @@ import {
   NO_STARTUP_BACKEND_NOTICE_ID,
 } from "./features/notifications/provider-startup-notice";
 import { QuitBlockerQueueToast } from "./features/notifications/QuitBlockerQueueToast";
-import { isCodexStreamNoticeMethod } from "./features/notifications/codex-stream-notice";
+import { isStreamNoticeEvent } from "./features/notifications/codex-stream-notice";
 import {
   appNoticeReducer,
   INITIAL_APP_NOTICE_STATE,
@@ -1238,7 +1239,7 @@ function DesktopAppShell(props: {
       }
       return backend === "codex"
         ? `Codex thread${threadId ? ` ${threadId}` : ""}`
-        : `${backend} thread${threadId ? ` ${threadId}` : ""}`;
+        : `${formatBackendLabel(backend as AppServerBackendKind)} thread${threadId ? ` ${threadId}` : ""}`;
     };
     return desktopApi?.onAgentEvent?.(async (event) => {
       if (
@@ -1252,20 +1253,18 @@ function DesktopAppShell(props: {
       const instanceId = event.federationTarget?.scope === "remote"
         ? event.federationTarget.instanceId
         : undefined;
-      if (
-        event.backend === "codex"
-        && isCodexStreamNoticeMethod(event.notification.method)
-      ) {
+      if (isStreamNoticeEvent(event.backend, event.notification.method)) {
         const params = event.notification.params as Record<string, unknown>;
         dispatchAppNotice({
           type: "codex-stream-event",
+          backend: event.backend,
           notification: { method: event.notification.method, params },
           ...(instanceId ? { instanceId } : {}),
           skillQuestionsWarningDismissed:
             props.settings.snapshot?.experimental.codexSkillQuestionsWarningDismissed?.value,
           dismissedWarningIds: codexConfigWarningsDismissedRef.current,
           threadLabel: labelForThread(
-            "codex",
+            event.backend,
             typeof params.threadId === "string" ? params.threadId : undefined,
           ),
         });

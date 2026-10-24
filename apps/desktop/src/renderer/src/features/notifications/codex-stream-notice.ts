@@ -1,4 +1,5 @@
-import type { FederationInstanceId } from "@pwragent/shared";
+import type { AppServerBackendKind, FederationInstanceId } from "@pwragent/shared";
+import { formatBackendLabel } from "../../lib/backend-label";
 import {
   codexWarningSuppressionId,
   isCodexWarningSuppressed,
@@ -6,6 +7,8 @@ import {
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 export type CodexStreamSignal = {
+  /** Codex when omitted. ACP backends send retries in the same shape. */
+  backend?: AppServerBackendKind;
   notification: { method: string; params: Record<string, unknown> };
   instanceId?: FederationInstanceId;
   skillQuestionsWarningDismissed?: boolean;
@@ -30,7 +33,17 @@ export function isCodexStreamNoticeMethod(method: string): boolean {
     || method === "turn/completed"
     || method === "turn/failed"
     || method === "turn/cancelled"
+    || method === "turn/recovered"
     || MODEL_PROGRESS_METHODS.has(method);
+}
+
+/** Codex and ACP backends report model retries; Claude does not. */
+export function isStreamNoticeEvent(
+  backend: AppServerBackendKind,
+  method: string,
+): boolean {
+  return (backend === "codex" || backend.startsWith("acp:"))
+    && isCodexStreamNoticeMethod(method);
 }
 
 /** Structured App Server errors describe upstream retries; stdio can remain healthy. */
@@ -44,11 +57,21 @@ export function resolveCodexStreamNotice(
   const threadId = readText(params.threadId);
   if (!threadId) return undefined;
   const turnId = readText(params.turnId);
-  const id = `codex-stream:${JSON.stringify([
-    signal.instanceId ?? "local",
-    threadId,
-    turnId ?? null,
-  ])}`;
+  const backend = signal.backend ?? "codex";
+  // Codex keeps its original id; an ACP thread can share a Codex thread's ids.
+  const id = backend === "codex"
+    ? `codex-stream:${JSON.stringify([
+      signal.instanceId ?? "local",
+      threadId,
+      turnId ?? null,
+    ])}`
+    : `agent-stream:${JSON.stringify([
+      backend,
+      signal.instanceId ?? "local",
+      threadId,
+      turnId ?? null,
+    ])}`;
+  const provider = backend === "codex" ? "Codex" : formatBackendLabel(backend);
   const current = notices.find((notice) => notice.id === id);
 
   if (method === "error" || method === "warning") {
@@ -83,22 +106,22 @@ export function resolveCodexStreamNotice(
         // fallback information without leaving a stale retry incident behind.
         autoDismiss: method === "warning",
         title: method === "warning"
-          ? "Codex warning"
-          : retrying ? "Codex is retrying" : "Codex error",
+          ? `${provider} warning`
+          : retrying ? `${provider} is retrying` : `${provider} error`,
         message: details ? `${message}\n${details}` : message,
         ...(skillQuestionsWarning ? { skillQuestionsWarning: true } : {}),
         ...(warningSuppressionId ? { warningSuppressionId } : {}),
         tone: method === "warning" || retrying ? "warning" : "error",
         detail: signal.threadLabel,
         threadLink: {
-          backend: "codex",
+          backend,
           threadId,
           title: signal.threadLabel,
           ...(signal.instanceId ? { instanceId: signal.instanceId } : {}),
         },
         ...(retrying ? {
           status: {
-            label: "The turn is still active. Codex will retry automatically.",
+            label: `The turn is still active. ${provider} will retry automatically.`,
             state: "progress" as const,
           },
         } : {}),
@@ -129,10 +152,12 @@ export function resolveCodexStreamNotice(
     notice: {
       ...current,
       autoDismiss: true,
-      title: method === "turn/completed" ? "Codex turn completed" : "Codex resumed",
+      title: method === "turn/completed"
+        ? `${provider} turn completed`
+        : `${provider} resumed`,
       message: method === "turn/completed"
         ? "The turn completed after the reported problem."
-        : "Codex is producing output again.",
+        : `${provider} is producing output again.`,
       tone: "success",
       status: { label: "Reported problem cleared.", state: "success" },
     },

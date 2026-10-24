@@ -3,6 +3,7 @@ import {
   acpContextWindowFill,
   acpContextWindowNotification,
   AcpLiveToolUpdateResolver,
+  AcpModelRetryTracker,
   acpToolUpdateNotifications,
   acpTurnCompletedUsageNotification,
   readAcpContextTokens,
@@ -1007,5 +1008,93 @@ describe("ACP context window fill", () => {
     ]) {
       expect(acpContextWindowFill(used, size)).toBeUndefined();
     }
+  });
+});
+
+describe("AcpModelRetryTracker", () => {
+  const retry = (attempt: number) => ({
+    sessionUpdate: "retry_state",
+    type: "retrying",
+    attempt,
+    max_retries: 15,
+    reason: "API error (status 500 Internal Server Error): The model is currently at capacity.",
+    error_type: "api",
+  });
+  const observe = (
+    tracker: AcpModelRetryTracker,
+    update: Record<string, unknown>,
+    turnId = "turn-1",
+  ) => tracker.observe({ backendId: "acp:grok", threadId: "session-1", turnId, update });
+
+  it("reports each retry in the shape Codex uses for its retries", () => {
+    const tracker = new AcpModelRetryTracker();
+    expect(observe(tracker, retry(4))).toEqual({
+      method: "error",
+      params: {
+        threadId: "session-1",
+        turnId: "turn-1",
+        willRetry: true,
+        error: {
+          message: "API error (status 500 Internal Server Error): The model is currently at capacity.",
+          additionalDetails: "Attempt 4 of 15.",
+        },
+      },
+    });
+    expect(observe(tracker, retry(5))).toMatchObject({
+      method: "error",
+      params: { error: { additionalDetails: "Attempt 5 of 15." } },
+    });
+  });
+
+  it("reports recovery once, on the first model output after a retry", () => {
+    const tracker = new AcpModelRetryTracker();
+    observe(tracker, retry(1));
+    // Grok hides thoughts from the transcript, so main must catch this one.
+    expect(observe(tracker, {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Reading the spec" },
+    })).toEqual({
+      method: "turn/recovered",
+      params: { threadId: "session-1", turnId: "turn-1" },
+    });
+    expect(observe(tracker, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Found it." },
+    })).toBeUndefined();
+  });
+
+  it("ignores bookkeeping updates and output when nothing was retrying", () => {
+    const tracker = new AcpModelRetryTracker();
+    expect(observe(tracker, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Hello" },
+    })).toBeUndefined();
+    observe(tracker, retry(1));
+    for (const update of [
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "  " } },
+      { sessionUpdate: "usage_update", used: 10, size: 100 },
+      { sessionUpdate: "session_info_update", title: "Research" },
+    ]) {
+      expect(observe(tracker, update)).toBeUndefined();
+    }
+  });
+
+  it.each([
+    { sessionUpdate: "tool_call_update", toolCallId: "bg-1", status: "in_progress" },
+    { sessionUpdate: "turn_finished", stopReason: "cancelled" },
+    { sessionUpdate: "turn_completed", stopReason: "cancelled" },
+  ])("does not call $sessionUpdate a recovery", (update) => {
+    // Local tool progress can arrive while the model is still down, and a
+    // stopped turn did not recover; the renderer settles turn ends itself.
+    const tracker = new AcpModelRetryTracker();
+    observe(tracker, retry(1));
+    expect(observe(tracker, update)).toBeUndefined();
+  });
+
+  it("forgets a turn once it settles", () => {
+    const tracker = new AcpModelRetryTracker();
+    observe(tracker, retry(1));
+    tracker.clearTurn({ backendId: "acp:grok", threadId: "session-1", turnId: "turn-1" });
+    expect(observe(tracker, { sessionUpdate: "tool_call", toolCallId: "t-1" })).toBeUndefined();
   });
 });
