@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FederationInstanceId } from "@pwragent/shared";
 import { codexWarningSuppressionId } from "../../codex-config/codex-warning-suppression";
-import { resolveCodexStreamNotice } from "../codex-stream-notice";
+import { isStreamNoticeEvent, resolveCodexStreamNotice } from "../codex-stream-notice";
 
 const REQUIREMENT_WARNING =
   "Ignoring unknown `features` requirement `example_mode` from requirements layers: managed requirements Baseline";
@@ -159,5 +159,16 @@ describe("Codex stream notices", () => {
     expect(result).toMatchObject({ notice: { title: "Codex error" } });
     expect(result && "notice" in result && result.notice.warningSuppressionId)
       .toBeFalsy();
+  });
+
+  it.each([
+    ["codex", "error", true],
+    ["acp:grok", "error", true],
+    ["acp:grok", "turn/recovered", true],
+    ["acp:kimi", "item/agentMessage/delta", true],
+    ["claude", "error", false],
+    ["acp:grok", "thread/name/updated", false],
+  ] as const)("routes %s %s to stream notices: %s", (backend, method, expected) => {
+    expect(isStreamNoticeEvent(backend, method)).toBe(expected);
   });
 });
