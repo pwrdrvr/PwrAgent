@@ -1153,6 +1153,89 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("streams tool items into one live row without re-merging the tail for each item", async () => {
+    const tailEntryCount = 200;
+    let tailEntryReads = 0;
+    const completedTurn = { id: "turn-0", status: "completed" as const };
+    const tailEntry = (index: number): AppServerThreadEntry =>
+      new Proxy(
+        { ...messageEntry({ id: `tail-${index}`, text: `Tail ${index}`, createdAt: 1_000 + index }), turn: completedTurn },
+        {
+          get(target, property, receiver) {
+            if (property === "type") {
+              tailEntryReads += 1;
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        },
+      );
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async () => readThreadResponse({
+        entries: Array.from({ length: tailEntryCount }, (_value, index) => tailEntry(index)),
+        hasPreviousPage: false,
+      })),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitForThreadHydration(result);
+    const toolItem = (index: number) => agentEventHandler?.({
+      backend: "codex",
+      notification: {
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: `read-${index}`,
+            type: "commandExecution",
+            command: `sed -n '1,40p' src/file-${index}.ts`,
+            commandActions: [{ type: "read", path: `src/file-${index}.ts` }],
+          },
+        },
+      },
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
+        },
+      });
+      toolItem(0);
+      toolItem(1);
+    });
+    expect(result.current.entries.at(-1)?.id).toBe("live-tools-turn-1-1");
+    tailEntryReads = 0;
+
+    const streamedItems = 20;
+    act(() => {
+      for (let index = 2; index < 2 + streamedItems; index += 1) {
+        toolItem(index);
+      }
+    });
+
+    const liveRow = result.current.entries.at(-1);
+    expect(liveRow?.id).toBe("live-tools-turn-1-1");
+    expect(liveRow?.type === "activity" ? liveRow.details : []).toHaveLength(2 + streamedItems);
+    // One render reads the tail a fixed number of times (2,200 reads here).
+    // Re-merging it for each streamed item added 1,200 reads per item:
+    // 26,200 for these 20.
+    expect(tailEntryReads).toBeLessThan(tailEntryCount * streamedItems);
+  });
+
   it("keeps latest-page refresh work linear in retained tail entries", async () => {
     const tailEntryCount = 100;
     const turn = {

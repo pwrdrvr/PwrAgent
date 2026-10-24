@@ -144,6 +144,28 @@ describe("anchorTurnUsageEntries", () => {
     expect(anchorTurnUsageEntries(entries)).toBe(entries);
   });
 
+  it("inserts rows at the end of their turn, ahead of that turn's total", () => {
+    const untimedNote: AppServerThreadEntry = {
+      type: "message", id: "t-late-note", role: "assistant", phase: "commentary",
+      text: "t late note", turn: { id: turnT.id },
+    };
+    const entries = [tUser, tFinal, usage(turnT, turnT.completedAt - 300), vUser, vFinal];
+
+    expect(ids(anchorTurnUsageEntries(entries, new Map([[turnT.id, [untimedNote]]])))).toEqual([
+      "t-user", "t-final", "t-late-note", "live-turn-usage-turn-t", "v-user", "v-final",
+    ]);
+  });
+
+  it("appends an inserted row whose turn has no entry", () => {
+    const orphan: AppServerThreadEntry = {
+      type: "message", id: "orphan", role: "assistant", text: "orphan", turn: { id: "turn-gone" },
+    };
+
+    expect(ids(anchorTurnUsageEntries([vUser, vFinal], new Map([["turn-gone", [orphan]]])))).toEqual([
+      "v-user", "v-final", "orphan",
+    ]);
+  });
+
   it("returns the same array when every total is already anchored", () => {
     const entries = [tUser, tFinal, usage(turnT, turnT.completedAt - 300), vUser, vFinal];
 

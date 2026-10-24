@@ -858,9 +858,7 @@ function mergeTranscriptEntries(
   for (const entry of merged) {
     (retainedReviewIds.has(entry.id) ? retainedReviews : authoritativeEntries).push(entry);
   }
-  return anchorTurnUsageEntries(
-    reconcileRetainedTranscriptTail(authoritativeEntries, retainedReviews, new Map()),
-  );
+  return reconcileRetainedTranscriptTail(authoritativeEntries, retainedReviews, new Map());
 }
 
 function mergeTranscriptMessages(
@@ -994,11 +992,11 @@ function preserveRetainedTranscriptTail(
       freshEntryByRetainedEntry.set(retainedMatch, freshEntry);
     }
   }
-  const entries = anchorTurnUsageEntries(reconcileRetainedTranscriptTail(
+  const entries = reconcileRetainedTranscriptTail(
     response.replay.entries,
     retainedResponse.replay.entries,
     freshEntryByRetainedEntry,
-  ));
+  );
 
   return {
     ...response,
@@ -1054,7 +1052,7 @@ function reconcileRetainedTranscriptTail(
   }
 
   if (pendingRetainedEntries.length === 0) {
-    return entries;
+    return anchorTurnUsageEntries(entries);
   }
 
   // A retained row with no time cannot be placed by time. When its turn is on
@@ -1086,7 +1084,9 @@ function reconcileRetainedTranscriptTail(
     return false;
   });
 
-  return insertEntriesAtEndOfTurns(
+  // The anchor places those rows at the end of their turns, ahead of each
+  // turn's total, and every total at the end of its turn.
+  return anchorTurnUsageEntries(
     mergeRetainedTranscriptSuffix(
       entries,
       trailingInsertionFloor,
@@ -1150,52 +1150,6 @@ function mergeRetainedTranscriptSuffix(
     ...entries.slice(0, trailingInsertionFloor),
     ...mergedSuffix,
   ];
-}
-
-/**
- * Inserts rows after the last entry of their own turn, ahead of that turn's
- * total. One pass to find the anchors and one to rebuild. A row whose turn has
- * no anchor goes last, as it would have before.
- */
-function insertEntriesAtEndOfTurns(
-  entries: AppServerThreadEntry[],
-  rowsByTurn: ReadonlyMap<string, AppServerThreadEntry[]>,
-): AppServerThreadEntry[] {
-  if (rowsByTurn.size === 0) {
-    return entries;
-  }
-  const lastIndexByTurn = new Map<string, number>();
-  entries.forEach((entry, index) => {
-    const turnId = entry.turn?.id;
-    if (
-      turnId
-      && rowsByTurn.has(turnId)
-      && turnUsageEntryTurnId(entry) === undefined
-    ) {
-      lastIndexByTurn.set(turnId, index);
-    }
-  });
-  const rowsAfterIndex = new Map<number, AppServerThreadEntry[]>();
-  const unanchoredRows: AppServerThreadEntry[] = [];
-  for (const [turnId, rows] of rowsByTurn) {
-    const anchorIndex = lastIndexByTurn.get(turnId);
-    if (anchorIndex === undefined) {
-      unanchoredRows.push(...rows);
-      continue;
-    }
-    const anchored = rowsAfterIndex.get(anchorIndex);
-    if (anchored) {
-      anchored.push(...rows);
-    } else {
-      rowsAfterIndex.set(anchorIndex, [...rows]);
-    }
-  }
-  const result: AppServerThreadEntry[] = [];
-  entries.forEach((entry, index) => {
-    result.push(entry, ...(rowsAfterIndex.get(index) ?? []));
-  });
-  result.push(...unanchoredRows);
-  return result;
 }
 
 function transcriptRefreshOrderTimestamp(
@@ -3398,6 +3352,34 @@ function liveActivityNotificationSignature(params: {
   return signatureParts.join("\u0000");
 }
 
+const NO_RESPONSE_ENTRIES: AppServerThreadEntry[] = [];
+
+// Live entry lists whose last row upsertLiveActivityEntry has shown to be the
+// transcript's last row, keyed to the response entries it checked against.
+// The merge is a pure function of those two arrays, so while both are the
+// same objects the answer holds without merging the whole tail again for
+// every streamed tool item.
+const lastLiveActivityVerifiedAgainst = new WeakMap<
+  AppServerThreadEntry[],
+  AppServerThreadEntry[]
+>();
+
+/** True when the merge would place both entries identically. */
+function sameMergePlacement(
+  left: AppServerThreadEntry,
+  right: AppServerThreadEntry,
+): boolean {
+  return (
+    left.id === right.id
+    && left.type === right.type
+    && left.createdAt === right.createdAt
+    && left.turn?.id === right.turn?.id
+    && readRendererSequence(left) === readRendererSequence(right)
+    && isTokenUsageActivityEntry(left) === isTokenUsageActivityEntry(right)
+    && isMonitorUsageActivityEntry(left) === isMonitorUsageActivityEntry(right)
+  );
+}
+
 function upsertLiveActivityEntry(
   current: ThreadSessionEntry,
   params: {
@@ -3443,14 +3425,18 @@ function upsertLiveActivityEntry(
   }
 
   const lastOptimisticEntry = flushed.optimisticEntries[flushed.optimisticEntries.length - 1];
-  const latestMergedEntry = mergeTranscriptEntries(
-    flushed.response?.replay.entries ?? [],
-    flushed.optimisticEntries
-  ).at(-1);
+  const responseEntries = flushed.response?.replay.entries ?? NO_RESPONSE_ENTRIES;
+  // New detail joins the last live tool row only while nothing renders below
+  // it. The cheap checks run first; the merge answers the rest, once per
+  // change to the response or to the other live rows.
   const canMergeWithLastActivity =
     lastOptimisticEntry?.type === "activity" &&
     lastOptimisticEntry.turn?.id === params.turn?.id &&
-    latestMergedEntry?.id === lastOptimisticEntry.id;
+    (
+      lastLiveActivityVerifiedAgainst.get(flushed.optimisticEntries) === responseEntries
+      || mergeTranscriptEntries(responseEntries, flushed.optimisticEntries)
+        .at(-1)?.id === lastOptimisticEntry.id
+    );
 
   if (canMergeWithLastActivity) {
     const updated = updateActivityEntry(
@@ -3460,18 +3446,25 @@ function upsertLiveActivityEntry(
       { suppressNoop: params.suppressDuplicateLiveActivityUpdates }
     );
     if (updated === lastOptimisticEntry) {
+      lastLiveActivityVerifiedAgainst.set(flushed.optimisticEntries, responseEntries);
       return flushed;
     }
 
+    const optimisticEntries = [
+      ...flushed.optimisticEntries.slice(0, -1),
+      updated,
+    ];
+    // New details change no field the merge places a row by, so the updated
+    // row is still last against the same response.
+    if (sameMergePlacement(lastOptimisticEntry, updated)) {
+      lastLiveActivityVerifiedAgainst.set(optimisticEntries, responseEntries);
+    }
     return {
       ...flushed,
       expectOwnUpdate: true,
       interacted: true,
       lastTouchedAt: params.now,
-      optimisticEntries: [
-        ...flushed.optimisticEntries.slice(0, -1),
-        updated,
-      ],
+      optimisticEntries,
     };
   }
 

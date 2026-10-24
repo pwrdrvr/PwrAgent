@@ -491,11 +491,16 @@ export function turnUsageEntryTurnId(
  * turn is. Monitor usage and per-request usage are ordinary entries here: a
  * row of the same turn that already follows them keeps following them.
  *
+ * `rowsToInsert` adds rows, by turn id, that a caller could not place by time
+ * (a retained row with no timestamp). Each goes after its turn's last entry,
+ * ahead of that turn's total; a row whose turn has no entry goes last.
+ *
  * Two passes, O(n). Returns the input array when nothing moves, so memoized
  * consumers keep their identity.
  */
 export function anchorTurnUsageEntries(
   entries: AppServerThreadEntry[],
+  rowsToInsert?: ReadonlyMap<string, AppServerThreadEntry[]>,
 ): AppServerThreadEntry[] {
   const lastEntryIndexByTurnId = new Map<string, number>();
   const totals: Array<{ index: number; turnId: string }> = [];
@@ -511,31 +516,46 @@ export function anchorTurnUsageEntries(
       lastEntryIndexByTurnId.set(turnId, index);
     }
   }
-  if (totals.length === 0) {
+  if (totals.length === 0 && !rowsToInsert?.size) {
     return entries;
   }
 
-  const totalsByAnchorIndex = new Map<number, AppServerThreadEntry[]>();
+  const insertionsAfterIndex = new Map<number, AppServerThreadEntry[]>();
+  const insertAfter = (
+    anchorIndex: number,
+    rows: readonly AppServerThreadEntry[],
+  ): void => {
+    const inserted = insertionsAfterIndex.get(anchorIndex);
+    if (inserted) {
+      inserted.push(...rows);
+    } else {
+      insertionsAfterIndex.set(anchorIndex, [...rows]);
+    }
+  };
+  // Inserted rows go first, so a turn's total still follows them.
+  const unplacedRows: AppServerThreadEntry[] = [];
+  for (const [turnId, rows] of rowsToInsert ?? []) {
+    const anchorIndex = lastEntryIndexByTurnId.get(turnId);
+    if (anchorIndex === undefined) {
+      unplacedRows.push(...rows);
+    } else {
+      insertAfter(anchorIndex, rows);
+    }
+  }
   const movedIndexes = new Set<number>();
   for (const { index, turnId } of totals) {
     const anchorIndex = lastEntryIndexByTurnId.get(turnId);
-    if (anchorIndex === undefined) {
-      continue;
+    if (anchorIndex !== undefined) {
+      insertAfter(anchorIndex, [entries[index]!]);
+      movedIndexes.add(index);
     }
-    const anchored = totalsByAnchorIndex.get(anchorIndex);
-    if (anchored) {
-      anchored.push(entries[index]!);
-    } else {
-      totalsByAnchorIndex.set(anchorIndex, [entries[index]!]);
-    }
-    movedIndexes.add(index);
   }
-  if (movedIndexes.size === 0) {
+  if (insertionsAfterIndex.size === 0 && unplacedRows.length === 0) {
     return entries;
   }
 
   const anchoredEntries: AppServerThreadEntry[] = [];
-  let changed = false;
+  let changed = unplacedRows.length > 0;
   const push = (entry: AppServerThreadEntry): void => {
     changed ||= entry !== entries[anchoredEntries.length];
     anchoredEntries.push(entry);
@@ -544,10 +564,11 @@ export function anchorTurnUsageEntries(
     if (!movedIndexes.has(index)) {
       push(entries[index]!);
     }
-    for (const total of totalsByAnchorIndex.get(index) ?? []) {
-      push(total);
+    for (const row of insertionsAfterIndex.get(index) ?? []) {
+      push(row);
     }
   }
+  anchoredEntries.push(...unplacedRows);
   return changed ? anchoredEntries : entries;
 }
 
