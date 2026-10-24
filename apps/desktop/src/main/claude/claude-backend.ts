@@ -96,6 +96,8 @@ type RunningTurn = {
   completedMessageText: Map<string, string>;
   /** ReportFindings calls the CLI has not yet accepted, by tool-use id. */
   pendingReports: Map<string, { report: ClaudeFindingsReport; model?: string; input: unknown }>;
+  /** Some successful tools update existing state without adding transcript entries. */
+  hasCompletedToolActivity: boolean;
   inputWrites: Promise<void>;
   ending?: boolean;
   /** One background context probe at a time; a request while it runs reruns it once. */
@@ -314,7 +316,7 @@ export class ClaudeBackend {
     const running: RunningTurn = {
       turnId: randomUUID(), controller: new AbortController(), entries: new Map(),
       input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(), pendingReports: new Map(),
-      inputWrites: Promise.resolve(), stderr: "",
+      inputWrites: Promise.resolve(), stderr: "", hasCompletedToolActivity: false,
     };
     this.running.set(params.threadId, running);
     try {
@@ -544,7 +546,7 @@ export class ClaudeBackend {
           };
           // A normal send with no visible work must not silently look answered.
           // Local slash commands can legitimately finish without model output.
-          const hasResponse = [...running.entries.values()].some((entry) =>
+          const hasResponse = running.hasCompletedToolActivity || [...running.entries.values()].some((entry) =>
             entry.type !== "message" || (entry.role === "assistant" && entry.text.trim()));
           if (finished && !failure && message.subtype === "success" && message.result?.trim() === ""
             && !hasResponse && !running.titlePrompt?.trimStart().startsWith("/")) {
@@ -935,6 +937,7 @@ export class ClaudeBackend {
               threadId, turnId, running, toolUseId: block.tool_use_id,
               report: pendingReport.report, model: pendingReport.model,
             });
+            running.hasCompletedToolActivity = true;
             continue;
           }
           // A rejected report stays visible as the failed tool call it was.
@@ -969,6 +972,7 @@ export class ClaudeBackend {
               contentItems: [{ type: "inputText", text: output }] }),
         };
         await this.emit({ method: "item/completed", params: { threadId, turnId, item } });
+        running.hasCompletedToolActivity = true;
       }
     }
   }

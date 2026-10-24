@@ -484,12 +484,14 @@ describe("Claude SDK backend", () => {
           { ...findings[1], outcome: "skipped" },
           { ...findings[0], outcome: "fixed" },
         ] }),
+        [{ type: "result", subtype: "success", is_error: false, result: "" } as SDKMessage],
       ));
       const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
       await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
       await f.waitForTurn();
       await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Fix the first one." }] });
       await f.waitForTurn();
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/completed" });
 
       expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1"]);
       const reported = f.events.filter((event) => event.notification.method === "thread/review/outcomesReported");
@@ -505,6 +507,14 @@ describe("Claude SDK backend", () => {
       const entries = (await f.backend.readThread(threadId)).entries;
       expect(entries.filter((entry) => entry.type === "review").map((entry) => entry.id)).toEqual(["review-1"]);
       expect(entries.some((entry) => entry.id === "review-2")).toBe(false);
+      expect(entries.findLast((entry) => entry.type === "message" && entry.role === "user")?.turn?.status).toBe("completed");
+
+      // Completed tool activity belongs to its turn, not the whole session.
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+      await f.waitForTurn();
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+        turn: { error: { message: "Claude completed without a response or any tool activity. Try sending the message again." } },
+      } });
       await f.backend.close();
     });
 
