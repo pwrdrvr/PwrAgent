@@ -3,6 +3,7 @@ import type {
   AppServerThreadEntry,
   ThreadTurnFailure,
 } from "@pwragent/shared";
+import { insertSyntheticEntriesByTime } from "./synthetic-transcript-entries";
 
 /**
  * Synthetic activity entries built from `turnFailureLog` reuse the
@@ -147,9 +148,9 @@ export function buildTurnFailureActivityEntries(
 }
 
 /**
- * Splice synthetic turn-failure activity entries into the transcript,
- * ordered by `createdAt` / `occurredAt` so the failure marker lands at the
- * moment the turn failed. Entries whose id already exists in the
+ * Splice synthetic turn-failure activity entries into the transcript at
+ * the moment the turn failed (`occurredAt`), without reordering the
+ * transcript itself. Entries whose id already exists in the
  * transcript (a backend that emits its own failure entry) are skipped so a
  * failure is never rendered twice.
  */
@@ -166,24 +167,7 @@ export function injectTurnFailures(
   if (additions.length === 0) {
     return entries;
   }
-  const merged: AppServerThreadEntry[] = [...entries, ...additions];
-  merged.sort((left, right) => {
-    const leftAt = left.createdAt ?? 0;
-    const rightAt = right.createdAt ?? 0;
-    if (leftAt !== rightAt) {
-      return leftAt - rightAt;
-    }
-    // Stable tie-break: existing entries before synthetic failures when
-    // timestamps match, so the failure marker lands after the work it
-    // describes rather than shoving a same-instant entry around.
-    const leftIsFailure = left.id.startsWith(TURN_FAILURE_ENTRY_PREFIX);
-    const rightIsFailure = right.id.startsWith(TURN_FAILURE_ENTRY_PREFIX);
-    if (leftIsFailure === rightIsFailure) {
-      return 0;
-    }
-    return leftIsFailure ? 1 : -1;
-  });
-  return merged;
+  return insertSyntheticEntriesByTime(entries, additions);
 }
 
 export function isTurnFailureEntry(entry: AppServerThreadEntry): boolean {

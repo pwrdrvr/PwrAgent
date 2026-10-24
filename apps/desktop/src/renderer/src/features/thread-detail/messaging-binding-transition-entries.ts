@@ -5,6 +5,7 @@ import type {
   ThreadMessagingBindingTransition,
 } from "@pwragent/shared";
 import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
+import { insertSyntheticEntriesByTime } from "./synthetic-transcript-entries";
 
 export const MESSAGING_BINDING_TRANSITION_ENTRY_PREFIX =
   "messaging-binding-transition-";
@@ -67,25 +68,7 @@ export function injectMessagingBindingTransitions(
   if (synthetic.length === 0) {
     return entries;
   }
-  const merged: AppServerThreadEntry[] = [...entries, ...synthetic];
-  merged.sort((left, right) => {
-    const leftAt = left.createdAt ?? 0;
-    const rightAt = right.createdAt ?? 0;
-    if (leftAt !== rightAt) {
-      return leftAt - rightAt;
-    }
-    const leftIsTransition = left.id.startsWith(
-      MESSAGING_BINDING_TRANSITION_ENTRY_PREFIX,
-    );
-    const rightIsTransition = right.id.startsWith(
-      MESSAGING_BINDING_TRANSITION_ENTRY_PREFIX,
-    );
-    if (leftIsTransition === rightIsTransition) {
-      return 0;
-    }
-    return leftIsTransition ? 1 : -1;
-  });
-  return merged;
+  return insertSyntheticEntriesByTime(entries, synthetic);
 }
 
 export function isMessagingBindingTransitionEntry(

@@ -191,6 +191,70 @@ describe("TranscriptList", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps a turn total below its final message in a channel-bound thread", () => {
+    // Codex stamps the final message with its second-truncated completion
+    // time, or a live read carries the receipt time forward, while the
+    // renderer stamps the turn total when it mints it. The final message can
+    // therefore read as later than the total that follows it. A Telegram
+    // binding adds a synthetic row, which once re-sorted the whole transcript
+    // by those timestamps and moved the total above the reply.
+    const turn = { id: "turn-1", status: "completed" as const };
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "from-thread",
+            role: "user",
+            text: "Handled stale train PR dependency wake.",
+            createdAt: 2_000_000,
+            turn,
+          },
+          {
+            type: "message",
+            id: "acknowledged",
+            role: "assistant",
+            phase: "final",
+            text: "Acknowledged: PR65 is reported merged.",
+            createdAt: 2_005_400,
+            turn,
+          },
+          {
+            type: "activity",
+            id: "live-turn-usage-turn-1",
+            summary: "Turn usage: 94,799 uncached in · 0 cached · 149 out",
+            status: "completed",
+            details: [],
+            createdAt: 2_005_000,
+            turn,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        messagingBindingTransitions={[
+          {
+            id: "bind-1",
+            action: "bound",
+            bindingId: "binding-1",
+            platform: "telegram",
+            conversationKind: "topic",
+            conversationTitle: "PwrDrvr/Topic",
+            parentTitle: "PwrDrvr",
+            occurredAt: 1_000,
+          },
+        ]}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const text = container.textContent ?? "";
+    const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
+    const usage = text.indexOf("Turn usage: 94,799 uncached in");
+    expect(reply).toBeGreaterThan(-1);
+    expect(usage).toBeGreaterThan(-1);
+    expect(reply).toBeLessThan(usage);
+  });
+
   it("attributes an injected Agent message and links its source thread", () => {
     const onShowThread = vi.fn();
     const sourceThread = {
