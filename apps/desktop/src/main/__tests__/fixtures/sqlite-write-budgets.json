@@ -1225,6 +1225,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "usage-turn-start-repair": {
+    "commits": 1,
+    "note": "Startup repair of three implausible ledger turn starts: one transaction however many turns; zero commits when none qualify",
+    "observedWalBytes": 4120,
+    "rowsChanged": 3,
+    "statements": 4
+  },
   "usage-turn-startup-repair": {
     "commits": 1,
     "note": "Startup repair of two unfinished ledger turns: one transaction however many turns; zero commits when none qualify",

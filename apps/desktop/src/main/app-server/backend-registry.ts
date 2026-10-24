@@ -5401,6 +5401,20 @@ function logUnpricedThreadUsageLine(line: ThreadUsageLineRecord): void {
   });
 }
 
+/** Each turn's earliest recorded time in a Claude transcript, by turn id. */
+function claudeTurnStartTimes(replay: AppServerThreadReplay): Map<string, number> {
+  const starts = new Map<string, number>();
+  for (const entry of replay.entries) {
+    const turnId = entry.turn?.id;
+    const at = entry.turn?.startedAt ?? entry.createdAt;
+    if (!turnId || typeof at !== "number") {
+      continue;
+    }
+    starts.set(turnId, Math.min(starts.get(turnId) ?? at, at));
+  }
+  return starts;
+}
+
 function resolveLiveThreadUsageTiming(params: {
   overlay?: ThreadOverlayState;
   reportedStartedAt?: number;
@@ -8437,6 +8451,8 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "completeThreadUsageTurn"
     | "completeThreadUsageTurns"
     | "repairUnfinishedThreadUsageTurns"
+    | "readImplausibleThreadUsageTurnStarts"
+    | "repairThreadUsageTurnStarts"
     | "readUsageActivity"
     | "listRemoteThreadPins"
     | "listThreadCompactions"
@@ -10551,12 +10567,20 @@ export class DesktopBackendRegistry {
           message: error instanceof Error ? error.message : String(error),
         });
       });
+    // Starts first: inferring an unfinished turn's end reads its start.
     this.usageTurnStartupRepair =
-      this.repairUnfinishedThreadUsageTurnsAtStartup().catch((error) => {
-        backendRegistryLog.warn("usage-turn-startup-repair-failed", {
-          message: error instanceof Error ? error.message : String(error),
+      this.repairImplausibleThreadUsageTurnStartsAtStartup()
+        .catch((error) => {
+          backendRegistryLog.warn("usage-turn-start-repair-failed", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .then(() => this.repairUnfinishedThreadUsageTurnsAtStartup())
+        .catch((error) => {
+          backendRegistryLog.warn("usage-turn-startup-repair-failed", {
+            message: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
 
     // Kick off a one-shot scan of persisted codexEnvironmentRuntime
     // entries: zombie "started" runs from a prior session become
@@ -10642,6 +10666,45 @@ export class DesktopBackendRegistry {
    * usage write for a day qualify. The repair marks each end as inferred, so
    * if such a turn is still live, its terminal event replaces the estimate.
    */
+  /**
+   * Repair ledger turn starts that cannot be real times. Claude turns were
+   * dated by reading their UUIDv4 ids as UUIDv7. PwrAgent's own Claude
+   * transcript still has each turn's first entry, so recover the start from
+   * it. Any other implausible start is cleared, and readers fall back to the
+   * turn's first observation.
+   */
+  private async repairImplausibleThreadUsageTurnStartsAtStartup(): Promise<void> {
+    const read = this.overlayStore.readImplausibleThreadUsageTurnStarts;
+    const repair = this.overlayStore.repairThreadUsageTurnStarts;
+    if (!read || !repair) {
+      return;
+    }
+    const rows = await read.call(this.overlayStore, { limit: USAGE_TURN_REPAIR_BATCH_LIMIT });
+    if (rows.length === 0) {
+      return;
+    }
+    const claudeStarts = new Map<string, Map<string, number>>();
+    for (const threadId of new Set(rows.flatMap((row) => row.backend === "claude" ? [row.threadId] : []))) {
+      try {
+        claudeStarts.set(threadId, claudeTurnStartTimes(await this.claudeBackend.readThread(threadId)));
+      } catch {
+        // A deleted transcript leaves the start unknown.
+      }
+    }
+    const repairs = rows.map((row) => {
+      const startedAt = row.backend === "claude" && row.turnId
+        ? claudeStarts.get(row.threadId)?.get(row.turnId)
+        : undefined;
+      return { usageTurnId: row.usageTurnId, ...(startedAt !== undefined ? { startedAt } : {}) };
+    });
+    const repaired = await repair.call(this.overlayStore, { repairs });
+    backendRegistryLog.info("usage-turn-start-repair", {
+      found: rows.length,
+      recovered: repairs.filter((row) => row.startedAt !== undefined).length,
+      repaired,
+    });
+  }
+
   private async repairUnfinishedThreadUsageTurnsAtStartup(): Promise<void> {
     const repair = this.overlayStore.repairUnfinishedThreadUsageTurns;
     if (!repair) {
