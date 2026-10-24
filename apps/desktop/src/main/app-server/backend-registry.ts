@@ -9,6 +9,7 @@ import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
   classifyDirectory,
+  readUuidV7Timestamp,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
   type McpConnectionToolApproval,
@@ -5400,20 +5401,9 @@ function logUnpricedThreadUsageLine(line: ThreadUsageLineRecord): void {
   });
 }
 
-function readUuidV7Timestamp(id: string | undefined): number | undefined {
-  if (!id) {
-    return undefined;
-  }
-  const hex = id.replace(/-/g, "").slice(0, 12);
-  if (!/^[0-9a-fA-F]{12}$/.test(hex)) {
-    return undefined;
-  }
-  const timestamp = Number.parseInt(hex, 16);
-  return Number.isFinite(timestamp) ? timestamp : undefined;
-}
-
 function resolveLiveThreadUsageTiming(params: {
   overlay?: ThreadOverlayState;
+  reportedStartedAt?: number;
   turnId?: string;
 }): {
   completedAt?: number;
@@ -5428,7 +5418,12 @@ function resolveLiveThreadUsageTiming(params: {
     (entry) => entry.turn?.id === params.turnId,
   );
   const turn = activity?.turn;
-  const startedAt = turn?.startedAt ?? readUuidV7Timestamp(params.turnId);
+  // Only a UUIDv7 id carries its own start time. Other backends (Claude's ids
+  // are UUIDv4) report the start on turn/started instead.
+  const startedAt =
+    turn?.startedAt
+    ?? readUuidV7Timestamp(params.turnId)
+    ?? params.reportedStartedAt;
   const completedAt = turn?.completedAt;
   const createdAt = completedAt ?? activity?.createdAt;
   return {
@@ -8680,6 +8675,8 @@ export class DesktopBackendRegistry {
   >;
   private codexBackendSummary?: BackendSummary;
   private readonly usageTurnAccounts = new Map<string, Promise<string | undefined>>();
+  /** Turn start times reported on turn/started, keyed like usageTurnAccounts. */
+  private readonly usageTurnStartTimes = new Map<string, number>();
   private codexBackendGeneration = 0;
   /** Reject quota reads started before refreshed account or plan metadata changed. */
   private codexAccountRevision = 0;
@@ -31277,6 +31274,9 @@ export class DesktopBackendRegistry {
       overlay?.reasoningEffort;
     const resolvedUsageTiming = resolveLiveThreadUsageTiming({
       overlay,
+      reportedStartedAt: turnId
+        ? this.usageTurnStartTimes.get(JSON.stringify([event.backend, threadId, turnId]))
+        : undefined,
       turnId,
     });
     const usageTiming = {
@@ -45532,6 +45532,16 @@ export class DesktopBackendRegistry {
           this.usageTurnAccounts.set(accountKey, this.captureUsageAccount(event.backend));
           if (this.usageTurnAccounts.size > 1_000) {
             this.usageTurnAccounts.delete(this.usageTurnAccounts.keys().next().value!);
+          }
+        }
+        const startedTurn = readRecord(event.notification.params.turn);
+        const startedAt = normalizeNotificationTimestamp(
+          startedTurn?.startedAt ?? startedTurn?.started_at,
+        );
+        if (typeof startedAt === "number") {
+          this.usageTurnStartTimes.set(accountKey, startedAt);
+          if (this.usageTurnStartTimes.size > 1_000) {
+            this.usageTurnStartTimes.delete(this.usageTurnStartTimes.keys().next().value!);
           }
         }
       }
