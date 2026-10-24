@@ -209,6 +209,7 @@ import type {
 import {
   isAppServerBackendKind,
   normalizeNavigationSnapshotThreadKeys,
+  qualifyThreadUrlsInText,
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import { hasFederationErrorCode } from "./federation-rpc";
@@ -2130,7 +2131,22 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       | AppServerReadThreadResponse
       | Promise<AppServerReadThreadResponse> = (response) => response,
     private readonly prepareTurnInput?: PrepareOutgoingFederationTurnInput,
+    private readonly senderInstanceId?: () => FederationInstanceId,
   ) {}
+
+  /**
+   * A bare thread link means "a thread on the machine reading this", and the
+   * reader is the owner. Name this machine on every link the operator wrote
+   * here — `#` chips, pasted sidebar links, restored drafts — so the owner's
+   * agent opens our thread instead of looking for it among its own.
+   */
+  private qualifyThreadLinks(input: readonly AppServerTurnInputItem[]): AppServerTurnInputItem[] {
+    const instanceId = this.senderInstanceId?.();
+    if (!instanceId) return [...input];
+    return input.map((item) => item.type === "text"
+      ? { ...item, text: qualifyThreadUrlsInText(item.text, instanceId) }
+      : item);
+  }
 
   async getNavigationQueryPage(
     request: NavigationQueryRequest,
@@ -2544,9 +2560,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async startTurn(
     request: FederationStartTurnRequest,
   ): Promise<StartTurnResponse> {
+    const qualified = this.qualifyThreadLinks(request.input);
     const input = this.prepareTurnInput
-      ? await this.prepareTurnInput(request.input)
-      : request.input;
+      ? await this.prepareTurnInput(qualified)
+      : qualified;
     return await this.rpc.request<StartTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.startTurn,
       params: { ...request, input },
@@ -2573,9 +2590,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async replaceQueuedMessage(
     request: FederationReplaceQueuedMessageRequest,
   ): Promise<StartTurnResponse> {
+    const qualified = this.qualifyThreadLinks(request.input);
     const input = this.prepareTurnInput
-      ? await this.prepareTurnInput(request.input)
-      : request.input;
+      ? await this.prepareTurnInput(qualified)
+      : qualified;
     return await this.rpc.request<StartTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.replaceQueuedMessage,
       params: { ...request, input },
@@ -2781,9 +2799,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async controlActiveTurn(
     request: ControlActiveTurnRequest,
   ): Promise<ControlActiveTurnResponse> {
-    const input = request.input && this.prepareTurnInput
-      ? await this.prepareTurnInput(request.input)
-      : request.input;
+    const qualified = request.input && this.qualifyThreadLinks(request.input);
+    const input = qualified && this.prepareTurnInput
+      ? await this.prepareTurnInput(qualified)
+      : qualified;
     return await this.rpc.request<ControlActiveTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.controlActiveTurn,
       params: { ...request, ...(input ? { input } : {}) },
@@ -2818,9 +2837,11 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   }
 
   async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
+    // The owner's steer handler resolves no attachment blobs, so steer input
+    // gets only the link pass, not `prepareTurnInput`.
     return await this.rpc.request<SteerTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.steerTurn,
-      params: request,
+      params: { ...request, input: this.qualifyThreadLinks(request.input) },
     });
   }
 
@@ -3105,9 +3126,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
-    const input = request.input && this.prepareTurnInput
-      ? await this.prepareTurnInput(request.input)
-      : request.input;
+    const qualified = request.input && this.qualifyThreadLinks(request.input);
+    const input = qualified && this.prepareTurnInput
+      ? await this.prepareTurnInput(qualified)
+      : qualified;
     return await this.rpc.request<MaterializeDirectoryLaunchpadResponse>({
       method: FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
       timeoutMs: null,
