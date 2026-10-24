@@ -80,7 +80,7 @@ describe("pwragent thread orchestration agent tools", () => {
                   description: expect.stringContaining("`acp:grok`"),
                 }),
                 model: expect.objectContaining({
-                  description: expect.stringContaining("list_instance_projects lists each backend's model IDs"),
+                  description: expect.stringContaining("list_instance_projects backends[].modelOptions"),
                 }),
                 branchName: expect.objectContaining({
                   description: expect.stringContaining("resolves this ref in cwd"),

@@ -20,6 +20,7 @@ import type {
   ThreadIdentifier,
 } from "./normalized-app-server";
 import type { CodexEnvironmentStartupFailure } from "./agent";
+import type { BackendModelOption } from "./backend";
 import type { HandoffInstanceThreadToolArgs, HandoffInstanceThreadResult } from "./thread-instance-handoff";
 
 export const PWRAGENT_FEDERATION_OPERATION_NAMES = [
@@ -167,6 +168,12 @@ export type FederationInstanceBackendSummary = {
   backend: AppServerBackendKind;
   label: string;
   models: string[];
+  /**
+   * The same model options as the UI picker, including display labels and
+   * selectable IDs (which may be aliases). Pass the id, never the label, to
+   * thread creation. Optional for compatibility with older tool responses.
+   */
+  modelOptions?: BackendModelOption[];
   /** The model a new thread gets when none is named. */
   defaultModel?: string;
 };
