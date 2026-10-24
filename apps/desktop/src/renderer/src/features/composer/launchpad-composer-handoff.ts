@@ -141,7 +141,8 @@ export function handoffLaunchpadComposer(
     ...(!turnId && thread.scheduledStart ? {
       waitingForScheduledActionId: thread.scheduledStart.actionId,
     } : {}),
-    ...(entry.steerWhenReady && turnId ? { backendQueuePending: true, steerDelivery: "sending" as const } : {}),
+    // A paused follow-up waits for Resume instead of steering on its own.
+    ...(entry.steerWhenReady && !entry.paused && turnId ? { backendQueuePending: true, steerDelivery: "sending" as const } : {}),
   }));
   store.setQueuedTurns(target, [...store.getQueuedTurns(target), ...queued]);
   store.deleteQueuedTurn(source);
@@ -283,7 +284,7 @@ export function handoffLaunchpadComposer(
       store.setQueuedTurns(target, store.getQueuedTurns(target).map((entry) => {
         if (entry.waitingForScheduledActionId !== actionId) return entry;
         const admitted = action.status === "started";
-        const steerReady = admitted && entry.steerWhenReady && action.turnId;
+        const steerReady = admitted && entry.steerWhenReady && !entry.paused && action.turnId;
         const next = {
           ...entry,
           waitingForScheduledActionId: undefined,
@@ -307,7 +308,7 @@ export function handoffLaunchpadComposer(
   }
   void (async () => {
     for (const entry of queued) {
-      if (entry.steerWhenReady && turnId) await steer(entry);
+      if (entry.steerWhenReady && !entry.paused && turnId) await steer(entry);
     }
   })();
 }

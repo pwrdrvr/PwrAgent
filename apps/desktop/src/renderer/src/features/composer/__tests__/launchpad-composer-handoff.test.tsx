@@ -72,6 +72,21 @@ describe("launchpad composer handoff", () => {
     await waitFor(() => expect(result.current.getQueuedTurns(target)[0]).toMatchObject({ steerDelivery: "accepted", backendQueuePending: true }));
   });
 
+  it("leaves a paused steer-when-ready follow-up waiting for Resume", async () => {
+    const { result } = renderHook(useComposerDraftStore);
+    const steerTurn = vi.fn<NonNullable<DesktopApi["steerTurn"]>>();
+    result.current.setQueuedTurns(source, [{ ...queued("correction"), steerWhenReady: true, paused: true }]);
+
+    act(() => handoffLaunchpadComposer(result.current, "launchpad:project", thread, { steerTurn }));
+    await act(async () => { await Promise.resolve(); });
+
+    expect(steerTurn).not.toHaveBeenCalled();
+    const [entry] = result.current.getQueuedTurns(target);
+    expect(entry).toMatchObject({ id: "correction", paused: true, steerWhenReady: true });
+    expect(entry).not.toHaveProperty("backendQueuePending");
+    expect(entry).not.toHaveProperty("steerDelivery");
+  });
+
   it.each(["before", "after"])("keeps the steer visible until its user message arrives %s the response", async (order) => {
     const { result } = renderHook(useComposerDraftStore);
     let emit: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0] = () => undefined;

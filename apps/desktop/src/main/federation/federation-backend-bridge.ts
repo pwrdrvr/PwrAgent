@@ -46,6 +46,8 @@ import type {
   ReleaseQueuedTurnResponse,
   MoveQueuedTurnRequest,
   MoveQueuedTurnResponse,
+  SetQueuedTurnPausedRequest,
+  SetQueuedTurnPausedResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   CelestialIconId,
@@ -482,6 +484,10 @@ function authenticateScheduledTurnOrigin<
 export const QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE =
   "Update PwrAgent on the owning instance to reorder its queued messages.";
 
+/** What a viewer hears when the owning instance cannot pause its queue. */
+export const QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE =
+  "Update PwrAgent on the owning instance to pause its queued messages.";
+
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationQueryPage: "backend.getNavigationQueryPage",
   removeNavigationDirectory: "backend.removeNavigationDirectory",
@@ -541,6 +547,7 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelQueuedTurn: "backend.cancelQueuedTurn",
   releaseQueuedTurn: "backend.releaseQueuedTurn",
   moveQueuedTurn: "backend.moveQueuedTurn",
+  setQueuedTurnPaused: "backend.setQueuedTurnPaused",
   startReview: "backend.startReview",
   startPullRequestReview: "backend.startPullRequestReview",
   listScheduledThreadActions: "backend.listScheduledThreadActions",
@@ -688,6 +695,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.releaseQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.moveQueuedTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.setQueuedTurnPaused]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startReview]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startPullRequestReview]: "turn_control",
   [FEDERATION_BACKEND_METHODS.listScheduledThreadActions]: "scheduled_actions",
@@ -932,6 +940,10 @@ export type FederationBackendOperations = {
   moveQueuedTurn?(
     request: MoveQueuedTurnRequest,
   ): Promise<MoveQueuedTurnResponse>;
+  /** Optional for the same reason as `moveQueuedTurn`. */
+  setQueuedTurnPaused?(
+    request: SetQueuedTurnPausedRequest,
+  ): Promise<SetQueuedTurnPausedResponse>;
   startReview(request: StartReviewRequest): Promise<StartReviewResponse>;
   listScheduledThreadActions(
     request?: ListScheduledThreadActionsRequest,
@@ -1604,6 +1616,15 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as ReleaseQueuedTurnRequest,
       ),
   );
+  if (params.backend.setQueuedTurnPaused) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.setQueuedTurnPaused,
+      async (envelope) =>
+        await params.backend.setQueuedTurnPaused!(
+          envelope.params as SetQueuedTurnPausedRequest,
+        ),
+    );
+  }
   if (params.backend.moveQueuedTurn) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.moveQueuedTurn,
@@ -2670,6 +2691,22 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     } catch (error) {
       if (hasFederationErrorCode(error, "method_not_found")) {
         throw new Error(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
+      }
+      throw error;
+    }
+  }
+
+  async setQueuedTurnPaused(
+    request: SetQueuedTurnPausedRequest,
+  ): Promise<SetQueuedTurnPausedResponse> {
+    try {
+      return await this.rpc.request<SetQueuedTurnPausedResponse>({
+        method: FEDERATION_BACKEND_METHODS.setQueuedTurnPaused,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error(QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE);
       }
       throw error;
     }

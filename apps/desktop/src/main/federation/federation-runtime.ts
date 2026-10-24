@@ -68,6 +68,7 @@ import type {
   DetachDirectoryFromThreadResponse,
   CancelQueuedTurnResponse,
   MoveQueuedTurnResponse,
+  SetQueuedTurnPausedResponse,
   ReleaseQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
@@ -174,6 +175,7 @@ import {
   type AttachDirectoryToThreadRequest,
   type CancelQueuedTurnRequest,
   type MoveQueuedTurnRequest,
+  type SetQueuedTurnPausedRequest,
   type ReleaseQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
   type CelestialIconAssignment,
@@ -605,6 +607,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "shutdown_notice",
   "navigation_directory_set_events",
   "turn_queue_reorder",
+  "turn_queue_pause",
   "thread_mcp_connections",
   "thread_todos",
   "operator_questions",
@@ -7229,6 +7232,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: MoveQueuedTurnRequest,
     ): Promise<MoveQueuedTurnResponse> {
       return await getDesktopBackendRegistry().moveQueuedTurn(request);
+    },
+    async setQueuedTurnPaused(
+      request: SetQueuedTurnPausedRequest,
+    ): Promise<SetQueuedTurnPausedResponse> {
+      return await getDesktopBackendRegistry().setQueuedTurnPaused(request);
     },
     async listScheduledThreadActions(
       request: ListScheduledThreadActionsRequest = {},

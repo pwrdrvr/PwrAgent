@@ -176,6 +176,7 @@ export function reconcileCompleteNavigationQueue(params: {
       threadOwner: params.owner,
       manualReleaseRequired: entry.manualReleaseRequired,
       holdReason: entry.holdReason,
+      paused: entry.paused,
     };
   });
   applyPendingMoves(mirrors);

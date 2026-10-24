@@ -217,6 +217,8 @@ import {
   type CancelQueuedTurnResponse,
   type MoveQueuedTurnRequest,
   type MoveQueuedTurnResponse,
+  type SetQueuedTurnPausedRequest,
+  type SetQueuedTurnPausedResponse,
   type ReleaseQueuedTurnResponse,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
@@ -11826,6 +11828,7 @@ export class DesktopBackendRegistry {
                 displayText: queuedTurnDisplayText(event.entry.input),
                 manualReleaseRequired:
                   event.entry.manualReleaseRequired === true,
+                ...(event.entry.paused ? { paused: true } : {}),
                 ...(event.entry.holdReason
                   ? { errorMessage: event.entry.holdReason }
                   : {}),
@@ -11850,6 +11853,7 @@ export class DesktopBackendRegistry {
                       displayText: queuedTurnDisplayText(event.entry.input),
                       errorMessage: event.reason,
                       manualReleaseRequired: true,
+                      ...(event.entry.paused ? { paused: true } : {}),
                     }
                   : event.type === "blocked"
                     ? {
@@ -18323,7 +18327,12 @@ export class DesktopBackendRegistry {
     if (this.handoffTurnStarts.has(key)
       || !this.threadTurnQueue.canStartImmediately({ backend: "codex", threadId })
       || this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId }).length) {
-      throw new Error("Wait for source turns and queued prompts to finish before handoff.");
+      // A paused prompt never finishes on its own.
+      const paused = this.threadTurnQueue.getQueuedEntries({ backend: "codex", threadId })
+        .some((entry) => entry.paused);
+      throw new Error(paused
+        ? "Resume or delete paused queued prompts, and wait for source turns and queued prompts to finish before handoff."
+        : "Wait for source turns and queued prompts to finish before handoff.");
     }
     this.threadHandoffReservations.add(key);
     try {
@@ -18905,6 +18914,51 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * Pauses or resumes a waiting entry. Every window and viewer hears the
+   * entry's new state on `thread/turnQueue/updated`, as a title refresh is
+   * heard; the flag lives on the in-memory FIFO entry, so it writes nothing
+   * to sqlite.
+   */
+  async setQueuedTurnPaused(
+    request: Omit<SetQueuedTurnPausedRequest, "federationTarget">,
+  ): Promise<SetQueuedTurnPausedResponse> {
+    const result = await this.threadTurnQueue.setEntryPaused(
+      request.queueEntryId,
+      request.paused,
+    );
+    const entry = result.entry;
+    if (result.disposition === "updated" && entry) {
+      await this.emit({
+        backend: entry.backend,
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: entry.threadId,
+            queueEntryId: entry.id,
+            queueEntryCreatedAt: entry.createdAt,
+            origin: entry.origin,
+            status: entry.manualReleaseRequired ? "held" : "queued",
+            displayText: queuedTurnDisplayText(entry.input),
+            ...(entry.title ? { title: entry.title } : {}),
+            manualReleaseRequired: entry.manualReleaseRequired === true,
+            ...(entry.paused ? { paused: true } : {}),
+            ...(entry.holdReason ? { errorMessage: entry.holdReason } : {}),
+          },
+        },
+      }).catch((error) => {
+        backendRegistryLog.error("Could not publish queued turn pause", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    return {
+      queueEntryId: request.queueEntryId,
+      disposition: result.disposition,
+      ...(entry ? { paused: entry.paused === true } : {}),
+    };
+  }
+
   async releaseQueuedTurnWithDisposition(
     entryId: string,
   ): Promise<ReleaseQueuedTurnResponse> {
@@ -18990,6 +19044,7 @@ export class DesktopBackendRegistry {
           inputUpdated: true,
           displayText: queuedTurnDisplayText(entry.input),
           manualReleaseRequired: entry.manualReleaseRequired === true,
+          ...(entry.paused ? { paused: true } : {}),
           ...(entry.holdReason ? { errorMessage: entry.holdReason } : {}),
         },
       },
@@ -19049,6 +19104,7 @@ export class DesktopBackendRegistry {
           displayText: queuedTurnDisplayText(entry.input),
           title,
           manualReleaseRequired: entry.manualReleaseRequired === true,
+          ...(entry.paused ? { paused: true } : {}),
           ...(entry.holdReason ? { errorMessage: entry.holdReason } : {}),
         },
       },
@@ -22929,6 +22985,7 @@ export class DesktopBackendRegistry {
         position: position++,
         ...(entry.manualReleaseRequired ? { manualReleaseRequired: true } : {}),
         ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+        ...(entry.paused ? { paused: true } : {}),
         ...(entry.title ? { title: entry.title } : {}),
       };
     }
@@ -22954,6 +23011,7 @@ export class DesktopBackendRegistry {
           ? { manualReleaseRequired: true }
           : {}),
         ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
+        ...(entry.paused ? { paused: true } : {}),
         ...(entry.title ? { title: entry.title } : {}),
       });
       snapshot[threadKey] = queue;

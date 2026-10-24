@@ -17,6 +17,8 @@ export type QueuedReorderRow = {
   id: string;
   group?: string;
   title: string;
+  /** Paused rows move like any other but take no place in the send order. */
+  paused?: boolean;
 };
 
 export const QUEUED_ROW_DRAG_ACTIVATION_PX = 4;
@@ -85,8 +87,11 @@ export type QueuedRowReorder = {
   /** The polite live region the hook writes move announcements into. */
   announcerRef: (element: HTMLElement | null) => void;
   subscribe: (listener: () => void) => () => void;
-  /** Where a row would land if the drag in progress dropped now. */
-  previewIndex: (id: string) => number | undefined;
+  /**
+   * A row's place in the send order — among the rows that are not paused —
+   * in the order the drag in progress would make, or the band's order.
+   */
+  previewPlace: (id: string) => number | undefined;
   /** Drops a drag in progress without moving anything. */
   cancel: () => void;
 };
@@ -99,7 +104,7 @@ export type QueuedRowReorder = {
  * session moves rows with transforms only, outside React: the rows under the
  * lifted one slide to open a slot the size of the lifted row, so the gap is
  * where the drop lands. React renders again when a drop commits through
- * `onMove`, and when the drop target changes, through `previewIndex`, so the
+ * `onMove`, and when the drop target changes, through `previewPlace`, so the
  * position labels read the order the drop would make.
  */
 export function useQueuedRowReorder(params: {
@@ -454,7 +459,19 @@ export function useQueuedRowReorder(params: {
         listenersRef.current.add(listener);
         return () => listenersRef.current.delete(listener);
       },
-      previewIndex: (id) => previewRef.current?.get(id),
+      previewPlace: (id) => {
+        const rows = latest.current.rows;
+        const preview = previewRef.current;
+        const at = (row: QueuedReorderRow, index: number): number =>
+          preview?.get(row.id) ?? index;
+        const index = rows.findIndex((row) => row.id === id);
+        const row = rows[index];
+        if (!row) return undefined;
+        const position = at(row, index);
+        return rows.filter((other, otherIndex) =>
+          !other.paused && at(other, otherIndex) < position
+        ).length;
+      },
     };
   }, []);
 
@@ -469,15 +486,19 @@ export function useQueuedRowReorder(params: {
   return reorder;
 }
 
-/** A row's place in the band, renumbered live while another row is dragged. */
-export function useQueuedPreviewIndex(
+/**
+ * A row's place among the rows that will send, renumbered live while another
+ * row is dragged; see `previewPlace`. `index` stands in until the row is
+ * known to the reorder.
+ */
+export function useQueuedPreviewPlace(
   reorder: QueuedRowReorder,
   id: string,
   index: number,
 ): number {
   return useSyncExternalStore(
     reorder.subscribe,
-    () => reorder.previewIndex(id) ?? index,
+    () => reorder.previewPlace(id) ?? index,
     () => index,
   );
 }

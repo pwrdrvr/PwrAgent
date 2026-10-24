@@ -58,6 +58,11 @@ export type ComposerQueuedTurnSnapshot = {
   errorMessage?: string;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  /**
+   * The operator paused it. Release passes over it, here and in the owner's
+   * FIFO, until it is resumed.
+   */
+  paused?: boolean;
   /** Owner-generated display title for a long message; see `ThreadQueuedTurnSummary`. */
   title?: string;
   input?: AppServerTurnInputItem[];
@@ -224,10 +229,13 @@ export function getNextReleasableQueuedTurn<
     | "scheduledActionId"
     | "scheduledSendAt"
     | "manualReleaseRequired"
+    | "paused"
     | "waitingForScheduledActionId"
   >,
 >(queuedTurns: readonly T[], now = Date.now()): T | undefined {
   for (const queuedTurn of queuedTurns) {
+    // A paused turn steps out of line; the turns behind it still go.
+    if (queuedTurn.paused) continue;
     // A backend-owned entry is already in the authoritative FIFO. Local
     // scheduled turns and reviews behind it must not leapfrog that entry.
     if (

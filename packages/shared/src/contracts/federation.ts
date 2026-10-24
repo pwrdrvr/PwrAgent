@@ -55,6 +55,12 @@ export const FEDERATION_CAPABILITIES = [
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
   "operator_requests",
+  /**
+   * The owner answers `backend.setQueuedTurnPaused` and skips paused entries
+   * when it dispatches, so a viewer can pause the thread's queued messages.
+   * A viewer offers no pause without it.
+   */
+  "turn_queue_pause",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

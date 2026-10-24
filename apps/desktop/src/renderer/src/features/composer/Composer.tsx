@@ -27,6 +27,7 @@ import {
   QueuedMessageInspector,
   QueuedRowGrip,
   QueuedRowIconButton,
+  QueuedRowPausedLabel,
   QueuedRowPositionLabel,
 } from "./QueuedMessageInspector";
 import {
@@ -37,6 +38,12 @@ import {
   requestOwnerQueuedTurnMove,
   settleQueuedTurnMove,
 } from "./queued-turn-move";
+import {
+  canPauseQueuedTurn,
+  canResumeQueuedTurn,
+  queuedTurnOwnerCanPause,
+  setQueuedTurnPausedIn,
+} from "./queued-turn-pause";
 import {
   type QueuedReorderRow,
   useQueuedRowReorder,
@@ -113,6 +120,7 @@ import {
   FolderIcon,
   LightningIcon,
   MoreVerticalIcon,
+  PauseIcon,
   PencilIcon,
   PlanIcon,
   PlayIcon,
@@ -721,6 +729,7 @@ type QueuedTurnDraft = {
   errorMessage?: string;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  paused?: boolean;
   title?: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
@@ -3936,6 +3945,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       id: queued.id,
       title: queued.title ?? formatDraftPreview(queued),
       group: queuedReorderGroup(queued, scheduleNow, ownerCanMoveQueuedTurns),
+      ...(queued.paused ? { paused: true } : {}),
     })),
     [queuedTurns, scheduleNow, ownerCanMoveQueuedTurns],
   );
@@ -3947,6 +3957,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const queuedBandHasMovableRow = queuedTurns.some((queued) =>
     queuedReorder.canMove(queued.id)
   );
+  const ownerCanPauseQueuedTurns = queuedTurnOwnerCanPause(props.desktopApi, props.thread);
+  // Retry answers the row the queue would send next, which can sit behind
+  // paused rows.
+  const firstWaitingQueuedIndex = queuedTurns.findIndex((queued) => !queued.paused);
   const futureScheduledDraftSendAt = getFutureScheduledSendAt(
     scheduledDraftSendAt,
     scheduleNow,
@@ -4701,6 +4715,31 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setQueuedTurnsState(settled);
       if (answer.failure) setSendError(answer.failure);
     });
+  };
+  /** Pauses or resumes `queued`; see `setQueuedTurnPausedIn`. */
+  const setQueuedTurnPaused = (queued: QueuedTurnDraft, paused: boolean): void => {
+    const scopeKey = composerScopeKey;
+    setSendError(undefined);
+    const run = async (): Promise<void> => {
+      const failure = await setQueuedTurnPausedIn({
+        queued,
+        paused,
+        read: () => draftStore.getQueuedTurns(scopeKey),
+        write: (turns) => {
+          saveQueuedTurnSnapshots(scopeKey, turns);
+          if (activeComposerScopeKeyRef.current === scopeKey) setQueuedTurnsState(turns);
+        },
+        desktopApi: props.desktopApi,
+        federationTarget:
+          props.thread?.federation?.ref.target
+          ?? readRendererFederationTarget(),
+      });
+      if (failure && activeComposerScopeKeyRef.current === scopeKey) {
+        setSendError(failure);
+      }
+    };
+    // Only a request to the owner can be in flight.
+    void (queued.queueEntryId ? runQueuedRowAction(queued, run) : run());
   };
   const preserveCancelledQueuedTurnInScope = (
     scopeKey: string,
@@ -5982,6 +6021,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               title?: unknown;
               errorMessage?: unknown;
               manualReleaseRequired?: unknown;
+              paused?: unknown;
               queueEntryId?: unknown;
               queueEntryCreatedAt?: unknown;
               status?: unknown;
@@ -6022,6 +6062,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           typeof turnQueueRecord.title === "string" && turnQueueRecord.title
             ? turnQueueRecord.title
             : undefined;
+        // Every queued and held event carries the entry's whole state, so
+        // an absent flag is an entry that is not paused.
+        const paused = turnQueueRecord.paused === true ? true : undefined;
         if (matchingIndex >= 0) {
           const next = mirrorCurrent.map((queued, index) =>
             index === matchingIndex
@@ -6040,6 +6083,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       : {}),
                   manualReleaseRequired,
                   holdReason,
+                  paused,
                 }
               : queued
           );
@@ -6053,6 +6097,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 : {}),
               manualReleaseRequired,
               holdReason,
+              ...(paused ? { paused } : {}),
               ...(title ? { title } : {}),
               text:
                 typeof turnQueueRecord.displayText === "string"
@@ -12113,6 +12158,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           : undefined;
         const failed = Boolean(queued.errorMessage || queued.manualReleaseRequired);
         const movable = queuedReorder.canMove(queued.id);
+        const queuedTitle = queued.title ?? formatDraftPreview(queued);
 
         return (
           <div
@@ -12121,8 +12167,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               "composer__queued--message",
               scheduledSendAt ? "composer__queued--scheduled" : "",
               failed ? "composer__queued--failed" : "",
+              queued.paused ? "composer__queued--paused" : "",
               // Rows waiting on an answer keep their actions on screen.
-              failed || scheduledSendAt ? "composer__queued--pinned-actions" : "",
+              failed || scheduledSendAt || queued.paused
+                ? "composer__queued--pinned-actions"
+                : "",
               queuedBandHasMovableRow ? "composer__queued--reorderable" : "",
               movable ? "composer__queued--movable" : "",
             ]
@@ -12132,7 +12181,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             onKeyDown={(event) => queuedReorder.onKeyDown(event, queued.id)}
             onPointerDown={(event) => queuedReorder.onPointerDown(event, queued.id)}
             aria-label={
-              queued.manualReleaseRequired
+              queued.paused
+                ? index === 0
+                  ? "Paused queued message"
+                  : `Paused queued message ${index + 1}`
+                : queued.manualReleaseRequired
                 ? index === 0
                   ? "Held queued message"
                   : `Held queued message ${index + 1}`
@@ -12154,7 +12207,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 // A row that cannot move keeps the slot, so every chevron in
                 // the band stays on one line.
                 movable ? (
-                  <QueuedRowGrip title={queued.title ?? formatDraftPreview(queued)} />
+                  <QueuedRowGrip title={queuedTitle} />
                 ) : (
                   <span className="composer__queued-grip composer__queued-grip--empty" aria-hidden="true" />
                 )
@@ -12172,7 +12225,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ) : null
               }
               actions={<>
-              {isLaunchpad ? (
+              {queued.paused ? (
+                <button
+                  className="composer__secondary-action"
+                  disabled={!canResumeQueuedTurn(queued, ownerCanPauseQueuedTurns)}
+                  type="button"
+                  onClick={() => {
+                    setQueuedTurnPaused(queued, false);
+                  }}
+                >
+                  Resume
+                </button>
+              ) : isLaunchpad ? (
                 supportsSteering ? (
                   <button
                     className="composer__secondary-action"
@@ -12188,7 +12252,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     {queued.steerWhenReady ? "Queue instead" : "Steer when ready"}
                   </button>
                 ) : null
-              ) : queued.manualReleaseRequired && index === 0 ? (
+              ) : queued.manualReleaseRequired && index === firstWaitingQueuedIndex ? (
                 <button
                   className="composer__secondary-action"
                   disabled={
@@ -12241,6 +12305,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 >
                   Send now
                 </button>
+              ) : null}
+              {canPauseQueuedTurn(queued, scheduleNow, ownerCanPauseQueuedTurns) ? (
+                <QueuedRowIconButton
+                  label="Pause"
+                  onClick={() => {
+                    setQueuedTurnPaused(queued, true);
+                  }}
+                >
+                  <PauseIcon size={14} />
+                </QueuedRowIconButton>
               ) : null}
               <QueuedRowIconButton
                 label="Edit"
@@ -12333,7 +12407,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               </>}
             >
               <span className="composer__queued-label" role="status">
-                {queuedLabel ?? (
+                {queued.paused ? (
+                  <QueuedRowPausedLabel />
+                ) : queuedLabel ?? (
                   <QueuedRowPositionLabel
                     reorder={queuedReorder}
                     id={queued.id}
@@ -12354,7 +12430,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   queued.title ? "" : "composer__queued-text--raw",
                 ].filter(Boolean).join(" ")}
               >
-                {queued.title ?? formatDraftPreview(queued)}
+                {queuedTitle}
               </span>
             </QueuedMessageInspector>
           </div>

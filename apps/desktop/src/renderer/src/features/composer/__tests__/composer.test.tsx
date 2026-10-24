@@ -21,6 +21,8 @@ import {
   type ModelSettingsRecent,
   type FederationCapability,
   type MoveQueuedTurnResponse,
+  type SetQueuedTurnPausedRequest,
+  type SetQueuedTurnPausedResponse,
   type SetThreadModelSettingsRequest,
   type StartTurnRequest,
   type StartTurnResponse,
@@ -25469,5 +25471,126 @@ describe("queued message reordering", () => {
       desktopApi={{ onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
       thread={thread} />);
     expect(screen.queryByRole("button", { name: /^Reorder: / })).toBeNull();
+  });
+});
+
+describe("queued message pausing", () => {
+  const thread = {
+    id: "thread-1", title: "Recipient", titleSource: "explicit" as const, source: "codex" as const,
+    linkedDirectories: [], inbox: { inInbox: false },
+  };
+  const mirror = (id: string, extra: Partial<ComposerQueuedTurnSnapshot> = {}): ComposerQueuedTurnSnapshot => ({
+    id, queueEntryId: id, title: `Message ${id}`, text: id, imageAttachments: [], fileAttachments: [], ...extra,
+  });
+  const row = (title: string): HTMLElement =>
+    screen.getByText(title).closest<HTMLElement>(".composer__queued--message")!;
+  const labels = (): string[] =>
+    [...document.querySelectorAll(".composer__queued--message")].map((queued) =>
+      `${queued.querySelector(".composer__queued-text")?.textContent}=${queued.querySelector(".composer__queued-label")?.textContent}`);
+
+  it("pauses an owner's queued message, numbers the rest around it, and resumes it", async () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b"), mirror("c")]);
+    const setQueuedTurnPaused = vi.fn(async (request: SetQueuedTurnPausedRequest): Promise<SetQueuedTurnPausedResponse> =>
+      ({ queueEntryId: request.queueEntryId, disposition: "updated", paused: request.paused }));
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ setQueuedTurnPaused, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+    expect(labels()).toEqual(["Message a=Next", "Message b=#2", "Message c=#3"]);
+
+    fireEvent.click(within(row("Message a")).getByRole("button", { name: "Pause" }));
+
+    await waitFor(() => expect(labels()).toEqual(["Message a=Paused", "Message b=Next", "Message c=#2"]));
+    expect(setQueuedTurnPaused).toHaveBeenCalledWith({ queueEntryId: "a", paused: true });
+    expect(screen.getByLabelText("Paused queued message")).toHaveClass(
+      "composer__queued--paused",
+      "composer__queued--pinned-actions",
+    );
+    expect(within(row("Message a")).queryByRole("button", { name: "Pause" })).toBeNull();
+    expect(within(row("Message a")).queryByRole("button", { name: "Steer" })).toBeNull();
+
+    fireEvent.click(within(row("Message a")).getByRole("button", { name: "Resume" }));
+    await waitFor(() => expect(labels()).toEqual(["Message a=Next", "Message b=#2", "Message c=#3"]));
+    expect(setQueuedTurnPaused).toHaveBeenLastCalledWith({ queueEntryId: "a", paused: false });
+  });
+
+  it("follows the owner's queue event, which reaches every window", () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b")]);
+    let publish!: (event: AgentEvent) => void;
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{
+        setQueuedTurnPaused: vi.fn(),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => { publish = listener; return () => undefined; },
+      }} disabled={false} skills={[]} thread={thread} />);
+    const queueEvent = (paused?: boolean): AgentEvent => ({ backend: "codex", notification: {
+      method: "thread/turnQueue/updated",
+      params: {
+        threadId: "thread-1", queueEntryId: "b", origin: "manual", status: "queued",
+        displayText: "b", manualReleaseRequired: false, ...(paused ? { paused } : {}),
+      },
+    } });
+
+    act(() => publish(queueEvent(true)));
+    expect(draftStore.getQueuedTurns(scopeKey)[1]).toMatchObject({ id: "b", paused: true });
+    // Every queued event carries the entry's whole state: no flag is not paused.
+    act(() => publish(queueEvent()));
+    expect(draftStore.getQueuedTurns(scopeKey)[1]).not.toHaveProperty("paused", true);
+  });
+
+  it("reports an owner that refused, and leaves the row as the owner has it", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [mirror("a"), mirror("b")]);
+    const setQueuedTurnPaused = vi.fn(async (): Promise<SetQueuedTurnPausedResponse> =>
+      ({ queueEntryId: "b", disposition: "not_found" }));
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ setQueuedTurnPaused, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    fireEvent.click(within(row("Message b")).getByRole("button", { name: "Pause" }));
+
+    expect(await screen.findByText("That message already started or was removed.")).toBeInTheDocument();
+    expect(labels()).toEqual(["Message a=Next", "Message b=#2"]);
+  });
+
+  it("pauses a message only this composer holds without asking an owner", () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a", { queueEntryId: undefined })]);
+    const setQueuedTurnPaused = vi.fn();
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ setQueuedTurnPaused, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    fireEvent.click(within(row("Message a")).getByRole("button", { name: "Pause" }));
+
+    expect(draftStore.getQueuedTurns(scopeKey)[0]).toMatchObject({ id: "a", paused: true });
+    expect(labels()).toEqual(["Message a=Paused"]);
+    expect(setQueuedTurnPaused).not.toHaveBeenCalled();
+  });
+
+  it("offers no pause on a held row, or for a peer that does not advertise pausing", () => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [
+      mirror("held", { manualReleaseRequired: true, holdReason: "Retry when ready." }),
+    ]);
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1", target), [mirror("a")]);
+    const desktopApi = { setQueuedTurnPaused: vi.fn(), onAgentEvent: () => () => undefined };
+    const { unmount } = render(<Composer activeTurnId="active" backends={[backendSummary("codex")]}
+      draftStore={draftStore} desktopApi={desktopApi} disabled={false} skills={[]} thread={thread} />);
+    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+    unmount();
+
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={desktopApi} disabled={false} skills={[]}
+      thread={{ ...thread, federation: {
+        instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: "thread-1", target },
+        capabilities: ["turn_control", "turn_queue_reorder"],
+      } }} />);
+    expect(screen.getByText("Message a")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
   });
 });
