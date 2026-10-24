@@ -10887,6 +10887,10 @@ describe("useThreadSessionState", () => {
       expect(liveIds.indexOf("live-turn-usage-turn-t")).toBeGreaterThan(
         liveIds.indexOf("turn-t:assistant"),
       );
+      // The late work row is the turn's work, so it reads above the answer.
+      expect(liveIds.indexOf("live-protocol-t")).toBeLessThan(
+        liveIds.indexOf("turn-t:assistant"),
+      );
 
       for (const updatedAt of [2_000, 3_000]) {
         now += 1_000;
@@ -10901,6 +10905,8 @@ describe("useThreadSessionState", () => {
         expect(ids.at(-1)).toBe("live-turn-usage-turn-t");
         expect(ids.filter((id) => id === "live-turn-usage-turn-t")).toHaveLength(1);
         expect(ids.indexOf("t-final")).toBeLessThan(ids.indexOf("live-turn-usage-turn-t"));
+        expect(ids).toContain("live-protocol-t");
+        expect(ids.indexOf("live-protocol-t")).toBeLessThan(ids.indexOf("t-final"));
         // The session's own response is what later merges start from.
         const responseIds = entryIds(result.current.response?.replay.entries ?? []);
         expect(responseIds.at(-1)).toBe("live-turn-usage-turn-t");
@@ -11119,9 +11125,10 @@ describe("useThreadSessionState", () => {
           turn: turnT,
         });
       });
+      // T's late work row goes above T's answer, not below it.
       const vIds = ["v-user", "v-commentary", "activity-exec-v", "v-final", "live-turn-usage-turn-v"];
       expect(entryIds(result.current.entries)).toEqual([
-        "t-user", "t-commentary", "activity-exec-t", "t-final", "live-protocol-t", "live-turn-usage-turn-t",
+        "t-user", "t-commentary", "activity-exec-t", "live-protocol-t", "t-final", "live-turn-usage-turn-t",
         ...vIds,
       ]);
 
@@ -11220,6 +11227,154 @@ describe("useThreadSessionState", () => {
         "t-user", "t-commentary", "activity-exec-t", "t-final", "live-turn-usage-turn-t",
         "v-user", "v-commentary", "activity-exec-v", "v-final", "live-turn-usage-turn-v",
       ]);
+    });
+
+    // Work below a turn's answer makes the answer read as an interim reply,
+    // and the transcript folds it into the turn's "Worked for" group.
+    it("keeps a finished newest turn's late work row above its answer, across a re-read", async () => {
+      vi.spyOn(Date, "now").mockImplementation(() => turnT.completedAt + 5_000);
+      const readThread = vi.fn(async () => readThreadResponse({
+        entries: turnEntries(turnT, "t", turnT.completedAt - 600),
+        hasPreviousPage: false,
+      }));
+      const desktopApi: DesktopApi = {
+        onAgentEvent: () => () => undefined,
+        readThread,
+      };
+      const { result, rerender } = renderHook(
+        ({ thread }) => useThreadSessionState({ desktopApi, thread }),
+        { initialProps: { thread: buildThread({ id: "thread-1", updatedAt: 1_000 }) } },
+      );
+      await waitForThreadHydration(result);
+
+      // Deferred at turn/completed and stamped a few hundred milliseconds
+      // after T's second-truncated completion: newer than T's answer.
+      act(() => {
+        result.current.upsertLiveTranscriptEntry({
+          type: "activity",
+          id: "live-protocol-t",
+          summary: "Used 2 tools",
+          status: "completed",
+          details: [],
+          createdAt: turnT.completedAt + 400,
+          turn: turnT,
+        });
+      });
+      const expected = [
+        "t-user", "t-commentary", "activity-exec-t", "live-protocol-t", "t-final", "live-turn-usage-turn-t",
+      ];
+      expect(entryIds(result.current.entries)).toEqual(expected);
+
+      rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+      await waitFor(() => {
+        expect(readThread).toHaveBeenCalledTimes(2);
+      });
+      await waitFor(() => {
+        expect(entryIds(result.current.entries)).toEqual(expected);
+      });
+    });
+
+    it("keeps a finished turn's retained work row above its answer after a lagging refresh", async () => {
+      vi.spyOn(Date, "now").mockImplementation(() => turnV.completedAt + 5_000);
+      const turnS = {
+        id: "turn-s",
+        status: "completed" as const,
+        startedAt: 1_792_851_000_000,
+        completedAt: 1_792_851_060_000,
+        durationMs: 60_000,
+      };
+      const tPage = turnEntries(turnT, "t", turnT.completedAt - 600);
+      // An earlier read listed a work row of T below T's answer: one stamped
+      // after T's second-truncated completion, one with no time at all.
+      const timedLateRow: AppServerThreadEntry = {
+        type: "activity",
+        id: "activity-late-t",
+        summary: "Used 2 tools",
+        status: "completed",
+        details: [],
+        createdAt: turnT.completedAt + 400,
+        turn: turnT,
+      };
+      const untimedLateRow: AppServerThreadEntry = {
+        type: "activity",
+        id: "activity-untimed-t",
+        summary: "Ran 1 command",
+        status: "completed",
+        details: [],
+        turn: { id: turnT.id },
+      };
+      const pages = [
+        readThreadResponse({
+          entries: [...tPage, timedLateRow, untimedLateRow],
+          hasPreviousPage: true,
+          previousCursor: "before-t",
+        }),
+        readThreadResponse({ entries: turnEntries(turnS, "s", turnS.completedAt - 500), hasPreviousPage: false }),
+        // A lagging refresh omits both rows.
+        readThreadResponse({ entries: tPage, hasPreviousPage: true, previousCursor: "before-t" }),
+      ];
+      const readThread = vi.fn(async () => pages.shift()!);
+      const desktopApi: DesktopApi = {
+        onAgentEvent: () => () => undefined,
+        readThread,
+      };
+      const { result, rerender } = renderHook(
+        ({ thread }) => useThreadSessionState({ desktopApi, thread }),
+        { initialProps: { thread: buildThread({ id: "thread-1", updatedAt: 1_000 }) } },
+      );
+      await waitForThreadHydration(result);
+      await act(async () => {
+        await result.current.loadOlder();
+      });
+
+      rerender({ thread: buildThread({ id: "thread-1", updatedAt: 2_000 }) });
+      await waitFor(() => {
+        expect(readThread).toHaveBeenCalledTimes(3);
+      });
+      await waitFor(() => {
+        expect(entryIds(result.current.entries)).toEqual([
+          "s-user", "s-commentary", "activity-exec-s", "s-final", "live-turn-usage-turn-s",
+          "t-user", "t-commentary", "activity-exec-t", "activity-late-t", "activity-untimed-t", "t-final",
+          "live-turn-usage-turn-t",
+        ]);
+      });
+    });
+
+    it("leaves an agent's work below its reply while the turn runs", async () => {
+      vi.spyOn(Date, "now").mockImplementation(() => turnT.startedAt + 60_000);
+      const liveTurn = { id: turnT.id, status: "in_progress" as const, startedAt: turnT.startedAt };
+      const readThread = vi.fn(async () => readThreadResponse({
+        entries: [
+          { type: "message", id: "t-user", role: "user", text: "t prompt", createdAt: turnT.startedAt, turn: liveTurn },
+          // ACP agents tag every reply final.
+          { type: "message", id: "t-reply", role: "assistant", phase: "final", text: "Starting the probe.", createdAt: turnT.startedAt + 30_000, turn: liveTurn },
+        ],
+        hasPreviousPage: false,
+      }));
+      const desktopApi: DesktopApi = {
+        onAgentEvent: () => () => undefined,
+        readThread,
+      };
+      const { result } = renderHook(() =>
+        useThreadSessionState({
+          desktopApi,
+          thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+        })
+      );
+      await waitForThreadHydration(result);
+
+      act(() => {
+        result.current.upsertLiveTranscriptEntry({
+          type: "activity",
+          id: "live-protocol-t",
+          summary: "Used 2 tools",
+          status: "completed",
+          details: [],
+          createdAt: turnT.startedAt + 45_000,
+          turn: liveTurn,
+        });
+      });
+      expect(entryIds(result.current.entries)).toEqual(["t-user", "t-reply", "live-protocol-t"]);
     });
   });
 

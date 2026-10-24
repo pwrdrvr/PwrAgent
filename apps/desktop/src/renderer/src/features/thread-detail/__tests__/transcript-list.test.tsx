@@ -21,6 +21,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
+import { withRendererSequence } from "../live-transcript-activity";
 import { TranscriptList } from "../TranscriptList";
 
 const compactMarkdownTable = `| Key | Value |
@@ -326,7 +327,7 @@ describe("TranscriptList", () => {
       expect(text.indexOf("Turn usage:", usage + 1)).toBe(-1);
     });
 
-    it("keeps the total below the turn's folded work group", () => {
+    it("keeps a late work row in the turn's work group, above the answer and the total", () => {
       const { container } = render(
         <TranscriptList
           entries={completedTurnEntries}
@@ -337,15 +338,43 @@ describe("TranscriptList", () => {
         />
       );
 
-      // Work after the reply makes the reply interim, so the turn folds into
-      // one group. The total is the turn's last row: below that group, with
-      // no second group split off beneath it.
+      // The late row is the turn's work: it joins the work group above the
+      // answer. Below the answer it would make the answer read as interim and
+      // fold it into the group.
       const group = screen.getByRole("button", { name: /Worked for 2m 29s · 3 tool updates/ });
       expect(group).toBeInTheDocument();
       const text = container.textContent ?? "";
+      const worked = text.indexOf("Worked for 2m 29s");
+      const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
       const usage = text.indexOf("Turn usage: 94,799 uncached in");
-      expect(usage).toBeGreaterThan(text.indexOf("Worked for 2m 29s"));
+      expect(reply).toBeGreaterThan(worked);
+      expect(usage).toBeGreaterThan(reply);
       expect(text.indexOf("More work")).toBe(-1);
+    });
+
+    it("keeps work the renderer saw after an agent's reply below that reply", () => {
+      const reply = withRendererSequence(
+        { ...completedTurnEntries[4]!, turn: { id: turn.id, status: "in_progress" as const, startedAt: turn.startedAt } },
+        4,
+      );
+      const { container } = render(
+        <TranscriptList
+          entries={[...completedTurnEntries.slice(0, 4), reply]}
+          expandedWorkPhaseGroupIds={["work:turn-1:commentary:complete"]}
+          loading={false}
+          loadingMore={false}
+          pendingActivityEntry={withRendererSequence(
+            { ...lateLiveRow, id: "live-tools-1", summary: "Ran 1 command" },
+            5,
+          )}
+          onLoadOlder={async () => undefined}
+        />
+      );
+
+      const text = container.textContent ?? "";
+      expect(text.indexOf("Ran 1 command")).toBeGreaterThan(
+        text.indexOf("Acknowledged: PR65 is reported merged."),
+      );
     });
   });
 
