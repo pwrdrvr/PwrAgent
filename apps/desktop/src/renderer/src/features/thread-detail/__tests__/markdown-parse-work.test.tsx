@@ -95,6 +95,22 @@ it.each([16, 32, 64] as const)("records necessary full-document work for %i slow
   checkBudget(`slowStream${chunks}`);
 });
 
+it.each([16, 32, 64] as const)("reuses stable prose in the production transcript for %i slow chunks", (chunks) => {
+  vi.useFakeTimers();
+  const prose = "A contrived **answer** with `code`.\n\n";
+  const view = (text: string) => (
+    <TranscriptList threadId="fixture" entries={[]} pendingAssistantMessage={answer(text)}
+      loading={false} loadingMore={false} onLoadOlder={onLoadOlder} />
+  );
+  const { rerender } = render(view(prose));
+  for (let index = 2; index <= chunks; index += 1) {
+    act(() => vi.advanceTimersByTime(110));
+    rerender(view(prose.repeat(index)));
+  }
+  act(() => vi.advanceTimersByTime(100));
+  checkBudget(`proseStream${chunks}`);
+});
+
 it("updates copy actions and viewer state without reparsing the owning message", async () => {
   const text = "Copy `fixture code` or [open a file](/fixture/example.md).";
   const firstCopy = vi.fn(async () => undefined);

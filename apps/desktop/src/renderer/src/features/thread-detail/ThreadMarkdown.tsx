@@ -25,7 +25,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import ReactMarkdown, { type Components, type UrlTransform } from "react-markdown";
+import { type Components, type Options, type UrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AppIcon } from "../../components/AppIcon";
@@ -67,6 +67,7 @@ import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
+import { IncrementalMarkdown } from "./IncrementalMarkdown";
 import {
   TranscriptFileRegistrationContext,
   useTranscriptFileReference,
@@ -719,22 +720,23 @@ const MarkdownDocument = memo(function MarkdownDocument(props: {
   text: string;
   mathRuntime?: MarkdownMathRuntime;
 }) {
+  const remarkPlugins = useMemo<Options["remarkPlugins"]>(() => [
+    ...(props.mathRuntime?.remarkPlugins ?? []),
+    remarkBreaks,
+    [remarkGfm, { singleTilde: false }],
+    remarkPullRequestReferences,
+    remarkTableProfile,
+  ], [props.mathRuntime]);
   return (
-    <ReactMarkdown
+    <IncrementalMarkdown
       components={markdownComponents}
+      mathFlow={Boolean(props.mathRuntime)}
       rehypePlugins={props.mathRuntime?.rehypePlugins}
-      remarkPlugins={[
-        ...(props.mathRuntime?.remarkPlugins ?? []),
-        remarkBreaks,
-        // Single tildes are common in home paths and approximate values.
-        [remarkGfm, { singleTilde: false }],
-        remarkPullRequestReferences,
-        remarkTableProfile,
-      ]}
+      remarkPlugins={remarkPlugins}
       urlTransform={normalizeMarkdownUrl}
     >
       {props.text}
-    </ReactMarkdown>
+    </IncrementalMarkdown>
   );
 });
 
