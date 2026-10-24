@@ -368,6 +368,8 @@ export type SetQueuedTurnPausedResponse = {
   disposition: "updated" | "unchanged" | "not_found" | "held";
   /** Whether the entry is paused after the request, while it is queued. */
   paused?: boolean;
+  /** See `ThreadQueuedTurnSummary.pauseRevision`. */
+  pauseRevision?: number;
 };
 
 export type ReleaseQueuedTurnRequest = {

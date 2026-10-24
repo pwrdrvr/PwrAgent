@@ -2444,6 +2444,8 @@ export type AppServerNotification =
          * Owners that predate pausing never send it.
          */
         paused?: boolean;
+        /** See `ThreadQueuedTurnSummary.pauseRevision`. */
+        pauseRevision?: number;
         finalText?: string;
         terminalStatus?: string;
       };

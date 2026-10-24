@@ -57,7 +57,7 @@ import {
   canResumeQueuedTurn,
   queuedTurnOwnerCanPause,
   setQueuedTurnPausedIn,
-  withPausedFlag,
+  withOwnerPause,
 } from "../composer/queued-turn-pause";
 import { useQueuedRowReorder } from "../composer/useQueuedRowReorder";
 import { restoreQueuedMessage } from "../composer/queued-message-content";
@@ -516,6 +516,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         displayText?: unknown;
         inputUpdated?: unknown;
         paused?: unknown;
+        pauseRevision?: unknown;
         queueEntryId?: unknown;
         status?: unknown;
         threadId?: unknown;
@@ -542,20 +543,32 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             ? notification.title
             : undefined;
         const inputUpdated = notification.inputUpdated === true;
-        const paused = notification.paused === true;
+        const ownerPause = {
+          paused: notification.paused === true,
+          ...(typeof notification.pauseRevision === "number"
+            ? { pauseRevision: notification.pauseRevision }
+            : {}),
+        };
         let changed = false;
         const next = current.map((queued) => {
           if (queued.queueEntryId !== notification.queueEntryId) return queued;
           const retitled = Boolean(title) || inputUpdated;
-          if (!retitled && Boolean(queued.paused) === paused) return queued;
-          changed = true;
-          return withPausedFlag({
+          const updated = withOwnerPause({
             ...queued,
             ...(inputUpdated && typeof notification.displayText === "string"
               ? { text: notification.displayText }
               : {}),
             ...(retitled ? { title } : {}),
-          }, paused);
+          }, ownerPause);
+          if (
+            !retitled
+            && Boolean(updated.paused) === Boolean(queued.paused)
+            && updated.pauseRevision === queued.pauseRevision
+          ) {
+            return queued;
+          }
+          changed = true;
+          return updated;
         });
         if (changed) {
           ownedComposerDraftStore?.setQueuedTurns(composerScopeKey, next);

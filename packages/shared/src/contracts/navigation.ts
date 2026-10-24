@@ -306,6 +306,11 @@ export type ThreadQueuedTurnSummary = {
   /** The operator paused it; dispatch passes over it until it is resumed. */
   paused?: boolean;
   /**
+   * The owner's count of pause changes to this entry. A reader keeps the
+   * `paused` it has when a read carries an older count.
+   */
+  pauseRevision?: number;
+  /**
    * Generated display title for a message too long to show as typed. Absent
    * until the helper answers, and from owners that predate it; show
    * `displayText` then.

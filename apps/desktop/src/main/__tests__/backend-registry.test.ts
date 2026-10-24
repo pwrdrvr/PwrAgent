@@ -64446,14 +64446,14 @@ describe("DesktopBackendRegistry queued turn pausing", () => {
     const queuedBefore = pauseEvents().length;
 
     await expect(registry.setQueuedTurnPaused({ queueEntryId: "first", paused: true }))
-      .resolves.toEqual({ queueEntryId: "first", disposition: "updated", paused: true });
+      .resolves.toEqual({ queueEntryId: "first", disposition: "updated", paused: true, pauseRevision: 1 });
     expect(snapshot()).toEqual([
-      expect.objectContaining({ queueEntryId: "first", paused: true }),
+      expect.objectContaining({ queueEntryId: "first", paused: true, pauseRevision: 1 }),
       expect.not.objectContaining({ paused: true }),
     ]);
     expect(registry.getQueuedTurnsForThread({ backend: "codex", threadId: "busy" })[0]).toMatchObject({ paused: true });
     expect(pauseEvents()).toHaveLength(queuedBefore + 1);
-    expect(pauseEvents().at(-1)?.notification.params).toMatchObject({ threadId: "busy", paused: true });
+    expect(pauseEvents().at(-1)?.notification.params).toMatchObject({ threadId: "busy", paused: true, pauseRevision: 1 });
 
     // Only a change is news.
     await expect(registry.setQueuedTurnPaused({ queueEntryId: "first", paused: true }))

@@ -6,6 +6,7 @@ import type {
 } from "@pwragent/shared";
 import type { ComposerQueuedTurnSnapshot } from "../features/composer/useComposerDraftStore";
 import { isNavigationCursorExpired } from "./navigation-query-state";
+import { withOwnerPause } from "../features/composer/queued-turn-pause";
 
 export const NAVIGATION_QUEUE_MAX_BASELINE_BYTES = 8 * 1024 * 1024;
 export const NAVIGATION_QUEUE_MAX_PAGES = 128;
@@ -164,7 +165,7 @@ export function reconcileCompleteNavigationQueue(params: {
     .map((entry) => [entry.queueEntryId!, entry]));
   const mirrors = params.projection.entries.map((entry): ComposerQueuedTurnSnapshot => {
     const existing = mirrorsById.get(entry.queueEntryId);
-    return {
+    return withOwnerPause({
       ...(existing ?? {
         id: `backend-queued:${JSON.stringify([params.owner.target, params.owner.backend, params.owner.threadId, entry.queueEntryId])}`,
         queueEntryId: entry.queueEntryId,
@@ -176,8 +177,7 @@ export function reconcileCompleteNavigationQueue(params: {
       threadOwner: params.owner,
       manualReleaseRequired: entry.manualReleaseRequired,
       holdReason: entry.holdReason,
-      paused: entry.paused,
-    };
+    }, entry);
   });
   applyPendingMoves(mirrors);
   const isMirror = (entry: ComposerQueuedTurnSnapshot): boolean =>
