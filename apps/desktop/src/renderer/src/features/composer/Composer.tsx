@@ -9011,11 +9011,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    if (command.id !== FORK_SLASH_COMMAND.id && shouldQueueThreadSubmit()) {
-      void queueCurrentDraft();
-      return;
-    }
-
+    // Picking a command inserts it, even while a turn runs. Queueing here
+    // would send the partial text the operator typed ("/code"), not the
+    // command they picked; the next Enter queues the completed command.
     const selectionStart = Math.min(
       inputRef.current.selectionStart ?? draft.length,
       draft.length,
