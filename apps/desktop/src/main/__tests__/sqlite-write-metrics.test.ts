@@ -250,7 +250,7 @@ describe("sqlite write metrics", () => {
       expect(prompts.map((prompt) => prompt.message.content)).toEqual([
         [{ type: "text", text: "Start" }], [{ type: "text", text: "Focus on the PR" }], [{ type: "text", text: "Next queued task" }],
       ]);
-      expect(prompts[1].priority).toBe("now");
+      expect(prompts[1].priority).toBe("next");
       const replay = await registry.readThread(identity);
       expect(replay.replay.messages.find((message) => message.text === "Focus on the PR")?.origin).toEqual(origin);
       expect(registry.getActiveTurnForThread(identity)).toBeUndefined();
