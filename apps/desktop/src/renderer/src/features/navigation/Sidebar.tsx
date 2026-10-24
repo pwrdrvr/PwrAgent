@@ -55,6 +55,7 @@ import {
   readRendererFederationTarget,
 } from "../../lib/federation-window";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
+import { countArchiveGroup } from "./archive-group-counts";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import {
@@ -2347,14 +2348,18 @@ export function Sidebar(props: SidebarProps) {
         threadSummaryIdentityKey(contextMenu.thread),
       )?.count ?? 0
     : 0;
-  const contextMenuChildThreadCount = contextMenu && !contextMenuIsBulk
-    ? props.threads.filter(
-        (thread) =>
-          resolveThreadParentKey(thread, navigationThreadByKey)
-          === threadSummaryIdentityKey(contextMenu.thread),
-      ).length
-    : 0;
+  // A collapsed parent's sub-threads are not loaded; its row still reports
+  // how many it has, so the menu offers the same two archives either way.
+  const contextMenuArchiveGroup = contextMenu && !contextMenuIsBulk
+    ? countArchiveGroup(contextMenu.thread, props.threads, navigationThreadByKey)
+    : undefined;
+  const contextMenuChildThreadCount = contextMenuArchiveGroup?.childCount ?? 0;
   const contextMenuHasChildThreads = contextMenuChildThreadCount > 0;
+  const contextMenuArchiveGroupLabel = contextMenuArchiveGroup
+    ? `Archive ${contextMenuArchiveGroup.exact ? "" : "at least "}${
+        contextMenuArchiveGroup.threadCount
+      } threads`
+    : "";
   const contextMenuPrimaryDirectory = contextMenu
     ? getThreadPrimaryDirectory(contextMenu.thread)
     : undefined;
@@ -3681,9 +3686,7 @@ export function Sidebar(props: SidebarProps) {
                         </span>
                       </button>
                       <button
-                        aria-label={`Archive Thread and Sub-Threads. Archive ${
-                          contextMenuChildThreadCount + 1
-                        } threads`}
+                        aria-label={`Archive Thread and Sub-Threads. ${contextMenuArchiveGroupLabel}`}
                         className="thread-context-menu__button--stacked"
                         role="menuitem"
                         type="button"
@@ -3695,7 +3698,7 @@ export function Sidebar(props: SidebarProps) {
                       >
                         <span>Archive Thread + Sub-Threads</span>
                         <span className="thread-context-menu__item-detail">
-                          Archive {contextMenuChildThreadCount + 1} threads
+                          {contextMenuArchiveGroupLabel}
                         </span>
                       </button>
                     </>

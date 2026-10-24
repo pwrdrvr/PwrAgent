@@ -5642,6 +5642,57 @@ describe("Sidebar", () => {
     });
   });
 
+  it("offers both parent archives on a collapsed parent whose sub-threads are not loaded", () => {
+    const onArchiveThread = vi.fn(async () => undefined);
+    // Collapsed: the owner reports six sub-threads, none of them in the list.
+    const collapsedParent = {
+      ...sharedThread,
+      ordinaryChildCount: 6,
+      subthreadsCollapsed: true,
+    };
+
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[collapsedParent]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey={undefined}
+        threads={[collapsedParent]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={onArchiveThread}
+      />
+    );
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Open thread actions" })[0]!
+    );
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Archive Thread" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", {
+        name: "Archive Thread Only. Ungroup 6 sub-threads",
+      }),
+    ).toBeInTheDocument();
+    // Unloaded sub-threads may have sub-threads of their own.
+    fireEvent.click(
+      screen.getByRole("menuitem", {
+        name: "Archive Thread and Sub-Threads. Archive at least 7 threads",
+      }),
+    );
+
+    expect(onArchiveThread).toHaveBeenCalledWith(collapsedParent, {
+      includeSubthreads: true,
+    });
+  });
+
   it("pins from the row menu and leaves pinned threads in sort order in Inbox when pins stay in place", () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     const pinnedThread = {
