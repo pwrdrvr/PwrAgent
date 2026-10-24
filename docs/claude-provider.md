@@ -118,6 +118,38 @@ parts and message origins survive replay. A steer with an agent origin writes
 one SQLite commit (~12 KB, or ~1.24 MB/day at 100 steers/day); a duplicate
 request adds no write, and there are no idle writes.
 
+## Background tasks and sub-agents
+
+Claude runs shell commands and sub-agents as tasks. `Agent` calls run in the
+background by default, and `Bash` can too. A background call answers at once
+with a placeholder, and Claude emits the turn's `result` while the task keeps
+running. Closing the query kills the CLI process and every task with it, so
+the logical desktop turn stays open until the tasks settle. Claude answers a
+task notification with a native turn of its own; that follow-up joins the same
+desktop turn, like a steer that raced a result boundary.
+
+The turn ends at a result that acknowledges every steer, once no task is
+running and the last task notification has had its follow-up. The task set
+comes from `background_tasks_changed`, which the CLI documents as
+authoritative, plus `task_*` edges for foreground tasks. A foreground task
+also settles with its tool result or its native result, since it cannot
+outlive either. PwrAgent sets `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`; when
+the CLI reports `session_state_changed`, the turn also waits for `idle`, which
+follows Claude's own background-agent loop. If a task settles and Claude runs
+no follow-up within five seconds, the turn ends without one.
+
+While the turn is open the thread is active everywhere a turn is: the thread
+list, Attention, the quit prompt, and archive guards. The tool row of a
+background call stays running until its notification, then shows the task's
+summary. Running tasks are published as `thread/backgroundTasks/updated` and
+listed in the Executions rail beside Codex background terminals, with the
+sub-agent type and the latest `task_progress` line. Stop on a row calls
+`Query.stopTask`; Stop on the turn ends the query and every task. Housekeeping
+tasks the CLI marks `ambient` are not shown and do not hold the turn open.
+
+A long-running background command, such as a development server, therefore
+keeps its turn open until it is stopped.
+
 ## Usage, context, and MCP
 
 The Pricing rail uses the SDK's per-model result totals, including cache

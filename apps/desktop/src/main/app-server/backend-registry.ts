@@ -25411,6 +25411,9 @@ export class DesktopBackendRegistry {
   }
 
   async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
+    // Claude's running tasks live with its active turn, which already keeps
+    // the thread busy for quit, archive, and the thread list.
+    if (request.backend === "claude") return this.claudeBackend.listBackgroundTasks(request.threadId);
     if (request.backend !== "codex") return { supported: false, terminals: [] };
     const generation = this.backgroundTerminalGeneration;
     const revision = ++this.backgroundTerminalReadCounter;
@@ -25434,7 +25437,10 @@ export class DesktopBackendRegistry {
   }
 
   async terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> {
-    if (request.backend !== "codex") throw new Error("Background terminals are only available for Codex.");
+    if (request.backend === "claude") {
+      return { terminated: await this.claudeBackend.stopBackgroundTask(request.threadId, request.processId) };
+    }
+    if (request.backend !== "codex") throw new Error("Background terminals are only available for Codex and Claude.");
     const terminated = await this.withCodexThreadClient(request.threadId, async (client) => {
       if (!client.terminateBackgroundTerminal) throw new Error("This Codex runtime cannot stop background terminals.");
       return await client.terminateBackgroundTerminal(request.threadId, request.processId);

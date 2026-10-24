@@ -1,17 +1,8 @@
-import type { AppServerBackendKind } from "./normalized-app-server";
+import type { AppServerBackendKind, AppServerBackgroundTask } from "./normalized-app-server";
 import type { FederationTarget } from "./federation";
 
-/** A live command owned by Codex, not a PwrAgent environment action. */
-export type CodexBackgroundTerminal = {
-  itemId: string;
-  /** Opaque Codex session handle; never use it as an OS PID. */
-  processId: string;
-  command: string;
-  cwd: string;
-  osPid?: number;
-  cpuPercent?: number;
-  memoryKb?: number;
-};
+/** The original name, from when only Codex reported background commands. */
+export type CodexBackgroundTerminal = AppServerBackgroundTask;
 
 export type ListBackgroundTerminalsRequest = {
   backend: AppServerBackendKind;
