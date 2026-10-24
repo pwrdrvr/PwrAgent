@@ -5,6 +5,8 @@ import {
 } from "@pwragent/shared";
 import type {
   AppServerReadThreadResponse,
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
   AppServerThreadMessageEntry,
   NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -253,6 +255,98 @@ describe("TranscriptList", () => {
     expect(reply).toBeGreaterThan(-1);
     expect(usage).toBeGreaterThan(-1);
     expect(reply).toBeLessThan(usage);
+  });
+
+  describe("turn usage placement", () => {
+    // Real clocks: the user message carries the turn start, commentary and
+    // tool rows no time, the final reply the second-truncated completion, and
+    // the turn total and late live rows the millisecond the renderer saw them.
+    const turn = {
+      id: "turn-1",
+      status: "completed" as const,
+      startedAt: 1_792_852_051_000,
+      completedAt: 1_792_852_200_000,
+      durationMs: 149_000,
+    };
+    const completedTurnEntries: AppServerThreadEntry[] = [
+      { type: "message", id: "from-thread", role: "user", text: "Handled stale train PR dependency wake.", createdAt: turn.startedAt, turn },
+      { type: "message", id: "commentary", role: "assistant", phase: "commentary", text: "Checking the merge train.", turn },
+      { type: "activity", id: "activity-exec-1", summary: "Ran 3 commands", status: "completed", details: [], turn },
+      { type: "activity", id: "activity-exec-2", summary: "Ran 2 commands", status: "completed", details: [], turn },
+      { type: "message", id: "acknowledged", role: "assistant", phase: "final", text: "Acknowledged: PR65 is reported merged.", createdAt: turn.completedAt, turn },
+      // Minted when usage arrived, before Codex wrote the final reply.
+      { type: "activity", id: "live-turn-usage-turn-1", summary: "Turn usage: 94,799 uncached in · 0 cached · 149 out", status: "completed", details: [], createdAt: turn.completedAt - 600, turn },
+    ];
+    // A late live row of the same turn, received after its completion.
+    const lateLiveRow: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-protocol-1",
+      summary: "MCP server pwragent ready",
+      status: "completed",
+      details: [],
+      createdAt: turn.completedAt + 400,
+      turn,
+    };
+    const telegramBinding = {
+      id: "bind-1",
+      action: "bound" as const,
+      bindingId: "binding-1",
+      platform: "telegram" as const,
+      conversationKind: "topic" as const,
+      conversationTitle: "PwrDrvr/Topic",
+      parentTitle: "PwrDrvr",
+      occurredAt: turn.completedAt + 100,
+    };
+
+    it("keeps the total last in its turn with a channel transition and a late live row", () => {
+      // Both work groups expanded, so every row of the turn renders inline.
+      const { container } = render(
+        <TranscriptList
+          entries={completedTurnEntries}
+          expandedWorkPhaseGroupIds={[
+            "work:turn-1:commentary:complete",
+            "work:turn-1:live-protocol-1:complete",
+          ]}
+          loading={false}
+          loadingMore={false}
+          messagingBindingTransitions={[telegramBinding]}
+          pendingProtocolActivityEntry={lateLiveRow}
+          onLoadOlder={async () => undefined}
+        />
+      );
+
+      const text = container.textContent ?? "";
+      const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
+      const late = text.indexOf("MCP server pwragent ready");
+      const usage = text.indexOf("Turn usage: 94,799 uncached in");
+      expect(reply).toBeGreaterThan(-1);
+      expect(late).toBeGreaterThan(-1);
+      expect(usage).toBeGreaterThan(reply);
+      expect(usage).toBeGreaterThan(late);
+      expect(text.indexOf("Turn usage:", usage + 1)).toBe(-1);
+    });
+
+    it("keeps the total below the turn's folded work group", () => {
+      const { container } = render(
+        <TranscriptList
+          entries={completedTurnEntries}
+          loading={false}
+          loadingMore={false}
+          pendingActivityEntry={{ ...lateLiveRow, id: "live-tools-1", summary: "Ran 1 command" }}
+          onLoadOlder={async () => undefined}
+        />
+      );
+
+      // Work after the reply makes the reply interim, so the turn folds into
+      // one group. The total is the turn's last row: below that group, with
+      // no second group split off beneath it.
+      const group = screen.getByRole("button", { name: /Worked for 2m 29s · 3 tool updates/ });
+      expect(group).toBeInTheDocument();
+      const text = container.textContent ?? "";
+      const usage = text.indexOf("Turn usage: 94,799 uncached in");
+      expect(usage).toBeGreaterThan(text.indexOf("Worked for 2m 29s"));
+      expect(text.indexOf("More work")).toBe(-1);
+    });
   });
 
   it("attributes an injected Agent message and links its source thread", () => {

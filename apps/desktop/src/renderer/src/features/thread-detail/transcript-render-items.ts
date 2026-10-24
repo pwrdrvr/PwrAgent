@@ -5,6 +5,7 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
+import { turnUsageEntryTurnId } from "@pwragent/shared";
 import { formatElapsedMs } from "../../lib/format-duration";
 
 export type TranscriptRenderItem =
@@ -155,6 +156,14 @@ function buildActiveWorkGroups(
   const activeEntries: AppServerThreadEntry[] = [];
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
+    // The turn's total sits after its last entry; the work above it is
+    // still the turn's bottom work.
+    if (
+      activeEntries.length === 0
+      && turnUsageEntryTurnId(entry) === activeTurnId
+    ) {
+      continue;
+    }
     if (
       alwaysVisibleEntryIds?.has(entry.id)
       || entry.turn?.id !== activeTurnId

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   aggregateToolAccounting,
+  anchorTurnUsageEntries,
   buildThreadPricingDisplay,
   isThreadSubAgentVisibleInPanel,
   subAgentLens,
@@ -86,9 +87,11 @@ export function projectThreadDisplay(
     ...response.replay.entries.flatMap((entry) => [...(messagesBefore.get(entry.id) ?? []), entry]),
     ...pendingMessages,
   ];
-  let entries = demand.resource === "transcript" ? reconcileCompletedTurnUsageEntries({
+  // Reconciliation anchors completed turns it rewrites; the active turn and
+  // any total it leaves alone still follow the same rule.
+  let entries = demand.resource === "transcript" ? anchorTurnUsageEntries(reconcileCompletedTurnUsageEntries({
     entries: transcriptEntries, lines: response.pricing?.lines, activeTurnId: thread?.activeTurnId,
-  }) : [];
+  })) : [];
   if (demand.resource === "accounting") {
     if ((demand.turns?.length ?? 0) > 256) throw new Error("Too many display turns in one request.");
     const turns = new Map(demand.turns?.map((turn) => [turn.id, turn]));

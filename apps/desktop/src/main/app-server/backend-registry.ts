@@ -131,6 +131,7 @@ import {
   type ListAcpThreadRewindPointsResponse,
   type RewindAcpThreadRequest,
   type RewindAcpThreadResponse,
+  anchorTurnUsageEntries,
   buildPrependPinRank,
   buildThreadMarkdownLink,
   buildThreadUrl,
@@ -6899,6 +6900,19 @@ function mergeTurnAnchoredUsageActivities(params: {
     ...params.replay,
     entries,
   };
+}
+
+/**
+ * Final ordering rule for a transcript page: each turn total follows the last
+ * entry of its own turn. The merges above place rows by turn where they can,
+ * but each runs once and a later merge can add rows to a turn. Running the
+ * rule after the last merge makes the page's order independent of merge order.
+ */
+function anchorReplayTurnUsage(
+  replay: AppServerThreadReplay,
+): AppServerThreadReplay {
+  const entries = anchorTurnUsageEntries(replay.entries);
+  return entries === replay.entries ? replay : { ...replay, entries };
 }
 
 function mergeThreadMessageOrigins(
@@ -16666,14 +16680,14 @@ export class DesktopBackendRegistry {
         ...response,
         replay: request.includeTurns === false
           ? response.replay
-          : this.correspondenceStore.appendToReplay(
+          : anchorReplayTurnUsage(this.correspondenceStore.appendToReplay(
               { backend, threadId: request.threadId },
               response.replay,
               undefined,
               response.pricing?.lines.flatMap((line) => line.scope === "turn" && line.turnId
                 ? [{ id: line.turnId, startedAt: line.startedAt, completedAt: line.completedAt }] : []),
               { before: request.before, limit: request.limit },
-            ),
+            )),
         readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       };
     }
@@ -16875,14 +16889,14 @@ export class DesktopBackendRegistry {
         : {}),
       replay: request.includeTurns === false
         ? replayWithReviewMetadata
-        : this.correspondenceStore.appendToReplay(
+        : anchorReplayTurnUsage(this.correspondenceStore.appendToReplay(
             { backend, threadId: request.threadId },
             replayWithReviewMetadata,
             undefined,
             pricing.lines.flatMap((line) => line.scope === "turn" && line.turnId
               ? [{ id: line.turnId, startedAt: line.startedAt, completedAt: line.completedAt }] : []),
             { before: request.before, limit: request.limit },
-          ),
+          )),
     };
   }
 

@@ -32,6 +32,7 @@ import type {
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import {
+  anchorTurnUsageEntries,
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
   parseCodexAsyncQuestionReply,
@@ -836,15 +837,21 @@ export function TranscriptList(props: TranscriptListProps) {
     ])) {
       insertPendingEntry(entries, pendingEntry);
     }
-    return injectTurnFailures(
-      injectQuestionnaireActivities(
-        injectMessagingBindingTransitions(
-          injectPermissionTransitions(entries, props.permissionTransitions),
-          props.messagingBindingTransitions,
+    // Pending rows (a pending total included) and synthetic rows (transitions,
+    // questionnaires, turn failures) are placed by time. A row of a turn placed
+    // after that turn's total would leave the total mid-turn, so the rendered
+    // list ends with each total back at the end of its turn.
+    return anchorTurnUsageEntries(
+      injectTurnFailures(
+        injectQuestionnaireActivities(
+          injectMessagingBindingTransitions(
+            injectPermissionTransitions(entries, props.permissionTransitions),
+            props.messagingBindingTransitions,
+          ),
+          props.questionnaireActivities,
         ),
-        props.questionnaireActivities,
+        props.turnFailures,
       ),
-      props.turnFailures,
     );
   }, [
     props.entries,
