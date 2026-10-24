@@ -17,13 +17,13 @@ import {
   type NativeVoiceStart, type NativeVoiceTarget, type NativeVoiceText,
 } from "../../shared/native-voice";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
-import { NativeVoiceSessionManager } from "../codex-app-server/native-voice-session";
+import { getNativeVoiceSessions } from "../native-voice/session-owner";
 import { isVoiceManagerThread, openVoiceManagerThread } from "../native-voice/voice-manager-thread";
 import { isOperatorFocusSnapshot, publishOperatorFocus } from "../native-voice/operator-focus-registry";
 import { isLocalMainWindowWebContents } from "../window-channels";
 
 const cameraLog = getMainLogger("pwragent:voice-camera");
-const sessions = new NativeVoiceSessionManager((threadId) => getDesktopBackendRegistry().acquireNativeVoiceBackend(threadId));
+const sessions = getNativeVoiceSessions();
 // Cold model loading can take a minute or more. Opt-out still aborts immediately.
 const CAMERA_WARMUP_TIMEOUT_MS = 5 * 60_000;
 const CAMERA_ANALYSIS_TIMEOUT_MS = 8000;
