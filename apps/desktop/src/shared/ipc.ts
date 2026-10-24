@@ -269,6 +269,8 @@ export const MCP_CONNECTION_PWRGIT_OPEN_CHANNEL =
   "mcp-connection:pwrgit-open";
 export const MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL =
   "mcp-connection:pwrgit-download";
+export const MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL =
+  "mcp-connection:sandboxer-open";
 export const PWRSUITE_INSTALLER_READ_CHANNEL = "pwrsuite-installer:read";
 export const PWRSUITE_INSTALLER_START_CHANNEL = "pwrsuite-installer:start";
 export const PWRSUITE_INSTALLER_CANCEL_CHANNEL = "pwrsuite-installer:cancel";

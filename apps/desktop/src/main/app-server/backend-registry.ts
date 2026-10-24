@@ -38095,7 +38095,9 @@ export class DesktopBackendRegistry {
   // the server does not mark safe; it never reads as Allow all tools.
   private async readMcpConnectionToolApproval(connectionId: string): Promise<McpConnectionToolApproval> {
     try {
-      const connections = await this.mcpConnectionService?.listConnections?.();
+      // The approval mode is stored config. Reading it must not wait on a
+      // local CLI's status probe before every tool call.
+      const connections = await this.mcpConnectionService?.listConnections?.({ cachedLocalStatus: true });
       return connections?.find((connection) => connection.id === connectionId)?.toolApproval ?? "auto";
     } catch (error) {
       backendRegistryLog.warn("could not read MCP connection tool approval", { connectionId, error: String(error) });

@@ -38,7 +38,9 @@ import {
   type McpConnectionToolApproval,
   type ConnectPwrSnapResponse,
   type OpenPwrSnapResponse,
+  type OpenSandboxerLinkResponse,
   type PwrSnapConnectionStatus,
+  type SandboxerLinkTarget,
 } from "@pwragent/shared";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
 import { getMainLogger } from "../log";
@@ -99,6 +101,7 @@ const MAX_RPC_CONNECTIONS = 32;
  * what arrived rather than a spinner that never ends.
  */
 const MAX_TOOL_LIST_PAGES = 20;
+const MAX_SERVER_INSTRUCTIONS_CHARS = 2_000;
 const GATEWAY_OFF_ERROR =
   "The PwrAgent MCP gateway is turned off. Turn it on in Settings → Plugins to use managed connections.";
 
@@ -509,13 +512,14 @@ export class McpConnectionGatewayService {
   private readonly sandboxer: SandboxerConnection;
 
   constructor(options: McpConnectionGatewayServiceOptions = {}) {
-    this.sandboxer = options.sandboxer ?? new SandboxerConnection();
     this.readGatewaySelection = options.readGatewaySelection
       ?? (async (context) => (await getAppOverlayStore().getThreadOverlayState(context))?.mcpConnectionIds ?? []);
     this.bridgeEntryPath =
       options.bridgeEntryPath ?? join(__dirname, "mcp-connection-bridge.js");
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url));
+    this.sandboxer = options.sandboxer
+      ?? new SandboxerConnection(undefined, { openExternal: this.openExternal });
     this.openPath = options.openPath ?? ((path) => shell.openPath(path));
     this.resolveInstallPaths =
       options.resolveInstallPaths ?? resolveDefaultPwrSnapInstallPaths;
@@ -647,6 +651,14 @@ export class McpConnectionGatewayService {
     }
     const connection = this.registry.create(request);
     return await this.connectionStatus(connection);
+  }
+
+  /**
+   * Opens a Sandboxer page from this machine. No broker hop: the dashboard
+   * link is signed in through this machine's CLI login.
+   */
+  async openSandboxerLink(target: SandboxerLinkTarget): Promise<OpenSandboxerLinkResponse> {
+    return await this.sandboxer.openLink(target);
   }
 
   async authorizeConnection(connectionId: string): Promise<McpConnectionStatus> {
@@ -2398,6 +2410,12 @@ export class McpConnectionGatewayService {
       throw new Error("The MCP connection changed during discovery. Search again.");
     }
     this.recordDiscoverySuccess(connection.id);
+    // Sandboxer's say to stop each sandbox when done; dropping them left the
+    // agent nothing telling it a forgotten machine keeps billing.
+    const instructions = client.getInstructions?.()?.trim();
+    if (instructions && tools[0]) {
+      tools[0] = { ...tools[0], serverInstructions: instructions.slice(0, MAX_SERVER_INSTRUCTIONS_CHARS) };
+    }
     return tools;
   }
 

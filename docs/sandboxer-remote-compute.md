@@ -23,13 +23,30 @@ Docker's unrelated `sbx`. The initial integration expects the official CLI at
 that path; it does not search PATH or accept arbitrary commands. Status comes
 from `/usr/local/bin/sbx status --json --no-update`, with an eight-second limit
 and a short in-memory cache. Missing CLI, missing login, and unavailable status
-have distinct remedies in Settings; Refresh status bypasses the cache.
+have distinct remedies in Settings; Refresh status bypasses the cache. While
+setup is unfinished, Settings also refreshes when its window regains focus,
+because the remedy runs in a terminal.
+
+Signed in is not the same as ready. The status's `plan.canStart: false` keeps
+Sandboxer out of threads, with a chip that names the reason: `No plan` (no
+plan, or a zero-dollar one), `Billing issue` (a `billingStatus` other than
+`active` or `trialing`), `Out of credit` (`creditBalanceHours` at zero), or
+`Can't start` for a reason the status does not name. Only `active` has been
+observed; the other values are inferred. A status without `plan` comes from an
+older CLI and counts as able to start. Settings shows the account the login
+bills (`user.email`, the plan's monthly price, credit hours left). Federation
+strips that account from the connection list it serves to peers, and the
+`manage_mcp_connections` agent tool never returns it.
 New-thread defaults read the last cached status without waiting for the CLI,
 including through the profile owner broker. If enabled, Sandboxer refreshes in
 the background. A cold cache skips only Sandboxer's default until its login is
 known; unrelated defaults are never held up by the CLI's eight-second probe.
 
-Sandboxer owns its local login (`/usr/local/bin/sbx login`). PwrAgent neither
+Sandboxer owns its local login. Settings copies `/usr/local/bin/sbx onboard`
+for the operator to run in a terminal: it signs in an existing account or
+creates one, then asks only for what the account still lacks, such as the plan
+checkout. `sbx login` only signs in, so a new account would reach "Signed in"
+and still fail its first create. PwrAgent runs neither command. PwrAgent neither
 reads its credential file nor stores OAuth tokens for it. `SANDBOXER_API_KEY`
 is an inherited fallback for headless/CI use. Status and MCP inherit the same
 limited environment, including Sandboxer's endpoint/org overrides. The URL
@@ -43,9 +60,21 @@ Closing a local process does **not** stop a remote sandbox. Agents must use
 `stop_sandbox` when finished; the finite creation TTL is a fallback. After a
 local session restarts, use an explicit sandbox ID from `list_sandboxes`.
 
+Settings links to Sandboxer's own pages (home, pricing, quickstart, and the MCP,
+machines, and billing docs) through main, which maps each to a fixed
+`https://sandboxer.com` URL. Open dashboard and Open billing run
+`sbx dashboard --no-open --json --no-update` and open the one-time signed-in
+link it prints only when its origin is exactly `https://sandboxer.com`.
+Federation windows cannot open them. Until the CLI is found, the row is one
+line with Learn more and Set up, so operators who never use Sandboxer are not
+shown a setup ladder.
+
 The existing `search_mcp_tools` / `call_mcp_tool` path carries the official
 server's eight tools: create, list, exec, read/write files, host a port, stop,
-and resume. No Sandboxer REST client or agent harness is implemented here.
+and resume. Search results also carry each returned server's `initialize`
+instructions once, capped at 2,000 characters; Sandboxer's tell the agent to
+stop each sandbox when it is done. No Sandboxer REST client or agent harness is
+implemented here.
 The default size is small (2 vCPU / 4 GB), never xlarge. Agents may explicitly
 pass `type` and `ttlSeconds`, including overriding auto-stop; the TTL is a
 default, not a spending cap. Other sizes are default (4 / 8 GB), large

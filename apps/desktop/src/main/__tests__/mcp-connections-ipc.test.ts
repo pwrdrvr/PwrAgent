@@ -95,6 +95,7 @@ describe("MCP connection IPC", () => {
     connect: vi.fn(),
     openApplication: vi.fn(),
     openDownload: vi.fn(),
+    openSandboxerLink: vi.fn(async () => ({ opened: true })),
   };
   const pwrGitLocalStatus: PwrGitConnectionStatus = {
     connectionId: "pwrgit",
@@ -387,6 +388,33 @@ describe("MCP connection IPC", () => {
       ).rejects.toThrow(/machine that owns this window/i);
     }
   });
+  it("opens Sandboxer pages only from a local window, and only known ones", async () => {
+    const { registerMcpConnectionIpcHandlers } = await import(
+      "../ipc/mcp-connections"
+    );
+    const { MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL } = await import("../../shared/ipc");
+    service.openSandboxerLink.mockClear();
+    registerMcpConnectionIpcHandlers(
+      service as never,
+      pwrGit as never,
+      installer as never,
+    );
+    const open = mocks.handlers.get(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL)!;
+
+    // The dashboard link signs in with this machine's CLI login.
+    await expect(open({ sender: remoteSender }, { target: "dashboard" })).resolves.toMatchObject({
+      opened: false,
+    });
+    await expect(open({ sender: { id: 18 } }, { target: "https://example.com" })).resolves.toMatchObject({
+      opened: false,
+      error: "Unknown Sandboxer page.",
+    });
+    await expect(open({ sender: { id: 18 } }, undefined)).resolves.toMatchObject({ opened: false });
+    expect(service.openSandboxerLink).not.toHaveBeenCalled();
+    await expect(open({ sender: { id: 18 } }, { target: "pricing" })).resolves.toEqual({ opened: true });
+    expect(service.openSandboxerLink).toHaveBeenCalledWith("pricing");
+  });
+
   it("refuses installer downloads from a remote window and unknown apps", async () => {
     const { registerMcpConnectionIpcHandlers } = await import(
       "../ipc/mcp-connections"

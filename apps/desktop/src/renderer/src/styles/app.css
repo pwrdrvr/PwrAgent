@@ -16210,6 +16210,221 @@ a.button {
   flex: 0 0 auto;
 }
 
+/*
+ * Sandboxer is a paid service most operators have never heard of. Its setup
+ * states say what it is and link to its site; its ladder shows where setup
+ * stands so the state line only has to say what to do next.
+ */
+.settings-mcp-row__toggle--static {
+  cursor: default;
+}
+
+.settings-sandboxer-about {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-width: 620px;
+  margin: 4px 0 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.settings-sandboxer-about p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-sandboxer-about strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.settings-sandboxer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-mcp-row__detail > .settings-sandboxer-links {
+  margin-top: 6px;
+}
+
+.settings-sandboxer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* An arrow says the page opens in the browser, not in Settings. */
+.settings-sandboxer-link::after {
+  content: "\2197";
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-sandboxer-link:hover:not([disabled]) {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.settings-sandboxer-link--inline {
+  height: auto;
+  padding: 0 2px;
+  border-color: transparent;
+  color: var(--accent-bright);
+}
+
+.settings-sandboxer-link--inline::after {
+  color: var(--accent-bright);
+}
+
+.settings-sandboxer-link--inline:hover:not([disabled]) {
+  border-color: transparent;
+  color: var(--accent-bright);
+  text-decoration: underline;
+}
+
+.settings-sandboxer-action::after {
+  content: " \2197";
+  font-size: 11px;
+}
+
+.settings-sandboxer-link[disabled] {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.settings-sandboxer-ladder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-sandboxer-ladder__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.settings-sandboxer-ladder__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--bg-panel-hover);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.settings-sandboxer-ladder__step.is-done {
+  color: var(--text-secondary);
+}
+
+.settings-sandboxer-ladder__step.is-done .settings-sandboxer-ladder__mark {
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.settings-sandboxer-ladder__step.is-current {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.settings-sandboxer-ladder__step.is-current .settings-sandboxer-ladder__mark {
+  background: var(--accent-fill);
+  color: var(--button-text);
+}
+
+.settings-sandboxer-ladder__done {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.settings-sandboxer-account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.settings-sandboxer-account strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Same columns as the Tools line above it (.mcp-inventory-panel__line), so
+   the three values start at one edge. */
+.settings-sandboxer-drawer {
+  display: grid;
+  flex: 1 1 100%;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px 8px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.settings-sandboxer-drawer > div {
+  display: contents;
+}
+
+.settings-sandboxer-drawer dt {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.settings-sandboxer-drawer dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.settings-sandboxer-drawer code {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-mcp-row__chevron {
     transition: none;

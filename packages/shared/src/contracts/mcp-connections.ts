@@ -7,9 +7,65 @@ export const PWRGIT_MCP_CONNECTION_ID = "pwrgit" as const;
 // connections, credentials, and thread selections on their original identity.
 export const SANDBOXER_MCP_CONNECTION_ID = "builtin:sandboxer" as const;
 
+// Docker also installs an unrelated `sbx`. Never resolve this name on PATH.
+export const SANDBOXER_CLI_PATH = "/usr/local/bin/sbx";
+export const SANDBOXER_MCP_ARGS = ["mcp", "--type", "small", "--ttl", "1800"] as const;
+/** Exactly what the gateway launches; Settings shows this line verbatim. */
+export const SANDBOXER_MCP_LAUNCH_ARGS = [...SANDBOXER_MCP_ARGS, "--no-update"] as const;
+// `onboard` signs in an existing account or creates one, then asks only for
+// what the account still lacks (the plan checkout). `login` only signs in, so
+// a new account would reach "Signed in" and still fail its first create.
+export const SANDBOXER_SETUP_COMMAND = `${SANDBOXER_CLI_PATH} onboard`;
+
 /** Remote compute today; a remote PwrAgent runtime is reserved for later work. */
 export type SandboxerRole = "compute" | "remote_agent";
-export type SandboxerCliState = "signed_in" | "not_signed_in" | "cli_missing" | "unavailable";
+/**
+ * What `sbx status --json` says about this machine's Sandboxer setup.
+ *
+ * Signed in is not ready: an account without a plan, with a card that can't
+ * be charged, or with no machine time left signs in fine and then fails its
+ * first create. Those states come from the status's `plan.canStart`.
+ */
+export type SandboxerCliState =
+  | "signed_in"
+  | "not_signed_in"
+  | "no_plan"
+  | "billing_issue"
+  | "out_of_credit"
+  | "cannot_start"
+  | "cli_missing"
+  | "unavailable";
+
+/**
+ * The account the local CLI login bills. Shown in Settings only; federation
+ * strips it, and no agent tool returns it.
+ */
+export type SandboxerAccountSummary = {
+  email?: string;
+  /** The plan's monthly price, as the CLI reports it. */
+  planDollars?: number;
+  creditBalanceHours?: number;
+};
+
+/** Sandboxer pages Settings can open. Main maps each to a fixed URL. */
+export const SANDBOXER_LINK_TARGETS = [
+  "home",
+  "pricing",
+  "quickstart",
+  "docs_mcp",
+  "docs_machines",
+  "docs_billing",
+  "dashboard",
+] as const;
+
+export type SandboxerLinkTarget = (typeof SANDBOXER_LINK_TARGETS)[number];
+
+export function isSandboxerLinkTarget(value: unknown): value is SandboxerLinkTarget {
+  return SANDBOXER_LINK_TARGETS.some((target) => target === value);
+}
+
+export type OpenSandboxerLinkRequest = { target: SandboxerLinkTarget };
+export type OpenSandboxerLinkResponse = { opened: boolean; error?: string };
 
 /**
  * Shown on the New thread PwrSnap band next to the Connect to PwrSnap button
@@ -97,6 +153,7 @@ export type McpConnectionRuntimeState =
 export type McpConnectionStatus = McpConnectionRecord & {
   state: McpConnectionRuntimeState;
   sandboxerCliState?: SandboxerCliState;
+  sandboxerAccount?: SandboxerAccountSummary;
   configured: boolean;
   detail?: string;
   /** In-memory live catalog health, independent of stored authorization. */
@@ -106,6 +163,14 @@ export type McpConnectionStatus = McpConnectionRecord & {
     lastFailure?: { at: number; message: string };
   };
 };
+
+/**
+ * A connection list for a federation peer. The account a local CLI login
+ * bills (its email and balance) stays on the machine that holds the login.
+ */
+export function mcpConnectionsForPeer(connections: McpConnectionStatus[]): McpConnectionStatus[] {
+  return connections.map(({ sandboxerAccount: _account, ...connection }) => connection);
+}
 
 export type ListMcpConnectionsRequest = {
   federationTarget?: FederationRemoteTarget;
@@ -452,6 +517,14 @@ export type ResolveMcpConnectionSetupInput = {
   localAvailability?: McpConnectionAvailability;
 };
 
+// Signed in, but every create would fail. The chip names the reason.
+const SANDBOXER_ACCOUNT_HEADLINES: Partial<Record<SandboxerCliState, string>> = {
+  no_plan: "No plan",
+  billing_issue: "Billing issue",
+  out_of_credit: "Out of credit",
+  cannot_start: "Can't start",
+};
+
 export function resolveMcpConnectionSetup(
   input: ResolveMcpConnectionSetupInput,
 ): McpConnectionSetupSummary {
@@ -492,10 +565,15 @@ export function resolveMcpConnectionSetup(
     if (connection.sandboxerCliState === "unavailable") {
       return build("unavailable", "Unavailable", detail, "err");
     }
+    const account = SANDBOXER_ACCOUNT_HEADLINES[connection.sandboxerCliState ?? "signed_in"];
+    if (account) return build("login_required", account, detail, "warn");
     if (!configured) return build("login_required", "Not signed in", detail, "warn");
-    return build(connection.enabled ? "ready" : "parked",
-      connection.enabled ? "Signed in" : "Parked", detail,
-      connection.enabled ? "ok" : "warn");
+    // A sandbox outlives its thread, so the ready line says who stops it.
+    const billing =
+      "Sandboxes bill per second while they run. Closing the thread does not stop one; auto-stop or the agent does.";
+    return connection.enabled
+      ? build("ready", "Signed in", `Turn Sandboxer on in a thread's MCP access. ${billing}`, "ok")
+      : build("parked", "Parked", `Turn on Offer to threads, then turn Sandboxer on in a thread's MCP access. ${billing}`, "warn");
   }
 
   if (localAvailability === "not_installed") {

@@ -29,6 +29,7 @@ import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { FederationShutdown } from "./federation-shutdown";
 import { FEDERATION_HEALTH_CHANGED_METHOD, FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
 import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD } from "@pwragent/shared";
+import { mcpConnectionsForPeer } from "@pwragent/shared";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
 import type { CloudflareClientConnection, NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -7115,7 +7116,11 @@ function localBackendOperations(): FederationBackendOperations {
       return await getDesktopBackendRegistry().compactThread(request);
     },
     async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
-      return { connections: await getMcpConnectionGatewayService().listConnections() };
+      return {
+        connections: mcpConnectionsForPeer(
+          await getMcpConnectionGatewayService().listConnections(),
+        ),
+      };
     },
     async readThreadMcpConnections(
       request: ReadThreadMcpConnectionsRequest,

@@ -94,12 +94,21 @@ export function describeMcpConnectionAuth(
   connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "sandboxerCliState" | "detail">>,
 ): McpAuthStatusPresentation {
   if (connection.authMode === "local_cli") {
+    // An account that can't start a machine is still signed in. Its own
+    // chip names what the account lacks; this one says the login is fine.
+    const cliState = connection.sandboxerCliState;
+    const signedIn =
+      connection.configured
+      || cliState === "no_plan"
+      || cliState === "billing_issue"
+      || cliState === "out_of_credit"
+      || cliState === "cannot_start";
     return {
-      label: connection.sandboxerCliState === "cli_missing" ? "CLI missing"
-        : connection.sandboxerCliState === "unavailable" ? "Status unavailable"
-        : connection.configured ? "Signed in" : "Not signed in",
+      label: cliState === "cli_missing" ? "CLI missing"
+        : cliState === "unavailable" ? "Status unavailable"
+        : signedIn ? "Signed in" : "Not signed in",
       description: connection.detail ?? "Uses the Sandboxer CLI login on this machine.",
-      tone: connection.configured ? "ok" : "warn",
+      tone: signedIn ? "ok" : "warn",
       canSignIn: false,
     };
   }
