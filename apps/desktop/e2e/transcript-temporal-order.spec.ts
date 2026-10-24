@@ -52,22 +52,22 @@ test("transcript preserves temporal order across live activity and hydration", a
     await app.advance({ stepId: "turn-completed-1" });
 
     await expect(transcript.getByText("I added the controller hook")).toBeVisible();
-    // Turn completion introduces the work-group summary labels; wait for them to
-    // render before the synchronous innerText() snapshot so we don't race the DOM.
+    // Turn completion folds the turn's work into one summary group; wait for it
+    // to render before the synchronous innerText() snapshot so we don't race
+    // the DOM. The replies that more tool work followed fold with that work,
+    // and only the answer stays in view.
     await expect(transcript).toContainText("Worked for 1m 10s");
-    await expect(transcript).toContainText("More work");
+    await expect(transcript).not.toContainText("The code already logs explicit turn completion.");
+    await expect(transcript).not.toContainText("More work");
     transcriptText = await transcript.innerText();
     assertOrdered(transcriptText, [
       "Show the temporal transcript order.",
-      "The code already logs explicit turn completion.",
       "Worked for 1m 10s",
-      "I am going to close that gap in renderBindingStatus.",
-      "More work",
       "I added the controller hook that reconciles navigation state.",
     ]);
+    expect(transcriptText).not.toContain("I am going to close that gap in renderBindingStatus.");
 
     await transcript.getByRole("button", { name: /Worked for 1m 10s/ }).click();
-    await transcript.getByRole("button", { name: /More work/ }).click();
     await transcript.getByRole("button", { name: /Explored 1 item/ }).first().click();
     await transcript.getByRole("button", { name: /Explored 1 item/ }).last().click();
 

@@ -199,6 +199,7 @@ function buildCompletedGroups(
       lastReviewIndexByTurn.set(entry.turn.id, index);
     }
   });
+  const interimReplies = collectInterimReplies(entries);
   let currentEntries: AppServerThreadEntry[] = [];
   let currentTurnId: string | undefined;
 
@@ -267,7 +268,11 @@ function buildCompletedGroups(
       !alwaysVisibleEntryIds?.has(entry.id)
       && Boolean(turnId)
       && turnId !== excludeTurnId
-      && (isWorkPhaseEntry(entry) || isReplyBetweenReviewCards);
+      && (
+        isWorkPhaseEntry(entry)
+        || isReplyBetweenReviewCards
+        || interimReplies.has(entry)
+      );
 
     if (!canJoinGroup) {
       flushCurrent();
@@ -284,6 +289,35 @@ function buildCompletedGroups(
 
   flushCurrent();
   return groups;
+}
+
+/**
+ * Replies a turn wrote on its way to its answer. Codex tags those commentary,
+ * but Claude tags no reply and ACP agents tag every reply final, so a finished
+ * turn of theirs kept each reply between tool calls in view and split its work
+ * into a run of "More work" groups. A reply that more tool work follows in the
+ * same turn was not the answer, whatever its phase says. A user message in
+ * between ends the search: a reply the operator answered stays in view.
+ */
+function collectInterimReplies(
+  entries: AppServerThreadEntry[],
+): Set<AppServerThreadEntry> {
+  const interim = new Set<AppServerThreadEntry>();
+  let workFollowsInTurn: string | undefined;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    const turnId = entry.turn?.id;
+    if (entry.type === "message" && entry.role === "user") {
+      workFollowsInTurn = undefined;
+    } else if (turnId && isConcreteWorkEntry(entry)) {
+      workFollowsInTurn = turnId;
+    } else if (!turnId || turnId !== workFollowsInTurn) {
+      workFollowsInTurn = undefined;
+    } else if (isAssistantMessage(entry)) {
+      interim.add(entry);
+    }
+  }
+  return interim;
 }
 
 function buildCommentaryOnlyGroup(
