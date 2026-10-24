@@ -49,37 +49,11 @@ import {
   subscribersForChannel,
 } from "./window-channels";
 import {
-  AGENT_EVENT_CHANNEL,
-  APPEARANCE_CHANGED_EVENT_CHANNEL,
-  CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
-  THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL,
-  THREAD_TODOS_CHANGED_EVENT_CHANNEL,
-  OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
-  DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
-  GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
-  GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
-  INTEGRATED_TERMINAL_REVEAL_CHANNEL,
-  INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
-  KEYBINDINGS_CHANGED_CHANNEL,
-  MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
-  MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL,
-  MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
-  MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL,
-  MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
-  MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
-  NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
-  PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
-  PWRSUITE_INSTALLER_EVENT_CHANNEL,
-  PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL,
-  SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
-  WINDOW_OPEN_MAIN_VIEW_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
-  WINDOW_OPEN_SETTINGS_CHANNEL,
-  WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
-  WINDOW_REPLAY_ONBOARDING_CHANNEL,
   WINDOW_SHOW_THREAD_CHANNEL,
 } from "../shared/ipc";
+import { mainWindowEventChannels } from "./main-window-channels";
 import {
   readBootstrapAppearance,
   themedWindowAdditionalArguments,
@@ -913,49 +887,14 @@ export function createMainWindow(options?: {
 
   applyWindowSecurityHardening(window);
   attachRendererProcessRecovery(window);
-  // Local main windows receive CPU capture notices. Federation viewers
-  // also host the app shell, but must not receive local CPU notices.
-  // Secondary windows register a narrower
-  // set (or none) so broadcasters only deliver to what they actually
-  // consume. See `apps/desktop/src/main/window-channels.ts`.
-  registerWindowChannels(window, WINDOW_KIND_MAIN, [
-    AGENT_EVENT_CHANNEL,
-    APPEARANCE_CHANGED_EVENT_CHANNEL,
-    DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
-    GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
-    GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
-    ...(options?.federationTarget ? [] : [HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL]),
-    // This machine's Codex process; a remote peer's window must not offer to
-    // restart it.
-    ...(options?.federationTarget ? [] : [CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL]),
-    ...(options?.federationTarget ? [] : [THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL]),
-    // Cards live on the instance that owns the thread; a peer's window
-    // shows none in v1.
-    ...(options?.federationTarget ? [] : [THREAD_TODOS_CHANGED_EVENT_CHANNEL]),
-    // Requests are answered on the instance that owns the thread.
-    ...(options?.federationTarget ? [] : [OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL]),
-    INTEGRATED_TERMINAL_REVEAL_CHANNEL,
-    INTEGRATED_TERMINAL_SESSIONS_CHANNEL,
-    KEYBINDINGS_CHANGED_CHANNEL,
-    MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
-    MANAGED_RUNTIME_PROGRESS_EVENT_CHANNEL,
-    MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
-    MESSAGING_INBOUND_PREVIEW_EVENT_CHANNEL,
-    MESSAGING_PAIRING_CHANGED_EVENT_CHANNEL,
-    MESSAGING_PLATFORM_STATUS_EVENT_CHANNEL,
-    NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
-    PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
-    PROVIDER_CATALOG_REFRESH_EVENT_CHANNEL,
-    // The launchpad tiles download installers onto this machine only.
-    ...(options?.federationTarget ? [] : [PWRSUITE_INSTALLER_EVENT_CHANNEL]),
-    SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
-    WINDOW_OPEN_MAIN_VIEW_CHANNEL,
-    WINDOW_OPEN_NEW_THREAD_CHANNEL,
-    WINDOW_OPEN_SETTINGS_CHANNEL,
-    WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
-    WINDOW_REPLAY_ONBOARDING_CHANNEL,
-    WINDOW_SHOW_THREAD_CHANNEL,
-  ], options?.federationTarget);
+  // Secondary windows register a narrower set (or none) so broadcasters
+  // only deliver to what they actually consume.
+  registerWindowChannels(
+    window,
+    WINDOW_KIND_MAIN,
+    mainWindowEventChannels(options?.federationTarget),
+    options?.federationTarget,
+  );
 
   window.on("closed", () => {
     hotCpuProfilerSyncHandlers.delete(window.id);

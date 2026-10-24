@@ -1,3 +1,4 @@
+import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, ThreadTodo, ThreadTodosChangedEvent } from "@pwragent/shared";
 import {
@@ -44,16 +45,25 @@ vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: 
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({}) }));
 vi.mock("../settings/desktop-settings-singleton", () => ({ getDesktopSettingsService: () => ({}) }));
 vi.mock("../ipc/app-server", () => ({ appServerService: {} }));
-vi.mock("../window-channels", () => ({
-  subscribersForChannel: () => fixture.windows,
-  federationTargetForChannelSubscriber: (sender: { target: unknown }) => sender.target,
-}));
 vi.mock("../log", () => ({ getMainLogger: () => ({ warn: vi.fn() }) }));
 
 import { registerThreadTodoIpcHandlers } from "../ipc/thread-todos-ipc";
+import { mainWindowEventChannels } from "../main-window-channels";
+import { WINDOW_KIND_MAIN, _resetWindowChannelsForTests, registerWindowChannels } from "../window-channels";
+
+// The real registry, fed the channels createMainWindow registers, so a
+// window missing a channel misses its broadcasts here as it does in the app.
+function registerTestWindows(): void {
+  _resetWindowChannelsForTests();
+  for (const window of fixture.windows) {
+    registerWindowChannels({ webContents: window, on: () => {} } as unknown as BrowserWindow,
+      WINDOW_KIND_MAIN, mainWindowEventChannels(window.target), window.target);
+  }
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
+  registerTestWindows();
   registerThreadTodoIpcHandlers();
 });
 

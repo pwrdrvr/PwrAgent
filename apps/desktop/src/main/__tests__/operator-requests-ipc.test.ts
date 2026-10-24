@@ -1,3 +1,4 @@
+import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, OperatorRequestsChangedEvent } from "@pwragent/shared";
 import {
@@ -42,15 +43,27 @@ vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime
   onRemoteBackendEvent: (listener: (event: AgentEvent) => void) => { fixture.remoteListener = listener; return () => {}; },
   onPeerStatusChanged: (listener: () => void) => { fixture.peerListener = listener; return () => {}; },
 }) }));
-vi.mock("../window-channels", () => ({
-  subscribersForChannel: () => fixture.windows,
-  federationTargetForChannelSubscriber: (sender: { target: unknown }) => sender.target,
-}));
 vi.mock("../log", () => ({ getMainLogger: () => ({ warn: vi.fn() }) }));
 
 import { registerOperatorRequestIpcHandlers } from "../ipc/operator-requests-ipc";
+import { mainWindowEventChannels } from "../main-window-channels";
+import { WINDOW_KIND_MAIN, _resetWindowChannelsForTests, registerWindowChannels } from "../window-channels";
 
-beforeEach(() => { vi.clearAllMocks(); registerOperatorRequestIpcHandlers(); });
+// The real registry, fed the channels createMainWindow registers, so a
+// window missing a channel misses its broadcasts here as it does in the app.
+function registerTestWindows(): void {
+  _resetWindowChannelsForTests();
+  for (const window of fixture.windows) {
+    registerWindowChannels({ webContents: window, on: () => {} } as unknown as BrowserWindow,
+      WINDOW_KIND_MAIN, mainWindowEventChannels(window.target), window.target);
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  registerTestWindows();
+  registerOperatorRequestIpcHandlers();
+});
 
 const question = { backend: "codex", threadId: "thread-1", messageId: "question-1" };
 
@@ -114,5 +127,21 @@ describe("operator question IPC ownership", () => {
     expect(fixture.windows[1]!.send).toHaveBeenCalledTimes(2);
     fixture.peerListener!();
     expect(fixture.windows[1]!.send).toHaveBeenCalledTimes(3);
+  });
+
+  // A full-window viewer reads its queue from the owner. Answering a question
+  // there closed it on the owner, whose own sidebar cleared, while the
+  // viewer's chip stayed because the viewer window never subscribed.
+  it.each([
+    ["an answered or dismissed question", { reason: "questions", backend: "codex", threadId: "thread-1" }],
+    ["a resolved approval or input request", { reason: "requests" }],
+  ] as const)("tells a full-window viewer about %s on its owner", (_label, params) => {
+    fixture.remoteListener!({ backend: "codex", federationTarget: fixture.target,
+      notification: { method: "thread/operatorRequests/changed", params },
+    } as AgentEvent);
+    expect(fixture.windows[1]!.send).toHaveBeenCalledWith(OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL, {
+      ...params, federationTarget: fixture.target,
+    });
+    expect(fixture.windows[2]!.send).not.toHaveBeenCalled();
   });
 });
