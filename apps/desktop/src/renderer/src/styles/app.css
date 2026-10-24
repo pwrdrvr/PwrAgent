@@ -6800,29 +6800,60 @@ a.button {
   line-height: 1.25;
 }
 
-/* Rename in place: the title becomes a field of the same type, so the row
-   keeps its height and the text does not jump. The header passes pointer
-   events through to the open-thread overlay; the field takes them back. */
+/* Rename in place: the title becomes a field of the same type. The header
+   passes pointer events through to the open-thread overlay; the field
+   takes them back.
+
+   Everything the field draws stays inside its own box. It has focus for
+   as long as it exists (leaving it saves), so it always draws its 2px
+   focus ring: the 1px border plus a 1px outline pulled inside it by the
+   negative offset. The box already sits close to the status mark on its
+   left and the card's top border above it: the old 2px outline at 1px
+   outside the box covered the unread cookie and the thinking scanner and
+   touched the card edge. An outline, unlike an inset box-shadow, survives
+   forced-colors mode.
+
+   Block: the box is the title's line plus 2px of border and the title's
+   2px descender pad, and the -1px margins cancel the border, so the field
+   occupies exactly the title's line and pad. The row keeps its height and
+   the chips do not move. The bottom padding keeps the text
+   on the title's baseline.
+
+   Inline: after a status mark the box starts 6px clear of the mark's
+   16px lane (2px heading gap + 4px margin), the same air as between two
+   chips. The text moves right to make that room. A row with no mark pulls
+   the box left instead, so its text moves only 2px, and the box stays 4px
+   clear of the selected card's 2px accent edge. A parent card keeps the
+   box in place: its sub-thread chevron sits in that inset. */
 .thread-row__rename-input {
   flex: 1 1 auto;
   min-width: 0;
-  margin: -2px -4px;
-  padding: 1px 3px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  height: calc(var(--sidebar-title-size) * 1.25 + 4px);
+  margin: -1px 0;
+  padding: 0 5px 2px;
+  border: 1px solid var(--focus-ring);
+  border-radius: 5px;
   background: var(--bg-panel);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--sidebar-title-size);
   font-weight: 600;
   line-height: 1.25;
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -2px;
   pointer-events: auto;
 }
 
-.thread-row__rename-input:focus,
-.thread-row__rename-input:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+.thread-row__heading > .thread-row__rename-input:first-child {
+  margin-left: -4px;
+}
+
+.thread-row-shell.has-subthreads .thread-row__heading > .thread-row__rename-input:first-child {
+  margin-left: 0;
+}
+
+.thread-row__status-indicator + .thread-row__rename-input {
+  margin-left: 4px;
 }
 
 .thread-row__time,
