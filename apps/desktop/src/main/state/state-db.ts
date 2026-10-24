@@ -2976,6 +2976,13 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
   ON thread_usage_turns(provider, backend, thread_id, turn_id);
 `);
 
+  // This runs on every open, so each step below touches only rows that still
+  // need converting. Rewriting every ledger row here once cost each launch
+  // about 0.8 s and 35 MB of WAL on a 53,000-turn profile, and replaced every
+  // turn's recorded start and end with values derived from its lines.
+  const providerScopedSummaries = Boolean(db.prepare(
+    "SELECT 1 FROM pragma_table_info('thread_pricing_summaries') WHERE name = 'provider' AND pk > 0",
+  ).get());
   if (!tableColumnExists(db, "thread_usage_lines", "provider")) {
     db.exec(
       "ALTER TABLE thread_usage_lines ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'",
@@ -2992,6 +2999,7 @@ SET
     NULLIF(usage_turn_id, ''),
     COALESCE(NULLIF(provider, ''), 'openai') || ':' || backend || ':' || thread_id || ':' || COALESCE(turn_id, usage_line_id)
   )
+WHERE provider IS NULL OR provider = '' OR usage_turn_id IS NULL OR usage_turn_id = ''
 `);
 
   db.exec(`
@@ -3030,31 +3038,23 @@ SELECT
   MAX(completed_at),
   MIN(created_at),
   MAX(updated_at)
-FROM thread_usage_lines
+FROM thread_usage_lines AS line
 WHERE usage_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM thread_usage_turns AS turn WHERE turn.usage_turn_id = line.usage_turn_id
+  )
 GROUP BY usage_turn_id
-ON CONFLICT(usage_turn_id) DO UPDATE SET
-  provider = excluded.provider,
-  backend = excluded.backend,
-  thread_id = excluded.thread_id,
-  parent_thread_id = excluded.parent_thread_id,
-  turn_id = excluded.turn_id,
-  model = excluded.model,
-  reasoning_effort = excluded.reasoning_effort,
-  service_tier = excluded.service_tier,
-  fast_mode = excluded.fast_mode,
-  settings_source = excluded.settings_source,
-  settings_confidence = excluded.settings_confidence,
-  started_at = excluded.started_at,
-  completed_at = excluded.completed_at,
-  observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
-  updated_at = excluded.updated_at
+ON CONFLICT(usage_turn_id) DO NOTHING
 `);
 
   if (!tableColumnExists(db, "thread_pricing_summaries", "provider")) {
     db.exec(
       "ALTER TABLE thread_pricing_summaries ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'",
     );
+  }
+  if (providerScopedSummaries) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
   }
   db.exec("DROP TABLE IF EXISTS thread_pricing_summaries_v2");
   db.exec(`
