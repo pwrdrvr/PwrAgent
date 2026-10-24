@@ -2,6 +2,7 @@ import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { FederatedThreadTodoService, type ThreadTodoOperation } from "../federation/federation-thread-todos";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { readLocalNavigationDirectoryIndex } from "../app-server/navigation-directory-index";
 import { getMainLogger } from "../log";
 import { ipcMain } from "electron";
 import type { FederationRemoteTarget, ThreadTodosChangedEvent } from "@pwragent/shared";
@@ -24,7 +25,6 @@ import {
   installThreadTodoRuntime,
 } from "../thread-todos/thread-todo-runtime";
 import { federationTargetForChannelSubscriber, subscribersForChannel } from "../window-channels";
-import { appServerService } from "./app-server";
 
 let unsubscribeRemoteTodos: (() => void) | undefined;
 let unsubscribePeerStatus: (() => void) | undefined;
@@ -47,16 +47,12 @@ function broadcastThreadTodosChanged(event: ThreadTodosChangedEvent, everyWindow
   }
 }
 
-/** The local Directories lens rows, the projects a card can name. */
+/**
+ * The local Directories lens rows, the projects a card can name. Every
+ * page of them: a navigation page holds at most 100 rows.
+ */
 async function listLocalProjects(): Promise<ThreadTodoProjectCandidate[]> {
-  const page = await appServerService.getNavigationQueryPage({
-    protocol: 2,
-    inventory: "owner",
-    consumer: "agent-tool",
-    query: { kind: "directory-index" },
-    pageSize: 500,
-  });
-  return (page.directories ?? []).map((directory) => ({
+  return (await readLocalNavigationDirectoryIndex()).map((directory) => ({
     key: directory.key,
     label: directory.label,
     kind: directory.kind,
