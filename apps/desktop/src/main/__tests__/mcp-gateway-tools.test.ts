@@ -98,6 +98,23 @@ describe("fixed MCP gateway tools", () => {
     expect(f.approve).not.toHaveBeenCalled();
   });
 
+  it("returns each server's instructions once, beside its tools", async () => {
+    const f = fixture();
+    f.selected.set("thread-a", ["one", "two"]);
+    f.catalog.set("one", [
+      { ...tool("one", "lookup"), serverInstructions: "Call stop_sandbox when you are done." },
+      tool("one", "lookup_more"),
+    ]);
+    const result = await f.service.search({ query: "lookup", limit: 5 }, context);
+    expect(result.tools.map((entry) => entry.toolName)).toEqual(["lookup", "lookup", "lookup_more"]);
+    expect(result.tools.some((entry) => "serverInstructions" in entry)).toBe(false);
+    expect(result.serverInstructions).toEqual([
+      { connectionId: "one", serverName: "one", instructions: "Call stop_sandbox when you are done." },
+    ]);
+    // A server whose tools were not returned contributes no instructions.
+    expect((await f.service.search({ query: "lookup", connectionId: "two" }, context)).serverInstructions).toBeUndefined();
+  });
+
   it("rechecks selection after discovery and after approval, without an upstream action", async () => {
     const f = fixture();
     await f.service.search({ query: "lookup" }, context);

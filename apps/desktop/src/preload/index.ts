@@ -354,6 +354,8 @@ import type {
   ConnectPwrGitResponse,
   ConnectPwrSnapResponse,
   OpenPwrGitResponse,
+  OpenSandboxerLinkResponse,
+  SandboxerLinkTarget,
   OpenPwrSnapResponse,
   PwrGitConnectionStatus,
   PwrSnapConnectionStatus,
@@ -869,6 +871,7 @@ import {
   MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL,
   MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
   MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
+  MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
   MCP_CONNECTION_AUTHORIZE_CHANNEL,
   MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL,
   MCP_CONNECTION_CREATE_CHANNEL,
@@ -1279,6 +1282,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(MCP_CONNECTION_PWRGIT_OPEN_CHANNEL),
   openPwrGitDownload: async (): Promise<OpenPwrGitResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL),
+  openSandboxerLink: async (
+    target: SandboxerLinkTarget,
+  ): Promise<OpenSandboxerLinkResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL, { target }),
   readPwrSuiteInstaller: async (
     app: PwrSuiteAppId,
   ): Promise<PwrSuiteInstallerState> =>

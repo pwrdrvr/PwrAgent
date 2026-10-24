@@ -11,10 +11,12 @@ import {
   type Socket,
 } from "node:net";
 import { shell } from "electron";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode, McpError, ToolListChangedNotificationSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpDiscovery, McpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
+import { SandboxerConnection } from "./sandboxer-connection";
 import { ConnectionRpcClient } from "./mcp-connection-rpc-client";
 import { gatewayToolRevision, validateGatewayArguments, type McpGatewayTool, type McpGatewayInvocation } from "./mcp-gateway-catalog";
 import {
@@ -22,6 +24,7 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
   isAcpBackendId,
+  isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
   type AppServerBackendKind,
   type CreateMcpConnectionRequest,
@@ -35,7 +38,9 @@ import {
   type McpConnectionToolApproval,
   type ConnectPwrSnapResponse,
   type OpenPwrSnapResponse,
+  type OpenSandboxerLinkResponse,
   type PwrSnapConnectionStatus,
+  type SandboxerLinkTarget,
 } from "@pwragent/shared";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
 import { getMainLogger } from "../log";
@@ -96,6 +101,7 @@ const MAX_RPC_CONNECTIONS = 32;
  * what arrived rather than a spinner that never ends.
  */
 const MAX_TOOL_LIST_PAGES = 20;
+const MAX_SERVER_INSTRUCTIONS_CHARS = 2_000;
 const GATEWAY_OFF_ERROR =
   "The PwrAgent MCP gateway is turned off. Turn it on in Settings → Plugins to use managed connections.";
 
@@ -106,7 +112,7 @@ type BridgeGrant = {
 
 type UpstreamSession = {
   client: Client;
-  transport: StreamableHTTPClientTransport;
+  transport: Transport;
 };
 
 type BridgeRequest = {
@@ -157,6 +163,7 @@ type FetchLike = (
 ) => Promise<Response>;
 
 export type McpConnectionGatewayServiceOptions = {
+  sandboxer?: SandboxerConnection;
   readGatewaySelection?: (context: { backend: AppServerBackendKind; threadId: string }) => Promise<string[]>;
   bridgeEntryPath?: string;
   fetchFn?: FetchLike;
@@ -502,6 +509,8 @@ export class McpConnectionGatewayService {
   private brokerToken?: string;
   private nonOwnerHolder?: RuntimeLeaseHolder;
 
+  private readonly sandboxer: SandboxerConnection;
+
   constructor(options: McpConnectionGatewayServiceOptions = {}) {
     this.readGatewaySelection = options.readGatewaySelection
       ?? (async (context) => (await getAppOverlayStore().getThreadOverlayState(context))?.mcpConnectionIds ?? []);
@@ -509,6 +518,8 @@ export class McpConnectionGatewayService {
       options.bridgeEntryPath ?? join(__dirname, "mcp-connection-bridge.js");
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url));
+    this.sandboxer = options.sandboxer
+      ?? new SandboxerConnection(undefined, { openExternal: this.openExternal });
     this.openPath = options.openPath ?? ((path) => shell.openPath(path));
     this.resolveInstallPaths =
       options.resolveInstallPaths ?? resolveDefaultPwrSnapInstallPaths;
@@ -609,17 +620,20 @@ export class McpConnectionGatewayService {
     return await this.connectPromise;
   }
 
-  async listConnections(): Promise<McpConnectionStatus[]> {
+  async listConnections(
+    options: { cachedLocalStatus?: boolean } = {},
+  ): Promise<McpConnectionStatus[]> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
       return await this.requestOwnerBroker<McpConnectionStatus[]>(
         ownership.holder,
         "broker/list",
+        options,
       );
     }
     return await Promise.all(
       this.registry.list().map(async (connection) =>
-        await this.connectionStatus(connection),
+        await this.connectionStatus(connection, options.cachedLocalStatus),
       ),
     );
   }
@@ -639,6 +653,14 @@ export class McpConnectionGatewayService {
     return await this.connectionStatus(connection);
   }
 
+  /**
+   * Opens a Sandboxer page from this machine. No broker hop: the dashboard
+   * link is signed in through this machine's CLI login.
+   */
+  async openSandboxerLink(target: SandboxerLinkTarget): Promise<OpenSandboxerLinkResponse> {
+    return await this.sandboxer.openLink(target);
+  }
+
   async authorizeConnection(connectionId: string): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
@@ -649,6 +671,18 @@ export class McpConnectionGatewayService {
       );
     }
     const connection = this.requireConnection(connectionId);
+    if (connection.kind === "sandboxer") {
+      // The CLI may have logged into a different account since this process
+      // started. Only then retire servers holding the previous login and its
+      // catalog: Settings refreshes on window focus during setup, and closing
+      // a live `sbx mcp` drops the sandbox a thread was implicitly using.
+      const { accountChanged } = await this.sandboxer.refreshStatus();
+      if (accountChanged) {
+        await this.closeConnectionSessions(connectionId);
+        this.invalidateConnectionTools(connectionId);
+      }
+      return await this.connectionStatus(connection);
+    }
     // Restore the first attempt's state before its callback rejection runs.
     this.coordinatorFor(connection).abandonAuthorization();
     this.abandonPendingAuthorization(
@@ -717,6 +751,7 @@ export class McpConnectionGatewayService {
       );
     }
     const connection = this.requireConnection(connectionId);
+    if (connection.kind === "sandboxer") return await this.connectionStatus(connection);
     // Retire the attempt in the coordinator *before* ending its wait, so the
     // rejection that follows lands on a stale attempt and cannot report a
     // called-off authorization as `reauthorization_required`. Doing it the
@@ -833,6 +868,9 @@ export class McpConnectionGatewayService {
     }
     const connection = this.requireConnection(connectionId);
     await this.closeConnectionSessions(connectionId);
+    if (connection.kind === "sandboxer") {
+      return await this.connectionStatus(this.registry.setEnabled(connectionId, false));
+    }
     await this.coordinatorFor(connection).disconnect();
     this.invalidateConnectionTools(connectionId);
     if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
@@ -1032,7 +1070,7 @@ export class McpConnectionGatewayService {
         { connectionId },
       );
     }
-    if (connectionId === PWRSNAP_MCP_CONNECTION_ID || connectionId === PWRGIT_MCP_CONNECTION_ID) {
+    if (isBuiltInMcpConnectionId(connectionId)) {
       throw new Error("Built-in MCP connections cannot be removed.");
     }
     this.requireConnection(connectionId);
@@ -1064,14 +1102,16 @@ export class McpConnectionGatewayService {
     // problem, and telling the operator to reauthorize would send them to
     // the wrong control.
     const connection = this.requireAvailableConnection(connectionId);
-    const configured = await this.coordinatorFor(connection).configured();
+    const status = await this.connectionStatus(connection);
+    const configured = status.configured;
     signal?.throwIfAborted();
     if (
       !configured
       && !(connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked)
     ) {
       throw new Error(
-        `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
+        connection.kind === "sandboxer" ? status.detail
+          : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
       );
     }
     const registrationKey = threadId
@@ -1697,6 +1737,7 @@ export class McpConnectionGatewayService {
   private coordinatorFor(
     connection: McpConnectionRecord,
   ): McpOAuthSessionCoordinator {
+    if (connection.authMode !== "oauth") throw new Error("This connection uses the local CLI login, not OAuth.");
     let coordinator = this.coordinators.get(connection.id);
     if (!coordinator) {
       const serverUrl = new URL(connection.serverUrl);
@@ -1753,7 +1794,24 @@ export class McpConnectionGatewayService {
 
   private async connectionStatus(
     connection: McpConnectionRecord,
+    cachedLocalStatus = false,
   ): Promise<McpConnectionStatus> {
+    if (connection.kind === "sandboxer") {
+      // New-thread defaults have a two-second total budget. Refresh enabled
+      // compute in the background without delaying unrelated defaults. A cold
+      // cache skips only Sandboxer until a probe has established its login.
+      if (cachedLocalStatus && connection.enabled) {
+        void this.sandboxer.readStatus();
+      }
+      const status = cachedLocalStatus
+        ? this.sandboxer.cachedStatus()
+        : await this.sandboxer.readStatus();
+      return {
+        ...connection,
+        ...status,
+        discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
+      };
+    }
     const coordinator = this.coordinatorFor(connection);
     const configured = await coordinator.configured();
     return {
@@ -1847,18 +1905,25 @@ export class McpConnectionGatewayService {
       discovery: McpDiscovery;
     },
   ): Promise<UpstreamSession> {
-    const coordinator = this.coordinatorFor(connection);
-    if (!(await coordinator.configured())) {
-      throw new Error(
-        connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked
-          ? PWRSNAP_SESSION_REVOKED_ERROR
-          : `${connection.displayName} needs to be reauthorized in Settings → Plugins.`,
+    let transport: Transport;
+    if (connection.kind === "sandboxer") {
+      const status = await this.sandboxer.readStatus();
+      if (!status.configured) throw new Error(status.detail);
+      transport = this.sandboxer.createTransport();
+    } else {
+      const coordinator = this.coordinatorFor(connection);
+      if (!(await coordinator.configured())) {
+        throw new Error(
+          connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked
+            ? PWRSNAP_SESSION_REVOKED_ERROR
+            : `${connection.displayName} needs to be reauthorized in Settings → Plugins.`,
+        );
+      }
+      transport = new StreamableHTTPClientTransport(
+        new URL(connection.serverUrl),
+        { fetch: coordinator.authorizedFetch() },
       );
     }
-    const transport = new StreamableHTTPClientTransport(
-      new URL(connection.serverUrl),
-      { fetch: coordinator.authorizedFetch() },
-    );
     const client = new Client(
       {
         name: options.clientName,
@@ -2094,7 +2159,7 @@ export class McpConnectionGatewayService {
       ? params as Record<string, unknown>
       : {};
     if (operation === "broker/list") {
-      return await this.listConnections();
+      return await this.listConnections({ cachedLocalStatus: values.cachedLocalStatus === true });
     }
     if (operation === "broker/pwrsnap-status") {
       return await this.readStatus();
@@ -2207,9 +2272,11 @@ export class McpConnectionGatewayService {
         throw new Error("Invalid MCP bridge registration request.");
       }
       const connection = this.requireAvailableConnection(values.connectionId);
-      if (!(await this.coordinatorFor(connection).configured())) {
+      const status = await this.connectionStatus(connection);
+      if (!status.configured) {
         throw new Error(
-          `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
+          connection.kind === "sandboxer" ? status.detail
+            : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
         );
       }
       const threadId = typeof values.threadId === "string"
@@ -2347,6 +2414,16 @@ export class McpConnectionGatewayService {
       throw new Error("The MCP connection changed during discovery. Search again.");
     }
     this.recordDiscoverySuccess(connection.id);
+    // Sandboxer's say to stop each sandbox when done; dropping them left the
+    // agent nothing telling it a forgotten machine keeps billing. Only the
+    // built-in Sandboxer CLI's: a third-party server's instructions would be
+    // untrusted text the agent is told to follow.
+    const instructions = connection.kind === "sandboxer"
+      ? client.getInstructions?.()?.trim()
+      : undefined;
+    if (instructions && tools[0]) {
+      tools[0] = { ...tools[0], serverInstructions: instructions.slice(0, MAX_SERVER_INSTRUCTIONS_CHARS) };
+    }
     return tools;
   }
 

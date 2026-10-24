@@ -14,6 +14,11 @@ export type McpGatewaySource = {
 
 export type McpGatewayTool = McpGatewaySource & {
   definition: Tool;
+  /**
+   * The server's `initialize` instructions, on the catalog's first entry only
+   * so a large catalog does not repeat them. Search lifts them out per server.
+   */
+  serverInstructions?: string;
 };
 
 export type McpGatewayInvocation = McpGatewaySource & {

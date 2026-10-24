@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import {
   isMcpConnectionToolApproval,
+  isSandboxerLinkTarget,
   type AuthorizeMcpConnectionRequest,
   type AuthorizeMcpConnectionResponse,
   type CancelMcpConnectionAuthorizationRequest,
@@ -30,6 +31,8 @@ import {
   type ConnectPwrSnapResponse,
   type OpenPwrGitResponse,
   type OpenPwrSnapResponse,
+  type OpenSandboxerLinkRequest,
+  type OpenSandboxerLinkResponse,
   type PwrGitConnectionStatus,
   type PwrSnapConnectionStatus,
   type ReadPwrSnapConnectionStatusRequest,
@@ -49,6 +52,7 @@ import {
   MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL,
   MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
   MCP_CONNECTION_REMOVE_CHANNEL,
+  MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
@@ -144,6 +148,26 @@ export function registerMcpConnectionIpcHandlers(
       return {
         connection: await service.authorizeConnection(request.connectionId),
       };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
+    async (
+      event,
+      request: OpenSandboxerLinkRequest,
+    ): Promise<OpenSandboxerLinkResponse> => {
+      // The dashboard link signs in with this machine's CLI login.
+      if (federationWindowTargetForWebContents(event.sender)) {
+        return {
+          opened: false,
+          error: "Open Sandboxer from the machine that owns this window.",
+        };
+      }
+      if (!isSandboxerLinkTarget(request?.target)) {
+        return { opened: false, error: "Unknown Sandboxer page." };
+      }
+      return await service.openSandboxerLink(request.target);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL);
@@ -522,6 +546,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_AUTHORIZE_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_DISCONNECT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_REMOVE_CHANNEL);

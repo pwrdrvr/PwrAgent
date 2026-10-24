@@ -19417,8 +19417,10 @@ export class DesktopBackendRegistry {
       const inheritedNames = await this.readConfiguredCodexMcpServerNames(params.cwd);
       const providerEnabled = params.overlay?.mcpProviderServersEnabled !== false;
       const selectedConnectionIds = params.overlay?.mcpConnectionIds ?? [];
+      // Only ids, names, and `enabled` are read here: stored config. A fresh
+      // local CLI probe would hold up every run start for nothing.
       const connectionStatuses = params.mcpAllowlist?.length || selectedConnectionIds.length
-        ? await this.mcpConnectionService?.listConnections?.()
+        ? await this.mcpConnectionService?.listConnections?.({ cachedLocalStatus: true })
         : undefined;
       const namesConnection = (connection: { id: string; displayName: string }, name: string) =>
         name === connection.id || name === connection.displayName || name === connection.displayName.toLowerCase();
@@ -27281,7 +27283,7 @@ export class DesktopBackendRegistry {
         timer.unref?.();
       });
       return mcpConnectionIdsForNewThread(
-        await Promise.race([service.listConnections(), deadline]),
+        await Promise.race([service.listConnections({ cachedLocalStatus: true }), deadline]),
       );
     } catch (error) {
       backendRegistryLog.warn("new_thread_mcp_defaults_unavailable", {
@@ -38218,7 +38220,9 @@ export class DesktopBackendRegistry {
   // the server does not mark safe; it never reads as Allow all tools.
   private async readMcpConnectionToolApproval(connectionId: string): Promise<McpConnectionToolApproval> {
     try {
-      const connections = await this.mcpConnectionService?.listConnections?.();
+      // The approval mode is stored config. Reading it must not wait on a
+      // local CLI's status probe before every tool call.
+      const connections = await this.mcpConnectionService?.listConnections?.({ cachedLocalStatus: true });
       return connections?.find((connection) => connection.id === connectionId)?.toolApproval ?? "auto";
     } catch (error) {
       backendRegistryLog.warn("could not read MCP connection tool approval", { connectionId, error: String(error) });

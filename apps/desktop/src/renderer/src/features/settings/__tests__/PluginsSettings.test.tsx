@@ -1032,6 +1032,113 @@ describe("PluginsSettings", () => {
       return article;
     }
 
+    it("offers Sandboxer CLI status and compute controls without OAuth actions", async () => {
+      const sandboxer = managed({
+        id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
+        serverUrl: "sandboxer:compute", sandboxerRole: "compute", sandboxerCliState: "signed_in",
+        enabled: false, selectForNewThreads: false, toolApproval: "prompt",
+        detail: "Signed in through the Sandboxer CLI.",
+        sandboxerAccount: { email: "operator@example.com", planDollars: 20, creditBalanceHours: 21.4 },
+      });
+      const api = managedApi([sandboxer], ["create_sandbox", "stop_sandbox"]);
+      api.authorizeMcpConnection = vi.fn(async () => ({ connection: sandboxer }));
+      api.openSandboxerLink = vi.fn(async () => ({ opened: true }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const row = (await screen.findByText("Sandboxer")).closest("article")!;
+      expect(within(row).queryByRole("button", { name: "Authorize" })).toBeNull();
+      expect(within(row).queryByRole("button", { name: "Disconnect" })).toBeNull();
+      expect(within(row).queryByRole("button", { name: "Remove" })).toBeNull();
+      expect(within(row).getByRole("button", { name: "Test connection" })).toBeInTheDocument();
+      expect(within(row).getByText(/starts billing, so this defaults to asking\. Full Access threads never ask/)).toBeInTheDocument();
+      // The account that pays, and what it has left.
+      expect(within(row).getByText("operator@example.com")).toBeInTheDocument();
+      expect(within(row).getByText(/\$20\/month · 21\.4 h credit left/)).toBeInTheDocument();
+      expect(within(row).getByText(/^Turn on Offer to threads/)).toBeInTheDocument();
+      // Setup is done, so neither the ladder nor the explainer stays.
+      expect(within(row).queryByRole("list", { name: "Sandboxer setup" })).toBeNull();
+      expect(within(row).queryByText(/runs cloud Linux machines/)).toBeNull();
+      fireEvent.click(within(row).getByRole("button", { name: "Open dashboard" }));
+      await waitFor(() => expect(api.openSandboxerLink).toHaveBeenCalledWith("dashboard"));
+
+      // The launched command lives in the drawer, complete with --no-update.
+      expect(within(row).queryByText(/sbx mcp/)).toBeNull();
+      fireEvent.click(within(row).getByRole("button", { name: /^Sandboxer/ }));
+      expect(within(row).getByText("/usr/local/bin/sbx mcp --type small --ttl 1800 --no-update")).toBeInTheDocument();
+      fireEvent.click(within(row).getByRole("button", { name: "Machines & sizes" }));
+      await waitFor(() => expect(api.openSandboxerLink).toHaveBeenLastCalledWith("docs_machines"));
+
+      fireEvent.click(within(row).getByRole("button", { name: "Refresh status" }));
+      await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: "builtin:sandboxer" }));
+      await waitFor(() => expect(within(row).getByRole("button", { name: "Refresh status" })).toBeEnabled());
+    });
+
+    it("folds Sandboxer to one line until its CLI is found, then explains it", async () => {
+      const sandboxer = managed({
+        id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
+        serverUrl: "sandboxer:compute", sandboxerCliState: "cli_missing", configured: false,
+        state: "temporarily_unavailable", enabled: false, toolApproval: "prompt",
+        detail: "Sandboxer CLI missing.",
+      });
+      const api = managedApi([sandboxer]);
+      api.authorizeMcpConnection = vi.fn(async () => ({ connection: sandboxer }));
+      api.openSandboxerLink = vi.fn(async () => ({ opened: true }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const compact = (await screen.findByText("Sandboxer")).closest("article")!;
+      expect(within(compact).getByText(/paid service/)).toBeInTheDocument();
+      expect(within(compact).queryByRole("button", { name: "Refresh status" })).toBeNull();
+      fireEvent.click(within(compact).getByRole("button", { name: "Learn more" }));
+      await waitFor(() => expect(api.openSandboxerLink).toHaveBeenCalledWith("home"));
+
+      fireEvent.click(within(compact).getByRole("button", { name: "Set up Sandboxer" }));
+      const row = screen.getByText("Sandboxer", { selector: ".settings-mcp-row__name" }).closest("article")!;
+      expect(within(row).getByText(/runs cloud Linux machines/)).toBeInTheDocument();
+      expect(within(row).queryByRole("button", { name: "Test connection" })).toBeNull();
+      const ladder = within(row).getByRole("list", { name: "Sandboxer setup" });
+      expect(within(ladder).getByText("Install CLI").closest("li")).toHaveAttribute("aria-current", "step");
+      fireEvent.click(within(row).getByRole("button", { name: "Get Sandboxer CLI" }));
+      await waitFor(() => expect(api.openSandboxerLink).toHaveBeenLastCalledWith("quickstart"));
+      fireEvent.click(within(row).getByRole("button", { name: "Pricing" }));
+      await waitFor(() => expect(api.openSandboxerLink).toHaveBeenLastCalledWith("pricing"));
+
+      // Setup happens in a terminal; coming back to the window checks again.
+      fireEvent.focus(window);
+      await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: "builtin:sandboxer" }));
+    });
+
+    it("copies sbx onboard for an operator who still needs an account or a plan", async () => {
+      for (const [sandboxerCliState, step, headline] of [
+        ["not_signed_in", "Sign in", "Not signed in"],
+        ["no_plan", "Finish account setup", "No plan"],
+      ] as const) {
+        const sandboxer = managed({
+          id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
+          serverUrl: "sandboxer:compute", sandboxerCliState, configured: false,
+          state: "disconnected", enabled: false, toolApproval: "prompt",
+          detail: "Run /usr/local/bin/sbx onboard in a terminal.",
+          ...(sandboxerCliState === "no_plan" ? { sandboxerAccount: { email: "operator@example.com" } } : {}),
+        });
+        const api = managedApi([sandboxer]);
+        const copyText = vi.fn().mockResolvedValue(undefined);
+        api.copyText = copyText;
+        const view = render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+        const row = (await screen.findByText("Sandboxer")).closest("article")!;
+        expect(within(row).getByText(headline)).toBeInTheDocument();
+        const ladder = within(row).getByRole("list", { name: "Sandboxer setup" });
+        expect(within(ladder).getByText(step).closest("li")).toHaveAttribute("aria-current", "step");
+        // Signed in but unable to start a machine: the switch would promise
+        // threads something every create would refuse.
+        expect(within(row).queryByLabelText("Offer Sandboxer to threads")).toBeNull();
+        fireEvent.click(within(row).getByRole("button", { name: "Copy setup command" }));
+        await waitFor(() => expect(copyText).toHaveBeenCalledWith("/usr/local/bin/sbx onboard"));
+        expect(await within(row).findByRole("button", { name: "Copied" })).toBeInTheDocument();
+        if (sandboxerCliState === "no_plan") {
+          expect(within(row).getByText(/no plan yet/)).toBeInTheDocument();
+          expect(within(row).getAllByText("Signed in").length).toBeGreaterThan(0);
+        }
+        view.unmount();
+      }
+    });
+
     /**
      * The Codex list below has always shown every tool of every server; a
      * managed connection showed a name and a URL. The gateway can read the
