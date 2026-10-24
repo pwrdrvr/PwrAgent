@@ -105,6 +105,7 @@ const federationMock = vi.hoisted(() => {
       prs: [],
     })),
     refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
+    refreshThreadGitWorkingState: vi.fn(async () => ({ scheduled: true })),
     ensureDirectoryLaunchpad: vi.fn(),
     listRecentFileReferences: vi.fn(async () => ({
       files: [] as Array<{ label: string; path: string }>,
@@ -5688,6 +5689,79 @@ describe("app server ipc", () => {
         threadId: "thread-remote",
       },
     );
+  });
+
+  it("routes remote working-state hover refreshes to the thread-owning instance", async () => {
+    const {
+      NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+    } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "pwr_owner" };
+    federationMock.runtime.connectedPeerTargets.mockReturnValue([
+      { target: federationTarget, label: "Owner", capabilities: ["thread_navigation"] },
+    ]);
+    registerAppServerIpcHandlers();
+
+    await expect(handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
+      { sender: { id: 999 } },
+      { backend: "claude", threadId: "thread-remote", trigger: "user", federationTarget },
+    )).resolves.toEqual({ scheduled: true });
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(federationTarget);
+    expect(
+      federationMock.remoteBackend.refreshThreadGitWorkingState,
+    ).toHaveBeenCalledExactlyOnceWith({
+      backend: "claude",
+      threadId: "thread-remote",
+      trigger: "user",
+    });
+    expect(scheduleWorktreeGitWorkingStateRefresh).not.toHaveBeenCalled();
+  });
+
+  it("refuses an untargeted working-state refresh from a remote window", async () => {
+    const {
+      NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+    } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+
+    await expect(handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
+      { sender: { id: 999 } },
+      { backend: "codex", threadId: "thread-remote", trigger: "user" },
+    )).rejects.toThrow(/owning instance/);
+    expect(federationMock.remoteBackend.refreshThreadGitWorkingState).not.toHaveBeenCalled();
+    expect(scheduleWorktreeGitWorkingStateRefresh).not.toHaveBeenCalled();
+  });
+
+  it("quietly skips remote working-state refreshes the owner cannot take", async () => {
+    const {
+      NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+    } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "pwr_owner" };
+    const request = { backend: "codex", threadId: "thread-remote", trigger: "user", federationTarget };
+    registerAppServerIpcHandlers();
+    const refresh = () => handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
+      { sender: { id: 999 } }, request,
+    );
+
+    // Disconnected owner.
+    await expect(refresh()).resolves.toEqual({ scheduled: false });
+    expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+
+    // An owner from before the method existed.
+    federationMock.runtime.connectedPeerTargets.mockReturnValue([
+      { target: federationTarget, label: "Owner", capabilities: ["thread_navigation"] },
+    ]);
+    federationMock.remoteBackend.refreshThreadGitWorkingState.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "method_not_found: No federation handler registered for backend.refreshThreadGitWorkingState",
+        ),
+        { code: "method_not_found" },
+      ),
+    );
+    await expect(refresh()).resolves.toEqual({ scheduled: false });
+    expect(scheduleWorktreeGitWorkingStateRefresh).not.toHaveBeenCalled();
+    expect(mockAppServerLog.warn).not.toHaveBeenCalled();
+    expect(mockAppServerLog.error).not.toHaveBeenCalled();
   });
 
   it("resolves federated PR refresh inputs from the owner's thread state", async () => {

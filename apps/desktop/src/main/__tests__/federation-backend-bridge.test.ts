@@ -2964,6 +2964,33 @@ describe("federation backend bridge", () => {
       prs: [],
     });
 
+    const refreshWorkingStatePending = client.refreshThreadGitWorkingState({
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "user",
+    });
+    const refreshWorkingStateRequest = sent.at(-1)!;
+    expect(refreshWorkingStateRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.refreshThreadGitWorkingState,
+      params: {
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "user",
+      },
+    });
+    rpc.receiveEnvelope({
+      id: "response-working-state-refresh",
+      kind: "response",
+      requestId: refreshWorkingStateRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_360,
+      result: { scheduled: true },
+    });
+    await expect(refreshWorkingStatePending).resolves.toEqual({ scheduled: true });
+
     const cancelPending = client.cancelQueuedTurn({ queueEntryId: "queue-1" });
     const cancelRequest = sent.at(-1)!;
     expect(cancelRequest).toMatchObject({
@@ -3238,6 +3265,59 @@ describe("federation backend bridge", () => {
           ghAvailable: true,
           prs: [],
         },
+      },
+    ]);
+  });
+
+  it("executes working-state refreshes on the target instance only", async () => {
+    const refreshThreadGitWorkingState = vi.fn(async () => ({ scheduled: true }));
+    const backend = {
+      refreshThreadGitWorkingState,
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "refresh-working-state-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.refreshThreadGitWorkingState,
+        params: {
+          backend: "claude",
+          threadId: "thread-1",
+          trigger: "user",
+          federationTarget: {
+            scope: "remote",
+            instanceId: "untrusted-relay-target",
+          },
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(refreshThreadGitWorkingState).toHaveBeenCalledExactlyOnceWith({
+      backend: "claude",
+      threadId: "thread-1",
+      trigger: "user",
+    });
+    expect(replies).toMatchObject([
+      {
+        kind: "response",
+        requestId: "refresh-working-state-request",
+        result: { scheduled: true },
       },
     ]);
   });
@@ -3893,6 +3973,7 @@ describe("federation backend bridge", () => {
       refreshThreadPullRequests: vi.fn(),
       materializeDirectoryLaunchpad: vi.fn(),
       refreshDirectoryGitStatuses: vi.fn(),
+      refreshThreadGitWorkingState: vi.fn(),
       ensureDirectoryLaunchpad: vi.fn(),
       listRecentFileReferences: vi.fn(),
       recordRecentFileReferences: vi.fn(),
@@ -4277,6 +4358,7 @@ describe("federation backend bridge", () => {
         setCodexThreadEnvironment: vi.fn(),
         refreshThreadPullRequests: vi.fn(),
         refreshDirectoryGitStatuses: vi.fn(),
+        refreshThreadGitWorkingState: vi.fn(),
         ensureDirectoryLaunchpad: vi.fn(),
         listRecentFileReferences: vi.fn(),
         recordRecentFileReferences: vi.fn(),
