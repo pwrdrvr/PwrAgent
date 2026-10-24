@@ -85,6 +85,17 @@ const CLAUDE_TASK_FOLLOW_UP_GRACE_MS = 5_000;
 
 const CLAUDE_WAKE = Symbol("claude-wake");
 
+/** The system messages that start, change, or end a Claude task. */
+const CLAUDE_TASK_SUBTYPES = new Set<string>([
+  "task_started", "task_updated", "task_progress", "task_notification", "background_tasks_changed",
+]);
+
+/** Whether cumulative model totals record any work. */
+function claudeHasModelUsage(modelUsage: SDKResultMessage["modelUsage"] | undefined): modelUsage is SDKResultMessage["modelUsage"] {
+  return Boolean(modelUsage) && Object.values(modelUsage!).some((value) =>
+    value.inputTokens + value.outputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens > 0);
+}
+
 function claudeWakeSignal(): { promise: Promise<typeof CLAUDE_WAKE>; wake: () => void } {
   let wake!: () => void;
   const promise = new Promise<typeof CLAUDE_WAKE>((resolve) => { wake = () => resolve(CLAUDE_WAKE); });
@@ -134,7 +145,12 @@ type RunningTurn = {
    */
   tasks: ClaudeTaskTracker;
   /** The rows last published through `thread/backgroundTasks/updated`. */
-  publishedTasks: string;
+  publishedTasks: AppServerBackgroundTask[];
+  publishedTaskKey: string;
+  /** Tool calls answered with a background placeholder and not yet settled. */
+  launchedToolUseIds: Set<string>;
+  /** Set at the first native init; a follow-up turn's init repeats it. */
+  initialized?: boolean;
   /** The latest native result; the logical turn reports it when it ends. */
   lastResult?: SDKResultMessage;
   /** Message counters that order a result against task notifications. */
@@ -362,7 +378,7 @@ export class ClaudeBackend {
       turnId: randomUUID(), controller: new AbortController(), entries: new Map(),
       input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(), pendingReports: new Map(),
       inputWrites: Promise.resolve(), stderr: "", hasCompletedToolActivity: false,
-      tasks: new ClaudeTaskTracker(), publishedTasks: "[]",
+      tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", launchedToolUseIds: new Set(),
       messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0,
       wake: claudeWakeSignal(),
     };
@@ -541,16 +557,22 @@ export class ClaudeBackend {
           // Never publish this query's project-scoped supportedModels() to
           // the backend-wide picker. Recover through separate global discovery.
           void this.refreshGlobalModels().catch(() => {});
-          session.sdkSessionId = message.session_id;
-          const current = await this.store.read(threadId);
-          current.sdkSessionId = message.session_id;
-          await this.store.save(current);
+          // Each native turn starts with init, including Claude's follow-up to
+          // a settled task. Only the first needs the session's metadata.
+          const firstInit = !running.initialized;
+          running.initialized = true;
+          if (firstInit || session.sdkSessionId !== message.session_id) {
+            session.sdkSessionId = message.session_id;
+            const current = await this.store.read(threadId);
+            current.sdkSessionId = message.session_id;
+            await this.store.save(current);
+          }
           // The native control request returns Claude's stored/in-flight title
           // while inference continues. Waiting for result leaves long first
           // turns named after the raw prompt for their entire duration.
           running.titleUpdate ??= this.updateTitle(session, running);
           if (message.terminal_slash_commands) this.terminalCommands = new Set(message.terminal_slash_commands);
-          await Promise.all([
+          if (firstInit) await Promise.all([
             // A probe that finds no windows keeps the last reading, so the
             // account must be confirmed first.
             this.checkAccount(running).then(() => this.refreshUsage(running)),
@@ -589,7 +611,8 @@ export class ClaudeBackend {
             await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
           }
         }
-        await this.consumeTaskMessage(message, session, running);
+        const taskMessage = message.type === "system" && CLAUDE_TASK_SUBTYPES.has(message.subtype);
+        if (taskMessage) await this.consumeTaskMessage(message, session, running);
         await this.consumeCompleteMessage(message, threadId, running);
         // The probe is a control round-trip that can wait 1.5s; never hold
         // the stream for it. The result boundary below reads it in order.
@@ -604,6 +627,9 @@ export class ClaudeBackend {
           for (const id of message.user_message_uuids ?? []) running.pendingSteers.delete(id);
           if (message.user_message_uuid) running.pendingSteers.delete(message.user_message_uuid);
           running.resultFailure ??= claudeResultFailure(message);
+          // The totals are cumulative. A turn stopped after this result must
+          // not bill its spend to the next turn.
+          if (claudeHasModelUsage(message.modelUsage)) session.modelUsage = message.modelUsage;
           running.lastResult = message;
           running.lastResultSeq = running.messageSeq;
           running.tasks.settleForeground();
@@ -614,7 +640,7 @@ export class ClaudeBackend {
             resultLength: message.subtype === "success" ? message.result?.length : undefined,
           };
         }
-        if (message.type === "system" || message.type === "user" || message.type === "result") await this.publishTasks(session, running);
+        if (taskMessage || message.type === "user" || message.type === "result") await this.publishTasks(session, running);
         if (this.turnSettled(running)) break;
         this.armTaskFollowUpGrace(running);
       }
@@ -642,7 +668,7 @@ export class ClaudeBackend {
       catch (error) { failure ??= claudeExceptionMessage(error, running.stderr); }
       const cancelled = running.controller.signal.aborted;
       const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
-      const orphanedTasks = running.tasks.runningToolUseIds();
+      const orphanedTasks = new Set([...running.tasks.runningToolUseIds(), ...running.launchedToolUseIds]);
       for (const entry of running.entries.values()) {
         // A task the query took down with it did not complete.
         if (entry.type === "activity" && entry.status === "in_progress" && orphanedTasks.has(entry.id)) {
@@ -663,7 +689,7 @@ export class ClaudeBackend {
         failure = `Could not save Claude history: ${error instanceof Error ? error.message : String(error)}`;
       }
       this.running.delete(threadId);
-      if (running.publishedTasks !== "[]") {
+      if (running.publishedTasks.length > 0) {
         await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId, tasks: [] } });
       }
       const diagnostics = {
@@ -757,9 +783,7 @@ export class ClaudeBackend {
     // Native title generation shares this session's account and model
     // totals. Its request can land after the result's usage snapshot.
     const modelUsage = requestedTitle ? usage?.session?.model_usage ?? message.modelUsage : message.modelUsage;
-    const hasUsage = modelUsage && Object.values(modelUsage).some((value) =>
-      value.inputTokens + value.outputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens > 0);
-    if (hasUsage) {
+    if (claudeHasModelUsage(modelUsage)) {
       const tokenUsage = claudeTurnUsage(modelUsage, usageBaseline);
       session.modelUsage = modelUsage;
       // Without an old session's baseline, cumulative spend cannot be
@@ -788,9 +812,10 @@ export class ClaudeBackend {
 
   private async publishTasks(session: ClaudeSession, running: RunningTurn): Promise<void> {
     const tasks = this.taskRows(session, running);
-    const serialized = JSON.stringify(tasks);
-    if (serialized === running.publishedTasks) return;
-    running.publishedTasks = serialized;
+    const key = JSON.stringify(tasks);
+    if (key === running.publishedTaskKey) return;
+    running.publishedTasks = tasks;
+    running.publishedTaskKey = key;
     await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId: session.thread.id, tasks } });
   }
 
@@ -807,6 +832,7 @@ export class ClaudeBackend {
    * tool row stays running until the task's notification settles it.
    */
   private async settleTaskToolCall(threadId: string, running: RunningTurn, { task, summary }: ClaudeTaskSettlement): Promise<void> {
+    if (task.toolUseId) running.launchedToolUseIds.delete(task.toolUseId);
     const entry = task.toolUseId ? running.entries.get(task.toolUseId) : undefined;
     if (entry?.type !== "activity" || entry.status !== "in_progress") return;
     entry.status = task.status === "completed" ? "completed" : task.status === "stopped" ? "cancelled" : "failed";
@@ -835,14 +861,15 @@ export class ClaudeBackend {
   /** Commands and sub-agents Claude is running for the thread. */
   listBackgroundTasks(threadId: string): { supported: true; terminals: AppServerBackgroundTask[] } {
     const running = this.running.get(threadId);
-    if (!running) return { supported: true, terminals: [] };
-    return { supported: true, terminals: JSON.parse(running.publishedTasks) as AppServerBackgroundTask[] };
+    return { supported: true, terminals: running?.publishedTasks ?? [] };
   }
 
   /** Stops one task. Claude reports the stop through the task's notification. */
   async stopBackgroundTask(threadId: string, taskId: string): Promise<boolean> {
     const running = this.running.get(threadId);
-    if (!running?.query || !running.tasks.get(taskId)) throw new Error("Claude is not running that task.");
+    if (!running?.query || !running.tasks.active().some((task) => task.taskId === taskId)) {
+      throw new Error("Claude is not running that task.");
+    }
     await running.query.stopTask(taskId);
     return true;
   }
@@ -1162,7 +1189,8 @@ export class ClaudeBackend {
         // notification completes the row.
         const launchedTask = !block.is_error
           && (running.tasks.isBackgroundToolUse(block.tool_use_id) || claudeBackgroundLaunch(message.tool_use_result));
-        if (!launchedTask) running.tasks.settleForeground(block.tool_use_id);
+        if (launchedTask) running.launchedToolUseIds.add(block.tool_use_id);
+        else running.tasks.settleForeground(block.tool_use_id);
         entry.status = block.is_error ? "failed" : launchedTask ? "in_progress" : "completed";
         const output = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
         const command = entry.details[0].command?.rawCommand;
@@ -1330,7 +1358,7 @@ export class ClaudeBackend {
 /** Whether a tool result is the placeholder of a task launched in the background. */
 function claudeBackgroundLaunch(result: unknown): boolean {
   if (!result || typeof result !== "object") return false;
-  const value = result as { backgroundTaskId?: unknown; status?: unknown; timedOutAfterMs?: unknown };
+  const value = result as { backgroundTaskId?: unknown; status?: unknown };
   return typeof value.backgroundTaskId === "string" || value.status === "async_launched";
 }
 

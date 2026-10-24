@@ -1534,6 +1534,68 @@ describe("Claude SDK backend", () => {
       .toMatchObject({ item: { status: "completed" } });
   });
 
+  it("keeps a background monitor the live set names running past its native result", async () => {
+    const monitorDone = Promise.withResolvers<void>();
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [
+        { task_id: "monitor-1", task_type: "monitor_mcp", description: "Watch the deploy" },
+      ] } as SDKMessage;
+      // Monitors carry no is_backgrounded flag.
+      yield { type: "system", subtype: "task_started", task_id: "monitor-1", description: "Watch the deploy", task_type: "monitor_mcp" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "watching" } as SDKMessage;
+      await monitorDone.promise;
+      yield { type: "system", subtype: "task_notification", task_id: "monitor-1", status: "completed", output_file: "", summary: "Deployed" } as SDKMessage;
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [] } as unknown as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "done", content: [{ type: "text", text: "Deployed." }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Watch" }] });
+    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toMatchObject([{ processId: "monitor-1", kind: "task" }]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
+    monitorDone.resolve();
+    await f.waitForTurn();
+    expect((await f.backend.readThread(threadId)).lastAssistantMessage).toBe("Deployed.");
+  });
+
+  it("records an intermediate result's totals when the turn is stopped during a background wait", async () => {
+    const model = { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      costUSD: 2, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 };
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "task-1", description: "sleep", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting", modelUsage: { opus: model } } as unknown as SDKMessage;
+      await new Promise<void>((resolve) => {
+        options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
+    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toHaveLength(1));
+    await f.backend.interruptTurn(turn);
+    expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
+    expect((await f.store.read(threadId)).modelUsage?.opus.costUSD).toBe(2);
+  });
+
+  it("closes a background launch row that no task event ever settled", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "launch", content: [{ type: "tool_use", id: "tool-bg", name: "Bash", input: { command: "sleep 60", run_in_background: true } }],
+      } } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "bg-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-bg", content: "Command running in background with ID: bg-1" }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "started" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }] });
+    await f.waitForTurn();
+    const row = (await f.backend.readThread(threadId)).entries.find((entry) => entry.type === "activity");
+    expect(row).toMatchObject({ status: "failed" });
+  });
+
   it("reports a background sub-agent as running work with its progress", async () => {
     const agentDone = Promise.withResolvers<void>();
     const f = await fixture(async function* () {

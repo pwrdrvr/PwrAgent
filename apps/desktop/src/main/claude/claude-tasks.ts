@@ -46,8 +46,11 @@ export class ClaudeTaskTracker {
         taskType: message.task_type ?? previous?.taskType,
         subagentType: message.subagent_type ?? previous?.subagentType,
         description: message.description || previous?.description || "",
-        ambient: message.ambient === true || message.skip_transcript === true,
-        backgrounded: message.is_backgrounded === true,
+        ambient: message.ambient === true || message.skip_transcript === true || previous?.ambient === true,
+        // The CLI sets is_backgrounded only for agents and shells. A monitor
+        // or workflow the live set already names is a background task.
+        backgrounded: message.is_backgrounded
+          ?? (previous?.backgrounded === true || this.liveBackground?.has(message.task_id) === true),
         status: "running",
       });
     } else if (message.subtype === "task_updated") {
@@ -112,7 +115,7 @@ export class ClaudeTaskTracker {
    */
   settleForeground(toolUseId?: string): void {
     for (const task of this.tasks.values()) {
-      if (task.status !== "running" || task.backgrounded) continue;
+      if (task.status !== "running" || task.backgrounded || this.liveBackground?.has(task.taskId)) continue;
       if (toolUseId === undefined || task.toolUseId === toolUseId) task.status = "completed";
     }
   }
@@ -126,10 +129,6 @@ export class ClaudeTaskTracker {
   runningToolUseIds(): Set<string> {
     return new Set([...this.tasks.values()].flatMap((task) =>
       task.status === "running" && task.toolUseId ? [task.toolUseId] : []));
-  }
-
-  get(taskId: string): ClaudeTask | undefined {
-    return this.tasks.get(taskId);
   }
 }
 
