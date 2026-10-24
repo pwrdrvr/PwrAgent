@@ -543,6 +543,61 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     );
   });
 
+  it("repairs turn starts that cannot be real times in one commit", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    useFileStateDb();
+    const now = PRICING_CATALOG_TIME;
+    const seed = (turnId: string, startedAt: number) => store.upsertThreadUsageLine({ line: buildUsageLine({
+      source: "live", status: "pending", turnUsageAttributed: true,
+      turnId, startedAt, createdAt: now, usageLineId: `line-${turnId}`,
+    }) });
+    // Claude UUIDv4 turn ids read as UUIDv7 milliseconds.
+    await seed("year-6903", 0x8d94fa8e3a98);
+    await seed("year-2042", 0x02142f8ec60e);
+    await seed("year-2025", Date.UTC(2025, 11, 31));
+    await seed("next-year", Date.UTC(2027, 11, 31));
+    await seed("real", now - 6_000);
+    const turnRow = (turnId: string) => stateDb.raw.prepare(
+      "SELECT usage_turn_id, started_at FROM thread_usage_turns WHERE turn_id = ?",
+    ).get(turnId) as { usage_turn_id: string; started_at: number | null };
+    const startOf = (turnId: string) => turnRow(turnId).started_at;
+    const usageTurnId = (turnId: string) => turnRow(turnId).usage_turn_id;
+
+    const found = await store.readImplausibleThreadUsageTurnStarts({ limit: 10, now });
+    expect(found.map((row) => row.turnId).sort()).toEqual(["year-2025", "year-2042", "year-6903"]);
+
+    const { result, writes } = await measureSqliteWrites(() => store.repairThreadUsageTurnStarts({
+      now,
+      repairs: [
+        { usageTurnId: usageTurnId("year-6903"), startedAt: now - 6_000 },
+        // A recovered start that is still implausible clears the start.
+        { usageTurnId: usageTurnId("year-2042"), startedAt: 0x02142f8ec60e },
+        { usageTurnId: usageTurnId("year-2025") },
+        // A start that is already plausible is left alone.
+        { usageTurnId: usageTurnId("real"), startedAt: now },
+      ],
+    }));
+
+    expect(result).toBe(3);
+    expectSqliteWriteBudget({
+      scenario: "usage-turn-start-repair",
+      writes,
+      note: "Startup repair of three implausible ledger turn starts: one transaction however many turns; zero commits when none qualify",
+    });
+    expect(startOf("year-6903")).toBe(now - 6_000);
+    expect(startOf("year-2042")).toBeNull();
+    expect(startOf("year-2025")).toBeNull();
+    expect(startOf("next-year")).toBe(Date.UTC(2027, 11, 31));
+    expect(startOf("real")).toBe(now - 6_000);
+    // A cleared start leaves the line's own time for readers.
+    const { lines } = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
+    expect(lines.find((line) => line.turnId === "year-2025")?.startedAt).toBeUndefined();
+    expect(lines.find((line) => line.turnId === "year-6903")?.startedAt).toBe(now - 6_000);
+
+    // Nothing qualifies on the next launch, so it makes no repair call.
+    expect(await store.readImplausibleThreadUsageTurnStarts({ limit: 10, now })).toEqual([]);
+  });
+
   it("ends a turn at its first usage write when its last write is a bulk rewrite", async () => {
     const start = PRICING_CATALOG_TIME;
     const turnIds = Array.from({ length: 64 }, (_, index) => `restamped-${String(index).padStart(2, "0")}`);

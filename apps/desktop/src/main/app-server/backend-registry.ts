@@ -9,6 +9,7 @@ import {
   DEFAULT_THREAD_ARCHIVE_POLICY,
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
   classifyDirectory,
+  readUuidV7Timestamp,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
   type McpConnectionToolApproval,
@@ -5400,20 +5401,23 @@ function logUnpricedThreadUsageLine(line: ThreadUsageLineRecord): void {
   });
 }
 
-function readUuidV7Timestamp(id: string | undefined): number | undefined {
-  if (!id) {
-    return undefined;
+/** Each turn's earliest recorded time in a Claude transcript, by turn id. */
+function claudeTurnStartTimes(replay: AppServerThreadReplay): Map<string, number> {
+  const starts = new Map<string, number>();
+  for (const entry of replay.entries) {
+    const turnId = entry.turn?.id;
+    const at = entry.turn?.startedAt ?? entry.createdAt;
+    if (!turnId || typeof at !== "number") {
+      continue;
+    }
+    starts.set(turnId, Math.min(starts.get(turnId) ?? at, at));
   }
-  const hex = id.replace(/-/g, "").slice(0, 12);
-  if (!/^[0-9a-fA-F]{12}$/.test(hex)) {
-    return undefined;
-  }
-  const timestamp = Number.parseInt(hex, 16);
-  return Number.isFinite(timestamp) ? timestamp : undefined;
+  return starts;
 }
 
 function resolveLiveThreadUsageTiming(params: {
   overlay?: ThreadOverlayState;
+  reportedStartedAt?: number;
   turnId?: string;
 }): {
   completedAt?: number;
@@ -5428,7 +5432,12 @@ function resolveLiveThreadUsageTiming(params: {
     (entry) => entry.turn?.id === params.turnId,
   );
   const turn = activity?.turn;
-  const startedAt = turn?.startedAt ?? readUuidV7Timestamp(params.turnId);
+  // Only a UUIDv7 id carries its own start time. Other backends (Claude's ids
+  // are UUIDv4) report the start on turn/started instead.
+  const startedAt =
+    turn?.startedAt
+    ?? readUuidV7Timestamp(params.turnId)
+    ?? params.reportedStartedAt;
   const completedAt = turn?.completedAt;
   const createdAt = completedAt ?? activity?.createdAt;
   return {
@@ -8441,6 +8450,8 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "completeThreadUsageTurn"
     | "completeThreadUsageTurns"
     | "repairUnfinishedThreadUsageTurns"
+    | "readImplausibleThreadUsageTurnStarts"
+    | "repairThreadUsageTurnStarts"
     | "readUsageActivity"
     | "listRemoteThreadPins"
     | "listThreadCompactions"
@@ -8680,6 +8691,8 @@ export class DesktopBackendRegistry {
   >;
   private codexBackendSummary?: BackendSummary;
   private readonly usageTurnAccounts = new Map<string, Promise<string | undefined>>();
+  /** Turn start times reported on turn/started, keyed like usageTurnAccounts. */
+  private readonly usageTurnStartTimes = new Map<string, number>();
   private codexBackendGeneration = 0;
   /** Reject quota reads started before refreshed account or plan metadata changed. */
   private codexAccountRevision = 0;
@@ -10553,12 +10566,20 @@ export class DesktopBackendRegistry {
           message: error instanceof Error ? error.message : String(error),
         });
       });
+    // Starts first: inferring an unfinished turn's end reads its start.
     this.usageTurnStartupRepair =
-      this.repairUnfinishedThreadUsageTurnsAtStartup().catch((error) => {
-        backendRegistryLog.warn("usage-turn-startup-repair-failed", {
-          message: error instanceof Error ? error.message : String(error),
+      this.repairImplausibleThreadUsageTurnStartsAtStartup()
+        .catch((error) => {
+          backendRegistryLog.warn("usage-turn-start-repair-failed", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .then(() => this.repairUnfinishedThreadUsageTurnsAtStartup())
+        .catch((error) => {
+          backendRegistryLog.warn("usage-turn-startup-repair-failed", {
+            message: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
 
     // Kick off a one-shot scan of persisted codexEnvironmentRuntime
     // entries: zombie "started" runs from a prior session become
@@ -10644,6 +10665,45 @@ export class DesktopBackendRegistry {
    * usage write for a day qualify. The repair marks each end as inferred, so
    * if such a turn is still live, its terminal event replaces the estimate.
    */
+  /**
+   * Repair ledger turn starts that cannot be real times. Claude turns were
+   * dated by reading their UUIDv4 ids as UUIDv7. PwrAgent's own Claude
+   * transcript still has each turn's first entry, so recover the start from
+   * it. Any other implausible start is cleared, and readers fall back to the
+   * turn's first observation.
+   */
+  private async repairImplausibleThreadUsageTurnStartsAtStartup(): Promise<void> {
+    const read = this.overlayStore.readImplausibleThreadUsageTurnStarts;
+    const repair = this.overlayStore.repairThreadUsageTurnStarts;
+    if (!read || !repair) {
+      return;
+    }
+    const rows = await read.call(this.overlayStore, { limit: USAGE_TURN_REPAIR_BATCH_LIMIT });
+    if (rows.length === 0) {
+      return;
+    }
+    const claudeStarts = new Map<string, Map<string, number>>();
+    for (const threadId of new Set(rows.flatMap((row) => row.backend === "claude" ? [row.threadId] : []))) {
+      try {
+        claudeStarts.set(threadId, claudeTurnStartTimes(await this.claudeBackend.readThread(threadId)));
+      } catch {
+        // A deleted transcript leaves the start unknown.
+      }
+    }
+    const repairs = rows.map((row) => {
+      const startedAt = row.backend === "claude" && row.turnId
+        ? claudeStarts.get(row.threadId)?.get(row.turnId)
+        : undefined;
+      return { usageTurnId: row.usageTurnId, ...(startedAt !== undefined ? { startedAt } : {}) };
+    });
+    const repaired = await repair.call(this.overlayStore, { repairs });
+    backendRegistryLog.info("usage-turn-start-repair", {
+      found: rows.length,
+      recovered: repairs.filter((row) => row.startedAt !== undefined).length,
+      repaired,
+    });
+  }
+
   private async repairUnfinishedThreadUsageTurnsAtStartup(): Promise<void> {
     const repair = this.overlayStore.repairUnfinishedThreadUsageTurns;
     if (!repair) {
@@ -31277,6 +31337,9 @@ export class DesktopBackendRegistry {
       overlay?.reasoningEffort;
     const resolvedUsageTiming = resolveLiveThreadUsageTiming({
       overlay,
+      reportedStartedAt: turnId
+        ? this.usageTurnStartTimes.get(JSON.stringify([event.backend, threadId, turnId]))
+        : undefined,
       turnId,
     });
     const usageTiming = {
@@ -45532,6 +45595,16 @@ export class DesktopBackendRegistry {
           this.usageTurnAccounts.set(accountKey, this.captureUsageAccount(event.backend));
           if (this.usageTurnAccounts.size > 1_000) {
             this.usageTurnAccounts.delete(this.usageTurnAccounts.keys().next().value!);
+          }
+        }
+        const startedTurn = readRecord(event.notification.params.turn);
+        const startedAt = normalizeNotificationTimestamp(
+          startedTurn?.startedAt ?? startedTurn?.started_at,
+        );
+        if (typeof startedAt === "number") {
+          this.usageTurnStartTimes.set(accountKey, startedAt);
+          if (this.usageTurnStartTimes.size > 1_000) {
+            this.usageTurnStartTimes.delete(this.usageTurnStartTimes.keys().next().value!);
           }
         }
       }
