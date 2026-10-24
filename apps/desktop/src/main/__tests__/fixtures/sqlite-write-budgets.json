@@ -1225,6 +1225,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "usage-turn-time-repair": {
+    "commits": 1,
+    "note": "One-time repair of seven recovered ledger turn times plus a sweep clearing two implausible starts: one transaction however many turns, run once per profile",
+    "observedWalBytes": 4120,
+    "rowsChanged": 10,
+    "statements": 9
+  },
   "usage-turn-startup-repair": {
     "commits": 1,
     "note": "Startup repair of two unfinished ledger turns: one transaction however many turns; zero commits when none qualify",

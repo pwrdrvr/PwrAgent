@@ -116,6 +116,8 @@ function claudeAccountKey(info: AccountInfo): string {
 
 type RunningTurn = {
   turnId: string;
+  /** Claude turn ids are UUIDv4 and carry no time, so report the start. */
+  startedAt: number;
   controller: AbortController;
   query?: Query;
   done?: Promise<void>;
@@ -375,7 +377,7 @@ export class ClaudeBackend {
   }): Promise<{ backend: "claude"; threadId: string; turnId: string }> {
     if (this.running.has(params.threadId)) throw new Error("A Claude turn is already active for this thread.");
     const running: RunningTurn = {
-      turnId: randomUUID(), controller: new AbortController(), entries: new Map(),
+      turnId: randomUUID(), startedAt: Date.now(), controller: new AbortController(), entries: new Map(),
       input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(), pendingReports: new Map(),
       inputWrites: Promise.resolve(), stderr: "", hasCompletedToolActivity: false,
       tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", launchedToolUseIds: new Set(),
@@ -394,7 +396,7 @@ export class ClaudeBackend {
         type: "message", id: `user:${running.turnId}`, role: "user",
         text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n"),
         parts,
-        createdAt: Date.now(), turn: { id: running.turnId, status: "in_progress" },
+        createdAt: Date.now(), turn: { id: running.turnId, status: "in_progress", startedAt: running.startedAt },
       };
       const firstPrompt = params.input.find((item) => item.type === "text" && item.text.trim());
       running.titlePrompt = firstPrompt?.type === "text" ? firstPrompt.text : undefined;
@@ -409,7 +411,9 @@ export class ClaudeBackend {
       running.entries.set(user.id, user);
       await this.store.append(params.threadId, [user]);
       running.started = true;
-      await this.emit({ method: "turn/started", params: { threadId: params.threadId, turn: { id: running.turnId, status: "in_progress" } } });
+      await this.emit({ method: "turn/started", params: {
+        threadId: params.threadId, turn: { id: running.turnId, status: "in_progress", startedAt: running.startedAt },
+      } });
       await this.emit({ method: "item/completed", params: {
         threadId: params.threadId, turnId: running.turnId,
         item: { id: user.id, type: "userMessage", text: user.text, content: parts },
@@ -480,11 +484,13 @@ export class ClaudeBackend {
       this.running.delete(params.threadId);
       params.onTurnFinished?.();
       if (running.started) {
-        for (const entry of running.entries.values()) entry.turn = { id: running.turnId, status: "failed" };
+        for (const entry of running.entries.values()) {
+          entry.turn = { id: running.turnId, status: "failed", startedAt: running.startedAt };
+        }
         await this.store.append(params.threadId, [...running.entries.values()]);
         await this.emit({ method: "turn/failed", params: {
           threadId: params.threadId, turnId: running.turnId,
-          turn: { id: running.turnId, status: "failed", error: { message: failure } },
+          turn: { id: running.turnId, status: "failed", startedAt: running.startedAt, error: { message: failure } },
         } });
       }
       throw new Error(failure, { cause: error });
@@ -674,7 +680,7 @@ export class ClaudeBackend {
         if (entry.type === "activity" && entry.status === "in_progress" && orphanedTasks.has(entry.id)) {
           entry.status = cancelled ? "cancelled" : "failed";
         }
-        entry.turn = { id: turnId, status, completedAt: Date.now() };
+        entry.turn = { id: turnId, status, startedAt: running.startedAt, completedAt: Date.now() };
       }
       try {
         await this.store.append(threadId, [...running.entries.values()]);
@@ -700,12 +706,16 @@ export class ClaudeBackend {
       if (failure && !cancelled) claudeBackendLog.warn("Claude turn failed", { ...diagnostics, error: failure, stderr: running.stderr.slice(-320) });
       else claudeBackendLog.info("Claude turn finished", diagnostics);
       if (cancelled) {
-        await this.emit({ method: "turn/cancelled", params: { threadId, turnId, turn: { id: turnId, status: "cancelled" } } });
+        await this.emit({ method: "turn/cancelled", params: { threadId, turnId, turn: {
+          id: turnId, status: "cancelled", startedAt: running.startedAt,
+        } } });
       } else if (failure) {
-        await this.emit({ method: "turn/failed", params: { threadId, turnId, turn: { id: turnId, status: "failed", error: { message: failure } } } });
+        await this.emit({ method: "turn/failed", params: { threadId, turnId, turn: {
+          id: turnId, status: "failed", startedAt: running.startedAt, error: { message: failure },
+        } } });
       } else {
         await this.emit({ method: "turn/completed", params: { threadId, turnId, turn: {
-          id: turnId, status: "completed",
+          id: turnId, status: "completed", startedAt: running.startedAt,
           output: [...running.entries.values()].flatMap((entry) => entry.type === "message" && entry.role === "assistant" ? [{ type: "text" as const, text: entry.text }] : []),
         } } });
       }
