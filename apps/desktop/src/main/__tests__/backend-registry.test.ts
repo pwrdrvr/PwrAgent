@@ -45381,6 +45381,125 @@ script = "printf setup"
     expect(response.replay.messages[0]).toMatchObject({ id: message.id, origin });
   });
 
+  it.each([false, true])("retains delayed steer provenance while its turn is running (item started=%s)", async (itemStarted) => {
+    const text = "Return the observations already collected.";
+    const message = { id: "delayed-steer", role: "user" as const, text };
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [{ ...message, type: "message", turn: { id: "turn-1", status: "completed" } }],
+        messages: [message],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const turn = await registry.startTurn({
+      backend: "codex", threadId: "target-thread", input: [{ type: "text", text: "Collect observations." }],
+    });
+    const origin = {
+      kind: "agent" as const,
+      sourceThread: { backend: "codex" as const, threadId: "parent-thread" },
+    };
+    await registry.steerTurn({
+      backend: "codex", threadId: turn.threadId, expectedTurnId: turn.turnId,
+      input: [{ type: "text", text }], requestId: "delayed-steer",
+    }, origin);
+    const emitItem = async (method: "item/started" | "item/completed") => {
+      await codexClient.emit({
+        method,
+        params: {
+          threadId: turn.threadId, turnId: turn.turnId,
+          item: { id: message.id, type: "userMessage", content: [{ type: "text", text }] },
+        },
+      });
+    };
+    if (itemStarted) await emitItem("item/started");
+
+    // A different thread's registration used to evict this context after ten
+    // minutes, even while Codex was still waiting on a long-running tool call.
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 20 * 60 * 1000);
+    try {
+      await registry.startTurn({
+        backend: "codex", threadId: "other-thread", input: [{ type: "text", text: "Separate task." }],
+        messageOrigin: { kind: "automation" },
+      });
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: "other-thread", turnId: turn.turnId,
+          turn: { id: turn.turnId, status: "completed", output: [] },
+        },
+      });
+      if (!itemStarted) await emitItem("item/started");
+      await emitItem("item/completed");
+    } finally {
+      clock.mockRestore();
+    }
+    const userEvents = events.filter((event) =>
+      (event.notification.method === "item/started" || event.notification.method === "item/completed")
+      && (event.notification.params.item as { id?: string }).id === message.id
+    );
+    expect(userEvents).toHaveLength(2);
+    for (const event of userEvents) {
+      expect(event).toMatchObject({ notification: { params: { item: { origin } } } });
+    }
+    expect(overlayStore.upsertThreadMessageOrigin).toHaveBeenCalledWith({
+      backend: "codex", threadId: turn.threadId, messageId: message.id, origin,
+    });
+    const response = await registry.readThread({ backend: "codex", threadId: turn.threadId });
+    expect(response.replay.entries[0]).toMatchObject({ id: message.id, origin });
+    expect(response.replay.messages[0]).toMatchObject({ id: message.id, origin });
+  });
+
+  it.each(["turn/completed", "turn/failed", "turn/cancelled"] as const)("releases undelivered steer provenance on %s", async (method) => {
+    const codexClient = new MockBackendClient({});
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const turn = await registry.startTurn({
+      backend: "codex", threadId: "target-thread", input: [{ type: "text", text: "Collect observations." }],
+    });
+    const text = "Continue.";
+    await registry.steerTurn({
+      backend: "codex", threadId: turn.threadId, expectedTurnId: turn.turnId,
+      input: [{ type: "text", text }], requestId: "undelivered-steer",
+    }, { kind: "agent", sourceThread: { backend: "codex", threadId: "parent-thread" } });
+    const terminal: AppServerNotification = method === "turn/completed"
+      ? { method, params: { threadId: turn.threadId, turnId: turn.turnId,
+          turn: { id: turn.turnId, status: "completed", output: [] } } }
+      : method === "turn/failed"
+        ? { method, params: { threadId: turn.threadId, turnId: turn.turnId,
+            turn: { id: turn.turnId, status: "failed", error: { message: "Fixture failure." } } } }
+        : { method, params: { threadId: turn.threadId, turnId: turn.turnId,
+            turn: { id: turn.turnId, status: "cancelled" } } };
+    await codexClient.emit(terminal);
+
+    // Providers may omit turnId on a user item. A later manual message must
+    // not inherit a finished turn's undelivered agent origin by matching text.
+    await codexClient.emit({
+      method: "item/completed",
+      params: {
+        threadId: turn.threadId,
+        item: { id: "manual-message", type: "userMessage", content: [{ type: "text", text }] },
+      },
+    });
+    const manualEvent = events.find((event) =>
+      event.notification.method === "item/completed"
+      && (event.notification.params.item as { id?: string }).id === "manual-message"
+    );
+    expect(manualEvent).toBeDefined();
+    expect(manualEvent).not.toHaveProperty("notification.params.item.origin");
+    expect(overlayStore.upsertThreadMessageOrigin).not.toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "manual-message" }),
+    );
+  });
+
   it("binds pending provenance to the started item when identical steers complete out of order", async () => {
     const codexClient = new MockBackendClient({});
     const overlayStore = createOverlayStoreMock();

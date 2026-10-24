@@ -20448,12 +20448,9 @@ export class DesktopBackendRegistry {
     ) {
       return undefined;
     }
-    const oldestAllowed = Date.now() - 10 * 60 * 1000;
-    for (const [id, pending] of this.pendingThreadMessageContexts) {
-      if (pending.createdAt < oldestAllowed) {
-        this.pendingThreadMessageContexts.delete(id);
-      }
-    }
+    // Codex can defer a steer behind a long-running tool for more than ten
+    // minutes. Keep its origin until the item completes or its turn ends;
+    // another thread's activity must not expire an accepted message's sender.
     const id = randomUUID();
     this.pendingThreadMessageContexts.set(id, {
       backend: params.backend,
@@ -46186,6 +46183,13 @@ export class DesktopBackendRegistry {
       const completedTurnId = turnIdFromTerminalNotification(event.notification);
       this.mcpGatewayTools?.cancel(event.backend, event.notification.params.threadId, completedTurnId);
       if (completedTurnId) {
+        for (const [id, pending] of this.pendingThreadMessageContexts) {
+          if (pending.backend === event.backend
+            && pending.threadId === event.notification.params.threadId
+            && pending.turnId === completedTurnId) {
+            this.pendingThreadMessageContexts.delete(id);
+          }
+        }
         // An MCP elicitation cannot keep its provider turn alive after that
         // turn ends. Retaining it lets a later read resurrect the ended turn.
         for (const [key, pending] of this.pendingServerRequests) {
