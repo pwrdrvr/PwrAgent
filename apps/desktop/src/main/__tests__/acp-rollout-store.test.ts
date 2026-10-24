@@ -523,6 +523,25 @@ describe("AcpRolloutStore", () => {
     ]);
   });
 
+  it("does not persist Grok background task snapshots", () => {
+    // Each snapshot repeats every background command in full, and the tool
+    // calls that launched and read them are already in the rollout.
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:grok" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "background_tasks",
+        tasks: [{ task_id: "call-1-10", command: "du -sh ~/Library", status: "running" }],
+      },
+    });
+
+    expect(store.readUpdates({ backendId, sessionId: "session-1" })).toEqual([]);
+  });
+
   it("does not persist context usage updates", () => {
     // Kimi Code 2.x sends one after every turn. It is session state for the
     // context indicator, and replay discards it.
