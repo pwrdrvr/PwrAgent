@@ -2,9 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { getSessionInfo, query, type AccountInfo, type Options, type Query, type SDKMessage, type SDKUserMessage, type SlashCommand } from "@anthropic-ai/claude-agent-sdk";
+import {
+  getSessionInfo, query, type AccountInfo, type Options, type Query, type SDKMessage, type SDKResultMessage, type SDKUserMessage,
+  type SlashCommand,
+} from "@anthropic-ai/claude-agent-sdk";
 import type {
-  AgentEvent, AppServerAvailableCommandSummary, AppServerPendingRequestNotification, AppServerReviewContext,
+  AgentEvent, AppServerAvailableCommandSummary, AppServerBackgroundTask, AppServerPendingRequestNotification, AppServerReviewContext,
   AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay,
   AppServerThreadReviewEntry, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
@@ -23,6 +26,7 @@ import {
 } from "./claude-usage";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
+import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
   CLAUDE_REPORT_FINDINGS_TOOL, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
@@ -41,6 +45,8 @@ export type ClaudeBackendOptions = {
   emit: (event: AgentEvent) => Promise<void>;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
   cancelRequest: (threadId: string, turnId: string, requestId: string) => Promise<void>;
+  /** Overrides CLAUDE_TASK_FOLLOW_UP_GRACE_MS. */
+  taskFollowUpGraceMs?: number;
   /** Workspace, branch, and pull request for a review card. Never fails a review. */
   resolveReviewContext?: (params: { threadId: string; cwd: string }) => Promise<AppServerReviewContext | undefined>;
 };
@@ -49,6 +55,21 @@ const claudeBackendLog = getMainLogger("pwragent:claude-backend");
 
 /** setTimeout's longest delay; a later reset re-arms on wake. */
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
+ * How long a settled task may go unanswered before the turn ends without its
+ * follow-up. Claude normally answers a task notification with a native turn
+ * of its own; this bounds the wait when it does not.
+ */
+const CLAUDE_TASK_FOLLOW_UP_GRACE_MS = 5_000;
+
+const CLAUDE_WAKE = Symbol("claude-wake");
+
+function claudeWakeSignal(): { promise: Promise<typeof CLAUDE_WAKE>; wake: () => void } {
+  let wake!: () => void;
+  const promise = new Promise<typeof CLAUDE_WAKE>((resolve) => { wake = () => resolve(CLAUDE_WAKE); });
+  return { promise, wake };
+}
 
 /** Signed out, or billed outside a Claude subscription: no plan limit applies. */
 function claudeHasNoPlanLimits({ authStatus, authMethod }: ClaudeInstallation): boolean {
@@ -84,6 +105,28 @@ type RunningTurn = {
   titleEnv?: NodeJS.ProcessEnv;
   /** Owned by the turn, but never awaited by the streaming message pump. */
   titleUpdate?: Promise<boolean>;
+  /**
+   * Shell commands and sub-agents this process runs. A background task
+   * outlives the native result that launched it, and closing the query kills
+   * it, so the logical turn stays open until every task has settled.
+   */
+  tasks: ClaudeTaskTracker;
+  /** The rows last published through `thread/backgroundTasks/updated`. */
+  publishedTasks: string;
+  /** The latest native result; the logical turn reports it when it ends. */
+  lastResult?: SDKResultMessage;
+  /** Message counters that order a result against task notifications. */
+  messageSeq: number;
+  lastResultSeq: number;
+  lastActivitySeq: number;
+  lastNotificationSeq: number;
+  /** Claude's own session state, when the CLI reports one. */
+  sessionState?: "idle" | "running" | "requires_action";
+  /** Wakes the message pump while it waits for the next message. */
+  wake: ReturnType<typeof claudeWakeSignal>;
+  followUpTimer?: ReturnType<typeof setTimeout>;
+  /** The message counter at which the follow-up grace expired. */
+  followUpWaivedAt?: number;
 };
 
 /** One input pump owns the SDK's stdin until the logical turn finishes. */
@@ -293,6 +336,9 @@ export class ClaudeBackend {
       turnId: randomUUID(), controller: new AbortController(), entries: new Map(),
       input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(), pendingReports: new Map(),
       inputWrites: Promise.resolve(),
+      tasks: new ClaudeTaskTracker(), publishedTasks: "[]",
+      messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0,
+      wake: claudeWakeSignal(),
     };
     this.running.set(params.threadId, running);
     try {
@@ -437,12 +483,25 @@ export class ClaudeBackend {
     const turnId = running.turnId;
     let messageId = "";
     let failure: string | undefined;
-    let receivedResult = false;
     const needsUsageBaseline = Boolean(session.sdkSessionId) && !session.modelUsage;
     const usageBaseline = session.modelUsage;
+    const iterator = running.query![Symbol.asyncIterator]();
     try {
-      for await (const message of running.query!) {
+      for (;;) {
+        const pending = iterator.next();
+        // A wake can end the turn while this read waits. Closing the query
+        // then rejects it, which nothing else observes.
+        pending.catch(() => {});
+        let step: IteratorResult<SDKMessage, void> | typeof CLAUDE_WAKE;
+        while ((step = await Promise.race([pending, running.wake.promise])) === CLAUDE_WAKE) {
+          running.wake = claudeWakeSignal();
+          if (this.turnSettled(running)) break;
+        }
+        if (step === CLAUDE_WAKE || step.done) break;
+        const message = step.value;
+        running.messageSeq += 1;
         if (message.type === "system" && message.subtype === "init") {
+          running.lastActivitySeq = running.messageSeq;
           // Never publish this query's project-scoped supportedModels() to
           // the backend-wide picker. Recover through separate global discovery.
           void this.refreshGlobalModels().catch(() => {});
@@ -467,6 +526,13 @@ export class ClaudeBackend {
         if (message.type === "system" && message.subtype === "commands_changed") {
           await this.publishCommands(session, message.commands);
         }
+        if (message.type === "system" && message.subtype === "session_state_changed") {
+          running.sessionState = message.state;
+          if (message.state !== "idle") running.lastActivitySeq = running.messageSeq;
+        }
+        if ((message.type === "assistant" || message.type === "stream_event") && !message.parent_tool_use_id) {
+          running.lastActivitySeq = running.messageSeq;
+        }
         if (message.type === "stream_event" && !message.parent_tool_use_id) {
           const event = message.event;
           if (event.type === "message_start") messageId = event.message.id;
@@ -487,6 +553,7 @@ export class ClaudeBackend {
             await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
           }
         }
+        await this.consumeTaskMessage(message, session, running);
         await this.consumeCompleteMessage(message, threadId, running);
         // The probe is a control round-trip that can wait 1.5s; never hold
         // the stream for it. The result boundary below reads it in order.
@@ -500,57 +567,25 @@ export class ClaudeBackend {
           await this.settleInputWrites(running);
           for (const id of message.user_message_uuids ?? []) running.pendingSteers.delete(id);
           if (message.user_message_uuid) running.pendingSteers.delete(message.user_message_uuid);
-          const finished = message.is_error || running.pendingSteers.size === 0;
-          if (finished) running.ending = true;
-          receivedResult = true;
-          // Even a failed turn may already have requested its title at init;
-          // join it before taking the final usage snapshot as well.
-          let requestedTitle = false;
-          if (finished) {
-            if (!running.titleUpdate && !message.is_error && !running.controller.signal.aborted) {
-              running.titleUpdate = this.updateTitle(session, running);
-            }
-            requestedTitle = await running.titleUpdate ?? false;
-          }
-          if (finished && !message.is_error && !running.controller.signal.aborted) {
-            // A native request can time out before Claude persists its title.
-            // Keep the result-boundary adoption, without another model request.
-            await this.updateTitle(session, running, false);
-          }
-          await running.contextRefresh?.promise;
-          const [, usage] = await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
-          // Native title generation shares this session's account and model
-          // totals. Its request can land after the result's usage snapshot.
-          const modelUsage = requestedTitle ? usage?.session?.model_usage ?? message.modelUsage : message.modelUsage;
-          const hasUsage = modelUsage && Object.values(modelUsage).some((value) =>
-            value.inputTokens + value.outputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens > 0);
-          if (hasUsage) {
-            const canAttribute = !needsUsageBaseline;
-            const tokenUsage = claudeTurnUsage(modelUsage, usageBaseline);
-            session.modelUsage = modelUsage;
-            // Without an old session's baseline, cumulative spend cannot be
-            // attributed to this turn. Save it for the next turn, do not bill
-            // the pre-existing transcript as new work.
-            if (canAttribute && finished) {
-              await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
-            }
-          }
-          if (message.is_error) {
-            const text = message.subtype === "success" ? message.result : message.errors.join("\n");
-            // An error result without text still failed the turn.
-            failure = text.trim() || "Claude ended the turn with an error.";
-          }
-          if (finished) break;
+          running.lastResult = message;
+          running.lastResultSeq = running.messageSeq;
+          running.tasks.settleForeground();
         }
+        if (message.type === "system" || message.type === "user" || message.type === "result") await this.publishTasks(session, running);
+        if (this.turnSettled(running)) break;
+        this.armTaskFollowUpGrace(running);
       }
-      // An error result already says why the turn ended; keep its text.
-      if (!failure && (!receivedResult || running.pendingSteers.size > 0) && !running.controller.signal.aborted) {
-        failure = "Claude exited before completing the turn.";
+      if (!running.controller.signal.aborted) {
+        // An error result already says why the turn ended; keep its text.
+        if (!running.lastResult || (running.pendingSteers.size > 0 && !running.lastResult.is_error)) {
+          failure = "Claude exited before completing the turn.";
+        } else failure = await this.finishResult(session, running, running.lastResult, needsUsageBaseline, usageBaseline);
       }
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
     } finally {
       running.ending = true;
+      if (running.followUpTimer) clearTimeout(running.followUpTimer);
       running.input.close();
       await this.settleInputWrites(running);
       await running.contextRefresh?.promise;
@@ -561,7 +596,12 @@ export class ClaudeBackend {
       catch (error) { failure ??= error instanceof Error ? error.message : String(error); }
       const cancelled = running.controller.signal.aborted;
       const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
+      const orphanedTasks = running.tasks.runningToolUseIds();
       for (const entry of running.entries.values()) {
+        // A task the query took down with it did not complete.
+        if (entry.type === "activity" && entry.status === "in_progress" && orphanedTasks.has(entry.id)) {
+          entry.status = cancelled ? "cancelled" : "failed";
+        }
         entry.turn = { id: turnId, status, completedAt: Date.now() };
       }
       try {
@@ -577,6 +617,9 @@ export class ClaudeBackend {
         failure = `Could not save Claude history: ${error instanceof Error ? error.message : String(error)}`;
       }
       this.running.delete(threadId);
+      if (running.publishedTasks !== "[]") {
+        await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId, tasks: [] } });
+      }
       if (cancelled) {
         await this.emit({ method: "turn/cancelled", params: { threadId, turnId, turn: { id: turnId, status: "cancelled" } } });
       } else if (failure) {
@@ -588,6 +631,161 @@ export class ClaudeBackend {
         } } });
       }
     }
+  }
+
+  /**
+   * One logical desktop turn can span several native results: one per steer
+   * that raced a boundary, and one per follow-up Claude runs when a background
+   * task settles. It ends at a result that acknowledges every steer, once no
+   * task is running and Claude has answered the last task notification.
+   */
+  private turnSettled(running: RunningTurn): boolean {
+    const result = running.lastResult;
+    if (!result) return false;
+    // An error result ends the turn, even before it acknowledges a steer.
+    if (result.is_error) return true;
+    if (running.pendingSteers.size > 0 || running.tasks.active().length > 0) return false;
+    // The CLI goes idle after its own background-agent loop. A CLI that does
+    // not report session state is idle once it reports a result.
+    if (running.sessionState !== undefined && running.sessionState !== "idle") return false;
+    if (running.lastActivitySeq > running.lastResultSeq) return false;
+    return running.lastNotificationSeq < running.lastResultSeq || running.followUpWaivedAt === running.messageSeq;
+  }
+
+  /** Bound the wait for a follow-up Claude may not run. */
+  private armTaskFollowUpGrace(running: RunningTurn): void {
+    if (running.followUpTimer) clearTimeout(running.followUpTimer);
+    running.followUpTimer = undefined;
+    const result = running.lastResult;
+    if (!result || running.pendingSteers.size > 0 || running.tasks.active().length > 0) return;
+    if (running.lastNotificationSeq < running.lastResultSeq) return;
+    if (running.sessionState !== undefined ? running.sessionState !== "idle" : running.lastActivitySeq > running.lastNotificationSeq) return;
+    const armedAt = running.messageSeq;
+    running.followUpTimer = setTimeout(() => {
+      running.followUpTimer = undefined;
+      // Any message since arming answers for itself.
+      if (running.messageSeq !== armedAt) return;
+      running.followUpWaivedAt = armedAt;
+      running.wake.wake();
+    }, this.options.taskFollowUpGraceMs ?? CLAUDE_TASK_FOLLOW_UP_GRACE_MS);
+    running.followUpTimer.unref?.();
+  }
+
+  /** Record the result that ends the logical turn; returns its failure. */
+  private async finishResult(
+    session: ClaudeSession, running: RunningTurn, message: SDKResultMessage,
+    needsUsageBaseline: boolean, usageBaseline: ClaudeSession["modelUsage"],
+  ): Promise<string | undefined> {
+    const threadId = session.thread.id;
+    const turnId = running.turnId;
+    running.ending = true;
+    // Even a failed turn may already have requested its title at init;
+    // join it before taking the final usage snapshot as well.
+    if (!running.titleUpdate && !message.is_error && !running.controller.signal.aborted) {
+      running.titleUpdate = this.updateTitle(session, running);
+    }
+    const requestedTitle = await running.titleUpdate ?? false;
+    if (!message.is_error && !running.controller.signal.aborted) {
+      // A native request can time out before Claude persists its title.
+      // Keep the result-boundary adoption, without another model request.
+      await this.updateTitle(session, running, false);
+    }
+    await running.contextRefresh?.promise;
+    const [, usage] = await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
+    // Native title generation shares this session's account and model
+    // totals. Its request can land after the result's usage snapshot.
+    const modelUsage = requestedTitle ? usage?.session?.model_usage ?? message.modelUsage : message.modelUsage;
+    const hasUsage = modelUsage && Object.values(modelUsage).some((value) =>
+      value.inputTokens + value.outputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens > 0);
+    if (hasUsage) {
+      const tokenUsage = claudeTurnUsage(modelUsage, usageBaseline);
+      session.modelUsage = modelUsage;
+      // Without an old session's baseline, cumulative spend cannot be
+      // attributed to this turn. Save it for the next turn, do not bill
+      // the pre-existing transcript as new work.
+      if (!needsUsageBaseline) {
+        await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
+      }
+    }
+    if (!message.is_error) return undefined;
+    const text = message.subtype === "success" ? message.result : message.errors.join("\n");
+    // An error result without text still failed the turn.
+    return text.trim() || "Claude ended the turn with an error.";
+  }
+
+  /** Track Claude's tasks and settle the tool calls that started them. */
+  private async consumeTaskMessage(message: SDKMessage, session: ClaudeSession, running: RunningTurn): Promise<void> {
+    if (message.type !== "system") return;
+    const before = running.tasks.active();
+    const { settled } = running.tasks.apply(message);
+    // Claude answers a task that ends with a native turn. Its terminal
+    // task_updated arrives before the notification, and either can be first.
+    const active = new Set(running.tasks.active().map((task) => task.taskId));
+    if (before.some((task) => !active.has(task.taskId)) || (settled && !settled.task.ambient)) {
+      running.lastNotificationSeq = running.messageSeq;
+    }
+    if (settled) await this.settleTaskToolCall(session.thread.id, running, settled);
+  }
+
+  private async publishTasks(session: ClaudeSession, running: RunningTurn): Promise<void> {
+    const tasks = this.taskRows(session, running);
+    const serialized = JSON.stringify(tasks);
+    if (serialized === running.publishedTasks) return;
+    running.publishedTasks = serialized;
+    await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId: session.thread.id, tasks } });
+  }
+
+  private taskRows(session: ClaudeSession, running: RunningTurn): AppServerBackgroundTask[] {
+    return running.tasks.active().map((task) => {
+      const entry = task.toolUseId ? running.entries.get(task.toolUseId) : undefined;
+      const command = entry?.type === "activity" ? entry.details[0]?.command?.rawCommand : undefined;
+      return claudeTaskRow(task, { cwd: session.cwd, ...(command !== undefined ? { command } : {}) });
+    });
+  }
+
+  /**
+   * A background Bash or Agent call answers at once with a placeholder; its
+   * tool row stays running until the task's notification settles it.
+   */
+  private async settleTaskToolCall(threadId: string, running: RunningTurn, { task, summary }: ClaudeTaskSettlement): Promise<void> {
+    const entry = task.toolUseId ? running.entries.get(task.toolUseId) : undefined;
+    if (entry?.type !== "activity" || entry.status !== "in_progress") return;
+    entry.status = task.status === "completed" ? "completed" : task.status === "stopped" ? "cancelled" : "failed";
+    const command = entry.details[0].command?.rawCommand;
+    const outputId = `${entry.id}:output`;
+    const previous = command !== undefined
+      ? entry.details[0].command?.output
+      : entry.details.find((detail) => detail.id === outputId)?.markdown;
+    const output = [previous, summary].filter(Boolean).join("\n\n");
+    if (command !== undefined) {
+      entry.details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
+    } else {
+      entry.details = [...entry.details.filter((detail) => detail.id !== outputId), {
+        id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
+      }];
+    }
+    await this.store.append(threadId, [entry]);
+    const item = {
+      id: entry.id, status: entry.status,
+      ...(command !== undefined ? { type: "commandExecution", command, aggregatedOutput: output }
+        : { type: "dynamicToolCall", toolName: entry.summary, contentItems: [{ type: "inputText", text: output }] }),
+    };
+    await this.emit({ method: "item/completed", params: { threadId, turnId: running.turnId, item } });
+  }
+
+  /** Commands and sub-agents Claude is running for the thread. */
+  listBackgroundTasks(threadId: string): { supported: true; terminals: AppServerBackgroundTask[] } {
+    const running = this.running.get(threadId);
+    if (!running) return { supported: true, terminals: [] };
+    return { supported: true, terminals: JSON.parse(running.publishedTasks) as AppServerBackgroundTask[] };
+  }
+
+  /** Stops one task. Claude reports the stop through the task's notification. */
+  async stopBackgroundTask(threadId: string, taskId: string): Promise<boolean> {
+    const running = this.running.get(threadId);
+    if (!running?.query || !running.tasks.get(taskId)) throw new Error("Claude is not running that task.");
+    await running.query.stopTask(taskId);
+    return true;
   }
 
   /** Retrieve Claude's native title without holding up the active turn. */
@@ -900,7 +1098,12 @@ export class ClaudeBackend {
         }
         const entry = running.entries.get(block.tool_use_id);
         if (entry?.type !== "activity") continue;
-        entry.status = block.is_error ? "failed" : "completed";
+        // A background launch answers with a placeholder. The task's
+        // notification completes the row.
+        const launchedTask = !block.is_error
+          && (running.tasks.isBackgroundToolUse(block.tool_use_id) || claudeBackgroundLaunch(message.tool_use_result));
+        if (!launchedTask) running.tasks.settleForeground(block.tool_use_id);
+        entry.status = block.is_error ? "failed" : launchedTask ? "in_progress" : "completed";
         const output = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
         const command = entry.details[0].command?.rawCommand;
         if (command !== undefined) {
@@ -913,6 +1116,7 @@ export class ClaudeBackend {
           }];
         }
         await this.store.append(threadId, [entry]);
+        if (launchedTask) continue;
         const item = {
           id: entry.id, status: entry.status,
           ...(command !== undefined ? { type: "commandExecution", command, aggregatedOutput: output }
@@ -1060,6 +1264,13 @@ export class ClaudeBackend {
     this.rateLimitExpiry = undefined;
     await Promise.all([...this.running.entries()].map(([threadId, running]) => this.interruptTurn({ threadId, turnId: running.turnId })));
   }
+}
+
+/** Whether a tool result is the placeholder of a task launched in the background. */
+function claudeBackgroundLaunch(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  const value = result as { backgroundTaskId?: unknown; status?: unknown; timedOutAfterMs?: unknown };
+  return typeof value.backgroundTaskId === "string" || value.status === "async_launched";
 }
 
 function claudeUserMessageParts(input: AppServerTurnInputItem[]): AppServerThreadMessagePart[] {

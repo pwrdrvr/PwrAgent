@@ -108,3 +108,18 @@ it("previews a command by its first non-blank line", () => {
   expect(agentCommandPreview("x".repeat(80)).cut).toBe(false);
   expect(agentCommandPreview("x".repeat(81))).toEqual({ text: "x".repeat(81), lineCount: 1, cut: true });
 });
+
+it("labels a sub-agent with its type and progress instead of command output", () => {
+  const agent = {
+    itemId: "tool-agent", processId: "agent-1", command: "Audit the SDK", cwd: "/fixture/worktree",
+    kind: "agent" as const, agentType: "Explore", progress: "3 tool uses · last Grep",
+  };
+  const onStop = vi.fn(async () => undefined);
+  render(<ActionRunsPanel dock="sidebar" onDockChange={vi.fn()} runs={[]} terminals={[agent]} onStop={onStop} />);
+  const row = screen.getByRole("group", { name: "Sub-agent: Audit the SDK" });
+  expect(row).toHaveTextContent("Sub-agent · Explore · worktree");
+  expect(within(row).getByText("3 tool uses · last Grep")).toBeInTheDocument();
+  expect(within(row).queryByText("No output yet.")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Stop Audit the SDK" }));
+  expect(onStop).toHaveBeenCalledWith(agent);
+});

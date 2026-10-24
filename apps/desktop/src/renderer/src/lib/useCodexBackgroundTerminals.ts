@@ -8,15 +8,21 @@ export type BackgroundTerminalView = CodexBackgroundTerminal & { output?: string
 const OUTPUT_LIMIT = 32_768;
 const REFRESH_INTERVAL_MS = 5_000;
 
-/** All state is window-local. Codex owns the sessions and their lifetime. */
+/** Backends that report commands still running for a thread. */
+const BACKGROUND_TERMINAL_BACKENDS = new Set<string>(["codex", "claude"]);
+
+/**
+ * All state is window-local. The backend owns the sessions and their
+ * lifetime: Codex background terminals, and Claude's commands and sub-agents.
+ */
 export function useCodexBackgroundTerminals(params: {
   desktopApi?: DesktopApi;
   thread?: NavigationThreadSummary;
   suspended?: boolean;
   retainedRemoteThreadKeys?: ReadonlySet<string>;
   /**
-   * A supported read that no item or turn event raced. Codex's list names
-   * every command still running for the thread at that moment.
+   * A supported Codex read that no item or turn event raced. Codex's list
+   * names every command still running for the thread at that moment.
    */
   onAuthoritativeList?: (threadKey: string, itemIds: ReadonlySet<string>) => void;
 }) {
@@ -60,7 +66,7 @@ export function useCodexBackgroundTerminals(params: {
     const thread = threadRef.current;
     const list = desktopApi?.listBackgroundTerminals;
     if (suspended || !list) return;
-    const request = thread?.source === "codex" ? {
+    const request = thread && BACKGROUND_TERMINAL_BACKENDS.has(thread.source) ? {
       backend: thread.source,
       threadId: thread.id,
       federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
@@ -93,7 +99,8 @@ export function useCodexBackgroundTerminals(params: {
             else delete next[threadKey];
             return next;
           });
-          if (response.supported) {
+          // Claude lists only its tasks, not every running tool call.
+          if (response.supported && request.backend === "codex") {
             onAuthoritativeListRef.current?.(
               threadKey,
               new Set(response.terminals.map((terminal) => terminal.itemId)),
@@ -128,7 +135,26 @@ export function useCodexBackgroundTerminals(params: {
       const eventParams = notification.params;
       if (!("threadId" in eventParams) || typeof eventParams.threadId !== "string") return;
       const key = agentEventThreadIdentityKey(event, eventParams.threadId);
-      if (event.backend !== "codex") return;
+      if (!BACKGROUND_TERMINAL_BACKENDS.has(event.backend)) return;
+      if (notification.method === "thread/backgroundTasks/updated") {
+        // Claude publishes its whole running set; no read is needed.
+        const { tasks } = notification.params as { tasks: CodexBackgroundTerminal[] };
+        setByThread((current) => {
+          const previous = current[key] ?? [];
+          const next = { ...current };
+          if (tasks.length) {
+            next[key] = tasks.map((task) => ({
+              ...task,
+              output: previous.find((item) => item.itemId === task.itemId)?.output,
+            }));
+          } else {
+            delete next[key];
+          }
+          return next;
+        });
+        if (key === threadKey) revision += 1;
+        return;
+      }
       if (notification.method === "item/commandExecution/outputDelta") {
         const { itemId, delta } = notification.params;
         setByThread((current) => {

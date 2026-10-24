@@ -43,6 +43,9 @@ export function claudeEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // reports them through the ReportFindings tool. Without this, the CLI forks
   // the review and returns its findings as plain text.
   result.CLAUDE_CODE_REPORT_FINDINGS = "1";
+  // Claude reports `session_state_changed` only when asked. Its `idle` is the
+  // authoritative end of work, after any background agents have reported.
+  result.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS = "1";
   return result;
 }
 
