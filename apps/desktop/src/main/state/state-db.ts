@@ -2915,6 +2915,16 @@ function ensureThreadUsagePricingProviderScope(db: BetterSqlite3.Database): void
     db.exec(THREAD_USAGE_PRICING_SCHEMA);
     return;
   }
+  // This runs on every open, so it converts only what predates provider
+  // scope. Rewriting every ledger row here once cost each launch about 0.8 s
+  // and 35 MB of WAL on a 53,000-turn profile, and replaced every turn's
+  // recorded start and end with values derived from its lines. Every usage
+  // line is now written together with its turn row, so only a database that
+  // predates these columns or the turns table needs the backfill.
+  const backfillUsageTurns =
+    !tableExists(db, "thread_usage_turns")
+    || !tableColumnExists(db, "thread_usage_lines", "provider")
+    || !tableColumnExists(db, "thread_usage_lines", "usage_turn_id");
 
   db.exec(`
 CREATE TABLE IF NOT EXISTS pricing_catalog_versions (
@@ -2976,10 +2986,6 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
   ON thread_usage_turns(provider, backend, thread_id, turn_id);
 `);
 
-  // This runs on every open, so each step below touches only rows that still
-  // need converting. Rewriting every ledger row here once cost each launch
-  // about 0.8 s and 35 MB of WAL on a 53,000-turn profile, and replaced every
-  // turn's recorded start and end with values derived from its lines.
   const providerScopedSummaries = Boolean(db.prepare(
     "SELECT 1 FROM pragma_table_info('thread_pricing_summaries') WHERE name = 'provider' AND pk > 0",
   ).get());
@@ -2991,6 +2997,67 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
   if (!tableColumnExists(db, "thread_usage_lines", "usage_turn_id")) {
     db.exec("ALTER TABLE thread_usage_lines ADD COLUMN usage_turn_id TEXT");
   }
+  if (backfillUsageTurns) {
+    backfillProviderScopedUsageTurns(db);
+  }
+
+  if (!tableColumnExists(db, "thread_pricing_summaries", "provider")) {
+    db.exec(
+      "ALTER TABLE thread_pricing_summaries ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'",
+    );
+  }
+  if (providerScopedSummaries) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  db.exec("DROP TABLE IF EXISTS thread_pricing_summaries_v2");
+  db.exec(`
+CREATE TABLE thread_pricing_summaries_v2 (
+  provider                  TEXT NOT NULL DEFAULT 'openai',
+  backend                   TEXT NOT NULL,
+  thread_id                 TEXT NOT NULL,
+  currency                  TEXT NOT NULL,
+  usage_line_count          INTEGER NOT NULL,
+  priced_usage_line_count   INTEGER NOT NULL,
+  unpriced_usage_line_count INTEGER NOT NULL,
+  input_tokens              INTEGER NOT NULL,
+  cached_input_tokens       INTEGER NOT NULL,
+  uncached_input_tokens     INTEGER NOT NULL,
+  output_tokens             INTEGER NOT NULL,
+  reasoning_output_tokens   INTEGER NOT NULL,
+  total_tokens              INTEGER NOT NULL,
+  total_cost_micros         INTEGER NOT NULL,
+  updated_at                INTEGER NOT NULL,
+  PRIMARY KEY (provider, backend, thread_id, currency)
+)
+`);
+  db.exec(`
+INSERT INTO thread_pricing_summaries_v2
+SELECT
+  COALESCE(NULLIF(provider, ''), 'openai'),
+  backend,
+  thread_id,
+  currency,
+  usage_line_count,
+  priced_usage_line_count,
+  unpriced_usage_line_count,
+  input_tokens,
+  cached_input_tokens,
+  uncached_input_tokens,
+  output_tokens,
+  reasoning_output_tokens,
+  total_tokens,
+  total_cost_micros,
+  updated_at
+FROM thread_pricing_summaries
+`);
+  db.exec("DROP TABLE thread_pricing_summaries");
+  db.exec("ALTER TABLE thread_pricing_summaries_v2 RENAME TO thread_pricing_summaries");
+  db.exec(THREAD_USAGE_PRICING_SCHEMA);
+}
+
+/** Give pre-provider-scope usage lines a provider, a turn id, and turn rows. */
+function backfillProviderScopedUsageTurns(db: BetterSqlite3.Database): void {
   db.exec(`
 UPDATE thread_usage_lines
 SET
@@ -3046,60 +3113,6 @@ WHERE usage_turn_id IS NOT NULL
 GROUP BY usage_turn_id
 ON CONFLICT(usage_turn_id) DO NOTHING
 `);
-
-  if (!tableColumnExists(db, "thread_pricing_summaries", "provider")) {
-    db.exec(
-      "ALTER TABLE thread_pricing_summaries ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'",
-    );
-  }
-  if (providerScopedSummaries) {
-    db.exec(THREAD_USAGE_PRICING_SCHEMA);
-    return;
-  }
-  db.exec("DROP TABLE IF EXISTS thread_pricing_summaries_v2");
-  db.exec(`
-CREATE TABLE thread_pricing_summaries_v2 (
-  provider                  TEXT NOT NULL DEFAULT 'openai',
-  backend                   TEXT NOT NULL,
-  thread_id                 TEXT NOT NULL,
-  currency                  TEXT NOT NULL,
-  usage_line_count          INTEGER NOT NULL,
-  priced_usage_line_count   INTEGER NOT NULL,
-  unpriced_usage_line_count INTEGER NOT NULL,
-  input_tokens              INTEGER NOT NULL,
-  cached_input_tokens       INTEGER NOT NULL,
-  uncached_input_tokens     INTEGER NOT NULL,
-  output_tokens             INTEGER NOT NULL,
-  reasoning_output_tokens   INTEGER NOT NULL,
-  total_tokens              INTEGER NOT NULL,
-  total_cost_micros         INTEGER NOT NULL,
-  updated_at                INTEGER NOT NULL,
-  PRIMARY KEY (provider, backend, thread_id, currency)
-)
-`);
-  db.exec(`
-INSERT INTO thread_pricing_summaries_v2
-SELECT
-  COALESCE(NULLIF(provider, ''), 'openai'),
-  backend,
-  thread_id,
-  currency,
-  usage_line_count,
-  priced_usage_line_count,
-  unpriced_usage_line_count,
-  input_tokens,
-  cached_input_tokens,
-  uncached_input_tokens,
-  output_tokens,
-  reasoning_output_tokens,
-  total_tokens,
-  total_cost_micros,
-  updated_at
-FROM thread_pricing_summaries
-`);
-  db.exec("DROP TABLE thread_pricing_summaries");
-  db.exec("ALTER TABLE thread_pricing_summaries_v2 RENAME TO thread_pricing_summaries");
-  db.exec(THREAD_USAGE_PRICING_SCHEMA);
 }
 
 function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): void {
