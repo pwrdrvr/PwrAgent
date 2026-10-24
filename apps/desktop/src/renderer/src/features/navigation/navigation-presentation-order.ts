@@ -31,16 +31,16 @@ export function readOwnerChildOrder(
   resources: NavigationWindowQueriesState["resources"],
   presentation: NavigationPresentationOrder,
 ): Map<string, string[]> {
-  const order = new Map<string, string[]>();
+  const order = new Map<string, Set<string>>();
   for (const resource of resources.values()) {
     if (resource.state.request.query.kind !== "children") continue;
     for (const entry of presentation.get(resource.id) ?? []) {
       if (entry.placement.kind !== "child") continue;
       const parentKey = navigationThreadSelectionKey(entry.placement.parent);
-      const keys = order.get(parentKey) ?? [];
-      if (!keys.includes(entry.key)) keys.push(entry.key);
+      const keys = order.get(parentKey) ?? new Set<string>();
+      keys.add(entry.key);
       order.set(parentKey, keys);
     }
   }
-  return order;
+  return new Map([...order].map(([parentKey, keys]) => [parentKey, [...keys]]));
 }
