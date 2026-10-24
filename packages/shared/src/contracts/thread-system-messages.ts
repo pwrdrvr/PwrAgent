@@ -75,10 +75,16 @@ function dependencySummary(
 
 /** `"Name" passes CI: CI failed; PR: …` → condition and reason. */
 function splitEvidence(line: string): { condition: string; reason: string } | undefined {
+  // The name is a quoted title or `Thread <id>`. Find where it ends before
+  // looking for the phrase, so a title that contains a phrase cannot match.
+  const nameEnd = line.startsWith("\"")
+    ? line.indexOf("\" ", 1) + 1
+    : line.startsWith("Thread ") ? line.indexOf(" ", "Thread ".length) : -1;
+  if (nameEnd <= 0) return undefined;
   for (const phrase of Object.values(THREAD_DEPENDENCY_CONDITION_PHRASES)) {
     const marker = ` ${phrase}: `;
-    const index = line.indexOf(marker);
-    if (index > 0) {
+    const index = line.indexOf(marker, nameEnd);
+    if (index === nameEnd) {
       const rest = line.slice(index + marker.length);
       return {
         condition: line.slice(0, index + marker.length - 2),

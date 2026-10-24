@@ -341,7 +341,9 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
         : undefined,
       sourceThreadLink: destination ? threadLinks?.resolve(destination) : undefined,
       summary: firstPreviewLine(correspondence.body)
-        ?? (attachmentCount === 1 ? "1 attachment" : `${attachmentCount} attachments`),
+        ?? (attachmentCount === 0
+          ? "Empty message"
+          : attachmentCount === 1 ? "1 attachment" : `${attachmentCount} attachments`),
       summaryIsQuote: true,
       threadTitle: destination?.title,
     });
@@ -1446,7 +1448,7 @@ function firstPreviewLine(text: string): string | undefined {
     .split("\n")
     .map((candidate) => candidate
       .replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, "")
-      .replace(/\*\*|__|`/g, "")
+      .replace(/\*\*|`/g, "")
       .trim())
     .find(Boolean);
   return line || undefined;

@@ -28,6 +28,14 @@ describe("summarizeThreadDependencyPrompt", () => {
     });
   });
 
+  it("does not match a condition phrase inside the prerequisite's title", () => {
+    const text = [
+      "PwrAgent resumed this thread because a prerequisite failed.",
+      "- \"Docs is merged: v2\" passes CI: CI failed",
+    ].join("\n");
+    expect(summarizeThreadDependencyPrompt(text)?.summary).toBe("\"Docs is merged: v2\" passes CI — CI failed");
+  });
+
   it("falls back to the raw evidence line when no condition phrase matches", () => {
     const text = [
       "PwrAgent resumed this thread because its prerequisites were met (all of 1).",
