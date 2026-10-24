@@ -1207,6 +1207,34 @@ describe("ThreadTurnQueue.setEntryPaused", () => {
     queue.close();
   });
 
+  it("counts each pause change on the entry", async () => {
+    const { queue } = await busyQueue(["a"]);
+
+    await expect(queue.setEntryPaused("a", true)).resolves.toMatchObject({ entry: { paused: true, pauseRevision: 1 } });
+    await queue.setEntryPaused("a", true);
+    await expect(queue.setEntryPaused("a", false)).resolves.toMatchObject({ entry: { pauseRevision: 2 } });
+    expect(queue.getQueuedEntries(thread)[0]).not.toHaveProperty("paused");
+  });
+
+  it("puts an entry that could not start back in its own place when one ahead resumed meanwhile", async () => {
+    let failStart!: (error: Error) => void;
+    const { queue, state } = await busyQueue(["a", "b", "c"], async () =>
+      await new Promise((_resolve, reject) => { failStart = reject; }));
+    await queue.setEntryPaused("a", true);
+    state.active = false;
+    const release = queue.releaseThread(thread);
+    await vi.waitFor(() => expect(failStart).toBeTypeOf("function"));
+    expect(ids(queue)).toEqual(["a", "c"]);
+
+    // The operator resumes a while b's start is in flight, then b fails.
+    await queue.setEntryPaused("a", false);
+    failStart(new Error("backend unavailable"));
+    await release;
+
+    expect(ids(queue)).toEqual(["a", "b", "c"]);
+    queue.close();
+  });
+
   it("starts a new grouped steer beside a paused batch instead of joining it", async () => {
     const queue = new ThreadTurnQueue({
       isThreadActive: () => true,

@@ -63,6 +63,8 @@ export type ComposerQueuedTurnSnapshot = {
    * FIFO, until it is resumed.
    */
   paused?: boolean;
+  /** See `ThreadQueuedTurnSummary.pauseRevision`. */
+  pauseRevision?: number;
   /** Owner-generated display title for a long message; see `ThreadQueuedTurnSummary`. */
   title?: string;
   input?: AppServerTurnInputItem[];

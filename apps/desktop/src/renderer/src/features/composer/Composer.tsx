@@ -43,6 +43,7 @@ import {
   canResumeQueuedTurn,
   queuedTurnOwnerCanPause,
   setQueuedTurnPausedIn,
+  withOwnerPause,
 } from "./queued-turn-pause";
 import {
   type QueuedReorderRow,
@@ -730,6 +731,7 @@ type QueuedTurnDraft = {
   manualReleaseRequired?: boolean;
   holdReason?: string;
   paused?: boolean;
+  pauseRevision?: number;
   title?: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
@@ -6022,6 +6024,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               errorMessage?: unknown;
               manualReleaseRequired?: unknown;
               paused?: unknown;
+              pauseRevision?: unknown;
               queueEntryId?: unknown;
               queueEntryCreatedAt?: unknown;
               status?: unknown;
@@ -6064,11 +6067,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             : undefined;
         // Every queued and held event carries the entry's whole state, so
         // an absent flag is an entry that is not paused.
-        const paused = turnQueueRecord.paused === true ? true : undefined;
+        const ownerPause = {
+          paused: turnQueueRecord.paused === true,
+          ...(typeof turnQueueRecord.pauseRevision === "number"
+            ? { pauseRevision: turnQueueRecord.pauseRevision }
+            : {}),
+        };
         if (matchingIndex >= 0) {
           const next = mirrorCurrent.map((queued, index) =>
             index === matchingIndex
-              ? {
+              ? withOwnerPause({
                   ...queued,
                   ...(turnQueueRecord.inputUpdated === true
                     && typeof turnQueueRecord.displayText === "string"
@@ -6083,13 +6091,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       : {}),
                   manualReleaseRequired,
                   holdReason,
-                  paused,
-                }
+                }, ownerPause)
               : queued
           );
           draftStore.setQueuedTurns(mirrorScopeKey, next);
         } else if (!mirrorCurrent.some((queued) => queued.backendQueuePending)) {
-          const mirrored = {
+          const mirrored = withOwnerPause<ComposerQueuedTurnSnapshot>({
               id: `backend-queued:${turnQueueRecord.queueEntryId}`,
               queueEntryId: turnQueueRecord.queueEntryId,
               ...(typeof turnQueueRecord.queueEntryCreatedAt === "number"
@@ -6097,7 +6104,6 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 : {}),
               manualReleaseRequired,
               holdReason,
-              ...(paused ? { paused } : {}),
               ...(title ? { title } : {}),
               text:
                 typeof turnQueueRecord.displayText === "string"
@@ -6105,7 +6111,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   : "",
               imageAttachments: [],
               fileAttachments: [],
-          };
+          }, ownerPause);
           draftStore.setQueuedTurns(
             mirrorScopeKey,
             manualReleaseRequired

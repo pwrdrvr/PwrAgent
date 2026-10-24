@@ -43,6 +43,11 @@ export type ThreadTurnQueueEntry = {
    */
   paused?: boolean;
   /**
+   * Counts this entry's pause changes, so a reader holding a newer state can
+   * tell an older read of `paused` from a fresh one.
+   */
+  pauseRevision?: number;
+  /**
    * Display-only label from `queued-message-title.ts`, set after admission
    * for messages too long to show as typed. Never sent with the turn.
    */
@@ -220,12 +225,23 @@ function nextWaitingIndex(queue: readonly ThreadTurnQueueEntry[]): number {
 }
 
 /**
- * Puts an entry that could not start back where dispatch takes from: in
- * front of the first entry that is not paused, so it stays behind the paused
- * entries it was passed over from.
+ * Puts an entry that could not start back where it was: right after the
+ * paused entry it sat behind, or at the front when none did. Its neighbors
+ * keep their order even if that entry was resumed or new ones arrived while
+ * the start was in flight. If that entry has gone, the restored one goes in
+ * front of the first entry that is not paused.
  */
-function restoreNext(queue: ThreadTurnQueueEntry[], entry: ThreadTurnQueueEntry): void {
-  const index = nextWaitingIndex(queue);
+function restoreAfter(
+  queue: ThreadTurnQueueEntry[],
+  entry: ThreadTurnQueueEntry,
+  previousId: string | undefined,
+): void {
+  if (previousId === undefined) {
+    queue.unshift(entry);
+    return;
+  }
+  const previous = queue.findIndex((candidate) => candidate.id === previousId);
+  const index = previous >= 0 ? previous + 1 : nextWaitingIndex(queue);
   queue.splice(index < 0 ? queue.length : index, 0, entry);
 }
 
@@ -624,7 +640,10 @@ export class ThreadTurnQueue {
         return { disposition: "held", entryId, entry };
       }
       const { paused: _previous, ...rest } = entry;
-      const updated: ThreadTurnQueueEntry = paused ? { ...rest, paused: true } : rest;
+      const pauseRevision = (entry.pauseRevision ?? 0) + 1;
+      const updated: ThreadTurnQueueEntry = paused
+        ? { ...rest, paused: true, pauseRevision }
+        : { ...rest, pauseRevision };
       queue[index] = updated;
       return { disposition: "updated", entryId, entry: updated };
     });
@@ -862,6 +881,7 @@ export class ThreadTurnQueue {
     const steer = head.delivery === "queued-steer" && this.options.canSteerThread?.(head);
     if (!steer && (this.runningEntries.has(key)
       || (this.options.isThreadActive?.(head) ?? false))) return "none";
+    const previousId = queue[index - 1]?.id;
     const [next] = queue.splice(index, 1);
     if (!next) return "none";
     if (queue.length === 0) {
@@ -878,7 +898,7 @@ export class ThreadTurnQueue {
           const result = await this.options.steerTurn(next);
           if (!result || result === "retry") {
             this.recentlyAdmittedEntries.delete(next.id);
-            restoreNext(this.queueFor(key), next);
+            restoreAfter(this.queueFor(key), next, previousId);
             if (result === "retry") this.scheduleDrain(key);
             return "none";
           }
@@ -898,7 +918,7 @@ export class ThreadTurnQueue {
       // A rejected start says nothing about whether this thread can safely
       // accept a different queued request. Keep this entry at the FIFO head
       // and require an explicit retry instead of looping on idle signals.
-      restoreNext(this.queueFor(key), next);
+      restoreAfter(this.queueFor(key), next, previousId);
       const normalized = error instanceof Error ? error : new Error(String(error));
       this.heldQueues.set(key, normalized.message);
       await this.emit({

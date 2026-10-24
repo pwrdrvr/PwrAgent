@@ -4,6 +4,7 @@ import type {
   ComposerDraftStore,
   ComposerQueuedTurnSnapshot,
 } from "../features/composer/useComposerDraftStore";
+import { withOwnerPause } from "../features/composer/queued-turn-pause";
 
 /**
  * Reconciles the owning instance's turn-FIFO read projection
@@ -77,13 +78,12 @@ export function useQueuedTurnProjection(params: {
             ? snapshotsById.get(entry.queueEntryId)
             : undefined;
           return snapshot
-            ? {
+            ? withOwnerPause({
                 ...entry,
                 manualReleaseRequired: snapshot.manualReleaseRequired,
                 holdReason: snapshot.holdReason,
-                paused: snapshot.paused,
                 title: snapshot.title ?? entry.title,
-              }
+              }, snapshot)
             : entry;
         });
       const additions: ComposerQueuedTurnSnapshot[] = snapshotEntries
@@ -95,6 +95,7 @@ export function useQueuedTurnProjection(params: {
           manualReleaseRequired: entry.manualReleaseRequired,
           holdReason: entry.holdReason,
           ...(entry.paused ? { paused: true } : {}),
+          ...(entry.pauseRevision ? { pauseRevision: entry.pauseRevision } : {}),
           ...(entry.title ? { title: entry.title } : {}),
           text: entry.displayText,
           imageAttachments: [],
@@ -128,6 +129,7 @@ export function useQueuedTurnProjection(params: {
         || entry.manualReleaseRequired !== current[index]?.manualReleaseRequired
         || entry.holdReason !== current[index]?.holdReason
         || entry.paused !== current[index]?.paused
+        || entry.pauseRevision !== current[index]?.pauseRevision
         || entry.title !== current[index]?.title
       );
 

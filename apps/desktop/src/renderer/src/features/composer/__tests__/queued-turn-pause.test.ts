@@ -11,6 +11,7 @@ import {
   canResumeQueuedTurn,
   queuedTurnOwnerCanPause,
   requestOwnerQueuedTurnPause,
+  withOwnerPause,
   withOwnerPauseState,
 } from "../queued-turn-pause";
 import { getNextReleasableQueuedTurn } from "../useComposerDraftStore";
@@ -132,13 +133,33 @@ describe("withOwnerPauseState", () => {
   it("sets the owner's answer on its row, and is undefined when no row disagrees", () => {
     const turns = [{ id: "x", queueEntryId: "a" }, { id: "y", queueEntryId: "b", paused: true }];
 
-    expect(withOwnerPauseState(turns, "a", true)).toEqual([
+    expect(withOwnerPauseState(turns, "a", { paused: true })).toEqual([
       { id: "x", queueEntryId: "a", paused: true },
       turns[1],
     ]);
-    expect(withOwnerPauseState(turns, "b", false)).toEqual([turns[0], { id: "y", queueEntryId: "b" }]);
-    expect(withOwnerPauseState(turns, "b", true)).toBeUndefined();
-    expect(withOwnerPauseState(turns, "gone", true)).toBeUndefined();
+    expect(withOwnerPauseState(turns, "b", { paused: false })).toEqual([turns[0], { id: "y", queueEntryId: "b" }]);
+    expect(withOwnerPauseState(turns, "b", { paused: true })).toBeUndefined();
+    expect(withOwnerPauseState(turns, "gone", { paused: true })).toBeUndefined();
+  });
+});
+
+describe("withOwnerPause", () => {
+  it("applies a read at or after the row's revision, and keeps the row against an older one", () => {
+    const row = { id: "x", queueEntryId: "a", paused: true, pauseRevision: 2 };
+
+    // A queue read that left before the pause landed after it.
+    expect(withOwnerPause(row, { paused: false, pauseRevision: 1 })).toBe(row);
+    expect(withOwnerPause(row, { paused: false })).toBe(row);
+    expect(withOwnerPause(row, { paused: false, pauseRevision: 3 })).toEqual({ id: "x", queueEntryId: "a", pauseRevision: 3 });
+    expect(withOwnerPause(row, { paused: true, pauseRevision: 2 })).toEqual(row);
+  });
+
+  it("applies every read from an owner that predates revisions", () => {
+    const unpaused: { id: string; paused?: boolean } = { id: "x" };
+    const paused: { id: string; paused?: boolean } = { id: "x", paused: true };
+
+    expect(withOwnerPause(unpaused, { paused: true })).toEqual({ id: "x", paused: true });
+    expect(withOwnerPause(paused, {})).toEqual({ id: "x" });
   });
 });
 

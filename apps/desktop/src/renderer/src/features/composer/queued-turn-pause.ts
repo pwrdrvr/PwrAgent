@@ -11,6 +11,7 @@ type PausableQueuedTurn = {
   errorMessage?: string;
   manualReleaseRequired?: boolean;
   paused?: boolean;
+  pauseRevision?: number;
   queueEntryId?: string;
   reviewCommand?: unknown;
   scheduledActionId?: string;
@@ -93,7 +94,7 @@ export async function requestOwnerQueuedTurnPause(params: {
   federationTarget?: FederationTarget;
   queueEntryId: string;
   paused: boolean;
-}): Promise<{ failure?: string; paused?: boolean }> {
+}): Promise<{ failure?: string; paused?: boolean; pauseRevision?: number }> {
   if (!params.desktopApi?.setQueuedTurnPaused) {
     return { failure: "Pausing queued messages is unavailable." };
   }
@@ -106,6 +107,7 @@ export async function requestOwnerQueuedTurnPause(params: {
     return {
       failure: queuedTurnPauseFailureMessage(response.disposition),
       ...(response.paused !== undefined ? { paused: response.paused } : {}),
+      ...(response.pauseRevision ? { pauseRevision: response.pauseRevision } : {}),
     };
   } catch (error) {
     return { failure: error instanceof Error ? error.message : String(error) };
@@ -118,20 +120,44 @@ export function withPausedFlag<T extends { paused?: boolean }>(turn: T, paused: 
   return (paused ? { ...rest, paused: true } : rest) as T;
 }
 
+/** The owner's pause state for one entry, as a read, event or answer carries it. */
+export type OwnerPauseState = { paused?: boolean; pauseRevision?: number };
+
+/**
+ * `turn` with the owner's pause state from `owner`, unless `owner` was read
+ * before the state `turn` already shows. A queue read that left before a
+ * pause can land after the pause's event; its older revision keeps it from
+ * putting the row back. Owners that predate revisions send none, and every
+ * read of theirs applies.
+ */
+export function withOwnerPause<T extends { paused?: boolean; pauseRevision?: number }>(
+  turn: T,
+  owner: OwnerPauseState,
+): T {
+  if ((owner.pauseRevision ?? 0) < (turn.pauseRevision ?? 0)) return turn;
+  const { pauseRevision: _previous, ...rest } = withPausedFlag(turn, owner.paused === true);
+  return (owner.pauseRevision ? { ...rest, pauseRevision: owner.pauseRevision } : rest) as T;
+}
+
 /**
  * The list with the row for `queueEntryId` paused as the owner answered, or
- * undefined when no row disagrees: the owner's queue event usually lands
+ * undefined when nothing changes: the owner's queue event usually lands
  * first.
  */
 export function withOwnerPauseState<T extends PausableQueuedTurn>(
   turns: readonly T[],
   queueEntryId: string,
-  paused: boolean,
+  owner: OwnerPauseState,
 ): T[] | undefined {
-  if (!turns.some((turn) => turn.queueEntryId === queueEntryId && Boolean(turn.paused) !== paused)) {
-    return undefined;
-  }
-  return turns.map((turn) => turn.queueEntryId === queueEntryId ? withPausedFlag(turn, paused) : turn);
+  let changed = false;
+  const next = turns.map((turn) => {
+    if (turn.queueEntryId !== queueEntryId) return turn;
+    const updated = withOwnerPause(turn, owner);
+    changed ||= Boolean(updated.paused) !== Boolean(turn.paused)
+      || updated.pauseRevision !== turn.pauseRevision;
+    return updated;
+  });
+  return changed ? next : undefined;
 }
 
 /**
@@ -163,7 +189,7 @@ export async function setQueuedTurnPausedIn<T extends PausableQueuedTurn & { id:
     paused: params.paused,
   });
   if (answer.paused !== undefined) {
-    const settled = withOwnerPauseState(params.read(), queueEntryId, answer.paused);
+    const settled = withOwnerPauseState(params.read(), queueEntryId, answer);
     if (settled) params.write(settled);
   }
   return answer.failure;

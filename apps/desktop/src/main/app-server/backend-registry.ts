@@ -11828,7 +11828,7 @@ export class DesktopBackendRegistry {
                 displayText: queuedTurnDisplayText(event.entry.input),
                 manualReleaseRequired:
                   event.entry.manualReleaseRequired === true,
-                ...(event.entry.paused ? { paused: true } : {}),
+                ...queuedTurnPauseParams(event.entry),
                 ...(event.entry.holdReason
                   ? { errorMessage: event.entry.holdReason }
                   : {}),
@@ -11853,7 +11853,7 @@ export class DesktopBackendRegistry {
                       displayText: queuedTurnDisplayText(event.entry.input),
                       errorMessage: event.reason,
                       manualReleaseRequired: true,
-                      ...(event.entry.paused ? { paused: true } : {}),
+                      ...queuedTurnPauseParams(event.entry),
                     }
                   : event.type === "blocked"
                     ? {
@@ -18942,7 +18942,7 @@ export class DesktopBackendRegistry {
             displayText: queuedTurnDisplayText(entry.input),
             ...(entry.title ? { title: entry.title } : {}),
             manualReleaseRequired: entry.manualReleaseRequired === true,
-            ...(entry.paused ? { paused: true } : {}),
+            ...queuedTurnPauseParams(entry),
             ...(entry.holdReason ? { errorMessage: entry.holdReason } : {}),
           },
         },
@@ -18956,6 +18956,7 @@ export class DesktopBackendRegistry {
       queueEntryId: request.queueEntryId,
       disposition: result.disposition,
       ...(entry ? { paused: entry.paused === true } : {}),
+      ...(entry?.pauseRevision ? { pauseRevision: entry.pauseRevision } : {}),
     };
   }
 
@@ -19044,7 +19045,7 @@ export class DesktopBackendRegistry {
           inputUpdated: true,
           displayText: queuedTurnDisplayText(entry.input),
           manualReleaseRequired: entry.manualReleaseRequired === true,
-          ...(entry.paused ? { paused: true } : {}),
+          ...queuedTurnPauseParams(entry),
           ...(entry.holdReason ? { errorMessage: entry.holdReason } : {}),
         },
       },
@@ -19104,7 +19105,7 @@ export class DesktopBackendRegistry {
           displayText: queuedTurnDisplayText(entry.input),
           title,
           manualReleaseRequired: entry.manualReleaseRequired === true,
-          ...(entry.paused ? { paused: true } : {}),
+          ...queuedTurnPauseParams(entry),
           ...(entry.holdReason ? { errorMessage: entry.holdReason } : {}),
         },
       },
@@ -22985,7 +22986,7 @@ export class DesktopBackendRegistry {
         position: position++,
         ...(entry.manualReleaseRequired ? { manualReleaseRequired: true } : {}),
         ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
-        ...(entry.paused ? { paused: true } : {}),
+        ...queuedTurnPauseParams(entry),
         ...(entry.title ? { title: entry.title } : {}),
       };
     }
@@ -23011,7 +23012,7 @@ export class DesktopBackendRegistry {
           ? { manualReleaseRequired: true }
           : {}),
         ...(entry.holdReason ? { holdReason: entry.holdReason } : {}),
-        ...(entry.paused ? { paused: true } : {}),
+        ...queuedTurnPauseParams(entry),
         ...(entry.title ? { title: entry.title } : {}),
       });
       snapshot[threadKey] = queue;
@@ -47566,6 +47567,17 @@ export async function disposeDesktopBackendRegistry(): Promise<void> {
   const current = registry;
   registry = null;
   await current.close();
+}
+
+/**
+ * The pause fields every queued-entry read and event carries: the flag only
+ * when set, and the revision once the entry has ever been paused.
+ */
+function queuedTurnPauseParams(entry: ThreadTurnQueueEntry): { paused?: true; pauseRevision?: number } {
+  return {
+    ...(entry.paused ? { paused: true } : {}),
+    ...(entry.pauseRevision ? { pauseRevision: entry.pauseRevision } : {}),
+  };
 }
 
 /** First text of a queued turn's input, truncated for chip display. */
