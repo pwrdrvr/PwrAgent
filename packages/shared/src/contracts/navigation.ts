@@ -2376,11 +2376,8 @@ export type RecentThreadLockNotesResponse = {
   notes: string[];
 };
 
-export type RememberThreadLockNoteRequest = {
-  note: string;
-};
-
-export type ForgetThreadLockNoteRequest = {
+/** Remembers or forgets one recent lock note. */
+export type ThreadLockNoteRequest = {
   note: string;
 };
 

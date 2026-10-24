@@ -194,6 +194,30 @@ describe("ThreadLockDialog recent notes", () => {
     expect(api.rememberThreadLockNote).toHaveBeenCalledWith({ note: "Pairing with design" });
   });
 
+  it("does not remember a note saved unchanged, which may be an agent's", async () => {
+    const api = recentNotesApi();
+    const props = await renderDialog({
+      mode: "edit",
+      initialNote: "Repair thread owns this",
+      recentNotesApi: api,
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save Note" }));
+    });
+    expect(props.onSubmit).toHaveBeenCalledWith("Repair thread owns this");
+    expect(api.rememberThreadLockNote).not.toHaveBeenCalled();
+  });
+
+  it("remembers an edited note", async () => {
+    const api = recentNotesApi();
+    await renderDialog({ mode: "edit", initialNote: "Repair thread owns this", recentNotesApi: api });
+    fireEvent.change(screen.getByRole("textbox", { name: "Note" }), { target: { value: "Claude Design" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save Note" }));
+    });
+    expect(api.rememberThreadLockNote).toHaveBeenCalledWith({ note: "Claude Design" });
+  });
+
   it("still locks when remembering the note fails", async () => {
     const api = recentNotesApi();
     api.rememberThreadLockNote.mockRejectedValue(new Error("database is locked"));

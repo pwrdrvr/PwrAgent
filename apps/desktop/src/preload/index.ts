@@ -285,8 +285,7 @@ import type {
   SetThreadLockRequest,
   SetThreadLockResponse,
   RecentThreadLockNotesResponse,
-  RememberThreadLockNoteRequest,
-  ForgetThreadLockNoteRequest,
+  ThreadLockNoteRequest,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
@@ -2537,11 +2536,11 @@ const desktopApi = Object.freeze({
   listRecentThreadLockNotes: async (): Promise<RecentThreadLockNotesResponse> =>
     await ipcRenderer.invoke(NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL),
   rememberThreadLockNote: async (
-    request: RememberThreadLockNoteRequest,
+    request: ThreadLockNoteRequest,
   ): Promise<RecentThreadLockNotesResponse> =>
     await ipcRenderer.invoke(NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL, request),
   forgetThreadLockNote: async (
-    request: ForgetThreadLockNoteRequest,
+    request: ThreadLockNoteRequest,
   ): Promise<RecentThreadLockNotesResponse> =>
     await ipcRenderer.invoke(NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL, request),
   setThreadToolIncidentNotice: async (

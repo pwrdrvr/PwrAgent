@@ -198,8 +198,7 @@ import {
   type SetPinnedGroupCollapsedRequest,
   type SetPinnedGroupCollapsedResponse,
   type RecentThreadLockNotesResponse,
-  type RememberThreadLockNoteRequest,
-  type ForgetThreadLockNoteRequest,
+  type ThreadLockNoteRequest,
   type ListThreadMigrationSourceThreadsRequest,
   type ListThreadMigrationSourceThreadsResponse,
   type ListThreadMigrationSourcesResponse,
@@ -2205,9 +2204,9 @@ class DesktopAppServerService {
    * profile even when the thread lives on a peer: the operator typed it here.
    */
   async rememberThreadLockNote(
-    request: RememberThreadLockNoteRequest,
+    request: ThreadLockNoteRequest,
   ): Promise<RecentThreadLockNotesResponse> {
-    const note = typeof request?.note === "string" ? request.note : "";
+    const note = readThreadLockNoteRequest(request);
     return {
       notes: await this.getOverlayStore().rememberRecentThreadLockNote?.(note) ?? [],
     };
@@ -2215,9 +2214,9 @@ class DesktopAppServerService {
 
   /** Removes a note from the recent list, as a chip's remove button asks. */
   async forgetThreadLockNote(
-    request: ForgetThreadLockNoteRequest,
+    request: ThreadLockNoteRequest,
   ): Promise<RecentThreadLockNotesResponse> {
-    const note = typeof request?.note === "string" ? request.note : "";
+    const note = readThreadLockNoteRequest(request);
     return {
       notes: await this.getOverlayStore().forgetRecentThreadLockNote?.(note) ?? [],
     };
@@ -8445,6 +8444,11 @@ function invalidateNavigationEvent(event: AgentEvent): void {
     typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
 }
 
+/** The note in a recent-lock-note request; the renderer's payload is untrusted. */
+function readThreadLockNoteRequest(request: ThreadLockNoteRequest | undefined): string {
+  return typeof request?.note === "string" ? request.note : "";
+}
+
 export function registerAppServerIpcHandlers(): void {
   setBundledGitLfsAdvisory((repositoryPath) => {
     appServerService.publishBundledGitLfsAdvisory(repositoryPath);
@@ -8986,7 +8990,7 @@ export function registerAppServerIpcHandlers(): void {
     NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL,
     async (
       _event,
-      request: RememberThreadLockNoteRequest,
+      request: ThreadLockNoteRequest,
     ): Promise<RecentThreadLockNotesResponse> => {
       return await appServerService.rememberThreadLockNote(request);
     },
@@ -8996,7 +9000,7 @@ export function registerAppServerIpcHandlers(): void {
     NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL,
     async (
       _event,
-      request: ForgetThreadLockNoteRequest,
+      request: ThreadLockNoteRequest,
     ): Promise<RecentThreadLockNotesResponse> => {
       return await appServerService.forgetThreadLockNote(request);
     },

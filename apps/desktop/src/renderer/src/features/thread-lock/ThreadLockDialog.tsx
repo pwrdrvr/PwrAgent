@@ -1,6 +1,7 @@
 import {
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -54,7 +55,7 @@ export function ThreadLockDialog(props: ThreadLockDialogProps) {
   const [rovingIndex, setRovingIndex] = useState<number>();
   // Where focus goes once a removed chip has left the DOM: a chip index, or
   // the note field when the row is gone.
-  const [focusAfterRemoval, setFocusAfterRemoval] = useState<number | "note">();
+  const focusAfterRemovalRef = useRef<number | "note">(undefined);
   const recentRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const submitRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useModalDialog<HTMLElement>({
@@ -81,9 +82,13 @@ export function ThreadLockDialog(props: ThreadLockDialogProps) {
     setError(undefined);
     try {
       await props.onSubmit(note);
-      // Only a saved note becomes a recent one. Failing to remember it must
+      // Only a note the operator saved becomes a recent one. Saving the note
+      // the dialog opened with is not authoring it: that note may be an agent
+      // tool's, a peer's or a messaging contact's. Failing to remember must
       // not turn a lock that succeeded into an error.
-      void recentNotesApi?.rememberThreadLockNote?.({ note }).catch(() => undefined);
+      if (trimmedNote !== (props.initialNote ?? "").trim()) {
+        void recentNotesApi?.rememberThreadLockNote?.({ note }).catch(() => undefined);
+      }
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : String(submitError));
       setBusy(false);
@@ -106,18 +111,20 @@ export function ThreadLockDialog(props: ThreadLockDialogProps) {
     // Focus stays in the row on the chip that took this one's place, or the
     // one before it at the end, so removing several is one key repeated.
     const nextIndex = Math.min(index, remaining.length - 1);
+    focusAfterRemovalRef.current = nextIndex >= 0 ? nextIndex : "note";
     setRecentNotes(remaining);
     setRovingIndex(nextIndex >= 0 ? nextIndex : undefined);
-    setFocusAfterRemoval(nextIndex >= 0 ? nextIndex : "note");
     void recentNotesApi?.forgetThreadLockNote?.({ note: recent }).catch(() => undefined);
   };
 
-  useEffect(() => {
-    if (focusAfterRemoval === undefined) return;
-    if (focusAfterRemoval === "note") noteRef.current?.focus();
-    else recentRefs.current[focusAfterRemoval]?.focus();
-    setFocusAfterRemoval(undefined);
-  }, [focusAfterRemoval]);
+  // Before paint, so focus never rests on <body> once the chip is gone.
+  useLayoutEffect(() => {
+    const target = focusAfterRemovalRef.current;
+    if (target === undefined) return;
+    focusAfterRemovalRef.current = undefined;
+    if (target === "note") noteRef.current?.focus();
+    else recentRefs.current[target]?.focus();
+  }, [recentNotes]);
 
   const moveInRecents = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
     if (event.key === "Delete" || event.key === "Backspace") {
@@ -187,7 +194,7 @@ export function ThreadLockDialog(props: ThreadLockDialogProps) {
                   ref={(element) => {
                     recentRefs.current[index] = element;
                   }}
-                  aria-keyshortcuts="Delete"
+                  aria-keyshortcuts="Delete Backspace"
                   aria-pressed={index === selectedIndex}
                   className="thread-lock-dialog__recent-pick"
                   disabled={busy}
@@ -201,8 +208,7 @@ export function ThreadLockDialog(props: ThreadLockDialogProps) {
                 </button>
                 <button
                   aria-label={`Remove “${recent}” from recent notes`}
-                  className="thread-lock-dialog__recent-remove tooltip-target"
-                  data-tooltip="Remove"
+                  className="thread-lock-dialog__recent-remove"
                   disabled={busy}
                   tabIndex={-1}
                   type="button"
