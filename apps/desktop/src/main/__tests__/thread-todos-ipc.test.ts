@@ -105,4 +105,13 @@ describe("owner-routed To-do IPC", () => {
     expect(fixture.windows[0]!.send).toHaveBeenCalledOnce();
     expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
   });
+
+  // A local provider refresh names no backend. It must not make a viewer
+  // re-read its owner's cards over federation.
+  it("keeps untargeted local invalidations out of remote windows", () => {
+    fixture.broadcast!({ at: 3 });
+    expect(fixture.windows[0]!.send).toHaveBeenCalledOnce();
+    expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
+    expect(fixture.windows[2]!.send).not.toHaveBeenCalled();
+  });
 });
