@@ -41,7 +41,7 @@ Shell history files are owned by the shell and are neither read nor rewritten.
 The saved cwd is the launch directory, not an inferred current directory.
 An abrupt crash can lose output since the last lifecycle checkpoint.
 
-## Agent output contract (stacked implementation)
+## Agent output contract
 
 The base supplies owner-side capture and bounded reads; a separate stacked PR
 exposes `list_thread_terminals` and `read_terminal_output` through existing tool
@@ -65,6 +65,46 @@ tools owns backend-registry.ts, ipc/app-server.ts and Federation registrations;
 coordinate any overlap with thread 01a12c08-cbfd-70b0-9465-6899de103bb5. Port
 forwarding is thread 01a12c10-fb8f-7da0-94e1-ed26782025ed. Stack starts only from
 the reviewed base PR commit and uses its own worktree. No merge or release.
+
+## Agent authentication and output paging
+
+The two tools execute on the authenticated thread's owning runtime. The current
+backend and thread come from the active dynamic-tool turn or bound MCP client,
+never from arguments. Both use the existing thread-inspection messaging
+permission. `ownerInstanceId` is an identity check, not a routing parameter:
+another instance is rejected even if it has an identical backend/thread ID.
+
+Owner reads combine the local integrated terminal service and owner-hosted
+Federation PTYs for that backend/thread. The Federation owner-read facade is
+separate from peer control: a local owning agent may inspect its thread's
+viewer-opened terminals without impersonating their opening peers. Reads do not
+acknowledge output, cancel reaping, refresh leases, spawn, attach, resize, write,
+or extend process lifetime. The remote-shell policy still hides Federation
+terminals when disabled. Existing peer RPCs continue to require `remote_pty`
+and the authenticated opening peer; no new remote RPC or proxy is added.
+Viewer aliases are never terminal addresses in these tools.
+
+Read data defaults to 16,384 UTF-16 code units and is capped at 65,536. Raw
+pages contain at most 128 whole ANSI frames and their sequence/timestamps. Evicted or
+oversized frames report `gap` and `truncated` while advancing `nextCursor`, so
+a small budget cannot get stuck. `hasMore` reports retained continuation. Raw
+output is unavailable once a process exits as well as after restart; saved
+screens remain readable with `format: "plain"`.
+
+Plain output is normalized headless-xterm screen text with retained scrollback,
+not a reconstruction of raw events. `nextCursor` pages one immutable snapshot;
+omitting it takes a fresh snapshot. Each runtime holds at most 32 snapshots
+of 64 Ki characters, with five-minute expiry, and reports cursor expiry rather
+than silently switching to newer output. Paging itself is not loss; `truncated`
+reports screen capture limits or an explicitly skipped surrogate pair when a
+one-code-unit budget cannot carry it. Cursors are authenticated and bound to
+owner, backend/thread, terminal creation, format and runtime. Raw cursors also
+bind to the replay generation: resuming a shell under the same terminal ID
+invalidates its previous raw cursors, even when the new sequence catches up.
+Closing a session
+revokes reads even for cached pages. All terminal metadata and output remain
+untrusted. This layer writes no history and introduces no SQLite commits or
+periodic work (0 MB/day of persistence).
 
 ## Bounds and validation
 

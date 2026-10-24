@@ -16,6 +16,7 @@ Search when the user wants to:
 - Manage PwrAgent MCP connections and app access; inspect what connections a thread received.
 - Discover or invoke live tools from this thread's selected MCP connections, including tools added after registration. Use search_mcp_tools and call_mcp_tool.
 - Read or navigate the Star Map, locate thread cards or project clouds, highlight threads, change the map lens or filters.
+- List current-thread terminals and read bounded terminal output as raw ANSI deltas or plain screen snapshots.
 - Retrieve exact output preserved by Token Miser, including searching, reading lines, or reading grouped results.
 Use a short query describing the desired action, or exact tool names. Name every tool you need in one query: each exact tool name is always returned. Search separately for unrelated tasks. Otherwise returns up to 3 matching tools by default (maximum 5), with full usage instructions and JSON parameter schemas. Follow those instructions and existing permission requirements. Search itself performs no action.
 In Code Mode: text(await tools.pwragent__tool_search({query: "handoff child thread"})). Emit the returned string directly so schemas stay intact. Then call the returned codeModeName on tools with arguments matching inputSchema. Deferred tools remain callable. Prefer a bulk tool when available; otherwise batch repeated calls in one cell and print compact aggregate results. If no tools match, retry with a more specific action; do not invent a tool name.`;
@@ -30,6 +31,8 @@ const SEARCH_ALIASES: Record<string, string> = {
   read_ci_job_log: "github actions gitlab ci failure pipeline logs trace failed job earlier paging large output",
   get_commit_checks: "github gitlab commit checks check runs status contexts external ci failures",
   list_ci_artifacts: "github actions gitlab ci pipeline workflow artifacts metadata expiry sizes reports",
+  list_thread_terminals: "terminal shell console sessions tabs discover current output",
+  read_terminal_output: "terminal shell console output logs ansi raw screen snapshot cursor",
   handoff_task: "delegate delegation child subagent split parallel tasks worktree",
   create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",
   manage_thread_dependencies: "wait waiting prerequisite dependency dependencies dag notify notification continue after turn completion CI PR remind reminder operator todo",
