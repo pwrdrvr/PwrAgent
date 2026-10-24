@@ -41,6 +41,43 @@ describe("createSubthreadTrays", () => {
     ]);
   });
 
+  it("orders a tray by the owner's child order, not by creation time", () => {
+    // Navigation rows never carry `subthreadOrder`: it is a detail
+    // collection. The owner's child page arrives in the saved order, and a
+    // tray that re-sorts it newest-first undoes every reorder.
+    const root = thread("root");
+    const older = thread("older", { createdAt: 1 });
+    const newer = thread("newer", { createdAt: 2 });
+    const unlisted = thread("unlisted", { createdAt: 3 });
+    const grandchild = thread("grandchild", { createdAt: 4 });
+    const trays = createSubthreadTrays(childrenByParentKey([
+      ["codex:root", [older, newer, unlisted]],
+      ["codex:newer", [grandchild]],
+    ]), [root], new Map([["codex:root", ["codex:older", "codex:newer"]]]));
+
+    expect(trays.subtree("codex:root").map((row) => row.id)).toEqual([
+      "older",
+      "newer",
+      "grandchild",
+      // A child no owner page listed yet follows the listed ones.
+      "unlisted",
+    ]);
+    expect(trays.directChildKeys("codex:root")).toEqual(["codex:older", "codex:newer", "codex:unlisted"]);
+  });
+
+  it("prefers a parent's own subthreadOrder over the owner's page order", () => {
+    // Set only by this window's optimistic absolute reorder, which is newer
+    // than the page it replaces.
+    const root = thread("root", { subthreadOrder: ["newer", "older"] });
+    const older = thread("older", { createdAt: 1 });
+    const newer = thread("newer", { createdAt: 2 });
+    const trays = createSubthreadTrays(childrenByParentKey([
+      ["codex:root", [older, newer]],
+    ]), [root], new Map([["codex:root", ["codex:older", "codex:newer"]]]));
+
+    expect(trays.subtree("codex:root").map((row) => row.id)).toEqual(["newer", "older"]);
+  });
+
   it("reports each row's real depth so a flat tray still reads as a tree", () => {
     const root = thread("root");
     const child = thread("child");

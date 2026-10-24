@@ -22,3 +22,25 @@ export function retainNavigationPresentationOrder(frozen: NavigationPresentation
   }
   return result;
 }
+
+/**
+ * Each parent's child keys in the order its owner's child pages listed them:
+ * the saved `subthreadOrder`, which navigation rows do not carry.
+ */
+export function readOwnerChildOrder(
+  resources: NavigationWindowQueriesState["resources"],
+  presentation: NavigationPresentationOrder,
+): Map<string, string[]> {
+  const order = new Map<string, string[]>();
+  for (const resource of resources.values()) {
+    if (resource.state.request.query.kind !== "children") continue;
+    for (const entry of presentation.get(resource.id) ?? []) {
+      if (entry.placement.kind !== "child") continue;
+      const parentKey = navigationThreadSelectionKey(entry.placement.parent);
+      const keys = order.get(parentKey) ?? [];
+      if (!keys.includes(entry.key)) keys.push(entry.key);
+      order.set(parentKey, keys);
+    }
+  }
+  return order;
+}
