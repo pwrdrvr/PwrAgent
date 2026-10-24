@@ -562,14 +562,19 @@ function findHistoryInsertionPoint(
   let lastTurnEntry:
     | { entryIndex: number; page: TranscriptHistoryPage }
     | undefined;
+  let firstTurnTotal: TranscriptHistoryInsertionPoint | undefined;
 
   for (let pageIndex = turnPages.length - 1; pageIndex >= 0; pageIndex -= 1) {
     const turnPage = turnPages[pageIndex]!;
     for (const entryIndex of turnPage.entryIndexes) {
       const historyEntry = turnPage.page.entries[entryIndex];
+      if (!historyEntry) {
+        continue;
+      }
       // The page's own turn total is no anchor: retained work belongs above
       // it, and a retained total beside it.
-      if (!historyEntry || turnUsageEntryTurnId(historyEntry) !== undefined) {
+      if (turnUsageEntryTurnId(historyEntry) !== undefined) {
+        firstTurnTotal ??= { entryIndex, page: turnPage.page };
         continue;
       }
       const historyEntryTime = transcriptEntryTime(historyEntry);
@@ -584,12 +589,14 @@ function findHistoryInsertionPoint(
     }
   }
 
+  // A page split inside the turn can carry only the turn's total; the row
+  // still belongs with its turn, just above that total.
   return lastTurnEntry
     ? {
         entryIndex: lastTurnEntry.entryIndex + 1,
         page: lastTurnEntry.page,
       }
-    : undefined;
+    : firstTurnTotal;
 }
 
 function retainedEntryInsertionPoint(
