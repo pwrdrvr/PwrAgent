@@ -994,6 +994,8 @@ export type UpdateDirectoryLaunchpadResponse = {
 
 export type ResetDirectoryLaunchpadRequest = {
   directoryKey: string;
+  /** Clear submitted viewer input while retaining the project's environment. */
+  preserveEnvironment?: boolean;
 };
 
 export type ResetDirectoryLaunchpadResponse = {

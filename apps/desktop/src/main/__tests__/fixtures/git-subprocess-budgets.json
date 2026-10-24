@@ -19,5 +19,11 @@
     "navigationRequestsWhileInFlight": 100,
     "baselineRoundsStarted": 13,
     "maxRoundsStarted": 1
+  },
+  "sharedWorktree": {
+    "threadsSharingWorktree": 24,
+    "gitCommandsPerProbe": 5,
+    "probesPerRound": 1,
+    "turnCompletionBurstProbes": 2
   }
 }

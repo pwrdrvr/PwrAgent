@@ -484,12 +484,14 @@ describe("Claude SDK backend", () => {
           { ...findings[1], outcome: "skipped" },
           { ...findings[0], outcome: "fixed" },
         ] }),
+        [{ type: "result", subtype: "success", is_error: false, result: "" } as SDKMessage],
       ));
       const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
       await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
       await f.waitForTurn();
       await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Fix the first one." }] });
       await f.waitForTurn();
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/completed" });
 
       expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1"]);
       const reported = f.events.filter((event) => event.notification.method === "thread/review/outcomesReported");
@@ -505,6 +507,14 @@ describe("Claude SDK backend", () => {
       const entries = (await f.backend.readThread(threadId)).entries;
       expect(entries.filter((entry) => entry.type === "review").map((entry) => entry.id)).toEqual(["review-1"]);
       expect(entries.some((entry) => entry.id === "review-2")).toBe(false);
+      expect(entries.findLast((entry) => entry.type === "message" && entry.role === "user")?.turn?.status).toBe("completed");
+
+      // Completed tool activity belongs to its turn, not the whole session.
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+      await f.waitForTurn();
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+        turn: { error: { message: "Claude completed without a response or any tool activity. Try sending the message again." } },
+      } });
       await f.backend.close();
     });
 
@@ -1278,6 +1288,115 @@ describe("Claude SDK backend", () => {
     expect((await f.backend.readThread(threadId)).messages[0].text).toBe("Hello");
   });
 
+  it.each([
+    { subtype: "success", is_error: true, result: "", expected: "Claude reported an error without details (success)." },
+    { subtype: "success", is_error: true, result: "  \n", expected: "Claude reported an error without details (success)." },
+    { subtype: "error_during_execution", is_error: true, errors: [], expected: "Claude reported an error without details (error_during_execution)." },
+    { subtype: "error_during_execution", is_error: false, errors: ["Resume failed"], expected: "Resume failed" },
+    { subtype: "error_max_turns", is_error: false, errors: [], expected: "Claude reached the maximum number of turns." },
+    { subtype: "error_max_budget_usd", is_error: false, errors: ["  "], expected: "Claude reached the configured spending limit." },
+    { subtype: "error_max_structured_output_retries", is_error: false, errors: [], expected: "Claude could not produce the required structured output." },
+  ])("reports $subtype with is_error=$is_error even without error text", async ({ expected, ...result }) => {
+    const f = await fixture(async function* () {
+      yield { type: "result", ...result } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+    await f.waitForTurn();
+    expect(f.events.filter((event) => event.notification.method.startsWith("turn/")))
+      .toMatchObject([
+        { notification: { method: "turn/started" } },
+        { notification: { method: "turn/failed", params: { turn: { id: turn.turnId, error: { message: expected } } } } },
+      ]);
+    const restarted = new ClaudeBackend(f.backendOptions);
+    const replay = await restarted.readThread(threadId);
+    expect(replay.entries?.find((entry) => entry.type === "message")?.turn?.status).toBe("failed");
+    expect((await f.backend.readThread(threadId)).threadStatus).toBe("idle");
+    expect(f.close).toHaveBeenCalledOnce();
+  });
+
+  it("fails a silent empty success instead of presenting an unanswered send as complete", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "result", subtype: "success", is_error: false, num_turns: 0, result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "What happened?" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Claude completed without a response or any tool activity. Try sending the message again." } },
+    } });
+  });
+
+  it("allows a slash command to complete without assistant output", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "result", subtype: "success", is_error: false, num_turns: 0, result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/clear" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
+  it("allows tool activity to complete with an empty final answer", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "tool-only", content: [{ type: "tool_use", id: "read-only", name: "Read", input: { file_path: "fixture.txt" } }],
+      } } as SDKMessage;
+      yield { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "read-only", content: "fixture" }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Read the file" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
+  it.each(["empty result", "stream exit"])("preserves the parent API error through a later %s", async (ending) => {
+    const f = await fixture(async function* () {
+      yield { type: "assistant", parent_tool_use_id: null, error: "authentication_failed", message: {
+        id: "auth-error", content: [{ type: "text", text: "Sign in again" }],
+      } } as SDKMessage;
+      if (ending === "empty result") yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [] } as unknown as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
+      turn: { error: { message: "Sign in again" } },
+    } });
+  });
+
+  it.each([null, "subagent-tool"])("handles assistant errors only for the parent turn (parent=%s)", async (parent) => {
+    const f = await fixture(async function* () {
+      yield { type: "assistant", parent_tool_use_id: parent, error: "rate_limit", message: {
+        id: "api-error", content: [{ type: "text", text: "Usage limit reached" }],
+      } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "Done" } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+    await f.waitForTurn();
+    expect(f.events.at(-1)?.notification).toMatchObject(parent
+      ? { method: "turn/completed" }
+      : { method: "turn/failed", params: { turn: { error: { message: "Usage limit reached" } } } });
+  });
+
+  it("reports empty thrown errors and retains bounded CLI stderr for diagnosis", async () => {
+    const f = await fixture(async function* (options) {
+      options.stderr?.("x".repeat(8_192));
+      options.stderr?.("\nfixture transport failed");
+      yield* [];
+      throw new Error("");
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Continue" }] });
+    await f.waitForTurn();
+    const event = f.events.at(-1)?.notification;
+    expect(event).toMatchObject({ method: "turn/failed", params: { turn: { error: { message: expect.stringContaining("fixture transport failed") } } } });
+    const params = event?.params as { turn: { error: { message: string } } };
+    expect(params.turn.error.message.length).toBeLessThanOrEqual(4_096);
+  });
+
   it("aborts a running query and rejects a stale interrupt", async () => {
     const f = await fixture(async function* (options) {
       yield { type: "system", subtype: "init", session_id: options.sessionId } as SDKMessage;
@@ -1529,7 +1648,7 @@ describe("Claude SDK backend", () => {
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }] });
     await f.waitForTurn();
     expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/failed", params: {
-      turn: { error: { message: "Claude ended the turn with an error." } },
+      turn: { error: { message: "Claude reported an error without details (error_during_execution)." } },
     } });
   });
 });

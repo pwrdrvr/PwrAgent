@@ -148,7 +148,7 @@ import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-w
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
-import type { GitWorkingStateService } from "../app-server/git-working-state-service";
+import { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
@@ -4805,6 +4805,160 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("probes a worktree shared by many threads once, whichever registry lane asks", async () => {
+    // Two dozen threads open in one checkout is an ordinary day, and every row
+    // shows that checkout's +/- chips. Everything here that names a thread —
+    // the fleet round, each thread's PR heads, the durable row, the
+    // notification, a burst of turn completions — must collapse to the
+    // worktree, or Git and sqlite cost scale with the thread count. The other
+    // tests stub the service; this one runs the real service, its read cache,
+    // and a real state database behind the registry.
+    const budget = gitSubprocessBudgets.sharedWorktree;
+    const sharedPath = "/worktrees/shared-checkout";
+    const otherPath = "/worktrees/other-checkout";
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-shared-worktree-working-state-");
+    const db = StateDb.open(temp.dbPath);
+    onTestFinished(() => {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    });
+
+    const gitCalls: Array<{ cwd: string; args: string[]; input?: string }> = [];
+    let numstatGate: Promise<void> | undefined;
+    let releaseNumstat: (() => void) | undefined;
+    const runGit = async (
+      cwd: string,
+      args: string[],
+      _env?: NodeJS.ProcessEnv,
+      input?: string,
+    ): Promise<string> => {
+      gitCalls.push({ cwd, args, input });
+      if (args.includes("--numstat")) {
+        await numstatGate;
+        return "5509\t0\tsrc/kernel.cu\n";
+      }
+      if (args.includes("status")) return " M src/kernel.cu\0";
+      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args.includes("rev-list")) return "0\n";
+      throw new Error(`unexpected git invocation: ${args.join(" ")}`);
+    };
+    const probesOf = (cwd: string): number =>
+      gitCalls.filter((call) => call.cwd === cwd && call.args.includes("--numstat")).length;
+
+    const prHeadShas = ["a", "b", "c"].map((digit) => digit.repeat(40));
+    const publishedPr = (number: number, headSha: string): PrSummary => ({
+      provider: "github.com",
+      number,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      lifecycleState: "open",
+      headSha,
+      url: `https://github.com/pwrdrvr/PwrAgent/pull/${number}`,
+    });
+    const sharedThreads: Array<AppServerThreadSummary & { prs?: PrSummary[] }> =
+      Array.from({ length: budget.threadsSharingWorktree }, (_unused, index) => ({
+        ...activeWorkingStateThread({ worktreePath: sharedPath }),
+        id: `thread-shared-${index}`,
+        ...(prHeadShas[index]
+          ? { prs: [publishedPr(index + 1, prHeadShas[index])] }
+          : {}),
+      }));
+    // Last, so a selection that capped before deduplicating would fill the
+    // batch with copies of the shared path and never reach it.
+    const threads = [
+      ...sharedThreads,
+      { ...activeWorkingStateThread({ worktreePath: otherPath }), id: "thread-other" },
+    ];
+
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: new GitWorkingStateService({ runGit }),
+      overlayStore: new SqliteOverlayStore(db),
+    });
+    const updatedPaths: string[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      if (event.notification.method === "navigation/threadGitWorkingState/updated") {
+        updatedPaths.push(
+          (event.notification.params as { worktreePath: string }).worktreePath,
+        );
+      }
+    });
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await expect(registry.refreshThreadGitWorkingStates(threads))
+          .resolves.toEqual({ scheduledCount: 2 });
+        await expectEventually(async () => updatedPaths.length, 2);
+      });
+      expectSqliteWriteBudget({ scenario: "shared-worktree-working-state-round", writes,
+        note: "One automatic working-state round over 24 threads in one checkout plus 1 in another: one cache-row commit per probed worktree (2), never per thread (25). ~12.4 KB/commit; every probe commits even when unchanged, so the selected checkout's 60 s refresh is ~17.8 MB/day and the 30 s automatic floor caps a continuously browsed checkout at ~35.6 MB/day, the same for 1 or 24 threads sharing it" });
+
+      expect(probesOf(sharedPath)).toBe(budget.probesPerRound);
+      expect(probesOf(otherPath)).toBe(budget.probesPerRound);
+      expect(gitCalls.filter((call) => call.cwd === sharedPath))
+        .toHaveLength(budget.gitCommandsPerProbe);
+      expect(updatedPaths.filter((path) => path === sharedPath)).toHaveLength(1);
+      // Each thread's PR heads join the one probe instead of keying their own.
+      expect(gitCalls
+        .filter((call) => call.cwd === sharedPath && call.args.includes("rev-list"))
+        .map((call) => call.input))
+        .toEqual([`${prHeadShas.map((sha) => `^${sha}`).join("\n")}\n`]);
+
+      const hydrated = await registry.hydrateThreadGitWorkingStates(threads);
+      for (const thread of hydrated.slice(0, sharedThreads.length)) {
+        expect(thread.gitWorkingState).toMatchObject({
+          dirtyAdditions: 5509,
+          dirtyDeletions: 0,
+        });
+      }
+      // Every window, messaging command and federated viewer asks again.
+      // Let the first round's bookkeeping settle so this measures freshness,
+      // not the in-flight gate.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      for (let request = 0; request < budget.threadsSharingWorktree; request += 1) {
+        await expect(registry.refreshThreadGitWorkingStates(threads))
+          .resolves.toEqual({ scheduledCount: 0 });
+      }
+      expect(probesOf(sharedPath)).toBe(budget.probesPerRound);
+
+      // Every thread finishes a turn. The first completion's probe is still
+      // in Git when the rest arrive, the way a real burst lands. They fold
+      // into one rerun, which must not be served from the pre-burst read.
+      numstatGate = new Promise<void>((resolve) => {
+        releaseNumstat = resolve;
+      });
+      registry.invalidateWorktreeWorkingState(sharedPath);
+      expect(registry.scheduleWorktreeGitWorkingStateRefresh({
+        worktreePath: sharedPath,
+      })).toBe(true);
+      await expectEventually(
+        async () => probesOf(sharedPath),
+        budget.probesPerRound + 1,
+      );
+      for (let request = 1; request < sharedThreads.length; request += 1) {
+        registry.invalidateWorktreeWorkingState(sharedPath);
+        expect(registry.scheduleWorktreeGitWorkingStateRefresh({
+          worktreePath: sharedPath,
+        })).toBe(false);
+      }
+      releaseNumstat?.();
+      const afterBurst = budget.probesPerRound + budget.turnCompletionBurstProbes;
+      await expectEventually(async () => probesOf(sharedPath), afterBurst);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(probesOf(sharedPath)).toBe(afterBurst);
+      expect(probesOf(otherPath)).toBe(budget.probesPerRound);
+      // Unchanged state publishes nothing, however many threads it serves.
+      expect(updatedPaths.filter((path) => path === sharedPath)).toHaveLength(1);
+    } finally {
+      releaseNumstat?.();
+      unsubscribe();
+      await registry.close();
+    }
+  });
+
   it("re-probes a stale worktree that hydration already stamped", async () => {
     // The serving path hydrates from the cache and then schedules, so every
     // thread reaching the scheduler carries a `gitWorkingState`. Deciding
@@ -9265,7 +9419,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("records a turn/failed outcome to the thread overlay turnFailureLog", async () => {
+  it.each(["codex", "claude"] as const)("records a %s turn/failed outcome to the thread overlay turnFailureLog", async (backend) => {
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
@@ -9275,7 +9429,7 @@ describe("DesktopBackendRegistry", () => {
     await (
       registry as unknown as { emit(event: AgentEvent): Promise<void> }
     ).emit({
-      backend: "codex",
+      backend,
       notification: {
         method: "turn/failed",
         params: {
@@ -9292,7 +9446,7 @@ describe("DesktopBackendRegistry", () => {
     });
 
     const overlay = await overlayStore.getThreadOverlayState({
-      backend: "codex",
+      backend,
       threadId: "thread-fail",
     });
     expect(overlay?.turnFailureLog).toHaveLength(1);
@@ -20781,7 +20935,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("keeps environment selections scoped across repeated Codex and ACP flips", async () => {
+  it("shares environment selections across repeated OpenAI, Claude and ACP flips", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-env-options-"));
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
     await writeFile(
@@ -20864,7 +21018,7 @@ command = "pnpm grok"
           },
         ],
       });
-      expect(switchedToAcp.launchpad.codexEnvironmentId).toBeUndefined();
+      expect(switchedToAcp.launchpad.codexEnvironmentId).toBe("codex");
 
       const acpSelected = await registry.updateDirectoryLaunchpad({
         directoryKey: `directory:${root}`,
@@ -20891,10 +21045,16 @@ command = "pnpm grok"
       });
       expect(restoredCodex.launchpad).toMatchObject({
         backend: "codex",
-        codexEnvironmentId: "codex",
+        codexEnvironmentId: "grok",
         codexEnvironmentExecutionTarget: "local",
-        codexEnvironmentActionId: "codex-action",
+        codexEnvironmentActionId: "grok-action",
       });
+
+      const switchedToClaude = await registry.updateDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        patch: { backend: "claude" },
+      });
+      expect(switchedToClaude.launchpad.codexEnvironmentId).toBe("grok");
 
       const restoredAcp = await registry.updateDirectoryLaunchpad({
         directoryKey: `directory:${root}`,
@@ -22169,6 +22329,72 @@ command = "pnpm grok"
     });
 
     await registry.close();
+  });
+
+  it("retains the viewer environment when clearing a submitted remote draft", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-viewer-environment-");
+    const db = StateDb.open(temp.dbPath);
+    const persisted = new SqliteOverlayStore(db);
+    const overlayStore = createOverlayStoreMock();
+    vi.spyOn(overlayStore, "getDirectoryLaunchpad").mockImplementation((request) => persisted.getDirectoryLaunchpad(request));
+    vi.spyOn(overlayStore, "upsertDirectoryLaunchpad").mockImplementation((value) => persisted.upsertDirectoryLaunchpad(value));
+    vi.spyOn(overlayStore, "resetDirectoryLaunchpad").mockImplementation((request) => persisted.resetDirectoryLaunchpad(request));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start"] } }),
+      overlayStore,
+    });
+    const request = {
+      directoryKey: "directory:/owner-only/repo",
+      directoryKind: "directory" as const,
+      directoryLabel: "Repo",
+      directoryPath: "/owner-only/repo",
+    };
+    try {
+      await registry.ensureDirectoryLaunchpad(request, { skipFilesystemInspection: true });
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: request.directoryKey,
+        patch: {
+          prompt: "submitted message",
+          codexEnvironmentId: "project",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "dev",
+        },
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.resetDirectoryLaunchpad({ directoryKey: request.directoryKey, preserveEnvironment: true });
+      });
+      const reopened = await registry.ensureDirectoryLaunchpad(request, { skipFilesystemInspection: true });
+      expect(reopened.launchpad).toMatchObject({
+        prompt: "",
+        codexEnvironmentId: "project",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentActionId: "dev",
+      });
+      expectSqliteWriteBudget({
+        scenario: "remote-launchpad-environment-reset",
+        note: "Clear one submitted viewer draft and retain its environment at the submission boundary. Two commits, approximately 1.7 MB/day at 100 threads/day, with no idle or streamed-event writes.",
+        writes,
+      });
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: request.directoryKey,
+        patch: { backend: "claude", codexEnvironmentId: undefined, codexEnvironmentActionId: undefined },
+      });
+      await registry.resetDirectoryLaunchpad({ directoryKey: request.directoryKey, preserveEnvironment: true });
+      const cleared = await registry.ensureDirectoryLaunchpad(request, { skipFilesystemInspection: true });
+      expect(cleared.launchpad.codexEnvironmentId).toBeUndefined();
+      const otherProject = await registry.ensureDirectoryLaunchpad({
+        ...request, directoryKey: "directory:/owner-only/other", directoryPath: "/owner-only/other",
+      }, { skipFilesystemInspection: true });
+      expect(otherProject.launchpad.codexEnvironmentId).toBeUndefined();
+      await registry.resetDirectoryLaunchpad({ directoryKey: request.directoryKey });
+      await expect(persisted.getDirectoryLaunchpad({ directoryKey: request.directoryKey })).resolves.toBeUndefined();
+    } finally {
+      await registry.close();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps selected Codex environments sticky after materializing", async () => {

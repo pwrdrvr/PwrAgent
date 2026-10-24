@@ -882,6 +882,7 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "remote-launchpad-environment-reset": {"commits": 2, "note": "Clear one submitted viewer draft and retain its environment at the submission boundary. Two commits, approximately 1.7 MB/day at 100 threads/day, with no idle or streamed-event writes.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "registered-project-launchpad-submit": {
     "commits": 1,
     "note": "One registered project draft reset per new thread: one replacement commit, no delete/insert pair; at 100 starts/day the measured WAL is approximately 0.8 MB/day; no idle writes",
@@ -928,6 +929,13 @@
     "commits": 2,
     "note": "one config publication and one discovery publication per explicit Codex path save; no idle writes",
     "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "shared-worktree-working-state-round": {
+    "commits": 2,
+    "note": "One automatic working-state round over 24 threads in one checkout plus 1 in another: one cache-row commit per probed worktree (2), never per thread (25). ~12.4 KB/commit; every probe commits even when unchanged, so the selected checkout's 60 s refresh is ~17.8 MB/day and the 30 s automatic floor caps a continuously browsed checkout at ~35.6 MB/day, the same for 1 or 24 threads sharing it",
+    "observedWalBytes": 24720,
     "rowsChanged": 2,
     "statements": 2
   },

@@ -758,6 +758,20 @@ describe("federation agent tools service", () => {
             path: "/Users/op/pwragent",
             threadKeys: [],
             needsAttentionCount: 0,
+            launchpad: {
+              backend: "codex",
+              executionMode: "default",
+              workMode: "worktree",
+              directoryKey: "dir:/Users/op/pwragent",
+              directoryKind: "directory",
+              directoryLabel: "PwrAgent",
+              prompt: "Unsent operator draft",
+              codexEnvironmentId: "project",
+              codexEnvironmentExecutionTarget: "local",
+              codexEnvironmentActionId: "dev",
+              createdAt: 1,
+              updatedAt: 2,
+            },
           },
         ] as NavigationSnapshot["directories"],
       }),
@@ -804,6 +818,9 @@ describe("federation agent tools service", () => {
           directoryKey: "dir:/Users/op/pwragent",
           directoryLabel: "PwrAgent",
           prompt: "",
+          codexEnvironmentId: "project",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "dev",
         }),
         input: [
           { type: "text", text: "Fix the recorder crash" },
@@ -1184,6 +1201,9 @@ describe("federation agent tools service", () => {
             directoryKind: "directory",
             directoryLabel: "PwrSuiteLab",
             prompt: "Unsent operator draft",
+            codexEnvironmentId: "project",
+            codexEnvironmentExecutionTarget: "local",
+            codexEnvironmentActionId: "dev",
             createdAt: 1,
             updatedAt: 2,
           } } : {}),
@@ -1228,6 +1248,9 @@ describe("federation agent tools service", () => {
       expect(response).toMatchObject({ ok: true, data: { backend } });
       const draft = materializeDirectoryLaunchpad.mock.calls[0][0].launchpad!;
       expect(draft).toMatchObject({ backend, workMode: "local", prompt: "" });
+      expect(draft.codexEnvironmentId).toBe(source === "saved launchpad" ? "project" : undefined);
+      expect(draft.codexEnvironmentExecutionTarget).toBe(source === "saved launchpad" ? "local" : undefined);
+      expect(draft.codexEnvironmentActionId).toBe(source === "saved launchpad" ? "dev" : undefined);
       const expected = {
         model: undefined,
         reasoningEffort: undefined,
