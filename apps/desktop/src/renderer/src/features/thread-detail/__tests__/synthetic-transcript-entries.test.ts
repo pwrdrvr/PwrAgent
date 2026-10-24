@@ -134,6 +134,28 @@ describe("synthetic transcript rows", () => {
     expect(merged.map((entry) => entry.id)).toEqual([...transcriptIds, syntheticId]);
   });
 
+  it("places a synthetic row after an existing entry stamped at the same time", () => {
+    const turn = { id: "turn-c", status: "failed" as const };
+    const merged = injectTurnFailures([
+      { type: "message", id: "prompt", role: "user", text: "Go", createdAt: 100, turn },
+      { type: "activity", id: "last-work", summary: "Ran 1 command", status: "completed", details: [], createdAt: 200, turn },
+      { type: "message", id: "next-prompt", role: "user", text: "Retry", createdAt: 300 },
+    ], [{
+      id: "fail-1",
+      turnId: "turn-c",
+      error: "Model overloaded",
+      occurredAt: 200,
+    }]);
+
+    // The failure marker follows the work it describes, never shoves it down.
+    expect(merged.map((entry) => entry.id)).toEqual([
+      "prompt",
+      "last-work",
+      "turn-failed:turn-c",
+      "next-prompt",
+    ]);
+  });
+
   it("places a synthetic row before the first later entry without moving untimed rows", () => {
     const merged = injectMessagingBindingTransitions(transcript, [{
       id: "bind-2",

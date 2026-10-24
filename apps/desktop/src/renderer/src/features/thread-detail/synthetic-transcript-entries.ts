@@ -23,24 +23,30 @@ export function insertSyntheticEntriesByTime(
   if (synthetic.length === 0) {
     return entries;
   }
-  const timed = synthetic
-    .filter((entry) => typeof entry.createdAt === "number")
-    .sort((left, right) => left.createdAt! - right.createdAt!);
-  const untimed = synthetic.filter((entry) => typeof entry.createdAt !== "number");
+  const timed: Array<{ at: number; entry: AppServerThreadEntry }> = [];
+  const untimed: AppServerThreadEntry[] = [];
+  for (const entry of synthetic) {
+    if (typeof entry.createdAt === "number") {
+      timed.push({ at: entry.createdAt, entry });
+    } else {
+      untimed.push(entry);
+    }
+  }
+  timed.sort((left, right) => left.at - right.at);
+
   const merged: AppServerThreadEntry[] = [];
   let next = 0;
   for (const entry of entries) {
     const createdAt = entry.createdAt;
     if (typeof createdAt === "number") {
-      while (next < timed.length && timed[next]!.createdAt! < createdAt) {
-        merged.push(timed[next]!);
-        next += 1;
+      for (; next < timed.length && timed[next]!.at < createdAt; next += 1) {
+        merged.push(timed[next]!.entry);
       }
     }
     merged.push(entry);
   }
   for (; next < timed.length; next += 1) {
-    merged.push(timed[next]!);
+    merged.push(timed[next]!.entry);
   }
   merged.push(...untimed);
   return merged;
