@@ -145,6 +145,7 @@ export default defineConfig(({ command }) => {
         externalizeDeps: {
           exclude: [
             "@pwragent/shared",
+            "@pwragent/federation",
             "@pwrdrvr/codex-app-server-protocol",
             "@pwragent/messaging-interface",
             "@pwragent/messaging-provider-discord",

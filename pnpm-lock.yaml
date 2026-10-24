@@ -274,6 +274,9 @@ importers:
       '@peculiar/x509':
         specifier: ^2.0.0
         version: 2.2.0
+      '@pwragent/federation':
+        specifier: workspace:*
+        version: link:../../packages/federation
       '@pwragent/messaging-interface':
         specifier: workspace:*
         version: link:../../packages/messaging/interface
@@ -499,6 +502,19 @@ importers:
         specifier: 1.0.11
         version: 1.0.11
 
+  packages/federation:
+    dependencies:
+      '@pwragent/shared':
+        specifier: workspace:*
+        version: link:../shared
+      ws:
+        specifier: 8.22.0
+        version: 8.22.0
+    devDependencies:
+      '@types/ws':
+        specifier: 8.18.2
+        version: 8.18.2
+
   packages/messaging/interface:
     dependencies:
       '@pwragent/shared':
@@ -595,7 +611,17 @@ importers:
         specifier: ^5.0.1
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.3(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.2)(jiti@2.7.0)(lightningcss@1.33.0)(tsx@4.23.15))
 
-  packages/pwragent: {}
+  packages/pwragent:
+    devDependencies:
+      '@pwragent/federation':
+        specifier: workspace:*
+        version: link:../federation
+      '@pwragent/shared':
+        specifier: workspace:*
+        version: link:../shared
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
 
   packages/shared: {}
 
