@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type {
-  FederationRemoteTarget,
   NavigationThreadSummary,
   PrSummary,
 } from "@pwragent/shared";
-import {
-  buildThreadIdentityKey,
-  isRemoteFederationTarget,
-} from "@pwragent/shared";
+import { buildThreadIdentityKey } from "@pwragent/shared";
 import { resolveFetchableDirectoryPaths } from "./resolveFetchableDirectoryPaths";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import {
+  buildThreadOwnerKey,
+  readRendererFederationTarget,
+  resolveThreadOwnerFederationTarget,
+} from "../../lib/federation-window";
 import type { DesktopApi } from "../../lib/desktop-api";
 
 const SELECTED_REFRESH_INTERVAL_MS = 60_000;
@@ -62,7 +62,7 @@ export function usePullRequestRefresh(params: {
       if (!desktopApi?.refreshThreadPullRequests) return;
       const target = resolvePullRequestLookupTarget(thread);
       if (!target) return;
-      const federationTarget = resolvePullRequestFederationTarget(
+      const federationTarget = resolveThreadOwnerFederationTarget(
         thread,
         federationWindowInstanceId,
       );
@@ -161,7 +161,7 @@ export function usePullRequestRefresh(params: {
     ? buildThreadIdentityKey(selected.source, selected.id)
     : undefined;
   const selectedIsRemoteFederated = Boolean(
-    selected && resolvePullRequestFederationTarget(selected),
+    selected && resolveThreadOwnerFederationTarget(selected),
   );
   useEffect(() => {
     const setFocus = desktopApi?.setPullRequestPollingFocus;
@@ -195,7 +195,7 @@ export function usePullRequestRefresh(params: {
   const inflightKeysRef = useRef<Set<string>>(new Set());
   const prefetch = useCallback(
     (thread: NavigationThreadSummary): void => {
-      const key = buildPullRequestThreadKey(
+      const key = buildThreadOwnerKey(
         thread,
         federationWindowInstanceId,
       );
@@ -227,36 +227,9 @@ function buildRefreshRequestKey(
   if (!target) return undefined;
 
   return JSON.stringify({
-    threadKey: buildPullRequestThreadKey(thread, federationWindowInstanceId),
+    threadKey: buildThreadOwnerKey(thread, federationWindowInstanceId),
     target,
   });
-}
-
-function buildPullRequestThreadKey(
-  thread: NavigationThreadSummary,
-  federationWindowInstanceId?: string,
-): string {
-  const federationTarget = resolvePullRequestFederationTarget(
-    thread,
-    federationWindowInstanceId,
-  );
-  return `${federationTarget?.instanceId ?? "local"}:${buildThreadIdentityKey(
-    thread.source,
-    thread.id,
-  )}`;
-}
-
-function resolvePullRequestFederationTarget(
-  thread: NavigationThreadSummary,
-  federationWindowInstanceId?: string,
-): FederationRemoteTarget | undefined {
-  const threadTarget = thread.federation?.ref.target;
-  if (threadTarget && isRemoteFederationTarget(threadTarget)) {
-    return threadTarget;
-  }
-  return federationWindowInstanceId
-    ? { scope: "remote", instanceId: federationWindowInstanceId }
-    : undefined;
 }
 
 function resolvePullRequestLookupTarget(

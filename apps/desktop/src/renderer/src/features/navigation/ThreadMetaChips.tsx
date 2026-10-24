@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted, operatorTodoItemKey } from "@pwragent/shared";
 import {
@@ -674,6 +674,24 @@ export function CopyableThreadChip(props: {
   const [copied, setCopied] = useState(false);
   const tooltipBody = props.tooltipText ?? props.value;
   const tooltipText = copied ? "Copied" : `${tooltipBody}\nClick to copy to clipboard`;
+  const latestTooltipTextRef = useRef(tooltipText);
+  latestTooltipTextRef.current = tooltipText;
+  const updateTooltip = tooltip.update;
+  const tooltipVisible = tooltip.visible;
+
+  // Hovering the branch chip asks for a Git refresh, so its base drift can
+  // change while the tooltip is open. Push a changed body into the open
+  // tooltip; an unchanged one leaves it alone. Tracking the body while hidden
+  // keeps the next hover from pushing a stale one, as PrChip does.
+  const pushedTooltipBodyRef = useRef(tooltipBody);
+  useEffect(() => {
+    const moved = pushedTooltipBodyRef.current !== tooltipBody;
+    pushedTooltipBodyRef.current = tooltipBody;
+    if (!moved || !tooltipVisible || copied) {
+      return;
+    }
+    updateTooltip(`${tooltipBody}\nClick to copy to clipboard`);
+  }, [copied, tooltipBody, tooltipVisible, updateTooltip]);
 
   useEffect(() => {
     if (!copied) {
@@ -714,9 +732,13 @@ export function CopyableThreadChip(props: {
           event.stopPropagation();
           copy(event.currentTarget);
         }}
+        // A delayed tooltip reads its text when the delay fires.
         onMouseEnter={(event) =>
           props.delayedTooltip
-            ? tooltip.showAfterDelay(event.currentTarget, tooltipText)
+            ? tooltip.showAfterDelay(
+              event.currentTarget,
+              () => latestTooltipTextRef.current,
+            )
             : tooltip.show(event.currentTarget, tooltipText)
         }
         onMouseLeave={tooltip.hide}

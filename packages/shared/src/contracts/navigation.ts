@@ -1330,7 +1330,18 @@ export type RefreshThreadGitWorkingStateRequest = {
   threadId: string;
   /** User inspection bypasses cache freshness; scheduled focus refreshes do not. */
   trigger: "scheduled" | "user";
+  /**
+   * Route the refresh to the instance that owns the thread's worktree. The
+   * owner's Git info store applies its own cache and user-refresh budget.
+   */
+  federationTarget?: FederationTarget;
 };
+
+/** What a viewer sends to the owner: no onward routing target. */
+export type RefreshOwnedThreadGitWorkingStateRequest = Omit<
+  RefreshThreadGitWorkingStateRequest,
+  "federationTarget"
+>;
 
 export type RefreshThreadGitWorkingStateResponse = {
   scheduled: boolean;
