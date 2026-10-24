@@ -1,6 +1,6 @@
 import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, ThreadTodo, ThreadTodosChangedEvent } from "@pwragent/shared";
+import type { AgentEvent, NavigationDirectorySummary, ThreadTodo, ThreadTodosChangedEvent } from "@pwragent/shared";
 import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL, THREAD_TODOS_LIST_CHANNEL, THREAD_TODOS_RESOLVE_CHANNEL,
   THREAD_REVIEWS_UPDATE_CHANNEL,
@@ -23,6 +23,8 @@ const fixture = vi.hoisted(() => {
     peerStatusListener: undefined as (() => void) | undefined,
     remoteListener: undefined as ((event: AgentEvent) => void) | undefined,
     broadcast: undefined as ((event: ThreadTodosChangedEvent) => void) | undefined,
+    listProjects: undefined as (() => Promise<unknown[]>) | undefined,
+    loadIndex: vi.fn(),
   };
 });
 
@@ -39,12 +41,18 @@ vi.mock("../thread-todos/thread-todo-operations", () => ({ localThreadTodoOperat
   listTodos: fixture.localList, resolveTodo: fixture.localResolve,
 } }));
 vi.mock("../thread-todos/thread-todo-runtime", () => ({
-  installThreadTodoRuntime: (options: { broadcast: (event: ThreadTodosChangedEvent) => void }) => { fixture.broadcast = options.broadcast; },
+  installThreadTodoRuntime: (options: {
+    broadcast: (event: ThreadTodosChangedEvent) => void;
+    listProjects: () => Promise<unknown[]>;
+  }) => {
+    fixture.broadcast = options.broadcast;
+    fixture.listProjects = options.listProjects;
+  },
 }));
 vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({ listRemoteThreadPins: async () => [] }) }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({}) }));
 vi.mock("../settings/desktop-settings-singleton", () => ({ getDesktopSettingsService: () => ({}) }));
-vi.mock("../ipc/app-server", () => ({ appServerService: {} }));
+vi.mock("../app-server/navigation-query-source", () => ({ loadLocalNavigationQueryIndex: fixture.loadIndex }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ warn: vi.fn() }) }));
 
 import { registerThreadTodoIpcHandlers } from "../ipc/thread-todos-ipc";
@@ -113,5 +121,18 @@ describe("owner-routed To-do IPC", () => {
     expect(fixture.windows[0]!.send).toHaveBeenCalledOnce();
     expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
     expect(fixture.windows[2]!.send).not.toHaveBeenCalled();
+  });
+
+  // The Directories lens can hold more projects than one navigation page.
+  // A project past the first page must still be one a card can name.
+  it("lists every local project for a card, past one navigation page", async () => {
+    const directories: NavigationDirectorySummary[] = Array.from({ length: 150 }, (_, index) => ({
+      key: `directory:${index}`, kind: "directory", label: `Project ${index}`, path: `/project/${index}`,
+      threadKeys: [], needsAttentionCount: 0,
+    }));
+    fixture.loadIndex.mockResolvedValue({ directories, threads: [] });
+    const projects = await fixture.listProjects!();
+    expect(projects).toHaveLength(150);
+    expect(projects).toContainEqual({ key: "directory:149", label: "Project 149", kind: "directory", path: "/project/149" });
   });
 });
