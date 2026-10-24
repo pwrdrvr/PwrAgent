@@ -5401,18 +5401,31 @@ function logUnpricedThreadUsageLine(line: ThreadUsageLineRecord): void {
   });
 }
 
-/** Each turn's earliest recorded time in a Claude transcript, by turn id. */
-function claudeTurnStartTimes(replay: AppServerThreadReplay): Map<string, number> {
-  const starts = new Map<string, number>();
+type ClaudeTurnTimes = { completedAt?: number; startedAt?: number };
+
+/**
+ * Each turn's times in a Claude transcript, by turn id: its earliest
+ * recorded start or entry, and its latest recorded end.
+ */
+function claudeTurnTimes(replay: AppServerThreadReplay): Map<string, ClaudeTurnTimes> {
+  const turns = new Map<string, ClaudeTurnTimes>();
   for (const entry of replay.entries) {
     const turnId = entry.turn?.id;
-    const at = entry.turn?.startedAt ?? entry.createdAt;
-    if (!turnId || typeof at !== "number") {
+    if (!turnId) {
       continue;
     }
-    starts.set(turnId, Math.min(starts.get(turnId) ?? at, at));
+    const times = turns.get(turnId) ?? {};
+    const startedAt = entry.turn?.startedAt ?? entry.createdAt;
+    if (typeof startedAt === "number") {
+      times.startedAt = Math.min(times.startedAt ?? startedAt, startedAt);
+    }
+    const completedAt = entry.turn?.completedAt;
+    if (typeof completedAt === "number") {
+      times.completedAt = Math.max(times.completedAt ?? completedAt, completedAt);
+    }
+    turns.set(turnId, times);
   }
-  return starts;
+  return turns;
 }
 
 function resolveLiveThreadUsageTiming(params: {
@@ -8451,8 +8464,8 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "completeThreadUsageTurn"
     | "completeThreadUsageTurns"
     | "repairUnfinishedThreadUsageTurns"
-    | "readImplausibleThreadUsageTurnStarts"
-    | "repairThreadUsageTurnStarts"
+    | "readThreadUsageTurnTimeRepairCandidates"
+    | "repairThreadUsageTurnTimes"
     | "readUsageActivity"
     | "listRemoteThreadPins"
     | "listThreadCompactions"
@@ -10569,9 +10582,9 @@ export class DesktopBackendRegistry {
       });
     // Starts first: inferring an unfinished turn's end reads its start.
     this.usageTurnStartupRepair =
-      this.repairImplausibleThreadUsageTurnStartsAtStartup()
+      this.repairThreadUsageTurnTimesOnce()
         .catch((error) => {
-          backendRegistryLog.warn("usage-turn-start-repair-failed", {
+          backendRegistryLog.warn("usage-turn-time-repair-failed", {
             message: error instanceof Error ? error.message : String(error),
           });
         })
@@ -10655,6 +10668,63 @@ export class DesktopBackendRegistry {
   }
 
   /**
+   * Repair ledger turn times once per profile. Two bugs left them wrong:
+   *
+   * - Claude turns were dated by reading their UUIDv4 ids as UUIDv7, which
+   *   stored starts in years such as 2042 and 6903.
+   * - Every launch rewrote each turn's start to its first usage write and
+   *   cleared ends the lines did not carry.
+   *
+   * A Codex turn id is a UUIDv7 that carries the start. PwrAgent's own Claude
+   * transcript has each turn's first entry and its recorded end. The store
+   * keeps a recovered time only when it is plausible and better than the
+   * stored one, and clears any start that is still implausible.
+   */
+  private async repairThreadUsageTurnTimesOnce(): Promise<void> {
+    const read = this.overlayStore.readThreadUsageTurnTimeRepairCandidates;
+    const repair = this.overlayStore.repairThreadUsageTurnTimes;
+    if (!read || !repair) {
+      return;
+    }
+    const rows = await read.call(this.overlayStore);
+    // Nothing recorded yet: leave the marker unwritten rather than commit it
+    // for an empty ledger. The next launch's read is as cheap.
+    if (!rows || rows.length === 0) {
+      return;
+    }
+    const claudeTurns = new Map<string, Map<string, ClaudeTurnTimes>>();
+    for (const threadId of new Set(rows.flatMap((row) => row.backend === "claude" ? [row.threadId] : []))) {
+      try {
+        claudeTurns.set(threadId, claudeTurnTimes(await this.claudeBackend.readThread(threadId)));
+      } catch {
+        // A deleted transcript leaves the turn's stored times in place.
+      }
+    }
+    const repairs = rows.flatMap((row) => {
+      const claude = row.backend === "claude" && row.turnId
+        ? claudeTurns.get(row.threadId)?.get(row.turnId)
+        : undefined;
+      const startedAt = claude?.startedAt ?? readUuidV7Timestamp(row.turnId);
+      const completedAt = row.completedAt === undefined || row.completedAtInferred
+        ? claude?.completedAt
+        : undefined;
+      return startedAt === undefined && completedAt === undefined
+        ? []
+        : [{
+            usageTurnId: row.usageTurnId,
+            ...(startedAt !== undefined ? { startedAt } : {}),
+            ...(completedAt !== undefined ? { completedAt } : {}),
+          }];
+    });
+    const repaired = await repair.call(this.overlayStore, { repairs });
+    backendRegistryLog.info("usage-turn-time-repair", {
+      candidates: rows.length,
+      recovered: repairs.length,
+      repaired,
+    });
+  }
+
+  /**
    * Record an end for pricing-ledger turns that no process will ever finish.
    *
    * Each turn runs in an app-server or ACP agent process that one registry
@@ -10666,45 +10736,6 @@ export class DesktopBackendRegistry {
    * usage write for a day qualify. The repair marks each end as inferred, so
    * if such a turn is still live, its terminal event replaces the estimate.
    */
-  /**
-   * Repair ledger turn starts that cannot be real times. Claude turns were
-   * dated by reading their UUIDv4 ids as UUIDv7. PwrAgent's own Claude
-   * transcript still has each turn's first entry, so recover the start from
-   * it. Any other implausible start is cleared, and readers fall back to the
-   * turn's first observation.
-   */
-  private async repairImplausibleThreadUsageTurnStartsAtStartup(): Promise<void> {
-    const read = this.overlayStore.readImplausibleThreadUsageTurnStarts;
-    const repair = this.overlayStore.repairThreadUsageTurnStarts;
-    if (!read || !repair) {
-      return;
-    }
-    const rows = await read.call(this.overlayStore, { limit: USAGE_TURN_REPAIR_BATCH_LIMIT });
-    if (rows.length === 0) {
-      return;
-    }
-    const claudeStarts = new Map<string, Map<string, number>>();
-    for (const threadId of new Set(rows.flatMap((row) => row.backend === "claude" ? [row.threadId] : []))) {
-      try {
-        claudeStarts.set(threadId, claudeTurnStartTimes(await this.claudeBackend.readThread(threadId)));
-      } catch {
-        // A deleted transcript leaves the start unknown.
-      }
-    }
-    const repairs = rows.map((row) => {
-      const startedAt = row.backend === "claude" && row.turnId
-        ? claudeStarts.get(row.threadId)?.get(row.turnId)
-        : undefined;
-      return { usageTurnId: row.usageTurnId, ...(startedAt !== undefined ? { startedAt } : {}) };
-    });
-    const repaired = await repair.call(this.overlayStore, { repairs });
-    backendRegistryLog.info("usage-turn-start-repair", {
-      found: rows.length,
-      recovered: repairs.filter((row) => row.startedAt !== undefined).length,
-      repaired,
-    });
-  }
-
   private async repairUnfinishedThreadUsageTurnsAtStartup(): Promise<void> {
     const repair = this.overlayStore.repairUnfinishedThreadUsageTurns;
     if (!repair) {

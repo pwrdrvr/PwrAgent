@@ -1639,6 +1639,8 @@ describe("sqlite write metrics", () => {
         overlayStore: store as never,
       });
       try {
+        // Startup ledger repairs are setup, not the discovery under measure.
+        await (registry as unknown as { usageTurnStartupRepair: Promise<void> }).usageTurnStartupRepair;
         const { writes } = await measureSqliteWrites(async () => {
           await registry.listThreads({ backend: "codex", forceRefresh: true });
         });

@@ -649,7 +649,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       expect(await lineStartedAt("codex")).toBe(0x019a3c1f5e2b);
     });
 
-    it("repairs a stored Claude start from PwrAgent's own Claude transcript at launch", async () => {
+    it("repairs stored turn times once, from Codex turn ids and PwrAgent's own Claude transcripts", async () => {
       const claudeRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-starts-"));
       try {
         const claudeStore = new ClaudeSessionStore(claudeRoot);
@@ -665,10 +665,15 @@ describe("DesktopBackendRegistry usage turn ends", () => {
           { type: "message", id: `user:${claudeTurnId}`, role: "user", text: "Hi", createdAt: userAt, turn },
           { type: "message", id: "answer", role: "assistant", text: "Hello", createdAt: userAt + 3_065, turn },
         ]);
-        const seed = (backend: AppServerBackendKind, threadId: string, turnId: string) => store.upsertThreadUsageLine({ line: {
+        const seed = (
+          backend: AppServerBackendKind,
+          threadId: string,
+          turnId: string,
+          startedAt = 0x8d94fa8e3a98,
+        ) => store.upsertThreadUsageLine({ line: {
           backend, provider: backend === "claude" ? "anthropic" : "openai", threadId, turnId,
           usageLineId: `line-${turnId}`, source: "live", scope: "turn", status: "finalized",
-          turnUsageAttributed: true, startedAt: 0x8d94fa8e3a98, createdAt: completedAt, completedAt,
+          turnUsageAttributed: true, startedAt, createdAt: completedAt, completedAt,
           currency: "USD", priceStatus: "unpriced", model: "claude-haiku-5-5",
           inputTokens: 10, cachedInputTokens: 0, uncachedInputTokens: 10, outputTokens: 1,
           reasoningOutputTokens: 0, totalTokens: 11, uncachedInputCostMicros: 0,
@@ -677,15 +682,36 @@ describe("DesktopBackendRegistry usage turn ends", () => {
         await seed("claude", claudeThreadId, claudeTurnId);
         // No transcript to recover from: the start becomes unknown.
         await seed("claude", "0f2b7c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "8f477f20-e354-4c1a-9d2e-1f0a5b6c7d8e");
+        // An earlier launch reset this Codex turn's start to its first usage
+        // write; its UUIDv7 id still carries the real start.
+        const codexTurnId = "01a16e99-96ab-7a82-b681-9ca30ad325fa";
+        await seed("codex", "codex-thread", codexTurnId, completedAt);
+        // The same rewrite cleared the Claude turn's end; startup inferred one.
+        stateDb.raw.prepare(
+          "UPDATE thread_usage_turns SET completed_at = ?, completed_at_inferred = 1 WHERE turn_id = ?",
+        ).run(completedAt + 60_000, claudeTurnId);
         expect(startedAt(claudeTurnId)).toBe(0x8d94fa8e3a98);
+        const turnTimes = (turnId: string) => stateDb.raw.prepare(
+          "SELECT started_at, completed_at, completed_at_inferred FROM thread_usage_turns WHERE turn_id = ?",
+        ).get(turnId);
 
         const registry = createRegistry([], { claudeBackendOptions: { store: claudeStore } });
         await internals(registry).usageTurnStartupRepair;
 
-        expect(startedAt(claudeTurnId)).toBe(userAt);
+        expect(turnTimes(claudeTurnId)).toEqual({
+          started_at: userAt, completed_at: completedAt, completed_at_inferred: null,
+        });
         expect(startedAt("8f477f20-e354-4c1a-9d2e-1f0a5b6c7d8e")).toBeNull();
+        expect(startedAt(codexTurnId)).toBe(0x01a16e9996ab);
         const { lines } = await store.readThreadPricing({ backend: "claude", threadId: claudeThreadId });
         expect(lines[0].startedAt).toBe(userAt);
+
+        // The repair runs once per profile: a later launch leaves the ledger alone.
+        stateDb.raw.prepare("UPDATE thread_usage_turns SET started_at = ? WHERE turn_id = ?")
+          .run(completedAt, codexTurnId);
+        const relaunched = createRegistry([], { claudeBackendOptions: { store: claudeStore } });
+        await internals(relaunched).usageTurnStartupRepair;
+        expect(startedAt(codexTurnId)).toBe(completedAt);
       } finally {
         await rm(claudeRoot, { recursive: true, force: true });
       }

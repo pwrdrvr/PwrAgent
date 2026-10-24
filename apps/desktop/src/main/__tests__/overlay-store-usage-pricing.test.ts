@@ -543,59 +543,89 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     );
   });
 
-  it("repairs turn starts that cannot be real times in one commit", async () => {
+  it("repairs ledger turn times once, keeping only plausible and better times", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     useFileStateDb();
     const now = PRICING_CATALOG_TIME;
-    const seed = (turnId: string, startedAt: number) => store.upsertThreadUsageLine({ line: buildUsageLine({
-      source: "live", status: "pending", turnUsageAttributed: true,
-      turnId, startedAt, createdAt: now, usageLineId: `line-${turnId}`,
-    }) });
-    // Claude UUIDv4 turn ids read as UUIDv7 milliseconds.
-    await seed("year-6903", 0x8d94fa8e3a98);
-    await seed("year-2042", 0x02142f8ec60e);
-    await seed("year-2025", Date.UTC(2025, 11, 31));
-    await seed("next-year", Date.UTC(2027, 11, 31));
-    await seed("real", now - 6_000);
+    const turns = {
+      // Claude UUIDv4 turn ids read as UUIDv7 milliseconds.
+      year6903: 0x8d94fa8e3a98,
+      year2042: 0x02142f8ec60e,
+      year2025: Date.UTC(2025, 11, 31),
+      // An earlier launch reset the start to the first usage write.
+      overwritten: now,
+      afterObservation: now,
+      realStart: now - 6_000,
+      inferredEnd: now - 6_000,
+      observedEnd: now - 6_000,
+    };
+    for (const [turnId, startedAt] of Object.entries(turns)) {
+      await store.upsertThreadUsageLine({ line: buildUsageLine({
+        source: "live", status: "pending", turnUsageAttributed: true,
+        turnId, startedAt, createdAt: now, usageLineId: `line-${turnId}`,
+      }) });
+    }
+    const setEnd = stateDb.raw.prepare(
+      "UPDATE thread_usage_turns SET completed_at = ?, completed_at_inferred = ? WHERE turn_id = ?",
+    );
+    for (const turnId of ["realStart", "observedEnd"]) setEnd.run(now + 9_000, null, turnId);
+    setEnd.run(now + 50_000, 1, "inferredEnd");
     const turnRow = (turnId: string) => stateDb.raw.prepare(
-      "SELECT usage_turn_id, started_at FROM thread_usage_turns WHERE turn_id = ?",
-    ).get(turnId) as { usage_turn_id: string; started_at: number | null };
-    const startOf = (turnId: string) => turnRow(turnId).started_at;
+      `SELECT usage_turn_id, started_at, completed_at, completed_at_inferred
+         FROM thread_usage_turns WHERE turn_id = ?`,
+    ).get(turnId) as {
+      usage_turn_id: string;
+      started_at: number | null;
+      completed_at: number | null;
+      completed_at_inferred: number | null;
+    };
     const usageTurnId = (turnId: string) => turnRow(turnId).usage_turn_id;
 
-    const found = await store.readImplausibleThreadUsageTurnStarts({ limit: 10, now });
-    expect(found.map((row) => row.turnId).sort()).toEqual(["year-2025", "year-2042", "year-6903"]);
+    const candidates = await store.readThreadUsageTurnTimeRepairCandidates({ now });
+    // Only a turn with a plausible start before its first observation and an
+    // observed end is left out.
+    expect(candidates?.map((row) => row.turnId).sort()).toEqual(
+      Object.keys(turns).filter((turnId) => turnId !== "realStart" && turnId !== "observedEnd").sort(),
+    );
 
-    const { result, writes } = await measureSqliteWrites(() => store.repairThreadUsageTurnStarts({
+    const { result, writes } = await measureSqliteWrites(() => store.repairThreadUsageTurnTimes({
       now,
       repairs: [
-        { usageTurnId: usageTurnId("year-6903"), startedAt: now - 6_000 },
-        // A recovered start that is still implausible clears the start.
-        { usageTurnId: usageTurnId("year-2042"), startedAt: 0x02142f8ec60e },
-        { usageTurnId: usageTurnId("year-2025") },
-        // A start that is already plausible is left alone.
-        { usageTurnId: usageTurnId("real"), startedAt: now },
+        { usageTurnId: usageTurnId("year6903"), startedAt: now - 6_000 },
+        // A recovered start that is itself implausible is not kept.
+        { usageTurnId: usageTurnId("year2042"), startedAt: 0x02142f8ec60e },
+        { usageTurnId: usageTurnId("overwritten"), startedAt: now - 5_000 },
+        // A start cannot follow the turn's first observation.
+        { usageTurnId: usageTurnId("afterObservation"), startedAt: now + 1_000 },
+        // A later recovered start does not replace an earlier one.
+        { usageTurnId: usageTurnId("realStart"), startedAt: now - 1_000 },
+        { usageTurnId: usageTurnId("inferredEnd"), completedAt: now + 40_000 },
+        // A recovered end does not replace an observed one.
+        { usageTurnId: usageTurnId("observedEnd"), completedAt: now + 1 },
       ],
     }));
 
-    expect(result).toBe(3);
+    expect(result).toBe(9);
     expectSqliteWriteBudget({
-      scenario: "usage-turn-start-repair",
+      scenario: "usage-turn-time-repair",
       writes,
-      note: "Startup repair of three implausible ledger turn starts: one transaction however many turns; zero commits when none qualify",
+      note: "One-time repair of seven recovered ledger turn times plus a sweep clearing two implausible starts: one transaction however many turns, run once per profile",
     });
-    expect(startOf("year-6903")).toBe(now - 6_000);
-    expect(startOf("year-2042")).toBeNull();
-    expect(startOf("year-2025")).toBeNull();
-    expect(startOf("next-year")).toBe(Date.UTC(2027, 11, 31));
-    expect(startOf("real")).toBe(now - 6_000);
+    expect(turnRow("year6903").started_at).toBe(now - 6_000);
+    expect(turnRow("year2042").started_at).toBeNull();
+    expect(turnRow("year2025").started_at).toBeNull();
+    expect(turnRow("overwritten").started_at).toBe(now - 5_000);
+    expect(turnRow("afterObservation").started_at).toBe(now);
+    expect(turnRow("realStart").started_at).toBe(now - 6_000);
+    expect(turnRow("inferredEnd")).toMatchObject({ completed_at: now + 40_000, completed_at_inferred: null });
+    expect(turnRow("observedEnd").completed_at).toBe(now + 9_000);
     // A cleared start leaves the line's own time for readers.
     const { lines } = await store.readThreadPricing({ backend: "codex", threadId: "thread-1" });
-    expect(lines.find((line) => line.turnId === "year-2025")?.startedAt).toBeUndefined();
-    expect(lines.find((line) => line.turnId === "year-6903")?.startedAt).toBe(now - 6_000);
+    expect(lines.find((line) => line.turnId === "year2025")?.startedAt).toBeUndefined();
+    expect(lines.find((line) => line.turnId === "overwritten")?.startedAt).toBe(now - 5_000);
 
-    // Nothing qualifies on the next launch, so it makes no repair call.
-    expect(await store.readImplausibleThreadUsageTurnStarts({ limit: 10, now })).toEqual([]);
+    // The repair runs once per profile.
+    expect(await store.readThreadUsageTurnTimeRepairCandidates({ now })).toBeUndefined();
   });
 
   it("ends a turn at its first usage write when its last write is a bulk rewrite", async () => {
