@@ -32,9 +32,11 @@ import type {
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import {
+  anchorTurnUsageEntries,
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
   parseCodexAsyncQuestionReply,
+  turnUsageEntryTurnId,
 } from "@pwragent/shared";
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
@@ -274,6 +276,21 @@ function insertPendingEntry(
   const pendingTurnId = pendingEntry.turn?.id;
   if (!pendingTurnId || isAssistantFinalMessage(pendingEntry)) {
     entries.push(pendingEntry);
+    return;
+  }
+
+  // A turn total follows its turn's last entry; its own stamp says only when
+  // it was minted, often before the final reply.
+  const usageTurnId = turnUsageEntryTurnId(pendingEntry);
+  if (usageTurnId !== undefined) {
+    const lastTurnIndex = entries.findLastIndex(
+      (entry) => entry.turn?.id === usageTurnId,
+    );
+    if (lastTurnIndex === -1) {
+      entries.push(pendingEntry);
+    } else {
+      entries.splice(lastTurnIndex + 1, 0, pendingEntry);
+    }
     return;
   }
 
@@ -836,15 +853,21 @@ export function TranscriptList(props: TranscriptListProps) {
     ])) {
       insertPendingEntry(entries, pendingEntry);
     }
-    return injectTurnFailures(
-      injectQuestionnaireActivities(
-        injectMessagingBindingTransitions(
-          injectPermissionTransitions(entries, props.permissionTransitions),
-          props.messagingBindingTransitions,
+    // Pending rows and synthetic rows (transitions, questionnaires, turn
+    // failures) are placed by time. A row of a turn placed after that turn's
+    // total would leave the total mid-turn, so the rendered list ends with
+    // each total back at the end of its turn.
+    return anchorTurnUsageEntries(
+      injectTurnFailures(
+        injectQuestionnaireActivities(
+          injectMessagingBindingTransitions(
+            injectPermissionTransitions(entries, props.permissionTransitions),
+            props.messagingBindingTransitions,
+          ),
+          props.questionnaireActivities,
         ),
-        props.questionnaireActivities,
+        props.turnFailures,
       ),
-      props.turnFailures,
     );
   }, [
     props.entries,

@@ -2,8 +2,10 @@ import { useCodexBackgroundTerminals, type BackgroundTerminalView } from "./useC
 import { activityDetailsMatch } from "./activity-detail-match";
 import { useThreadUsageDisplay } from "./useThreadUsageDisplay";
 import {
+  anchorTurnUsageEntries,
   reconcileCompletedTurnUsageEntries,
   tokenUsageActivityScope,
+  turnUsageEntryTurnId,
   isTerminalTurnMetadata,
 } from "@pwragent/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -825,15 +827,20 @@ function mergeTranscriptEntries(
     appendIndexedEntry(optimisticEntry);
   }
 
+  // The tiers above place rows by timestamp and arrival order, which put a
+  // turn total wherever its clock happened to land. A total's place is the
+  // end of its own turn, so every merged list ends there.
   if (retainedReviewIds.size === 0) {
-    return merged;
+    return anchorTurnUsageEntries(merged);
   }
   const retainedReviews: AppServerThreadEntry[] = [];
   const authoritativeEntries: AppServerThreadEntry[] = [];
   for (const entry of merged) {
     (retainedReviewIds.has(entry.id) ? retainedReviews : authoritativeEntries).push(entry);
   }
-  return reconcileRetainedTranscriptTail(authoritativeEntries, retainedReviews, new Map());
+  return anchorTurnUsageEntries(
+    reconcileRetainedTranscriptTail(authoritativeEntries, retainedReviews, new Map()),
+  );
 }
 
 function mergeTranscriptMessages(
@@ -967,11 +974,11 @@ function preserveRetainedTranscriptTail(
       freshEntryByRetainedEntry.set(retainedMatch, freshEntry);
     }
   }
-  const entries = reconcileRetainedTranscriptTail(
+  const entries = anchorTurnUsageEntries(reconcileRetainedTranscriptTail(
     response.replay.entries,
     retainedResponse.replay.entries,
     freshEntryByRetainedEntry,
-  );
+  ));
 
   return {
     ...response,
@@ -1030,6 +1037,54 @@ function reconcileRetainedTranscriptTail(
     return entries;
   }
 
+  // A retained row with no time cannot be placed by time. When its turn is on
+  // the page, its place is inside that turn. Left to the suffix merge below,
+  // it went to the very end, below every later turn, and its turn's total
+  // followed it there.
+  const turnIdsOnPage = new Set<string>();
+  for (const entry of entries) {
+    if (entry.turn?.id) {
+      turnIdsOnPage.add(entry.turn.id);
+    }
+  }
+  const untimedRetainedByTurn = new Map<string, AppServerThreadEntry[]>();
+  pendingRetainedEntries = pendingRetainedEntries.filter((entry) => {
+    const turnId = entry.turn?.id;
+    if (
+      !turnId
+      || !turnIdsOnPage.has(turnId)
+      || typeof transcriptRefreshOrderTimestamp(entry) === "number"
+    ) {
+      return true;
+    }
+    const rows = untimedRetainedByTurn.get(turnId);
+    if (rows) {
+      rows.push(entry);
+    } else {
+      untimedRetainedByTurn.set(turnId, [entry]);
+    }
+    return false;
+  });
+
+  return insertEntriesAtEndOfTurns(
+    mergeRetainedTranscriptSuffix(
+      entries,
+      trailingInsertionFloor,
+      pendingRetainedEntries,
+    ),
+    untimedRetainedByTurn,
+  );
+}
+
+function mergeRetainedTranscriptSuffix(
+  entries: AppServerThreadEntry[],
+  trailingInsertionFloor: number,
+  pendingRetainedEntries: AppServerThreadEntry[],
+): AppServerThreadEntry[] {
+  if (pendingRetainedEntries.length === 0) {
+    return entries;
+  }
+
   // A bounded newest-page refresh advances naturally as later turns arrive.
   // Entries that fell off its front are older history, not missing live tail,
   // and must remain ahead of the newer page. Entries after the last retained
@@ -1075,6 +1130,52 @@ function reconcileRetainedTranscriptTail(
     ...entries.slice(0, trailingInsertionFloor),
     ...mergedSuffix,
   ];
+}
+
+/**
+ * Inserts rows after the last entry of their own turn, ahead of that turn's
+ * total. One pass to find the anchors and one to rebuild. A row whose turn has
+ * no anchor goes last, as it would have before.
+ */
+function insertEntriesAtEndOfTurns(
+  entries: AppServerThreadEntry[],
+  rowsByTurn: ReadonlyMap<string, AppServerThreadEntry[]>,
+): AppServerThreadEntry[] {
+  if (rowsByTurn.size === 0) {
+    return entries;
+  }
+  const lastIndexByTurn = new Map<string, number>();
+  entries.forEach((entry, index) => {
+    const turnId = entry.turn?.id;
+    if (
+      turnId
+      && rowsByTurn.has(turnId)
+      && turnUsageEntryTurnId(entry) === undefined
+    ) {
+      lastIndexByTurn.set(turnId, index);
+    }
+  });
+  const rowsAfterIndex = new Map<number, AppServerThreadEntry[]>();
+  const unanchoredRows: AppServerThreadEntry[] = [];
+  for (const [turnId, rows] of rowsByTurn) {
+    const anchorIndex = lastIndexByTurn.get(turnId);
+    if (anchorIndex === undefined) {
+      unanchoredRows.push(...rows);
+      continue;
+    }
+    const anchored = rowsAfterIndex.get(anchorIndex);
+    if (anchored) {
+      anchored.push(...rows);
+    } else {
+      rowsAfterIndex.set(anchorIndex, [...rows]);
+    }
+  }
+  const result: AppServerThreadEntry[] = [];
+  entries.forEach((entry, index) => {
+    result.push(entry, ...(rowsAfterIndex.get(index) ?? []));
+  });
+  result.push(...unanchoredRows);
+  return result;
 }
 
 function transcriptRefreshOrderTimestamp(
@@ -1790,7 +1891,12 @@ function reorderHydratedEntriesByKnownOrder(
   });
   const hydratedEntries: HydratedEntryOrderMatch[] = entries.map(
     (entry, hydrationIndex) => {
-      const source = sourceByHydratedEntry.get(entry);
+      // A turn total's place is the end of its turn, which the read already
+      // knows. The live ledger only knows when the total arrived, often
+      // before its turn's final reply, so it never orders one.
+      const source = turnUsageEntryTurnId(entry) === undefined
+        ? sourceByHydratedEntry.get(entry)
+        : undefined;
       const sourceIndex = source ? sourceIndexes.get(source) : undefined;
       return {
         entry,
@@ -1977,6 +2083,12 @@ function carryForwardTranscriptEntryOrder(
 
     changed = true;
     entries = mergeTranscriptEntries(entries, [source]);
+  }
+
+  const anchoredEntries = anchorTurnUsageEntries(entries);
+  if (anchoredEntries !== entries) {
+    changed = true;
+    entries = anchoredEntries;
   }
 
   const responseWithOrderedEntries = changed
