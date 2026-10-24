@@ -1,14 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import type {
-  FederationRemoteTarget,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
-import {
-  buildThreadIdentityKey,
-  isRemoteFederationTarget,
-} from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import {
+  buildThreadOwnerKey,
+  readRendererFederationTarget,
+  resolveThreadOwnerFederationTarget,
+} from "../../lib/federation-window";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 
 const SELECTED_REFRESH_INTERVAL_MS = 60_000;
@@ -37,7 +34,7 @@ export function useThreadGitWorkingStateRefresh(params: {
     ): void => {
       if (!desktopApi?.refreshThreadGitWorkingState) return;
       if (!resolveThreadWorkingStatePath(thread)) return;
-      const federationTarget = resolveWorkingStateFederationTarget(
+      const federationTarget = resolveThreadOwnerFederationTarget(
         thread,
         federationWindowInstanceId,
       );
@@ -87,7 +84,7 @@ export function useThreadGitWorkingStateRefresh(params: {
   const lastUserRefreshAtByThreadKey = useRef(new Map<string, number>());
   const prefetch = useCallback(
     (thread: NavigationThreadSummary): void => {
-      const key = buildWorkingStateThreadKey(thread, federationWindowInstanceId);
+      const key = buildThreadOwnerKey(thread, federationWindowInstanceId);
       const now = Date.now();
       const lastRefreshAt = lastUserRefreshAtByThreadKey.current.get(key);
       if (
@@ -112,34 +109,7 @@ function buildRefreshRequestKey(
   const worktreePath = resolveThreadWorkingStatePath(thread);
   if (!worktreePath) return undefined;
   return JSON.stringify({
-    threadKey: buildWorkingStateThreadKey(thread, federationWindowInstanceId),
+    threadKey: buildThreadOwnerKey(thread, federationWindowInstanceId),
     worktreePath,
   });
-}
-
-function buildWorkingStateThreadKey(
-  thread: NavigationThreadSummary,
-  federationWindowInstanceId?: string,
-): string {
-  const federationTarget = resolveWorkingStateFederationTarget(
-    thread,
-    federationWindowInstanceId,
-  );
-  return `${federationTarget?.instanceId ?? "local"}:${buildThreadIdentityKey(
-    thread.source,
-    thread.id,
-  )}`;
-}
-
-function resolveWorkingStateFederationTarget(
-  thread: NavigationThreadSummary,
-  federationWindowInstanceId?: string,
-): FederationRemoteTarget | undefined {
-  const threadTarget = thread.federation?.ref.target;
-  if (threadTarget && isRemoteFederationTarget(threadTarget)) {
-    return threadTarget;
-  }
-  return federationWindowInstanceId
-    ? { scope: "remote", instanceId: federationWindowInstanceId }
-    : undefined;
 }

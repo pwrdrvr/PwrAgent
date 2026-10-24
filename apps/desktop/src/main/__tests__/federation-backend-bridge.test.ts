@@ -3322,6 +3322,48 @@ describe("federation backend bridge", () => {
     ]);
   });
 
+  it("rejects a working-state refresh without a valid thread reference", async () => {
+    const refreshThreadGitWorkingState = vi.fn(async () => ({ scheduled: true }));
+    const backend = {
+      refreshThreadGitWorkingState,
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    for (const [index, params] of [
+      { backend: "not-a-backend", threadId: "thread-1", trigger: "user" },
+      { backend: "codex", threadId: 7, trigger: "user" },
+      { backend: "codex", threadId: "  ", trigger: "user" },
+    ].entries()) {
+      await router.routeEnvelope({
+        sourcePeerId: "viewer_one",
+        envelope: {
+          id: `invalid-working-state-request-${index}`,
+          kind: "request",
+          method: FEDERATION_BACKEND_METHODS.refreshThreadGitWorkingState,
+          params,
+          protocolVersion: 1,
+          sourceInstanceId: "viewer_one",
+          targetInstanceId: "owner_one",
+          createdAt: 1_000,
+        },
+      });
+    }
+
+    expect(refreshThreadGitWorkingState).not.toHaveBeenCalled();
+    expect(replies).toHaveLength(3);
+    expect(replies.every((reply) => reply.kind === "error")).toBe(true);
+  });
+
   it("routes mark-seen requests through the remote overlay owner", async () => {
     const backend = {
       markThreadSeen: vi.fn(async () => ({

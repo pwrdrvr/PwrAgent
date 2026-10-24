@@ -207,6 +207,7 @@ import type {
   UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
 import {
+  isAppServerBackendKind,
   normalizeNavigationSnapshotThreadKeys,
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
@@ -366,10 +367,21 @@ function localizeRefreshThreadPullRequestsRequest(
   };
 }
 
-/** The owner refreshes its own worktree; a viewer cannot name a relay target. */
+/**
+ * The owner refreshes its own worktree; a viewer cannot name a relay target,
+ * and a malformed thread reference never reaches the owner's thread lookups.
+ */
 function localizeRefreshThreadGitWorkingStateRequest(
   request: RefreshOwnedThreadGitWorkingStateRequest,
 ): RefreshOwnedThreadGitWorkingStateRequest {
+  if (
+    typeof request?.backend !== "string"
+    || !isAppServerBackendKind(request.backend)
+    || typeof request.threadId !== "string"
+    || !request.threadId.trim()
+  ) {
+    throw new Error("Git working-state refresh needs a valid thread reference.");
+  }
   return {
     backend: request.backend,
     threadId: request.threadId,

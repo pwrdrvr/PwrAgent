@@ -3475,10 +3475,10 @@ class DesktopAppServerService {
       request.federationTarget
       && isRemoteFederationTarget(request.federationTarget)
     ) {
-      return await this.refreshRemoteThreadGitWorkingState({
-        ...request,
-        federationTarget: request.federationTarget,
-      });
+      return await this.refreshRemoteThreadGitWorkingState(
+        request,
+        request.federationTarget,
+      );
     }
     await getDesktopBackendRegistry().refreshThreadDirectoryRelationship(request);
     const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
@@ -3505,11 +3505,9 @@ class DesktopAppServerService {
    * `navigation/threadGitWorkingState/updated`, which fires only on change.
    */
   private async refreshRemoteThreadGitWorkingState(
-    request: RefreshThreadGitWorkingStateRequest & {
-      federationTarget: FederationRemoteTarget;
-    },
+    request: RefreshThreadGitWorkingStateRequest,
+    federationTarget: FederationRemoteTarget,
   ): Promise<RefreshThreadGitWorkingStateResponse> {
-    const { federationTarget } = request;
     const federationRuntime = getDesktopFederationRuntime();
     // Capabilities can survive a disconnect in remembered peer metadata.
     // Hover and scheduled refreshes stay silent until the owner reconnects.
