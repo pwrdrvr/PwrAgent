@@ -342,6 +342,29 @@ describe("Claude SDK backend", () => {
       .toMatchObject({ params: { tokenUsage: { claudeCostUSD: 0.002 } } });
   });
 
+  it("reports when a turn started, since a UUIDv4 turn id carries no time", async () => {
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["usage limit"] } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const before = Date.now();
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Investigate" }] });
+    await f.waitForTurn();
+    const after = Date.now();
+    const turnOf = (method: string) => {
+      const event = f.events.find((candidate) => candidate.notification.method === method);
+      return (event?.notification.params as { turn?: { startedAt?: number } } | undefined)?.turn;
+    };
+    const startedAt = turnOf("turn/started")?.startedAt;
+    expect(startedAt).toBeGreaterThanOrEqual(before);
+    expect(startedAt).toBeLessThanOrEqual(after);
+    expect(turnOf("turn/failed")?.startedAt).toBe(startedAt);
+    const entries = await f.store.entries(threadId);
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) expect(entry.turn?.startedAt).toBe(startedAt);
+  });
+
   it("waits for the current turn when an earlier turn already completed", async () => {
     const enteredSecondTurn = Promise.withResolvers<void>();
     const finishSecondTurn = Promise.withResolvers<void>();

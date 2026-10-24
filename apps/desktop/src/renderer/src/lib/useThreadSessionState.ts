@@ -5,6 +5,7 @@ import {
   reconcileCompletedTurnUsageEntries,
   tokenUsageActivityScope,
   isTerminalTurnMetadata,
+  readUuidV7Timestamp,
 } from "@pwragent/shared";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
@@ -2863,18 +2864,6 @@ function buildTurnMetadata(params: {
     ...(completedAt ? { completedAt } : {}),
     ...(typeof durationMs === "number" ? { durationMs } : {}),
   };
-}
-
-function readUuidV7Timestamp(id: string | undefined): number | undefined {
-  if (!id) {
-    return undefined;
-  }
-  const hex = id.replace(/-/g, "").slice(0, 12);
-  if (!/^[0-9a-fA-F]{12}$/.test(hex)) {
-    return undefined;
-  }
-  const timestamp = Number.parseInt(hex, 16);
-  return Number.isFinite(timestamp) ? timestamp : undefined;
 }
 
 function mergeKnownTurnMetadata(params: {

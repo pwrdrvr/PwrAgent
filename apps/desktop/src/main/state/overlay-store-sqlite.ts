@@ -121,6 +121,23 @@ const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
 // shared by more than 2 lines; one migration stamp was shared by 7,251.
 const THREAD_USAGE_BULK_REWRITE_MIN_LINES = 64;
 
+// PwrAgent recorded no turn usage before 2026.
+const EARLIEST_USAGE_TURN_START = Date.UTC(2026, 0, 1);
+// Set once the one-time ledger turn time repair has run.
+const USAGE_TURN_TIME_REPAIR_META_KEY = "usage_turn_time_repair_v1";
+
+/**
+ * A recorded turn start falls between 2026 and the end of next year. A value
+ * outside that span is not a clock reading: Claude's UUIDv4 turn ids, read as
+ * UUIDv7, stored starts in years such as 2042, 2090, and 6903.
+ */
+function plausibleUsageTurnStartSpan(now: number): { from: number; before: number } {
+  return {
+    from: EARLIEST_USAGE_TURN_START,
+    before: Date.UTC(new Date(now).getUTCFullYear() + 2, 0, 1),
+  };
+}
+
 class UnsupportedStarMapWorkspaceVersionError extends Error {}
 
 function assertSupportedStarMapWorkspacePayload(value: unknown): void {
@@ -2333,6 +2350,122 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   /**
+   * Ledger turns whose recorded times may be wrong, for the one-time repair
+   * in `repairThreadUsageTurnTimes`. Undefined once that repair has run.
+   *
+   * - A start that is not a plausible time (see `plausibleUsageTurnStartSpan`):
+   *   Claude's UUIDv4 turn ids were read as UUIDv7.
+   * - A start equal to the first observation, or none: every launch before
+   *   provider-scope convergence stopped rewriting the ledger reset each start
+   *   to its first usage write.
+   * - An end that is missing or inferred: the same rewrite cleared ends, and
+   *   the startup repair inferred some of them again.
+   */
+  async readThreadUsageTurnTimeRepairCandidates(params: { now?: number } = {}): Promise<Array<{
+    backend: string;
+    completedAt?: number;
+    completedAtInferred: boolean;
+    threadId: string;
+    turnId?: string;
+    usageTurnId: string;
+  }> | undefined> {
+    if (this.stateDb.getMeta(USAGE_TURN_TIME_REPAIR_META_KEY)) {
+      return undefined;
+    }
+    const span = plausibleUsageTurnStartSpan(params.now ?? Date.now());
+    const rows = this.stateDb.raw.prepare(
+      `SELECT usage_turn_id, backend, thread_id, turn_id, completed_at, completed_at_inferred
+         FROM thread_usage_turns
+        WHERE started_at IS NULL
+           OR started_at < ?
+           OR started_at >= ?
+           OR started_at = observed_at
+           OR completed_at IS NULL
+           OR completed_at_inferred = 1`,
+    ).all(span.from, span.before) as Array<{
+      backend: string;
+      completed_at: number | null;
+      completed_at_inferred: number | null;
+      thread_id: string;
+      turn_id: string | null;
+      usage_turn_id: string;
+    }>;
+    return rows.map((row) => ({
+      backend: row.backend,
+      ...(row.completed_at !== null ? { completedAt: row.completed_at } : {}),
+      completedAtInferred: row.completed_at_inferred === 1,
+      threadId: row.thread_id,
+      ...(row.turn_id ? { turnId: row.turn_id } : {}),
+      usageTurnId: row.usage_turn_id,
+    }));
+  }
+
+  /**
+   * Apply the one-time turn time repair and record that it ran. One
+   * transaction.
+   *
+   * A recovered start replaces the stored one when it is plausible, no later
+   * than the turn's first observation, and earlier than the stored start (or
+   * the stored start is implausible). Any start still implausible afterwards
+   * is cleared; readers then fall back to the first observation.
+   * A recovered end replaces only a missing or inferred end, and never lands
+   * before the start.
+   */
+  async repairThreadUsageTurnTimes(params: {
+    now?: number;
+    repairs: Array<{ completedAt?: number; startedAt?: number; usageTurnId: string }>;
+  }): Promise<number> {
+    const now = params.now ?? Date.now();
+    const span = plausibleUsageTurnStartSpan(now);
+    const repair = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET started_at = CASE
+                WHEN @startedAt IS NOT NULL
+                  AND @startedAt >= @from AND @startedAt < @before
+                  AND @startedAt <= observed_at
+                  AND (started_at IS NULL OR started_at < @from OR started_at >= @before
+                    OR @startedAt < started_at)
+                  THEN @startedAt
+                ELSE started_at
+              END,
+              completed_at = CASE
+                WHEN @completedAt IS NOT NULL
+                  AND (completed_at IS NULL OR completed_at_inferred = 1)
+                  AND @completedAt >= COALESCE(@startedAt, started_at, observed_at)
+                  THEN @completedAt
+                ELSE completed_at
+              END,
+              completed_at_inferred = CASE
+                WHEN @completedAt IS NOT NULL
+                  AND (completed_at IS NULL OR completed_at_inferred = 1)
+                  AND @completedAt >= COALESCE(@startedAt, started_at, observed_at)
+                  THEN NULL
+                ELSE completed_at_inferred
+              END,
+              updated_at = @now
+        WHERE usage_turn_id = @usageTurnId`,
+    );
+    const clearImplausible = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET started_at = NULL, updated_at = ?
+        WHERE started_at < ? OR started_at >= ?`,
+    );
+    return this.stateDb.raw.transaction(() => {
+      const changed = params.repairs.reduce((total, row) => total + repair.run({
+        before: span.before,
+        completedAt: row.completedAt ?? null,
+        from: span.from,
+        now,
+        startedAt: row.startedAt ?? null,
+        usageTurnId: row.usageTurnId,
+      }).changes, 0);
+      const cleared = clearImplausible.run(now, span.from, span.before).changes;
+      this.stateDb.setMeta(USAGE_TURN_TIME_REPAIR_META_KEY, String(now));
+      return changed + cleared;
+    })();
+  }
+
+  /**
    * Close ledger turns whose end was never observed: the process running them
    * quit or crashed, or its app-server died, before a terminal event arrived.
    * The caller picks `lastWriteBefore` so no live turn can qualify.
@@ -3534,7 +3667,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       )
       .all(backend, threadId, backend, threadId, threadId) as Array<{
       completed_at: number | null;
-      started_at: number;
+      started_at: number | null;
       usage_turn_id: string;
       observed_cold_replay_count: number | null;
       observed_cold_replay_uncached_tokens: number | null;
@@ -3556,7 +3689,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       if (!turn) {
         continue;
       }
-      line.startedAt = turn.started_at;
+      if (turn.started_at !== null) {
+        line.startedAt = turn.started_at;
+      }
       if (line.completedAt === undefined && turn.completed_at !== null) {
         line.completedAt = turn.completed_at;
       }
