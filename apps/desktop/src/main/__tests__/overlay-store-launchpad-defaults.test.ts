@@ -604,7 +604,7 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     });
   });
 
-  it("persists provider-specific launchpad environments across a database reopen", async () => {
+  it("persists a provider-independent launchpad environment across a database reopen", async () => {
     const { dbPath, tempDir } = createTempStateDb(
       "pwragent-provider-launchpad-test-",
     );
@@ -678,9 +678,9 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
           acpRuntime: {
             currentModeId: "default",
           },
-          codexEnvironmentId: "grok-environment",
+          codexEnvironmentId: "codex-environment",
           codexEnvironmentExecutionTarget: "local",
-          codexEnvironmentActionId: "grok-action",
+          codexEnvironmentActionId: "codex-action",
           prompt: "Keep the draft",
           workMode: "worktree",
           branchName: "feature/provider-memory",

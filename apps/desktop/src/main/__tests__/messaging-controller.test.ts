@@ -12750,7 +12750,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Grok Environment\nModel: grok-4.5\nReasoning: low",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Codex Environment\nModel: grok-4.5\nReasoning: low",
       ),
       actions: expect.arrayContaining([
         expect.objectContaining({
@@ -12802,7 +12802,7 @@ describe("MessagingController", () => {
       kind: "confirmation",
       title: "Ready to start",
       body: expect.stringContaining(
-        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Grok Environment\nModel: grok-4.5\nReasoning: low",
+        "Provider: Grok\nWorkspace: Local\nPermissions: Agent default\nEnvironment: Codex Environment\nModel: grok-4.5\nReasoning: low",
       ),
     });
 
@@ -12813,9 +12813,9 @@ describe("MessagingController", () => {
         directoryKey: expect.stringMatching(/^messaging:browse:/),
         launchpad: expect.objectContaining({
           backend: "acp:grok",
-          codexEnvironmentActionId: "grok-action",
+          codexEnvironmentActionId: "codex-action",
           codexEnvironmentExecutionTarget: "local",
-          codexEnvironmentId: "grok-environment",
+          codexEnvironmentId: "codex-environment",
           model: "grok-4.5",
           reasoningEffort: "low",
         }),
