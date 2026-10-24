@@ -1091,6 +1091,11 @@ function SettingsSectionBody(props: {
             experimental: { markdownMathRendering: enabled },
           });
         }}
+        onIncrementalMarkdownRenderingChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { incrementalMarkdownRendering: enabled },
+          });
+        }}
         onThreadToolAccountingChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { threadToolAccounting: enabled },

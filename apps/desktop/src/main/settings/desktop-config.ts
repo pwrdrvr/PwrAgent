@@ -151,6 +151,7 @@ export type DesktopSettingsConfig = {
     fullAccessRiskWarningDismissed?: boolean;
     liveTranscriptEventFiltering?: boolean;
     markdownMathRendering?: boolean;
+    incrementalMarkdownRendering?: boolean;
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
@@ -781,6 +782,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "live_transcript_event_filtering"],
       patch.experimental.liveTranscriptEventFiltering,
+    );
+  }
+  if (patch.experimental?.incrementalMarkdownRendering !== undefined) {
+    set(
+      ["experimental", "incremental_markdown_rendering"],
+      patch.experimental.incrementalMarkdownRendering,
     );
   }
   if (patch.experimental?.markdownMathRendering !== undefined) {
@@ -2171,6 +2178,9 @@ function normalizeDesktopConfig(
       ),
       markdownMathRendering: readBoolean(
         experimental?.markdown_math_rendering,
+      ),
+      incrementalMarkdownRendering: readBoolean(
+        experimental?.incremental_markdown_rendering,
       ),
       threadPricingSummary: readBoolean(experimental?.thread_pricing_summary),
       threadPricingDisplayUsd: readBoolean(

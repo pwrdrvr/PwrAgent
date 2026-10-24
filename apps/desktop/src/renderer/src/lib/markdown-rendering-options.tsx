@@ -10,6 +10,29 @@ import type { MarkdownMathRuntime } from "./markdown-math-runtime";
 import { hasPotentialMarkdownMath } from "./markdown-math-detection";
 
 const MarkdownMathEnabledContext = createContext(false);
+type IncrementalRenderer = typeof import("../features/thread-detail/IncrementalMarkdown")["IncrementalMarkdown"];
+const IncrementalMarkdownContext = createContext<IncrementalRenderer | undefined>(undefined);
+let loadedIncrementalRenderer: IncrementalRenderer | undefined;
+let incrementalRendererPromise: Promise<IncrementalRenderer | undefined> | undefined;
+
+function loadIncrementalRenderer(): Promise<IncrementalRenderer | undefined> {
+  if (!incrementalRendererPromise) {
+    incrementalRendererPromise = import("../features/thread-detail/IncrementalMarkdown")
+      .then(({ IncrementalMarkdown }) => {
+        loadedIncrementalRenderer = IncrementalMarkdown;
+        return IncrementalMarkdown;
+      })
+      .catch((error: unknown) => {
+        console.error("Failed to load incremental Markdown rendering", error);
+        return undefined;
+      });
+  }
+  return incrementalRendererPromise;
+}
+
+export function useIncrementalMarkdownRenderer(): IncrementalRenderer | undefined {
+  return useContext(IncrementalMarkdownContext);
+}
 let loadedMarkdownMathRuntime: MarkdownMathRuntime | undefined;
 let markdownMathRuntimePromise: Promise<MarkdownMathRuntime | undefined> | undefined;
 
@@ -36,10 +59,24 @@ function loadMarkdownMathRuntime(): Promise<MarkdownMathRuntime | undefined> {
 export function MarkdownRenderingOptionsProvider(props: {
   children: ReactNode;
   mathEnabled: boolean;
+  incrementalEnabled?: boolean;
 }) {
+  const [incrementalRenderer, setIncrementalRenderer] = useState<IncrementalRenderer | undefined>(
+    () => loadedIncrementalRenderer,
+  );
+  useEffect(() => {
+    if (!props.incrementalEnabled || incrementalRenderer) return;
+    let active = true;
+    void loadIncrementalRenderer().then((renderer) => {
+      if (active && renderer) setIncrementalRenderer(() => renderer);
+    });
+    return () => { active = false; };
+  }, [props.incrementalEnabled, incrementalRenderer]);
   return (
     <MarkdownMathEnabledContext.Provider value={props.mathEnabled}>
-      {props.children}
+      <IncrementalMarkdownContext.Provider value={props.incrementalEnabled ? incrementalRenderer : undefined}>
+        {props.children}
+      </IncrementalMarkdownContext.Provider>
     </MarkdownMathEnabledContext.Provider>
   );
 }

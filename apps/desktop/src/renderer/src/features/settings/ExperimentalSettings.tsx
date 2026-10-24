@@ -110,6 +110,7 @@ export function ExperimentalSettings(props: {
   onDiffCondensationEnabledChange: (enabled: boolean) => Promise<void>;
   onLiveTranscriptEventFilteringChange: (enabled: boolean) => Promise<void>;
   onMarkdownMathRenderingChange: (enabled: boolean) => Promise<void>;
+  onIncrementalMarkdownRenderingChange: (enabled: boolean) => Promise<void>;
   onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
   onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
   onTokenMiserFocusedSummariesEnabledChange: (enabled: boolean) => Promise<void>;
@@ -133,6 +134,9 @@ export function ExperimentalSettings(props: {
   const markdownMathRendering =
     props.snapshot.experimental.markdownMathRendering ??
     DEFAULT_MARKDOWN_MATH_RENDERING;
+  const incrementalMarkdownRendering =
+    props.snapshot.experimental.incrementalMarkdownRendering ??
+    { value: false, source: "default" as const };
   const threadToolAccounting =
     props.snapshot.experimental.threadToolAccounting ??
     DEFAULT_THREAD_TOOL_ACCOUNTING;
@@ -371,6 +375,26 @@ export function ExperimentalSettings(props: {
             onChange={(enabled) => {
               return props.onThreadToolAccountingChange(enabled);
             }}
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Incremental Markdown Rendering"
+        description="Reuse completed Markdown blocks while a response streams. Experimental and off by default."
+        chip={incrementalMarkdownRendering.value ? "On" : "Off"}
+        chipKind={incrementalMarkdownRendering.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={incrementalMarkdownRendering.value}
+            disabled={props.saving}
+            label="Enable incremental Markdown rendering"
+            sub="Reduce repeated parsing of long streaming responses."
+            help="Turn off to use the standard Markdown renderer. The additional renderer loads only when enabled."
+            source={sourceBadge(incrementalMarkdownRendering)}
+            onChange={props.onIncrementalMarkdownRenderingChange}
           />
         </div>
       </SettingsSection>

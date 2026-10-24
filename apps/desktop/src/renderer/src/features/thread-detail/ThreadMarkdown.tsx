@@ -25,7 +25,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { type Components, type Options, type UrlTransform } from "react-markdown";
+import ReactMarkdown, { type Components, type Options, type UrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { AppIcon } from "../../components/AppIcon";
@@ -39,7 +39,7 @@ import {
   protectComposerHyphenListItems,
   repairNestedLanguageFences,
 } from "../../lib/markdown-fences";
-import { useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
+import { useIncrementalMarkdownRenderer, useMarkdownMathRuntime } from "../../lib/markdown-rendering-options";
 import type { MarkdownMathRuntime } from "../../lib/markdown-math-runtime";
 import {
   resolveThreadHref,
@@ -67,7 +67,6 @@ import { remarkTableProfile } from "./remark-table-profile";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
-import { IncrementalMarkdown } from "./IncrementalMarkdown";
 import {
   TranscriptFileRegistrationContext,
   useTranscriptFileReference,
@@ -720,6 +719,7 @@ const MarkdownDocument = memo(function MarkdownDocument(props: {
   text: string;
   mathRuntime?: MarkdownMathRuntime;
 }) {
+  const IncrementalRenderer = useIncrementalMarkdownRenderer();
   const remarkPlugins = useMemo<Options["remarkPlugins"]>(() => [
     ...(props.mathRuntime?.remarkPlugins ?? []),
     remarkBreaks,
@@ -727,16 +727,21 @@ const MarkdownDocument = memo(function MarkdownDocument(props: {
     remarkPullRequestReferences,
     remarkTableProfile,
   ], [props.mathRuntime]);
-  return (
-    <IncrementalMarkdown
-      components={markdownComponents}
+  const options = {
+    components: markdownComponents,
+    rehypePlugins: props.mathRuntime?.rehypePlugins,
+    remarkPlugins,
+    urlTransform: normalizeMarkdownUrl,
+  };
+  return IncrementalRenderer ? (
+    <IncrementalRenderer
       mathFlow={Boolean(props.mathRuntime)}
-      rehypePlugins={props.mathRuntime?.rehypePlugins}
-      remarkPlugins={remarkPlugins}
-      urlTransform={normalizeMarkdownUrl}
+      {...options}
     >
       {props.text}
-    </IncrementalMarkdown>
+    </IncrementalRenderer>
+  ) : (
+    <ReactMarkdown {...options}>{props.text}</ReactMarkdown>
   );
 });
 

@@ -1,9 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { StrictMode } from "react";
 import ReactMarkdown from "react-markdown";
-import { cleanup, render } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
-import { ThreadMarkdown } from "../ThreadMarkdown";
+import { cleanup, render, waitFor } from "@testing-library/react";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { ThreadMarkdown as ProductionThreadMarkdown } from "../ThreadMarkdown";
+import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
 import { advanceIncrementalParse, type AdvanceOptions, type IncrementalParseState } from "@ai-markdown/engine";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -18,15 +19,29 @@ vi.mock("hast-util-to-jsx-runtime", async (importOriginal) => {
   return { ...actual, toJsxRuntime: vi.fn(actual.toJsxRuntime) };
 });
 
-const baseline = vi.hoisted(() => ({ enabled: false }));
+const baseline = vi.hoisted(() => ({ enabled: false, calls: 0 }));
 vi.mock("../IncrementalMarkdown", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../IncrementalMarkdown")>();
   return {
     IncrementalMarkdown: (props: Parameters<typeof actual.IncrementalMarkdown>[0]) => {
+      baseline.calls += 1;
       const { mathFlow: _mathFlow, ...markdownProps } = props;
       return baseline.enabled ? <ReactMarkdown {...markdownProps} /> : <actual.IncrementalMarkdown {...props} />;
     },
   };
+});
+
+function ThreadMarkdown(props: { text: string }) {
+  return <MarkdownRenderingOptionsProvider mathEnabled={false} incrementalEnabled>
+    <ProductionThreadMarkdown {...props} />
+  </MarkdownRenderingOptionsProvider>;
+}
+
+beforeAll(async () => {
+  render(<ThreadMarkdown text="Warmup" />);
+  await waitFor(() => expect(baseline.calls).toBeGreaterThan(0));
+  cleanup();
+  vi.clearAllMocks();
 });
 
 afterEach(() => {
