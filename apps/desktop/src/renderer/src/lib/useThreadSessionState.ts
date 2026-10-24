@@ -795,6 +795,33 @@ function mergeTranscriptEntries(
       continue;
     }
 
+    // The timestamps could not place a row whose turn is on this page, but
+    // something later follows that turn. Appending would put the turn's work
+    // below every later turn: Codex stamps a final message with its
+    // second-truncated completion, so a live row received a few hundred
+    // milliseconds later reads as newer than its own turn's answer. Keep the
+    // row inside its turn: work before the turn's first terminal entry,
+    // anything else after the turn's last entry.
+    const lastTurnIndex = optimisticTurnId
+      ? merged.findLastIndex((entry) => entry.turn?.id === optimisticTurnId)
+      : -1;
+    if (lastTurnIndex !== -1 && lastTurnIndex < merged.length - 1) {
+      const firstTerminalIndex = isTerminalTurnEntry(optimisticEntry)
+        ? -1
+        : merged.findIndex((entry, index) =>
+            index <= lastTurnIndex
+            && entry.turn?.id === optimisticTurnId
+            && isTerminalTurnEntry(entry)
+          );
+      merged.splice(
+        firstTerminalIndex !== -1 ? firstTerminalIndex : lastTurnIndex + 1,
+        0,
+        optimisticEntry,
+      );
+      rebuildAppendIndexes();
+      continue;
+    }
+
     appendIndexedEntry(optimisticEntry);
   }
 

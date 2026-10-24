@@ -10547,6 +10547,92 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("keeps a completed turn's live work and usage inside that turn when later turns follow", async () => {
+    // Codex stamps a turn's final message with its completion time truncated
+    // to the second (10:30:00.000), while the renderer stamps live rows with
+    // the millisecond it received them. A tool row received at 10:30:00.400
+    // therefore reads as later than the turn's own final message. It once
+    // fell through to "append at the end of the transcript", and the turn
+    // total followed it, below every later turn.
+    const turnT = {
+      id: "turn-t",
+      status: "completed" as const,
+      startedAt: 1_792_852_051_000,
+      completedAt: 1_792_852_200_000,
+      durationMs: 148_524,
+    };
+    const turnV = {
+      id: "turn-v",
+      status: "completed" as const,
+      startedAt: 1_792_853_600_000,
+      completedAt: 1_792_853_760_000,
+      durationMs: 160_000,
+    };
+    const desktopApi: DesktopApi = {
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [
+            { type: "message", id: "t-user", role: "user", text: "Authorize one packet", createdAt: turnT.startedAt, turn: turnT },
+            { type: "activity", id: "activity-exec-t", summary: "Ran 6 commands", status: "completed", details: [], turn: turnT },
+            { type: "message", id: "t-final", role: "assistant", phase: "final", text: "The probe is running.", createdAt: turnT.completedAt, turn: turnT },
+            { type: "message", id: "v-user", role: "user", text: "Monitor finished", createdAt: turnV.startedAt, turn: turnV },
+            { type: "activity", id: "activity-exec-v", summary: "Ran 2 commands", status: "completed", details: [], turn: turnV },
+            { type: "message", id: "v-final", role: "assistant", phase: "final", text: "The serial packet is running.", createdAt: turnV.completedAt, turn: turnV },
+            { type: "activity", id: "live-turn-usage-turn-v", summary: "Turn usage: 13,687 uncached in", status: "completed", details: [], createdAt: turnV.completedAt, turn: turnV },
+          ],
+          messages: [],
+          pagination: { supportsPagination: true, hasPreviousPage: true },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry({
+        type: "activity",
+        id: "live-protocol-t",
+        summary: "Used 2 tools",
+        status: "completed",
+        details: [],
+        createdAt: turnT.completedAt + 400,
+        turn: turnT,
+      });
+      result.current.upsertLiveTranscriptEntry({
+        type: "activity",
+        id: "live-turn-usage-turn-t",
+        summary: "Turn usage: 26,512 uncached in",
+        status: "completed",
+        details: [],
+        createdAt: turnT.completedAt,
+        turn: turnT,
+      });
+    });
+
+    // Both rows belong to turn T: the work before T's answer, the total
+    // after it, and nothing of T below turn V.
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "t-user",
+      "activity-exec-t",
+      "live-protocol-t",
+      "t-final",
+      "live-turn-usage-turn-t",
+      "v-user",
+      "activity-exec-v",
+      "v-final",
+      "live-turn-usage-turn-v",
+    ]);
+  });
+
   it("keeps completed token usage before the next turn user prompt during hydration", async () => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now++);
