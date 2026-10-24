@@ -12,6 +12,7 @@ import {
   STATE_DB_WAL_AUTOCHECKPOINT_PAGES,
   StateDb,
 } from "../state/state-db";
+import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import {
   openInMemoryStateDb,
@@ -1371,6 +1372,44 @@ describe("StateDb", () => {
       thread_id: "thread-1",
       total_cost_micros: 5000,
     });
+  });
+
+  it("keeps recorded usage turn times and writes no ledger rows when reopened", async () => {
+    stateDb.close();
+    const dbPath = path.join(profileTempDir(), "reopen-usage-ledger-state.db");
+    stateDb = StateDb.open(dbPath);
+    const store = new SqliteOverlayStore(stateDb);
+    const startedAt = Date.UTC(2026, 9, 24, 15, 48, 41);
+    await store.upsertThreadUsageLine({ line: {
+      backend: "codex", provider: "openai", threadId: "thread-1", turnId: "turn-1",
+      usageLineId: "line-1", source: "live", scope: "turn", status: "finalized",
+      turnUsageAttributed: true, startedAt, createdAt: startedAt + 3_000,
+      currency: "USD", priceStatus: "unpriced", model: "gpt-5.5",
+      inputTokens: 10, cachedInputTokens: 0, uncachedInputTokens: 10, outputTokens: 1,
+      reasoningOutputTokens: 0, totalTokens: 11, uncachedInputCostMicros: 0,
+      cachedInputCostMicros: 0, outputCostMicros: 0, totalCostMicros: 0,
+    } });
+    await store.completeThreadUsageTurn({
+      backend: "codex", threadId: "thread-1", turnId: "turn-1", completedAt: startedAt + 6_000,
+    });
+    const ledger = () => stateDb.raw.prepare(
+      `SELECT
+         (SELECT json_group_array(json_array(usage_turn_id, started_at, completed_at, observed_at, updated_at))
+            FROM thread_usage_turns) AS turns,
+         (SELECT json_group_array(json_array(usage_line_id, provider, usage_turn_id, updated_at))
+            FROM thread_usage_lines) AS lines,
+         (SELECT json_group_array(json_array(rowid, provider, thread_id, updated_at))
+            FROM thread_pricing_summaries) AS summaries`,
+    ).get();
+    expect(stateDb.raw.prepare("SELECT started_at, completed_at FROM thread_usage_turns").get())
+      .toEqual({ started_at: startedAt, completed_at: startedAt + 6_000 });
+    const before = ledger();
+    stateDb.close();
+
+    stateDb = StateDb.open(dbPath);
+
+    expect(ledger()).toEqual(before);
+    expect(stateDb.raw.prepare("SELECT total_changes() AS changes").get()).toEqual({ changes: 0 });
   });
 
   it("repairs live usage line timestamps that were overwritten by streaming updates", () => {
