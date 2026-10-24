@@ -12,19 +12,24 @@ export function claudePermissionMode(mode: ThreadExecutionMode): PermissionMode 
 
 export function createClaudePermissionHandler(options: {
   threadId: string;
-  turnId: string;
+  /**
+   * A live session outlives its desktop turn, and a background task can ask
+   * between turns, so the turn is read when the request is made.
+   */
+  turnId: () => string;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
-  cancelRequest: (requestId: string) => Promise<void>;
+  cancelRequest: (requestId: string, turnId: string) => Promise<void>;
 }): CanUseTool {
   return async (toolName, input, context) => {
     if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
     const requestId = randomUUID();
+    const turnId = options.turnId();
     const request: AppServerPendingRequestNotification = toolName === "AskUserQuestion"
       ? {
           method: "item/tool/requestUserInput",
           params: {
             threadId: options.threadId,
-            turnId: options.turnId,
+            turnId,
             requestId,
             questions: Array.isArray(input.questions) ? input.questions.map((value, index) => {
               const question = value as Record<string, unknown>;
@@ -43,7 +48,7 @@ export function createClaudePermissionHandler(options: {
           method: "item/commandExecution/requestApproval",
           params: {
             threadId: options.threadId,
-            turnId: options.turnId,
+            turnId,
             requestId,
             itemId: context.toolUseID,
             toolName,
@@ -59,7 +64,7 @@ export function createClaudePermissionHandler(options: {
         options.request(request, context.signal),
         new Promise<undefined>((resolve) => {
           abort = () => {
-            void options.cancelRequest(requestId).then(() => resolve(undefined), () => resolve(undefined));
+            void options.cancelRequest(requestId, turnId).then(() => resolve(undefined), () => resolve(undefined));
           };
           context.signal.addEventListener("abort", abort, { once: true });
           if (context.signal.aborted) abort();

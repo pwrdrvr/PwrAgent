@@ -112,10 +112,11 @@ open SDK input stream with `priority: "next"`. Claude adds it to the running
 turn at the next tool boundary, or starts a native turn with it once the
 current response ends. Do not use `"now"`: it aborts the in-flight response
 and ends that native turn with an `error_during_execution` result.
-PwrAgent keeps the query open until result UUIDs acknowledge every accepted
+PwrAgent keeps the turn open until result UUIDs acknowledge every accepted
 steer, and treats those results as one logical desktop turn. Usage is recorded
-once from the final cumulative result. Stop closes the stream and aborts the
-query, including pending input. Request IDs deduplicate retries; attachment
+once per desktop turn from the final cumulative result, less the totals when
+the turn began. Stop closes the stream and aborts the query, including pending
+input. Request IDs deduplicate retries; attachment
 parts and message origins survive replay. A steer with an agent origin writes
 one SQLite commit (~12 KB, or ~1.24 MB/day at 100 steers/day); a duplicate
 request adds no write, and there are no idle writes.
@@ -125,32 +126,52 @@ request adds no write, and there are no idle writes.
 Claude runs shell commands and sub-agents as tasks. `Agent` calls run in the
 background by default, and `Bash` can too. A background call answers at once
 with a placeholder, and Claude emits the turn's `result` while the task keeps
-running. Closing the query kills the CLI process and every task with it, so
-the logical desktop turn stays open until the tasks settle. Claude answers a
-task notification with a native turn of its own; that follow-up joins the same
-desktop turn, like a steer that raced a result boundary.
+running. Closing the query kills the CLI process and every task with it, and
+closing its stdin makes the CLI hold results and sweep background shells after
+about five seconds. So the query is a per-thread live session that can outlive
+the desktop turn, as a Codex background terminal outlives its turn.
 
-The turn ends at a result that acknowledges every steer, once no task is
-running and the last task notification has had its follow-up. The task set
-comes from `background_tasks_changed`, which the CLI documents as
+A desktop turn ends at the `result` that acknowledges every steer, once Claude
+is idle, whether or not a task still runs. PwrAgent sets
+`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`; when the CLI reports
+`session_state_changed`, the turn also waits for `idle`, which follows
+Claude's own background-agent loop. The session stays open while a task runs.
+The task set comes from `background_tasks_changed`, which the CLI documents as
 authoritative, plus `task_*` edges for foreground tasks. A foreground task
 also settles with its tool result or its native result, since it cannot
-outlive either. PwrAgent sets `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`; when
-the CLI reports `session_state_changed`, the turn also waits for `idle`, which
-follows Claude's own background-agent loop. If a task settles and Claude runs
-no follow-up within five seconds, the turn ends without one.
+outlive either. Housekeeping tasks the CLI marks `ambient` are not shown and
+do not keep the session open.
 
-While the turn is open the thread is active everywhere a turn is: the thread
-list, Attention, the quit prompt, and archive guards. The tool row of a
-background call stays running until its notification, then shows the task's
-summary. Running tasks are published as `thread/backgroundTasks/updated` and
-listed in the Executions rail beside Codex background terminals, with the
-sub-agent type and the latest `task_progress` line. Stop on a row calls
-`Query.stopTask`; Stop on the turn ends the query and every task. Housekeeping
-tasks the CLI marks `ambient` are not shown and do not hold the turn open.
+Claude answers a task notification with a native turn of its own
+(`session_state_changed: running`, then `init`). With no desktop turn open,
+PwrAgent opens one for it: `turn/started` with no user message, then the
+follow-up's items, then `turn/completed`. A follow-up that produces no text
+is not reported as a failed send. The session closes once no task runs,
+Claude is idle, and the last task notification has had its follow-up. If a
+task settles and Claude runs no follow-up within five seconds, the session
+closes without one.
 
-A long-running background command, such as a development server, therefore
-keeps its turn open until it is stopped.
+A message sent while the session is live goes into the same input stream with
+`priority: "next"`, and its turn ends at the result that acknowledges it. A
+changed model, effort, permission mode, or MCP server set is applied first
+through `setModel`, `applyFlagSettings({ effortLevel })`, `setPermissionMode`,
+and `setMcpServers`. New agent instructions change the system prompt, which
+only a new process takes, so that turn closes the session, stopping its
+tasks, and resumes in a new query. So does a control the CLI rejects. MCP
+grants the registry issues for a turn are revoked when the session that uses
+them closes, not when the turn ends.
+
+Between turns the thread reads as idle in the thread list and Attention. The
+quit prompt and auto-archive still count it as busy, as they count a Codex
+thread with a background terminal, and archiving refuses until its tasks are
+stopped. The tool row of a background call stays running until its
+notification, then shows the task's summary in the turn that made the call.
+A permission request or MCP elicitation from a task between turns belongs to
+the latest turn. Running tasks are published as
+`thread/backgroundTasks/updated` and listed in the Executions rail beside
+Codex background terminals, with the sub-agent type and the latest
+`task_progress` line. Stop on a row calls `Query.stopTask`. Stop on a turn
+ends the query and every task, as does quitting.
 
 ## Usage, context, and MCP
 
