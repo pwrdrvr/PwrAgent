@@ -921,6 +921,7 @@ describe("ThreadRow chip flow", () => {
       const props: React.ComponentProps<typeof ThreadRow> = {
         thread: { ...baseThread, gitWorkingState },
         onSelectThread: vi.fn(),
+        onOpenContextMenu: vi.fn(),
       };
       const view = render(<ThreadRow {...props} />);
 

@@ -726,6 +726,7 @@ const setThreadDependencyToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
 const setThreadPullRequestRefreshHandler = vi.fn();
+const setThreadGitWorkingStateRefreshHandler = vi.fn();
 const setDirectoryGitStatusWriter = vi.fn();
 const setThreadPrAutoDispatchBatch = vi.fn(async () => undefined);
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
@@ -1172,6 +1173,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPrAutoDispatchHandler,
     setThreadPullRequestDetachHandler,
     setThreadPullRequestRefreshHandler,
+    setThreadGitWorkingStateRefreshHandler,
     setDirectoryGitStatusWriter,
     setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
@@ -1433,6 +1435,7 @@ describe("app server ipc", () => {
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPullRequestDetachHandler.mockClear();
     setThreadPullRequestRefreshHandler.mockClear();
+    setThreadGitWorkingStateRefreshHandler.mockClear();
     setDirectoryGitStatusWriter.mockClear();
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
@@ -5806,6 +5809,36 @@ describe("app server ipc", () => {
         allowPrimedBranchLookup: false,
       });
     });
+  });
+
+  it("runs a viewer's working-state hover refresh through the owner's Git info store", async () => {
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-owner",
+        title: "Owner thread",
+        titleSource: "explicit",
+        source: "claude",
+        projectKey: "/owner/worktree",
+        linkedDirectories: [],
+        updatedAt: 2_000,
+      },
+    ] as never);
+    registerAppServerIpcHandlers();
+    await refreshOwnerMetadata();
+    scheduleWorktreeGitWorkingStateRefresh.mockClear();
+
+    const refreshFromViewer =
+      setThreadGitWorkingStateRefreshHandler.mock.calls.at(-1)?.[0];
+    await expect(refreshFromViewer({
+      backend: "claude",
+      threadId: "thread-owner",
+      trigger: "user",
+    })).resolves.toEqual({ scheduled: true });
+
+    expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+    expect(scheduleWorktreeGitWorkingStateRefresh).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreePath: "/owner/worktree", userAction: true }),
+    );
   });
 
   it("publishes a successful provider while retaining failed-provider status and freshness", async () => {

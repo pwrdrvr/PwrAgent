@@ -141,7 +141,9 @@ import type {
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
+  RefreshOwnedThreadGitWorkingStateRequest,
   RefreshOwnedThreadPullRequestsRequest,
+  RefreshThreadGitWorkingStateResponse,
   RefreshThreadPullRequestsResponse,
   RecordModelSettingsRecentRequest,
   RecordRecentFileReferencesRequest,
@@ -364,6 +366,17 @@ function localizeRefreshThreadPullRequestsRequest(
   };
 }
 
+/** The owner refreshes its own worktree; a viewer cannot name a relay target. */
+function localizeRefreshThreadGitWorkingStateRequest(
+  request: RefreshOwnedThreadGitWorkingStateRequest,
+): RefreshOwnedThreadGitWorkingStateRequest {
+  return {
+    backend: request.backend,
+    threadId: request.threadId,
+    trigger: request.trigger === "user" ? "user" : "scheduled",
+  };
+}
+
 type FederationMaterializeDirectoryLaunchpadRequest =
   Omit<MaterializeDirectoryLaunchpadRequest, "input"> & {
     input?: FederationWireTurnInputItem[];
@@ -552,6 +565,7 @@ export const FEDERATION_BACKEND_METHODS = {
   setCodexThreadEnvironment: "backend.setCodexThreadEnvironment",
   refreshThreadPullRequests: "backend.refreshThreadPullRequests",
   refreshDirectoryGitStatuses: "backend.refreshDirectoryGitStatuses",
+  refreshThreadGitWorkingState: "backend.refreshThreadGitWorkingState",
   ensureDirectoryLaunchpad: "backend.ensureDirectoryLaunchpad",
   listRecentFileReferences: "backend.listRecentFileReferences",
   recordRecentFileReferences: "backend.recordRecentFileReferences",
@@ -697,6 +711,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.refreshThreadPullRequests]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.refreshThreadGitWorkingState]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad]: "launchpad_metadata",
   [FEDERATION_BACKEND_METHODS.listRecentFileReferences]: "remote_window",
   [FEDERATION_BACKEND_METHODS.recordRecentFileReferences]: "remote_window",
@@ -994,6 +1009,9 @@ export type FederationBackendOperations = {
   refreshDirectoryGitStatuses(
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse>;
+  refreshThreadGitWorkingState(
+    request: RefreshOwnedThreadGitWorkingStateRequest,
+  ): Promise<RefreshThreadGitWorkingStateResponse>;
   ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse>;
@@ -1887,6 +1905,15 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.refreshDirectoryGitStatuses(
         envelope.params as RefreshDirectoryGitStatusesRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.refreshThreadGitWorkingState,
+    async (envelope) =>
+      await params.backend.refreshThreadGitWorkingState(
+        localizeRefreshThreadGitWorkingStateRequest(
+          envelope.params as RefreshOwnedThreadGitWorkingStateRequest,
+        ),
       ),
   );
   params.router.registerHandler(
@@ -2970,6 +2997,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<RefreshThreadPullRequestsResponse> {
     return await this.rpc.request<RefreshThreadPullRequestsResponse>({
       method: FEDERATION_BACKEND_METHODS.refreshThreadPullRequests,
+      params: request,
+    });
+  }
+
+  async refreshThreadGitWorkingState(
+    request: RefreshOwnedThreadGitWorkingStateRequest,
+  ): Promise<RefreshThreadGitWorkingStateResponse> {
+    return await this.rpc.request<RefreshThreadGitWorkingStateResponse>({
+      method: FEDERATION_BACKEND_METHODS.refreshThreadGitWorkingState,
       params: request,
     });
   }

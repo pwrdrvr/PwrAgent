@@ -154,6 +154,7 @@ import {
   type AddRemoteThreadPinResponse,
   type FederatedThreadRef,
   type FederationJumpSearchProgress,
+  type FederationRemoteTarget,
   type FederationJumpSearchRequest,
   type FederationJumpSearchResponse,
   type RemoveRemoteThreadPinRequest,
@@ -3470,6 +3471,15 @@ class DesktopAppServerService {
   async refreshThreadGitWorkingState(
     request: RefreshThreadGitWorkingStateRequest,
   ): Promise<RefreshThreadGitWorkingStateResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      return await this.refreshRemoteThreadGitWorkingState({
+        ...request,
+        federationTarget: request.federationTarget,
+      });
+    }
     await getDesktopBackendRegistry().refreshThreadDirectoryRelationship(request);
     const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
     const worktreePath = this.worktreePathByThreadKey.get(threadKey);
@@ -3486,6 +3496,54 @@ class DesktopAppServerService {
         userAction: request.trigger === "user",
       }) > 0,
     };
+  }
+
+  /**
+   * The owner's Git info store decides whether a request probes: its cache,
+   * focused-refresh coalescing, and user-refresh budget all live there. The
+   * viewer learns the result from the owner's forwarded
+   * `navigation/threadGitWorkingState/updated`, which fires only on change.
+   */
+  private async refreshRemoteThreadGitWorkingState(
+    request: RefreshThreadGitWorkingStateRequest & {
+      federationTarget: FederationRemoteTarget;
+    },
+  ): Promise<RefreshThreadGitWorkingStateResponse> {
+    const { federationTarget } = request;
+    const federationRuntime = getDesktopFederationRuntime();
+    // Capabilities can survive a disconnect in remembered peer metadata.
+    // Hover and scheduled refreshes stay silent until the owner reconnects.
+    const connected = federationRuntime.connectedPeerTargets().some(
+      (peer) => peer.target.instanceId === federationTarget.instanceId,
+    );
+    if (
+      !connected
+      || !federationRuntime.remoteTargetSupportsCapability(
+        federationTarget,
+        "thread_navigation",
+      )
+    ) {
+      return { scheduled: false };
+    }
+    try {
+      return await federationRuntime
+        .remoteBackend(federationTarget)
+        .refreshThreadGitWorkingState({
+          backend: request.backend,
+          threadId: request.threadId,
+          trigger: request.trigger,
+        });
+    } catch (error) {
+      // The route can disappear after the connected-peer check, and an owner
+      // from before this method cannot take it.
+      if (
+        isFederationPeerUnavailableError(error)
+        || isFederationMethodNotFoundError(error)
+      ) {
+        return { scheduled: false };
+      }
+      throw error;
+    }
   }
 
   /**
@@ -8523,6 +8581,10 @@ export function registerAppServerIpcHandlers(): void {
     async (request) =>
       await appServerService.refreshOwnedThreadPullRequests(request),
   );
+  getDesktopBackendRegistry().setThreadGitWorkingStateRefreshHandler(
+    async (request) =>
+      await appServerService.refreshThreadGitWorkingState(request),
+  );
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),
@@ -9249,7 +9311,15 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: RefreshThreadGitWorkingStateRequest,
     ): Promise<RefreshThreadGitWorkingStateResponse> => {
-      if (isFederationWindowWebContents(event?.sender)) {
+      // A remote window's refresh must name the owner. Running it untargeted
+      // here would probe a path on this machine instead of the owner's.
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
         throw new Error(
           "Git working-state refreshes for remote threads run on the owning instance.",
         );

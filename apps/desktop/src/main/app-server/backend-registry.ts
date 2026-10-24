@@ -313,7 +313,9 @@ import {
   type QueueThreadExecutionModeResponse,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
+  type RefreshOwnedThreadGitWorkingStateRequest,
   type RefreshOwnedThreadPullRequestsRequest,
+  type RefreshThreadGitWorkingStateResponse,
   type RefreshThreadPullRequestsResponse,
   type NavigationDirectoryGitStatusUpdatedNotification,
   type CancelThreadExecutionModeQueueRequest,
@@ -2002,6 +2004,10 @@ type ThreadPullRequestDetachHandler = (
 type ThreadPullRequestRefreshHandler = (
   request: RefreshOwnedThreadPullRequestsRequest,
 ) => Promise<RefreshThreadPullRequestsResponse>;
+
+type ThreadGitWorkingStateRefreshHandler = (
+  request: RefreshOwnedThreadGitWorkingStateRequest,
+) => Promise<RefreshThreadGitWorkingStateResponse>;
 
 type ThreadPrAutoDispatchHandler = {
   preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
@@ -9383,6 +9389,9 @@ export class DesktopBackendRegistry {
   private threadPullRequestRefreshHandler:
     | ThreadPullRequestRefreshHandler
     | undefined;
+  private threadGitWorkingStateRefreshHandler:
+    | ThreadGitWorkingStateRefreshHandler
+    | undefined;
   private threadPullRequestCanonicalizer:
     | ThreadPullRequestCanonicalizer
     | undefined;
@@ -11288,6 +11297,27 @@ export class DesktopBackendRegistry {
     const handler = this.threadPullRequestRefreshHandler;
     if (!handler) {
       throw new Error("Pull-request refresh service is not available yet.");
+    }
+    return await handler(request);
+  }
+
+  setThreadGitWorkingStateRefreshHandler(
+    handler: ThreadGitWorkingStateRefreshHandler | null | undefined,
+  ): void {
+    this.threadGitWorkingStateRefreshHandler = handler ?? undefined;
+  }
+
+  /**
+   * Refresh a viewer-inspected thread's Git working state through the desktop
+   * app-server service, which owns the thread-to-worktree map. Federation
+   * uses this mediator so its backend bridge does not import the IPC module.
+   */
+  async refreshOwnedThreadGitWorkingState(
+    request: RefreshOwnedThreadGitWorkingStateRequest,
+  ): Promise<RefreshThreadGitWorkingStateResponse> {
+    const handler = this.threadGitWorkingStateRefreshHandler;
+    if (!handler) {
+      throw new Error("Git working-state refresh service is not available yet.");
     }
     return await handler(request);
   }
