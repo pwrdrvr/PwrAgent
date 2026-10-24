@@ -12,6 +12,8 @@ type ChipContextMenuCopyItem = {
   action?: never;
   copyValue: string;
   label: string;
+  /** A count or size on the right of the item, set like a shortcut. */
+  aside?: string;
   separated?: boolean;
 };
 
@@ -19,6 +21,7 @@ type ChipContextMenuActionItem = {
   action: () => void;
   copyValue?: never;
   label: string;
+  aside?: string;
   separated?: boolean;
 };
 
@@ -119,6 +122,9 @@ export function ChipContextMenu(props: ChipContextMenuProps) {
               onClick={() => select(item)}
             >
               {item.label}
+              {item.aside ? (
+                <span className="thread-context-menu__aside">{item.aside}</span>
+              ) : null}
             </button>
           </div>
         ))}

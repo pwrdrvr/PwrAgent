@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ComponentType,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import type {
   ThreadReviewItem,
@@ -38,6 +39,11 @@ import {
 } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import {
+  ChipContextMenu,
+  type ChipContextMenuItem,
+  type ChipContextMenuPosition,
+} from "../chrome/ChipContextMenu";
 import { TodoProjectPicker } from "./TodoProjectPicker";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "./TodoSplitButton";
 import type {
@@ -52,6 +58,11 @@ import {
   orderReviewItems,
   useTrackedReview,
 } from "./review-tracking";
+import {
+  threadTodoMarkdown,
+  threadTodoStepsMarkdown,
+  threadTodosMarkdown,
+} from "./thread-todo-copy";
 
 const KIND_ICONS: Record<ThreadTodoKind, ComponentType<IconProps> | undefined> = {
   reminder: undefined,
@@ -118,6 +129,11 @@ export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
     onNext: () => void;
   };
   onCollapse?: () => void;
+  /**
+   * The cards shown with this one, in order: the right-click menu offers to
+   * copy them all when there is more than one.
+   */
+  copyAllTodos?: readonly ThreadTodo[];
   now?: number;
 };
 
@@ -198,6 +214,13 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   const titleId = `thread-todo-title-${todo.id}`;
   const review = tracking.review;
   const items = review ? orderReviewItems(review.items) : [];
+  const copying = useTodoCopy(todo, {
+    markdown: () => threadTodoMarkdown(
+      review ? { ...todo, detail: todo.detail ?? review.summary } : todo,
+      items,
+    ),
+    copyAllTodos: props.copyAllTodos,
+  });
   const openItems = items.filter((item) => item.status === "open");
   // A selection that has since settled no longer counts.
   const selectedItems = openItems.filter((item) => selected.has(item.id));
@@ -294,12 +317,15 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
       data-kind={todo.kind}
       data-todo-id={todo.id}
       aria-labelledby={titleId}
+      onMouseDown={copying.onMouseDown}
+      onContextMenu={copying.onContextMenu}
     >
       <ThreadTodoCardHead
         todo={todo}
         titleId={titleId}
         now={props.now}
         progress={progress}
+        copying={copying}
         onCollapse={props.onCollapse}
         dismissLabel="Dismiss review"
         onDismiss={() => props.onResolve(todo, "dismissed")}
@@ -407,6 +433,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
         {props.pager ? <ThreadTodoCardPager pager={props.pager} /> : null}
         <div className="thread-todo-card__actions">{renderAction()}</div>
       </div>
+      {copying.menu}
     </article>
   );
 }
@@ -418,11 +445,12 @@ function ThreadTodoCardHead(props: {
   now?: number;
   /** Checked steps of a card with a checklist. */
   progress?: { checked: number; total: number };
+  copying: TodoCopying;
   onCollapse?: () => void;
   dismissLabel: string;
   onDismiss: () => void;
 }) {
-  const { todo } = props;
+  const { todo, copying } = props;
   const KindIcon = KIND_ICONS[todo.kind];
   return (
     <div className="thread-todo-card__head">
@@ -439,6 +467,16 @@ function ThreadTodoCardHead(props: {
         {formatTodoAge(todo.createdAt, props.now)}
       </span>
       <div className="thread-todo-card__tools">
+        <button
+          ref={copying.buttonRef}
+          type="button"
+          className="thread-todo-card__icon-button"
+          aria-label={copying.copied ? "To-do copied" : "Copy to-do"}
+          title={copying.copied ? "Copied" : "Copy to-do"}
+          onClick={copying.copyCard}
+        >
+          {copying.copied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+        </button>
         {props.onCollapse ? (
           <button
             type="button"
@@ -504,6 +542,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const confirmTextId = useId();
   const [promptExpanded, setPromptExpanded] = useState(false);
   const resting = useRestingCard(todo);
+  const copying = useTodoCopy(todo, {
+    markdown: () => threadTodoMarkdown(todo),
+    copyAllTodos: props.copyAllTodos,
+  });
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(copiedTimerRef.current), []);
@@ -761,12 +803,15 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       data-kind={todo.kind}
       data-todo-id={todo.id}
       aria-labelledby={titleId}
+      onMouseDown={copying.onMouseDown}
+      onContextMenu={copying.onContextMenu}
     >
       <ThreadTodoCardHead
         todo={todo}
         titleId={titleId}
         now={props.now}
         progress={progress}
+        copying={copying}
         onCollapse={props.onCollapse}
         dismissLabel={`Dismiss to-do: ${todo.title}`}
         onDismiss={() => props.onResolve(todo, "dismissed")}
@@ -867,8 +912,133 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         {props.pager ? <ThreadTodoCardPager pager={props.pager} /> : null}
         <div ref={actionsRef} className="thread-todo-card__actions">{renderAction()}</div>
       </div>
+      {copying.menu}
     </article>
   );
+}
+
+type TodoCopying = ReturnType<typeof useTodoCopy>;
+
+/**
+ * The card's Copy tool and its right-click menu. Both copy the stored card
+ * as Markdown, never the DOM, so a resting card's step window does not cut
+ * what lands on the clipboard. Any copy flashes the tool's check.
+ */
+function useTodoCopy(
+  todo: ThreadTodo,
+  options: { markdown: () => string; copyAllTodos?: readonly ThreadTodo[] },
+) {
+  const [copied, setCopied] = useState(false);
+  const [menu, setMenu] = useState<{
+    position: ChipContextMenuPosition;
+    items: ChipContextMenuItem[];
+    returnFocusTo: HTMLElement;
+  }>();
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
+  const copy = (text: string): void => {
+    void copyText(text).then(() => {
+      clearTimeout(timerRef.current);
+      setCopied(true);
+      timerRef.current = setTimeout(() => setCopied(false), COPIED_MS);
+    }).catch((error: unknown) => {
+      console.warn("Copying the to-do failed.", error);
+    });
+  };
+
+  return {
+    copied,
+    buttonRef,
+    copyCard: () => copy(options.markdown()),
+    /**
+     * A right press selects the word under the pointer on macOS, which
+     * would replace a selection the operator made in order to copy it.
+     */
+    onMouseDown: (event: ReactMouseEvent<HTMLElement>): void => {
+      if (event.button !== 2 || !inCard(event) || isTextField(event.target)) return;
+      event.preventDefault();
+    },
+    onContextMenu: (event: ReactMouseEvent<HTMLElement>): void => {
+      // The project picker's search box keeps the native text menu.
+      if (!inCard(event) || isTextField(event.target)) return;
+      event.preventDefault();
+      const card = event.currentTarget;
+      const items: ChipContextMenuItem[] = [];
+      const selection = selectedTextWithin(card);
+      if (selection) {
+        items.push({ label: "Copy selection", action: () => copy(selection) });
+      }
+      const steps = todo.items ?? [];
+      const stepId = event.target instanceof Element
+        ? event.target.closest("[data-todo-item-id]")?.getAttribute("data-todo-item-id")
+        : undefined;
+      const step = steps.find((item) => item.id === stepId);
+      if (step) {
+        items.push({ label: "Copy step", action: () => copy(step.text) });
+      }
+      items.push({
+        label: "Copy to-do",
+        aside: steps.length > 0 ? `${steps.length} ${steps.length === 1 ? "step" : "steps"}` : undefined,
+        separated: items.length > 0,
+        action: () => copy(options.markdown()),
+      });
+      const openSteps = steps.filter((item) => !item.checked);
+      // With nothing ticked it would copy the same list as Copy to-do.
+      if (openSteps.length > 0 && openSteps.length < steps.length) {
+        items.push({
+          label: "Copy open steps",
+          aside: String(openSteps.length),
+          action: () => copy(threadTodoStepsMarkdown(openSteps)),
+        });
+      }
+      const all = options.copyAllTodos;
+      if (all && all.length > 1) {
+        items.push({
+          label: "Copy all to-dos",
+          aside: String(all.length),
+          action: () => copy(threadTodosMarkdown(all)),
+        });
+      }
+      setMenu({
+        position: { x: event.clientX, y: event.clientY },
+        items,
+        returnFocusTo: buttonRef.current ?? card,
+      });
+    },
+    menu: menu ? (
+      <ChipContextMenu
+        items={menu.items}
+        position={menu.position}
+        returnFocusTo={menu.returnFocusTo}
+        onClose={() => setMenu(undefined)}
+      />
+    ) : null,
+  };
+}
+
+/**
+ * The event happened in the card's own DOM. React bubbles a portal's events
+ * through the card too, and the menu is one.
+ */
+function inCard(event: ReactMouseEvent<HTMLElement>): boolean {
+  return event.target instanceof Node && event.currentTarget.contains(event.target);
+}
+
+function isTextField(target: EventTarget): boolean {
+  return target instanceof Element
+    && target.closest("input:not([type='checkbox']), textarea, [contenteditable='true']") !== null;
+}
+
+/** Text the operator selected inside the card, when both ends are in it. */
+function selectedTextWithin(card: HTMLElement): string | undefined {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return undefined;
+  if (!card.contains(selection.anchorNode) || !card.contains(selection.focusNode)) {
+    return undefined;
+  }
+  return selection.toString().trim() || undefined;
 }
 
 /**
@@ -955,7 +1125,7 @@ function ThreadTodoChecklist(props: {
       aria-label={`Steps, ${props.progress.checked} of ${props.progress.total} checked`}
     >
       {props.items.map((item) => (
-        <li key={item.id} className="thread-todo-checklist__item">
+        <li key={item.id} className="thread-todo-checklist__item" data-todo-item-id={item.id}>
           <label
             className={`thread-todo-checklist__label${item.checked ? " is-checked" : ""}`}
           >

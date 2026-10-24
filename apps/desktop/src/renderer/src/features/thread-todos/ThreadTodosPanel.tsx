@@ -365,6 +365,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                       {mine && todo.status === "open" ? (
                         <ThreadTodoCard
                           todo={todo}
+                          copyAllTodos={threadOpenCards(group.items, threadKey)}
                           running={view.runningIds.has(todo.id)}
                           threadRunning={props.threadRunning}
                           mergeMethods={view.mergeMethods}
@@ -543,6 +544,17 @@ function describeRoute(
       : `For ${target.label}`;
   }
   return source ? `${source.label} → ${target.label}` : `For ${target.label}`;
+}
+
+/** The thread on screen's open cards in a group: the ones drawn as cards. */
+function threadOpenCards(items: PanelItem[], threadKey: string): ThreadTodo[] {
+  return items.flatMap((item) => (
+    item.type !== "wait"
+    && item.todo.status === "open"
+    && threadTodoThreadKey(item.todo) === threadKey
+      ? [item.todo]
+      : []
+  ));
 }
 
 function groupItems(
