@@ -16294,6 +16294,118 @@ describe("Composer", () => {
     });
   });
 
+  describe("picking a slash command during an active turn", () => {
+    const renderRunningClaudeComposer = (
+      startTurn: (request: StartTurnRequest) => Promise<StartTurnResponse> =
+        vi.fn(),
+    ): void => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[backendSummary("claude")]}
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn,
+          }}
+          disabled={false}
+          providerCommands={[
+            {
+              name: "code-review",
+              description: "Review the current diff",
+              backend: "claude",
+              scope: "session",
+              source: "provider",
+            },
+          ]}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Claude thread",
+            titleSource: "explicit",
+            source: "claude",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "/code" },
+      });
+      expect(
+        within(screen.getByRole("listbox", { name: "Commands" })).getByRole(
+          "option",
+          { name: /\/code-review/i },
+        ),
+      ).toBeInTheDocument();
+    };
+
+    it("inserts the command on Tab instead of queueing the partial text", async () => {
+      renderRunningClaudeComposer();
+
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Tab" });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Reply")).toHaveValue("/code-review ");
+      });
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    });
+
+    it("inserts the command on Enter instead of queueing the partial text", async () => {
+      renderRunningClaudeComposer();
+
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Reply")).toHaveValue("/code-review ");
+      });
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    });
+
+    it("inserts the clicked command instead of queueing the partial text", async () => {
+      renderRunningClaudeComposer();
+
+      fireEvent.click(
+        within(screen.getByRole("listbox", { name: "Commands" })).getByRole(
+          "option",
+          { name: /\/code-review/i },
+        ),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Reply")).toHaveValue("/code-review ");
+      });
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    });
+
+    it("queues the full command once the operator sends it", async () => {
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "queue-entry-1",
+        queueStatus: "queued" as const,
+        queueEntryId: "queue-entry-1",
+      }));
+      renderRunningClaudeComposer(startTurn);
+
+      const reply = screen.getByLabelText("Reply");
+      fireEvent.keyDown(reply, { key: "Tab" });
+      await waitFor(() => {
+        expect(reply).toHaveValue("/code-review ");
+      });
+      fireEvent.keyDown(reply, { key: "Enter" });
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledTimes(1);
+        expect(screen.getByText("Next")).toBeInTheDocument();
+      });
+      expect(startTurn.mock.calls[0]![0].input).toEqual([
+        { type: "text", text: "/code-review" },
+      ]);
+      expect(reply).toHaveValue("");
+    });
+  });
+
   it("opens review composer from the focused slash command option", async () => {
     render(
       <Composer
