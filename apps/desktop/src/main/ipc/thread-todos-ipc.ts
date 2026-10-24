@@ -30,13 +30,17 @@ let unsubscribeRemoteTodos: (() => void) | undefined;
 let unsubscribePeerStatus: (() => void) | undefined;
 const todoLog = getMainLogger("pwragent:thread-todos");
 
-function broadcastThreadTodosChanged(event: ThreadTodosChangedEvent): void {
+/**
+ * A federation viewer hears only its owner's changes. `everyWindow` is for
+ * reconnection, after which every window reloads its owner's state.
+ */
+function broadcastThreadTodosChanged(event: ThreadTodosChangedEvent, everyWindow = false): void {
   for (const webContents of subscribersForChannel(
     THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   )) {
     const windowTarget = federationTargetForChannelSubscriber(webContents);
-    if (windowTarget && windowTarget.instanceId !== event.federationTarget?.instanceId
-      && (event.backend !== undefined || event.federationTarget !== undefined)) continue;
+    if (!everyWindow && windowTarget
+      && windowTarget.instanceId !== event.federationTarget?.instanceId) continue;
     if (!webContents.isDestroyed()) {
       webContents.send(THREAD_TODOS_CHANGED_EVENT_CHANNEL, event);
     }
@@ -98,7 +102,7 @@ export function registerThreadTodoIpcHandlers(options: {
   });
   unsubscribePeerStatus?.();
   unsubscribePeerStatus = runtime.onPeerStatusChanged(() => {
-    broadcastThreadTodosChanged({ at: Date.now() });
+    broadcastThreadTodosChanged({ at: Date.now() }, true);
   });
   const channels = {
     listReviews: THREAD_REVIEWS_LIST_CHANNEL, updateReview: THREAD_REVIEWS_UPDATE_CHANNEL,

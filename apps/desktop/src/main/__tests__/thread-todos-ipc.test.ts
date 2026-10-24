@@ -1,3 +1,4 @@
+import type { BrowserWindow } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, ThreadTodo, ThreadTodosChangedEvent } from "@pwragent/shared";
 import {
@@ -44,16 +45,25 @@ vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: 
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: () => ({}) }));
 vi.mock("../settings/desktop-settings-singleton", () => ({ getDesktopSettingsService: () => ({}) }));
 vi.mock("../ipc/app-server", () => ({ appServerService: {} }));
-vi.mock("../window-channels", () => ({
-  subscribersForChannel: () => fixture.windows,
-  federationTargetForChannelSubscriber: (sender: { target: unknown }) => sender.target,
-}));
 vi.mock("../log", () => ({ getMainLogger: () => ({ warn: vi.fn() }) }));
 
 import { registerThreadTodoIpcHandlers } from "../ipc/thread-todos-ipc";
+import { mainWindowEventChannels } from "../main-window-channels";
+import { WINDOW_KIND_MAIN, _resetWindowChannelsForTests, registerWindowChannels } from "../window-channels";
+
+// The real registry, fed the channels createMainWindow registers, so a
+// window missing a channel misses its broadcasts here as it does in the app.
+function registerTestWindows(): void {
+  _resetWindowChannelsForTests();
+  for (const window of fixture.windows) {
+    registerWindowChannels({ webContents: window, on: () => {} } as unknown as BrowserWindow,
+      WINDOW_KIND_MAIN, mainWindowEventChannels(window.target), window.target);
+  }
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
+  registerTestWindows();
   registerThreadTodoIpcHandlers();
 });
 
@@ -94,5 +104,14 @@ describe("owner-routed To-do IPC", () => {
     expect(fixture.publish).toHaveBeenCalledWith({ backend: "codex", threadId: "local-thread", at: 2 });
     expect(fixture.windows[0]!.send).toHaveBeenCalledOnce();
     expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
+  });
+
+  // A local provider refresh names no backend. It must not make a viewer
+  // re-read its owner's cards over federation.
+  it("keeps untargeted local invalidations out of remote windows", () => {
+    fixture.broadcast!({ at: 3 });
+    expect(fixture.windows[0]!.send).toHaveBeenCalledOnce();
+    expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
+    expect(fixture.windows[2]!.send).not.toHaveBeenCalled();
   });
 });
