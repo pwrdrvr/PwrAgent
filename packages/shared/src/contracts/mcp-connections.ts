@@ -36,6 +36,14 @@ export type SandboxerCliState =
   | "cli_missing"
   | "unavailable";
 
+/** Signed in, but Sandboxer will not start a machine for this account. */
+export function isSandboxerAccountLimited(state: SandboxerCliState | undefined): boolean {
+  return state === "no_plan"
+    || state === "billing_issue"
+    || state === "out_of_credit"
+    || state === "cannot_start";
+}
+
 /**
  * The account the local CLI login bills. Shown in Settings only; federation
  * strips it, and no agent tool returns it.
@@ -566,8 +574,14 @@ export function resolveMcpConnectionSetup(
       return build("unavailable", "Unavailable", detail, "err");
     }
     const account = SANDBOXER_ACCOUNT_HEADLINES[connection.sandboxerCliState ?? "signed_in"];
-    if (account) return build("login_required", account, detail, "warn");
+    // No plan means no sandbox exists yet, so threads are not offered it.
+    if (account && !configured) return build("login_required", account, detail, "warn");
     if (!configured) return build("login_required", "Not signed in", detail, "warn");
+    // A billing problem stops new machines, not running ones. Threads keep
+    // reaching it so the agent can still list and stop what is running.
+    if (account) {
+      return build(connection.enabled ? "ready" : "parked", account, detail, "warn");
+    }
     // A sandbox outlives its thread, so the ready line says who stops it.
     const billing =
       "Sandboxes bill per second while they run. Closing the thread does not stop one; auto-stop or the agent does.";

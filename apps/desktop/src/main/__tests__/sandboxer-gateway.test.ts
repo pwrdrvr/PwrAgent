@@ -17,14 +17,18 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sandboxer-gateway-"));
   const registry = new McpConnectionRegistry({ configPath: path.join(root, "config.toml") });
   registry.setEnabled("builtin:sandboxer", true);
-  const sandboxer = new SandboxerConnection(async () => '{"signedIn":true,"apiReachable":true}');
+  let status = '{"signedIn":true,"apiReachable":true}';
+  const sandboxer = new SandboxerConnection(async () => status);
   const calls = vi.fn();
   const closed = vi.fn();
   const servers: Server[] = [];
   const names = ["create_sandbox", "list_sandboxes", "exec", "read_file", "write_file", "host_port", "stop_sandbox", "resume_sandbox"];
   const spawn = vi.spyOn(sandboxer, "createTransport").mockImplementation(() => {
     const [client, remote] = InMemoryTransport.createLinkedPair();
-    const server = new Server({ name: "mock-sbx", version: "1" }, { capabilities: { tools: {} } });
+    const server = new Server({ name: "mock-sbx", version: "1" }, {
+      capabilities: { tools: {} },
+      instructions: "Call stop_sandbox when you are done.",
+    });
     let lastSandbox: string | undefined;
     server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: names.map((name) => ({
       name, inputSchema: { type: "object" as const, properties: { sandboxId: { type: "string" }, type: { type: "string" } } },
@@ -64,7 +68,11 @@ function fixture() {
   const scope = (id: string) => ({ connectionId: "builtin:sandboxer", scopeKey: JSON.stringify(["gateway", "codex", id]), signal: new AbortController().signal });
   const list = async (id: string) => await service.requestGatewayToolOperation({ ...scope(id), operation: "gateway/tools/list" }) as McpGatewayTool[];
   const call = async (id: string, tool: McpGatewayTool, args: Record<string, unknown>) => await service.requestGatewayToolOperation({ ...scope(id), operation: "gateway/tools/call", invocation: { ...tool, arguments: args } });
-  return { service, list, call, spawn, calls, closed, credentialRead, deselect: () => { selected = false; } };
+  return {
+    service, list, call, spawn, calls, closed, credentialRead,
+    deselect: () => { selected = false; },
+    setStatus: (next: string) => { status = next; },
+  };
 }
 
 describe("Sandboxer thread gateway", () => {
@@ -121,6 +129,37 @@ describe("Sandboxer thread gateway", () => {
     const refreshed = await f.list("a");
     expect(await f.call("a", refreshed[2]!, {})).toMatchObject({ content: [{ text: "none" }] });
     expect(f.credentialRead).not.toHaveBeenCalled();
+  });
+
+  it("keeps live sessions when a refresh finds the same account", async () => {
+    const f = fixture();
+    const account = (id: string, canStart = true) => JSON.stringify({
+      signedIn: true, apiReachable: true, user: { id, email: `${id}@example.com` },
+      plan: { canStart, dollars: 20, billingStatus: canStart ? "active" : "past_due", creditBalanceHours: 3 },
+    });
+    f.setStatus(account("usr_a"));
+    await f.service.authorizeConnection("builtin:sandboxer");
+    const tools = await f.list("a");
+    await f.call("a", tools[2]!, { sandboxId: "fixture-running" });
+    // Settings refreshes on window focus; that must not drop the thread's sandbox.
+    await f.service.authorizeConnection("builtin:sandboxer");
+    // A billing problem stops new machines. Running ones still need stop.
+    f.setStatus(account("usr_a", false));
+    expect(await f.service.authorizeConnection("builtin:sandboxer")).toMatchObject({
+      configured: true, sandboxerCliState: "billing_issue",
+    });
+    expect(f.closed).not.toHaveBeenCalled();
+    expect(await f.call("a", tools[2]!, {})).toMatchObject({ content: [{ text: "fixture-running" }] });
+    f.setStatus(account("usr_b"));
+    await f.service.authorizeConnection("builtin:sandboxer");
+    expect(f.closed).toHaveBeenCalledOnce();
+  });
+
+  it("forwards only Sandboxer's own server instructions with its catalog", async () => {
+    const f = fixture();
+    const tools = await f.list("a");
+    expect(tools[0]!.serverInstructions).toBe("Call stop_sandbox when you are done.");
+    expect(tools.slice(1).some((tool) => tool.serverInstructions)).toBe(false);
   });
 
   it("reports missing CLI without OAuth or attempting to spawn MCP", async () => {

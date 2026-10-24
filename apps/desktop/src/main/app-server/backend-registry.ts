@@ -19303,8 +19303,10 @@ export class DesktopBackendRegistry {
       const inheritedNames = await this.readConfiguredCodexMcpServerNames(params.cwd);
       const providerEnabled = params.overlay?.mcpProviderServersEnabled !== false;
       const selectedConnectionIds = params.overlay?.mcpConnectionIds ?? [];
+      // Only ids, names, and `enabled` are read here: stored config. A fresh
+      // local CLI probe would hold up every run start for nothing.
       const connectionStatuses = params.mcpAllowlist?.length || selectedConnectionIds.length
-        ? await this.mcpConnectionService?.listConnections?.()
+        ? await this.mcpConnectionService?.listConnections?.({ cachedLocalStatus: true })
         : undefined;
       const namesConnection = (connection: { id: string; displayName: string }, name: string) =>
         name === connection.id || name === connection.displayName || name === connection.displayName.toLowerCase();

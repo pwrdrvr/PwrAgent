@@ -8,6 +8,7 @@ import {
   SANDBOXER_CLI_PATH,
   SANDBOXER_MCP_LAUNCH_ARGS,
   SANDBOXER_SETUP_COMMAND,
+  isSandboxerAccountLimited,
 } from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -22,14 +23,6 @@ import type { DesktopApi } from "../../lib/desktop-api";
 
 type Notice = { kind: "error" | "info" | "success" | "working"; text: string };
 
-/** Signed in, but the account cannot start a machine yet. */
-const ACCOUNT_STATES: ReadonlySet<SandboxerCliState | undefined> = new Set([
-  "no_plan",
-  "billing_issue",
-  "out_of_credit",
-  "cannot_start",
-]);
-
 /** Billing problems are fixed on the signed-in dashboard. */
 const BILLING_STATES: ReadonlySet<SandboxerCliState | undefined> = new Set([
   "billing_issue",
@@ -42,12 +35,12 @@ export const SANDBOXER_RUNS_COMMAND =
 
 /** Signed in to an account that can't start a machine; its chip says why. */
 export function sandboxerCannotStart(connection: McpConnectionStatus): boolean {
-  return ACCOUNT_STATES.has(connection.sandboxerCliState);
+  return isSandboxerAccountLimited(connection.sandboxerCliState);
 }
 
 export function sandboxerNeedsSetup(connection: McpConnectionStatus): boolean {
   const state = connection.sandboxerCliState;
-  return state === "cli_missing" || state === "not_signed_in" || ACCOUNT_STATES.has(state);
+  return state === "cli_missing" || state === "not_signed_in" || isSandboxerAccountLimited(state);
 }
 
 export function SandboxerLink(props: {
@@ -174,7 +167,7 @@ export function SandboxerSetupAction(props: {
 
 function SetupLadder(props: { state: SandboxerCliState | undefined; offered: boolean }) {
   const installed = props.state !== "cli_missing";
-  const account = ACCOUNT_STATES.has(props.state);
+  const account = isSandboxerAccountLimited(props.state);
   const ready = props.state === "signed_in";
   const steps = [
     { label: "Install CLI", done: installed },

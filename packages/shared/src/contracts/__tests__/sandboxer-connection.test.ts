@@ -45,17 +45,23 @@ describe("Sandboxer contract", () => {
     expect(resolveMcpConnectionSetup({ connection, gatewayEnabled: false }).state).toBe("gateway_off");
   });
 
-  it("does not call an account that can't start a machine ready", () => {
+  it("keeps an account without a plan out of threads, but not one with a billing problem", () => {
+    const noPlan = { ...connection, sandboxerCliState: "no_plan" as const, configured: false, state: "disconnected" as const, detail: "Account remedy" };
+    expect(resolveMcpConnectionSetup({ connection: noPlan, gatewayEnabled: true })).toMatchObject({
+      state: "login_required", headline: "No plan", detail: "Account remedy", tone: "warn",
+      threadSelectable: false, offersAvailabilitySwitch: false,
+    });
+    expect(describeMcpConnectionAuth(noPlan)).toMatchObject({ label: "Signed in", tone: "ok", canSignIn: false });
     for (const [sandboxerCliState, headline] of [
-      ["no_plan", "No plan"], ["billing_issue", "Billing issue"],
-      ["out_of_credit", "Out of credit"], ["cannot_start", "Can't start"],
+      ["billing_issue", "Billing issue"], ["out_of_credit", "Out of credit"], ["cannot_start", "Can't start"],
     ] as const) {
-      const status = { ...connection, sandboxerCliState, configured: false, state: "disconnected" as const, detail: "Account remedy" };
+      // New machines won't start; running ones still need list and stop.
+      const status = { ...connection, sandboxerCliState, detail: "Billing remedy" };
       expect(resolveMcpConnectionSetup({ connection: status, gatewayEnabled: true })).toMatchObject({
-        headline, detail: "Account remedy", tone: "warn",
-        threadSelectable: false, offersAvailabilitySwitch: false,
+        state: "ready", headline, detail: "Billing remedy", tone: "warn",
+        threadSelectable: true, offersAvailabilitySwitch: true,
       });
-      // The login itself is fine; the other chip names what the account lacks.
+      expect(resolveMcpConnectionSetup({ connection: { ...status, enabled: false }, gatewayEnabled: true }).state).toBe("parked");
       expect(describeMcpConnectionAuth(status)).toMatchObject({ label: "Signed in", tone: "ok", canSignIn: false });
     }
   });

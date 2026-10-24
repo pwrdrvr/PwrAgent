@@ -33,10 +33,13 @@ type CliStatus = Pick<
 >;
 type RunCli = () => Promise<string>;
 
+/** A status plus who it is for, so a refresh can tell an account switch. */
+type Probe = { value: CliStatus; identity?: string };
+
 type CliStatusJson = {
   signedIn?: boolean;
   apiReachable?: boolean;
-  user?: { email?: unknown };
+  user?: { id?: unknown; email?: unknown };
   plan?: {
     canStart?: unknown;
     billingStatus?: unknown;
@@ -134,8 +137,8 @@ export type SandboxerConnectionOptions = {
 
 /** Owns local CLI discovery only. Credentials remain owned by Sandboxer. */
 export class SandboxerConnection {
-  private cached?: { at: number; value: CliStatus };
-  private pending?: Promise<CliStatus>;
+  private cached?: { at: number } & Probe;
+  private pending?: Promise<Probe>;
 
   private readonly dashboardCommand: RunCli;
   private readonly openExternal: (url: string) => Promise<void>;
@@ -158,13 +161,35 @@ export class SandboxerConnection {
   }
 
   async readStatus(refresh = false): Promise<CliStatus> {
+    return (await this.read(refresh)).value;
+  }
+
+  /**
+   * Re-reads status for Refresh status. `accountChanged` is true when the
+   * CLI is now signed in to a different account, or no longer usable, which
+   * is the only time live sessions holding the old login must be retired.
+   * Retiring them otherwise kills each thread's `sbx mcp` process and the
+   * sandbox it was implicitly using.
+   */
+  async refreshStatus(): Promise<{ status: CliStatus; accountChanged: boolean }> {
+    const before = this.cached;
+    const after = await this.read(true);
+    const accountChanged =
+      !before?.value.configured
+      || !after.value.configured
+      || before.identity === undefined
+      || before.identity !== after.identity;
+    return { status: after.value, accountChanged };
+  }
+
+  private async read(refresh: boolean): Promise<Probe> {
     if (!refresh && this.cached && Date.now() - this.cached.at < 15_000) {
-      return this.cached.value;
+      return this.cached;
     }
     if (this.pending) return await this.pending;
-    const pending = this.probe().then((value) => {
-      this.cached = { at: Date.now(), value };
-      return value;
+    const pending = this.probe().then((probe) => {
+      this.cached = { at: Date.now(), ...probe };
+      return probe;
     }).finally(() => {
       if (this.pending === pending) this.pending = undefined;
     });
@@ -215,41 +240,52 @@ export class SandboxerConnection {
     });
   }
 
-  private async probe(): Promise<CliStatus> {
+  private async probe(): Promise<Probe> {
     try {
       const status = JSON.parse(await this.statusCommand()) as CliStatusJson;
       if (typeof status.signedIn !== "boolean") throw new Error("Invalid CLI status");
       if (!status.signedIn) {
-        return {
+        return { value: {
           configured: false, state: "disconnected", sandboxerCliState: "not_signed_in",
           detail: `Not signed in. Run ${SANDBOXER_SETUP_COMMAND} in a terminal. It signs in an existing account, or creates one and starts the trial, and skips any step already done. PwrAgent uses that login and stores no Sandboxer credentials.`,
-        };
+        } };
       }
       if (status.apiReachable === false) throw new Error("API unavailable");
       const sandboxerCliState = accountState(status.plan);
       const sandboxerAccount = accountSummary(status);
-      if (sandboxerCliState !== "signed_in") {
-        // Every create would fail, so threads are not offered it yet.
-        return {
+      const userId = status.user?.id;
+      const identity = typeof userId === "string" && userId ? userId : sandboxerAccount?.email;
+      if (sandboxerCliState === "no_plan") {
+        // Without a plan no sandbox exists, so there is nothing to offer yet.
+        return { identity, value: {
           configured: false, state: "disconnected", sandboxerCliState,
+          detail: ACCOUNT_DETAILS.no_plan,
+          ...(sandboxerAccount ? { sandboxerAccount } : {}),
+        } };
+      }
+      if (sandboxerCliState !== "signed_in") {
+        // New creates fail, but sandboxes started before the billing problem
+        // keep running and billing. Threads must still reach list and stop.
+        return { identity, value: {
+          configured: true, state: "ready", sandboxerCliState,
           detail: ACCOUNT_DETAILS[sandboxerCliState as keyof typeof ACCOUNT_DETAILS],
           ...(sandboxerAccount ? { sandboxerAccount } : {}),
-        };
+        } };
       }
-      return {
+      return { identity, value: {
         configured: true, state: "ready", sandboxerCliState,
         detail: "Signed in through the Sandboxer CLI. Sandboxes bill per second while they run.",
         ...(sandboxerAccount ? { sandboxerAccount } : {}),
-      };
+      } };
     } catch (error) {
       const missing = (error as NodeJS.ErrnoException)?.code === "ENOENT";
-      return {
+      return { value: {
         configured: false, state: "temporarily_unavailable",
         sandboxerCliState: missing ? "cli_missing" : "unavailable",
         detail: missing
           ? `Sandboxer CLI missing. Install the official CLI at ${SANDBOXER_CLI_PATH}, then refresh status in Settings → Plugins.`
           : `Could not check Sandboxer. Run ${SANDBOXER_CLI_PATH} status in a terminal, check access and connectivity, then refresh status.`,
-      };
+      } };
     }
   }
 }

@@ -37,21 +37,23 @@ describe("SandboxerConnection", () => {
     }
   });
 
-  it("keeps a signed-in account that can't start a machine out of threads", async () => {
+  it("names why a signed-in account can't start a machine", async () => {
     const status = (plan: Record<string, unknown>) => JSON.stringify({
       signedIn: true, apiReachable: true,
       user: { email: "operator@example.com" }, plan,
     });
-    for (const [plan, sandboxerCliState] of [
-      [{ canStart: false, dollars: 0, billingStatus: "none" }, "no_plan"],
-      [{ canStart: false, billingStatus: "inactive" }, "no_plan"],
-      [{ canStart: false, dollars: 20, billingStatus: "past_due", creditBalanceHours: 4 }, "billing_issue"],
-      [{ canStart: false, dollars: 20, billingStatus: "active", creditBalanceHours: 0 }, "out_of_credit"],
-      [{ canStart: false, dollars: 20, billingStatus: "trialing", creditBalanceHours: 0 }, "out_of_credit"],
-      [{ canStart: false, dollars: 20, billingStatus: "active", creditBalanceHours: 3 }, "cannot_start"],
+    // No plan: no sandbox can exist, so threads are not offered it. A billing
+    // problem stops new machines only; threads must still reach stop.
+    for (const [plan, sandboxerCliState, configured] of [
+      [{ canStart: false, dollars: 0, billingStatus: "none" }, "no_plan", false],
+      [{ canStart: false, billingStatus: "inactive" }, "no_plan", false],
+      [{ canStart: false, dollars: 20, billingStatus: "past_due", creditBalanceHours: 4 }, "billing_issue", true],
+      [{ canStart: false, dollars: 20, billingStatus: "active", creditBalanceHours: 0 }, "out_of_credit", true],
+      [{ canStart: false, dollars: 20, billingStatus: "trialing", creditBalanceHours: 0 }, "out_of_credit", true],
+      [{ canStart: false, dollars: 20, billingStatus: "active", creditBalanceHours: 3 }, "cannot_start", true],
     ] as const) {
       const read = await new SandboxerConnection(async () => status(plan)).readStatus();
-      expect(read).toMatchObject({ configured: false, state: "disconnected", sandboxerCliState });
+      expect(read).toMatchObject({ configured, state: configured ? "ready" : "disconnected", sandboxerCliState });
       expect(read.detail).not.toContain("operator@example.com");
     }
     expect((await new SandboxerConnection(async () => status({ canStart: false, dollars: 0 })).readStatus()).detail)
@@ -103,6 +105,22 @@ describe("SandboxerConnection", () => {
     expect(execFile).toHaveBeenCalledWith(SANDBOXER_CLI_PATH,
       ["dashboard", "--no-open", "--json", "--no-update"],
       expect.objectContaining({ timeout: 8_000 }), expect.any(Function));
+  });
+
+  it("reports an account change only when the login changed or broke", async () => {
+    let output = JSON.stringify({ signedIn: true, apiReachable: true, user: { id: "usr_a", email: "a@example.com" } });
+    const connection = new SandboxerConnection(async () => output);
+    // Nothing was known before the first read.
+    expect((await connection.refreshStatus()).accountChanged).toBe(true);
+    expect((await connection.refreshStatus()).accountChanged).toBe(false);
+    output = JSON.stringify({ signedIn: true, apiReachable: true, user: { id: "usr_b", email: "b@example.com" } });
+    expect((await connection.refreshStatus()).accountChanged).toBe(true);
+    output = '{"signedIn":false}';
+    expect((await connection.refreshStatus()).accountChanged).toBe(true);
+    // An older CLI names no user, so a refresh cannot prove the account held.
+    output = '{"signedIn":true,"apiReachable":true}';
+    await connection.refreshStatus();
+    expect((await connection.refreshStatus()).accountChanged).toBe(true);
   });
 
   it("coalesces concurrent status reads and refreshes after login", async () => {

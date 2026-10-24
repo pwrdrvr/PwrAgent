@@ -673,10 +673,14 @@ export class McpConnectionGatewayService {
     const connection = this.requireConnection(connectionId);
     if (connection.kind === "sandboxer") {
       // The CLI may have logged into a different account since this process
-      // started. Retire servers holding its previous login and cached catalog.
-      await this.closeConnectionSessions(connectionId);
-      this.invalidateConnectionTools(connectionId);
-      await this.sandboxer.readStatus(true);
+      // started. Only then retire servers holding the previous login and its
+      // catalog: Settings refreshes on window focus during setup, and closing
+      // a live `sbx mcp` drops the sandbox a thread was implicitly using.
+      const { accountChanged } = await this.sandboxer.refreshStatus();
+      if (accountChanged) {
+        await this.closeConnectionSessions(connectionId);
+        this.invalidateConnectionTools(connectionId);
+      }
       return await this.connectionStatus(connection);
     }
     // Restore the first attempt's state before its callback rejection runs.
@@ -2411,8 +2415,12 @@ export class McpConnectionGatewayService {
     }
     this.recordDiscoverySuccess(connection.id);
     // Sandboxer's say to stop each sandbox when done; dropping them left the
-    // agent nothing telling it a forgotten machine keeps billing.
-    const instructions = client.getInstructions?.()?.trim();
+    // agent nothing telling it a forgotten machine keeps billing. Only the
+    // built-in Sandboxer CLI's: a third-party server's instructions would be
+    // untrusted text the agent is told to follow.
+    const instructions = connection.kind === "sandboxer"
+      ? client.getInstructions?.()?.trim()
+      : undefined;
     if (instructions && tools[0]) {
       tools[0] = { ...tools[0], serverInstructions: instructions.slice(0, MAX_SERVER_INSTRUCTIONS_CHARS) };
     }

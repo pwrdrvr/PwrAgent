@@ -1,5 +1,8 @@
 import type { CodexMcpAuthStatus } from "./contracts/agent";
-import type { McpConnectionStatus } from "./contracts/mcp-connections";
+import {
+  isSandboxerAccountLimited,
+  type McpConnectionStatus,
+} from "./contracts/mcp-connections";
 
 /**
  * One wording for the Codex MCP sign-in enum, shared by every surface that
@@ -97,12 +100,7 @@ export function describeMcpConnectionAuth(
     // An account that can't start a machine is still signed in. Its own
     // chip names what the account lacks; this one says the login is fine.
     const cliState = connection.sandboxerCliState;
-    const signedIn =
-      connection.configured
-      || cliState === "no_plan"
-      || cliState === "billing_issue"
-      || cliState === "out_of_credit"
-      || cliState === "cannot_start";
+    const signedIn = connection.configured || isSandboxerAccountLimited(cliState);
     return {
       label: cliState === "cli_missing" ? "CLI missing"
         : cliState === "unavailable" ? "Status unavailable"
