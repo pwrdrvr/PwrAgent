@@ -875,6 +875,13 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "recent-thread-lock-notes": {
+    "commits": 3,
+    "note": "three saved lock notes that change the list and three that do not: one commit per change, none per repeat; a few locks a day is well under 1 MB/day of WAL",
+    "observedWalBytes": 24720,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "registered-project-launchpad-submit": {
     "commits": 1,
     "note": "One registered project draft reset per new thread: one replacement commit, no delete/insert pair; at 100 starts/day the measured WAL is approximately 0.8 MB/day; no idle writes",

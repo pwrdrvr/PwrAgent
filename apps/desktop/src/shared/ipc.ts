@@ -320,6 +320,10 @@ export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen"
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
 export const NAVIGATION_SET_THREAD_LOCK_CHANNEL = "navigation:set-thread-lock";
+export const NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL =
+  "navigation:recent-thread-lock-notes";
+export const NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL =
+  "navigation:remember-thread-lock-note";
 export const NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL =
   "navigation:set-thread-tool-incident-notice";
 export const NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL = "navigation:pending-thread-spend-alerts";

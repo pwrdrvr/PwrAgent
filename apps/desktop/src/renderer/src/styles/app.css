@@ -9259,6 +9259,63 @@ a.button {
   outline-offset: 2px;
 }
 
+/* Recent notes: one Tab stop under the field. The chip matching the note
+   takes the accent-soft fill the Star Map filter chips use for a choice. */
+.thread-lock-dialog__recents {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.thread-lock-dialog__recents-label {
+  margin-right: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.thread-lock-dialog__recent {
+  max-width: 100%;
+  padding: 3px 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.thread-lock-dialog__recent:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.thread-lock-dialog__recent[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.thread-lock-dialog__recent:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-lock-dialog__recent:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .thread-lock-dialog__blocks {
   margin-top: 12px;
   padding: 10px 12px;
