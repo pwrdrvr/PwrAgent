@@ -1409,6 +1409,7 @@ describe("StateDb", () => {
     stateDb = StateDb.open(dbPath);
 
     expect(ledger()).toEqual(before);
+    expect(stateDb.raw.prepare("SELECT total_changes() AS changes").get()).toEqual({ changes: 0 });
   });
 
   it("repairs live usage line timestamps that were overwritten by streaming updates", () => {
