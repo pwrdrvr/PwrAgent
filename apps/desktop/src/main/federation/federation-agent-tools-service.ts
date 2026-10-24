@@ -963,6 +963,13 @@ function buildLaunchpadDraft(params: {
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(acpRuntime !== undefined ? { acpRuntime } : {}),
     ...(providerSettings !== undefined ? { providerSettings } : {}),
+    ...(stored && "codexEnvironmentId" in stored
+      ? {
+          codexEnvironmentId: stored.codexEnvironmentId,
+          codexEnvironmentExecutionTarget: stored.codexEnvironmentExecutionTarget,
+          codexEnvironmentActionId: stored.codexEnvironmentActionId,
+        }
+      : {}),
     ...(tokenMiserEnabled !== undefined ? { tokenMiserEnabled } : {}),
     ...(stored?.mcpConnectionIds
       ? { mcpConnectionIds: stored.mcpConnectionIds }
