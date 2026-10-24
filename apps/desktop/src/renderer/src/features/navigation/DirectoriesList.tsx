@@ -273,6 +273,7 @@ const EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL: PagedDirectoryPresentation = {
   unpinnedThreads: [],
   selectedUnpinnedThreads: [],
   childThreadsByParentKey: new Map(),
+  ownerChildOrder: new Map(),
   directoryPinnedThreads: [],
   directoryThreadsCollapsed: false,
   directoryUnpinnedThreadCount: 0,
@@ -1042,7 +1043,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       .join(", ");
     const expandedThreadModel =
       expanded ? buildPagedDirectoryPresentation({ directory, presentationOrder: props.presentationOrder, resources: props.pagedNavigation?.resources ?? new Map(), threadsByKey }) : EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
-    const { childThreadsByParentKey } = expandedThreadModel;
+    const { childThreadsByParentKey, ownerChildOrder } = expandedThreadModel;
     // One tray per top-level row, holding its whole descendant subtree in
     // depth-first order. The owner keys each child under its *true* parent, so
     // a grandchild is filed under a row that is itself a child; rendering only
@@ -1052,7 +1053,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       ...expandedThreadModel.selectedUnpinnedThreads,
       ...expandedThreadModel.unpinnedThreads,
     ];
-    const trays = createSubthreadTrays(childThreadsByParentKey, roots);
+    const trays = createSubthreadTrays(childThreadsByParentKey, roots, ownerChildOrder);
     const selectedRoot = roots.find((thread) => threadSummaryIdentityKey(thread) === props.selectedItemKey);
     const selectedTrayRoot = selectedRoot ? undefined : roots.find((thread) =>
       trays.subtree(threadSummaryIdentityKey(thread)).some((child) =>

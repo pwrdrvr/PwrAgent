@@ -585,7 +585,10 @@ export class ClaudeBackend {
           if (finished) break;
         }
       }
-      if ((!receivedResult || running.pendingSteers.size > 0) && !running.controller.signal.aborted) failure ??= "Claude exited before completing the turn.";
+      // An error result already says why the turn ended; keep its text.
+      if ((!receivedResult || running.pendingSteers.size > 0) && !running.controller.signal.aborted) {
+        failure ??= "Claude exited before completing the turn.";
+      }
     } catch (error) {
       failure ??= claudeExceptionMessage(error, running.stderr);
     } finally {
@@ -1076,7 +1079,9 @@ export class ClaudeBackend {
       // history is written, and a rejected steer must leave no transcript row.
       running.entries.set(messageId, entry);
       running.pendingSteers.add(uuid);
-      running.input.push({ type: "user", uuid, priority: "now", parent_tool_use_id: null,
+      // "next" joins the running turn at its next boundary. "now" aborts the
+      // in-flight response and ends that native turn with an error result.
+      running.input.push({ type: "user", uuid, priority: "next", parent_tool_use_id: null,
         message: { role: "user", content } });
       // The message is already sent; turn completion persists every entry,
       // so an early-write failure must not report the steer as rejected.

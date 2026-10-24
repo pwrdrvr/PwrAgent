@@ -46,10 +46,17 @@ export type SubthreadTrays = {
  * Reserve every presentation root before walking any descendants. A promoted
  * root can also appear in an ancestor's child page; its own tray must keep
  * both that row and its descendants regardless of the owners' render order.
+ *
+ * `ownerChildOrder` is each parent's child keys in the order its owner's child
+ * pages listed them. Navigation rows never carry `subthreadOrder` (it is a
+ * detail collection), so those pages are the only place the saved order
+ * reaches a tray. Without it a tray falls back to newest-first, and every
+ * reorder snaps back on the next read.
  */
 export function createSubthreadTrays(
   childrenByParentKey: ReadonlyMap<string, NavigationThreadSummary[]>,
   owners: readonly NavigationThreadSummary[],
+  ownerChildOrder?: ReadonlyMap<string, readonly string[]>,
 ): SubthreadTrays {
   const subtreeByTrayKey = new Map<string, NavigationThreadSummary[]>();
   const directChildKeysByTrayKey = new Map<string, string[]>();
@@ -67,7 +74,7 @@ export function createSubthreadTrays(
     // map for nothing.
     const bucket = childrenByParentKey.get(parentKey);
     if (!bucket?.length) return;
-    const children = sortSubthreadSummaries(parent, bucket);
+    const children = sortTrayChildren(parent, bucket, ownerChildOrder?.get(parentKey));
     // Resolved once per tray rather than per child: this runs for every
     // rendered sub-thread of every directory on each navigation update.
     let tray = subtreeByTrayKey.get(trayKey);
@@ -104,4 +111,28 @@ export function createSubthreadTrays(
     directChildKeys: (trayKey) => directChildKeysByTrayKey.get(trayKey) ?? [],
     subtree: (trayKey) => subtreeByTrayKey.get(trayKey) ?? [],
   };
+}
+
+/**
+ * A parent's own `subthreadOrder` wins: only this window's optimistic reorder
+ * sets it on a row, and it is newer than the page it replaces. Otherwise the
+ * owner's page order ranks the children, and a child no page listed yet
+ * follows them newest-first, as `sortSubthreadSummaries` places an unranked
+ * child.
+ */
+function sortTrayChildren(
+  parent: NavigationThreadSummary,
+  bucket: NavigationThreadSummary[],
+  ownerOrder: readonly string[] | undefined,
+): NavigationThreadSummary[] {
+  if (parent.subthreadOrder?.length || !ownerOrder?.length) return sortSubthreadSummaries(parent, bucket);
+  const rank = new Map(ownerOrder.map((key, index) => [key, index]));
+  return [...bucket].sort((left, right) => {
+    const leftRank = rank.get(threadSummaryIdentityKey(left));
+    const rightRank = rank.get(threadSummaryIdentityKey(right));
+    if (leftRank !== undefined || rightRank !== undefined) {
+      return (leftRank ?? Number.MAX_SAFE_INTEGER) - (rightRank ?? Number.MAX_SAFE_INTEGER);
+    }
+    return (right.createdAt ?? 0) - (left.createdAt ?? 0);
+  });
 }

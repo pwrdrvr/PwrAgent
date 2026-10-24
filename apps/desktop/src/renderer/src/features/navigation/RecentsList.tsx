@@ -1,4 +1,4 @@
-import { readNavigationPresentationOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
+import { readNavigationPresentationOrder, readOwnerChildOrder, type NavigationPresentationOrder } from "./navigation-presentation-order";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationIdentityKey, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
@@ -260,7 +260,8 @@ export function RecentsList(props: RecentsListProps) {
   // depth-first order. The owner keys each child under its *true* parent,
   // so a grandchild is filed under a row that is itself a child; rendering
   // only direct children would silently drop it from this lens.
-  const trays = createSubthreadTrays(childrenByParentKey, [...pinnedRoots, ...topLevelThreads]);
+  const trays = createSubthreadTrays(childrenByParentKey, [...pinnedRoots, ...topLevelThreads],
+    readOwnerChildOrder(props.pagedNavigation?.resources ?? new Map(), presentation));
   const renderedThreadKeys = new Set(topLevelKeys);
   for (const key of topLevelKeys) {
     for (const child of trays.subtree(key)) renderedThreadKeys.add(threadSummaryIdentityKey(child));

@@ -14,22 +14,24 @@ function mount(collapsed = false, promotedGrandchild = false) {
     counts: { total: promotedGrandchild ? 10 : 9, active: 0, unread: 0, review: 0 },
     pinnedRootCount: 1, unpinnedRootCount: promotedGrandchild ? 2 : 1, launchpadPresent: false,
   };
-  const row = (id: string, patch: Partial<NavigationRow> = {}): NavigationRow => ({
+  const row = (id: string, patch: Partial<NavigationRow> & { subthreadOrder?: string[] } = {}): NavigationRow => ({
     id, source: "codex", title: id, titleSource: "explicit",
     ref: { backend: "codex", threadId: id }, rowRevision: "r",
     linkedDirectories: [{ id: "/repo", kind: "local", label: "Repo", path: "/repo" }],
     inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false,
     queueCount: 0, queueState: "unknown", ...patch,
   });
+  // The incoming pages and the displayed order disagree. A row's own
+  // `subthreadOrder` (set by an optimistic reorder) outranks its owner's page.
+  const displayedChildren = ["above", "gap", "first", "middle", "last"];
   const parent = row("parent", {
     pinnedRank: "1", ordinaryChildCount: 5, subthreadsCollapsed: collapsed,
+    subthreadOrder: displayedChildren,
   });
-  // The incoming page and the newest-created-first display order disagree.
-  const displayedChildren = ["above", "gap", "first", "middle", "last"];
   const children = ["first", "above", "middle", "last", "gap"].map((id) => row(id, {
     parentThreadId: parent.id,
     createdAt: 100 - displayedChildren.indexOf(id),
-    ...(id === "middle" ? { ordinaryChildCount: 2,
+    ...(id === "middle" ? { ordinaryChildCount: 2, subthreadOrder: ["grandchild-2", "grandchild-1"],
       ...(promotedGrandchild ? { linkedDirectories: [{ id: "/other", kind: "local" as const, label: "Other", path: "/other" }] } : {}),
     } : {}),
   }));

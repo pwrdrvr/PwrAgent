@@ -902,6 +902,68 @@ describe("ThreadRow chip flow", () => {
     }
   });
 
+  it("keeps an open branch tooltip in step with refreshed base drift", () => {
+    vi.useFakeTimers();
+    try {
+      const gitWorkingState = {
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 0,
+        baseBranch: "main",
+        baseCommit: "1db9ac256441aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        baseTipCommit: "bb3732d8930cbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        baseBehindCommitCount: 3,
+        baseAheadCommitCount: 0,
+        isBehindBase: true,
+      };
+      const props: React.ComponentProps<typeof ThreadRow> = {
+        thread: { ...baseThread, gitWorkingState },
+        onSelectThread: vi.fn(),
+        onOpenContextMenu: vi.fn(),
+      };
+      const view = render(<ThreadRow {...props} />);
+
+      const branchChip = screen.getByRole("button", {
+        name: "Copy branch feat/chips",
+      });
+      fireEvent.mouseEnter(branchChip);
+      act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Behind base: 3 commits");
+
+      // An unchanged refresh result arrives as a new object; the open tooltip
+      // must neither close nor change.
+      view.rerender(
+        <ThreadRow
+          {...props}
+          thread={{ ...baseThread, gitWorkingState: { ...gitWorkingState } }}
+        />,
+      );
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Behind base: 3 commits");
+
+      view.rerender(
+        <ThreadRow
+          {...props}
+          thread={{
+            ...baseThread,
+            gitWorkingState: {
+              ...gitWorkingState,
+              baseTipCommit: "cc0ffee00000cccccccccccccccccccccccccccc",
+              baseBehindCommitCount: 27,
+            },
+          }}
+        />,
+      );
+      const tooltip = screen.getByRole("tooltip");
+      expect(tooltip).toHaveTextContent("Base tip: cc0ffee00000");
+      expect(tooltip).toHaveTextContent("Behind base: 27 commits");
+      expect(tooltip).not.toHaveTextContent("Behind base: 3 commits");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("marks Agent threads and explains their messaging role", () => {
     const { container } = renderRow({
       thread: {
