@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import type { FederationTarget, NavigationDirectoryRow, NavigationRow } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { listInstanceReferences, type InstanceReference } from "../../lib/instance-references";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useFederationHealth } from "../../lib/useFederationHealth";
 import {
   getComposerMentionNavigationRevision,
@@ -51,6 +52,10 @@ export function useComposerMentionSources(params: {
       : localTarget ? { scope: "local" } : undefined,
   [localTarget, remoteInstanceId]);
   const ownerKey = remoteInstanceId === undefined ? "local" : `remote:${remoteInstanceId}`;
+  const viewerInstanceId = readRendererFederationTarget()?.instanceId;
+  const viewerTarget = useMemo<FederationTarget | undefined>(() =>
+    viewerInstanceId !== undefined ? { scope: "remote", instanceId: viewerInstanceId } : undefined,
+  [viewerInstanceId]);
   const consumerId = useId();
   const [demand, setDemand] = useState<string>();
   const { health } = useFederationHealth({
@@ -117,11 +122,14 @@ export function useComposerMentionSources(params: {
         query: { kind: "directory-index", filter: demand },
         pageSize: 10,
       }, directoryConsumer),
-      // The # picker combines local threads with a separate peer search.
-      // Scoping this page to the directory owner would remove local references.
+      // In the main window the # picker combines local threads with a
+      // separate peer search, so scoping this page to the directory owner
+      // would remove local references. A remote viewer runs no peer search
+      // (`useFederatedThreadSearch`); its threads are the peer's it fronts.
       desktopApi.getNavigationQueryPage({
         protocol: 2,
         consumer: "mentions",
+        ...(viewerTarget ? { federationTarget: viewerTarget } : {}),
         query: demand ? { kind: "search", text: demand } : { kind: "lens", lens: "inbox" },
         pageSize: 10,
       }, threadConsumer),
@@ -145,7 +153,7 @@ export function useComposerMentionSources(params: {
       void desktopApi.releaseNavigationQuery?.(directoryConsumer);
       void desktopApi.releaseNavigationQuery?.(threadConsumer);
     };
-  }, [consumerId, demand, desktopApi, federationTarget, ownerKey, refreshVersion]);
+  }, [consumerId, demand, desktopApi, federationTarget, ownerKey, refreshVersion, viewerTarget]);
 
   // Effects run after render: never expose the old owner's rows in that gap.
   const visibleState = state.ownerKey === ownerKey ? state

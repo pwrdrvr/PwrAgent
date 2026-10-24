@@ -158,4 +158,25 @@ describe("bounded composer mention sources", () => {
     expect(releaseNavigationQuery).toHaveBeenCalledTimes(2);
   });
 
+  // A remote viewer has no federated `#` search (`useFederatedThreadSearch`
+  // stands down there), so an unscoped thread page left the picker offering
+  // only the viewing machine's threads, never the ones of the peer it fronts.
+  it.each(["", "microapps"])("scopes the thread query %j to the peer a remote viewer window fronts", async (query) => {
+    const windowTarget: FederationTarget = { scope: "remote", instanceId: "m2-max" };
+    Object.assign(window, { __pwragentFederationTarget: windowTarget });
+    try {
+      const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => ownerPage(request));
+      const desktopApi: DesktopApi = { getNavigationQueryPage };
+      const { result } = renderHook(() => useComposerMentionSources({
+        desktopApi, federationTarget: windowTarget,
+      }));
+      act(() => result.current.ensureLoaded(query));
+      await waitFor(() => expect(result.current.settledQuery).toBe(query));
+      expect(result.current.threads.map((row) => row.id)).toEqual(["m2-max"]);
+      expect(getNavigationQueryPage.mock.calls[1]![0].federationTarget).toEqual(windowTarget);
+    } finally {
+      delete (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget;
+    }
+  });
+
 });
