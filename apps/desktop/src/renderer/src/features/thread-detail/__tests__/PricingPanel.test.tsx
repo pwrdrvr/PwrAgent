@@ -548,7 +548,7 @@ it("revalidates only expanded Pricing gate resources and preserves unchanged his
   expect(readThread).toHaveBeenCalledTimes(8);
 });
 
-it("reads a local thread's sub-thread totals, but never a peer's", async () => {
+it("reads sub-thread totals from the owner in local, mounted, and remote viewer threads", async () => {
   const family = {
     readAt: 1,
     members: [
@@ -568,20 +568,49 @@ it("reads a local thread's sub-thread totals, but never a peer's", async () => {
     ref: { backend: "codex" as const, threadId: "parent", target: { scope: "remote" as const, instanceId: "peer" } },
   } } as unknown as ComponentProps<typeof PricingPanel>["thread"];
   const peer = render(<PricingPanel desktopApi={desktopApi} thread={peerThread} subThreadCount={1} />);
-  expect(peer.container.querySelector(".thread-family-pricing")).toBeNull();
+  await waitFor(() => expect(peer.container.querySelector(".thread-family-pricing")).toHaveTextContent("$1.50"));
+  expect(readThreadFamilyPricing).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "parent",
+    federationTarget: { scope: "remote", instanceId: "peer" } });
   peer.unmount();
+  readThreadFamilyPricing.mockClear();
 
   // A window that fronts a peer carries the target on the window, not the thread.
   (window as typeof window & { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = { scope: "remote", instanceId: "peer" };
   try {
     const peerWindow = render(<PricingPanel desktopApi={desktopApi} thread={{ id: "parent", source: "codex" }} subThreadCount={1} />);
-    expect(peerWindow.container.querySelector(".thread-family-pricing")).toBeNull();
+    await waitFor(() => expect(peerWindow.container.querySelector(".thread-family-pricing")).toHaveTextContent("$1.50"));
+    expect(readThreadFamilyPricing).toHaveBeenCalledExactlyOnceWith({ backend: "codex", threadId: "parent",
+      federationTarget: { scope: "remote", instanceId: "peer" } });
   } finally {
     delete (window as typeof window & { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget;
   }
-  expect(readThreadFamilyPricing).not.toHaveBeenCalled();
 });
 
+
+it("clears family totals when a colliding thread ID changes owner", async () => {
+  const family = (totalCostMicros: number) => ({ readAt: 42, members: [
+    { backend: "codex" as const, threadId: "parent", title: "Parent", self: true, active: false,
+      totalCostMicros, usageLineCount: 1, unpricedUsageLineCount: 0 },
+    { backend: "codex" as const, threadId: "child", title: "Child", self: false, active: false,
+      totalCostMicros: 1_000_000, usageLineCount: 1, unpricedUsageLineCount: 0 },
+  ] });
+  let resolveNext!: (value: ReturnType<typeof family>) => void;
+  const next = new Promise<ReturnType<typeof family>>((resolve) => { resolveNext = resolve; });
+  const readThreadFamilyPricing = vi.fn().mockResolvedValueOnce(family(2_000_000)).mockReturnValueOnce(next);
+  const desktopApi = { readThreadFamilyPricing } as unknown as DesktopApi;
+  const thread = (instanceId: string) => ({ id: "parent", source: "codex" as const, federation: {
+    ref: { backend: "codex" as const, threadId: "parent", target: { scope: "remote" as const, instanceId } },
+  } }) as NonNullable<ComponentProps<typeof PricingPanel>["thread"]>;
+  const view = render(<PricingPanel desktopApi={desktopApi} thread={thread("owner-one")} subThreadCount={1} />);
+  await waitFor(() => expect(view.container.querySelector(".thread-family-pricing")).toHaveTextContent("$3.00"));
+  view.rerender(<PricingPanel desktopApi={desktopApi} thread={thread("owner-two")} subThreadCount={1} />);
+  expect(view.container.querySelector(".thread-family-pricing")).toHaveAttribute("aria-busy", "true");
+  expect(view.container.querySelector(".thread-family-pricing")).not.toHaveTextContent("$3.00");
+  await act(async () => { resolveNext(family(8_000_000)); });
+  expect(view.container.querySelector(".thread-family-pricing")).toHaveTextContent("$9.00");
+  expect(readThreadFamilyPricing).toHaveBeenLastCalledWith({ backend: "codex", threadId: "parent",
+    federationTarget: { scope: "remote", instanceId: "owner-two" } });
+});
 
 it("shows Claude limits without requesting or displaying the Codex account pace", () => {
   const readUsageActivity = vi.fn();

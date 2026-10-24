@@ -1706,6 +1706,10 @@ class DesktopAppServerService {
   }
 
   async readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime().remoteBackend(federationTarget).readThreadFamilyPricing(remoteRequest);
+    }
     return await readThreadFamilyPricing({
       request,
       loadIndex: () => loadLocalNavigationQueryIndex({ callerReason: "thread-family-pricing" }),
@@ -8755,7 +8759,9 @@ export function registerAppServerIpcHandlers(): void {
     if (typeof request?.backend !== "string" || typeof request?.threadId !== "string") {
       throw new Error("Thread family pricing needs a backend and thread id.");
     }
-    return await appServerService.readThreadFamilyPricing({ backend: request.backend, threadId: request.threadId });
+    return await appServerService.readThreadFamilyPricing({
+      backend: request.backend, threadId: request.threadId, federationTarget: request.federationTarget,
+    });
   });
   ipcMain.removeHandler(USAGE_ACTIVITY_ANALYZE_CHANNEL);
   ipcMain.handle(USAGE_ACTIVITY_ANALYZE_CHANNEL, async (_event, request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>

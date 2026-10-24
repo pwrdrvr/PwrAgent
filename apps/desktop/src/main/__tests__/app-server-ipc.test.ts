@@ -65,6 +65,7 @@ const federationMock = vi.hoisted(() => {
     setThreadAgent: vi.fn(),
     setThreadTokenMiser: vi.fn(),
     inspectTokenMiserOutput: vi.fn(async () => ({ available: false })),
+    readThreadFamilyPricing: vi.fn(),
     archiveThread: vi.fn(async (request: ArchiveThreadRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -4974,6 +4975,31 @@ describe("app server ipc", () => {
     expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(target);
     expect(federationMock.remoteBackend.inspectTokenMiserOutput).toHaveBeenCalledWith(request);
     expect(backendRegistryLifecycle.get).not.toHaveBeenCalled();
+  });
+
+  it("routes family pricing IPC to the owner and propagates failure without a local fallback", async () => {
+    const { THREAD_FAMILY_PRICING_READ_CHANNEL } = await import("../../shared/ipc");
+    const target = { scope: "remote" as const, instanceId: "owner-one" };
+    const request = { backend: "codex" as const, threadId: "parent" };
+    const family = { readAt: 42, members: [
+      { backend: "codex", threadId: "parent", title: "Parent", self: true, active: false,
+        totalCostMicros: 1_000_000, usageLineCount: 1, unpricedUsageLineCount: 0 },
+      { backend: "codex", threadId: "child", title: "Child", self: false, active: true,
+        totalCostMicros: 2_000_000, usageLineCount: 2, unpricedUsageLineCount: 1 },
+    ] };
+    const readLocalIndex = vi.fn();
+    const readLocalSummaries = vi.fn();
+    overlayStoreFixture.stable = { readNavigationQueryIndex: readLocalIndex, readThreadPricingSummaries: readLocalSummaries };
+    federationMock.remoteBackend.readThreadFamilyPricing.mockReset().mockResolvedValueOnce(family)
+      .mockRejectedValueOnce(new Error("Owner disconnected"));
+    registerAppServerIpcHandlers();
+    const read = () => handlers.get(THREAD_FAMILY_PRICING_READ_CHANNEL)!({}, { ...request, federationTarget: target });
+    expect(await read()).toEqual(family);
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(target);
+    expect(federationMock.remoteBackend.readThreadFamilyPricing).toHaveBeenCalledExactlyOnceWith(request);
+    await expect(read()).rejects.toThrow("Owner disconnected");
+    expect(readLocalIndex).not.toHaveBeenCalled();
+    expect(readLocalSummaries).not.toHaveBeenCalled();
   });
 
   it("hydrates retained worktree snapshots when listing archived threads", async () => {

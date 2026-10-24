@@ -272,6 +272,7 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { readThreadFamilyPricing } from "../app-server/thread-family-pricing";
 import { createScratchProjectDirectory, resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
@@ -6847,6 +6848,13 @@ function localBackendOperations(): FederationBackendOperations {
     },
     async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
       return await getDesktopBackendRegistry().readUsageActivity(request);
+    },
+    async readThreadFamilyPricing(request) {
+      return await readThreadFamilyPricing({
+        request: { backend: request.backend, threadId: request.threadId },
+        loadIndex: () => loadLocalNavigationQueryIndex({ callerReason: "thread-family-pricing" }),
+        readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
+      });
     },
     async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
       return await getDesktopBackendRegistry().analyzeUsageActivity(request);
