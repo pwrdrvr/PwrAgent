@@ -2418,6 +2418,7 @@ export class DesktopFederationRuntime {
             ),
         });
       },
+      () => this.ensureLocalInstanceId(),
     );
   }
 

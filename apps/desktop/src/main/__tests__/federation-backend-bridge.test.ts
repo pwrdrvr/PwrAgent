@@ -29,6 +29,34 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("names the sending instance on bare thread links in start and steer input", async () => {
+    const sender = "pwr_c9a3be06-b652-48df-9ea0-0a165344f86b";
+    const request = vi.fn(async (_call: { method: string; params: unknown }) => ({}));
+    const prepareTurnInput = vi.fn(async (input: readonly AppServerTurnInputItem[]) => [...input]);
+    const client = new FederationRemoteBackendClient(
+      { request } as unknown as FederationRpcEndpoint,
+      undefined,
+      prepareTurnInput,
+      () => sender,
+    );
+    const local = "[Claude exit on early steer](pwragent://thread/2eb5e094?backend=claude)";
+    const peer = "[M4](pwragent://thread/01a0e504?backend=codex&instanceId=pwr_3d822fab)";
+    const input: AppServerTurnInputItem[] = [{ type: "text", text: `${local} vs ${peer}` }];
+    const expected = `[Claude exit on early steer](pwragent://thread/2eb5e094?backend=claude&instanceId=${sender}) vs ${peer}`;
+
+    await client.startTurn({ backend: "codex", threadId: "owner-thread", input });
+    await client.steerTurn({ backend: "codex", threadId: "owner-thread", input,
+      expectedTurnId: "turn-1", requestId: "steer-1" });
+
+    const sentText = request.mock.calls.map(([call]) =>
+      ((call.params as { input: AppServerTurnInputItem[] }).input[0] as { text: string }).text);
+    expect(sentText).toEqual([expected, expected]);
+    // Attachment preparation sees the qualified text; steer never runs it.
+    expect(prepareTurnInput).toHaveBeenCalledOnce();
+    expect(prepareTurnInput.mock.calls[0]![0]).toEqual([{ type: "text", text: expected }]);
+    expect(input[0]).toEqual({ type: "text", text: `${local} vs ${peer}` });
+  });
+
   it("round-trips directory detachment and requires environment_actions", async () => {
     const request = { backend: "codex" as const, threadId: "source-thread",
       directory: { id: "/owner/PwrGit", kind: "local" as const, label: "PwrGit", path: "/owner/PwrGit" } };
