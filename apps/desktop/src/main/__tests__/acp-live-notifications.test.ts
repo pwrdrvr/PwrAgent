@@ -1079,6 +1079,18 @@ describe("AcpModelRetryTracker", () => {
     }
   });
 
+  it.each([
+    { sessionUpdate: "tool_call_update", toolCallId: "bg-1", status: "in_progress" },
+    { sessionUpdate: "turn_finished", stopReason: "cancelled" },
+    { sessionUpdate: "turn_completed", stopReason: "cancelled" },
+  ])("does not call $sessionUpdate a recovery", (update) => {
+    // Local tool progress can arrive while the model is still down, and a
+    // stopped turn did not recover; the renderer settles turn ends itself.
+    const tracker = new AcpModelRetryTracker();
+    observe(tracker, retry(1));
+    expect(observe(tracker, update)).toBeUndefined();
+  });
+
   it("forgets a turn once it settles", () => {
     const tracker = new AcpModelRetryTracker();
     observe(tracker, retry(1));

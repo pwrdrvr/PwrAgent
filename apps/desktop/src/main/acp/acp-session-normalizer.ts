@@ -284,6 +284,7 @@ export class AcpSessionReplayNormalizer {
     const id = `user:${params.turnId}`;
     const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
     this.settleOpenRetry("completed");
+    this.settleOpenCompaction("cancelled");
     this.currentTurnId = params.turnId;
     this.currentTurnStartedAt = createdAt;
     this.activeAssistantMessageId = undefined;
@@ -310,7 +311,9 @@ export class AcpSessionReplayNormalizer {
     status: "completed" | "interrupted" = "completed",
   ): AppServerThreadReplay {
     const completedTurnId = turnId ?? this.currentTurnId;
-    this.settleOpenRetry("completed");
+    const settledStatus = status === "interrupted" ? "cancelled" : "completed";
+    this.settleOpenRetry(settledStatus);
+    this.settleOpenCompaction(settledStatus);
     if (completedTurnId) {
       this.removeAgentWaitingActivity(completedTurnId);
       this.completeTurnEntries(completedTurnId, status, completedAt);
@@ -336,6 +339,7 @@ export class AcpSessionReplayNormalizer {
   }): AppServerThreadReplay {
     const createdAt = params.receivedAt ?? Date.now();
     this.settleOpenRetry("failed");
+    this.settleOpenCompaction("failed");
     this.removeAgentWaitingActivity(params.turnId);
     this.completeTurnEntries(params.turnId, "failed", createdAt);
     if (this.currentTurnId === params.turnId) {
@@ -941,7 +945,28 @@ export class AcpSessionReplayNormalizer {
     });
   }
 
-  private settleOpenRetry(status: "completed" | "failed"): void {
+  private settleOpenCompaction(status: "completed" | "failed" | "cancelled"): void {
+    const id = this.openCompactionId;
+    if (!id) {
+      return;
+    }
+    this.openCompactionId = undefined;
+    const index = this.typedEntryIndexes.get(`activity:${id}`);
+    const entry = index === undefined ? undefined : this.entries[index];
+    if (index === undefined || entry?.type !== "activity") {
+      return;
+    }
+    this.entries[index] = {
+      ...entry,
+      summary: status === "failed"
+        ? "Context compaction failed"
+        : status === "cancelled" ? "Context compaction stopped" : "Compacted context",
+      status,
+      details: entry.details.map((detail) => ({ ...detail, status })),
+    };
+  }
+
+  private settleOpenRetry(status: "completed" | "failed" | "cancelled"): void {
     const retry = this.openRetry;
     if (!retry) {
       return;
@@ -957,7 +982,9 @@ export class AcpSessionReplayNormalizer {
       ...entry,
       summary: status === "failed"
         ? `Model request failed after ${count} ${count === 1 ? "retry" : "retries"}`
-        : `Retried model request ${count} ${count === 1 ? "time" : "times"}`,
+        : status === "cancelled"
+          ? `Stopped after ${count} ${count === 1 ? "retry" : "retries"}`
+          : `Retried model request ${count} ${count === 1 ? "time" : "times"}`,
       status,
       details: entry.details.map((detail) => ({ ...detail, status })),
     };
@@ -1166,14 +1193,13 @@ export function isAcpModelProgressUpdate(
       readContentText(update, "content") ?? readString(update, "text") ?? "";
     return text.trim().length > 0;
   }
+  // Only output the model produced counts. Tool updates and terminal output
+  // can come from a local command that runs while the model is down, and a
+  // turn end says nothing about whether the model answered: a stopped turn
+  // did not recover. Turn ends settle retries through their own paths.
   return (
     kind === "tool_call"
-    || kind === "tool_call_update"
     || kind === "plan"
-    || kind === "file"
-    || kind === "terminal"
-    || kind === "turn_completed"
-    || kind === "turn_finished"
     // Grok's transient marker for a model response that finished.
     || kind === "response_completed"
   );
@@ -1849,12 +1875,17 @@ function imageDroppedActivity(
   update: AcpSessionUpdate,
   createdAt: number,
 ): AppServerThreadActivityEntry {
-  const id = `acp-image-dropped:${update.sessionId}:${createdAt}`;
   const notes = Array.isArray(update.update.notes)
     ? update.update.notes.filter(
       (note): note is string => typeof note === "string" && note.trim() !== "",
     )
     : [];
+  // Two reports in one millisecond must not merge, but re-applying the same
+  // update must still land on its own row.
+  const eventId = readString(asRecord(update.update._meta) ?? {}, "eventId");
+  const id = `acp-image-dropped:${update.sessionId}:${createdAt}:${
+    eventId ?? JSON.stringify(notes)
+  }`;
   return {
     type: "activity",
     id,

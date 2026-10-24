@@ -2168,7 +2168,7 @@ describe("AcpSessionReplayNormalizer", () => {
     it("settles an open retry row when the turn finishes", () => {
       const normalizer = startTurn();
       normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
-      normalizer.recordTurnFinished("turn-1", 1002, "interrupted");
+      normalizer.recordTurnFinished("turn-1", 1002, "completed");
 
       expect(activities(normalizer)).toEqual([
         expect.objectContaining({
@@ -2176,6 +2176,45 @@ describe("AcpSessionReplayNormalizer", () => {
           status: "completed",
         }),
       ]);
+    });
+
+    it("marks the row stopped when the operator stops the turn mid-retry", () => {
+      const normalizer = startTurn();
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1001, update: retry(1) });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1002, update: retry(2) });
+      normalizer.recordTurnFinished("turn-1", 1003, "interrupted");
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Stopped after 2 retries",
+          status: "cancelled",
+        }),
+      ]);
+    });
+
+    it("keeps retrying through local tool progress", () => {
+      // A background command can keep reporting while the model is down.
+      const normalizer = startTurn();
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1001,
+        update: { sessionUpdate: "tool_call", toolCallId: "bg-1", title: "run_terminal_command" },
+      });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1002, update: retry(1) });
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1003,
+        update: { sessionUpdate: "tool_call_update", toolCallId: "bg-1", status: "in_progress" },
+      });
+      normalizer.apply({ sessionId: "session-1", receivedAt: 1004, update: retry(2) });
+
+      expect(activities(normalizer).filter((entry) => entry.id.startsWith("acp-retry:")))
+        .toEqual([
+          expect.objectContaining({
+            summary: "Retrying model request · attempt 2 of 15",
+            status: "in_progress",
+          }),
+        ]);
     });
   });
 
@@ -2257,6 +2296,20 @@ describe("AcpSessionReplayNormalizer", () => {
       expectStreamingBubbleKept(normalizer);
     });
 
+    it("keeps two dropped-image reports from the same millisecond apart", () => {
+      const normalizer = startTurn();
+      for (const note of ["Image 1 was dropped before send.", "Image 2 was dropped before send."]) {
+        apply(normalizer, 1002, { sessionUpdate: "image_dropped", notes: [note] });
+      }
+
+      expect(activities(normalizer).map((entry) =>
+        entry.type === "activity" ? entry.details.map((detail) => detail.label) : []
+      )).toEqual([
+        ["Image 1 was dropped before send."],
+        ["Image 2 was dropped before send."],
+      ]);
+    });
+
     it("shows automatic compaction as one row that settles", () => {
       const normalizer = startTurn();
       apply(normalizer, 1002, {
@@ -2292,6 +2345,41 @@ describe("AcpSessionReplayNormalizer", () => {
         }),
       ]);
       expectStreamingBubbleKept(normalizer);
+    });
+
+    it.each([
+      ["interrupted", "cancelled", "Context compaction stopped"],
+      ["failed", "failed", "Context compaction failed"],
+    ] as const)("settles an open compaction when the turn is %s", (ending, status, summary) => {
+      const normalizer = startTurn();
+      apply(normalizer, 1002, {
+        sessionUpdate: "auto_compact_started",
+        percentage: 81,
+        reason: "Context window 81% full",
+      });
+      if (ending === "failed") {
+        normalizer.recordTurnFailed({
+          sessionId: "session-1",
+          turnId: "turn-1",
+          error: "Model unavailable.",
+          receivedAt: 1003,
+        });
+      } else {
+        normalizer.recordTurnFinished("turn-1", 1003, "interrupted");
+      }
+
+      expect(activities(normalizer)[0]).toMatchObject({ summary, status });
+
+      // A later completion must not land on the old turn's row.
+      normalizer.recordUserPrompt({
+        sessionId: "session-1",
+        prompt: "Continue",
+        turnId: "turn-2",
+        receivedAt: 1004,
+      });
+      apply(normalizer, 1005, { sessionUpdate: "auto_compact_completed", tokens_before: 10, tokens_after: 5 });
+      expect(activities(normalizer).filter((entry) => entry.id.startsWith("acp-compact:")))
+        .toHaveLength(2);
     });
 
     it("shows a compaction completion without a start", () => {
