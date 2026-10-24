@@ -5290,7 +5290,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("clears the viewer-persisted launchpad after remote materialization", async () => {
+  it("clears submitted remote input while preserving the viewer environment", async () => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "remote-instance",
@@ -5389,7 +5389,7 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({ federationTarget }),
     );
-    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({ directoryKey });
+    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({ directoryKey, preserveEnvironment: true });
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
 

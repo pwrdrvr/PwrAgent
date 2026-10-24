@@ -20935,7 +20935,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("keeps environment selections scoped across repeated Codex and ACP flips", async () => {
+  it("shares environment selections across repeated OpenAI, Claude and ACP flips", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-env-options-"));
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
     await writeFile(
@@ -21018,7 +21018,7 @@ command = "pnpm grok"
           },
         ],
       });
-      expect(switchedToAcp.launchpad.codexEnvironmentId).toBeUndefined();
+      expect(switchedToAcp.launchpad.codexEnvironmentId).toBe("codex");
 
       const acpSelected = await registry.updateDirectoryLaunchpad({
         directoryKey: `directory:${root}`,
@@ -21045,10 +21045,16 @@ command = "pnpm grok"
       });
       expect(restoredCodex.launchpad).toMatchObject({
         backend: "codex",
-        codexEnvironmentId: "codex",
+        codexEnvironmentId: "grok",
         codexEnvironmentExecutionTarget: "local",
-        codexEnvironmentActionId: "codex-action",
+        codexEnvironmentActionId: "grok-action",
       });
+
+      const switchedToClaude = await registry.updateDirectoryLaunchpad({
+        directoryKey: `directory:${root}`,
+        patch: { backend: "claude" },
+      });
+      expect(switchedToClaude.launchpad.codexEnvironmentId).toBe("grok");
 
       const restoredAcp = await registry.updateDirectoryLaunchpad({
         directoryKey: `directory:${root}`,
@@ -22323,6 +22329,72 @@ command = "pnpm grok"
     });
 
     await registry.close();
+  });
+
+  it("retains the viewer environment when clearing a submitted remote draft", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-viewer-environment-");
+    const db = StateDb.open(temp.dbPath);
+    const persisted = new SqliteOverlayStore(db);
+    const overlayStore = createOverlayStoreMock();
+    vi.spyOn(overlayStore, "getDirectoryLaunchpad").mockImplementation((request) => persisted.getDirectoryLaunchpad(request));
+    vi.spyOn(overlayStore, "upsertDirectoryLaunchpad").mockImplementation((value) => persisted.upsertDirectoryLaunchpad(value));
+    vi.spyOn(overlayStore, "resetDirectoryLaunchpad").mockImplementation((request) => persisted.resetDirectoryLaunchpad(request));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start"] } }),
+      overlayStore,
+    });
+    const request = {
+      directoryKey: "directory:/owner-only/repo",
+      directoryKind: "directory" as const,
+      directoryLabel: "Repo",
+      directoryPath: "/owner-only/repo",
+    };
+    try {
+      await registry.ensureDirectoryLaunchpad(request, { skipFilesystemInspection: true });
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: request.directoryKey,
+        patch: {
+          prompt: "submitted message",
+          codexEnvironmentId: "project",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "dev",
+        },
+      });
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.resetDirectoryLaunchpad({ directoryKey: request.directoryKey, preserveEnvironment: true });
+      });
+      const reopened = await registry.ensureDirectoryLaunchpad(request, { skipFilesystemInspection: true });
+      expect(reopened.launchpad).toMatchObject({
+        prompt: "",
+        codexEnvironmentId: "project",
+        codexEnvironmentExecutionTarget: "local",
+        codexEnvironmentActionId: "dev",
+      });
+      expectSqliteWriteBudget({
+        scenario: "remote-launchpad-environment-reset",
+        note: "Clear one submitted viewer draft and retain its environment at the submission boundary. Two commits, approximately 1.7 MB/day at 100 threads/day, with no idle or streamed-event writes.",
+        writes,
+      });
+      await registry.updateDirectoryLaunchpad({
+        directoryKey: request.directoryKey,
+        patch: { backend: "claude", codexEnvironmentId: undefined, codexEnvironmentActionId: undefined },
+      });
+      await registry.resetDirectoryLaunchpad({ directoryKey: request.directoryKey, preserveEnvironment: true });
+      const cleared = await registry.ensureDirectoryLaunchpad(request, { skipFilesystemInspection: true });
+      expect(cleared.launchpad.codexEnvironmentId).toBeUndefined();
+      const otherProject = await registry.ensureDirectoryLaunchpad({
+        ...request, directoryKey: "directory:/owner-only/other", directoryPath: "/owner-only/other",
+      }, { skipFilesystemInspection: true });
+      expect(otherProject.launchpad.codexEnvironmentId).toBeUndefined();
+      await registry.resetDirectoryLaunchpad({ directoryKey: request.directoryKey });
+      await expect(persisted.getDirectoryLaunchpad({ directoryKey: request.directoryKey })).resolves.toBeUndefined();
+    } finally {
+      await registry.close();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps selected Codex environments sticky after materializing", async () => {
