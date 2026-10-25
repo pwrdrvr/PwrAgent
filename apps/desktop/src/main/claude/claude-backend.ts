@@ -11,8 +11,8 @@ import type {
   AppServerPendingRequestNotification, AppServerReviewContext,
   AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadPlanEntry,
   AppServerThreadPlanStep, AppServerThreadReplay, AppServerThreadReviewEntry, AppServerThreadSummary,
-  AppServerTurnInputItem, BackendModelOption, LinkedDirectorySummary, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
-  SteerTurnDelivery,
+  AppServerTurnInputItem, BackendModelOption, LinkedDirectorySummary, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode,
+  CodexMcpServerSummary, SteerTurnDelivery, UsageLimitObservation,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
@@ -140,6 +140,18 @@ function claudeHasNoPlanLimits({ authStatus, authMethod }: ClaudeInstallation): 
 }
 
 /** Tells accounts apart without keeping their identifiers. */
+/**
+ * How long a turn's account waits for its session's first init to name the
+ * account. The wait also ends at the turn's result, failure, or session close.
+ */
+const ACCOUNT_CHECK_WAIT_MS = 10_000;
+
+function settledSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}
+
 function claudeAccountKey(info: AccountInfo): string {
   return createHash("sha256")
     .update(JSON.stringify([info.apiProvider ?? "", info.organization ?? "", info.email ?? ""]))
@@ -238,6 +250,8 @@ type LiveSession = {
   launchedToolUseIds: Set<string>;
   /** Set at the first native init; a follow-up turn's init repeats it. */
   initialized?: boolean;
+  /** Settles once the first init has confirmed the signed-in account, or the session closed. */
+  accountChecked: { promise: Promise<void>; resolve: () => void };
   /** Message counters that order a result against task notifications. */
   messageSeq: number;
   lastResultSeq: number;
@@ -355,6 +369,10 @@ export class ClaudeBackend {
   private rateLimitWrites = Promise.resolve();
   /** The account the limits describe, as `claudeAccountKey`. */
   private rateLimitAccount?: string;
+  /** When Claude last reported the limits, changed or not. */
+  private rateLimitsObservedAt?: number;
+  /** The account's subscription, as Claude reports it (`max`, `pro`). */
+  private rateLimitPlan?: string;
   private rateLimitExpiry?: ReturnType<typeof setTimeout>;
   // Last command list Claude reported per working directory. Project
   // commands and skills differ by folder, so the folder is the key.
@@ -393,12 +411,11 @@ export class ClaudeBackend {
   }
 
   summary(): BackendSummary {
-    const available = Boolean(this.installation.executable) && this.installation.authStatus !== "sign-in-required";
+    const available = this.available();
     return {
       kind: "claude", source: "builtin", label: "Claude", available,
       claude: { ...this.installation },
-      // Remembered limits describe a usable install; hide them while Claude is unavailable.
-      rateLimits: this.rateLimits && (available ? liveClaudeRateLimits(this.rateLimits, Date.now()) : []),
+      rateLimits: this.shownRateLimits(),
       unavailableReason: available ? undefined : this.installation.message,
       methods: [],
       capabilities: {
@@ -580,6 +597,7 @@ export class ClaudeBackend {
         config: claudeSessionConfig(params, session), turn, lastTurnId: turn.turnId, onClosed: [],
         tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", toolRows: new Map(), launchedToolUseIds: new Set(),
         messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0, wake: claudeWakeSignal(), stderr: "",
+        accountChecked: settledSignal(),
       };
       this.starting.delete(threadId);
       this.sessions.set(threadId, current);
@@ -802,6 +820,7 @@ export class ClaudeBackend {
 
   /** Fail a turn that never reached its query. */
   private async failTurn(threadId: string, turn: RunningTurn, failure: string): Promise<void> {
+    this.sessions.get(threadId)?.accountChecked.resolve();
     for (const entry of turn.entries.values()) {
       entry.turn = { id: turn.turnId, status: "failed", startedAt: turn.startedAt };
     }
@@ -909,7 +928,7 @@ export class ClaudeBackend {
           if (firstInit) await Promise.all([
             // A probe that finds no windows keeps the last reading, so the
             // account must be confirmed first.
-            this.checkAccount(live).then(() => this.refreshUsage(live)),
+            this.checkAccount(live).finally(() => live.accountChecked.resolve()).then(() => this.refreshUsage(live)),
             this.refreshContext(live),
             claudeTelemetry(() => live.query!.supportedCommands())
               .then((commands) => commands && this.publishCommands(session, commands)),
@@ -941,12 +960,18 @@ export class ClaudeBackend {
         }
         if (message.type === "rate_limit_event") {
           const update = claudeStreamRateLimits(message.rate_limit_info);
-          if (this.setRateLimits(mergeClaudeStreamRateLimits(this.rateLimits ?? [], update, Date.now()))) {
+          const merged = mergeClaudeStreamRateLimits(this.rateLimits ?? [], update, Date.now());
+          // Only an update naming every window is a reading of all of them.
+          const reported = new Set(update.map((limit) => limit.limitId));
+          if (this.setRateLimits(merged, merged.every((limit) => reported.has(limit.limitId)))) {
             await this.emit({ method: "backend/providerStatus/updated", params: { backend: "claude" } });
           }
         }
         const taskMessage = message.type === "system" && CLAUDE_TASK_SUBTYPES.has(message.subtype);
         if (taskMessage) await this.consumeTaskMessage(message, live);
+        // A result means the init's account check ran or never will; a
+        // turn's account must not wait past its own end.
+        if (message.type === "result") live.accountChecked.resolve();
         if (turn) await this.consumeCompleteMessage(message, live, turn);
         await this.consumeNotice(message, live, turn);
         // The probe is a control round-trip that can wait 1.5s; never hold
@@ -1123,6 +1148,7 @@ export class ClaudeBackend {
 
   private runSessionClosed(live: LiveSession): void {
     live.closed = true;
+    live.accountChecked.resolve();
     for (const release of live.onClosed.splice(0)) {
       try { release(); }
       catch (error) { claudeBackendLog.warn("Could not release a Claude session resource", error); }
@@ -1423,28 +1449,53 @@ export class ClaudeBackend {
     const info = await claudeTelemetry(() => live.query!.accountInfo());
     if (!info) return;
     const account = claudeAccountKey(info);
+    const plan = info.subscriptionType?.trim() || undefined;
     await this.loadRateLimits();
-    if (account === this.rateLimitAccount) return;
+    if (account === this.rateLimitAccount) {
+      if (plan === this.rateLimitPlan) return;
+      this.rateLimitPlan = plan;
+      this.saveRateLimits();
+      return;
+    }
     const previous = this.rateLimitAccount;
     this.rateLimitAccount = account;
+    this.rateLimitPlan = plan;
     // A file from before accounts were recorded is adopted, not discarded.
     if (previous !== undefined) this.setRateLimits([]);
     else this.saveRateLimits();
   }
 
   private async loadRateLimits(): Promise<void> {
-    this.rateLimitsLoad ??= this.store.readRateLimits().then(({ limits, account }) => {
+    this.rateLimitsLoad ??= this.store.readRateLimits().then(({ limits, account, observedAt, plan }) => {
       // A reading taken since launch is newer than the file.
       if (this.rateLimits !== undefined) return;
       this.rateLimits = liveClaudeRateLimits(limits, Date.now());
       this.rateLimitAccount ??= account;
+      this.rateLimitPlan ??= plan;
+      this.rateLimitsObservedAt ??= observedAt;
       this.scheduleRateLimitExpiry();
     });
     await this.rateLimitsLoad;
   }
 
-  /** Returns whether the reading changed; a change is also written for the next launch. */
-  private setRateLimits(limits: BackendRateLimitSummary[]): boolean {
+  private available(): boolean {
+    return Boolean(this.installation.executable) && this.installation.authStatus !== "sign-in-required";
+  }
+
+  /** Remembered limits describe a usable install; hide them while Claude is unavailable. */
+  private shownRateLimits(): BackendRateLimitSummary[] | undefined {
+    return this.rateLimits && (this.available() ? liveClaudeRateLimits(this.rateLimits, Date.now()) : []);
+  }
+
+  /**
+   * Returns whether the reading changed; a change is also written for the next
+   * launch. `observed` is false for a sparse stream update merged into older
+   * windows, which must not date those windows as read now.
+   */
+  private setRateLimits(limits: BackendRateLimitSummary[], observed = true): boolean {
+    // An unchanged reading is still a newer one; only a change is written.
+    if (limits.length === 0) this.rateLimitsObservedAt = undefined;
+    else if (observed || this.rateLimitsObservedAt === undefined) this.rateLimitsObservedAt = Date.now();
     if (this.rateLimits && JSON.stringify(limits) === JSON.stringify(this.rateLimits)) return false;
     this.rateLimits = limits;
     this.saveRateLimits();
@@ -1455,11 +1506,51 @@ export class ClaudeBackend {
   private saveRateLimits(): void {
     const limits = this.rateLimits ?? [];
     const account = this.rateLimitAccount;
+    const reading = { observedAt: this.rateLimitsObservedAt, plan: this.rateLimitPlan };
     this.rateLimitWrites = this.rateLimitWrites
-      .then(() => this.store.saveRateLimits(limits, account))
+      .then(() => this.store.saveRateLimits(limits, account, reading))
       .catch((error: unknown) => {
         claudeBackendLog.warn("Could not save Claude usage limits", error);
       });
+  }
+
+  /**
+   * The account Claude's limits describe, as an opaque hash. Turns record it,
+   * so a reading only ever joins the history of the account that ran them.
+   * A new session reports its turn before Claude names the signed-in
+   * account, so a thread's session is given a bounded wait for that check:
+   * a sign-in to another account must not lend its first turn to the last.
+   */
+  async usageAccountKey(threadId?: string): Promise<string | undefined> {
+    const live = threadId ? this.sessions.get(threadId) : undefined;
+    if (live && !live.closed) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([live.accountChecked.promise, new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ACCOUNT_CHECK_WAIT_MS);
+        timer.unref?.();
+      })]);
+      if (timer) clearTimeout(timer);
+    }
+    await this.loadRateLimits().catch(() => undefined);
+    return this.rateLimitAccount;
+  }
+
+  /** The limits summary() shows, as a Usage Activity reading. */
+  limitObservation(): UsageLimitObservation | undefined {
+    const observedAt = this.rateLimitsObservedAt;
+    const limits = this.shownRateLimits() ?? [];
+    if (observedAt === undefined || limits.length === 0) return undefined;
+    return {
+      observedAt,
+      provider: "anthropic",
+      accountKey: this.rateLimitAccount,
+      planType: this.rateLimitPlan,
+      limits: limits.map((limit) => ({
+        name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
+        resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
+        ...(limit.expires ? { expires: true } : {}),
+      })),
+    };
   }
 
   /**

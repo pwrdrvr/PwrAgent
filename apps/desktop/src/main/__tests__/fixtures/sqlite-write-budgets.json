@@ -828,6 +828,27 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "pr-terminal-watch-deliver": {
+    "commits": 2,
+    "note": "claim and finish one merge/close wake: 2 commits/~24.7 KB WAL per merged PR; ~1.2 MB/day at 50 merges/day, zero idle writes",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 3
+  },
+  "pr-terminal-watch-open-polls": {
+    "commits": 10,
+    "note": "ten polls of an open PR that has a merge/close watch: 0 rows and 0 WAL; the 10 commits are the pre-existing per-poll supersede statement, which changes no row, so the watch adds 0 MB/day",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 10
+  },
+  "pr-terminal-watch-register": {
+    "commits": 1,
+    "note": "one merge/close watch requested by an agent tool call: 1 commit/~16.5 KB WAL; ~0.8 MB/day at 50 requests/day, zero idle writes",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "profile-model-default-launchpads": {
     "commits": 1,
     "note": "One profile model change updates 100 directory launchpads and learned defaults in one transaction.",
@@ -1043,6 +1064,20 @@
   },
   "thread-review-reported-outcomes": {"commits": 1, "note": "One re-report settling two of three findings, then 99 identical re-reports. One commit for the whole report; repeats and skipped findings write nothing. ~8 KB per report: ~0.8 MB/day at 100 reports/day, 0 MB/day idle.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "thread-review-tracking-start": {"commits": 1, "note": "One profile tracking boundary; 100 service starts and reads. No repeated initialization or idle commits.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "thread-sandbox-cleanup-two": {
+    "commits": 2,
+    "note": "stop two sandboxes after a thread's PRs closed: 1 commit/~8 KB WAL per sandbox; ~0.4 MB/day at 50 sandboxes/day, zero idle writes",
+    "observedWalBytes": 16480,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "thread-sandbox-record-created": {
+    "commits": 1,
+    "note": "one observed create_sandbox result: 1 commit/~12.4 KB WAL per sandbox; ~0.6 MB/day at 50 sandboxes/day, zero idle writes",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "thread-self-rename": {
     "commits": 0,
     "note": "One ordinary-thread self-rename: zero commits/WAL bytes, projecting 0 MB/day. Notification and Undo state remain in memory, with no idle writes.",

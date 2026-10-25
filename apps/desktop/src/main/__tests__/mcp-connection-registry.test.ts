@@ -47,6 +47,27 @@ describe("McpConnectionRegistry", () => {
     expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer:compute");
   });
 
+  it("cleans up Sandboxer sandboxes on PR close unless the profile turns it off", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    expect(registry.get("builtin:sandboxer")?.sandboxerCleanupOnPrClose).toBe(true);
+    expect(registry.setSandboxerCleanupOnPrClose(false).sandboxerCleanupOnPrClose).toBe(false);
+    expect(fs.readFileSync(target, "utf8")).toContain("sandboxer_cleanup_on_pr_close = false");
+    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:sandboxer")?.sandboxerCleanupOnPrClose)
+      .toBe(false);
+    expect(registry.setSandboxerCleanupOnPrClose(true).sandboxerCleanupOnPrClose).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toContain("sandboxer_cleanup_on_pr_close = true");
+    // Only Sandboxer has the setting.
+    expect(registry.get("pwrgit")?.sandboxerCleanupOnPrClose).toBeUndefined();
+  });
+
+  it("reads a hand-written sandboxer_cleanup_on_pr_close = false as off", () => {
+    const target = configPath();
+    fs.writeFileSync(target, "[mcp_connections]\nsandboxer_cleanup_on_pr_close = false\n");
+    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:sandboxer")?.sandboxerCleanupOnPrClose)
+      .toBe(false);
+  });
+
   it("preserves a pre-existing sandboxer custom identity alongside the built-in", () => {
     const target = configPath();
     const legacy = `[mcp_connections]

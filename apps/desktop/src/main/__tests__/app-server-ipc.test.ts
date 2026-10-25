@@ -22,14 +22,17 @@ import type {
   FederationPeerSummary,
   PrActivitySnapshot,
   PrSummary,
+  PullRequestTerminalDetails,
   RefreshThreadPullRequestsRequest,
   RenameThreadRequest,
   RestoreWorktreeRequest,
   RestoreThreadRequest,
   SetThreadParentRequest,
   ThreadGitWorkingState,
+  ThreadPullRequestWatchEvent,
   ThreadSearchResponse,
 } from "@pwragent/shared";
+import { buildPullRequestStatusKey } from "@pwragent/shared";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import {
@@ -934,6 +937,10 @@ const finishThreadPrStatusWatch = vi.fn(async () => undefined);
 const supersedeThreadPrStatusWatches = vi.fn(async () => 0);
 const listActiveThreadPrStatusWatches = vi.fn(async () => []);
 const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
+const claimThreadPrTerminalWatches = vi.fn(async () => []);
+const finishThreadPrTerminalWatch = vi.fn(async () => undefined);
+const listPendingPrTerminalWatchPrKeys = vi.fn(async () => [] as string[]);
+const fetchPullRequestTerminalDetails = vi.fn(async (): Promise<PullRequestTerminalDetails | undefined> => undefined);
 const isGhAvailable = vi.fn(async () => true);
 const isProviderEnabled = vi.fn(() => true);
 const invalidateGhCaches = vi.fn();
@@ -1108,6 +1115,9 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     supersedeThreadPrStatusWatches,
     listActiveThreadPrStatusWatches,
     cancelThreadPrStatusWatchesForPr,
+    claimThreadPrTerminalWatches,
+    finishThreadPrTerminalWatch,
+    listPendingPrTerminalWatchPrKeys,
     readDirectoryGitStatusCache,
     writeDirectoryGitStatusCacheEntry,
     readThreadGitWorkingStateCache,
@@ -1223,6 +1233,7 @@ vi.mock("../pr-status/forge-pr-fetcher", async () => ({
       getProviderAvailability: async () => [{ provider: "github.com", cli: "gh", available: await isGhAvailable() }],
       github: { invalidateGhCaches, getAuthStatus },
       fetchPullRequestByUrl,
+      fetchPullRequestTerminalDetails,
     };
   }),
 }));
@@ -2863,6 +2874,157 @@ describe("app server ipc", () => {
     });
     expect(registerThreadPrStatusWatch).toHaveBeenCalledOnce();
     expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
+  });
+
+  async function requestWatchForAttachedPr(
+    attached: PrSummary,
+    notifyOn: ThreadPullRequestWatchEvent[],
+  ) {
+    readPrStatusCache.mockResolvedValueOnce({
+      [buildPullRequestStatusKey(attached)]: {
+        provider: "github.com",
+        prKey: buildPullRequestStatusKey(attached),
+        fetchedAt: Date.now() - 60_000,
+        pr: attached,
+      },
+    });
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "PR automation",
+        titleSource: "explicit",
+        source: "codex",
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        linkedDirectories: [
+          {
+            id: "directory:/repo/PwrAgent",
+            kind: "local",
+            label: "PwrAgent",
+            path: "/repo/PwrAgent",
+          },
+        ],
+        prs: [attached],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [attached],
+    });
+
+    registerAppServerIpcHandlers();
+    await refreshOwnerMetadata();
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(status?.backgroundPollingEnabled).toBe(true);
+    });
+    const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
+    return await watchHandler?.({
+      backend: "codex",
+      threadId: "thread-1",
+      notifyOn,
+    });
+  }
+
+  it("returns merge details at once when the PR merged before the watch was requested", async () => {
+    const merged = githubPr({
+      number: 1131,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Already merged",
+      state: "passing",
+      lifecycleState: "merged",
+      baseRefName: "main",
+      mergedAt: Date.parse("2026-10-25T12:00:00.000Z"),
+      headSha: "b".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1131",
+    });
+    fetchPullRequestTerminalDetails.mockResolvedValueOnce({
+      outcome: "merged",
+      prKey: "github.com/pwrdrvr/pwragent#1131",
+      prUrl: merged.url,
+      prNumber: 1131,
+      baseBranch: "main",
+      mergeMethod: "squash",
+      mergeMethodEvidence: "The merge commit has one parent and is a new commit.",
+      mergeCommitSha: "c".repeat(40),
+      mergedBy: "octocat",
+      mergedAt: "2026-10-25T12:00:00.000Z",
+    });
+    registerThreadPrStatusWatch.mockClear();
+
+    const response = await requestWatchForAttachedPr(merged, ["merged", "closed"]);
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        pullRequestWatch: {
+          currentOutcome: "merged",
+          terminal: {
+            outcome: "merged",
+            mergeMethod: "squash",
+            mergeCommitSha: "c".repeat(40),
+            mergedBy: "octocat",
+            baseBranch: "main",
+          },
+        },
+      },
+    });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+  });
+
+  it("answers a merged PR with no recorded head instead of asking for one", async () => {
+    const merged = githubPr({
+      number: 1133,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Merged before any poll",
+      state: "passing",
+      lifecycleState: "merged",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1133",
+    });
+    registerThreadPrStatusWatch.mockClear();
+
+    const response = await requestWatchForAttachedPr(merged, ["success", "failure"]);
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { pullRequestWatch: { currentOutcome: "success", terminal: { outcome: "merged" } } },
+    });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+  });
+
+  it("registers a CI watch and a separate merge/close watch for one request", async () => {
+    const open = githubPr({
+      number: 1132,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Still open",
+      state: "pending",
+      headSha: "d".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1132",
+    });
+    registerThreadPrStatusWatch.mockClear();
+
+    const response = await requestWatchForAttachedPr(open, ["success", "merged", "closed"]);
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        pullRequestWatch: {
+          watch: { kind: "checks", notifyOn: ["success"], headSha: "d".repeat(40) },
+          terminalWatch: { kind: "terminal", notifyOn: ["merged", "closed"] },
+        },
+      },
+    });
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledTimes(2);
   });
 
   it("serves the last remote navigation snapshot during an expected disconnect", async () => {

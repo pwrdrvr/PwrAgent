@@ -11,6 +11,7 @@ Use handoff_task for local child work.
 Use create_instance_thread for work on a selected machine.
 Use manage_thread_dependencies to wait for a prerequisite.
 Use watch_thread_pull_request to wait for CI on an attached PR.
+Add merged and closed to its notifyOn to clean up after the PR lands, such as a Sandboxer sandbox.
 Use get_forge_status and the CI read tools to inspect forge data.
 Use get_current_messaging_surface before a messaging action.
 Send messages or files only when authorized.

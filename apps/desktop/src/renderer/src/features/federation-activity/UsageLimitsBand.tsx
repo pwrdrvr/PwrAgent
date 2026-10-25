@@ -1,5 +1,6 @@
 import { limitLabel, type LimitAccount, type LimitSeries } from "./usage-limits";
 import { formatBackendPlanType } from "../../lib/backend-status-format";
+import { usageProviderLabel } from "./usage-activity-accounts";
 import { describeLimitPace, usageClock, usageCount, usageMoney, usagePercent as percent, usageWhen as when } from "./usage-activity-presentation";
 
 function LimitMeter({ series, now }: { series: LimitSeries; now: number }) {
@@ -14,7 +15,7 @@ function LimitMeter({ series, now }: { series: LimitSeries; now: number }) {
     <div className="usage-limit__figure"><strong>{percent(latest.usedPercent)}<small>%</small></strong>
       <span>{latest.used !== undefined && latest.limit !== undefined
         ? `${usageCount(latest.used)} of ${usageCount(latest.limit)} used`
-        : "used"}{latest.resetAt !== undefined ? ` · resets ${when(latest.resetAt, now)}` : ""}</span></div>
+        : "used"}{latest.resetAt !== undefined ? ` · ${latest.expires ? "expires" : "resets"} ${when(latest.resetAt, now)}` : ""}</span></div>
     <div className="usage-limit__meter" role="img" aria-label={`${limitLabel(series)} ${percent(latest.usedPercent)}% used`}>
       <i style={{ width: `${Math.min(100, Math.max(0, latest.usedPercent))}%` }} /></div>
     {pace}
@@ -45,11 +46,12 @@ export function UsageLimitsBand({ accounts, accountLabel, focusKey, onFocus, cos
   return <section className="usage-band" aria-label="Limits and cost">
     <div className="usage-band__accounts">
       {accounts.length === 0 ? <div className="usage-limit usage-limit--empty"><span className="usage-eyebrow">Account limits</span>
-        <p>No limit readings from these instances yet. They appear after Codex reports account limits.</p></div> : null}
+        <p>No limit readings from these instances yet. They appear after Codex, Claude or Grok reports account limits.</p></div> : null}
       {accounts.map((account) => <div key={account.key} className={`usage-account${account.key === focusKey && accounts.length > 1 ? " is-focused" : ""}`}>
         {accounts.length > 1 ? <button type="button" className="usage-account__name" aria-pressed={account.key === focusKey}
           onClick={() => onFocus(account.key)} title="Chart this account's limit">
-          {accountLabel?.(account) ?? (account.planType ? `${formatBackendPlanType({ kind: "codex" }, account.planType)} account` : "Account")}<span>{account.owners.join(", ")}</span></button> : null}
+          {accountLabel?.(account) ?? `${usageProviderLabel(account.provider)}${account.planType
+            ? ` ${formatBackendPlanType({ kind: "codex" }, account.planType)}` : ""} account`}<span>{account.owners.join(", ")}</span></button> : null}
         <div className="usage-account__limits">
           {account.series.map((series) => <LimitMeter key={series.key} series={series} now={now} />)}
           {account.credits ? <div className="usage-limit usage-limit--credits"><span className="usage-eyebrow">Credits</span>

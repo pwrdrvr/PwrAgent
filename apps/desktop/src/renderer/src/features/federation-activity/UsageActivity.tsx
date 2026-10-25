@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import type { AppServerBackendKind, DesktopHelperModelSettings, FederationTarget, ReadUsageActivityResponse,
-  UsageAnalysisModelBackend } from "@pwragent/shared";
+import { parseUsageLimitProvider, type AppServerBackendKind, type DesktopHelperModelSettings, type FederationTarget,
+  type ReadUsageActivityResponse, type UsageAnalysisModelBackend } from "@pwragent/shared";
 import { UsageTimeline, type UsageChartForecast, type UsageChartMember } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
 import { UsageInspector, analysisModelKey, defaultAnalysisModel, parseAnalysisModelKey,
@@ -11,7 +11,7 @@ import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesSta
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { summarizeUsageActivity, type OwnedUsageRow, type UsageGroup } from "./usage-activity-summary";
-import { buildUsageAccounts, limitUsageAccountKey, usageAccountKey, type UsageAccount } from "./usage-activity-accounts";
+import { buildUsageAccounts, limitUsageAccountKey, usageAccountKey, usageAccountProvider, type UsageAccount } from "./usage-activity-accounts";
 import { USAGE_RESULTS_MAX_HEIGHT, USAGE_RESULTS_MIN_HEIGHT, clampUsageResultsHeight, readStoredUsageResultsHeight,
   writeStoredUsageResultsHeight } from "./usage-activity-layout";
 
@@ -43,10 +43,17 @@ const PRESETS: Array<{ value: Preset; label: string; title: string }> = [
 
 const isOnline = (source: Source) => source.target.scope === "local" || source.status === undefined || source.status === "connected";
 
-/** The account whose limits drive the reset presets and the chart's line. */
-function focusAccount(accounts: LimitAccount[], preferred: string | undefined, localLabel: string) {
+/**
+ * The account whose limits drive the reset presets and the chart's line: the
+ * one the operator picked, else this instance's account with the provider the
+ * window was opened for (Codex's by default).
+ */
+function focusAccount(accounts: LimitAccount[], preferred: string | undefined, localLabel: string, provider: string) {
+  const local = (account: LimitAccount) => account.owners.includes(localLabel);
   return accounts.find((account) => account.key === preferred)
-    ?? accounts.find((account) => account.owners.includes(localLabel)) ?? accounts[0];
+    ?? accounts.find((account) => account.provider === provider && local(account))
+    ?? accounts.find((account) => account.provider === provider)
+    ?? accounts.find(local) ?? accounts[0];
 }
 
 /** Where a limit-based preset starts, once the account's limits are known. */
@@ -91,7 +98,11 @@ function nameList(names: string[]) {
   return names.length <= 3 ? names.join(", ") : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
 }
 
-export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
+export function UsageActivity({ desktopApi, initialProvider }: {
+  desktopApi?: DesktopApi;
+  /** Focus this provider's account limits, as the surface that opened the window asked. */
+  initialProvider?: string;
+}) {
   const [sources, setSources] = useState<Source[]>([{ label: "This instance", target: { scope: "local" } }]);
   // Until discovery settles, a read would miss every peer and immediately be
   // replaced; the first read waits for it.
@@ -109,6 +120,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const [to, setTo] = useState(() => localDate(new Date()));
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [focusKey, setFocusKey] = useState<string>();
+  const [focusProvider, setFocusProvider] = useState(initialProvider ?? "openai");
   const [accountFilter, setAccountFilter] = useState("");
   const [rememberedAccount, setRememberedAccount] = useState<UsageAccount>();
   // Operator names for accounts, kept in this profile's config and never sent to peers.
@@ -148,6 +160,19 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
       .finally(() => { if (mounted.current) setPeersReady(true); });
   }, [desktopApi]);
   useEffect(() => { discoverPeers(); }, [discoverPeers]);
+  // Opened again from another provider's surface: chart that provider's limits.
+  const accountFilterRef = useRef(accountFilter);
+  accountFilterRef.current = accountFilter;
+  const selectAccountRef = useRef<(key: string) => void>(() => {});
+  useEffect(() => desktopApi?.onUsageActivityFocusProvider?.((value) => {
+    const provider = parseUsageLimitProvider(value);
+    if (!provider) return;
+    setFocusProvider(provider);
+    setFocusKey(undefined);
+    // A filter on another provider's account would hide the one asked for.
+    const filter = accountFilterRef.current;
+    if (filter && usageAccountProvider(filter) !== provider) selectAccountRef.current("");
+  }), [desktopApi]);
   useEffect(() => {
     const readModelSettings = () => void desktopApi?.readSettings?.({}).then((value) => {
       if (!mounted.current) return;
@@ -229,7 +254,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
   const offlineSources = sources.filter((source) => !isOnline(source));
   const limitPreset = preset === "reset" || preset === "five";
   const queryKey = JSON.stringify([enabledSources.map((source) => sourceId(source.target)), preset,
-    preset === "custom" ? [from, to] : null, limitPreset ? [focusKey ?? null, accountFilter] : null]);
+    preset === "custom" ? [from, to] : null, limitPreset ? [focusKey ?? null, accountFilter, focusProvider] : null]);
   const localLabel = sources[0].label;
   const scopedLimits = (accounts: LimitAccount[]) => accountFilter
     ? accounts.filter((account) => limitUsageAccountKey(account) === accountFilter) : accounts;
@@ -246,7 +271,9 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     return results;
   };
   const accountsOf = (results: SourceResult[]) => buildLimitAccounts(results.filter((source) => source.data).map((source) => ({
-    owner: source.label, current: source.data!.limitObservation, history: source.data!.limitHistory,
+    // An older owner reports Codex alone, in the single-reading fields.
+    owner: source.label, current: source.data!.limitObservations ?? source.data!.limitObservation,
+    history: [...source.data!.limitHistory ?? [], ...source.data!.providerLimitHistory ?? []],
   })));
 
   const refresh = async () => {
@@ -257,7 +284,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     const today = new Date(end); today.setHours(0, 0, 0, 0);
     // A limit preset starts where the account's window began. Until limits are
     // known, read the longest such window and narrow once they arrive.
-    const known = limitStart(preset, focusAccount(scopedLimits(snapshot?.accounts ?? []), focusKey, localLabel));
+    const known = limitStart(preset, focusAccount(scopedLimits(snapshot?.accounts ?? []), focusKey, localLabel, focusProvider));
     let start = preset === "custom" ? new Date(from).getTime()
       : preset === "today" ? today.getTime()
       : preset === "day" ? end - DAY
@@ -277,7 +304,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     let results = await readAll(enabledSources, start, end);
     if (!mounted.current || seq !== readSeq.current) return;
     let accounts = accountsOf(results);
-    const resolved = limitStart(preset, focusAccount(scopedLimits(accounts), focusKey, localLabel));
+    const resolved = limitStart(preset, focusAccount(scopedLimits(accounts), focusKey, localLabel, focusProvider));
     if (resolved !== undefined && resolved < end) {
       const bounded = Math.max(resolved, end - MAX_WINDOW);
       if (Math.abs(bounded - start) > 60_000) {
@@ -392,7 +419,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     capped.length ? `${nameList(capped)} returned only the newest 5,000 rows; choose a shorter period for the rest` : "",
   ].filter(Boolean);
   const limitAccounts = scopedLimits(snapshot?.accounts ?? []);
-  const focus = snapshot ? focusAccount(limitAccounts, focusKey, localLabel) : undefined;
+  const focus = snapshot ? focusAccount(limitAccounts, focusKey, localLabel, focusProvider) : undefined;
   // An account without a 5-hour limit reads the last 5 hours, and the line is
   // its longest limit, resets and all: the window is not that limit's.
   const fiveHour = fiveHourSeries(focus);
@@ -440,6 +467,7 @@ export function UsageActivity({ desktopApi }: { desktopApi?: DesktopApi }) {
     setRememberedAccount(account);
     setFocusKey(account?.limitKey);
   };
+  selectAccountRef.current = selectAccount;
   const saveAccountName = async (account: UsageAccount, value: string) => {
     if (!account.nameKey || !desktopApi?.writeSettingsConfig || savingName) return;
     const name = value.trim();

@@ -6,6 +6,7 @@ import { discoverGlabCommands } from "../settings/glab-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { resolveGitLabReposForDirectory } from "./git-remote";
 import { FORGE_JSON_MAX_BYTES, FORGE_LOG_MAX_BYTES } from "./forge-read-limits";
+import type { GitLabTerminalPayload } from "./pr-terminal-details";
 
 const execFileAsync = promisify(execFile);
 /** Concurrent `glab` subprocesses admitted at once. */
@@ -300,6 +301,12 @@ export class GitLabPrFetcher {
     }
     this.failures.delete(ref.host);
     return pr;
+  }
+
+  /** One MR read for merge details when a merge or close watch fires. */
+  async fetchTerminalPayload(ref: GitLabRef): Promise<GitLabTerminalPayload> {
+    return await this.api<GitLabTerminalPayload>(ref.host,
+      `projects/${encodeURIComponent(`${ref.owner}/${ref.repo}`)}/merge_requests/${ref.number}`, true);
   }
 
   async fetchForBranch(cwd: string, branch: string): Promise<PrSummary[]> {

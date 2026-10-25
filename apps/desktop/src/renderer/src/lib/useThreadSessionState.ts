@@ -4375,7 +4375,10 @@ function threadMessagePrAutomationOriginFromUnknown(
       : {}),
     headSha: record.headSha,
     ...(eventKinds ? { eventKinds } : {}),
-    ...(record.outcome === "success" || record.outcome === "failure"
+    ...(record.outcome === "success"
+      || record.outcome === "failure"
+      || record.outcome === "merged"
+      || record.outcome === "closed"
       ? { outcome: record.outcome }
       : {}),
   };

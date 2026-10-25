@@ -385,6 +385,46 @@ it("uses the selected account's reset window rather than another instance's curr
   expect(screen.getByText(/Limits are the newest reading, from Remote/)).toBeInTheDocument();
 });
 
+it("shows Claude's limits beside Codex's and follows the provider the window was opened for", async () => {
+  const now = new Date(2026, 9, 25, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const codex: UsageLimitObservation = { observedAt: now, accountKey: "codex-account", planType: "pro",
+    limits: [{ name: "Weekly limit", windowKey: "secondary", usedPercent: 20, resetAt: now + 3 * 24 * HOUR, windowMinutes: 10_080 }] };
+  const claude: UsageLimitObservation = { observedAt: now - 60_000, provider: "anthropic", accountKey: "claude-account",
+    planType: "max", limits: [
+      { name: "5-hour limit", limitId: "five_hour", usedPercent: 12, resetAt: now + 2 * HOUR, windowMinutes: 300 },
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 41, resetAt: now + 5 * 24 * HOUR, windowMinutes: 10_080 },
+      { name: "Weekly Opus limit", limitId: "seven_day_opus", usedPercent: 7, resetAt: now + 5 * 24 * HOUR, windowMinutes: 10_080 },
+    ] };
+  const readUsageActivity = vi.fn(async (_request: { from: number }) => ({ rows: [], readAt: now, rateLimits: [],
+    truncated: false, limitObservation: codex, limitObservations: [{ ...codex, provider: "openai" }, claude] }));
+  const lastFrom = () => readUsageActivity.mock.calls.at(-1)?.[0].from;
+  let focusProvider: ((provider: string) => void) | undefined;
+  const onUsageActivityFocusProvider = vi.fn((callback: (provider: string) => void) => {
+    focusProvider = callback;
+    return () => { focusProvider = undefined; };
+  });
+  render(<UsageActivity desktopApi={{ readUsageActivity, onUsageActivityFocusProvider }} initialProvider="anthropic" />);
+  expect(await screen.findByRole("button", { name: /^Anthropic Max/ })).toHaveAttribute("aria-pressed", "true");
+  // Since reset follows Claude's account-wide weekly limit, which began two days ago.
+  await waitFor(() => expect(lastFrom()).toBe(now - 2 * 24 * HOUR));
+  expect(screen.getByRole("button", { name: /^OpenAI Pro/ })).toHaveAttribute("aria-pressed", "false");
+  // Each weekly limit keeps Claude's own name.
+  expect(screen.getByRole("img", { name: "Weekly Opus limit 7% used" })).toBeInTheDocument();
+  expect(screen.getByRole("img", { name: "5-hour window 12% used" })).toBeInTheDocument();
+  expect(selectOptionLabels(screen.getByRole("combobox", { name: "Account" }))).toEqual(
+    expect.arrayContaining(["Anthropic Max", "OpenAI Pro"]));
+
+  // Scoped to the Claude account, then opened again from a Codex thread: the
+  // scope that would hide Codex goes, and the chart moves to Codex's limit.
+  chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "Anthropic Max");
+  expect(await screen.findByRole("group", { name: "Account scope" })).toHaveTextContent("Showing Anthropic Max");
+  act(() => focusProvider!("openai"));
+  await waitFor(() => expect(screen.queryByRole("group", { name: "Account scope" })).not.toBeInTheDocument());
+  await waitFor(() => expect(lastFrom()).toBe(now - 4 * 24 * HOUR));
+  await waitFor(() => expect(screen.getByRole("button", { name: /^OpenAI Pro/ })).toHaveAttribute("aria-pressed", "true"));
+});
+
 it("reads the last 5 hours for the 5-hour window when the account's only limit is weekly, across its reset", async () => {
   const now = new Date(2026, 9, 22, 17, 12).getTime();
   vi.spyOn(Date, "now").mockReturnValue(now);

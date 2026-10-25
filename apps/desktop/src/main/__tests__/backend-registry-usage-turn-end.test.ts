@@ -201,6 +201,39 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     expect(snapshot.limitHistory).toEqual([]);
   });
 
+  it("relays Claude's account limits and records them on its turns, apart from Codex's", async () => {
+    const registry = createRegistry();
+    const reading = {
+      observedAt: Date.now() - 1_000, provider: "anthropic", accountKey: "claude-account", planType: "max",
+      limits: [{ name: "Weekly limit", limitId: "seven_day", usedPercent: 41, windowMinutes: 10_080 }],
+    };
+    const claude = (registry as unknown as { claudeBackend: object }).claudeBackend;
+    vi.spyOn(claude as { usageAccountKey(): Promise<string | undefined> }, "usageAccountKey")
+      .mockResolvedValue("claude-account");
+    vi.spyOn(claude as { limitObservation(): unknown }, "limitObservation").mockReturnValue(reading);
+    await runTurn(registry, "claude", "claude-turn");
+    await internals(registry).emit({ backend: "claude", notification: { method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "claude-turn", status: "completed" } } } } as AgentEvent);
+    const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
+    expect(snapshot.rows[0].accountKey).toBe("claude-account");
+    expect(snapshot.limitObservations).toEqual([reading]);
+    expect(snapshot.providerLimitHistory).toEqual([reading]);
+    // A viewer that predates other providers charts every `limitHistory` reading as Codex.
+    expect(snapshot.limitHistory).toEqual([]);
+    expect(snapshot.limitObservation).toBeUndefined();
+  });
+
+  it("keys Claude's reading by the operator's account group, as its turns are", async () => {
+    const registry = createRegistry([], { resolveUsageAccountGroups: () => ({ claude: "team" }) });
+    const claude = (registry as unknown as { claudeBackend: object }).claudeBackend;
+    vi.spyOn(claude as { limitObservation(): unknown }, "limitObservation").mockReturnValue({
+      observedAt: Date.now(), provider: "anthropic", accountKey: "claude-account", limits: [] });
+    await runTurn(registry, "claude", "claude-turn");
+    const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
+    expect(snapshot.rows[0].accountKey).toBe(usageAccountKey(undefined, "team"));
+    expect(snapshot.limitObservations?.[0].accountKey).toBe(usageAccountKey(undefined, "team"));
+  });
+
   it("attributes refreshed quotas to the account read used for metadata recovery", async () => {
     const previous = { type: "chatgpt" as const, accountId: "previous", email: "same@example.test" };
     const current = { ...previous, accountId: "current" };

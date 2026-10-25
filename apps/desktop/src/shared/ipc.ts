@@ -303,6 +303,8 @@ export const MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL =
   "mcp-connection:set-select-for-new-threads";
 export const MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL =
   "mcp-connection:set-tool-approval";
+export const MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL =
+  "mcp-connection:set-sandboxer-cleanup-on-pr-close";
 export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";
@@ -902,6 +904,8 @@ export const THREAD_FAMILY_PRICING_READ_CHANNEL = "pricing:readThreadFamilyPrici
 export const USAGE_ACTIVITY_ANALYZE_CHANNEL = "usage-activity:analyzeUsageActivity";
 /** Spawn or focus the dedicated Usage Activity window. */
 export const USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL = "usage-activity:openWindow";
+/** To an open Usage Activity window: focus a provider's account limits. */
+export const USAGE_ACTIVITY_FOCUS_PROVIDER_EVENT_CHANNEL = "usage-activity:focusProvider";
 /** From the Usage Activity window: focus the main window and open a thread there. */
 export const USAGE_ACTIVITY_OPEN_THREAD_CHANNEL = "usage-activity:openThreadInMainWindow";
 

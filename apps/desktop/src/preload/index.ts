@@ -27,6 +27,7 @@ import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
+import { createUsageActivityFocusSubscription } from "./usage-activity-focus";
 import type {
   ListThreadTodoProjectsResponse,
   ListThreadTodoProjectsRequest,
@@ -48,7 +49,7 @@ import type {
   MarkOperatorItemsSeenRequest,
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
-import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse, OpenUsageActivityRequest } from "@pwragent/shared";
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
@@ -167,6 +168,7 @@ import type {
   SetMcpConnectionEnabledRequest,
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
+  SetSandboxerCleanupOnPrCloseRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
@@ -889,6 +891,7 @@ import {
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
+  MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
@@ -1179,6 +1182,8 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
   },
 );
 
+const subscribeToUsageActivityFocus = createUsageActivityFocusSubscription(ipcRenderer);
+
 let federationJumpSearchRequestSequence = 0;
 let threadSearchRequestSequence = 0;
 
@@ -1261,6 +1266,13 @@ const desktopApi = Object.freeze({
     request: SetMcpConnectionToolApprovalRequest,
   ): Promise<MutateMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL, request),
+  setSandboxerCleanupOnPrClose: async (
+    request: SetSandboxerCleanupOnPrCloseRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(
+      MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
+      request,
+    ),
   listMcpConnectionTools: async (
     request: ListMcpConnectionToolsRequest,
   ): Promise<ListMcpConnectionToolsResponse> =>
@@ -2127,8 +2139,9 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(THREAD_FAMILY_PRICING_READ_CHANNEL, request),
   analyzeUsageActivity: async (request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_ANALYZE_CHANNEL, request),
-  openUsageActivity: async (): Promise<void> =>
-    await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL),
+  openUsageActivity: async (request?: OpenUsageActivityRequest): Promise<void> =>
+    await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL, request),
+  onUsageActivityFocusProvider: subscribeToUsageActivityFocus,
   openUsageThreadInMainWindow: async (request: WindowShowThreadRequest): Promise<void> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, request),
   inspectTokenMiserOutput: async (

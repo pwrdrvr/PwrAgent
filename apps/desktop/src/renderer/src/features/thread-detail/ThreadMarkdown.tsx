@@ -64,6 +64,7 @@ import {
   remarkPullRequestReferences,
 } from "./remark-pull-request-references";
 import { remarkTableProfile } from "./remark-table-profile";
+import { buildSelectionClipboard } from "./selection-clipboard";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
@@ -185,15 +186,41 @@ function suppressPullRequestChipSelectionStart(
   }
 }
 
-function copySelectedPullRequestLinks(
+// A selection inside one message copies as Markdown text plus clean HTML, so
+// plain-text targets keep list numbers and bullets. A selection that runs past
+// this message keeps the browser's copy, with PR chips rewritten to URLs.
+function copyTranscriptSelection(
   event: ClipboardEvent<HTMLDivElement>,
 ): void {
+  // A nested document viewer is portalled here through React, and its own
+  // ThreadMarkdown has already answered the event.
+  if (event.isDefaultPrevented()) {
+    return;
+  }
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
     return;
   }
 
-  const fragment = selection.getRangeAt(0).cloneContents();
+  const range = selection.getRangeAt(0);
+  if (event.currentTarget.contains(range.commonAncestorContainer)) {
+    const clipboard = buildSelectionClipboard(range, event.currentTarget);
+    if (clipboard) {
+      event.clipboardData.setData("text/plain", clipboard.text);
+      event.clipboardData.setData("text/html", clipboard.html);
+      event.preventDefault();
+    }
+    return;
+  }
+
+  copySelectedPullRequestLinks(event, range);
+}
+
+function copySelectedPullRequestLinks(
+  event: ClipboardEvent<HTMLDivElement>,
+  range: Range,
+): void {
+  const fragment = range.cloneContents();
   const pullRequestChips = fragment.querySelectorAll<HTMLElement>(
     "[data-pr-chip][data-pr-url]",
   );
@@ -917,7 +944,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       ]
         .filter(Boolean)
         .join(" ")}
-      onCopy={copySelectedPullRequestLinks}
+      onCopy={copyTranscriptSelection}
       onMouseDown={suppressPullRequestChipSelectionStart}
     >
       <MarkdownRenderContext.Provider value={renderState}>

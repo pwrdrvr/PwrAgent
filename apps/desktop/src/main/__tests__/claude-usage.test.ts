@@ -17,8 +17,8 @@ describe("Claude usage normalization", () => {
       seven_day: { utilization: 0.13, resetsAt: 1789005600 },
     } };
     expect(claudeStreamRateLimits(info)).toEqual([
-      { name: "5-hour limit", limitId: "five_hour", usedPercent: 24, resetAt: 1788465600000 },
-      { name: "Weekly limit", limitId: "seven_day", usedPercent: 13, resetAt: 1789005600000 },
+      { name: "5-hour limit", limitId: "five_hour", usedPercent: 24, resetAt: 1788465600000, windowMinutes: 300 },
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 13, resetAt: 1789005600000, windowMinutes: 10_080 },
     ]);
     expect(claudeStreamRateLimits({ status: "allowed", rateLimitType: "five_hour", utilization: 0.5 })[0].usedPercent).toBe(50);
   });
@@ -43,7 +43,7 @@ describe("Claude usage normalization", () => {
       extra_usage: { is_enabled: true, used_credits: 50 },
     } } as unknown as SDKControlGetUsageResponse;
     expect(claudeRateLimits(usage)).toEqual([{ name: "Weekly limit", limitId: "seven_day",
-      usedPercent: 22, resetAt: Date.parse("2026-10-27T00:00:00Z") }]);
+      usedPercent: 22, resetAt: Date.parse("2026-10-27T00:00:00Z"), windowMinutes: 10_080 }]);
     expect(claudeRateLimits({ ...usage, rate_limits_available: false })).toEqual([]);
   });
   it("reads per-model weekly windows and names cloud credits and unknown keys", () => {
@@ -57,12 +57,13 @@ describe("Claude usage normalization", () => {
       ],
     } } as unknown as SDKControlGetUsageResponse;
     expect(claudeRateLimits(usage)).toEqual([
-      { name: "Weekly limit", limitId: "seven_day", usedPercent: 25, resetAt: Date.parse("2026-10-27T11:00:00Z") },
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 25, resetAt: Date.parse("2026-10-27T11:00:00Z"),
+        windowMinutes: 10_080 },
       { name: "Cloud session credits", limitId: "iguana_necktie", usedPercent: 30,
         resetAt: Date.parse("2026-11-05T07:59:00Z"), expires: true },
       { name: "Other plan limit", limitId: "walrus_monocle", limitName: "walrus_monocle", usedPercent: 5 },
       { name: "Weekly Fable limit", limitId: "model_scoped:Fable", usedPercent: 40,
-        resetAt: Date.parse("2026-10-27T11:00:00Z") },
+        resetAt: Date.parse("2026-10-27T11:00:00Z"), windowMinutes: 10_080 },
     ]);
   });
   it("labels the streamed overage windows instead of printing their keys", () => {

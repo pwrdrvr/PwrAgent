@@ -15,6 +15,7 @@ import {
 } from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
 import { THREAD_DEPENDENCY_SCHEMA } from "./thread-dependency-store.js";
+import { THREAD_SANDBOX_SCHEMA } from "./thread-sandbox-store.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
 import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
 import {
@@ -883,6 +884,8 @@ CREATE TABLE IF NOT EXISTS pr_status_watches (
   head_sha           TEXT NOT NULL,
   notify_on_success  INTEGER NOT NULL,
   notify_on_failure  INTEGER NOT NULL,
+  notify_on_merged   INTEGER NOT NULL DEFAULT 0,
+  notify_on_closed   INTEGER NOT NULL DEFAULT 0,
   status             TEXT NOT NULL,
   attempt_count      INTEGER NOT NULL DEFAULT 0,
   lease_owner        TEXT,
@@ -897,6 +900,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_status_watches_active_target
 CREATE INDEX IF NOT EXISTS idx_pr_status_watches_active_pr
   ON pr_status_watches(pr_key, status, lease_expires_at);
 `;
+
+/**
+ * Merge/close interests. A terminal watch is stored with an empty head_sha:
+ * it is not bound to a head, and the active-target unique index then allows
+ * one terminal watch per thread and PR beside its CI watch. Added here rather
+ * than in a numbered step because ensureCurrentSchema runs on every open.
+ */
+function ensurePrStatusWatchTerminalColumns(db: BetterSqlite3.Database): void {
+  if (!tableColumnExists(db, "pr_status_watches", "notify_on_merged")) {
+    db.exec("ALTER TABLE pr_status_watches ADD COLUMN notify_on_merged INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!tableColumnExists(db, "pr_status_watches", "notify_on_closed")) {
+    db.exec("ALTER TABLE pr_status_watches ADD COLUMN notify_on_closed INTEGER NOT NULL DEFAULT 0");
+  }
+}
 
 // Finalization is keyed by turn identity, so a replacement usage-line id cannot
 // bypass it. Token intervals establish ordering; wall clocks and replay arrival
@@ -2785,7 +2803,9 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_AUTO_DISPATCH_SCHEMA);
     db.exec(PR_AUTO_DISPATCH_BUDGET_SCHEMA);
     db.exec(PR_STATUS_WATCH_SCHEMA);
+    ensurePrStatusWatchTerminalColumns(db);
     db.exec(THREAD_DEPENDENCY_SCHEMA);
+    db.exec(THREAD_SANDBOX_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);
@@ -4237,6 +4257,7 @@ function tableColumnExists(
     | "automation_runs"
     | "pr_lookup_cache"
     | "pr_status_cache"
+    | "pr_status_watches"
     | "thread_message_origins"
     | "thread_pricing_summaries"
     | "remote_thread_pins"
@@ -4277,6 +4298,7 @@ function readTableInfo(
     | "automation_runs"
     | "pr_lookup_cache"
     | "pr_status_cache"
+    | "pr_status_watches"
     | "thread_message_origins"
     | "thread_pricing_summaries"
     | "remote_thread_pins"
@@ -4304,6 +4326,10 @@ function readTableInfo(
       }>;
     case "pr_status_cache":
       return db.prepare("PRAGMA table_info(pr_status_cache)").all() as Array<{
+        name: string;
+      }>;
+    case "pr_status_watches":
+      return db.prepare("PRAGMA table_info(pr_status_watches)").all() as Array<{
         name: string;
       }>;
     case "thread_message_origins":

@@ -11,6 +11,7 @@ import {
   buildPullRequestStatusKey,
   type AppServerTurnInputItem,
   type PrSummary,
+  type PullRequestTerminalDetails,
   type ThreadPullRequestWatchEvent,
   type ThreadPullRequestWatchSummary,
 } from "@pwragent/shared";
@@ -20,6 +21,11 @@ import {
 } from "../pr-status/pr-status-watch";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import {
+  measureSqliteWrites,
+  SQLITE_WRITE_METRICS_ENV,
+} from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import {
   createTempStateDb,
   openInMemoryStateDb,
@@ -55,6 +61,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const db of extraDbs.splice(0)) db.close();
   stateDb.close();
   if (tempDir !== undefined) {
@@ -420,5 +427,433 @@ describe("PrStatusWatchCoordinator", () => {
     expect(submitTurnIfIdle).toHaveBeenCalledTimes(
       PR_STATUS_WATCH_MAX_DISPATCH_ATTEMPTS,
     );
+  });
+});
+
+async function registerTerminalWatch(
+  targetStore = store,
+  notifyOn: ThreadPullRequestWatchEvent[] = ["merged", "closed"],
+  threadId = "thread-1",
+): Promise<ThreadPullRequestWatchSummary> {
+  const target = pr();
+  const watch: ThreadPullRequestWatchSummary = {
+    watchId: `terminal-${Math.random()}`,
+    backend: "codex",
+    threadId,
+    prKey: buildPullRequestStatusKey(target),
+    prUrl: target.url,
+    prNumber: target.number,
+    prTitle: target.title,
+    headSha: target.headSha!,
+    notifyOn,
+    createdAt: now,
+    failureHandledByAutoFix: false,
+    kind: "terminal",
+  };
+  return (await targetStore.registerThreadPrStatusWatch({ watch, now })).watch;
+}
+
+/** Budgets need the metrics wrapper, which StateDb.open installs, and a WAL file. */
+function useMeasuredFileStateDb(): void {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  useFileStateDb();
+}
+
+function mergedPr(overrides: Partial<PrSummary> = {}): PrSummary {
+  return pr({
+    state: "passing",
+    checkState: "passing",
+    lifecycleState: "merged",
+    baseRefName: "main",
+    mergedAt: Date.parse("2026-10-25T12:00:00.000Z"),
+    ...overrides,
+  });
+}
+
+function squashDetails(): PullRequestTerminalDetails {
+  return {
+    outcome: "merged",
+    prKey: buildPullRequestStatusKey(pr()),
+    prUrl: pr().url,
+    prNumber: 1105,
+    prTitle: pr().title,
+    baseBranch: "main",
+    headSha: "a".repeat(40),
+    mergeMethod: "squash",
+    mergeMethodEvidence: "The merge commit has one parent and is a new commit.",
+    mergeCommitSha: "f".repeat(40),
+    mergedBy: "octocat",
+    mergedAt: "2026-10-25T12:00:00.000Z",
+  };
+}
+
+function createTerminalHarness(
+  options: {
+    targetStore?: SqliteOverlayStore;
+    submitTurnIfIdle?: Mock<SubmitTurnIfIdle>;
+    fetchTerminalDetails?: Mock<(pr: PrSummary) => Promise<PullRequestTerminalDetails | undefined>>;
+  } = {},
+) {
+  const submitTurnIfIdle = options.submitTurnIfIdle
+    ?? vi.fn(async (_request: { input: AppServerTurnInputItem[] }) => ({
+      status: "started" as const,
+      turnId: "turn-terminal-1",
+    }));
+  const fetchTerminalDetails = options.fetchTerminalDetails
+    ?? vi.fn(async (_pr: PrSummary) => squashDetails());
+  return {
+    coordinator: new PrStatusWatchCoordinator({
+      store: options.targetStore ?? store,
+      registry: { submitTurnIfIdle },
+      fetchTerminalDetails,
+      now: () => now,
+    }),
+    fetchTerminalDetails,
+    submitTurnIfIdle,
+  };
+}
+
+function promptOf(mock: Mock<SubmitTurnIfIdle>, call = 0): string {
+  const item = mock.mock.calls[call]?.[0].input[0];
+  return item && item.type === "text" ? item.text : "";
+}
+
+describe("PrStatusWatchCoordinator merge/close watches", () => {
+  it("outlives pushes and CI results, then wakes once on merge with the merge details", async () => {
+    await registerTerminalWatch();
+    const harness = createTerminalHarness();
+
+    // CI passing at one head, then a push to a new head: neither ends it.
+    await expect(harness.coordinator.handleStatusSnapshot(
+      pr({ state: "passing", checkState: "passing" }),
+      now,
+    )).resolves.toBe(0);
+    now += 1;
+    const pushed = pr({ headSha: "b".repeat(40), commitShas: ["b".repeat(40)] });
+    await harness.coordinator.handleStatusSnapshot(pushed, now);
+    expect(await store.listActiveThreadPrStatusWatches({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toHaveLength(1);
+
+    now += 1;
+    await expect(harness.coordinator.handleStatusSnapshot(
+      mergedPr({ headSha: "b".repeat(40) }),
+      now,
+    )).resolves.toBe(1);
+    await expect(harness.coordinator.handleStatusSnapshot(
+      mergedPr({ headSha: "b".repeat(40) }),
+      now + 1,
+    )).resolves.toBe(0);
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    const prompt = promptOf(harness.submitTurnIfIdle);
+    expect(prompt).toContain("- Outcome: merged");
+    expect(prompt).toContain("- Merge method: squash");
+    expect(prompt).toContain(`- Merge commit SHA: ${"f".repeat(40)}`);
+    expect(prompt).toContain("- Merged by: octocat");
+    expect(prompt).toContain("- Merged at: 2026-10-25T12:00:00.000Z");
+    expect(prompt).toContain("- Base branch: main");
+    expect(prompt).toContain(`- URL: ${pr().url}`);
+    expect(harness.submitTurnIfIdle.mock.calls[0]?.[0]).toMatchObject({
+      messageOrigin: {
+        kind: "pwragent",
+        prAutomation: { kind: "watch", prNumber: 1105, outcome: "merged" },
+      },
+    });
+  });
+
+  it("wakes on close without merge and says so", async () => {
+    await registerTerminalWatch();
+    const harness = createTerminalHarness({
+      fetchTerminalDetails: vi.fn(async (_pr: PrSummary) => ({
+        outcome: "closed" as const,
+        prKey: buildPullRequestStatusKey(pr()),
+        prUrl: pr().url,
+        prNumber: 1105,
+        baseBranch: "main",
+        closedBy: "octocat",
+        closedAt: "2026-10-25T13:00:00.000Z",
+      })),
+    });
+
+    await expect(harness.coordinator.handleStatusSnapshot(
+      pr({ lifecycleState: "closed", state: "failing", checkState: "failing" }),
+      now,
+    )).resolves.toBe(1);
+
+    const prompt = promptOf(harness.submitTurnIfIdle);
+    expect(prompt).toContain("saw the PR closed without merge");
+    expect(prompt).toContain("- Outcome: closed without merge");
+    expect(prompt).toContain("- Closed by: octocat");
+    expect(prompt).not.toContain("Merge method");
+  });
+
+  it("ignores a close when only merged was requested", async () => {
+    await registerTerminalWatch(store, ["merged"]);
+    const harness = createTerminalHarness();
+
+    await expect(harness.coordinator.handleTerminalSnapshot(
+      pr({ lifecycleState: "closed" }),
+      now,
+    )).resolves.toBe(0);
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(harness.fetchTerminalDetails).not.toHaveBeenCalled();
+  });
+
+  it("gives a thread with both watches one merge wake, not a CI success as well", async () => {
+    await registerWatch(store, ["success"]);
+    await registerTerminalWatch();
+    const harness = createTerminalHarness();
+
+    await expect(harness.coordinator.handleStatusSnapshot(mergedPr(), now))
+      .resolves.toBe(1);
+    await expect(harness.coordinator.handleStatusSnapshot(mergedPr(), now + 1))
+      .resolves.toBe(0);
+
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(promptOf(harness.submitTurnIfIdle)).toContain("- Outcome: merged");
+    expect(await store.listActiveThreadPrStatusWatches({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toEqual([]);
+  });
+
+  it("wakes every thread that asked about the merge", async () => {
+    await registerTerminalWatch(store, ["merged"], "thread-1");
+    now += 1;
+    await registerTerminalWatch(store, ["merged"], "thread-2");
+    const harness = createTerminalHarness();
+
+    await expect(harness.coordinator.handleStatusSnapshot(mergedPr(), now))
+      .resolves.toBe(2);
+    expect(harness.submitTurnIfIdle.mock.calls.map((call) =>
+      (call[0] as unknown as { threadId: string }).threadId
+    )).toEqual(["thread-1", "thread-2"]);
+    expect(harness.fetchTerminalDetails).toHaveBeenCalledTimes(1);
+  });
+
+  it("survives a restart before the merge is observed", async () => {
+    const dbPath = useFileStateDb();
+    const watch = await registerTerminalWatch();
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+
+    expect(await store.listActiveThreadPrStatusWatches({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toEqual([watch]);
+    expect(await store.listPendingPrTerminalWatchPrKeys()).toEqual([
+      buildPullRequestStatusKey(pr()),
+    ]);
+
+    const harness = createTerminalHarness();
+    await expect(harness.coordinator.handleStatusSnapshot(mergedPr(), now))
+      .resolves.toBe(1);
+    expect(promptOf(harness.submitTurnIfIdle)).toContain("- Merge method: squash");
+    expect(await store.listPendingPrTerminalWatchPrKeys()).toEqual([]);
+  });
+
+  it("retries a busy wake from cached status after a restart, without spending an attempt", async () => {
+    const dbPath = useFileStateDb();
+    await registerTerminalWatch();
+    const busy = createTerminalHarness({
+      submitTurnIfIdle: vi.fn(async () => ({ status: "busy" as const })),
+    });
+    await expect(busy.coordinator.handleStatusSnapshot(mergedPr(), now))
+      .resolves.toBe(1);
+    expect(await store.listPendingPrTerminalWatchPrKeys({
+      backend: "codex",
+      threadId: "thread-1",
+    })).toEqual([buildPullRequestStatusKey(pr())]);
+
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+    now += 1;
+    // The poller no longer fetches a merged PR; the app re-offers the cached
+    // snapshot through handleTerminalSnapshot.
+    const idle = createTerminalHarness();
+    await expect(idle.coordinator.handleTerminalSnapshot(mergedPr(), now))
+      .resolves.toBe(1);
+    expect(idle.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    const attempts = stateDb.raw
+      .prepare("SELECT attempt_count, status FROM pr_status_watches WHERE head_sha = ''")
+      .get() as { attempt_count: number; status: string };
+    expect(attempts).toEqual({ attempt_count: 1, status: "dispatched" });
+  });
+
+  it("adds PwrAgent's sandbox cleanup to the wake, and still wakes if it throws", async () => {
+    await registerTerminalWatch();
+    const submitTurnIfIdle: Mock<SubmitTurnIfIdle> = vi.fn(async () => ({
+      status: "started" as const,
+      turnId: "turn-1",
+    }));
+    const prepareTerminalWake = vi.fn(async () => [
+      "",
+      "Sandboxer cleanup by PwrAgent (sandboxes this thread created)",
+      "- sb_one: deleted",
+    ]);
+    const coordinator = new PrStatusWatchCoordinator({
+      store,
+      registry: { submitTurnIfIdle },
+      fetchTerminalDetails: async () => squashDetails(),
+      prepareTerminalWake,
+      now: () => now,
+    });
+    await expect(coordinator.handleTerminalSnapshot(mergedPr(), now)).resolves.toBe(1);
+    expect(prepareTerminalWake).toHaveBeenCalledWith(expect.objectContaining({
+      watch: expect.objectContaining({ threadId: "thread-1" }),
+    }));
+    const prompt = promptOf(submitTurnIfIdle);
+    expect(prompt).toContain("- sb_one: deleted");
+    expect(prompt).toContain("do not stop or delete them yourself");
+
+    await registerTerminalWatch(store, ["merged"], "thread-2");
+    const throwing = new PrStatusWatchCoordinator({
+      store,
+      registry: { submitTurnIfIdle },
+      fetchTerminalDetails: async () => squashDetails(),
+      prepareTerminalWake: async () => {
+        throw new Error("cleanup exploded");
+      },
+      now: () => now,
+    });
+    await expect(throwing.handleTerminalSnapshot(mergedPr(), now + 1)).resolves.toBe(1);
+    expect(promptOf(submitTurnIfIdle, 1)).toContain("- Outcome: merged");
+  });
+
+  it("prepares every thread's wake at once, so one slow cleanup does not hold the rest", async () => {
+    await registerTerminalWatch(store, ["merged"], "thread-1");
+    now += 1;
+    await registerTerminalWatch(store, ["merged"], "thread-2");
+    const submitTurnIfIdle: Mock<SubmitTurnIfIdle> = vi.fn(async () => ({
+      status: "started" as const,
+      turnId: "turn-1",
+    }));
+    const started: string[] = [];
+    let finish: () => void = () => {};
+    const bothStarted = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const coordinator = new PrStatusWatchCoordinator({
+      store,
+      registry: { submitTurnIfIdle },
+      fetchTerminalDetails: async () => squashDetails(),
+      prepareTerminalWake: async ({ watch }) => {
+        started.push(watch.threadId);
+        if (started.length === 2) finish();
+        // Neither returns until both have started.
+        await bothStarted;
+        return [`- cleaned ${watch.threadId}`];
+      },
+      now: () => now,
+    });
+    await expect(coordinator.handleTerminalSnapshot(mergedPr(), now)).resolves.toBe(2);
+    expect(started).toEqual(["thread-1", "thread-2"]);
+    expect(promptOf(submitTurnIfIdle, 0)).toContain("- cleaned thread-1");
+    expect(promptOf(submitTurnIfIdle, 1)).toContain("- cleaned thread-2");
+  });
+
+  it("still wakes the thread when the merge-details lookup fails", async () => {
+    await registerTerminalWatch();
+    const harness = createTerminalHarness({
+      fetchTerminalDetails: vi.fn(async (_pr: PrSummary) => {
+        throw new Error("gh is signed out");
+      }),
+    });
+
+    await expect(harness.coordinator.handleStatusSnapshot(mergedPr(), now))
+      .resolves.toBe(1);
+    const prompt = promptOf(harness.submitTurnIfIdle);
+    expect(prompt).toContain("- Outcome: merged");
+    expect(prompt).toContain("- Merge method: unknown");
+    expect(prompt).toContain("- Base branch: main");
+    expect(prompt).toContain("gh is signed out");
+  });
+
+  it("reads fresh details for a second close after a reopen", async () => {
+    const fetchTerminalDetails = vi.fn(async (target: PrSummary) => ({
+      outcome: "closed" as const,
+      prKey: buildPullRequestStatusKey(target),
+      prUrl: target.url,
+      prNumber: target.number,
+      closedAt: new Date(target.closedAt!).toISOString(),
+    }));
+    const harness = createTerminalHarness({ fetchTerminalDetails });
+    const first = pr({ lifecycleState: "closed", closedAt: Date.parse("2026-10-25T10:00:00Z") });
+    const second = pr({ lifecycleState: "closed", closedAt: Date.parse("2026-10-25T14:00:00Z") });
+
+    await harness.coordinator.resolveTerminalDetails(first);
+    await harness.coordinator.resolveTerminalDetails(first);
+    expect(fetchTerminalDetails).toHaveBeenCalledTimes(1);
+    await expect(harness.coordinator.resolveTerminalDetails(second)).resolves
+      .toMatchObject({ closedAt: "2026-10-25T14:00:00.000Z" });
+    expect(fetchTerminalDetails).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not wake while background PR polling is off", async () => {
+    await registerTerminalWatch();
+    const submitTurnIfIdle: Mock<SubmitTurnIfIdle> = vi.fn(async () => ({
+      status: "started" as const,
+      turnId: "turn-1",
+    }));
+    const coordinator = new PrStatusWatchCoordinator({
+      store,
+      registry: { submitTurnIfIdle },
+      isBackgroundPollingEnabled: () => false,
+      now: () => now,
+    });
+    await expect(coordinator.handleTerminalSnapshot(mergedPr(), now))
+      .resolves.toBe(0);
+    expect(submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(await store.listPendingPrTerminalWatchPrKeys()).toHaveLength(1);
+  });
+
+  it("merges notification interests into one terminal watch per thread and PR", async () => {
+    const first = await registerTerminalWatch(store, ["merged"]);
+    const second = await registerTerminalWatch(store, ["closed"]);
+    expect(second.watchId).toBe(first.watchId);
+    expect(second.notifyOn).toEqual(["merged", "closed"]);
+  });
+
+  it("records one commit per terminal watch registration and delivery", async () => {
+    useMeasuredFileStateDb();
+    const { writes: registration } = await measureSqliteWrites(async () => {
+      await registerTerminalWatch();
+    });
+    expectSqliteWriteBudget({
+      note: "one merge/close watch requested by an agent tool call: 1 commit/~16.5 KB WAL; ~0.8 MB/day at 50 requests/day, zero idle writes",
+      scenario: "pr-terminal-watch-register",
+      writes: registration,
+    });
+    const harness = createTerminalHarness();
+    const { writes: delivery } = await measureSqliteWrites(async () => {
+      await harness.coordinator.handleTerminalSnapshot(mergedPr(), now);
+    });
+    expectSqliteWriteBudget({
+      note: "claim and finish one merge/close wake: 2 commits/~24.7 KB WAL per merged PR; ~1.2 MB/day at 50 merges/day, zero idle writes",
+      scenario: "pr-terminal-watch-deliver",
+      writes: delivery,
+    });
+  });
+
+  it("adds no commits to the poll path while the PR stays open", async () => {
+    useMeasuredFileStateDb();
+    await registerTerminalWatch();
+    const harness = createTerminalHarness();
+    const { writes } = await measureSqliteWrites(async () => {
+      for (let tick = 0; tick < 10; tick += 1) {
+        now += 1;
+        await harness.coordinator.handleStatusSnapshot(pr(), now);
+      }
+    });
+    expectSqliteWriteBudget({
+      note: "ten polls of an open PR that has a merge/close watch: 0 rows and 0 WAL; the 10 commits are the pre-existing per-poll supersede statement, which changes no row, so the watch adds 0 MB/day",
+      scenario: "pr-terminal-watch-open-polls",
+      writes,
+    });
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
   });
 });

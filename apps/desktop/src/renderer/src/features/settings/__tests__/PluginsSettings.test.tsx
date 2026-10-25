@@ -1294,6 +1294,44 @@ describe("PluginsSettings", () => {
       expect(api.setMcpConnectionSelectForNewThreads).not.toHaveBeenCalled();
     });
 
+    it("offers Sandboxer cleanup when PRs close, on by default, on Sandboxer only", async () => {
+      const sandboxer = managed({
+        id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
+        serverUrl: "sandboxer:compute", sandboxerRole: "compute", sandboxerCliState: "signed_in",
+        enabled: true, selectForNewThreads: false, toolApproval: "prompt",
+      });
+      const api = managedApi([managed(), sandboxer]);
+      api.setSandboxerCleanupOnPrClose = vi.fn(async () => ({
+        connectionId: "builtin:sandboxer",
+        connection: { ...sandboxer, sandboxerCleanupOnPrClose: false },
+      }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+
+      const datadog = within(await findRow("Datadog"));
+      expect(datadog.queryByText("Clean up when PRs close")).toBeNull();
+      const row = within((await screen.findByText("Sandboxer")).closest("article")!);
+      const cleanup = row.getByRole("switch", {
+        name: "Clean up Sandboxer sandboxes when PRs close",
+      });
+      // Absent reads as on.
+      expect(cleanup).toBeChecked();
+      expect(row.getByText("Clean up when PRs close")).toBeInTheDocument();
+      expect(row.getByText(/Without a delete tool, PwrAgent stops it/)).toBeInTheDocument();
+
+      fireEvent.click(cleanup);
+      await waitFor(() => {
+        expect(api.setSandboxerCleanupOnPrClose).toHaveBeenCalledWith({
+          enabled: false,
+        });
+      });
+      expect(
+        await screen.findByText(
+          "PwrAgent leaves sandboxes running when a thread's PRs merge or close.",
+        ),
+      ).toBeInTheDocument();
+      expect(api.setMcpConnectionSelectForNewThreads).not.toHaveBeenCalled();
+    });
+
     /**
      * Reauthorizing a working connection can switch accounts while its URL and
      * its `configured` flag stay the same, which is all the row watched. The
