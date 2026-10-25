@@ -68,6 +68,10 @@ function runPnpmJson(args) {
     {
       cwd: repoRoot,
       encoding: "utf8",
+      // The full dependency tree is about 1 MB of JSON, and each record
+      // repeats the checkout path. The 1 MiB default failed with ENOBUFS
+      // in a checkout with a 63-character path.
+      maxBuffer: 64 * 1024 * 1024,
       // Windows resolves `pnpm` via the pnpm.cmd shim, which spawnSync only
       // finds through a shell. Without this, spawn fails with ENOENT and
       // result.status/stderr are null (crashing the undefined-stderr write).
