@@ -14,9 +14,9 @@ import type { ThreadTitleAdapterResult } from "./thread-title-generation-service
  * report, a pasted plan — needs a few words that tell it apart from the rest
  * of the queue. A helper turn writes those words once the message has sat in
  * a busy thread's queue for a moment. The title is display-only and lives on
- * the queue entry in memory, like the queue itself. The owner records each finished
- * run (its cost and what it wrote) through `settle`; nothing in this module
- * touches sqlite.
+ * the queue entry in memory, like the queue itself. The owner records each
+ * finished run (its cost and what it wrote) through `settle`; nothing in this
+ * module touches sqlite.
  */
 
 /**
@@ -38,6 +38,11 @@ const QUEUED_MESSAGE_TITLE_TURN_TIMEOUT_MS = 60_000;
  * message that is still waiting after this long is worth naming.
  */
 export const QUEUED_MESSAGE_TITLE_SETTLE_MS = 3_000;
+/**
+ * Re-requests restart the settle window, but never past this many windows
+ * from the first request, so a batch that keeps growing is still named.
+ */
+const QUEUED_MESSAGE_TITLE_MAX_SETTLE_WINDOWS = 4;
 /** Each name in the context, so a pasted title cannot crowd out the message. */
 const QUEUED_MESSAGE_TITLE_CONTEXT_NAME_LIMIT = 80;
 /** Senders named in the context; a bigger batch ends with "and N more". */
@@ -121,14 +126,14 @@ function senderName(
     const title = contextName(thread.title)
       ?? (thread.instanceId ? undefined : contextName(lookupTitle(thread)));
     if (!title) return undefined;
-    const instance = thread.instanceId
-      ? contextName(thread.instanceLabel ?? thread.instanceId)
-      : undefined;
+    // An instance id is not a name; say nothing rather than leak it.
+    const instance = thread.instanceId ? contextName(thread.instanceLabel) : undefined;
     return contextName(instance ? `${title} on ${instance}` : title);
   }
   const messaging = origin.messaging;
   if (messaging) {
-    const actor = contextName(messaging.actor.displayName ?? messaging.actor.username);
+    const actor = contextName(messaging.actor.displayName)
+      ?? contextName(messaging.actor.username);
     return actor ? contextName(`${actor} via ${messaging.platform}`) : undefined;
   }
   const subAgent = origin.subAgent;
@@ -234,22 +239,28 @@ export type QueuedMessageTitlerOptions = {
   log?: (message: string, fields: Record<string, unknown>) => void;
 };
 
+type PendingTitle = {
+  request: QueuedMessageTitleRequest;
+  ready: boolean;
+  /** Restarted by each re-request. */
+  settleTimer?: ReturnType<typeof setTimeout>;
+  /** Set by the first request and kept across re-requests. */
+  deadlineTimer?: ReturnType<typeof setTimeout>;
+};
+
 /**
  * Runs title requests one at a time. A thread handed eleven messages at once
  * gets its titles in order instead of eleven helper turns racing; a request
  * for an entry already waiting replaces the older one and restarts its
  * settle window, so an edit or a growing batch pays for one title, not one
- * per version of the text.
+ * per version of the text. The restarts stop at a deadline, so a batch
+ * that keeps growing is still named.
  */
 export class QueuedMessageTitler {
-  private readonly pending = new Map<
-    string,
-    { request: QueuedMessageTitleRequest; readyAt: number }
-  >();
+  private readonly pending = new Map<string, PendingTitle>();
   private readonly settleMs: number;
   private running = false;
   private closed = false;
-  private wake: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly options: QueuedMessageTitlerOptions) {
     this.settleMs = Math.max(0, options.settleMs ?? QUEUED_MESSAGE_TITLE_SETTLE_MS);
@@ -257,22 +268,42 @@ export class QueuedMessageTitler {
 
   request(request: QueuedMessageTitleRequest): void {
     if (this.closed) return;
+    const previous = this.pending.get(request.entryId);
     this.pending.delete(request.entryId);
-    this.pending.set(request.entryId, { request, readyAt: Date.now() + this.settleMs });
+    if (previous?.settleTimer) clearTimeout(previous.settleTimer);
+    // A request that already waited out its window stays ready: it was only
+    // waiting behind another run, and the new text does not reset that.
+    const ready = this.settleMs === 0 || previous?.ready === true;
+    const pending: PendingTitle = {
+      request,
+      ready,
+      ...(previous?.deadlineTimer ? { deadlineTimer: previous.deadlineTimer } : {}),
+    };
+    this.pending.set(request.entryId, pending);
+    if (!ready) {
+      // Timers, not clock arithmetic: a wall-clock change cannot stretch them.
+      pending.settleTimer = this.startTimer(request.entryId, this.settleMs);
+      pending.deadlineTimer ??= this.startTimer(
+        request.entryId,
+        this.settleMs * QUEUED_MESSAGE_TITLE_MAX_SETTLE_WINDOWS,
+      );
+    }
     this.kick();
   }
 
   /** Drops a request that has not started: the entry left the queue. */
   forget(entryId: string): void {
+    const pending = this.pending.get(entryId);
+    if (!pending) return;
     this.pending.delete(entryId);
-    if (this.pending.size === 0) this.clearWake();
+    clearPendingTimers(pending);
   }
 
   /** Drops every waiting request. A run already out finishes on its own. */
   close(): void {
     this.closed = true;
+    for (const pending of this.pending.values()) clearPendingTimers(pending);
     this.pending.clear();
-    this.clearWake();
   }
 
   /** Resolves once every request queued so far has finished. Tests only. */
@@ -282,51 +313,38 @@ export class QueuedMessageTitler {
     }
   }
 
-  private kick(): void {
-    if (this.running) return;
-    if (this.hasReadyRequest()) {
-      this.clearWake();
-      void this.drain();
-      return;
-    }
-    this.scheduleWake();
+  private startTimer(entryId: string, delayMs: number): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => this.markReady(entryId), delayMs);
+    timer.unref?.();
+    return timer;
   }
 
-  private hasReadyRequest(): boolean {
-    const now = Date.now();
-    for (const { readyAt } of this.pending.values()) {
-      if (readyAt <= now) return true;
+  private markReady(entryId: string): void {
+    const pending = this.pending.get(entryId);
+    if (!pending) return;
+    clearPendingTimers(pending);
+    pending.ready = true;
+    this.kick();
+  }
+
+  private kick(): void {
+    if (this.running) return;
+    for (const { ready } of this.pending.values()) {
+      if (ready) {
+        void this.drain();
+        return;
+      }
     }
-    return false;
   }
 
   /** The first ready request in arrival order, taken off the list. */
   private takeReadyRequest(): QueuedMessageTitleRequest | undefined {
-    const now = Date.now();
-    for (const [entryId, { request, readyAt }] of this.pending) {
-      if (readyAt > now) continue;
+    for (const [entryId, pending] of this.pending) {
+      if (!pending.ready) continue;
       this.pending.delete(entryId);
-      return request;
+      return pending.request;
     }
     return undefined;
-  }
-
-  private scheduleWake(): void {
-    this.clearWake();
-    if (this.closed || this.pending.size === 0) return;
-    let earliest = Number.POSITIVE_INFINITY;
-    for (const { readyAt } of this.pending.values()) earliest = Math.min(earliest, readyAt);
-    this.wake = setTimeout(() => {
-      this.wake = undefined;
-      this.kick();
-    }, Math.max(0, earliest - Date.now()));
-    this.wake.unref?.();
-  }
-
-  private clearWake(): void {
-    if (this.wake === undefined) return;
-    clearTimeout(this.wake);
-    this.wake = undefined;
   }
 
   private async drain(): Promise<void> {
@@ -351,7 +369,6 @@ export class QueuedMessageTitler {
       }
     } finally {
       this.running = false;
-      this.scheduleWake();
     }
   }
 
@@ -405,4 +422,11 @@ export class QueuedMessageTitler {
       return { result: { status: "failed", reason } };
     }
   }
+}
+
+function clearPendingTimers(pending: PendingTitle): void {
+  if (pending.settleTimer) clearTimeout(pending.settleTimer);
+  if (pending.deadlineTimer) clearTimeout(pending.deadlineTimer);
+  delete pending.settleTimer;
+  delete pending.deadlineTimer;
 }

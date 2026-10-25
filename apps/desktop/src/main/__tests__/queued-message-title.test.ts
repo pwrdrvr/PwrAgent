@@ -121,6 +121,23 @@ describe("queuedMessageTitleContext", () => {
     }
   });
 
+  it("falls back past a blank display name and never names a peer by its id", () => {
+    expect(queuedMessageTitleContext({
+      origins: [
+        { kind: "agent", sourceThread: { backend: "codex", threadId: "remote", title: "Rigging", instanceId: "peer-9f3c" as never } },
+        {
+          kind: "messaging",
+          messaging: {
+            platform: "telegram",
+            surface: { id: "chat", kind: "direct" as never },
+            actor: { platformUserId: "42", displayName: " ", username: "riley" },
+          },
+        },
+      ],
+      lookupTitle: () => undefined,
+    })).toEqual({ from: ["Rigging", "riley via telegram"] });
+  });
+
   it("is undefined when nothing is known", () => {
     expect(queuedMessageTitleContext({ origins: [], lookupTitle: () => undefined })).toBeUndefined();
   });
@@ -213,6 +230,22 @@ describe("QueuedMessageTitler", () => {
     await vi.advanceTimersByTimeAsync(QUEUED_MESSAGE_TITLE_SETTLE_MS);
     expect(generate).toHaveBeenCalledTimes(1);
     expect(generate.mock.calls[0]![0].prompt).toContain("message 5");
+  });
+
+  it("still names a batch that keeps growing once the deadline passes", async () => {
+    vi.useFakeTimers();
+    const generate = vi.fn<QueuedMessageTitlerOptions["generate"]>(
+      async () => ({ status: "ok", object: { title: "Steady stream" } }),
+    );
+    const titler = new QueuedMessageTitler({ generate, apply: () => true });
+
+    // A new message every two-thirds of a window, for well past the deadline.
+    for (let index = 1; index <= 12; index += 1) {
+      titler.request({ entryId: "stream", ...THREAD, source: `${LONG_TEXT}\nmessage ${index}` });
+      await vi.advanceTimersByTimeAsync((QUEUED_MESSAGE_TITLE_SETTLE_MS * 2) / 3);
+    }
+
+    expect(generate).toHaveBeenCalled();
   });
 
   it("skips a request whose entry moved on while earlier titles ran", async () => {
