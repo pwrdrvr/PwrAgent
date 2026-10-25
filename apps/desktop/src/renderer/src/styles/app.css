@@ -9156,7 +9156,7 @@ a.button {
    cross the window edge. */
 .thread-context-menu.thread-context-menu__flyout {
   position: absolute;
-  top: -6px;
+  top: -4px;
   left: calc(100% + 2px);
   min-width: 220px;
   max-width: 320px;
@@ -9167,6 +9167,10 @@ a.button {
 .thread-context-menu.thread-context-menu__flyout--start {
   left: auto;
   right: calc(100% + 2px);
+}
+
+.thread-context-menu__flyout .new-thread-menu__section-label {
+  padding-inline: 8px;
 }
 
 /* A machine row: the "New chat on" row (`.new-thread-menu__item--target`)
@@ -9188,7 +9192,7 @@ a.button {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
 }
 
 /* One line, so a long branch widens the flyout up to its cap and then
@@ -40895,18 +40899,32 @@ button.composer__subthread-source-parent:hover {
   right: 0;
   left: auto;
   min-width: min(204px, calc(100vw - 32px));
+  padding: 4px;
   overflow: visible;
 }
 
+/* An action menu, so it takes the thread context menu's native density
+   rather than the composer pickers' 40px option rows. Scoped to the menu so
+   every row in it, including "Use default for monitor suggestions", matches. */
+.composer-thread-options__menu .composer-dropdown__option {
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 16px;
+}
+
+.composer-thread-options__menu .composer-dropdown__separator {
+  margin: 4px 8px;
+}
+
 .composer-thread-options__option {
-  min-height: 34px;
   align-items: center;
   justify-content: space-between;
-  padding: 7px 10px;
 }
 
 .composer-thread-options__label {
-  font-weight: 650;
+  font-weight: 400;
 }
 
 /* "· this thread" beside a menu item whose per-thread override is set, so an
