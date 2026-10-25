@@ -20401,9 +20401,10 @@ export class DesktopBackendRegistry {
           mcpServers,
           // Directories attached to the thread, so Claude can work in them too.
           attachedDirectories: overlay?.extraLinkedDirectories,
-          shellEnvironment: overlay?.codexEnvironmentRuntime?.executionTarget === "local"
-            ? overlay.codexEnvironmentRuntime.shellEnvironment
-            : undefined,
+          shellEnvironment: setupVariablesForAgent(
+            overlay?.codexEnvironmentRuntime,
+            this.resolvePassSetupVariablesToAgentsFn(),
+          ),
           onSessionClosed: revokeConnections,
         });
         await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
