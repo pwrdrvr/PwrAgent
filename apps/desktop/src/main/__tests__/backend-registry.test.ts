@@ -43782,6 +43782,74 @@ script = "printf setup"
     }
   });
 
+  it("never titles a cross-thread message that steers straight into the running turn", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
+    const generate = vi.fn(async () => ({ status: "ok" as const, object: { title: "Nobody sees this" } }));
+    Object.assign(codexClient, { generateStructuredObject: generate });
+    const overlayStore = createOverlayStoreMock();
+    const recordHelper = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const registry = new DesktopBackendRegistry({
+      codexClient, overlayStore, threadTitleGenerationService: null, queuedMessageTitleSettleMs: 20,
+    });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active-recipient", turn: { id: "active-recipient" } },
+    } });
+    const steers = vi.spyOn(codexClient, "steerTurn")
+      .mockImplementation(async (params) => ({ threadId: params.threadId, turnId: params.expectedTurnId }));
+    const text = "Scope correction: they meant PR56, not PR64. Retract my PR64 presentation-update request and hold the render.";
+
+    await registry.submitTurn({ backend: "codex", threadId: "recipient", input: [{ type: "text", text }],
+      messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "director", title: "Image director" } },
+    });
+    await waitForCondition(() => steers.mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await registry.queuedMessageTitlesIdle();
+
+    expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]).toBeUndefined();
+    expect(generate).not.toHaveBeenCalled();
+    expect(recordHelper).not.toHaveBeenCalled();
+  });
+
+  it("titles a waiting cross-thread message with its sender and recipient, and no execution tools", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{ id: "recipient", title: "Train artist", titleSource: "explicit" as const, source: "codex" as const, linkedDirectories: [] }],
+    });
+    const generate = vi.fn(async (_params: { prompt: string; disableExecution?: boolean }) =>
+      ({ status: "ok" as const, object: { title: "Image director: hold PR64 render" } }));
+    Object.assign(codexClient, { generateStructuredObject: generate });
+    const registry = new DesktopBackendRegistry({
+      codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0,
+    });
+    onTestFinished(() => registry.close());
+    await discoverCodexBackendForTest(registry);
+    await registry.listThreads({ backend: "codex" });
+    await registry.publishLocalEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "recipient", turnId: "active", turn: { id: "active" } },
+    } });
+    // A huge message is capped; who sent it must survive the cap.
+    const text = `Hold the PR64 render. ${"Evidence line. ".repeat(1_000)}`;
+    try {
+      await registry.submitTurn({ backend: "codex", threadId: "recipient", queueEntryId: "from-director", delivery: "new_turn",
+        input: [{ type: "text", text }],
+        messageOrigin: { kind: "agent", sourceThread: { backend: "codex", threadId: "director", title: "Image director" } },
+      });
+      await registry.queuedMessageTitlesIdle();
+
+      expect(generate).toHaveBeenCalledTimes(1);
+      const params = generate.mock.calls[0]![0];
+      expect(params.disableExecution).toBe(true);
+      expect(params.prompt).toContain(JSON.stringify({ from: ["Image director"], to: "Train artist" }));
+      expect(params.prompt.length).toBeLessThan(10_000);
+      expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]?.[0]?.title)
+        .toBe("Image director: hold PR64 render");
+    } finally {
+      registry.cancelQueuedTurn("from-director");
+    }
+  });
+
   it("titles a long queued message once and drops a title the input outgrew", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -43795,7 +43863,7 @@ script = "printf setup"
     ).generateStructuredObject = (request) => new Promise((resolve) => {
       helperTurns.push({ prompt: request.prompt, resolve: (title) => resolve({ status: "ok", object: { title } }) });
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
     onTestFinished(() => registry.close());
     await discoverCodexBackendForTest(registry);
     const events: AgentEvent[] = [];
@@ -43875,7 +43943,7 @@ script = "printf setup"
         tokenUsage: { inputTokens: 100 * run, cachedInputTokens: 20, outputTokens: 10, totalTokens: 100 * run + 10 },
       }) });
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
     onTestFinished(() => registry.close());
     await discoverCodexBackendForTest(registry);
     const events: AgentEvent[] = [];
@@ -43963,7 +44031,7 @@ script = "printf setup"
     (
       codexClient as unknown as { generateStructuredObject: () => Promise<unknown> }
     ).generateStructuredObject = async () => results.shift();
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore, threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
     onTestFinished(() => registry.close());
     await discoverCodexBackendForTest(registry);
     await registry.publishLocalEvent({ backend: "codex", notification: {
@@ -44002,7 +44070,7 @@ script = "printf setup"
     ).generateStructuredObject = (request) => new Promise((resolve) => {
       helperTurns.push({ prompt: request.prompt, resolve: (title) => resolve({ status: "ok", object: { title } }) });
     });
-    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null, queuedMessageTitleSettleMs: 0 });
     onTestFinished(() => registry.close());
     await discoverCodexBackendForTest(registry);
     const events: AgentEvent[] = [];
