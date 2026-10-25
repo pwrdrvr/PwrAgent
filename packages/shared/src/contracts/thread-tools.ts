@@ -328,7 +328,47 @@ export type ThreadPullRequestAutomationStatus = {
   guidance: string;
 };
 
-export type ThreadPullRequestWatchEvent = "success" | "failure";
+/**
+ * `success` and `failure` are CI outcomes at the watched head. `merged` and
+ * `closed` are terminal outcomes: they wake the thread when the PR is merged
+ * or closed without merge, whatever CI does first.
+ */
+export type ThreadPullRequestWatchEvent =
+  | "success"
+  | "failure"
+  | "merged"
+  | "closed";
+
+/** CI watches end at a head; terminal watches end at merge or close. */
+export type ThreadPullRequestWatchKind = "checks" | "terminal";
+
+/**
+ * How a merged PR landed. Forges do not report this directly, so PwrAgent
+ * infers it from the merge commit and says `unknown` when the evidence is
+ * ambiguous. `mergeMethodEvidence` names the evidence either way.
+ */
+export type PullRequestMergeMethod = "merge" | "squash" | "rebase" | "unknown";
+
+export type PullRequestTerminalDetails = {
+  outcome: "merged" | "closed";
+  prKey: string;
+  prUrl: string;
+  prNumber: number;
+  prTitle?: string;
+  baseBranch?: string;
+  headSha?: string;
+  mergeMethod?: PullRequestMergeMethod;
+  mergeMethodEvidence?: string;
+  mergeCommitSha?: string;
+  mergedBy?: string;
+  /** ISO-8601. */
+  mergedAt?: string;
+  closedBy?: string;
+  /** ISO-8601. */
+  closedAt?: string;
+  /** Set when the forge lookup failed and only cached status was available. */
+  detailsUnavailableReason?: string;
+};
 
 export type WatchThreadPullRequestToolArgs = {
   /** Defaults to the invoking PwrAgent thread's backend when omitted. */
@@ -337,7 +377,10 @@ export type WatchThreadPullRequestToolArgs = {
   threadId?: ThreadIdentifier;
   /** Full PR/MR URL. Omit only when the thread has exactly one attached PR. */
   url?: string;
-  /** Events that should wake the thread. Defaults to both success and failure. */
+  /**
+   * Events that should wake the thread. Defaults to both success and failure.
+   * Add merged and/or closed to also wake when the PR reaches a terminal state.
+   */
   notifyOn?: ThreadPullRequestWatchEvent[];
 };
 
@@ -349,15 +392,23 @@ export type ThreadPullRequestWatchSummary = {
   prUrl: string;
   prNumber: number;
   prTitle?: string;
+  /** For a terminal watch, the head when it was requested. It does not bind the watch. */
   headSha: string;
   notifyOn: ThreadPullRequestWatchEvent[];
   createdAt: number;
   failureHandledByAutoFix: boolean;
+  /** Absent on rows written before terminal watches existed: those are `checks`. */
+  kind?: ThreadPullRequestWatchKind;
 };
 
 export type WatchThreadPullRequestResult = {
+  /** The CI watch, when success or failure was requested. */
   watch?: ThreadPullRequestWatchSummary;
+  /** The merge/close watch, when merged or closed was requested. */
+  terminalWatch?: ThreadPullRequestWatchSummary;
   currentOutcome?: ThreadPullRequestWatchEvent;
+  /** Present when the PR is already merged or closed. */
+  terminal?: PullRequestTerminalDetails;
   coveredByAutoFix: ThreadPullRequestWatchEvent[];
   prAutomation: ThreadPullRequestAutomationStatus;
 };
