@@ -65395,3 +65395,672 @@ describe("DesktopBackendRegistry workspace recovery", () => {
     }
   });
 });
+
+describe("DesktopBackendRegistry agent-created thread environments", () => {
+  const ENVIRONMENT_TOML = `
+version = 1
+name = "PwrAgent"
+
+[setup]
+script = "pnpm install"
+
+[[actions]]
+name = "Dev"
+command = "pnpm dev"
+`;
+
+  async function environmentProject(prefix: string) {
+    const root = await mkdtemp(path.join(os.tmpdir(), prefix));
+    const repoPath = path.join(root, "repo");
+    const worktreePath = path.join(root, "worktree");
+    try {
+      await mkdir(repoPath, { recursive: true });
+      await git(repoPath, ["init", "-b", "main"]);
+    } catch {
+      await git(repoPath, ["init"]);
+      await git(repoPath, ["checkout", "-b", "main"]);
+    }
+    await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, ["commit", "-m", "initial"]);
+    // The worktree is a checkout of the repository, so both carry the config.
+    for (const directory of [repoPath, worktreePath]) {
+      await mkdir(path.join(directory, ".codex", "environments"), { recursive: true });
+      await writeFile(
+        path.join(directory, ".codex", "environments", "pwragent.toml"),
+        ENVIRONMENT_TOML,
+        "utf8",
+      );
+    }
+    return { root, repoPath, worktreePath };
+  }
+
+  function claudeFixtureOptions(root: string, optionsSeen: ClaudeOptions[]) {
+    return {
+      store: new ClaudeSessionStore(path.join(root, "sessions")),
+      getSessionInfo: vi.fn().mockResolvedValue(undefined),
+      inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
+      discoverModels: async () => [{ id: "fable", label: "Fable 5.1", current: true }],
+      query: ({ options = {} }: { options?: ClaudeOptions }) => {
+        optionsSeen.push(options);
+        async function* messages(): AsyncGenerator<ClaudeMessage> {
+          yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+          yield { type: "result", subtype: "success", is_error: false, result: "Done" } as ClaudeMessage;
+        }
+        return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+      },
+    };
+  }
+
+  async function environmentHandoffFixture(params: {
+    prefix: string;
+    sourceRuntime?: CodexThreadEnvironmentRuntime;
+    commandRunner?: (worktreePath: string) => CodexEnvironmentCommandRunner;
+  }) {
+    const project = await environmentProject(params.prefix);
+    const { root, repoPath, worktreePath } = project;
+    const commandRunner = vi.fn(params.commandRunner?.(worktreePath) ?? (async () => ({
+      durationMs: 5,
+      exitCode: 0,
+      output: "installed",
+      shellEnvironment: {
+        PATH: `${worktreePath}/node_modules/.bin:/usr/bin`,
+        NVM_DIR: "/fixture/nvm",
+      },
+    })));
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: worktreePath,
+      repositoryPath: repoPath,
+      workMode: "worktree" as const,
+    }));
+    const linkedDirectory = {
+      id: expectedDir(repoPath),
+      kind: "local" as const,
+      label: "repo",
+      path: expectedDir(repoPath),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [
+        {
+          id: "ordinary-thread",
+          title: "Parent Thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [linkedDirectory],
+          updatedAt: 1000,
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:ordinary-thread": {
+          backend: "codex",
+          threadId: "ordinary-thread",
+          executionMode: "full-access",
+          ...(params.sourceRuntime ? { codexEnvironmentRuntime: params.sourceRuntime } : {}),
+          extraLinkedDirectories: [linkedDirectory],
+        },
+      },
+    });
+    const claudeOptionsSeen: ClaudeOptions[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      codexEnvironmentCommandRunner: commandRunner,
+      gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async (cwd: string) => ({
+          kind: "worktree" as const,
+          branch: cwd === worktreePath ? "HEAD" : "main",
+          hasCommits: true,
+          headHasCommit: true,
+          worktreeCreationAvailable: true,
+        })),
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+        resolvePrimaryWorkspacePath: vi.fn(async (cwd: string) => cwd),
+      } as never,
+      overlayStore,
+      pdfToolMcpServer: null,
+      threadTitleGenerationService: null,
+      claudeBackendOptions: claudeFixtureOptions(root, claudeOptionsSeen),
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: { threadId: "ordinary-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+      },
+    });
+    const handoff = async (args: Record<string, unknown>) => {
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId: "call-1",
+          requestId: "call-1",
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: { task: "Fix the recorder crash.", workspaceMode: "new_worktree", ...args },
+        },
+      } as AppServerPendingRequestNotification);
+      return {
+        response,
+        payload: JSON.parse(
+          (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
+        ),
+      };
+    };
+    const cleanup = async () => {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    };
+    return {
+      ...project,
+      claudeOptionsSeen,
+      cleanup,
+      codexClient,
+      commandRunner,
+      handoff,
+      overlayStore,
+      prepareLaunchpadWorkspace,
+      registry,
+    };
+  }
+
+  const parentRuntime = (cwd: string): CodexThreadEnvironmentRuntime => ({
+    environmentId: "pwragent",
+    environmentName: "PwrAgent",
+    executionTarget: "local",
+    cwd,
+    setupStatus: "completed",
+    setupCommand: "pnpm install",
+    shellEnvironment: { PATH: `${cwd}/node_modules/.bin:/usr/bin` },
+  });
+
+  it("runs a named environment's setup in a Claude handoff child's new worktree", async () => {
+    const fixture = await environmentHandoffFixture({ prefix: "pwragent-handoff-env-claude-" });
+    try {
+      const { response, payload } = await fixture.handoff({ backend: "claude", environment: "PwrAgent" });
+
+      expect(response).toMatchObject({ success: true });
+      expect(fixture.commandRunner).toHaveBeenCalledTimes(1);
+      expect(fixture.commandRunner).toHaveBeenCalledWith(expect.objectContaining({
+        cwd: fixture.worktreePath,
+        command: "pnpm install",
+        captureShellEnvironment: true,
+      }));
+      expect(payload.backend).toBe("claude");
+      expect(payload.environment).toEqual({
+        source: "requested",
+        requested: "PwrAgent",
+        environmentId: "pwragent",
+        environmentName: "PwrAgent",
+        setup: "completed",
+        setupExitCode: 0,
+        setupDurationMs: 5,
+        message: "Started with environment PwrAgent (pwragent). Setup completed in the child's workspace.",
+      });
+      await expect(fixture.overlayStore.getThreadOverlayState({
+        backend: "claude",
+        threadId: payload.threadId,
+      })).resolves.toMatchObject({
+        codexEnvironmentRuntime: {
+          environmentId: "pwragent",
+          cwd: fixture.worktreePath,
+          setupStatus: "completed",
+          actions: [expect.objectContaining({ id: "dev", command: "pnpm dev" })],
+          shellEnvironment: { NVM_DIR: "/fixture/nvm" },
+        },
+      });
+      // The child's Claude process runs with the toolchain setup captured.
+      await vi.waitFor(() => expect(fixture.claudeOptionsSeen).toHaveLength(1));
+      expect(fixture.claudeOptionsSeen[0]!.cwd).toBe(fixture.worktreePath);
+      expect(fixture.claudeOptionsSeen[0]!.env).toMatchObject({
+        NVM_DIR: "/fixture/nvm",
+        PATH: `${fixture.worktreePath}/node_modules/.bin:/usr/bin`,
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("gives a same-project Claude child the parent's environment when none is named", async () => {
+    const fixture = await environmentHandoffFixture({ prefix: "pwragent-handoff-env-inherit-" });
+    await fixture.overlayStore.setThreadCodexEnvironmentRuntime!({
+      backend: "codex",
+      threadId: "ordinary-thread",
+      codexEnvironmentRuntime: parentRuntime(fixture.repoPath),
+    });
+    try {
+      const { payload } = await fixture.handoff({ backend: "claude" });
+
+      expect(fixture.commandRunner).toHaveBeenCalledWith(expect.objectContaining({
+        cwd: fixture.worktreePath,
+        command: "pnpm install",
+      }));
+      expect(payload.environment).toMatchObject({
+        source: "inherited",
+        environmentId: "pwragent",
+        setup: "completed",
+      });
+      expect(payload.environment.requested).toBeUndefined();
+      await expect(fixture.overlayStore.getThreadOverlayState({
+        backend: "claude",
+        threadId: payload.threadId,
+      })).resolves.toMatchObject({
+        codexEnvironmentRuntime: { environmentId: "pwragent", cwd: fixture.worktreePath },
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("does not give a cross-project child the parent's environment", async () => {
+    const fixture = await environmentHandoffFixture({ prefix: "pwragent-handoff-env-cross-" });
+    const other = await environmentProject("pwragent-handoff-env-other-");
+    await fixture.overlayStore.setThreadCodexEnvironmentRuntime!({
+      backend: "codex",
+      threadId: "ordinary-thread",
+      codexEnvironmentRuntime: parentRuntime(fixture.repoPath),
+    });
+    try {
+      const { payload } = await fixture.handoff({ backend: "claude", cwd: other.repoPath });
+
+      expect(fixture.commandRunner).not.toHaveBeenCalled();
+      expect(payload.environment).toEqual({
+        source: "none",
+        message: "Started with no environment.",
+      });
+    } finally {
+      await fixture.cleanup();
+      await rm(other.root, { recursive: true, force: true });
+    }
+  });
+
+  it("starts a handoff child with no environment when environment is none", async () => {
+    const fixture = await environmentHandoffFixture({ prefix: "pwragent-handoff-env-none-" });
+    await fixture.overlayStore.setThreadCodexEnvironmentRuntime!({
+      backend: "codex",
+      threadId: "ordinary-thread",
+      codexEnvironmentRuntime: parentRuntime(fixture.repoPath),
+    });
+    try {
+      const { payload } = await fixture.handoff({ environment: "none" });
+
+      expect(fixture.commandRunner).not.toHaveBeenCalled();
+      expect(fixture.codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toBeUndefined();
+      expect(payload.inheritedSettings.codexEnvironmentRuntime).toBeUndefined();
+      expect(payload.environment).toEqual({
+        source: "none",
+        requested: "none",
+        message: "Started with no environment.",
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("runs a named environment's setup before a Codex handoff child starts", async () => {
+    const fixture = await environmentHandoffFixture({ prefix: "pwragent-handoff-env-codex-" });
+    try {
+      const { payload } = await fixture.handoff({ environment: "pwragent" });
+
+      expect(fixture.codexClient.lastStartThreadParams?.codexEnvironmentRuntime).toMatchObject({
+        environmentId: "pwragent",
+        cwd: fixture.worktreePath,
+        setupStatus: "completed",
+        shellEnvironment: { NVM_DIR: "/fixture/nvm" },
+      });
+      expect(payload.environment).toMatchObject({
+        source: "requested",
+        requested: "pwragent",
+        environmentId: "pwragent",
+        setup: "completed",
+      });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("runs a named environment's setup in a same-workspace child", async () => {
+    const fixture = await environmentHandoffFixture({ prefix: "pwragent-handoff-env-local-" });
+    try {
+      const { payload } = await fixture.handoff({
+        environment: "PwrAgent",
+        workspaceMode: "project_local",
+      });
+
+      expect(fixture.prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+      expect(fixture.commandRunner).toHaveBeenCalledWith(expect.objectContaining({
+        // The project checkout comes from the linked directory, which is
+        // stored forward-slash normalized on every platform.
+        cwd: expectedDir(fixture.repoPath),
+        command: "pnpm install",
+      }));
+      expect(payload.environment).toMatchObject({ source: "requested", setup: "completed" });
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps an environment from an ACP child whose agent cannot load a session", async () => {
+    const { root, repoPath, worktreePath } = await environmentProject("pwragent-handoff-env-acp-");
+    const commandRunner = vi.fn(async () => ({ durationMs: 5, exitCode: 0, output: "installed" }));
+    const linkedDirectory = {
+      id: expectedDir(repoPath),
+      kind: "local" as const,
+      label: "repo",
+      path: expectedDir(repoPath),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [{
+        id: "ordinary-thread",
+        title: "Parent Thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [linkedDirectory],
+        updatedAt: 1000,
+      }],
+    });
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      codexClient,
+      codexEnvironmentCommandRunner: commandRunner,
+      runtimeCapabilities: { agentCapabilities: { loadSession: false } } as BackendAcpRuntimeCapabilities,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "full-access",
+            codexEnvironmentRuntime: parentRuntime(repoPath),
+            extraLinkedDirectories: [linkedDirectory],
+          },
+        },
+      }),
+      gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async () => ({
+          kind: "worktree" as const,
+          branch: "main",
+          hasCommits: true,
+          headHasCommit: true,
+          worktreeCreationAvailable: true,
+        })),
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+        resolvePrimaryWorkspacePath: vi.fn(async (cwd: string) => cwd),
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: { threadId: "ordinary-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+      },
+    });
+    const handoff = async (callId: string, args: Record<string, unknown>) => {
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId,
+          requestId: callId,
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: { task: "Fix the recorder crash.", backend: acpBackendId, ...args },
+        },
+      } as AppServerPendingRequestNotification);
+      return JSON.parse((response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
+    };
+    try {
+      await expect(handoff("call-named", { environment: "PwrAgent" })).resolves.toEqual({
+        code: "invalid_arguments",
+        message: `backend="${acpBackendId}" cannot start with an environment, because its agent cannot reload a session. Pass environment="none", or choose another backend.`,
+      });
+
+      // Inheriting would fail the child's first turn, so the child starts without it.
+      const inherited = await handoff("call-inherited", {});
+      expect(commandRunner).not.toHaveBeenCalled();
+      expect(inherited.inheritedSettings.codexEnvironmentRuntime).toBeUndefined();
+      expect(inherited.environment).toEqual({
+        source: "none",
+        message: `Started with no environment: backend="${acpBackendId}" cannot start with an environment, because its agent cannot reload a session.`,
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("rejects an unknown handoff environment before creating a child", async () => {
+    const fixture = await environmentHandoffFixture({ prefix: "pwragent-handoff-env-unknown-" });
+    try {
+      const { response, payload } = await fixture.handoff({ environment: "Docs" });
+
+      expect(response).toMatchObject({ success: false });
+      expect(payload).toEqual({
+        code: "invalid_arguments",
+        message:
+          'Environment "Docs" is not defined in repo. Available environments: PwrAgent (pwragent). Pass environment="none" to start without one.',
+      });
+      expect(fixture.prepareLaunchpadWorkspace).not.toHaveBeenCalled();
+      expect(fixture.codexClient.lastStartThreadParams).toBeUndefined();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("reports a failed handoff environment setup in the tool response", async () => {
+    const fixture = await environmentHandoffFixture({
+      prefix: "pwragent-handoff-env-failed-",
+      commandRunner: () => async () => {
+        throw new CodexEnvironmentCommandError("Codex environment command exited with 1", {
+          durationMs: 7,
+          exitCode: 1,
+          output: "ERR_PNPM_NO_LOCKFILE",
+        });
+      },
+    });
+    try {
+      const { response, payload } = await fixture.handoff({ backend: "claude", environment: "PwrAgent" });
+
+      expect(response).toMatchObject({ success: true });
+      expect(payload.codexEnvironmentStartupFailure).toMatchObject({ phase: "setup" });
+      expect(payload.environment).toMatchObject({
+        source: "requested",
+        environmentId: "pwragent",
+        setup: "failed",
+        setupExitCode: 1,
+        setupOutputTail: "ERR_PNPM_NO_LOCKFILE",
+      });
+      expect(payload.environment.message).toMatch(/^Environment PwrAgent \(pwragent\) setup failed/);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("starts a Claude launchpad thread with its environment set up in the new worktree", async () => {
+    const { root, repoPath, worktreePath } = await environmentProject("pwragent-claude-launchpad-env-");
+    const commandRunner = vi.fn(async () => ({
+      durationMs: 5,
+      exitCode: 0,
+      output: "installed",
+      shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" },
+    }));
+    const optionsSeen: ClaudeOptions[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      codexEnvironmentCommandRunner: commandRunner,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      threadTitleGenerationService: null,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+      claudeBackendOptions: claudeFixtureOptions(root, optionsSeen),
+    });
+    try {
+      const response = await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${repoPath}`,
+        launchpad: {
+          directoryKey: `directory:${repoPath}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: repoPath,
+          backend: "claude",
+          executionMode: "default",
+          prompt: "Fix the recorder crash.",
+          workMode: "worktree",
+          codexEnvironmentId: "pwragent",
+          codexEnvironmentExecutionTarget: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(commandRunner).toHaveBeenCalledWith(expect.objectContaining({
+        cwd: worktreePath,
+        command: "pnpm install",
+      }));
+      expect(response).toMatchObject({
+        backend: "claude",
+        workMode: "worktree",
+        codexEnvironmentRuntime: { environmentId: "pwragent", cwd: worktreePath, setupStatus: "completed" },
+      });
+      expect(response.turnId).toEqual(expect.any(String));
+      await vi.waitFor(() => expect(optionsSeen).toHaveLength(1));
+      expect(optionsSeen[0]!.cwd).toBe(worktreePath);
+      expect(optionsSeen[0]!.env).toMatchObject({ NVM_DIR: "/fixture/nvm", PATH: "/fixture/node/bin:/usr/bin" });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("starts an ACP launchpad thread's first turn with its environment's shell variables", async () => {
+    const { root, repoPath, worktreePath } = await environmentProject("pwragent-acp-launchpad-env-");
+    const commandRunner = vi.fn(async () => ({
+      durationMs: 5,
+      exitCode: 0,
+      output: "installed",
+      shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" },
+    }));
+    const { acpBackendId, registry, startPrompt } = createKimiAcpRegistry({
+      codexEnvironmentCommandRunner: commandRunner,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      },
+    });
+    const prepareSessionEnvironment = vi
+      .spyOn(
+        (registry as unknown as { acpBackend: { prepareSessionEnvironment: (...args: unknown[]) => Promise<void> } }).acpBackend,
+        "prepareSessionEnvironment",
+      )
+      .mockResolvedValue(undefined);
+    try {
+      const response = await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${repoPath}`,
+        launchpad: {
+          directoryKey: `directory:${repoPath}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: repoPath,
+          backend: acpBackendId,
+          executionMode: "default",
+          prompt: "Fix the recorder crash.",
+          workMode: "worktree",
+          codexEnvironmentId: "pwragent",
+          codexEnvironmentExecutionTarget: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(commandRunner).toHaveBeenCalledWith(expect.objectContaining({ cwd: worktreePath }));
+      expect(response.codexEnvironmentRuntime).toMatchObject({ environmentId: "pwragent", cwd: worktreePath });
+      expect(response.turnId).toEqual(expect.any(String));
+      expect(prepareSessionEnvironment).toHaveBeenCalledWith(
+        acpBackendId,
+        response.threadId,
+        { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" },
+      );
+      expect(startPrompt).toHaveBeenCalled();
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("resolves an environment name on the owner when a launchpad request names one", async () => {
+    const { root, repoPath, worktreePath } = await environmentProject("pwragent-launchpad-env-selector-");
+    const commandRunner = vi.fn(async () => ({ durationMs: 5, exitCode: 0, output: "installed" }));
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: worktreePath,
+      repositoryPath: repoPath,
+      workMode: "worktree" as const,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ initializeResult: { methods: ["thread/start", "turn/start"] } }),
+      codexEnvironmentCommandRunner: commandRunner,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      threadTitleGenerationService: null,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+    const launchpad = {
+      directoryKey: `directory:${repoPath}`,
+      directoryKind: "directory" as const,
+      directoryLabel: "repo",
+      directoryPath: repoPath,
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "worktree" as const,
+      // An older owner reads only this field and matches it as an id.
+      codexEnvironmentId: "PwrAgent",
+      codexEnvironmentExecutionTarget: "local" as const,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    try {
+      await expect(registry.materializeDirectoryLaunchpad({
+        directoryKey: launchpad.directoryKey,
+        launchpad,
+        codexEnvironmentSelector: "PwrAgent",
+      })).resolves.toMatchObject({
+        codexEnvironmentRuntime: { environmentId: "pwragent", cwd: worktreePath, setupStatus: "completed" },
+      });
+
+      await expect(registry.materializeDirectoryLaunchpad({
+        directoryKey: launchpad.directoryKey,
+        launchpad: { ...launchpad, codexEnvironmentId: "Docs" },
+        codexEnvironmentSelector: "Docs",
+      })).rejects.toThrow(
+        'Environment "Docs" is not defined in repo. Available environments: PwrAgent (pwragent). Pass environment="none" to start without one.',
+      );
+      expect(prepareLaunchpadWorkspace).toHaveBeenCalledTimes(1);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+});

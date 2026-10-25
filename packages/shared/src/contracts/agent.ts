@@ -76,6 +76,39 @@ export type CodexEnvironmentStartupFailure = {
   worktreeCleanupAvailable: boolean;
 };
 
+/** Reserved environment selector that starts a thread with no environment. */
+export const THREAD_ENVIRONMENT_NONE = "none";
+
+/**
+ * The environment an agent-created thread started with, and how its setup
+ * went in that thread's workspace.
+ */
+export type CreatedThreadEnvironmentReport = {
+  /**
+   * `requested`: the caller named it. `inherited`: the parent thread's
+   * selection, in the same project. `project`: the project's new-thread
+   * preset. `none`: the thread has no environment.
+   */
+  source: "requested" | "inherited" | "project" | "none";
+  /** The caller's id or name, as given. */
+  requested?: string;
+  environmentId?: string;
+  environmentName?: string;
+  /**
+   * Absent when there is no environment. `completed` and `failed` describe a
+   * setup that ran in the thread's workspace. `reused`: setup did not run
+   * again, and the thread reuses the parent's setup. `skipped`: there is no setup
+   * script, or the environment runs remotely. `not_applied`: the owner did
+   * not apply the requested environment.
+   */
+  setup?: "completed" | "failed" | "reused" | "skipped" | "not_applied";
+  setupExitCode?: number;
+  setupDurationMs?: number;
+  /** The end of the setup output, when setup failed. */
+  setupOutputTail?: string;
+  message: string;
+};
+
 export type ThreadAutoPinFailure = {
   message: string;
 };
@@ -1065,6 +1098,13 @@ export type MaterializeDirectoryLaunchpadRequest = {
    * threads starting in one directory do not share one progress stream.
    */
   codexEnvironmentSetupProgressKey?: string;
+  /**
+   * An environment id or name for the owner to resolve against its own
+   * project config, replacing the draft's `codexEnvironmentId`. The owner
+   * rejects one it cannot resolve before preparing a workspace. Owners that
+   * predate this field ignore it and match the draft's id.
+   */
+  codexEnvironmentSelector?: string;
 };
 
 export type MaterializedDirectoryLaunchpadThread = {

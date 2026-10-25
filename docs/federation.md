@@ -403,6 +403,18 @@ pass `backend` and `model` to `create_instance_thread` without guessing. If
 the instance cannot list its backends, the projects still return and
 `backendsError` says why.
 
+`create_instance_thread` and `handoff_task` accept an `environment`: an id or
+name from the project's `.codex/environments/*.toml`, or `none`. The owning
+instance resolves it against its own copy of the project, as
+`codexEnvironmentSelector` on `materializeDirectoryLaunchpad`, and rejects an
+unknown one before preparing a workspace. The tool also writes the value into
+the draft's `codexEnvironmentId`, so an owner that predates the selector still
+applies an environment named by id. Omitted, a child in the caller's own
+project on the same instance inherits the caller's environment. Otherwise a
+`create_instance_thread` child keeps its project's preset, and a
+cross-project `handoff_task` child has none. Each result has an `environment` field that
+names the environment and its setup outcome, including a failed setup.
+
 Prefer `steer_thread` for cross-thread guidance. Both it and the default
 `send_message_to_thread` delivery group pending guidance at the recipient into
 one queued steer, preserving each sender, receipt time, and complete input.

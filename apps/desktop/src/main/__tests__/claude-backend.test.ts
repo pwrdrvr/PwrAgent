@@ -1909,6 +1909,41 @@ describe("Claude SDK backend", () => {
     expect(firstGrants).toHaveBeenCalledOnce();
   });
 
+  it("relaunches with a newly set environment once no task would stop with the process", async () => {
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      if (options.resume) {
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "built", content: [{ type: "text", text: "Built." }] } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "Built." } as SDKMessage;
+        return;
+      }
+      yield { type: "system", subtype: "task_started", task_id: "task-1", description: "sleep", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "waiting", content: [{ type: "text", text: "Waiting." }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "task-1", status: "completed", output_file: "", summary: "done" } as SDKMessage;
+      await new Promise<void>((resolve) => {
+        options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    const backend = new ClaudeBackend({ ...f.backendOptions, taskFollowUpGraceMs: 60_000 });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
+    await f.waitForTurn();
+    await vi.waitFor(() => expect(backend.listBackgroundTasks(threadId).terminals).toEqual([]));
+    expect(f.queries[0]!.env?.NVM_DIR).not.toBe("/fixture/nvm");
+
+    // The operator picked an environment; only a new process takes its PATH.
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Build" }],
+      shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" } });
+    await f.waitForTurn();
+    expect(f.run).toHaveBeenCalledTimes(2);
+    expect(f.queries[1]).toMatchObject({
+      resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd",
+      env: expect.objectContaining({ PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" }),
+    });
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+  });
+
   it("runs a Plan turn in Claude's plan mode and shows its proposal as a plan card", async () => {
     const f = await fixture(async function* (options) {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
