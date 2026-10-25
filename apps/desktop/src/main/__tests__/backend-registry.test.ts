@@ -3350,6 +3350,66 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("keeps a Claude thread busy for quit while its session outlives the turn, and revokes MCP grants as it closes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-registry-"));
+    const events: AgentEvent[] = [];
+    const taskDone = Promise.withResolvers<void>();
+    const revokeBridge = vi.fn();
+    const registerBridge = vi.fn(async () => ({
+      server: { name: "fixture_gateway", command: "/fixture/bridge", args: ["--stdio"], env: {} },
+      bindThread: vi.fn(), revoke: revokeBridge,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      mcpConnectionService: { registerBridge },
+      pdfToolMcpServer: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(root, "sessions")),
+        getSessionInfo: vi.fn().mockResolvedValue(undefined),
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" }),
+        discoverModels: async () => [],
+        taskFollowUpGraceMs: 10,
+        query: ({ options = {} }) => {
+          async function* messages(): AsyncGenerator<ClaudeMessage> {
+            yield { type: "system", subtype: "init", session_id: options.sessionId ?? options.resume } as ClaudeMessage;
+            yield { type: "assistant", parent_tool_use_id: null, message: {
+              id: "launch", content: [{ type: "tool_use", id: "tool-bash", name: "Bash", input: { command: "pnpm dev", run_in_background: true } }],
+            } } as ClaudeMessage;
+            yield { type: "system", subtype: "task_started", task_id: "task-1", tool_use_id: "tool-bash",
+              description: "pnpm dev", task_type: "local_bash", is_backgrounded: true } as ClaudeMessage;
+            yield { type: "user", parent_tool_use_id: null, tool_use_result: { backgroundTaskId: "task-1" },
+              message: { content: [{ type: "tool_result", tool_use_id: "tool-bash", content: "Command running in background with ID: task-1" }] } } as ClaudeMessage;
+            yield { type: "assistant", parent_tool_use_id: null, message: { id: "started", content: [{ type: "text", text: "Started." }] } } as ClaudeMessage;
+            yield { type: "result", subtype: "success", is_error: false, result: "Started." } as ClaudeMessage;
+            await taskDone.promise;
+            yield { type: "system", subtype: "task_notification", task_id: "task-1", tool_use_id: "tool-bash",
+              status: "stopped", output_file: "", summary: "Stopped" } as ClaudeMessage;
+          }
+          return Object.assign(messages(), { close: vi.fn(), setPermissionMode: vi.fn() }) as unknown as ClaudeQuery;
+        },
+      },
+    });
+    registry.onEvent((event) => { events.push(event); });
+    try {
+      const { threadId } = await registry.startThread({ backend: "claude", cwd: root, executionMode: "default" });
+      await registry.setThreadMcpConnections({ backend: "claude", threadId, connectionIds: ["fixture-connection"] });
+      await registry.startTurn({ backend: "claude", threadId, input: [{ type: "text", text: "Start the dev server" }] });
+      await vi.waitFor(() => expect(events.some((event) => event.notification.method === "turn/completed")).toBe(true));
+      expect(registry.getActiveTurnForThread({ backend: "claude", threadId })).toBeUndefined();
+      expect(registry.getInProgressThreadSnapshotForQuit()).toMatchObject({ count: 1, threadIds: [`claude:${threadId}`] });
+      expect((await registry.listBackgroundTerminals({ backend: "claude", threadId })).terminals).toMatchObject([{ processId: "task-1" }]);
+      // The process still uses the connection the turn handed it.
+      expect(revokeBridge).not.toHaveBeenCalled();
+      taskDone.resolve();
+      await vi.waitFor(() => expect(revokeBridge).toHaveBeenCalledOnce());
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("checks service thread membership without trusting error-tolerant navigation inventory", async () => {
     const thread: AppServerThreadSummary = { id: "service-thread", title: "Preview", titleSource: "explicit", source: "codex", linkedDirectories: [] };
     const client = new MockBackendClient({ threads: [thread] });

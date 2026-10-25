@@ -8,7 +8,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerBackgroundTask, AppServerPendingRequestNotification, AppServerReviewContext,
-  AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay,
+  AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay,
   AppServerThreadReviewEntry, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
 } from "@pwragent/shared";
@@ -47,6 +47,8 @@ export type ClaudeBackendOptions = {
   cancelRequest: (threadId: string, turnId: string, requestId: string) => Promise<void>;
   /** Overrides CLAUDE_TASK_FOLLOW_UP_GRACE_MS. */
   taskFollowUpGraceMs?: number;
+  /** Overrides CLAUDE_INTERRUPT_GRACE_MS. */
+  interruptGraceMs?: number;
   /** Workspace, branch, and pull request for a review card. Never fails a review. */
   resolveReviewContext?: (params: { threadId: string; cwd: string }) => Promise<AppServerReviewContext | undefined>;
 };
@@ -77,11 +79,25 @@ function claudeExceptionMessage(error: unknown, stderr: string): string {
 }
 
 /**
- * How long a settled task may go unanswered before the turn ends without its
- * follow-up. Claude normally answers a task notification with a native turn
+ * How long a settled task may go unanswered before the session closes without
+ * its follow-up. Claude normally answers a task notification with a native turn
  * of its own; this bounds the wait when it does not.
  */
 const CLAUDE_TASK_FOLLOW_UP_GRACE_MS = 5_000;
+
+/**
+ * How long Stop waits for Claude to end an interrupted turn before ending it
+ * locally. The process stays up either way, for the tasks it runs.
+ */
+const CLAUDE_INTERRUPT_GRACE_MS = 5_000;
+
+/** The CLI drops queued messages along with the interrupted turn. */
+const CLAUDE_INTERRUPT_CANCEL_QUEUED = "interrupt_cancel_queued_v1";
+
+/** The SDK sends cancelQueued, which its declared signature omits. */
+type ClaudeInterruptQuery = Query & {
+  interrupt(options?: { cancelQueued?: boolean }): ReturnType<Query["interrupt"]>;
+};
 
 const CLAUDE_WAKE = Symbol("claude-wake");
 
@@ -94,6 +110,19 @@ const CLAUDE_TASK_SUBTYPES = new Set<string>([
 function claudeHasModelUsage(modelUsage: SDKResultMessage["modelUsage"] | undefined): modelUsage is SDKResultMessage["modelUsage"] {
   return Boolean(modelUsage) && Object.values(modelUsage!).some((value) =>
     value.inputTokens + value.outputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens > 0);
+}
+
+/** A promise settled from outside; `settled` says whether it has been. */
+type ClaudeDeferred = { promise: Promise<void>; resolve: () => void; settled: boolean };
+
+function claudeDeferred(): ClaudeDeferred {
+  let settle!: () => void;
+  const deferred: ClaudeDeferred = {
+    promise: new Promise<void>((resolve) => { settle = resolve; }),
+    resolve: () => { deferred.settled = true; settle(); },
+    settled: false,
+  };
+  return deferred;
 }
 
 function claudeWakeSignal(): { promise: Promise<typeof CLAUDE_WAKE>; wake: () => void } {
@@ -114,17 +143,19 @@ function claudeAccountKey(info: AccountInfo): string {
     .digest("hex").slice(0, 16);
 }
 
+/** One desktop turn: what the operator sees start and end. */
 type RunningTurn = {
   turnId: string;
   /** Claude turn ids are UUIDv4 and carry no time, so report the start. */
   startedAt: number;
-  controller: AbortController;
-  query?: Query;
-  done?: Promise<void>;
   entries: Map<string, AppServerThreadEntry>;
   started?: boolean;
-  contextWindow?: ClaudeSession["contextWindow"];
-  input: ClaudeInputStream;
+  /** Claude began this turn itself, answering a settled task. */
+  followUp?: boolean;
+  /**
+   * Input UUIDs no result has acknowledged yet: steers, and the prompt of a
+   * turn sent into a live session.
+   */
   pendingSteers: Set<string>;
   /** The SDK emits one assistant message per content block, sharing an id. */
   completedMessageText: Map<string, string>;
@@ -132,29 +163,74 @@ type RunningTurn = {
   pendingReports: Map<string, { report: ClaudeFindingsReport; model?: string; input: unknown }>;
   /** Some successful tools update existing state without adding transcript entries. */
   hasCompletedToolActivity: boolean;
-  inputWrites: Promise<void>;
   ending?: boolean;
-  /** One background context probe at a time; a request while it runs reruns it once. */
-  contextRefresh?: { promise: Promise<void>; again: boolean };
   titlePrompt?: string;
-  titleEnv?: NodeJS.ProcessEnv;
   /** Owned by the turn, but never awaited by the streaming message pump. */
   titleUpdate?: Promise<boolean>;
-  /**
-   * Shell commands and sub-agents this process runs. A background task
-   * outlives the native result that launched it, and closing the query kills
-   * it, so the logical turn stays open until every task has settled.
-   */
+  /** The latest native result; the turn reports it when it ends. */
+  lastResult?: SDKResultMessage;
+  lastResultSeq: number;
+  resultSummary?: Record<string, unknown>;
+  /** Why Claude says the turn failed, from a result or an assistant API error. */
+  resultFailure?: string;
+  /** Cumulative model totals when the turn began; the turn bills the rest. */
+  usageBaseline?: ClaudeSession["modelUsage"];
+  /** An old session with no baseline cannot attribute its first totals. */
+  needsUsageBaseline: boolean;
+  /** Stop interrupted Claude rather than ending the query, so the turn ends cancelled. */
+  interrupted?: boolean;
+  /** Claude did not answer the interrupt in time; the turn ends without it. */
+  abandoned?: boolean;
+  /** Settles once the turn has reported its end. */
+  ended: ClaudeDeferred;
+};
+
+/** What a live session was launched with, compared when a turn reuses it. */
+type ClaudeSessionConfig = {
+  model?: string;
+  effort?: Options["effort"];
+  permissionMode: NonNullable<Options["permissionMode"]>;
+  instructions?: string;
+  mcpServers?: Options["mcpServers"];
+  mcpKey: string;
+};
+
+/**
+ * One SDK query and CLI process per thread. A desktop turn ends at Claude's
+ * native result, but closing the query kills every background task, so the
+ * session stays open while a task runs and carries the turns that follow.
+ */
+type LiveSession = {
+  session: ClaudeSession;
+  controller: AbortController;
+  query?: Query;
+  done?: Promise<void>;
+  input: ClaudeInputStream;
+  inputWrites: Promise<void>;
+  config: ClaudeSessionConfig;
+  /** The desktop turn now open, if any. */
+  turn?: RunningTurn;
+  /** The latest desktop turn; a request between turns belongs to it. */
+  lastTurnId: string;
+  /** Released when the session closes, such as the turns' MCP grants. */
+  onClosed: (() => void)[];
+  closing?: boolean;
+  closed?: boolean;
+  contextWindow?: ClaudeSession["contextWindow"];
+  /** One background context probe at a time; a request while it runs reruns it once. */
+  contextRefresh?: { promise: Promise<void>; again: boolean };
+  titleEnv?: NodeJS.ProcessEnv;
+  /** Shell commands and sub-agents this process runs. */
   tasks: ClaudeTaskTracker;
   /** The rows last published through `thread/backgroundTasks/updated`. */
   publishedTasks: AppServerBackgroundTask[];
   publishedTaskKey: string;
+  /** Tool rows a task may still settle, with the desktop turn that shows them. */
+  toolRows: Map<string, { entry: AppServerThreadActivityEntry; turnId: string }>;
   /** Tool calls answered with a background placeholder and not yet settled. */
   launchedToolUseIds: Set<string>;
   /** Set at the first native init; a follow-up turn's init repeats it. */
   initialized?: boolean;
-  /** The latest native result; the logical turn reports it when it ends. */
-  lastResult?: SDKResultMessage;
   /** Message counters that order a result against task notifications. */
   messageSeq: number;
   lastResultSeq: number;
@@ -167,13 +243,48 @@ type RunningTurn = {
   followUpTimer?: ReturnType<typeof setTimeout>;
   /** The message counter at which the follow-up grace expired. */
   followUpWaivedAt?: number;
-  /** Keep only a bounded tail; emit it only when the turn fails. */
+  /** Keep only a bounded tail; emit it only when a turn fails. */
   stderr: string;
-  /** Why Claude says the turn failed, from a result or an assistant API error. */
-  resultFailure?: string;
+  /** Protocol features the CLI advertised at init. */
+  capabilities?: string[];
 };
 
-/** One input pump owns the SDK's stdin until the logical turn finishes. */
+/** A turn is already open for the thread, so the message must wait in the queue. */
+export class ClaudeTurnActiveError extends Error {}
+
+type ClaudeTurnParams = {
+  threadId: string; input: AppServerTurnInputItem[]; model?: string; reasoningEffort?: string;
+  executionMode?: ThreadExecutionMode; instructions?: string;
+  mcpServers?: Options["mcpServers"];
+};
+
+type ClaudeTurnStart = { backend: "claude"; threadId: string; turnId: string };
+
+const CLAUDE_EFFORTS = new Set<string>(["low", "medium", "high", "xhigh", "max"]);
+
+function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): ClaudeSessionConfig {
+  return {
+    model: params.model ?? session.thread.model,
+    effort: CLAUDE_EFFORTS.has(params.reasoningEffort ?? "") ? params.reasoningEffort as Options["effort"] : undefined,
+    permissionMode: claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default"),
+    instructions: params.instructions,
+    mcpServers: params.mcpServers,
+    mcpKey: JSON.stringify(params.mcpServers ?? {}),
+  };
+}
+
+/** A session read before the turn has no baseline yet; the caller sets it. */
+function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
+  return {
+    ended: claudeDeferred(),
+    turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), pendingSteers: new Set(),
+    completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, lastResultSeq: 0,
+    usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
+    ...(followUp ? { followUp, started: true } : {}),
+  };
+}
+
+/** One input pump owns the SDK's stdin until the live session closes. */
 class ClaudeInputStream {
   private readonly messages: SDKUserMessage[] = [];
   private wake?: () => void;
@@ -201,7 +312,14 @@ class ClaudeInputStream {
 
 export class ClaudeBackend {
   private readonly store: ClaudeSessionStore;
-  private readonly running = new Map<string, RunningTurn>();
+  private readonly sessions = new Map<string, LiveSession>();
+  /** Threads whose first turn is reading its session, before a query exists. */
+  private readonly starting = new Map<string, AbortController>();
+  /**
+   * Releases a relaunched session hands to its successor: the turn that
+   * relaunched it registered the thread's MCP grants again, sharing them.
+   */
+  private readonly carriedReleases = new Map<string, (() => void)[]>();
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   private discovery?: { models: boolean; promise: Promise<void> };
   private modelDiscovery?: Promise<void>;
@@ -322,7 +440,7 @@ export class ClaudeBackend {
   async listThreads(params: { archived?: boolean; filter?: string } = {}): Promise<AppServerThreadSummary[]> {
     const filter = params.filter?.toLowerCase();
     return (await this.store.list()).map(({ thread }) => ({
-      ...thread, threadStatus: this.running.has(thread.id) ? "active" as const : "idle" as const,
+      ...thread, threadStatus: this.sessions.get(thread.id)?.turn ? "active" as const : "idle" as const,
     })).filter((thread) => Boolean(thread.archivedAt) === Boolean(params.archived)
       && (!filter || thread.title.toLowerCase().includes(filter) || thread.id.includes(filter)));
   }
@@ -330,16 +448,19 @@ export class ClaudeBackend {
   async readThread(threadId: string): Promise<AppServerThreadReplay> {
     const session = await this.store.read(threadId);
     const entries = new Map((await this.store.entries(threadId)).map((entry) => [entry.id, entry]));
-    for (const entry of this.running.get(threadId)?.entries.values() ?? []) entries.set(entry.id, entry);
+    const live = this.sessions.get(threadId);
+    for (const entry of live?.turn?.entries.values() ?? []) entries.set(entry.id, entry);
+    // A task row that outlived its turn changes after that turn was saved.
+    for (const { entry } of live?.toolRows.values() ?? []) entries.set(entry.id, entry);
     const ordered = groupClaudeActivities([...entries.values()]);
     const messages = ordered.filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message");
     return {
       entries: ordered, messages,
-      contextWindow: this.running.get(threadId)?.contextWindow ?? session.contextWindow,
+      contextWindow: live?.contextWindow ?? session.contextWindow,
       lastUserMessage: messages.findLast((entry) => entry.role === "user")?.text,
       lastAssistantMessage: messages.findLast((entry) => entry.role === "assistant")?.text,
       pagination: { supportsPagination: false, hasPreviousPage: false },
-      threadStatus: this.running.has(threadId) ? "active" : "idle",
+      threadStatus: live?.turn ? "active" : "idle",
     };
   }
 
@@ -352,7 +473,9 @@ export class ClaudeBackend {
   }
 
   async setArchived(threadId: string, archived: boolean): Promise<void> {
-    if (this.running.has(threadId)) throw new Error("Interrupt the active Claude turn before archiving.");
+    const live = this.sessions.get(threadId);
+    if (live?.turn) throw new Error("Interrupt the active Claude turn before archiving.");
+    if (live) throw new Error("Stop Claude's background tasks before archiving.");
     const session = await this.store.read(threadId);
     session.thread.archivedAt = archived ? Date.now() : undefined;
     await this.store.save(session);
@@ -361,139 +484,302 @@ export class ClaudeBackend {
   async setExecutionMode(threadId: string, mode: ThreadExecutionMode): Promise<void> {
     // Relaunching at the next turn applies the mode through the SDK. During a
     // live turn use its control API and wait for acknowledgement before saving.
-    const running = this.running.get(threadId);
-    if (running && !running.query) throw new Error("Claude is starting. Wait for the turn to start before changing permissions.");
-    await running?.query?.setPermissionMode(claudePermissionMode(mode));
+    const live = this.sessions.get(threadId);
+    if (live && !live.query) throw new Error("Claude is starting. Wait for the turn to start before changing permissions.");
+    if (live?.query) {
+      const permissionMode = claudePermissionMode(mode);
+      await live.query.setPermissionMode(permissionMode);
+      live.config.permissionMode = permissionMode;
+    }
     const session = await this.store.read(threadId);
     session.thread.executionMode = mode;
     await this.store.save(session);
   }
 
-  async startTurn(params: {
-    threadId: string; input: AppServerTurnInputItem[]; model?: string; reasoningEffort?: string;
-    executionMode?: ThreadExecutionMode; instructions?: string;
-    mcpServers?: Options["mcpServers"];
-    onTurnFinished?: () => void;
-  }): Promise<{ backend: "claude"; threadId: string; turnId: string }> {
-    if (this.running.has(params.threadId)) throw new Error("A Claude turn is already active for this thread.");
-    const running: RunningTurn = {
-      turnId: randomUUID(), startedAt: Date.now(), controller: new AbortController(), entries: new Map(),
-      input: new ClaudeInputStream(), pendingSteers: new Set(), completedMessageText: new Map(), pendingReports: new Map(),
-      inputWrites: Promise.resolve(), stderr: "", hasCompletedToolActivity: false,
-      tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", launchedToolUseIds: new Set(),
-      messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0,
-      wake: claudeWakeSignal(),
-    };
-    this.running.set(params.threadId, running);
+  async startTurn(params: ClaudeTurnParams & {
+    /**
+     * Runs when the session the turn joins closes, which can be turns later.
+     * Always consumed, including when the turn does not start.
+     */
+    onSessionClosed?: () => void;
+  }): Promise<ClaudeTurnStart> {
+    const { onSessionClosed, ...turnParams } = params;
+    try {
+      return await this.startTurnInSession(turnParams);
+    } finally {
+      // A live session uses the thread's MCP grants, so it keeps them too.
+      if (onSessionClosed) this.releaseWithSession(params.threadId, onSessionClosed);
+      const carried = this.carriedReleases.get(params.threadId);
+      this.carriedReleases.delete(params.threadId);
+      for (const release of carried ?? []) this.releaseWithSession(params.threadId, release);
+    }
+  }
+
+  private releaseWithSession(threadId: string, release: () => void): void {
+    const live = this.sessions.get(threadId);
+    if (live && !live.closed) live.onClosed.push(release);
+    else release();
+  }
+
+  private async startTurnInSession(params: ClaudeTurnParams): Promise<ClaudeTurnStart> {
+    for (;;) {
+      const live = this.sessions.get(params.threadId);
+      if (live?.turn || (!live && this.starting.has(params.threadId))) {
+        throw new ClaudeTurnActiveError("A Claude turn is already active for this thread.");
+      }
+      if (!live) return await this.startSession(params);
+      if (live.closing) {
+        await live.done;
+        continue;
+      }
+      const started = await this.continueSession(live, params);
+      if (started) return started;
+    }
+  }
+
+  /** Launch a query for the thread, with this turn's message as its prompt. */
+  private async startSession(params: ClaudeTurnParams): Promise<ClaudeTurnStart> {
+    const { threadId } = params;
+    const controller = new AbortController();
+    this.starting.set(threadId, controller);
+    const turn = claudeTurn();
+    let live: LiveSession | undefined;
     try {
       const executable = await this.requireInstallation();
-      const session = await this.store.read(params.threadId);
+      const session = await this.store.read(threadId);
       if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
       const content = await claudeInput(params.input);
-      running.controller.signal.throwIfAborted();
-      const parts = claudeUserMessageParts(params.input);
-      const user: AppServerThreadMessageEntry = {
-        type: "message", id: `user:${running.turnId}`, role: "user",
-        text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n"),
-        parts,
-        createdAt: Date.now(), turn: { id: running.turnId, status: "in_progress", startedAt: running.startedAt },
+      controller.signal.throwIfAborted();
+      const current: LiveSession = live = {
+        session, controller, input: new ClaudeInputStream(), inputWrites: Promise.resolve(),
+        config: claudeSessionConfig(params, session), turn, lastTurnId: turn.turnId, onClosed: [],
+        tasks: new ClaudeTaskTracker(), publishedTasks: [], publishedTaskKey: "[]", toolRows: new Map(), launchedToolUseIds: new Set(),
+        messageSeq: 0, lastResultSeq: 0, lastActivitySeq: 0, lastNotificationSeq: 0, wake: claudeWakeSignal(), stderr: "",
       };
-      const firstPrompt = params.input.find((item) => item.type === "text" && item.text.trim());
-      running.titlePrompt = firstPrompt?.type === "text" ? firstPrompt.text : undefined;
-      if (session.thread.titleSource === "fallback" && firstPrompt?.type === "text") {
-        session.thread.title = firstPrompt.text.replace(/\s+/g, " ").trim().slice(0, 80);
-        session.thread.titleSource = "derived";
-        await this.store.save(session);
-        await this.emit({ method: "thread/name/updated", params: {
-          threadId: params.threadId, threadName: session.thread.title, titleSource: "derived",
-        } });
-      }
-      running.entries.set(user.id, user);
-      await this.store.append(params.threadId, [user]);
-      running.started = true;
-      await this.emit({ method: "turn/started", params: {
-        threadId: params.threadId, turn: { id: running.turnId, status: "in_progress", startedAt: running.startedAt },
-      } });
-      await this.emit({ method: "item/completed", params: {
-        threadId: params.threadId, turnId: running.turnId,
-        item: { id: user.id, type: "userMessage", text: user.text, content: parts },
-      } });
+      this.starting.delete(threadId);
+      this.sessions.set(threadId, current);
+      await this.beginTurn(current, turn, session, params.input);
       const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-      running.titleEnv = env;
-      const permissionMode = claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default");
+      controller.signal.throwIfAborted();
+      current.titleEnv = env;
+      const { config } = current;
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
         cwd: session.cwd,
-        ...(session.sdkSessionId ? { resume: session.sdkSessionId } : { sessionId: params.threadId }),
-        systemPrompt: { type: "preset", preset: "claude_code", ...(params.instructions ? { append: params.instructions } : {}) },
+        ...(session.sdkSessionId ? { resume: session.sdkSessionId } : { sessionId: threadId }),
+        systemPrompt: { type: "preset", preset: "claude_code", ...(config.instructions ? { append: config.instructions } : {}) },
         persistSession: true,
         ...(session.thread.titleSource === "explicit" ? { title: session.thread.title } : {}),
         includePartialMessages: true,
-        permissionMode,
+        permissionMode: config.permissionMode,
         // Enables an explicit Full Access selection through setPermissionMode;
         // the current permissionMode still governs every tool invocation.
         allowDangerouslySkipPermissions: true,
-        model: params.model ?? session.thread.model,
-        ...(["low", "medium", "high", "xhigh", "max"].includes(params.reasoningEffort ?? "")
-          ? { effort: params.reasoningEffort as Options["effort"] } : {}),
-        abortController: running.controller,
-        stderr: (data) => { running.stderr = (running.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
-        mcpServers: params.mcpServers,
+        model: config.model,
+        ...(config.effort ? { effort: config.effort } : {}),
+        abortController: controller,
+        stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
+        mcpServers: config.mcpServers,
         canUseTool: createClaudePermissionHandler({
-          threadId: params.threadId, turnId: running.turnId,
+          threadId, turnId: () => current.turn?.turnId ?? current.lastTurnId,
           request: this.options.request,
-          cancelRequest: (requestId) => this.options.cancelRequest(params.threadId, running.turnId, requestId),
+          cancelRequest: (requestId, turnId) => this.options.cancelRequest(threadId, turnId, requestId),
         }),
         onElicitation: createClaudeElicitationHandler({
-          threadId: params.threadId, turnId: running.turnId,
+          threadId, turnId: () => current.turn?.turnId ?? current.lastTurnId,
           request: this.options.request,
-          cancelRequest: (requestId) => this.options.cancelRequest(params.threadId, running.turnId, requestId),
+          cancelRequest: (requestId, turnId) => this.options.cancelRequest(threadId, turnId, requestId),
         }),
       };
       let releasePrompt!: () => void;
       const promptReady = new Promise<void>((resolve) => { releasePrompt = resolve; });
+      const input = current.input;
       async function* prompt(): AsyncIterable<SDKUserMessage> {
         await promptReady;
-        yield { type: "user", session_id: session.sdkSessionId ?? params.threadId, parent_tool_use_id: null, message: { role: "user", content } };
-        yield* running.input;
+        yield { type: "user", session_id: session.sdkSessionId ?? threadId, parent_tool_use_id: null, message: { role: "user", content } };
+        yield* input;
       }
-      running.query = (this.options.query ?? query)({ prompt: prompt(), options: sdkOptions });
+      current.query = (this.options.query ?? query)({ prompt: prompt(), options: sdkOptions });
       // Older PwrAgent metadata has no cost baseline. Read the official
       // session totals before releasing the prompt, so this turn cannot race
       // its own baseline. If unavailable, the first result seeds the next turn.
       try {
         if (session.sdkSessionId && !session.modelUsage) {
-          const usage = await claudeTelemetry(() => running.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
+          const usage = await claudeTelemetry(() => current.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
           if (usage?.session?.model_usage) session.modelUsage = usage.session.model_usage;
         }
       } finally { releasePrompt(); }
-      running.done = this.consume(session, running).finally(params.onTurnFinished);
+      turn.usageBaseline = session.modelUsage;
+      turn.needsUsageBaseline = Boolean(session.sdkSessionId) && !session.modelUsage;
+      current.done = this.consume(current);
       // consume owns every error after launch, including terminal notification.
-      void running.done.catch(() => {});
-      return { backend: "claude", threadId: params.threadId, turnId: running.turnId };
+      void current.done.catch(() => {});
+      return { backend: "claude", threadId, turnId: turn.turnId };
     } catch (error) {
-      const failure = claudeExceptionMessage(error, running.stderr);
+      const failure = claudeExceptionMessage(error, live?.stderr ?? "");
       claudeBackendLog.warn("Claude turn failed during startup", {
-        threadId: params.threadId, turnId: running.turnId, error: failure, stderr: running.stderr.slice(-320),
+        threadId, turnId: turn.turnId, error: failure, stderr: live?.stderr.slice(-320),
       });
-      running.ending = true;
-      running.input.close();
-      // A steer accepted during startup writes its own row; let it land
-      // before the failed status, so the failed status is final.
-      await this.settleInputWrites(running);
-      this.running.delete(params.threadId);
-      params.onTurnFinished?.();
-      if (running.started) {
-        for (const entry of running.entries.values()) {
-          entry.turn = { id: running.turnId, status: "failed", startedAt: running.startedAt };
-        }
-        await this.store.append(params.threadId, [...running.entries.values()]);
-        await this.emit({ method: "turn/failed", params: {
-          threadId: params.threadId, turnId: running.turnId,
-          turn: { id: running.turnId, status: "failed", startedAt: running.startedAt, error: { message: failure } },
-        } });
+      turn.ending = true;
+      if (live) {
+        live.closing = true;
+        live.input.close();
+        // A steer accepted during startup writes its own row; let it land
+        // before the failed status, so the failed status is final.
+        await this.settleInputWrites(live);
+        if (this.sessions.get(threadId) === live) this.sessions.delete(threadId);
+        this.runSessionClosed(live);
       }
+      if (turn.started) await this.failTurn(threadId, turn, failure);
       throw new Error(failure, { cause: error });
+    } finally {
+      if (this.starting.get(threadId) === controller) this.starting.delete(threadId);
+    }
+  }
+
+  /**
+   * Send the turn's message into the thread's live session, so its tasks keep
+   * running. Returns undefined when the session must be relaunched first.
+   */
+  private async continueSession(live: LiveSession, params: ClaudeTurnParams): Promise<ClaudeTurnStart | undefined> {
+    const { threadId } = params;
+    const session = await this.store.read(threadId);
+    if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
+    const content = await claudeInput(params.input);
+    // A message that cannot be sent must not change the session's settings.
+    if (live.turn) throw new ClaudeTurnActiveError("A Claude turn is already active for this thread.");
+    if (!live.closing && !await this.reconfigure(live, claudeSessionConfig(params, session))) {
+      // Only a new process takes this setting, and this one runs no task.
+      claudeBackendLog.info("Relaunching Claude to apply the turn's settings", { threadId });
+      // This turn registered the thread's MCP grants again; the new session uses them.
+      this.carriedReleases.set(threadId, [...this.carriedReleases.get(threadId) ?? [], ...live.onClosed.splice(0)]);
+      await this.closeSession(live);
+      return undefined;
+    }
+    if (live.turn) throw new ClaudeTurnActiveError("A Claude turn is already active for this thread.");
+    if (live.closing || this.sessions.get(threadId) !== live) return undefined;
+    const turn = claudeTurn(live.session);
+    live.turn = turn;
+    live.lastTurnId = turn.turnId;
+    if (live.followUpTimer) clearTimeout(live.followUpTimer);
+    live.followUpTimer = undefined;
+    // A steer for this turn must follow its prompt into the input stream.
+    const prompted = claudeDeferred();
+    live.inputWrites = live.inputWrites.then(() => prompted.promise);
+    try {
+      await this.beginTurn(live, turn, session, params.input);
+      // The session closed while the turn opened; its prompt was never sent.
+      if (live.closing) throw new Error("Claude stopped before the message was sent.");
+      const uuid = randomUUID();
+      turn.pendingSteers.add(uuid);
+      live.input.push({ type: "user", uuid, priority: "next", parent_tool_use_id: null, message: { role: "user", content } });
+    } catch (error) {
+      turn.ending = true;
+      if (live.turn === turn) live.turn = undefined;
+      const failure = claudeExceptionMessage(error, "");
+      claudeBackendLog.warn("Claude turn failed to start in a live session", { threadId, turnId: turn.turnId, error: failure });
+      // A session that closed meanwhile has already ended a started turn.
+      if (turn.started && !turn.ended.settled) await this.failTurn(threadId, turn, failure);
+      throw error;
+    } finally {
+      prompted.resolve();
+    }
+    return { backend: "claude", threadId, turnId: turn.turnId };
+  }
+
+  /**
+   * Apply a turn's settings to a live session; false when it must relaunch.
+   * A relaunch stops the session's tasks, so with tasks running a setting
+   * only a new process takes waits for one, and a rejected change fails the
+   * turn instead.
+   */
+  private async reconfigure(live: LiveSession, config: ClaudeSessionConfig): Promise<boolean> {
+    const query = live.query;
+    if (!query) return false;
+    const keepTasks = live.tasks.active().length > 0;
+    // The system prompt is fixed when the process starts.
+    if (config.instructions !== live.config.instructions) {
+      if (!keepTasks) return false;
+      claudeBackendLog.info("Deferring new Claude instructions until the session relaunches", {
+        threadId: live.session.thread.id, taskCount: live.tasks.active().length,
+      });
+    }
+    try {
+      if (config.model !== live.config.model) {
+        await query.setModel(config.model);
+        live.config.model = config.model;
+      }
+      if (config.effort !== live.config.effort) {
+        // null returns the session to the model's default effort.
+        await query.applyFlagSettings({ effortLevel: config.effort ?? null });
+        live.config.effort = config.effort;
+      }
+      if (config.permissionMode !== live.config.permissionMode) {
+        await query.setPermissionMode(config.permissionMode);
+        live.config.permissionMode = config.permissionMode;
+      }
+      if (config.mcpKey !== live.config.mcpKey) {
+        await query.setMcpServers(config.mcpServers ?? {});
+        live.config.mcpServers = config.mcpServers;
+        live.config.mcpKey = config.mcpKey;
+      }
+      return true;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      claudeBackendLog.warn("Could not apply turn settings to the live Claude session", {
+        threadId: live.session.thread.id, keepTasks, error: detail,
+      });
+      if (!keepTasks) return false;
+      throw new Error(`Claude could not apply this message's settings while its background tasks run: ${detail}`, { cause: error });
+    }
+  }
+
+  /** Show the operator's message and open the desktop turn. */
+  private async beginTurn(live: LiveSession, turn: RunningTurn, session: ClaudeSession, input: AppServerTurnInputItem[]): Promise<void> {
+    const threadId = session.thread.id;
+    const parts = claudeUserMessageParts(input);
+    const user: AppServerThreadMessageEntry = {
+      type: "message", id: `user:${turn.turnId}`, role: "user",
+      text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n"),
+      parts,
+      createdAt: Date.now(), turn: { id: turn.turnId, status: "in_progress", startedAt: turn.startedAt },
+    };
+    const firstPrompt = input.find((item) => item.type === "text" && item.text.trim());
+    turn.titlePrompt = firstPrompt?.type === "text" ? firstPrompt.text : undefined;
+    if (session.thread.titleSource === "fallback" && firstPrompt?.type === "text") {
+      session.thread.title = firstPrompt.text.replace(/\s+/g, " ").trim().slice(0, 80);
+      session.thread.titleSource = "derived";
+      await this.store.save(session);
+      if (live.session !== session) Object.assign(live.session.thread, { title: session.thread.title, titleSource: "derived" });
+      await this.emit({ method: "thread/name/updated", params: {
+        threadId, threadName: session.thread.title, titleSource: "derived",
+      } });
+    }
+    turn.entries.set(user.id, user);
+    await this.store.append(threadId, [user]);
+    turn.started = true;
+    await this.emit({ method: "turn/started", params: {
+      threadId, turn: { id: turn.turnId, status: "in_progress", startedAt: turn.startedAt },
+    } });
+    await this.emit({ method: "item/completed", params: {
+      threadId, turnId: turn.turnId,
+      item: { id: user.id, type: "userMessage", text: user.text, content: parts },
+    } });
+  }
+
+  /** Fail a turn that never reached its query. */
+  private async failTurn(threadId: string, turn: RunningTurn, failure: string): Promise<void> {
+    for (const entry of turn.entries.values()) {
+      entry.turn = { id: turn.turnId, status: "failed", startedAt: turn.startedAt };
+    }
+    try {
+      await this.store.append(threadId, [...turn.entries.values()]);
+      await this.emit({ method: "turn/failed", params: {
+        threadId, turnId: turn.turnId,
+        turn: { id: turn.turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure } },
+      } });
+    } finally {
+      turn.ended.resolve();
     }
   }
 
@@ -531,42 +817,50 @@ export class ClaudeBackend {
     await this.refreshModelCatalog(env);
   }
 
-  private async consume(session: ClaudeSession, running: RunningTurn): Promise<void> {
+  private async consume(live: LiveSession): Promise<void> {
+    const session = live.session;
     const threadId = session.thread.id;
-    const turnId = running.turnId;
     let messageId = "";
     let failure: string | undefined;
-    let resultSummary: Record<string, unknown> | undefined;
-    const needsUsageBaseline = Boolean(session.sdkSessionId) && !session.modelUsage;
-    const usageBaseline = session.modelUsage;
-    const iterator = running.query![Symbol.asyncIterator]();
+    const iterator = live.query![Symbol.asyncIterator]();
     try {
       for (;;) {
         const pending = iterator.next();
-        // A wake can end the turn while this read waits. Closing the query
-        // then rejects it, which nothing else observes.
+        // A wake can close the session while this read waits. Closing the
+        // query then rejects it, which nothing else observes.
         pending.catch(() => {});
         let step: IteratorResult<SDKMessage, void> | typeof CLAUDE_WAKE;
-        while ((step = await Promise.race([pending, running.wake.promise])) === CLAUDE_WAKE) {
-          running.wake = claudeWakeSignal();
-          if (this.turnSettled(running)) break;
+        while ((step = await Promise.race([pending, live.wake.promise])) === CLAUDE_WAKE) {
+          live.wake = claudeWakeSignal();
+          // Claude did not answer a Stop in time. End the turn here; the
+          // session stays up for its tasks.
+          if (live.turn?.abandoned) await this.endTurn(live, live.turn);
+          if (!live.turn && this.sessionSettled(live)) break;
         }
         if (step === CLAUDE_WAKE || step.done) break;
         const message = step.value;
-        running.messageSeq += 1;
-        if (message.type === "assistant" && !message.parent_tool_use_id && message.error) {
+        live.messageSeq += 1;
+        const topLevel = (message.type === "assistant" || message.type === "stream_event") && !message.parent_tool_use_id;
+        // Claude answers a settled task with a native turn of its own. With no
+        // desktop turn open, that native turn gets one.
+        if (!live.turn && (topLevel || (message.type === "system"
+          && (message.subtype === "init" || message.subtype === "local_command_output")))) {
+          await this.startFollowUpTurn(live);
+        }
+        const turn = live.turn;
+        if (turn && message.type === "assistant" && !message.parent_tool_use_id && message.error) {
           const detail = message.message.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
-          running.resultFailure = detail.trim() || `Claude reported an API error (${message.error}).`;
+          turn.resultFailure = detail.trim() || `Claude reported an API error (${message.error}).`;
         }
         if (message.type === "system" && message.subtype === "init") {
-          running.lastActivitySeq = running.messageSeq;
+          live.lastActivitySeq = live.messageSeq;
           // Never publish this query's project-scoped supportedModels() to
           // the backend-wide picker. Recover through separate global discovery.
           void this.refreshGlobalModels().catch(() => {});
           // Each native turn starts with init, including Claude's follow-up to
           // a settled task. Only the first needs the session's metadata.
-          const firstInit = !running.initialized;
-          running.initialized = true;
+          const firstInit = !live.initialized;
+          live.initialized = true;
           if (firstInit || session.sdkSessionId !== message.session_id) {
             session.sdkSessionId = message.session_id;
             const current = await this.store.read(threadId);
@@ -576,14 +870,15 @@ export class ClaudeBackend {
           // The native control request returns Claude's stored/in-flight title
           // while inference continues. Waiting for result leaves long first
           // turns named after the raw prompt for their entire duration.
-          running.titleUpdate ??= this.updateTitle(session, running);
+          if (turn) turn.titleUpdate ??= this.updateTitle(live, turn);
           if (message.terminal_slash_commands) this.terminalCommands = new Set(message.terminal_slash_commands);
+          live.capabilities = message.capabilities ?? [];
           if (firstInit) await Promise.all([
             // A probe that finds no windows keeps the last reading, so the
             // account must be confirmed first.
-            this.checkAccount(running).then(() => this.refreshUsage(running)),
-            this.refreshContext(session, running),
-            claudeTelemetry(() => running.query!.supportedCommands())
+            this.checkAccount(live).then(() => this.refreshUsage(live)),
+            this.refreshContext(live),
+            claudeTelemetry(() => live.query!.supportedCommands())
               .then((commands) => commands && this.publishCommands(session, commands)),
           ]);
         }
@@ -591,24 +886,24 @@ export class ClaudeBackend {
           await this.publishCommands(session, message.commands);
         }
         if (message.type === "system" && message.subtype === "session_state_changed") {
-          running.sessionState = message.state;
-          if (message.state !== "idle") running.lastActivitySeq = running.messageSeq;
+          live.sessionState = message.state;
+          if (message.state !== "idle") live.lastActivitySeq = live.messageSeq;
         }
-        if ((message.type === "assistant" || message.type === "stream_event") && !message.parent_tool_use_id) {
-          running.lastActivitySeq = running.messageSeq;
-        }
-        if (message.type === "stream_event" && !message.parent_tool_use_id) {
+        if (topLevel) live.lastActivitySeq = live.messageSeq;
+        if (turn && message.type === "stream_event" && !message.parent_tool_use_id) {
           const event = message.event;
           if (event.type === "message_start") messageId = event.message.id;
           if (event.type === "content_block_delta" && event.delta.type === "text_delta" && messageId) {
-            const previous = running.entries.get(messageId);
+            const previous = turn.entries.get(messageId);
             const entry: AppServerThreadMessageEntry = {
               type: "message", id: messageId, role: "assistant",
               text: (previous?.type === "message" ? previous.text : "") + event.delta.text,
-              turn: { id: turnId, status: "in_progress" },
+              turn: { id: turn.turnId, status: "in_progress" },
             };
-            running.entries.set(messageId, entry);
-            await this.emit({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: messageId, delta: event.delta.text } });
+            turn.entries.set(messageId, entry);
+            await this.emit({ method: "item/agentMessage/delta", params: {
+              threadId, turnId: turn.turnId, itemId: messageId, delta: event.delta.text,
+            } });
           }
         }
         if (message.type === "rate_limit_event") {
@@ -618,188 +913,310 @@ export class ClaudeBackend {
           }
         }
         const taskMessage = message.type === "system" && CLAUDE_TASK_SUBTYPES.has(message.subtype);
-        if (taskMessage) await this.consumeTaskMessage(message, session, running);
-        await this.consumeCompleteMessage(message, threadId, running);
+        if (taskMessage) await this.consumeTaskMessage(message, live);
+        if (turn) await this.consumeCompleteMessage(message, live, turn);
         // The probe is a control round-trip that can wait 1.5s; never hold
         // the stream for it. The result boundary below reads it in order.
-        if (message.type === "assistant" && !message.parent_tool_use_id) {
-          this.scheduleContextRefresh(session, running);
+        if (turn && message.type === "assistant" && !message.parent_tool_use_id) {
+          this.scheduleContextRefresh(live);
         }
         if (message.type === "result") {
-          // A message arriving near a result boundary may become another native
-          // turn. Keep this query alive until its result acknowledges every
-          // accepted steer UUID; the first result alone must not discard input.
-          await this.settleInputWrites(running);
-          for (const id of message.user_message_uuids ?? []) running.pendingSteers.delete(id);
-          if (message.user_message_uuid) running.pendingSteers.delete(message.user_message_uuid);
-          running.resultFailure ??= claudeResultFailure(message);
-          // The totals are cumulative. A turn stopped after this result must
-          // not bill its spend to the next turn.
-          if (claudeHasModelUsage(message.modelUsage)) session.modelUsage = message.modelUsage;
-          running.lastResult = message;
-          running.lastResultSeq = running.messageSeq;
-          running.tasks.settleForeground();
-          resultSummary = {
-            subtype: message.subtype, isError: message.is_error, numTurns: message.num_turns,
-            stopReason: message.stop_reason,
-            errorCount: message.subtype === "success" ? 0 : message.errors.length,
-            resultLength: message.subtype === "success" ? message.result?.length : undefined,
-          };
+          live.lastResultSeq = live.messageSeq;
+          if (turn) {
+            // A message arriving near a result boundary may become another
+            // native turn. Keep the turn open until a result acknowledges
+            // every accepted input UUID; the first result alone must not
+            // discard input.
+            await this.settleInputWrites(live);
+            for (const id of message.user_message_uuids ?? []) turn.pendingSteers.delete(id);
+            if (message.user_message_uuid) turn.pendingSteers.delete(message.user_message_uuid);
+            turn.resultFailure ??= claudeResultFailure(message);
+            // The totals are cumulative. A turn stopped after this result must
+            // not bill its spend to the next turn.
+            if (claudeHasModelUsage(message.modelUsage)) session.modelUsage = message.modelUsage;
+            turn.lastResult = message;
+            turn.lastResultSeq = live.messageSeq;
+            turn.resultSummary = {
+              subtype: message.subtype, isError: message.is_error, numTurns: message.num_turns,
+              stopReason: message.stop_reason,
+              errorCount: message.subtype === "success" ? 0 : message.errors.length,
+              resultLength: message.subtype === "success" ? message.result?.length : undefined,
+            };
+          }
+          live.tasks.settleForeground();
         }
-        if (taskMessage || message.type === "user" || message.type === "result") await this.publishTasks(session, running);
-        if (this.turnSettled(running)) break;
-        this.armTaskFollowUpGrace(running);
+        if (taskMessage || message.type === "user" || message.type === "result") await this.publishTasks(live);
+        if (live.turn) {
+          if (this.turnSettled(live, live.turn)) {
+            // Nothing left to keep the process for: end the turn with it.
+            if (this.sessionSettled(live, true)) break;
+            await this.endTurn(live, live.turn);
+          }
+        } else if (this.sessionSettled(live)) break;
+        this.armFollowUpGrace(live);
       }
-      if (!running.controller.signal.aborted) {
-        const result = running.lastResult;
-        // An error result already says why the turn ended; keep its text.
-        if (result && (running.resultFailure !== undefined || running.pendingSteers.size === 0)) {
-          failure = await this.finishResult(session, running, result, needsUsageBaseline, usageBaseline);
-        } else {
-          failure = running.resultFailure ?? "Claude exited before completing the turn.";
-        }
-      }
+      const turn = live.turn;
+      if (turn?.started && !live.controller.signal.aborted) failure = await this.turnFailure(live, turn);
     } catch (error) {
-      failure ??= claudeExceptionMessage(error, running.stderr);
+      failure ??= claudeExceptionMessage(error, live.stderr);
     } finally {
-      running.ending = true;
-      if (running.followUpTimer) clearTimeout(running.followUpTimer);
-      running.input.close();
-      await this.settleInputWrites(running);
-      await running.contextRefresh?.promise;
-      // Join metadata reads and title persistence before closing the query or
-      // releasing the workspace, including failed and interrupted turns.
-      await running.titleUpdate;
-      try { running.query?.close(); }
-      catch (error) { failure ??= claudeExceptionMessage(error, running.stderr); }
-      const cancelled = running.controller.signal.aborted;
-      const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
-      const orphanedTasks = new Set([...running.tasks.runningToolUseIds(), ...running.launchedToolUseIds]);
-      for (const entry of running.entries.values()) {
-        // A task the query took down with it did not complete.
-        if (entry.type === "activity" && entry.status === "in_progress" && orphanedTasks.has(entry.id)) {
-          entry.status = cancelled ? "cancelled" : "failed";
-        }
-        entry.turn = { id: turnId, status, startedAt: running.startedAt, completedAt: Date.now() };
-      }
-      try {
-        await this.store.append(threadId, [...running.entries.values()]);
-        // Re-read metadata so a live rename/mode change cannot be overwritten.
-        const current = await this.store.read(threadId);
-        current.sdkSessionId = session.sdkSessionId;
-        current.modelUsage = session.modelUsage;
-        current.contextWindow = session.contextWindow;
-        current.thread.updatedAt = Date.now();
-        await this.store.save(current);
-      } catch (error) {
-        failure = `Could not save Claude history: ${error instanceof Error ? error.message : String(error)}`;
-      }
-      this.running.delete(threadId);
-      if (running.publishedTasks.length > 0) {
+      await this.finishSession(live, failure);
+    }
+  }
+
+  /** Claude answers a settled task on its own; the desktop shows that as a turn. */
+  private async startFollowUpTurn(live: LiveSession): Promise<void> {
+    const turn = claudeTurn(live.session, true);
+    live.turn = turn;
+    live.lastTurnId = turn.turnId;
+    if (live.followUpTimer) clearTimeout(live.followUpTimer);
+    live.followUpTimer = undefined;
+    await this.emit({ method: "turn/started", params: {
+      threadId: live.session.thread.id, turn: { id: turn.turnId, status: "in_progress", startedAt: turn.startedAt },
+    } });
+  }
+
+  /**
+   * A desktop turn can span several native results, one per steer that raced
+   * a boundary. It ends at a result that acknowledges every steer, once Claude
+   * is idle. A running background task does not hold it open.
+   */
+  private turnSettled(live: LiveSession, turn: RunningTurn): boolean {
+    if (!turn.lastResult) return false;
+    // A failed result ends the turn, even before it acknowledges a steer.
+    if (turn.resultFailure !== undefined) return true;
+    if (turn.pendingSteers.size > 0) return false;
+    // The CLI goes idle after its own background-agent loop. A CLI that does
+    // not report session state is idle once it reports a result.
+    if (live.sessionState !== undefined && live.sessionState !== "idle") return false;
+    return live.lastActivitySeq <= turn.lastResultSeq;
+  }
+
+  /**
+   * The session, and the process with it, ends once no task runs, Claude is
+   * idle, and Claude has answered the last task notification.
+   */
+  private sessionSettled(live: LiveSession, ignoreTurn = false): boolean {
+    if (live.turn && !ignoreTurn) return false;
+    if (live.tasks.active().length > 0) return false;
+    if (live.sessionState !== undefined && live.sessionState !== "idle") return false;
+    return live.lastNotificationSeq < live.lastResultSeq || live.followUpWaivedAt === live.messageSeq;
+  }
+
+  /** Bound the wait for a follow-up Claude may not run. */
+  private armFollowUpGrace(live: LiveSession): void {
+    if (live.followUpTimer) clearTimeout(live.followUpTimer);
+    live.followUpTimer = undefined;
+    if (live.turn || live.tasks.active().length > 0) return;
+    if (live.lastNotificationSeq < live.lastResultSeq) return;
+    if (live.sessionState !== undefined && live.sessionState !== "idle") return;
+    const armedAt = live.messageSeq;
+    live.followUpTimer = setTimeout(() => {
+      live.followUpTimer = undefined;
+      // Any message since arming answers for itself.
+      if (live.messageSeq !== armedAt) return;
+      live.followUpWaivedAt = armedAt;
+      live.wake.wake();
+    }, this.options.taskFollowUpGraceMs ?? CLAUDE_TASK_FOLLOW_UP_GRACE_MS);
+    live.followUpTimer.unref?.();
+  }
+
+  /** Why the turn failed, or undefined; records its usage either way. */
+  private async turnFailure(live: LiveSession, turn: RunningTurn): Promise<string | undefined> {
+    const result = turn.lastResult;
+    // An error result already says why the turn ended; keep its text.
+    if (result && (turn.resultFailure !== undefined || turn.pendingSteers.size === 0)) {
+      return await this.finishResult(live, turn, result);
+    }
+    return turn.resultFailure ?? "Claude exited before completing the turn.";
+  }
+
+  /** End the desktop turn; the session stays open for the tasks it runs. */
+  private async endTurn(live: LiveSession, turn: RunningTurn): Promise<void> {
+    let failure: string | undefined;
+    try {
+      failure = await this.turnFailure(live, turn);
+    } catch (error) {
+      failure = claudeExceptionMessage(error, live.stderr);
+    }
+    turn.ending = true;
+    await this.settleInputWrites(live);
+    await live.contextRefresh?.promise;
+    await turn.titleUpdate;
+    await this.completeTurn(live, turn, { failure, cancelled: false });
+  }
+
+  /** Close the query, and with it the CLI process and every task it runs. */
+  private async finishSession(live: LiveSession, failure: string | undefined): Promise<void> {
+    const threadId = live.session.thread.id;
+    live.closing = true;
+    if (live.followUpTimer) clearTimeout(live.followUpTimer);
+    // A turn still opening in a live session is failed by its own start.
+    const turn = live.turn?.started ? live.turn : undefined;
+    if (turn) turn.ending = true;
+    live.input.close();
+    await this.settleInputWrites(live);
+    await live.contextRefresh?.promise;
+    // Join metadata reads and title persistence before closing the query or
+    // releasing the workspace, including failed and interrupted turns.
+    await turn?.titleUpdate;
+    try { live.query?.close(); }
+    catch (error) { failure ??= claudeExceptionMessage(error, live.stderr); }
+    const cancelled = live.controller.signal.aborted;
+    await this.closeOrphanedTaskRows(live, cancelled);
+    const release = async () => {
+      if (this.sessions.get(threadId) === live) this.sessions.delete(threadId);
+      if (live.publishedTasks.length > 0) {
+        live.publishedTasks = [];
+        live.publishedTaskKey = "[]";
         await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId, tasks: [] } });
       }
-      const diagnostics = {
-        threadId, turnId, status: cancelled ? "cancelled" : failure ? "failed" : "completed",
-        receivedResult: Boolean(running.lastResult), ...resultSummary, pendingSteerCount: running.pendingSteers.size,
-        assistantMessageCount: [...running.entries.values()].filter((entry) => entry.type === "message" && entry.role === "assistant").length,
-      };
-      if (failure && !cancelled) claudeBackendLog.warn("Claude turn failed", { ...diagnostics, error: failure, stderr: running.stderr.slice(-320) });
-      else claudeBackendLog.info("Claude turn finished", diagnostics);
-      if (cancelled) {
-        await this.emit({ method: "turn/cancelled", params: { threadId, turnId, turn: {
-          id: turnId, status: "cancelled", startedAt: running.startedAt,
-        } } });
-      } else if (failure) {
-        await this.emit({ method: "turn/failed", params: { threadId, turnId, turn: {
-          id: turnId, status: "failed", startedAt: running.startedAt, error: { message: failure },
-        } } });
+    };
+    try {
+      if (turn) {
+        await this.completeTurn(live, turn, { failure, cancelled }, release);
       } else {
-        await this.emit({ method: "turn/completed", params: { threadId, turnId, turn: {
-          id: turnId, status: "completed", startedAt: running.startedAt,
-          output: [...running.entries.values()].flatMap((entry) => entry.type === "message" && entry.role === "assistant" ? [{ type: "text" as const, text: entry.text }] : []),
-        } } });
+        try { await this.saveSessionMetadata(live); }
+        catch (error) { claudeBackendLog.warn("Could not save Claude session metadata", { threadId, error }); }
+        await release();
+        if (failure && !cancelled) claudeBackendLog.warn("Claude session failed between turns", { threadId, error: failure, stderr: live.stderr.slice(-320) });
+      }
+    } finally {
+      claudeBackendLog.info("Claude session closed", { threadId, cancelled });
+      this.runSessionClosed(live);
+    }
+  }
+
+  private runSessionClosed(live: LiveSession): void {
+    live.closed = true;
+    for (const release of live.onClosed.splice(0)) {
+      try { release(); }
+      catch (error) { claudeBackendLog.warn("Could not release a Claude session resource", error); }
+    }
+  }
+
+  /** A task the query took down with it did not complete. */
+  private async closeOrphanedTaskRows(live: LiveSession, cancelled: boolean): Promise<void> {
+    const threadId = live.session.thread.id;
+    for (const id of new Set([...live.tasks.runningToolUseIds(), ...live.launchedToolUseIds])) {
+      const row = live.toolRows.get(id);
+      if (!row || row.entry.status !== "in_progress") continue;
+      row.entry.status = cancelled ? "cancelled" : "failed";
+      // The open turn saves its own rows as it ends.
+      if (row.turnId === live.turn?.turnId) continue;
+      try {
+        await this.store.append(threadId, [row.entry]);
+        await this.emit({ method: "item/completed", params: { threadId, turnId: row.turnId, item: claudeActivityItem(row.entry) } });
+      } catch (error) {
+        claudeBackendLog.warn("Could not close a Claude task row", { threadId, itemId: id, error });
       }
     }
   }
 
-  /**
-   * One logical desktop turn can span several native results: one per steer
-   * that raced a boundary, and one per follow-up Claude runs when a background
-   * task settles. It ends at a result that acknowledges every steer, once no
-   * task is running and Claude has answered the last task notification.
-   */
-  private turnSettled(running: RunningTurn): boolean {
-    const result = running.lastResult;
-    if (!result) return false;
-    // A failed result ends the turn, even before it acknowledges a steer.
-    if (running.resultFailure !== undefined) return true;
-    if (running.pendingSteers.size > 0 || running.tasks.active().length > 0) return false;
-    // The CLI goes idle after its own background-agent loop. A CLI that does
-    // not report session state is idle once it reports a result.
-    if (running.sessionState !== undefined && running.sessionState !== "idle") return false;
-    if (running.lastActivitySeq > running.lastResultSeq) return false;
-    return running.lastNotificationSeq < running.lastResultSeq || running.followUpWaivedAt === running.messageSeq;
+  /** Save the turn, then report its end. `release` runs between the two. */
+  private async completeTurn(
+    live: LiveSession, turn: RunningTurn, outcome: { failure?: string; cancelled: boolean },
+    release?: () => Promise<void>,
+  ): Promise<void> {
+    const threadId = live.session.thread.id;
+    const { turnId } = turn;
+    const cancelled = outcome.cancelled || turn.interrupted === true;
+    let { failure } = outcome;
+    const status = cancelled ? "cancelled" : failure ? "failed" : "completed";
+    for (const entry of turn.entries.values()) {
+      entry.turn = { id: turnId, status, startedAt: turn.startedAt, completedAt: Date.now() };
+    }
+    try {
+      await this.store.append(threadId, [...turn.entries.values()]);
+      await this.saveSessionMetadata(live);
+    } catch (error) {
+      failure = `Could not save Claude history: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if (live.turn === turn) live.turn = undefined;
+    // A task row outlives its turn only while its task runs.
+    const running = new Set([...live.tasks.runningToolUseIds(), ...live.launchedToolUseIds]);
+    for (const id of live.toolRows.keys()) if (!running.has(id)) live.toolRows.delete(id);
+    try {
+      await release?.();
+      const diagnostics = {
+        threadId, turnId, status: cancelled ? "cancelled" : failure ? "failed" : "completed",
+        receivedResult: Boolean(turn.lastResult), ...turn.resultSummary, pendingSteerCount: turn.pendingSteers.size,
+        followUp: turn.followUp === true, runningTaskCount: live.tasks.active().length,
+        assistantMessageCount: [...turn.entries.values()].filter((entry) => entry.type === "message" && entry.role === "assistant").length,
+      };
+      if (failure && !cancelled) claudeBackendLog.warn("Claude turn failed", { ...diagnostics, error: failure, stderr: live.stderr.slice(-320) });
+      else claudeBackendLog.info("Claude turn finished", diagnostics);
+      if (cancelled) {
+        await this.emit({ method: "turn/cancelled", params: { threadId, turnId, turn: {
+          id: turnId, status: "cancelled", startedAt: turn.startedAt,
+        } } });
+      } else if (failure) {
+        await this.emit({ method: "turn/failed", params: { threadId, turnId, turn: {
+          id: turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure },
+        } } });
+      } else {
+        await this.emit({ method: "turn/completed", params: { threadId, turnId, turn: {
+          id: turnId, status: "completed", startedAt: turn.startedAt,
+          output: [...turn.entries.values()].flatMap((entry) => entry.type === "message" && entry.role === "assistant" ? [{ type: "text" as const, text: entry.text }] : []),
+        } } });
+      }
+    } finally {
+      // Stop waits on this, so it settles even when a report fails.
+      turn.ended.resolve();
+    }
   }
 
-  /** Bound the wait for a follow-up Claude may not run. */
-  private armTaskFollowUpGrace(running: RunningTurn): void {
-    if (running.followUpTimer) clearTimeout(running.followUpTimer);
-    running.followUpTimer = undefined;
-    const result = running.lastResult;
-    if (!result || running.pendingSteers.size > 0 || running.tasks.active().length > 0) return;
-    if (running.lastNotificationSeq < running.lastResultSeq) return;
-    if (running.sessionState !== undefined ? running.sessionState !== "idle" : running.lastActivitySeq > running.lastNotificationSeq) return;
-    const armedAt = running.messageSeq;
-    running.followUpTimer = setTimeout(() => {
-      running.followUpTimer = undefined;
-      // Any message since arming answers for itself.
-      if (running.messageSeq !== armedAt) return;
-      running.followUpWaivedAt = armedAt;
-      running.wake.wake();
-    }, this.options.taskFollowUpGraceMs ?? CLAUDE_TASK_FOLLOW_UP_GRACE_MS);
-    running.followUpTimer.unref?.();
+  /** Re-read metadata so a live rename/mode change cannot be overwritten. */
+  private async saveSessionMetadata(live: LiveSession): Promise<void> {
+    const { session } = live;
+    const current = await this.store.read(session.thread.id);
+    current.sdkSessionId = session.sdkSessionId;
+    current.modelUsage = session.modelUsage;
+    current.contextWindow = session.contextWindow;
+    current.thread.updatedAt = Date.now();
+    await this.store.save(current);
   }
 
-  /** Record the result that ends the logical turn; returns why it failed. */
-  private async finishResult(
-    session: ClaudeSession, running: RunningTurn, message: SDKResultMessage,
-    needsUsageBaseline: boolean, usageBaseline: ClaudeSession["modelUsage"],
-  ): Promise<string | undefined> {
+  /** Record the result that ends the desktop turn; returns why it failed. */
+  private async finishResult(live: LiveSession, turn: RunningTurn, message: SDKResultMessage): Promise<string | undefined> {
+    const { session } = live;
     const threadId = session.thread.id;
-    const turnId = running.turnId;
-    running.ending = true;
-    let failure = running.resultFailure;
+    const turnId = turn.turnId;
+    turn.ending = true;
+    let failure = turn.resultFailure;
     // A normal send with no visible work must not silently look answered.
-    // Local slash commands can legitimately finish without model output.
-    const hasResponse = running.hasCompletedToolActivity || [...running.entries.values()].some((entry) =>
+    // Local slash commands can legitimately finish without model output, and
+    // a follow-up Claude starts itself has no send to answer.
+    const hasResponse = turn.hasCompletedToolActivity || [...turn.entries.values()].some((entry) =>
       entry.type !== "message" || (entry.role === "assistant" && entry.text.trim()));
-    if (!failure && message.subtype === "success" && message.result?.trim() === ""
-      && !hasResponse && !running.titlePrompt?.trimStart().startsWith("/")) {
+    if (!failure && !turn.followUp && message.subtype === "success" && message.result?.trim() === ""
+      && !hasResponse && !turn.titlePrompt?.trimStart().startsWith("/")) {
       failure = "Claude completed without a response or any tool activity. Try sending the message again.";
     }
     // Even a failed turn may already have requested its title at init;
     // join it before taking the final usage snapshot as well.
-    if (!running.titleUpdate && !failure && !running.controller.signal.aborted) {
-      running.titleUpdate = this.updateTitle(session, running);
+    if (!turn.titleUpdate && !failure && !live.controller.signal.aborted) {
+      turn.titleUpdate = this.updateTitle(live, turn);
     }
-    const requestedTitle = await running.titleUpdate ?? false;
-    if (!failure && !running.controller.signal.aborted) {
+    const requestedTitle = await turn.titleUpdate ?? false;
+    if (!failure && !live.controller.signal.aborted) {
       // A native request can time out before Claude persists its title.
       // Keep the result-boundary adoption, without another model request.
-      await this.updateTitle(session, running, false);
+      await this.updateTitle(live, turn, false);
     }
-    await running.contextRefresh?.promise;
-    const [, usage] = await Promise.all([this.refreshContext(session, running), this.refreshUsage(running)]);
+    await live.contextRefresh?.promise;
+    const [, usage] = await Promise.all([this.refreshContext(live), this.refreshUsage(live)]);
     // Native title generation shares this session's account and model
     // totals. Its request can land after the result's usage snapshot.
     const modelUsage = requestedTitle ? usage?.session?.model_usage ?? message.modelUsage : message.modelUsage;
     if (claudeHasModelUsage(modelUsage)) {
-      const tokenUsage = claudeTurnUsage(modelUsage, usageBaseline);
+      // The totals are cumulative across every turn the session carried.
+      const tokenUsage = claudeTurnUsage(modelUsage, turn.usageBaseline);
       session.modelUsage = modelUsage;
       // Without an old session's baseline, cumulative spend cannot be
       // attributed to this turn. Save it for the next turn, do not bill
       // the pre-existing transcript as new work.
-      if (!needsUsageBaseline) {
+      if (!turn.needsUsageBaseline) {
         await this.emit({ method: "thread/tokenUsage/updated", params: { threadId, turnId, model: tokenUsage.model, tokenUsage } });
       }
     }
@@ -807,44 +1224,47 @@ export class ClaudeBackend {
   }
 
   /** Track Claude's tasks and settle the tool calls that started them. */
-  private async consumeTaskMessage(message: SDKMessage, session: ClaudeSession, running: RunningTurn): Promise<void> {
+  private async consumeTaskMessage(message: SDKMessage, live: LiveSession): Promise<void> {
     if (message.type !== "system") return;
-    const before = running.tasks.active();
-    const { settled } = running.tasks.apply(message);
+    const before = live.tasks.active();
+    const { settled } = live.tasks.apply(message);
     // Claude answers a task that ends with a native turn. Its terminal
     // task_updated arrives before the notification, and either can be first.
-    const active = new Set(running.tasks.active().map((task) => task.taskId));
+    const active = new Set(live.tasks.active().map((task) => task.taskId));
     if (before.some((task) => !active.has(task.taskId)) || (settled && !settled.task.ambient)) {
-      running.lastNotificationSeq = running.messageSeq;
+      live.lastNotificationSeq = live.messageSeq;
     }
-    if (settled) await this.settleTaskToolCall(session.thread.id, running, settled);
+    if (settled) await this.settleTaskToolCall(live, settled);
   }
 
-  private async publishTasks(session: ClaudeSession, running: RunningTurn): Promise<void> {
-    const tasks = this.taskRows(session, running);
+  private async publishTasks(live: LiveSession): Promise<void> {
+    const tasks = this.taskRows(live);
     const key = JSON.stringify(tasks);
-    if (key === running.publishedTaskKey) return;
-    running.publishedTasks = tasks;
-    running.publishedTaskKey = key;
-    await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId: session.thread.id, tasks } });
+    if (key === live.publishedTaskKey) return;
+    live.publishedTasks = tasks;
+    live.publishedTaskKey = key;
+    await this.emit({ method: "thread/backgroundTasks/updated", params: { threadId: live.session.thread.id, tasks } });
   }
 
-  private taskRows(session: ClaudeSession, running: RunningTurn): AppServerBackgroundTask[] {
-    return running.tasks.active().map((task) => {
-      const entry = task.toolUseId ? running.entries.get(task.toolUseId) : undefined;
-      const command = entry?.type === "activity" ? entry.details[0]?.command?.rawCommand : undefined;
-      return claudeTaskRow(task, { cwd: session.cwd, ...(command !== undefined ? { command } : {}) });
+  private taskRows(live: LiveSession): AppServerBackgroundTask[] {
+    return live.tasks.active().map((task) => {
+      const row = task.toolUseId ? live.toolRows.get(task.toolUseId) : undefined;
+      const command = row?.entry.details[0]?.command?.rawCommand;
+      return claudeTaskRow(task, { cwd: live.session.cwd, ...(command !== undefined ? { command } : {}) });
     });
   }
 
   /**
    * A background Bash or Agent call answers at once with a placeholder; its
-   * tool row stays running until the task's notification settles it.
+   * tool row stays running until the task's notification settles it, which
+   * can be after the turn that made the call has ended.
    */
-  private async settleTaskToolCall(threadId: string, running: RunningTurn, { task, summary }: ClaudeTaskSettlement): Promise<void> {
-    if (task.toolUseId) running.launchedToolUseIds.delete(task.toolUseId);
-    const entry = task.toolUseId ? running.entries.get(task.toolUseId) : undefined;
-    if (entry?.type !== "activity" || entry.status !== "in_progress") return;
+  private async settleTaskToolCall(live: LiveSession, { task, summary }: ClaudeTaskSettlement): Promise<void> {
+    if (task.toolUseId) live.launchedToolUseIds.delete(task.toolUseId);
+    const row = task.toolUseId ? live.toolRows.get(task.toolUseId) : undefined;
+    if (!row || row.entry.status !== "in_progress") return;
+    const { entry } = row;
+    const threadId = live.session.thread.id;
     entry.status = task.status === "completed" ? "completed" : task.status === "stopped" ? "cancelled" : "failed";
     const command = entry.details[0].command?.rawCommand;
     const outputId = `${entry.id}:output`;
@@ -859,37 +1279,45 @@ export class ClaudeBackend {
         id: outputId, kind: entry.details[0].kind, label: `${entry.summary} output`, markdown: output, status: entry.status,
       }];
     }
+    if (row.turnId !== live.turn?.turnId) live.toolRows.delete(entry.id);
     await this.store.append(threadId, [entry]);
-    const item = {
-      id: entry.id, status: entry.status,
-      ...(command !== undefined ? { type: "commandExecution", command, aggregatedOutput: output }
-        : { type: "dynamicToolCall", toolName: entry.summary, contentItems: [{ type: "inputText", text: output }] }),
-    };
-    await this.emit({ method: "item/completed", params: { threadId, turnId: running.turnId, item } });
+    await this.emit({ method: "item/completed", params: { threadId, turnId: row.turnId, item: claudeActivityItem(entry, output) } });
   }
 
   /** Commands and sub-agents Claude is running for the thread. */
   listBackgroundTasks(threadId: string): { supported: true; terminals: AppServerBackgroundTask[] } {
-    const running = this.running.get(threadId);
-    return { supported: true, terminals: running?.publishedTasks ?? [] };
+    return { supported: true, terminals: this.sessions.get(threadId)?.publishedTasks ?? [] };
   }
 
   /** Stops one task. Claude reports the stop through the task's notification. */
   async stopBackgroundTask(threadId: string, taskId: string): Promise<boolean> {
-    const running = this.running.get(threadId);
-    if (!running?.query || !running.tasks.active().some((task) => task.taskId === taskId)) {
+    const live = this.sessions.get(threadId);
+    if (!live?.query || !live.tasks.active().some((task) => task.taskId === taskId)) {
       throw new Error("Claude is not running that task.");
     }
-    await running.query.stopTask(taskId);
+    await live.query.stopTask(taskId);
     return true;
   }
 
+  /**
+   * Threads whose Claude process is still open. Between turns it runs only
+   * background tasks, which the quit prompt and archive guards count as work.
+   */
+  liveSessionThreadIds(): string[] {
+    return [...this.sessions.keys()];
+  }
+
+  hasLiveSession(threadId: string): boolean {
+    return this.sessions.has(threadId);
+  }
+
   /** Retrieve Claude's native title without holding up the active turn. */
-  private async updateTitle(session: ClaudeSession, running: RunningTurn, allowRequest = true): Promise<boolean> {
+  private async updateTitle(live: LiveSession, turn: RunningTurn, allowRequest = true): Promise<boolean> {
+    const { session } = live;
     const threadId = session.thread.id;
     try {
       let current = await this.store.read(threadId);
-      if (current.thread.titleSource === "explicit" || !session.sdkSessionId || running.controller.signal.aborted) return false;
+      if (current.thread.titleSource === "explicit" || !session.sdkSessionId || live.controller.signal.aborted) return false;
       // getSessionInfo uses the SDK host's config directory, not Options.env.
       // Do not inspect a different account's session store.
       // The SDK may spawn Git in this workspace (with its own timeout).
@@ -897,7 +1325,7 @@ export class ClaudeBackend {
       // query. Keep it owned by the turn so shutdown cannot release the
       // workspace while an abandoned read still holds its directory open.
       let title: string | undefined;
-      if (running.titleEnv?.CLAUDE_CONFIG_DIR === process.env.CLAUDE_CONFIG_DIR) {
+      if (live.titleEnv?.CLAUDE_CONFIG_DIR === process.env.CLAUDE_CONFIG_DIR) {
         try {
           const info = await (this.options.getSessionInfo ?? getSessionInfo)(session.sdkSessionId, { dir: session.cwd });
           title = normalizeClaudeTitle(info?.customTitle);
@@ -908,11 +1336,11 @@ export class ClaudeBackend {
       }
       current = await this.store.read(threadId);
       if (current.thread.titleSource === "explicit") return false;
-      const query = running.query as ClaudeTitleQuery;
+      const query = live.query as ClaudeTitleQuery;
       const disabled = ["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"]
-        .some((key) => ["1", "true", "yes", "on"].includes(running.titleEnv?.[key]?.trim().toLowerCase() ?? ""));
+        .some((key) => ["1", "true", "yes", "on"].includes(live.titleEnv?.[key]?.trim().toLowerCase() ?? ""));
       const canRequest = allowRequest && !title && !current.titleGenerationAttempted && !disabled && typeof query.generateSessionTitle === "function"
-        && Boolean(running.titlePrompt?.trim()) && !running.controller.signal.aborted;
+        && Boolean(turn.titlePrompt?.trim()) && !live.controller.signal.aborted;
       if (!title && !canRequest) return false;
       // Persist the attempt before spending quota so failure/restart cannot
       // create a title request on every turn.
@@ -920,8 +1348,8 @@ export class ClaudeBackend {
         current.titleGenerationAttempted = true;
         await this.store.save(current);
       }
-      if (canRequest) title = await requestClaudeTitle(query, running.titlePrompt!, running.controller.signal);
-      if (title && !running.controller.signal.aborted) {
+      if (canRequest) title = await requestClaudeTitle(query, turn.titlePrompt!, live.controller.signal);
+      if (title && !live.controller.signal.aborted) {
         current = await this.store.read(threadId);
         if (current.thread.titleSource !== "explicit" && current.thread.title !== title) {
           current.thread.title = title;
@@ -937,8 +1365,8 @@ export class ClaudeBackend {
     }
   }
 
-  private async refreshUsage(running: RunningTurn) {
-    const usage = await claudeTelemetry(() => running.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
+  private async refreshUsage(live: LiveSession) {
+    const usage = await claudeTelemetry(() => live.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
     // The snapshot is complete, so it replaces every window. A probe that
     // timed out or returned nothing keeps the last good reading. Only an
     // account Claude does not meter by subscription clears it.
@@ -957,8 +1385,8 @@ export class ClaudeBackend {
    * Installation checks are cached for the session, so a sign-in to another
    * account shows up here first. Limits from a different account are cleared.
    */
-  private async checkAccount(running: RunningTurn): Promise<void> {
-    const info = await claudeTelemetry(() => running.query!.accountInfo());
+  private async checkAccount(live: LiveSession): Promise<void> {
+    const info = await claudeTelemetry(() => live.query!.accountInfo());
     if (!info) return;
     const account = claudeAccountKey(info);
     await this.loadRateLimits();
@@ -1020,9 +1448,9 @@ export class ClaudeBackend {
     this.rateLimitExpiry.unref?.();
   }
 
-  private scheduleContextRefresh(session: ClaudeSession, running: RunningTurn): void {
-    if (running.contextRefresh) {
-      running.contextRefresh.again = true;
+  private scheduleContextRefresh(live: LiveSession): void {
+    if (live.contextRefresh) {
+      live.contextRefresh.again = true;
       return;
     }
     const refresh = { again: false, promise: Promise.resolve() };
@@ -1030,25 +1458,26 @@ export class ClaudeBackend {
       try {
         do {
           refresh.again = false;
-          await this.refreshContext(session, running);
-        } while (refresh.again && !running.ending);
+          await this.refreshContext(live);
+        } while (refresh.again && !live.closing);
       } catch {
         // A meter update must never fail the turn.
       } finally {
-        running.contextRefresh = undefined;
+        live.contextRefresh = undefined;
       }
     })();
-    running.contextRefresh = refresh;
+    live.contextRefresh = refresh;
   }
 
-  private async refreshContext(session: ClaudeSession, running: RunningTurn): Promise<void> {
-    const context = await claudeTelemetry(() => running.query!.getContextUsage({ detail: "summary" }));
+  private async refreshContext(live: LiveSession): Promise<void> {
+    const { session } = live;
+    const context = await claudeTelemetry(() => live.query!.getContextUsage({ detail: "summary" }));
     if (!context || !Number.isFinite(context.totalTokens) || !(context.totalTokens >= 0)
       || !Number.isFinite(context.maxTokens) || !(context.maxTokens > 0)) return;
     session.contextWindow = { usedTokens: context.totalTokens, modelContextWindow: context.maxTokens };
-    running.contextWindow = session.contextWindow;
+    live.contextWindow = session.contextWindow;
     await this.emit({ method: "thread/contextWindow/updated", params: {
-      threadId: session.thread.id, turnId: running.turnId, ...session.contextWindow,
+      threadId: session.thread.id, turnId: live.turn?.turnId ?? live.lastTurnId, ...session.contextWindow,
     } });
   }
 
@@ -1100,8 +1529,8 @@ export class ClaudeBackend {
   }
 
   async listMcpServers(threadId: string): Promise<CodexMcpServerSummary[]> {
-    const query = this.running.get(threadId)?.query;
-    if (!query) throw new Error("Claude MCP inventory is available while a turn is running.");
+    const query = this.sessions.get(threadId)?.query;
+    if (!query) throw new Error("Claude MCP inventory is available while Claude is running.");
     const servers = await query.mcpServerStatus();
     return servers.map((server) => ({
       name: server.name,
@@ -1112,13 +1541,14 @@ export class ClaudeBackend {
     }));
   }
 
-  private async consumeCompleteMessage(message: SDKMessage, threadId: string, running: RunningTurn): Promise<void> {
-    const turnId = running.turnId;
+  private async consumeCompleteMessage(message: SDKMessage, live: LiveSession, turn: RunningTurn): Promise<void> {
+    const threadId = live.session.thread.id;
+    const turnId = turn.turnId;
     if (message.type === "system" && message.subtype === "local_command_output") {
       const entry: AppServerThreadMessageEntry = {
         type: "message", id: message.uuid, role: "assistant", text: message.content, turn: { id: turnId },
       };
-      running.entries.set(entry.id, entry);
+      turn.entries.set(entry.id, entry);
       await this.store.append(threadId, [entry]);
       await this.emit({ method: "item/completed", params: {
         threadId, turnId, item: { id: entry.id, type: "agentMessage", text: entry.text },
@@ -1131,11 +1561,11 @@ export class ClaudeBackend {
         // the text an earlier block completed.
         // Streamed deltas already include the current block. Only completed
         // blocks may contribute to the prefix when its final frame arrives.
-        const completed = running.completedMessageText.get(message.message.id);
+        const completed = turn.completedMessageText.get(message.message.id);
         const prior = completed ? `${completed}\n` : "";
-        running.completedMessageText.set(message.message.id, prior + text);
+        turn.completedMessageText.set(message.message.id, prior + text);
         const entry: AppServerThreadMessageEntry = { type: "message", id: message.message.id, role: "assistant", text: prior + text, turn: { id: turnId } };
-        running.entries.set(entry.id, entry);
+        turn.entries.set(entry.id, entry);
         await this.store.append(threadId, [entry]);
         await this.emit({ method: "item/completed", params: { threadId, turnId, item: { id: entry.id, type: "agentMessage", text: entry.text } } });
       }
@@ -1146,12 +1576,12 @@ export class ClaudeBackend {
           // The CLI validates the call before it runs it, and the model retries
           // a rejected one. The card waits for the result, so a retry is not a
           // second review.
-          running.pendingReports.set(block.id, { report, model: message.message.model, input: block.input });
+          turn.pendingReports.set(block.id, { report, model: message.message.model, input: block.input });
           continue;
         }
         const input = block.input as Record<string, unknown>;
         const command = block.name === "Bash" && typeof input.command === "string" ? input.command : undefined;
-        running.entries.set(block.id, {
+        const activity: AppServerThreadActivityEntry = {
           ...(command !== undefined
             ? claudeCommandActivity({ id: block.id, command, status: "in_progress" })
             : {
@@ -1159,8 +1589,11 @@ export class ClaudeBackend {
               details: [{ id: block.id, kind: "read" as const, label: block.name, markdown: JSON.stringify(input) }],
             }),
           createdAt: Date.now(), turn: { id: turnId },
-        });
-        await this.store.append(threadId, [running.entries.get(block.id)!]);
+        };
+        turn.entries.set(block.id, activity);
+        // A task this call starts can outlive the turn.
+        live.toolRows.set(block.id, { entry: activity, turnId });
+        await this.store.append(threadId, [activity]);
         const item = {
           id: block.id, status: "in_progress",
           ...(command !== undefined ? { type: "commandExecution", command }
@@ -1172,19 +1605,19 @@ export class ClaudeBackend {
     if (message.type === "user" && Array.isArray(message.message.content)) {
       for (const block of message.message.content) {
         if (block.type !== "tool_result") continue;
-        const pendingReport = running.pendingReports.get(block.tool_use_id);
+        const pendingReport = turn.pendingReports.get(block.tool_use_id);
         if (pendingReport) {
-          running.pendingReports.delete(block.tool_use_id);
+          turn.pendingReports.delete(block.tool_use_id);
           if (!block.is_error) {
             await this.reportFindings({
-              threadId, turnId, running, toolUseId: block.tool_use_id,
+              threadId, turnId, turn, toolUseId: block.tool_use_id,
               report: pendingReport.report, model: pendingReport.model,
             });
-            running.hasCompletedToolActivity = true;
+            turn.hasCompletedToolActivity = true;
             continue;
           }
           // A rejected report stays visible as the failed tool call it was.
-          running.entries.set(block.tool_use_id, {
+          turn.entries.set(block.tool_use_id, {
             type: "activity", id: block.tool_use_id, summary: CLAUDE_REPORT_FINDINGS_TOOL, status: "in_progress",
             details: [{
               id: block.tool_use_id, kind: "read", label: CLAUDE_REPORT_FINDINGS_TOOL,
@@ -1193,14 +1626,14 @@ export class ClaudeBackend {
             createdAt: Date.now(), turn: { id: turnId },
           });
         }
-        const entry = running.entries.get(block.tool_use_id);
+        const entry = turn.entries.get(block.tool_use_id);
         if (entry?.type !== "activity") continue;
         // A background launch answers with a placeholder. The task's
         // notification completes the row.
         const launchedTask = !block.is_error
-          && (running.tasks.isBackgroundToolUse(block.tool_use_id) || claudeBackgroundLaunch(message.tool_use_result));
-        if (launchedTask) running.launchedToolUseIds.add(block.tool_use_id);
-        else running.tasks.settleForeground(block.tool_use_id);
+          && (live.tasks.isBackgroundToolUse(block.tool_use_id) || claudeBackgroundLaunch(message.tool_use_result));
+        if (launchedTask) live.launchedToolUseIds.add(block.tool_use_id);
+        else live.tasks.settleForeground(block.tool_use_id);
         entry.status = block.is_error ? "failed" : launchedTask ? "in_progress" : "completed";
         const output = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
         const command = entry.details[0].command?.rawCommand;
@@ -1214,7 +1647,7 @@ export class ClaudeBackend {
           }];
         }
         await this.store.append(threadId, [entry]);
-        running.hasCompletedToolActivity = true;
+        turn.hasCompletedToolActivity = true;
         if (launchedTask) continue;
         const item = {
           id: entry.id, status: entry.status,
@@ -1233,13 +1666,13 @@ export class ClaudeBackend {
    * review it repeats; one that repeats no earlier review is a new review.
    */
   private async reportFindings(params: {
-    threadId: string; turnId: string; running: RunningTurn; toolUseId: string;
+    threadId: string; turnId: string; turn: RunningTurn; toolUseId: string;
     report: ClaudeFindingsReport; model?: string;
   }): Promise<void> {
-    const { threadId, turnId, running, report } = params;
+    const { threadId, turnId, turn, report } = params;
     const session = await this.store.read(threadId);
     if (isClaudeOutcomeReport(report)) {
-      const entries = [...(await this.store.entries(threadId)), ...running.entries.values()];
+      const entries = [...(await this.store.entries(threadId)), ...turn.entries.values()];
       const previous = entries.findLast((entry): entry is AppServerThreadReviewEntry =>
         entry.type === "review" && entry.reviewer?.backend === "claude" && entry.output !== undefined
         && entry.id !== params.toolUseId);
@@ -1275,7 +1708,7 @@ export class ClaudeBackend {
       ...(context ? { context } : {}),
       turn: { id: turnId },
     };
-    running.entries.set(entry.id, entry);
+    turn.entries.set(entry.id, entry);
     await this.store.append(threadId, [entry]);
     await this.emit({ method: "item/completed", params: { threadId, turnId, item: {
       id: entry.id, type: "exitedReviewMode", review: entry.review, createdAt: entry.createdAt,
@@ -1290,27 +1723,81 @@ export class ClaudeBackend {
     }
   }
 
-  async interruptTurn(params: { threadId: string; turnId: string }): Promise<typeof params> {
-    const running = this.running.get(params.threadId);
-    if (running && running.turnId !== params.turnId) throw new Error("The active Claude turn has changed.");
-    if (running) running.ending = true;
-    running?.input.close();
-    running?.controller.abort();
-    running?.query?.close();
-    await running?.done;
+  /** `keepTasks: false` ends the query even when tasks run, as quitting does. */
+  async interruptTurn(params: { threadId: string; turnId: string }, options: { keepTasks?: boolean } = {}): Promise<typeof params> {
+    const live = this.sessions.get(params.threadId);
+    const turn = live?.turn;
+    if (turn && turn.turnId !== params.turnId) throw new Error("The active Claude turn has changed.");
+    if (!live || !turn) return params;
+    // Without tasks to keep, ending the query is the surest stop.
+    if (options.keepTasks === false || !await this.interruptKeepingTasks(live, turn)) await this.closeSession(live);
     return params;
+  }
+
+  /**
+   * Stop the turn but keep the process, and the background tasks it runs.
+   * Returns false when only ending the query can stop the turn.
+   */
+  private async interruptKeepingTasks(live: LiveSession, turn: RunningTurn): Promise<boolean> {
+    // A CLI that cannot drop queued messages would run the steers being stopped.
+    if (!live.query || live.closing || live.tasks.active().length === 0
+      || !live.capabilities?.includes(CLAUDE_INTERRUPT_CANCEL_QUEUED)) return false;
+    turn.interrupted = true;
+    let cancelledPrompt = false;
+    try {
+      const receipt = await (live.query as ClaudeInterruptQuery).interrupt({ cancelQueued: true });
+      for (const uuid of receipt?.cancelled ?? []) cancelledPrompt = turn.pendingSteers.delete(uuid) || cancelledPrompt;
+    } catch (error) {
+      claudeBackendLog.warn("Claude rejected an interrupt; ending its session", {
+        threadId: live.session.thread.id, error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+    // Claude had not started on the turn's input, so no result will answer.
+    if (cancelledPrompt && turn.pendingSteers.size === 0 && live.sessionState === "idle" && live.turn === turn) {
+      turn.abandoned = true;
+      live.wake.wake();
+      await turn.ended.promise;
+      return true;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answered = await Promise.race([
+      turn.ended.promise.then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), this.options.interruptGraceMs ?? CLAUDE_INTERRUPT_GRACE_MS);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
+    if (!answered && live.turn === turn) {
+      turn.abandoned = true;
+      live.wake.wake();
+    }
+    await turn.ended.promise;
+    return true;
+  }
+
+  /** Close the query, and with it the CLI process and every task it runs. */
+  private async closeSession(live: LiveSession): Promise<void> {
+    if (live.turn) live.turn.ending = true;
+    live.input.close();
+    live.controller.abort();
+    live.query?.close();
+    await live.done;
   }
 
   async steerTurn(params: { threadId: string; expectedTurnId: string; input: AppServerTurnInputItem[] }): Promise<{
     threadId: string; turnId: string; messageId: string;
   }> {
-    const running = this.running.get(params.threadId);
-    if (!running) throw new Error("Claude has no active turn. Queue the message instead.");
+    const live = this.sessions.get(params.threadId);
+    const turn = live?.turn;
+    if (!live || !turn) throw new Error("Claude has no active turn. Queue the message instead.");
     const assertActive = () => {
-      if (this.running.get(params.threadId) !== running || running.ending || running.controller.signal.aborted) {
+      if (this.sessions.get(params.threadId) !== live || live.turn !== turn || turn.ending
+        || live.closing || live.controller.signal.aborted) {
         throw new Error("Claude has no active turn. Queue the message instead.");
       }
-      if (running.turnId !== params.expectedTurnId) throw new Error("Claude expected active turn id has changed.");
+      if (turn.turnId !== params.expectedTurnId) throw new Error("Claude expected active turn id has changed.");
       // Before the query launches, the input stream buffers the steer; the
       // prompt generator sends it right after the first prompt.
     };
@@ -1318,51 +1805,64 @@ export class ClaudeBackend {
     const content = await claudeInput(params.input);
     const uuid = randomUUID();
     const messageId = `user:${uuid}`;
-    const operation = running.inputWrites.then(async () => {
+    const operation = live.inputWrites.then(async () => {
       assertActive();
       // Native result receipts retain at most 64 consumed UUIDs, including
       // the original prompt. Never accept more than we can acknowledge.
-      if (running.pendingSteers.size >= 63) throw new Error("Claude has too many pending steer messages. Queue this message instead.");
+      if (turn.pendingSteers.size >= 63) throw new Error("Claude has too many pending steer messages. Queue this message instead.");
       const parts = claudeUserMessageParts(params.input);
       const entry: AppServerThreadMessageEntry = {
         type: "message", id: messageId, role: "user", parts,
         text: parts.flatMap((part) => part.type === "text" ? [part.text] : []).join("\n"),
-        createdAt: Date.now(), turn: { id: running.turnId, status: "in_progress" },
+        createdAt: Date.now(), turn: { id: turn.turnId, status: "in_progress" },
       };
       // Hand the message to Claude before any await: the turn can end while
       // history is written, and a rejected steer must leave no transcript row.
-      running.entries.set(messageId, entry);
-      running.pendingSteers.add(uuid);
+      turn.entries.set(messageId, entry);
+      turn.pendingSteers.add(uuid);
       // "next" joins the running turn at its next boundary. "now" aborts the
       // in-flight response and ends that native turn with an error result.
-      running.input.push({ type: "user", uuid, priority: "next", parent_tool_use_id: null,
+      live.input.push({ type: "user", uuid, priority: "next", parent_tool_use_id: null,
         message: { role: "user", content } });
       // The message is already sent; turn completion persists every entry,
       // so an early-write failure must not report the steer as rejected.
       await this.store.append(params.threadId, [entry]).catch(() => {});
       await this.emit({ method: "item/completed", params: {
-        threadId: params.threadId, turnId: running.turnId,
+        threadId: params.threadId, turnId: turn.turnId,
         item: { id: messageId, type: "userMessage", text: entry.text, content: parts },
       } });
     });
-    running.inputWrites = operation.catch(() => {});
+    live.inputWrites = operation.catch(() => {});
     await operation;
-    return { threadId: params.threadId, turnId: running.turnId, messageId };
+    return { threadId: params.threadId, turnId: turn.turnId, messageId };
   }
 
-  private async settleInputWrites(running: RunningTurn): Promise<void> {
+  private async settleInputWrites(live: LiveSession): Promise<void> {
     let writes: Promise<void>;
     do {
-      writes = running.inputWrites;
+      writes = live.inputWrites;
       await writes;
-    } while (writes !== running.inputWrites);
+    } while (writes !== live.inputWrites);
   }
 
   async close(): Promise<void> {
     if (this.rateLimitExpiry) clearTimeout(this.rateLimitExpiry);
     this.rateLimitExpiry = undefined;
-    await Promise.all([...this.running.entries()].map(([threadId, running]) => this.interruptTurn({ threadId, turnId: running.turnId })));
+    for (const controller of this.starting.values()) controller.abort();
+    await Promise.all([...this.sessions.values()].map((live) => this.closeSession(live)));
   }
+}
+
+/** The item event for a Claude tool row. */
+function claudeActivityItem(entry: AppServerThreadActivityEntry, output?: string) {
+  const command = entry.details[0]?.command?.rawCommand;
+  return {
+    id: entry.id, status: entry.status,
+    ...(command !== undefined
+      ? { type: "commandExecution", command, ...(output !== undefined ? { aggregatedOutput: output } : {}) }
+      : { type: "dynamicToolCall", toolName: entry.summary,
+        ...(output !== undefined ? { contentItems: [{ type: "inputText", text: output }] } : {}) }),
+  };
 }
 
 /** Whether a tool result is the placeholder of a task launched in the background. */

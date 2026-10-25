@@ -16,13 +16,18 @@ import type {
  */
 export function createClaudeElicitationHandler(options: {
   threadId: string;
-  turnId: string;
+  /**
+   * A live session outlives its desktop turn, and a background task can ask
+   * between turns, so the turn is read when the request is made.
+   */
+  turnId: () => string;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
-  cancelRequest: (requestId: string) => Promise<void>;
+  cancelRequest: (requestId: string, turnId: string) => Promise<void>;
 }): OnElicitation {
   return async (elicitation, context) => {
     if (context.signal.aborted) return { action: "cancel" };
     const requestId = randomUUID();
+    const turnId = options.turnId();
     const mode = elicitation.mode === "url" ? "url" : "form";
     const meta = {
       ...(elicitation.displayName ? { connector_name: elicitation.displayName } : {}),
@@ -33,7 +38,7 @@ export function createClaudeElicitationHandler(options: {
       method: "mcpServer/elicitation/request",
       params: {
         threadId: options.threadId,
-        turnId: options.turnId,
+        turnId,
         requestId,
         serverName: elicitation.serverName,
         mode,
@@ -53,7 +58,7 @@ export function createClaudeElicitationHandler(options: {
         options.request(request, context.signal),
         new Promise<undefined>((resolve) => {
           abort = () => {
-            void options.cancelRequest(requestId).then(() => resolve(undefined), () => resolve(undefined));
+            void options.cancelRequest(requestId, turnId).then(() => resolve(undefined), () => resolve(undefined));
           };
           context.signal.addEventListener("abort", abort, { once: true });
           if (context.signal.aborted) abort();

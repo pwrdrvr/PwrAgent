@@ -1,4 +1,4 @@
-import { ClaudeBackend, type ClaudeBackendOptions } from "../claude/claude-backend";
+import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { ForgeReadError, validateForgeReadArgs, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
@@ -10928,7 +10928,8 @@ export class DesktopBackendRegistry {
       }
       try {
         if (turn.backend === "claude") {
-          await this.claudeBackend.interruptTurn(turn);
+          // The app is quitting, so its tasks stop with it.
+          await this.claudeBackend.interruptTurn(turn, { keepTasks: false });
           counts.requested += 1;
           return;
         }
@@ -14907,6 +14908,7 @@ export class DesktopBackendRegistry {
       || this.threadHandoffReservations.has(buildThreadIdentityKey(thread.source, thread.id))
       || this.handoffTurnStarts.has(buildThreadIdentityKey(thread.source, thread.id))
       || (thread.source === "codex" && this.codexBackgroundTerminals.has(thread.id))
+      || (thread.source === "claude" && this.claudeBackend.hasLiveSession(thread.id))
       || this.threadHasActiveTurn(thread.id, thread.source)
       || this.threadHasBlockingWorkspaceMove(identity)
       || this.threadTurnQueue.getQueuedEntries(identity).length > 0
@@ -19369,6 +19371,10 @@ export class DesktopBackendRegistry {
     for (const threadId of this.codexBackgroundTerminals.keys()) {
       addThread("codex", threadId);
     }
+    // A Claude session outlives its turn while background tasks run.
+    for (const threadId of this.claudeBackend.liveSessionThreadIds()) {
+      addThread("claude", threadId);
+    }
     for (const threadId of this.liveCodexToolItemsByThread.keys()) {
       addThread("codex", threadId);
     }
@@ -19842,6 +19848,8 @@ export class DesktopBackendRegistry {
         privateStorageRoots: this.localFilePrivateStorageRoots,
       }), params, this.localFilePrivateStorageRoots);
       const registrations = await this.registerMcpConnections(overlay?.mcpConnectionIds, params.threadId);
+      // Once handed over, the Claude session revokes them when it closes.
+      let handedOver = false;
       let revoked = false;
       const revokeConnections = () => {
         if (revoked) return;
@@ -19867,18 +19875,22 @@ export class DesktopBackendRegistry {
         const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
           ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
           : { type: "stdio" as const, command: server.command, args: server.args, env: server.env }]));
+        const instructions = (await this.getThreadAgentMetadata(params))?.instructions;
+        handedOver = true;
         const result = await this.claudeBackend.startTurn({
           ...params, input, model: modelSettings.model, reasoningEffort: modelSettings.reasoningEffort,
           executionMode: params.executionMode ?? overlay?.executionMode,
-          instructions: (await this.getThreadAgentMetadata(params))?.instructions,
+          instructions,
           mcpServers,
-          onTurnFinished: revokeConnections,
+          onSessionClosed: revokeConnections,
         });
         await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
           messageId: `user:${result.turnId}`, origin: resolveThreadMessageOrigin(params) });
         return result;
       } catch (error) {
-        revokeConnections();
+        // A live session shares the thread's grants, so it alone revokes them.
+        if (!handedOver) revokeConnections();
+        if (error instanceof ClaudeTurnActiveError) throw new ThreadAlreadyActiveError(error.message);
         throw error;
       }
     }
@@ -25619,8 +25631,8 @@ export class DesktopBackendRegistry {
   }
 
   async listBackgroundTerminals(request: ListBackgroundTerminalsRequest): Promise<ListBackgroundTerminalsResponse> {
-    // Claude's running tasks live with its active turn, which already keeps
-    // the thread busy for quit, archive, and the thread list.
+    // Claude's running tasks live with its session, which counts as work for
+    // quit and auto-archive like a Codex background terminal.
     if (request.backend === "claude") return this.claudeBackend.listBackgroundTasks(request.threadId);
     if (request.backend !== "codex") return { supported: false, terminals: [] };
     const generation = this.backgroundTerminalGeneration;

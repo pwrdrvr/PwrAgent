@@ -2,9 +2,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Options, Query, SDKMessage, query } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, Query, SDKMessage, SDKUserMessage, query } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentEvent, BackendModelOption } from "@pwragent/shared";
-import { ClaudeBackend } from "../claude/claude-backend";
+import { ClaudeBackend, ClaudeTurnActiveError } from "../claude/claude-backend";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { createClaudePermissionHandler, claudePermissionMode } from "../claude/claude-permissions";
 import { createClaudeElicitationHandler } from "../claude/claude-elicitation";
@@ -16,7 +16,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
+async function fixture(messages?: (options: Options, prompt: AsyncIterable<SDKUserMessage>) => AsyncGenerator<SDKMessage>, controls: Partial<Query> & {
   generateSessionTitle?: (description: string, options?: { persist?: boolean }) => Promise<string | null>;
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-"));
@@ -43,7 +43,7 @@ async function fixture(messages?: (options: Options) => AsyncGenerator<SDKMessag
       } } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false, result: "Hello world" } as SDKMessage;
     }
-    return Object.assign(messages ? messages(options) : normal(), {
+    return Object.assign(messages ? messages(options, args.prompt as AsyncIterable<SDKUserMessage>) : normal(), {
       close, setPermissionMode: vi.fn().mockResolvedValue(undefined), ...controls,
     }) as unknown as Query;
   });
@@ -999,7 +999,7 @@ describe("Claude SDK backend", () => {
     expect(await f.backend.listMcpServers(threadId)).toEqual([{ name: "pwragent", authStatus: "unsupported", startupStatus: "ready", tools: ["search_mcp_tools"] }]);
     finish();
     await f.waitForTurn();
-    await expect(f.backend.listMcpServers(threadId)).rejects.toThrow("while a turn is running");
+    await expect(f.backend.listMcpServers(threadId)).rejects.toThrow("while Claude is running");
   });
 
   it("publishes discovery immediately and retains the catalog when a later refresh fails", async () => {
@@ -1458,65 +1458,88 @@ describe("Claude SDK backend", () => {
     } });
   });
 
-  it("keeps the turn and its query open while a background command runs, then finishes after Claude's follow-up", async () => {
+  it("ends the turn at its result while a background command keeps the session open, then carries Claude's follow-up", async () => {
     const commandDone = Promise.withResolvers<void>();
+    const followUpDone = Promise.withResolvers<void>();
     const stopTask = vi.fn().mockResolvedValue(undefined);
     const f = await fixture(async function* () {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
       yield { type: "assistant", parent_tool_use_id: null, message: {
-        id: "launch", content: [{ type: "tool_use", id: "tool-bash", name: "Bash", input: { command: "pnpm test --watch=false", run_in_background: true } }],
+        id: "launch", content: [{ type: "tool_use", id: "tool-bash", name: "Bash", input: { command: "pnpm dev", run_in_background: true } }],
       } } as SDKMessage;
       yield { type: "system", subtype: "task_started", task_id: "task-1", tool_use_id: "tool-bash",
-        description: "Run the tests", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+        description: "Run the dev server", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
       yield { type: "system", subtype: "background_tasks_changed", tasks: [
-        { task_id: "task-1", task_type: "local_bash", description: "Run the tests" },
+        { task_id: "task-1", task_type: "local_bash", description: "Run the dev server" },
       ] } as SDKMessage;
       yield { type: "user", parent_tool_use_id: null, tool_use_result: { stdout: "", stderr: "", interrupted: false, backgroundTaskId: "task-1" },
         message: { content: [{ type: "tool_result", tool_use_id: "tool-bash", content: "Command running in background with ID: task-1" }] } } as SDKMessage;
       yield { type: "assistant", parent_tool_use_id: null, message: {
-        id: "waiting", content: [{ type: "text", text: "The tests are running. I'll resume when they report back." }],
+        id: "waiting", content: [{ type: "text", text: "The dev server is starting. I'll check on it when it reports back." }],
       } } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
       await commandDone.promise;
       yield { type: "system", subtype: "task_notification", task_id: "task-1", tool_use_id: "tool-bash",
-        status: "completed", output_file: "", summary: "Tests passed" } as SDKMessage;
+        status: "completed", output_file: "", summary: "Server exited" } as SDKMessage;
       yield { type: "system", subtype: "background_tasks_changed", tasks: [] } as unknown as SDKMessage;
       yield { type: "assistant", parent_tool_use_id: null, message: {
-        id: "resumed", content: [{ type: "text", text: "All tests passed." }],
+        id: "resumed", content: [{ type: "text", text: "The dev server exited cleanly." }],
       } } as SDKMessage;
+      await followUpDone.promise;
       yield { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
     }, { stopTask });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
-    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Run the tests" }] });
-    await vi.waitFor(() => expect(f.events.some((event) => event.notification.method === "item/completed"
-      && JSON.stringify(event.notification.params).includes("resume when they report back"))).toBe(true));
-    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
-      itemId: "tool-bash", processId: "task-1", command: "pnpm test --watch=false", cwd: f.root,
-    }]));
-    expect(f.events.some((event) => event.notification.method === "thread/backgroundTasks/updated"
-      && (event.notification.params as { tasks: unknown[] }).tasks.length === 1)).toBe(true);
-    expect(f.events.some((event) => ["turn/completed", "turn/failed"].includes(event.notification.method))).toBe(false);
+    const started = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start the dev server" }] });
+    await f.waitForTurn();
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
+    // The task outlives its turn, and so does the process that runs it.
     expect(f.close).not.toHaveBeenCalled();
-    expect((await f.backend.readThread(threadId)).threadStatus).toBe("active");
+    expect(f.backend.liveSessionThreadIds()).toEqual([threadId]);
+    expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
+      itemId: "tool-bash", processId: "task-1", command: "pnpm dev", cwd: f.root,
+    }]);
+    const between = await f.backend.readThread(threadId);
+    expect(between.threadStatus).toBe("idle");
+    expect((await f.backend.listThreads()).find((thread) => thread.id === threadId)?.threadStatus).toBe("idle");
     // The placeholder result does not complete the command's row.
+    expect(between.entries.find((entry) => entry.id === "tool-bash")).toMatchObject({ status: "in_progress" });
     expect(f.events.some((event) => event.notification.method === "item/completed"
       && (event.notification.params.item as { id?: string }).id === "tool-bash")).toBe(false);
+    await expect(f.backend.steerTurn({ threadId, expectedTurnId: started.turnId, input: [{ type: "text", text: "Late" }] }))
+      .rejects.toThrow("no active turn");
+    await expect(f.backend.setArchived(threadId, true)).rejects.toThrow("Stop Claude's background tasks before archiving.");
     await f.backend.stopBackgroundTask(threadId, "task-1");
     expect(stopTask).toHaveBeenCalledWith("task-1");
 
     commandDone.resolve();
+    await vi.waitFor(() => expect(f.events.filter((event) => event.notification.method === "turn/started")).toHaveLength(2));
+    const followUpId = (f.events.filter((event) => event.notification.method === "turn/started").at(-1)!
+      .notification.params as { turn: { id: string } }).turn.id;
+    expect(followUpId).not.toBe(started.turnId);
+    expect((await f.backend.readThread(threadId)).threadStatus).toBe("active");
+    await expect(f.backend.startTurn({ threadId, input: [{ type: "text", text: "Queued" }] }))
+      .rejects.toBeInstanceOf(ClaudeTurnActiveError);
+    // The row settles in the turn that ran the command.
+    expect(f.events.find((event) => event.notification.method === "item/completed"
+      && (event.notification.params.item as { id?: string }).id === "tool-bash")?.notification.params)
+      .toMatchObject({ turnId: started.turnId, item: { status: "completed", aggregatedOutput: expect.stringContaining("Server exited") } });
+    followUpDone.resolve();
     await f.waitForTurn();
-    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
-    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
-    const command = f.events.find((event) => event.notification.method === "item/completed"
-      && (event.notification.params.item as { id?: string }).id === "tool-bash");
-    expect(command?.notification.params).toMatchObject({ item: { status: "completed", aggregatedOutput: expect.stringContaining("Tests passed") } });
+    expect(f.close).toHaveBeenCalled();
+    expect(f.run).toHaveBeenCalledOnce();
+    expect(f.backend.liveSessionThreadIds()).toEqual([]);
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(2);
+    expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/completed", params: { turnId: followUpId } });
     expect(f.events.filter((event) => event.notification.method === "thread/backgroundTasks/updated").at(-1)?.notification.params)
       .toMatchObject({ tasks: [] });
     expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([]);
     const replay = await f.backend.readThread(threadId);
     expect(replay.threadStatus).toBe("idle");
-    expect(replay.lastAssistantMessage).toBe("All tests passed.");
+    expect(replay.lastAssistantMessage).toBe("The dev server exited cleanly.");
+    expect(replay.entries.find((entry) => entry.id === "tool-bash")).toMatchObject({
+      status: "completed", turn: { id: started.turnId, status: "completed" },
+    });
+    expect(replay.entries.find((entry) => entry.id === "resumed")).toMatchObject({ turn: { id: followUpId, status: "completed" } });
   });
 
   it("follows Claude Code 2.1.301's captured background-command sequence to its follow-up turn", async () => {
@@ -1548,13 +1571,22 @@ describe("Claude SDK backend", () => {
       yield { type: "system", subtype: "session_state_changed", state: "idle" } as SDKMessage;
     });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
-    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Probe" }] });
+    const started = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Probe" }] });
+    await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
     await f.waitForTurn();
-    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
+    const methods = f.events.map((event) => event.notification.method)
+      .filter((method) => ["turn/started", "turn/completed", "item/completed"].includes(method));
+    // The first turn ends at idle, before the command does; the follow-up is a turn of its own.
+    expect(methods.indexOf("turn/completed")).toBeLessThan(f.events.findIndex((event) =>
+      event.notification.method === "item/completed" && (event.notification.params.item as { id?: string }).id === "toolu_1"
+      && (event.notification.params.item as { status?: string }).status === "completed"));
+    expect(f.events.filter((event) => event.notification.method === "turn/started")).toHaveLength(2);
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(2);
     expect((await f.backend.readThread(threadId)).lastAssistantMessage).toBe("DONE");
     expect(f.events.find((event) => event.notification.method === "item/completed"
-      && (event.notification.params.item as { id?: string }).id === "toolu_1")?.notification.params)
-      .toMatchObject({ item: { status: "completed" } });
+      && (event.notification.params.item as { id?: string }).id === "toolu_1"
+      && (event.notification.params.item as { status?: string }).status !== "in_progress")?.notification.params)
+      .toMatchObject({ turnId: started.turnId, item: { status: "completed" } });
   });
 
   it("keeps a background monitor the live set names running past its native result", async () => {
@@ -1566,6 +1598,7 @@ describe("Claude SDK backend", () => {
       ] } as SDKMessage;
       // Monitors carry no is_backgrounded flag.
       yield { type: "system", subtype: "task_started", task_id: "monitor-1", description: "Watch the deploy", task_type: "monitor_mcp" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "watching", content: [{ type: "text", text: "Watching." }] } } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false, result: "watching" } as SDKMessage;
       await monitorDone.promise;
       yield { type: "system", subtype: "task_notification", task_id: "monitor-1", status: "completed", output_file: "", summary: "Deployed" } as SDKMessage;
@@ -1575,31 +1608,272 @@ describe("Claude SDK backend", () => {
     });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Watch" }] });
-    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toMatchObject([{ processId: "monitor-1", kind: "task" }]));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
-    monitorDone.resolve();
     await f.waitForTurn();
+    expect(f.backend.listBackgroundTasks(threadId).terminals).toMatchObject([{ processId: "monitor-1", kind: "task" }]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(f.close).not.toHaveBeenCalled();
+    monitorDone.resolve();
+    await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+    await f.waitForTurn();
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(2);
     expect((await f.backend.readThread(threadId)).lastAssistantMessage).toBe("Deployed.");
   });
 
-  it("records an intermediate result's totals when the turn is stopped during a background wait", async () => {
+  it("sends a new message into the live session and bills each turn its own share of the totals", async () => {
     const model = { inputTokens: 100, outputTokens: 20, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
       costUSD: 2, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0 };
-    const f = await fixture(async function* (options) {
+    let second: SDKUserMessage | undefined;
+    const f = await fixture(async function* (options, prompt) {
+      const input = prompt[Symbol.asyncIterator]();
+      await input.next();
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
-      yield { type: "system", subtype: "task_started", task_id: "task-1", description: "sleep", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
-      yield { type: "result", subtype: "success", is_error: false, result: "waiting", modelUsage: { opus: model } } as unknown as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: {
+        id: "launch", content: [{ type: "tool_use", id: "tool-bash", name: "Bash", input: { command: "pnpm dev", run_in_background: true } }],
+      } } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "task-1", tool_use_id: "tool-bash",
+        description: "pnpm dev", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      yield { type: "user", parent_tool_use_id: null, tool_use_result: { backgroundTaskId: "task-1" },
+        message: { content: [{ type: "tool_result", tool_use_id: "tool-bash", content: "Command running in background with ID: task-1" }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "running", modelUsage: { opus: model } } as unknown as SDKMessage;
+      second = (await input.next()).value as SDKUserMessage;
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "status", content: [{ type: "text", text: "Still serving." }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "Still serving.", user_message_uuids: [second.uuid],
+        modelUsage: { opus: { ...model, inputTokens: 250, costUSD: 5 } } } as unknown as SDKMessage;
       await new Promise<void>((resolve) => {
         options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
       });
     });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
-    const turn = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
-    await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toHaveLength(1));
-    await f.backend.interruptTurn(turn);
-    expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
-    expect((await f.store.read(threadId)).modelUsage?.opus.costUSD).toBe(2);
+    const first = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start the dev server" }] });
+    await f.waitForTurn();
+    const onSessionClosed = vi.fn();
+    const next = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Is it still up?" }], onSessionClosed });
+    await f.waitForTurn();
+    expect(f.run).toHaveBeenCalledOnce();
+    expect(second).toMatchObject({ type: "user", priority: "next", message: { content: [{ type: "text", text: "Is it still up?" }] } });
+    expect(f.events.filter((event) => event.notification.method === "thread/tokenUsage/updated").map((event) => event.notification.params))
+      .toMatchObject([
+        { turnId: first.turnId, tokenUsage: { claudeCostUSD: 2, last: { inputTokens: 100 } } },
+        { turnId: next.turnId, tokenUsage: { claudeCostUSD: 3, last: { inputTokens: 150 } } },
+      ]);
+    expect((await f.backend.readThread(threadId)).entries.flatMap((entry) =>
+      entry.type === "message" ? [[entry.text, entry.turn?.id]] : [])).toEqual([
+      ["Start the dev server", first.turnId], ["Is it still up?", next.turnId], ["Still serving.", next.turnId],
+    ]);
+    // The session holds the turn's MCP grants until it closes.
+    expect(onSessionClosed).not.toHaveBeenCalled();
+    await f.backend.close();
+    expect(onSessionClosed).toHaveBeenCalledOnce();
+    expect(f.backend.liveSessionThreadIds()).toEqual([]);
+    // The command died with the process, after the turn that ran it ended.
+    expect(f.events.findLast((event) => event.notification.method === "item/completed"
+      && (event.notification.params.item as { id?: string }).id === "tool-bash")?.notification.params)
+      .toMatchObject({ turnId: first.turnId, item: { status: "cancelled" } });
+    expect((await f.store.read(threadId)).modelUsage?.opus.costUSD).toBe(5);
+  });
+
+  it("applies a later turn's settings to the live session without stopping its tasks", async () => {
+    let answers = 0;
+    const controls = {
+      setModel: vi.fn().mockResolvedValue(undefined),
+      applyFlagSettings: vi.fn().mockResolvedValue(undefined),
+      setPermissionMode: vi.fn().mockResolvedValue(undefined),
+      setMcpServers: vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} }),
+    };
+    const f = await fixture(async function* (_options, prompt) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "system", subtype: "task_started", task_id: "task-1", description: "pnpm dev", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      for await (const message of prompt) {
+        answers += 1;
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: `answer-${answers}`, content: [{ type: "text", text: "OK" }] } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "OK",
+          ...(message.uuid ? { user_message_uuids: [message.uuid] } : {}) } as unknown as SDKMessage;
+      }
+    }, controls);
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Start" }], model: "opus" });
+    await f.waitForTurn();
+    const mcpServers = { crm: { type: "http" as const, url: "http://127.0.0.1:9/mcp" } };
+    const settings = { model: "sonnet", reasoningEffort: "high", executionMode: "auto" as const, mcpServers };
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Next" }], ...settings });
+    await f.waitForTurn();
+    expect(f.run).toHaveBeenCalledOnce();
+    expect(controls.setModel).toHaveBeenCalledWith("sonnet");
+    expect(controls.applyFlagSettings).toHaveBeenCalledWith({ effortLevel: "high" });
+    expect(controls.setPermissionMode).toHaveBeenCalledWith("auto");
+    expect(controls.setMcpServers).toHaveBeenCalledWith(mcpServers);
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Again" }], ...settings });
+    await f.waitForTurn();
+    expect(controls.setModel).toHaveBeenCalledOnce();
+    // Only a new process takes new instructions; the running task keeps this one.
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Be brief" }], ...settings, instructions: "Be brief." });
+    await f.waitForTurn();
+    expect(f.run).toHaveBeenCalledOnce();
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(4);
+    // A change Claude rejects fails the message rather than the task.
+    controls.setPermissionMode.mockRejectedValueOnce(new Error("Unsupported mode"));
+    await expect(f.backend.startTurn({ threadId, input: [{ type: "text", text: "Full access" }], ...settings,
+      executionMode: "full-access" })).rejects.toThrow("Claude could not apply this message's settings while its background tasks run: Unsupported mode");
+    expect(f.close).not.toHaveBeenCalled();
+    expect(f.backend.listBackgroundTasks(threadId).terminals).toHaveLength(1);
+    await f.backend.close();
+  });
+
+  it("relaunches for new instructions once no task would stop with the process", async () => {
+    const firstGrants = vi.fn();
+    const secondGrants = vi.fn();
+    let releasedAtRelaunch: number | undefined;
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      if (options.resume) {
+        releasedAtRelaunch = firstGrants.mock.calls.length;
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "brief", content: [{ type: "text", text: "Brief." }] } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "Brief." } as SDKMessage;
+        return;
+      }
+      yield { type: "system", subtype: "task_started", task_id: "task-1", description: "sleep", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "waiting", content: [{ type: "text", text: "Waiting." }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "task-1", status: "completed", output_file: "", summary: "done" } as SDKMessage;
+      // The session now waits for a follow-up, with no task left to lose.
+      await new Promise<void>((resolve) => {
+        options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    const backend = new ClaudeBackend({ ...f.backendOptions, taskFollowUpGraceMs: 60_000 });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }], onSessionClosed: firstGrants });
+    await f.waitForTurn();
+    await vi.waitFor(() => expect(backend.listBackgroundTasks(threadId).terminals).toEqual([]));
+    expect(backend.liveSessionThreadIds()).toEqual([threadId]);
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Be brief" }], instructions: "Be brief.",
+      onSessionClosed: secondGrants });
+    await f.waitForTurn();
+    expect(f.run).toHaveBeenCalledTimes(2);
+    expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", systemPrompt: { append: "Be brief." } });
+    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+    // The relaunching turn registered the same thread grants again, so the
+    // old session must not revoke them out from under the new one.
+    expect(releasedAtRelaunch).toBe(0);
+    // Both grants go when the relaunched session closes.
+    await vi.waitFor(() => expect(secondGrants).toHaveBeenCalledOnce());
+    expect(firstGrants).toHaveBeenCalledOnce();
+  });
+
+  describe("stopping a turn while a background task runs", () => {
+    const capabilities = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"];
+    async function stoppable(params: { capabilities?: string[]; answer?: boolean; interruptGraceMs?: number } = {}) {
+      const interrupted = Promise.withResolvers<void>();
+      const interrupt = vi.fn(async () => {
+        interrupted.resolve();
+        return { still_queued: [], cancelled: [] };
+      });
+      const f = await fixture(async function* (options) {
+        // The SDK ends its stream when the query is aborted.
+        const aborted = new Promise<void>((resolve) => {
+          options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd",
+          ...(params.capabilities ? { capabilities: params.capabilities } : {}) } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: {
+          id: "launch", content: [{ type: "tool_use", id: "tool-bash", name: "Bash", input: { command: "pnpm dev", run_in_background: true } }],
+        } } as SDKMessage;
+        yield { type: "system", subtype: "task_started", task_id: "task-1", tool_use_id: "tool-bash",
+          description: "pnpm dev", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+        yield { type: "user", parent_tool_use_id: null, tool_use_result: { backgroundTaskId: "task-1" },
+          message: { content: [{ type: "tool_result", tool_use_id: "tool-bash", content: "Command running in background with ID: task-1" }] } } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "reading", content: [{ type: "text", text: "Reading the logs." }] } } as SDKMessage;
+        await Promise.race([interrupted.promise, aborted]);
+        if (options.abortController!.signal.aborted) return;
+        if (params.answer !== false) {
+          yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["Request interrupted by user"] } as unknown as SDKMessage;
+        }
+        await aborted;
+      }, { interrupt });
+      const backend = new ClaudeBackend({ ...f.backendOptions, interruptGraceMs: params.interruptGraceMs ?? 5_000 });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      const turn = await backend.startTurn({ threadId, input: [{ type: "text", text: "Start the dev server" }] });
+      await vi.waitFor(() => expect(backend.listBackgroundTasks(threadId).terminals).toHaveLength(1));
+      await vi.waitFor(() => expect((backend.readThread(threadId)).then((replay) => replay.lastAssistantMessage))
+        .resolves.toBe("Reading the logs."));
+      return { ...f, backend, threadId, turn, interrupt };
+    }
+
+    it("interrupts Claude and keeps the process for the task", async () => {
+      const f = await stoppable({ capabilities });
+      await f.backend.interruptTurn(f.turn);
+      expect(f.interrupt).toHaveBeenCalledWith({ cancelQueued: true });
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/cancelled", params: { turnId: f.turn.turnId } });
+      expect(f.close).not.toHaveBeenCalled();
+      expect(f.backend.liveSessionThreadIds()).toEqual([f.threadId]);
+      expect(f.backend.listBackgroundTasks(f.threadId).terminals).toMatchObject([{ processId: "task-1" }]);
+      const replay = await f.backend.readThread(f.threadId);
+      expect(replay.threadStatus).toBe("idle");
+      expect(replay.entries.find((entry) => entry.id === "tool-bash")).toMatchObject({ status: "in_progress" });
+      await f.backend.close();
+      expect(f.events.findLast((event) => event.notification.method === "item/completed"
+        && (event.notification.params.item as { id?: string }).id === "tool-bash")?.notification.params)
+        .toMatchObject({ item: { status: "cancelled" } });
+    });
+
+    it("ends the turn itself when Claude does not answer the interrupt", async () => {
+      const f = await stoppable({ capabilities, answer: false, interruptGraceMs: 20 });
+      await f.backend.interruptTurn(f.turn);
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/cancelled", params: { turnId: f.turn.turnId } });
+      expect(f.close).not.toHaveBeenCalled();
+      expect(f.backend.liveSessionThreadIds()).toEqual([f.threadId]);
+      await f.backend.close();
+    });
+
+    it("ends the query at shutdown even when the CLI could keep its tasks", async () => {
+      const f = await stoppable({ capabilities });
+      await f.backend.interruptTurn(f.turn, { keepTasks: false });
+      expect(f.interrupt).not.toHaveBeenCalled();
+      expect(f.close).toHaveBeenCalled();
+      expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
+      expect(f.backend.liveSessionThreadIds()).toEqual([]);
+    });
+
+    it("ends the turn at once when the interrupt dropped a prompt Claude had not started", async () => {
+      let queued: SDKUserMessage | undefined;
+      const interrupt = vi.fn(async () => ({ still_queued: [], cancelled: [queued!.uuid!] }));
+      const f = await fixture(async function* (options, prompt) {
+        const input = prompt[Symbol.asyncIterator]();
+        await input.next();
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", capabilities } as SDKMessage;
+        yield { type: "system", subtype: "session_state_changed", state: "running" } as SDKMessage;
+        yield { type: "system", subtype: "task_started", task_id: "task-1", description: "pnpm dev", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "serving", content: [{ type: "text", text: "Serving." }] } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "Serving." } as SDKMessage;
+        yield { type: "system", subtype: "session_state_changed", state: "idle" } as SDKMessage;
+        queued = (await input.next()).value as SDKUserMessage;
+        await new Promise<void>((resolve) => {
+          options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }, { interrupt });
+      const backend = new ClaudeBackend({ ...f.backendOptions, interruptGraceMs: 60_000 });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "Start the dev server" }] });
+      await f.waitForTurn();
+      const next = await backend.startTurn({ threadId, input: [{ type: "text", text: "Never mind" }] });
+      await vi.waitFor(() => expect(queued).toBeDefined());
+      await backend.interruptTurn(next);
+      expect(interrupt).toHaveBeenCalledWith({ cancelQueued: true });
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/cancelled", params: { turnId: next.turnId } });
+      expect(f.close).not.toHaveBeenCalled();
+      expect(backend.listBackgroundTasks(threadId).terminals).toHaveLength(1);
+      await backend.close();
+    });
+
+    it("ends the query when the CLI cannot drop queued messages", async () => {
+      const f = await stoppable();
+      await f.backend.interruptTurn(f.turn);
+      expect(f.interrupt).not.toHaveBeenCalled();
+      expect(f.close).toHaveBeenCalled();
+      expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
+      expect(f.backend.liveSessionThreadIds()).toEqual([]);
+    });
   });
 
   it("closes a background launch row that no task event ever settled", async () => {
@@ -1631,6 +1905,10 @@ describe("Claude SDK backend", () => {
       yield { type: "user", parent_tool_use_id: null, tool_use_result: { status: "async_launched", agentId: "agent-1", description: "Audit the SDK", prompt: "..." },
         message: { content: [{ type: "tool_result", tool_use_id: "tool-agent", content: "Async agent launched." }] } } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+      // The sub-agent's own messages never open a turn.
+      yield { type: "assistant", parent_tool_use_id: "tool-agent", message: {
+        id: "sub", content: [{ type: "text", text: "Reading the SDK." }],
+      } } as SDKMessage;
       yield { type: "system", subtype: "task_progress", task_id: "agent-1", tool_use_id: "tool-agent", description: "Audit the SDK",
         usage: { total_tokens: 10, tool_uses: 3, duration_ms: 5 }, last_tool_name: "Grep" } as SDKMessage;
       await agentDone.promise;
@@ -1639,17 +1917,19 @@ describe("Claude SDK backend", () => {
       yield { type: "result", subtype: "success", is_error: false, result: "noted" } as SDKMessage;
     });
     const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
-    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    const started = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Audit" }] });
+    await f.waitForTurn();
     await vi.waitFor(() => expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
       itemId: "tool-agent", processId: "agent-1", command: "Audit the SDK", cwd: f.root,
       kind: "agent", agentType: "Explore", progress: "3 tool uses · last Grep",
     }]));
+    expect(f.events.filter((event) => event.notification.method === "turn/started")).toHaveLength(1);
     agentDone.resolve();
-    await f.waitForTurn();
-    expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+    await vi.waitFor(() => expect(f.backend.liveSessionThreadIds()).toEqual([]));
+    expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(1);
     expect(f.events.find((event) => event.notification.method === "item/completed"
       && (event.notification.params.item as { id?: string }).id === "tool-agent")?.notification.params)
-      .toMatchObject({ item: { status: "cancelled" } });
+      .toMatchObject({ turnId: started.turnId, item: { status: "cancelled" } });
   });
 
   it("does not wait on a foreground task that sends no notification", async () => {
@@ -1690,10 +1970,11 @@ describe("Claude SDK backend", () => {
     expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
   });
 
-  it("ends the turn when Claude runs no follow-up for a settled task", async () => {
+  it("closes the session when Claude runs no follow-up for a settled task", async () => {
     const f = await fixture(async function* () {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
       yield { type: "system", subtype: "task_started", task_id: "task-1", description: "sleep", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "waiting", content: [{ type: "text", text: "Sleeping." }] } } as SDKMessage;
       yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
       yield { type: "system", subtype: "task_notification", task_id: "task-1", status: "completed", output_file: "", summary: "done" } as SDKMessage;
       // The CLI stays connected; nothing else arrives.
@@ -1704,8 +1985,11 @@ describe("Claude SDK backend", () => {
     const started = Date.now();
     await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
     await f.waitForTurn();
-    expect(Date.now() - started).toBeGreaterThanOrEqual(45);
     expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+    await vi.waitFor(() => expect(backend.liveSessionThreadIds()).toEqual([]));
+    expect(Date.now() - started).toBeGreaterThanOrEqual(45);
+    expect(f.close).toHaveBeenCalledOnce();
+    expect(f.events.filter((event) => event.notification.method === "turn/started")).toHaveLength(1);
   });
 
   it("reports Claude's error when a turn fails before acknowledging a steer", async () => {
@@ -1748,7 +2032,7 @@ describe("Claude permission bridge", () => {
     ["accept", "allow"], ["approve", "allow"], ["decline", "deny"], ["cancel", "deny"], ["unexpected", "deny"],
   ])("maps %s to %s without persisting permission rules", async (decision, behavior) => {
     const request = vi.fn().mockResolvedValue({ decision });
-    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: "turn", request, cancelRequest: async () => {} });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", request, cancelRequest: async () => {} });
     const result = await handler("Bash", { command: "git status" }, { signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
     expect(request).toHaveBeenCalledWith(expect.objectContaining({
       method: "item/commandExecution/requestApproval",
@@ -1762,7 +2046,7 @@ describe("Claude permission bridge", () => {
     const controller = new AbortController();
     const cancelRequest = vi.fn().mockResolvedValue(undefined);
     const handler = createClaudePermissionHandler({
-      threadId: "thread", turnId: "turn", cancelRequest,
+      threadId: "thread", turnId: () => "turn", cancelRequest,
       request: async () => await new Promise(() => {}),
     });
     const result = handler("Write", { file_path: "/fixture/file" }, { signal: controller.signal, toolUseID: "tool", requestId: "sdk-request" });
@@ -1773,7 +2057,7 @@ describe("Claude permission bridge", () => {
 
   it("returns questionnaire answers in the SDK tool input", async () => {
     const handler = createClaudePermissionHandler({
-      threadId: "thread", turnId: "turn", cancelRequest: async () => {},
+      threadId: "thread", turnId: () => "turn", cancelRequest: async () => {},
       request: async () => ({ answers: { "0": { answers: ["Blue"] } } }),
     });
     await expect(handler("AskUserQuestion", { questions: [{ question: "Color?", header: "Color", options: [{ label: "Blue", description: "Blue" }] }] },
@@ -1811,7 +2095,7 @@ describe("Claude MCP elicitation bridge", () => {
 
   it("sends a 2026-07-28 URL request without an elicitationId and accepts it without content", async () => {
     const request = vi.fn().mockResolvedValue({ action: "accept", content: {}, _meta: null });
-    const handler = createClaudeElicitationHandler({ threadId: "thread", turnId: "turn", request, cancelRequest: async () => {} });
+    const handler = createClaudeElicitationHandler({ threadId: "thread", turnId: () => "turn", request, cancelRequest: async () => {} });
 
     await expect(handler({
       serverName: "billing", message: "Confirm the refund.", mode: "url",
@@ -1829,7 +2113,7 @@ describe("Claude MCP elicitation bridge", () => {
 
   it("treats a schema-less form as a confirmation", async () => {
     const request = vi.fn().mockResolvedValue({ action: "accept", content: {}, _meta: null });
-    const handler = createClaudeElicitationHandler({ threadId: "thread", turnId: "turn", request, cancelRequest: async () => {} });
+    const handler = createClaudeElicitationHandler({ threadId: "thread", turnId: () => "turn", request, cancelRequest: async () => {} });
 
     await expect(handler({ serverName: "crm", message: "Close the ticket?" }, signal()))
       .resolves.toEqual({ action: "accept", content: {} });
@@ -1846,7 +2130,7 @@ describe("Claude MCP elicitation bridge", () => {
     [undefined, { action: "cancel" }],
   ])("returns %o as %o with no content", async (response, expected) => {
     const handler = createClaudeElicitationHandler({
-      threadId: "thread", turnId: "turn", cancelRequest: async () => {},
+      threadId: "thread", turnId: () => "turn", cancelRequest: async () => {},
       request: vi.fn().mockResolvedValue(response),
     });
 
@@ -1858,7 +2142,7 @@ describe("Claude MCP elicitation bridge", () => {
     const controller = new AbortController();
     const cancelRequest = vi.fn().mockResolvedValue(undefined);
     const handler = createClaudeElicitationHandler({
-      threadId: "thread", turnId: "turn", cancelRequest,
+      threadId: "thread", turnId: () => "turn", cancelRequest,
       request: async () => await new Promise(() => {}),
     });
     const result = handler({ serverName: "crm", message: "Continue?" }, { signal: controller.signal, requestId: "sdk-request" });
