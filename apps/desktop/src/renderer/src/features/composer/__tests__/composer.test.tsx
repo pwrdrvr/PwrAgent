@@ -11044,7 +11044,23 @@ describe("Composer", () => {
       fireEvent.change(textarea, { target: { value: "Stop and use the other API" } });
       fireEvent.click(screen.getByRole("button", { name: "Send options" }));
 
-      expect(screen.getByText("Now · while Claude works")).toBeInTheDocument();
+      // Groups run in send order: in-turn options, then Queue, then timed sends.
+      expect(
+        [...document.querySelectorAll(".composer__schedule-menu-label, [role=menuitem]")]
+          .map((node) => node.getAttribute("role") === "menuitem"
+            ? node.textContent?.match(/^(Steer|Interrupt|Queue|Send in 15m)/)?.[0]
+            : node.textContent)
+          .filter(Boolean)
+          .slice(0, 7),
+      ).toEqual([
+        "Now · while Claude works",
+        "Steer",
+        "Interrupt",
+        "After this turn",
+        "Queue",
+        "Later",
+        "Send in 15m",
+      ]);
       const steer = screen.getByRole("menuitem", { name: /^Steer/ });
       expect(steer).not.toHaveAttribute("aria-disabled");
       expect(steer).toHaveTextContent("Add it at the next tool call");

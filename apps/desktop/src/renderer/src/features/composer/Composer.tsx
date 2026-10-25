@@ -14619,21 +14619,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               >
                 {turnSendActionsVisible ? (
                   <>
+                    {/* Groups run in send order. Queue is not "now": it
+                        waits for the turn, however long that runs, so it
+                        can even land after a timed send below it. */}
                     <div
                       className="composer__schedule-menu-label"
                       role="presentation"
                     >
                       Now · while {turnBackendLabel} works
                     </div>
-                    <ComposerSendMenuItem
-                      description="Send when this turn ends"
-                      label="Queue"
-                      shortcut={formatQueueShortcut()}
-                      onSelect={() => {
-                        setScheduleMenuOpen(false);
-                        void submitTurn("default", { restoreComposerFocus: true });
-                      }}
-                    />
                     <ComposerSendMenuItem
                       description={steerUnavailableReason ?? "Add it at the next tool call"}
                       disabled={Boolean(steerUnavailableReason)}
@@ -14654,6 +14648,25 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       onSelect={() => {
                         setScheduleMenuOpen(false);
                         void submitTurn("interrupt", { restoreComposerFocus: true });
+                      }}
+                    />
+                    <div
+                      className="composer__schedule-menu-separator"
+                      role="separator"
+                    />
+                    <div
+                      className="composer__schedule-menu-label"
+                      role="presentation"
+                    >
+                      After this turn
+                    </div>
+                    <ComposerSendMenuItem
+                      description="Behind any messages already queued"
+                      label="Queue"
+                      shortcut={formatQueueShortcut()}
+                      onSelect={() => {
+                        setScheduleMenuOpen(false);
+                        void submitTurn("default", { restoreComposerFocus: true });
                       }}
                     />
                     <div
