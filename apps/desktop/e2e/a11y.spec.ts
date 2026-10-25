@@ -442,8 +442,8 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
     options?: Parameters<typeof runAxeScan>[2],
   ) =>
     runAxeScan(page, surface, {
-      ...(colorTheme ? { rules: COLOR_RULES } : {}),
       ...options,
+      rules: options?.rules ?? (colorTheme ? COLOR_RULES : undefined),
     });
   test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme${colorThemeLabel})`, () => {
     test("smoke fixture surfaces have no violations", async () => {
@@ -949,17 +949,22 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         await test.step("expanded unpinned overflow", async () => {
           const more = directoryRow.getByRole("button", { name: "Load more threads", exact: true });
           await more.scrollIntoViewIfNeeded();
+          // The scroll anchor is #2001 paging behavior, not an audit input.
           const lastRow = threads.locator(".thread-row-shell").last();
-          const lastRowKey = await lastRow.getAttribute("data-thread-pin-key");
-          const before = await lastRow.boundingBox();
+          const anchor = runsFunctionalChecks
+            ? {
+                key: await lastRow.getAttribute("data-thread-pin-key"),
+                box: await lastRow.boundingBox(),
+              }
+            : undefined;
           await more.click();
           await expect(listItems(threads)).toHaveCount(17);
           await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
-          // The scroll anchor is #2001 paging behavior, not an audit input.
-          if (runsFunctionalChecks) {
-            if (!before || !lastRowKey) throw new Error("Missing pagination scroll anchor");
+          if (anchor) {
+            const { key, box: before } = anchor;
+            if (!before || !key) throw new Error("Missing pagination scroll anchor");
             await expect.poll(async () => {
-              const after = await threads.locator(`[data-thread-pin-key="${lastRowKey}"]`).boundingBox();
+              const after = await threads.locator(`[data-thread-pin-key="${key}"]`).boundingBox();
               return after ? Math.abs(after.y - before.y) : Infinity;
             }).toBeLessThanOrEqual(2);
           }
