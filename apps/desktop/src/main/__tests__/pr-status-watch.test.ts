@@ -732,7 +732,7 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
       await registerTerminalWatch();
     });
     expectSqliteWriteBudget({
-      note: "one merge/close watch requested by an agent tool call",
+      note: "one merge/close watch requested by an agent tool call: 1 commit/~16.5 KB WAL; ~0.8 MB/day at 50 requests/day, zero idle writes",
       scenario: "pr-terminal-watch-register",
       writes: registration,
     });
@@ -741,7 +741,7 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
       await harness.coordinator.handleTerminalSnapshot(mergedPr(), now);
     });
     expectSqliteWriteBudget({
-      note: "claim and finish one merge/close wake",
+      note: "claim and finish one merge/close wake: 2 commits/~24.7 KB WAL per merged PR; ~1.2 MB/day at 50 merges/day, zero idle writes",
       scenario: "pr-terminal-watch-deliver",
       writes: delivery,
     });
@@ -758,7 +758,7 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
       }
     });
     expectSqliteWriteBudget({
-      note: "ten polls of an open PR that has a merge/close watch",
+      note: "ten polls of an open PR that has a merge/close watch: 0 rows and 0 WAL; the 10 commits are the pre-existing per-poll supersede statement, which changes no row, so the watch adds 0 MB/day",
       scenario: "pr-terminal-watch-open-polls",
       writes,
     });

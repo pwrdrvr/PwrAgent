@@ -828,6 +828,27 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "pr-terminal-watch-deliver": {
+    "commits": 2,
+    "note": "claim and finish one merge/close wake: 2 commits/~24.7 KB WAL per merged PR; ~1.2 MB/day at 50 merges/day, zero idle writes",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 3
+  },
+  "pr-terminal-watch-open-polls": {
+    "commits": 10,
+    "note": "ten polls of an open PR that has a merge/close watch: 0 rows and 0 WAL; the 10 commits are the pre-existing per-poll supersede statement, which changes no row, so the watch adds 0 MB/day",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 10
+  },
+  "pr-terminal-watch-register": {
+    "commits": 1,
+    "note": "one merge/close watch requested by an agent tool call: 1 commit/~16.5 KB WAL; ~0.8 MB/day at 50 requests/day, zero idle writes",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "profile-model-default-launchpads": {
     "commits": 1,
     "note": "One profile model change updates 100 directory launchpads and learned defaults in one transaction.",
