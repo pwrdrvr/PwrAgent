@@ -9456,7 +9456,7 @@ describe("SettingsScreen", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
-  it("keeps Exit, the General label, and section order in the settings nav", () => {
+  it("keeps Exit, the category headings, and section order in the settings nav", () => {
     // Regression lock for the design contract: Exit Settings lives
     // INSIDE `.settings-nav` (left column), not inside the title-bar
     // strip. Two prior attempts in this branch put it in the strip
@@ -9473,9 +9473,17 @@ describe("SettingsScreen", () => {
     expect(exit.closest(".settings-titlebar")).toBeNull();
     expect(exit).toHaveClass("settings-nav__exit");
 
-    const label = document.querySelector(".settings-nav__group-label");
-    expect(label).not.toBeNull();
-    expect(label?.textContent?.toLowerCase()).toBe("general");
+    const labels = Array.from(
+      document.querySelectorAll(".settings-nav__group-label"),
+    ).map((label) => label.textContent);
+    expect(labels).toEqual([
+      "App",
+      "Agents",
+      "Projects",
+      "Threads",
+      "Remote Access",
+      "Support",
+    ]);
 
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     // Caret toggles sit beside the group labels and sub-items live in
@@ -9489,18 +9497,18 @@ describe("SettingsScreen", () => {
       "Keyboard",
       "Updates",
       "Applications",
-      "Plugins",
       "Profiles",
       "AI Providers",
+      "Plugins",
       "Usage & Pricing",
-      "Messaging",
-      "Federation",
-      "Access Control",
       "Git",
       "Worktrees",
       "Environments",
       "Thread Management",
       "Archived Threads",
+      "Messaging",
+      "Access Control",
+      "Federation",
       "Experimental",
       "Troubleshooting",
       "About",
@@ -9513,11 +9521,11 @@ describe("SettingsScreen", () => {
       nav.querySelectorAll(".settings-nav__caret"),
     ).map((button) => button.getAttribute("aria-label"));
     expect(caretLabels).toEqual([
-      "Expand Plugins",
       "Expand AI Providers",
+      "Expand Plugins",
+      "Expand Git",
       "Expand Messaging",
       "Expand Federation",
-      "Expand Git",
     ]);
     // Collapsed sublists keep their children out of the accessibility
     // tree — MCP Gateway only appears once Plugins expands.
