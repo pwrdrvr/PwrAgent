@@ -12,6 +12,8 @@
 // It walks the live DOM rather than `Range.cloneContents()`: a clone of a list
 // that starts at item 3 has no way to know it was item 3.
 
+import { decodeMarkdownDestination } from "../../lib/directory-references";
+
 export type SelectionClipboard = {
   html: string;
   text: string;
@@ -42,7 +44,6 @@ const SEMANTIC_TAGS = new Set([
   "h5",
   "h6",
   "hr",
-  "img",
   "li",
   "ol",
   "p",
@@ -64,26 +65,7 @@ const TAG_ALIASES: Record<string, string> = {
   strike: "del",
 };
 
-// Blocks that are dropped when the selection only grazed them, as when a
-// triple-click selection ends at offset 0 of the next paragraph.
-const PRUNABLE_BLOCKS = new Set([
-  "blockquote",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "li",
-  "ol",
-  "p",
-  "pre",
-  "table",
-  "tbody",
-  "thead",
-  "tr",
-  "ul",
-]);
+const TABLE_SECTION_TAGS = new Set(["tbody", "thead", "tr"]);
 
 const BLOCK_TAGS = new Set([
   "blockquote",
@@ -115,7 +97,7 @@ export function buildSelectionClipboard(
   if (!root.contains(common) || !(common instanceof Element)) {
     return undefined;
   }
-  const verbatim = common.closest("pre, code, .katex");
+  const verbatim = common.closest("pre, code, .katex, .mermaid-diagram");
   if (verbatim && root.contains(verbatim)) {
     return undefined;
   }
@@ -207,6 +189,21 @@ function cloneSelectedNode(node: Node, range: Range): Node | null {
     return link;
   }
 
+  // A rendered diagram is an image and a toolbar. Its source is what reads
+  // back, so the whole fence copies even when the selection grazes it.
+  if (node.classList.contains("mermaid-diagram")) {
+    const source = node.getAttribute("data-mermaid-source");
+    if (!source) {
+      return null;
+    }
+    const pre = document.createElement("pre");
+    const code = document.createElement("code");
+    code.className = "language-mermaid";
+    code.textContent = source;
+    pre.append(code);
+    return pre;
+  }
+
   if (node.classList.contains("katex-display")) {
     const paragraph = document.createElement("p");
     paragraph.textContent = `$$${mathSource(node)}$$`;
@@ -243,14 +240,62 @@ function cloneSelectedNode(node: Node, range: Range): Node | null {
 
   if (tag === "ol") {
     appendListItems(node, clone, range);
+  } else if (tag === "tr") {
+    appendRowCells(node, clone, range);
   } else {
     clone.append(cloneChildren(node, range));
   }
 
-  if (PRUNABLE_BLOCKS.has(tag) && !hasContent(clone)) {
+  if (isPrunable(tag) && !hasContent(clone)) {
     return null;
   }
+  if (tag === "table") {
+    replaceWithFullHead(node, clone);
+  }
   return clone;
+}
+
+// Blocks that are dropped when the selection only grazed them, as when a
+// triple-click selection ends at offset 0 of the next paragraph.
+function isPrunable(tag: string): boolean {
+  return tag !== "hr" && (BLOCK_TAGS.has(tag) || TABLE_SECTION_TAGS.has(tag));
+}
+
+// A row keeps a cell for every column, empty where the selection did not
+// reach, so values stay under their own headers.
+function appendRowCells(source: Element, clone: Element, range: Range): void {
+  for (const child of Array.from(source.childNodes)) {
+    const tag = tagOf(child);
+    if ((tag === "td" || tag === "th") && !range.intersectsNode(child)) {
+      clone.append(document.createElement(tag));
+      continue;
+    }
+    const childClone = cloneSelectedNode(child, range);
+    if (childClone) {
+      clone.append(childClone);
+    }
+  }
+}
+
+// A Markdown table needs its header row. Copy the whole original header, so a
+// selection that starts in the body or mid-header still names every column.
+function replaceWithFullHead(source: Element, clone: Element): void {
+  const sourceHead = Array.from(source.children).find(
+    (child) => child.tagName.toLowerCase() === "thead",
+  );
+  if (!sourceHead) {
+    return;
+  }
+  const headRange = document.createRange();
+  headRange.selectNodeContents(sourceHead);
+  const head = cloneSelectedNode(sourceHead, headRange);
+  if (!head) {
+    return;
+  }
+  Array.from(clone.children)
+    .filter((child) => child.tagName.toLowerCase() === "thead")
+    .forEach((child) => child.remove());
+  clone.prepend(head);
 }
 
 // Keeps each item's original number, so a selection from item 3 to item 5
@@ -280,21 +325,14 @@ function appendListItems(source: Element, clone: Element, range: Range): void {
   }
 }
 
+// `ol[start]` is set by appendListItems from the items actually kept.
 function copyAllowedAttributes(source: Element, clone: Element): void {
   const tag = clone.tagName.toLowerCase();
-  if (tag === "a" || tag === "img") {
-    const name = tag === "a" ? "href" : "src";
-    const value = source.getAttribute(name);
-    if (value) {
-      clone.setAttribute(name, value);
+  if (tag === "a") {
+    const href = source.getAttribute("href");
+    if (href) {
+      clone.setAttribute("href", href);
     }
-    const alt = source.getAttribute("alt");
-    if (tag === "img" && alt) {
-      clone.setAttribute("alt", alt);
-    }
-  }
-  if (tag === "ol" && source.hasAttribute("start")) {
-    clone.setAttribute("start", source.getAttribute("start") ?? "1");
   }
   if (tag === "code") {
     const language = codeLanguage(source);
@@ -312,9 +350,11 @@ function mathSource(element: Element): string {
   return (element.querySelector(".katex-html")?.textContent ?? element.textContent ?? "").trim();
 }
 
+// A checkbox alone is not content: a task item the selection only grazed
+// would otherwise copy as an empty `- [ ]`.
 function hasContent(node: Element | DocumentFragment): boolean {
   return (node.textContent ?? "").trim().length > 0
-    || node.querySelector("hr, img, input") !== null;
+    || node.querySelector("hr") !== null;
 }
 
 function codeLanguage(element: Element): string | undefined {
@@ -514,10 +554,6 @@ function inlineToMarkdown(node: Node): string {
       return inlineCode(node.textContent ?? "");
     case "a":
       return linkToMarkdown(node, inner());
-    case "img": {
-      const src = node.getAttribute("src") ?? "";
-      return src ? `![${node.getAttribute("alt") ?? ""}](${src})` : "";
-    }
     case "input":
       return node.hasAttribute("checked") ? "[x] " : "[ ] ";
     default:
@@ -562,22 +598,14 @@ function linkToMarkdown(link: Element, text: string): string {
     if (children.length === 1 && tagOf(children[0]) === "code") {
       return text;
     }
-    const path = safeDecodeUri(href.slice("file://".length));
+    const path = decodeMarkdownDestination(href.slice("file://".length));
     return `[${text}](${/[\s()]/.test(path) ? `<${path}>` : path})`;
   }
 
-  if (!text || text === href || text === safeDecodeUri(href)) {
+  if (!text || text === href || text === decodeMarkdownDestination(href)) {
     return href;
   }
   return `[${text}](${href})`;
-}
-
-function safeDecodeUri(value: string): string {
-  try {
-    return decodeURI(value);
-  } catch {
-    return value;
-  }
 }
 
 function longestBacktickRun(text: string): number {

@@ -61,7 +61,8 @@ export function MermaidDiagram(props: {
     else throw new Error("Text clipboard is unavailable");
   };
   return (
-    <div className="transcript-message__pre-wrap mermaid-diagram" ref={root}>
+    // A selection copy reads the source here; the diagram is only an image.
+    <div className="transcript-message__pre-wrap mermaid-diagram" data-mermaid-source={props.source} ref={root}>
       <div className="mermaid-diagram__toolbar">
         <span>{current && !image ? "Diagram unavailable" : "Mermaid"}</span>
         <button className="mermaid-diagram__toggle" type="button"

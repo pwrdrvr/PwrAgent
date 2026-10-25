@@ -23,6 +23,7 @@ const FEATURE_REQUEST = [
 
 afterEach(() => {
   window.getSelection()?.removeAllRanges();
+  vi.unstubAllGlobals();
 });
 
 function textNode(container: HTMLElement, text: string): Text {
@@ -170,5 +171,62 @@ describe("copying a transcript selection", () => {
     select(container, "Tool", "Change TTL");
 
     expect(copy(container).text).toBe(markdown);
+  });
+
+  it("keeps a mid-table selection under the table's own headers", () => {
+    const markdown = [
+      "| Tool | Purpose |",
+      "| --- | --- |",
+      "| `delete_sandbox` | Clean up |",
+      "| `extend_sandbox` | Change TTL |",
+    ].join("\n");
+    const { container } = render(<ThreadMarkdown text={markdown} />);
+    select(container, "Clean up", "Change TTL");
+
+    expect(copy(container).text).toBe([
+      "| Tool | Purpose |",
+      "| --- | --- |",
+      "|  | Clean up |",
+      "| `extend_sandbox` | Change TTL |",
+    ].join("\n"));
+  });
+
+  it("copies a Mermaid diagram as its source fence", () => {
+    const markdown = [
+      "Before",
+      "",
+      "```mermaid",
+      "graph TD; A-->B",
+      "```",
+      "",
+      "After",
+    ].join("\n");
+    // The diagram renders only once visible; it stays offscreen here.
+    vi.stubGlobal("IntersectionObserver", class {
+      disconnect() {}
+      observe() {}
+    });
+    const { container } = render(<ThreadMarkdown text={markdown} />);
+    // The rendered diagram is an image; the source must not depend on it.
+    const diagram = container.querySelector(".mermaid-diagram")!;
+    const image = document.createElement("img");
+    image.src = "data:image/svg+xml;base64,AAAA";
+    image.alt = "Mermaid diagram";
+    diagram.append(image);
+    select(container, "Before", "After");
+
+    const { html, text } = copy(container);
+
+    expect(text).toBe(markdown);
+    expect(html).not.toContain("data:image");
+  });
+
+  it("drops a task item the selection only touches at its start", () => {
+    const { container } = render(
+      <ThreadMarkdown text={"Intro paragraph\n\n- [ ] todo item"} />,
+    );
+    select(container, "Intro", "todo item", { endOffset: 0 });
+
+    expect(copy(container).text).toBe("Intro paragraph");
   });
 });
