@@ -289,6 +289,30 @@ describe("ThreadRow chip flow", () => {
     expect(bindingChip?.getAttribute("role")).toBe("button");
   });
 
+  it("offers Unbind on a local row's binding chip but not on a peer's", () => {
+    const local = renderRow();
+    const localChip = local.container.querySelector(".thread-row__chip--binding");
+    expect(localChip?.getAttribute("aria-haspopup")).toBe("menu");
+    expect(localChip?.getAttribute("aria-disabled")).toBeNull();
+    local.unmount();
+
+    // The peer holds this binding, so this machine cannot revoke it.
+    const remote = renderRow({
+      thread: {
+        ...baseThread,
+        messagingBindings: [telegramBinding],
+        federation: {
+          ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: baseThread.id },
+          instanceLabel: "Peer",
+        },
+      } as NavigationThreadSummary,
+    });
+    const remoteChip = remote.container.querySelector(".thread-row__chip--binding");
+    expect(remoteChip).not.toBeNull();
+    expect(remoteChip?.getAttribute("aria-haspopup")).toBeNull();
+    expect(remoteChip?.getAttribute("aria-disabled")).toBe("true");
+  });
+
   it("renders Slack binding chips with the Slack icon", () => {
     const slackBinding: MessagingThreadBindingSummary = {
       ...telegramBinding,

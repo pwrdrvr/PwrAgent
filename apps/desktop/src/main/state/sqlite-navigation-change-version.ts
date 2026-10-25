@@ -6,6 +6,8 @@ const versions = new WeakMap<Database.Database, { value: number }>();
 const NAVIGATION_TABLES = [
   "directory_launchpads", "directory_overlay", "remote_directory_overlay", "remote_thread_pins",
   "directory_git_status", "thread_git_working_state", "pr_status_cache",
+  // Rows carry their messaging bindings; a bind or unbind changes the row.
+  "bindings",
 ];
 
 /** Navigation inputs, rather than every write on the connection. PR election

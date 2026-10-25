@@ -2736,6 +2736,7 @@ export function Sidebar(props: SidebarProps) {
     !contextMenuIsBulk &&
       contextMenu &&
       (contextMenu.thread.messagingBindings ?? []).length > 0 &&
+      contextMenu.thread.federation?.ref.target.scope !== "remote" &&
       props.onUnbindMessagingBinding,
   );
 
