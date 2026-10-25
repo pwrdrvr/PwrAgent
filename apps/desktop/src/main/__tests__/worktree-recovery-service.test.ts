@@ -31,7 +31,7 @@ async function records(repoPath: string): Promise<string[]> {
   return (await git(repoPath, ["worktree", "list", "--porcelain"]))
     .split("\n")
     .filter((line) => line.startsWith("worktree "))
-    .map((line) => line.slice("worktree ".length));
+    .map((line) => path.resolve(line.slice("worktree ".length)));
 }
 
 describe("WorktreeRecoveryService", () => {
@@ -46,6 +46,8 @@ describe("WorktreeRecoveryService", () => {
     worktreePath = path.join(root, "worktrees", "mf3k2q", "atlas");
     await mkdir(repoPath);
     await git(repoPath, ["init", "-b", "main"]);
+    // Windows runners default to autocrlf, which would rewrite the fixture text on checkout.
+    await git(repoPath, ["config", "core.autocrlf", "false"]);
     await writeFile(path.join(repoPath, "deliver.ts"), "export const delay = 1;\n");
     await git(repoPath, ["add", "."]);
     await git(repoPath, ["commit", "-m", "initial"]);

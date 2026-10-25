@@ -87,7 +87,8 @@ function parseRecords(output: string): RecordedWorktree[] {
   let current: RecordedWorktree | undefined;
   for (const line of output.split("\n")) {
     if (line.startsWith("worktree ")) {
-      current = { path: line.slice("worktree ".length), locked: false };
+      // Git prints forward slashes on Windows; keep paths native for messages.
+      current = { path: path.resolve(line.slice("worktree ".length)), locked: false };
       records.push(current);
     } else if (current && line.startsWith("branch ")) {
       current.branch = line.slice("branch ".length).replace(/^refs\/heads\//, "");
