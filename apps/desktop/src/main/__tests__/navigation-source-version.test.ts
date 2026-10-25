@@ -17,6 +17,9 @@ it.each([
   ["directory_git_status", "INSERT INTO directory_git_status(directory_key, fetched_at, payload) VALUES ('fixture', 1, '{}')"],
   ["thread_git_working_state", "INSERT INTO thread_git_working_state(worktree_path, fetched_at, payload) VALUES ('fixture', 1, '{}')"],
   ["pr_status_cache", "INSERT INTO pr_status_cache(pr_key, org, repo, number, fetched_at, payload) VALUES ('fixture', 'fixture', 'fixture', 1, 1, '{}')"],
+  // Sidebar rows carry each thread's messaging bindings, so a bind or unbind
+  // must not be answered from an index retained before it.
+  ["bindings", "INSERT INTO bindings(binding_id, channel_kind, channel_id, thread_id, status, created_at, updated_at, payload) VALUES ('fixture', 'telegram', 'fixture', 'fixture', 'active', 1, 1, '{}')"],
 ])("fences raw insert/update/delete on navigation input %s", (table, insert) => {
   const db = openInMemoryStateDb();
   const store = new SqliteOverlayStore(db);

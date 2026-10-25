@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent, AppServerBackendScope, NavigationQueryRequest, NavigationThreadSummary } from "@pwragent/shared";
+import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { NavigationQueryIndex } from "../app-server/navigation-query-projection";
 import budgets from "./fixtures/navigation-listing-budgets.json";
@@ -10,8 +11,12 @@ const mocks = vi.hoisted(() => ({
     readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
     readDirectoryGitStatusCache: async () => ({}),
   },
+  messaging: {
+    findActiveBindings: vi.fn(async (): Promise<MessagingBindingRecord[]> => []),
+  },
 }));
 vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
+vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
 import { loadLocalNavigationQueryIndex } from "../app-server/navigation-query-source";
@@ -170,6 +175,53 @@ describe("owner index source event admission", () => {
     expect(source.listeners.size).toBe(1);
     source.emit("thread/name/updated");
     expect(source.listeners.size).toBe(0);
+  });
+
+  it("carries each thread's active messaging bindings on its index row", async () => {
+    // The sidebar's binding chips and Unbind menu items read the row. Before
+    // this, only the selected thread's detail read had bindings, so a bound
+    // thread showed no chip and no Unbind control unless it was selected.
+    const row = (id: string, source: NavigationThreadSummary["source"] = "codex"): NavigationThreadSummary => ({
+      id, source, title: id, titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: false },
+    });
+    const binding = (id: string, threadId: string, extra: Partial<MessagingBindingRecord> = {}): MessagingBindingRecord => ({
+      id, threadId, backend: "codex", authorizedActorIds: [], createdAt: 1, updatedAt: 2,
+      channel: { channel: "telegram", conversation: { kind: "topic", id: `${id}-topic`, title: "Grid work",
+        parentTitle: "M5 Group" } },
+      ...extra,
+    } as MessagingBindingRecord);
+    const remote = { ...row("remote-bound"), federation: { ref: { target: { scope: "remote", instanceId: "peer" },
+      backend: "codex", threadId: "remote-bound" }, instanceLabel: "Peer" } } as NavigationThreadSummary;
+    const original = mocks.store.readNavigationQueryIndex.getMockImplementation();
+    mocks.store.readNavigationQueryIndex.mockImplementation(() => ({
+      threads: [row("bound"), row("unbound"), row("other-backend", "claude"), remote], directories: [],
+    }));
+    mocks.messaging.findActiveBindings.mockResolvedValue([
+      binding("binding-1", "bound"),
+      // A binding for the same id on another backend belongs to that thread.
+      binding("binding-2", "other-backend", { backend: "codex" }),
+      // A remote row is the peer's thread; this machine's bindings never attach.
+      binding("binding-3", "remote-bound"),
+    ]);
+    const source = createSource();
+    source.finish();
+    try {
+      const index = await source.read();
+      const byId = new Map(index.threads.map((thread) => [thread.id, thread]));
+      expect(byId.get("bound")?.messagingBindings).toEqual([{
+        bindingId: "binding-1", platform: "telegram", conversationKind: "topic",
+        conversationTitle: "Grid work", parentTitle: "M5 Group", ancestorTitle: undefined, activeAt: 2,
+      }]);
+      expect(byId.get("unbound")?.messagingBindings).toBeUndefined();
+      expect(byId.get("other-backend")?.messagingBindings).toBeUndefined();
+      expect(byId.get("remote-bound")?.messagingBindings).toBeUndefined();
+      expect(mocks.messaging.findActiveBindings).toHaveBeenCalledTimes(1);
+    } finally {
+      mocks.store.readNavigationQueryIndex.mockImplementation(original!);
+      mocks.messaging.findActiveBindings.mockResolvedValue([]);
+      mocks.messaging.findActiveBindings.mockClear();
+      source.emit("thread/name/updated");
+    }
   });
 
   it("shares one replacement scan across consumers admitted between related events", async () => {
