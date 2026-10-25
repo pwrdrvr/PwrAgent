@@ -213,11 +213,24 @@ Report the sandbox ID, the commit, and each status line. Name every failure.
   `<worktree>-lane<N>` beside it. Keep the latest commit's worktrees for their
   failure artifacts, and remove older ones with
   `git -C ~/pwragent/repo worktree remove --force <path>`.
-- When the PR merges or closes, the sandbox should be deleted: every stopped
-  sandbox keeps snapshots, and snapshots count against the account's storage
-  allowance. The Sandboxer MCP has no delete tool yet. Until it does, stop the
-  sandbox and report it as ready to delete. Use `delete_sandbox` as soon as
-  the tool list includes it.
+- PwrAgent releases the thread's sandboxes once every pull request attached
+  to the thread has merged or closed. It calls `delete_sandbox` when the
+  Sandboxer MCP lists that tool. Otherwise it calls `stop_sandbox` and marks
+  the deletion pending until the tool appears. The switch is Settings →
+  Plugins → MCPs → Sandboxer → **Clean up when PRs close**, on by default.
+  [`docs/sandboxer-remote-compute.md`](../../../docs/sandboxer-remote-compute.md)
+  has the details. For it to reach this thread's sandbox:
+  - Create the sandbox with this thread's `create_sandbox`. PwrAgent releases
+    only the sandboxes that the thread itself created.
+  - Attach the PR to this thread. Check with
+    `check_thread_pull_request_status`, and use `attach_thread_pull_request`
+    when branch discovery missed it. A thread with no attached PR is never
+    cleaned up.
+- After you open the PR, call `watch_thread_pull_request` with
+  `notifyOn: ["merged", "closed"]`. Add `success` and `failure` when the
+  thread should also wake for CI. Pushes and CI results do not end the merge
+  or close watch. The wake reports the merge method and the cleanup result.
+  Report a cleanup that failed or that left a deletion pending.
 - Do not stop or delete a sandbox that another thread owns.
 
 ## 7. Refresh the base snapshot
