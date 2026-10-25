@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   utimesSync,
@@ -138,13 +139,33 @@ describe("desktop out/ cache", () => {
     expect(computeCacheKey({ tree, nodeVersion: "v24.22.1", platform: "darwin", arch: "x64" })).not.toBe(base);
   });
 
-  it("does not serve an entry that has no manifest", () => {
+  const onlyEntry = () => {
+    const entries = readdirSync(path.join(cacheRoot, "desktop-out"));
+    expect(entries).toHaveLength(1);
+    return path.join(cacheRoot, "desktop-out", entries[0]);
+  };
+
+  it.each([
+    ["has no manifest", (entry) => rmSync(path.join(entry, "manifest.json"))],
+    ["has an unreadable manifest", (entry) => writeFileSync(path.join(entry, "manifest.json"), "{")],
+    ["has no out/", (entry) => rmSync(path.join(entry, "out"), { recursive: true })],
+  ])("rebuilds and replaces an entry that %s", (_label, damage) => {
     run();
-    const [entry] = execFileSync("ls", [path.join(cacheRoot, "desktop-out")], { encoding: "utf8" })
-      .trim()
-      .split("\n");
-    rmSync(path.join(cacheRoot, "desktop-out", entry, "manifest.json"));
+    damage(onlyEntry());
     expect(run()).toBe("build");
+    expect(builds).toBe(2);
+    // The replacement is complete, so the next lane hits again.
+    expect(run()).toBe("cache");
+    expect(readFileSync(outFile("main/index.js"), "utf8")).toBe("built from v1");
+  });
+
+  it("keeps a successful build when the cache cannot be written", () => {
+    // A file where the entries directory belongs makes every save fail.
+    mkdirSync(cacheRoot);
+    writeFileSync(path.join(cacheRoot, "desktop-out"), "");
+    expect(run()).toBe("build");
+    expect(readFileSync(outFile("main/index.js"), "utf8")).toBe("built from v1");
+    expect(verify({ repoRoot })).toBeNull();
   });
 
   it("keeps only the newest entries and drops abandoned temp directories", () => {

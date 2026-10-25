@@ -129,7 +129,9 @@ install() {
   } >> "${GITHUB_ENV:?}"
 
   corepack enable pnpm
-  # Installs the packageManager pin from package.json and checks its hash.
+  # Installs the packageManager pin from package.json. Corepack checks the
+  # pin's hash only when it downloads; a copy already in COREPACK_HOME runs
+  # unchecked, so the version check below is the guard on that path.
   corepack install
   local expected actual
   expected="$(node -p 'require("./package.json").packageManager.replace(/^pnpm@/, "").split("+")[0]')"
@@ -139,7 +141,13 @@ install() {
     exit 1
   fi
   echo "Activated pnpm $actual; store $(pnpm store path)"
-  pnpm install --frozen-lockfile
+  if ! pnpm install --frozen-lockfile; then
+    # Do not let a damaged store fail every job on this guest until it
+    # expires: the next job re-seeds it from the dependency cache.
+    rm -f "$marker"
+    echo "::warning::pnpm install failed on the guest store; the next job re-seeds it." >&2
+    exit 1
+  fi
 }
 
 case "${1:-}" in

@@ -37,6 +37,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -107,27 +108,43 @@ function cloneTree(source, destination) {
   });
 }
 
+function readManifest(entry) {
+  try {
+    return JSON.parse(readFileSync(path.join(entry, "manifest.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Copy a saved out/ into place. Only a complete entry is served: an entry is
  * renamed into place after its manifest is written, so a directory under the
- * key always holds a whole build.
+ * key always holds a whole build. The cache is an optimization, so any
+ * problem with an entry is a miss, never a failed lane. A bad entry is
+ * removed, or it would block saveEntry from replacing it.
  */
-export function restoreEntry({ cacheRoot, key, outDir }) {
+export function restoreEntry({ cacheRoot, key, outDir, log = console.log }) {
   const entry = entryDir(cacheRoot, key);
-  const manifestPath = path.join(entry, "manifest.json");
-  if (!existsSync(manifestPath)) {
+  if (!existsSync(entry)) {
     return false;
   }
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  if (manifest.key !== key || !existsSync(path.join(entry, "out"))) {
+  const manifest = readManifest(entry);
+  try {
+    if (manifest?.key !== key || !existsSync(path.join(entry, "out"))) {
+      throw new Error("incomplete entry");
+    }
+    rmSync(outDir, { recursive: true, force: true });
+    cloneTree(path.join(entry, "out"), outDir);
+    // Mark the entry recently used, so eviction keeps it.
+    const now = new Date();
+    utimesSync(entry, now, now);
+    return true;
+  } catch (error) {
+    log(`desktop out/ cache entry ${key} is unusable (${error.message}); discarding it.`);
+    rmSync(entry, { recursive: true, force: true });
+    rmSync(outDir, { recursive: true, force: true });
     return false;
   }
-  rmSync(outDir, { recursive: true, force: true });
-  cloneTree(path.join(entry, "out"), outDir);
-  // Mark the entry recently used, so eviction keeps it.
-  const now = new Date();
-  utimesSync(entry, now, now);
-  return true;
 }
 
 export function saveEntry({ cacheRoot, key, outDir, tree }) {
@@ -224,7 +241,7 @@ export function prepare({
   }
 
   const key = computeCacheKey({ tree });
-  if (restoreEntry({ cacheRoot, key, outDir })) {
+  if (restoreEntry({ cacheRoot, key, outDir, log })) {
     log(`desktop out/ cache hit: ${key}`);
     writeStamp(repoRoot, { tree, key, source: "cache" });
     return "cache";
@@ -232,12 +249,18 @@ export function prepare({
 
   log(`desktop out/ cache miss: ${key}; building.`);
   build();
-  const saved = saveEntry({ cacheRoot, key, outDir, tree });
-  const removed = evictEntries({ cacheRoot });
-  log(
-    `desktop out/ ${saved ? "saved" : "already saved"} as ${key}`
-      + (removed.length > 0 ? `; evicted ${removed.join(", ")}` : ""),
-  );
+  // The build succeeded, so a failed save (a full disk, say) must not fail
+  // the lane: it only costs the next lane a rebuild.
+  try {
+    const saved = saveEntry({ cacheRoot, key, outDir, tree });
+    const removed = evictEntries({ cacheRoot });
+    log(
+      `desktop out/ ${saved ? "saved" : "already saved"} as ${key}`
+        + (removed.length > 0 ? `; evicted ${removed.join(", ")}` : ""),
+    );
+  } catch (error) {
+    log(`desktop out/ could not be saved as ${key}: ${error.message}`);
+  }
   writeStamp(repoRoot, { tree, key, source: "build" });
   return "build";
 }
@@ -289,6 +312,12 @@ function main(argv) {
   return 2;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// import.meta.url is the module's real path, while argv[1] keeps any symlink
+// in the path it was invoked by (/tmp on macOS), so compare real paths.
+// Otherwise `prepare` would exit 0 having done nothing.
+if (
+  process.argv[1]
+  && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href
+) {
   process.exitCode = main(process.argv.slice(2));
 }
