@@ -414,6 +414,74 @@ describe("McpConnectionGatewayService", () => {
     );
   });
 
+  it("records sandboxes a thread creates through Sandboxer, and nothing else", async () => {
+    const created = JSON.stringify({ id: "sb_abc123", name: "pwragent-feat-x", state: "ready" });
+    const callTool = vi.fn(async (request: { name: string }) => request.name === "create_sandbox"
+      ? { content: [{ type: "text", text: created }] }
+      : { content: [{ type: "text", text: "{}" }] });
+    const recordCreatedSandbox = vi.fn();
+    const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
+      settings: createSettings(),
+      leaseManager: null,
+      recordCreatedSandbox,
+    });
+    services.push(service);
+    const token = "sandboxer-token";
+    Object.assign(service, {
+      upstreamSessions: new Map([[token, {
+        client: { callTool, close: vi.fn(async () => undefined) },
+        transport: { close: vi.fn(async () => undefined) },
+      }]]),
+    });
+    const bridge = service as unknown as {
+      dispatchBridgeOperation: (
+        token: string,
+        grant: { connectionId: string; threadId?: string },
+        operation: unknown,
+        params: unknown,
+      ) => Promise<unknown>;
+    };
+    const call = async (threadId: string | undefined, name = "create_sandbox", connectionId = "builtin:sandboxer") =>
+      await bridge.dispatchBridgeOperation(
+        token,
+        { connectionId, ...(threadId === undefined ? {} : { threadId }) },
+        "tools/call",
+        { name, arguments: {} },
+      );
+
+    // A thread's native bridge names only the thread.
+    await call("thread-native");
+    expect(recordCreatedSandbox).toHaveBeenLastCalledWith(expect.objectContaining({
+      connectionId: "builtin:sandboxer",
+      sandboxId: "sb_abc123",
+      name: "pwragent-feat-x",
+      threadId: "thread-native",
+    }));
+    expect(recordCreatedSandbox.mock.calls[0]?.[0]).not.toHaveProperty("backend");
+
+    // Not recorded: other tools, other connections, Settings discovery (no
+    // thread), and PwrAgent's own cleanup sessions.
+    await call("thread-native", "list_sandboxes");
+    await call("thread-native", "create_sandbox", "pwrsnap");
+    await call(undefined);
+    await call(JSON.stringify(["pwragent-cleanup", "codex", "thread-1"]));
+    expect(recordCreatedSandbox).toHaveBeenCalledTimes(1);
+
+    // A failed create records nothing, and the result still reaches the caller.
+    callTool.mockResolvedValueOnce({ isError: true, content: [{ type: "text", text: created }] } as never);
+    await expect(call("thread-native")).resolves.toMatchObject({ isError: true });
+    expect(recordCreatedSandbox).toHaveBeenCalledTimes(1);
+
+    // A recorder failure never fails the tool call.
+    recordCreatedSandbox.mockImplementationOnce(() => {
+      throw new Error("database is locked");
+    });
+    await expect(call("thread-native")).resolves.toMatchObject({
+      content: [{ type: "text", text: created }],
+    });
+  });
+
   it("clears a PwrSnap credential rejected by the MCP endpoint", async () => {
     const settings = createSettings(createAuthorizedCredential());
     const service = new McpConnectionGatewayService({
@@ -868,6 +936,38 @@ describe("McpConnectionGatewayService", () => {
     await expect(
       service.setConnectionSelectForNewThreads("ghost", true),
     ).rejects.toThrow("Unknown MCP connection");
+  });
+
+  it("stores Sandboxer cleanup on PR close through the owner broker, on by default", async () => {
+    const registry = temporaryRegistry();
+    const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+    const broker = service as unknown as {
+      dispatchBrokerOperation: (op: unknown, params: unknown) => Promise<unknown>;
+    };
+
+    expect(service.isSandboxerCleanupOnPrCloseEnabled()).toBe(true);
+    await expect(
+      service.setSandboxerCleanupOnPrClose(false),
+    ).resolves.toMatchObject({
+      id: "builtin:sandboxer",
+      sandboxerCleanupOnPrClose: false,
+    });
+    expect(service.isSandboxerCleanupOnPrCloseEnabled()).toBe(false);
+    await expect(
+      broker.dispatchBrokerOperation("broker/set-sandboxer-cleanup-on-pr-close", {
+        enabled: true,
+      }),
+    ).resolves.toMatchObject({ sandboxerCleanupOnPrClose: true });
+    expect(service.isSandboxerCleanupOnPrCloseEnabled()).toBe(true);
+    await expect(
+      broker.dispatchBrokerOperation("broker/set-sandboxer-cleanup-on-pr-close", {}),
+    ).rejects.toThrow("Invalid Sandboxer cleanup on PR close request.");
   });
 
   it("sets a connection's tool approval through the owner broker and rejects an unknown mode", async () => {

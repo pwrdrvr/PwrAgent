@@ -280,6 +280,14 @@ import {
   isFreshDirectoryGitStatusCacheEntry,
 } from "../app-server/directory-git-status-refresh-policy";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
+import { ThreadSandboxStore } from "../state/thread-sandbox-store";
+import {
+  SandboxerPrCleanupService,
+  formatSandboxCleanupLines,
+  summarizeSandboxCleanup,
+  type SandboxCleanupReport,
+} from "../mcp-connections/sandboxer-pr-cleanup";
+import { getMcpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import {
   listModelSettingsRecents,
   recordModelSettingsRecent,
@@ -488,6 +496,26 @@ import {
 
 const isDevelopment = process.env.NODE_ENV !== "production";
 const PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS = 30_000;
+/** How long a merge/close wake waits for sandbox cleanup to report. */
+const SANDBOX_CLEANUP_WAKE_WAIT_MS = 30_000;
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T | "timeout"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 const THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
 const USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 10_000;
 /**
@@ -1436,6 +1464,7 @@ class DesktopAppServerService {
   private prAutoDispatchCoordinator: PrAutoDispatchCoordinator | undefined;
   private prStatusWatchCoordinator: PrStatusWatchCoordinator | undefined;
   private threadDependencyCoordinator: ThreadDependencyCoordinator | undefined;
+  private sandboxerPrCleanup: SandboxerPrCleanupService | undefined;
   private ownerNavigationActive = false;
   private ownerNavigationMetadataVersion = 0;
   private ownerNavigationMetadataRead: Promise<void> | undefined;
@@ -6062,6 +6091,11 @@ class DesktopAppServerService {
             error: error instanceof Error ? error.message : String(error),
           });
         });
+        void this.retryPendingSandboxCleanups().catch((error) => {
+          appServerLog.warn("sandboxer cleanup startup retry failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       })
       .catch((error) => {
         appServerLog.warn("failed to start PR polling scheduler", {
@@ -6398,7 +6432,123 @@ class DesktopAppServerService {
           });
         }
       }
+      if (isTerminalPullRequest(pr)) {
+        this.startSandboxCleanupForPr(prKey);
+      }
     }
+  }
+
+  /**
+   * A PR reached merged or closed: release the sandboxes of each thread it is
+   * attached to, once all of that thread's PRs are terminal. Never awaited by
+   * the poll; a merge/close wake waits for it separately, with a bound.
+   */
+  private startSandboxCleanupForPr(prKey: string): void {
+    for (const [threadKey, attachment] of this.attachedPrsByThreadKey) {
+      if (!attachment.prs.some((candidate) => getPrStatusKey(candidate) === prKey)) continue;
+      const identity = parseThreadIdentityKey(threadKey);
+      if (!identity) continue;
+      void this.cleanupThreadSandboxesIfDone(identity.backend, identity.threadId)
+        .catch((error) => appServerLog.warn("sandboxer cleanup failed", {
+          threadKey,
+          error: error instanceof Error ? error.message : String(error),
+        }));
+    }
+  }
+
+  /**
+   * Release the Sandboxer sandboxes this thread created, but only once every
+   * PR attached to it has merged or closed. A thread with several PRs may
+   * still be testing the open ones, and a thread with no attached PR has
+   * nothing to say its work is done, so neither is touched. Detached PRs do
+   * not count.
+   */
+  private async cleanupThreadSandboxesIfDone(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<SandboxCleanupReport | undefined> {
+    const service = this.getSandboxerPrCleanup();
+    if (!service) return undefined;
+    const attachment = this.attachedPrsByThreadKey.get(
+      buildThreadIdentityKey(backend, threadId),
+    );
+    const prs = attachment?.prs ?? [];
+    if (prs.length === 0) return undefined;
+    const allTerminal = prs.every((pr) =>
+      isTerminalPullRequest(this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr)
+    );
+    if (!allTerminal) return undefined;
+    return await service.cleanupThread({ backend, threadId });
+  }
+
+  /** Startup: threads whose PRs all closed while a cleanup was pending. */
+  private async retryPendingSandboxCleanups(): Promise<void> {
+    const service = this.getSandboxerPrCleanup();
+    if (!service) return;
+    const pendingThreadIds = new Set(
+      new ThreadSandboxStore(getAppStateDb().raw).threadIdsWithPending(),
+    );
+    if (pendingThreadIds.size === 0) return;
+    await this.loadPrStatusRegistry();
+    for (const threadKey of this.attachedPrsByThreadKey.keys()) {
+      const identity = parseThreadIdentityKey(threadKey);
+      if (!identity || !pendingThreadIds.has(identity.threadId)) continue;
+      await this.cleanupThreadSandboxesIfDone(identity.backend, identity.threadId);
+    }
+  }
+
+  private getSandboxerPrCleanup(): SandboxerPrCleanupService | undefined {
+    if (!getAppStateMode()) return undefined;
+    if (!this.sandboxerPrCleanup) {
+      const store = new ThreadSandboxStore(getAppStateDb().raw);
+      this.sandboxerPrCleanup = new SandboxerPrCleanupService({
+        store,
+        openTransport: async (params) =>
+          await getMcpConnectionGatewayService().openPwrAgentToolSession({
+            connectionId: params.connectionId,
+            scopeKey: JSON.stringify([
+              "pwragent-cleanup",
+              params.backend,
+              params.threadId,
+            ]),
+            signal: params.signal,
+          }),
+        isEnabled: () =>
+          getMcpConnectionGatewayService().isSandboxerCleanupOnPrCloseEnabled(),
+        onReport: (report) => this.recordSandboxCleanup(report),
+      });
+    }
+    return this.sandboxerPrCleanup;
+  }
+
+  private recordSandboxCleanup(report: SandboxCleanupReport): void {
+    if (report.entries.length === 0) return;
+    const threadKey = buildThreadIdentityKey(
+      report.backend as AppServerBackendKind,
+      report.threadId,
+    );
+    const prKeys = (this.attachedPrsByThreadKey.get(threadKey)?.prs ?? [])
+      .map((pr) => getPrStatusKey(pr));
+    const failed = report.entries.some((entry) => entry.action === "failed");
+    const skipped = report.entries.every((entry) => entry.action === "skipped");
+    this.prActivity.record({
+      category: "cleanup",
+      source: "Sandboxer cleanup",
+      threadKeys: [threadKey],
+      prKeys,
+      tone: failed ? "error" : skipped ? "warning" : "ok",
+      message: report.entries.map((entry) =>
+        `${entry.sandboxId}: ${entry.action}${entry.detail ? ` (${entry.detail})` : ""}`
+      ).join("; "),
+    });
+    appServerLog.info("sandboxer cleanup", {
+      threadKey,
+      summary: summarizeSandboxCleanup(report),
+      sandboxes: report.entries.map((entry) => ({
+        sandboxId: entry.sandboxId,
+        action: entry.action,
+      })),
+    });
   }
 
   async handleThreadPrAutoDispatchPreference(
@@ -8221,6 +8371,19 @@ class DesktopAppServerService {
         isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
         fetchTerminalDetails: async (pr) =>
           await this.getPrFetcher().fetchPullRequestTerminalDetails(pr),
+        prepareTerminalWake: async ({ watch }) => {
+          const report = await withTimeout(
+            this.cleanupThreadSandboxesIfDone(watch.backend, watch.threadId),
+            SANDBOX_CLEANUP_WAKE_WAIT_MS,
+          );
+          if (report === "timeout") {
+            return [
+              "",
+              "Sandboxer cleanup by PwrAgent is still running; its result will appear in PR activity.",
+            ];
+          }
+          return formatSandboxCleanupLines(report);
+        },
       });
     }
     return this.prStatusWatchCoordinator;

@@ -14,7 +14,8 @@ Its domain role is `compute`; the shared `SandboxerRole` also reserves
 The operator enables Sandboxer in Settings → Plugins → MCPs, then selects it
 in a thread's MCP access. Both enabled and select-for-new-threads default to
 false. Profile TOML scalars `sandboxer_enabled`,
-`sandboxer_select_for_new_threads`, and `sandboxer_tool_approval` live under
+`sandboxer_select_for_new_threads`, `sandboxer_tool_approval`, and
+`sandboxer_cleanup_on_pr_close` (default true) live under
 `[mcp_connections]`. No SQLite persistence is added.
 
 The gateway launches only `/usr/local/bin/sbx mcp --type small --ttl 1800
@@ -64,6 +65,38 @@ gateway shutdown, and failed initialization close the transport and process.
 Closing a local process does **not** stop a remote sandbox. Agents must use
 `stop_sandbox` when finished; the finite creation TTL is a fallback. After a
 local session restarts, use an explicit sandbox ID from `list_sandboxes`.
+
+### Cleanup when a thread's PRs close
+
+PwrAgent releases the sandboxes a thread created once every PR attached to
+that thread has merged or closed. The owner gateway records each successful
+`create_sandbox` result against the calling thread in the profile's
+`thread_sandboxes` table (one commit per sandbox). That is the only source of
+ids it will touch: a sandbox created outside PwrAgent, or by another thread,
+is never released.
+
+- **When.** On the first observation of a terminal PR, for each local thread
+  it is attached to, and again at startup for threads still holding a
+  sandbox. A thread with several PRs waits until all are merged or closed;
+  a thread with no attached PR is never cleaned up. Detached PRs do not count.
+- **How.** Only through the connection's MCP tools, over the same
+  owner-broker path as an agent's call, so a hosted endpoint works the same as
+  the local `sbx mcp` process. The capability comes from the tool list: it
+  calls `delete_sandbox` when the connection lists it, otherwise
+  `stop_sandbox`, which ends compute billing but keeps the snapshot, and marks
+  deletion pending. A later cleanup deletes a stopped sandbox once
+  `delete_sandbox` appears. "Not found" counts as already deleted.
+- **Failures.** A missing CLI, a signed-out account, a disabled connection, or
+  a network error leaves the sandbox in place and reports it. Cleanup never
+  blocks a merge/close wake; the wake waits up to 30 seconds for the result.
+- **Where it shows.** Each outcome is a `cleanup` row in PR activity and a
+  `sandboxer cleanup` line in the main log, and a merge/close wake lists it
+  for the thread.
+- **Switch.** Settings → Plugins → MCPs → Sandboxer → **Clean up when PRs
+  close**, `sandboxer_cleanup_on_pr_close`, on by default: it only acts on the
+  thread's own sandboxes after its PRs are done, and stopped machines and
+  their snapshots otherwise keep billing compute and storage. A reopened PR
+  can resume a stopped sandbox; a deleted one cannot come back.
 
 Settings links to Sandboxer's own pages (home, pricing, quickstart, and the MCP,
 machines, and billing docs) through main, which maps each to a fixed

@@ -33,6 +33,7 @@ import {
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
+  SANDBOXER_MCP_CONNECTION_ID,
   isAcpBackendId,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
@@ -65,7 +66,9 @@ import {
   type RuntimeLeaseHolder,
 } from "../runtime-lease-manager";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { getAppStateMode, getAppOverlayStore } from "../state/app-state";
+import { getAppStateDb, getAppStateMode, getAppOverlayStore } from "../state/app-state";
+import { ThreadSandboxStore } from "../state/thread-sandbox-store";
+import { readCreatedSandbox, type SandboxerCleanupTransport } from "./sandboxer-pr-cleanup";
 import {
   McpConnectionRegistry,
 } from "./mcp-connection-registry";
@@ -219,6 +222,19 @@ export type McpConnectionGatewayServiceOptions = {
   resolveStdioSearchEnv?: () => Promise<NodeJS.ProcessEnv>;
   /** How long a Settings test waits for a local command to answer. */
   stdioTestTimeoutMs?: number;
+  /**
+   * Records a sandbox a thread created through the built-in Sandboxer
+   * connection, so PwrAgent can release exactly that one when the thread's
+   * PRs close. Defaults to the profile state database.
+   */
+  recordCreatedSandbox?: (params: {
+    connectionId: string;
+    sandboxId: string;
+    name?: string;
+    backend?: string;
+    threadId: string;
+    now: number;
+  }) => void;
 };
 
 function resolveDefaultPwrSnapInstallPaths(): string[] {
@@ -567,8 +583,14 @@ export class McpConnectionGatewayService {
   private bridgeAttachmentCount = 0;
   private readonly rpcSockets = new Set<Socket>();
   private activeRpcSockets = 0;
+  private readonly recordCreatedSandbox: NonNullable<McpConnectionGatewayServiceOptions["recordCreatedSandbox"]>;
 
   constructor(options: McpConnectionGatewayServiceOptions = {}) {
+    this.recordCreatedSandbox = options.recordCreatedSandbox
+      ?? ((params) => {
+        if (!getAppStateMode()) return;
+        new ThreadSandboxStore(getAppStateDb().raw).recordCreated(params);
+      });
     this.readGatewaySelection = options.readGatewaySelection
       ?? (async (context) => (await getAppOverlayStore().getThreadOverlayState(context))?.mcpConnectionIds ?? []);
     this.bridgeEntryPath =
@@ -1274,6 +1296,41 @@ export class McpConnectionGatewayService {
       selectForNewThreads,
     );
     return await this.connectionStatus(connection);
+  }
+
+  /**
+   * Choose whether PwrAgent cleans up the sandboxes a thread created once
+   * every PR attached to that thread has merged or closed.
+   *
+   * Nothing live changes. The flag is read when a thread's last open PR
+   * merges or closes, so the next such PR follows it.
+   */
+  async setSandboxerCleanupOnPrClose(
+    enabled: boolean,
+  ): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/set-sandboxer-cleanup-on-pr-close",
+        { enabled },
+      );
+    }
+    const connection = this.registry.setSandboxerCleanupOnPrClose(enabled);
+    return await this.connectionStatus(connection);
+  }
+
+  /**
+   * Whether Sandboxer cleanup on PR close is on.
+   *
+   * Reads the local registry rather than asking the owner broker: config.toml
+   * is profile-local, so every instance on the profile reads the same value.
+   */
+  isSandboxerCleanupOnPrCloseEnabled(): boolean {
+    return (
+      this.registry.get(SANDBOXER_MCP_CONNECTION_ID)?.sandboxerCleanupOnPrClose
+      !== false
+    );
   }
 
   /**
@@ -2786,6 +2843,12 @@ export class McpConnectionGatewayService {
         values.selectForNewThreads,
       );
     }
+    if (operation === "broker/set-sandboxer-cleanup-on-pr-close") {
+      if (typeof values.enabled !== "boolean") {
+        throw new Error("Invalid Sandboxer cleanup on PR close request.");
+      }
+      return await this.setSandboxerCleanupOnPrClose(values.enabled);
+    }
     if (operation === "broker/set-tool-approval") {
       if (
         typeof values.connectionId !== "string"
@@ -3044,8 +3107,10 @@ export class McpConnectionGatewayService {
             validateGatewayArguments(tool.definition, values.arguments as Record<string, unknown>);
             signal?.throwIfAborted();
             discovery.close();
-            return await client.callTool({ name: tool.toolName, arguments: values.arguments as Record<string, unknown> },
+            const result = await client.callTool({ name: tool.toolName, arguments: values.arguments as Record<string, unknown> },
               undefined, { signal, timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS });
+            this.observeToolResult(grant, tool.toolName, result as CallToolResult);
+            return result;
           }
           case "describe": {
             const capabilities = client.getServerCapabilities();
@@ -3060,8 +3125,8 @@ export class McpConnectionGatewayService {
             if (!result.nextCursor) this.recordDiscoverySuccess(grant.connectionId);
             return result;
           }
-          case "tools/call":
-            return await client.callTool(
+          case "tools/call": {
+            const result = await client.callTool(
               values as Parameters<Client["callTool"]>[0],
               undefined,
               {
@@ -3069,6 +3134,9 @@ export class McpConnectionGatewayService {
                 timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS,
               },
             );
+            this.observeToolResult(grant, values.name, result as CallToolResult);
+            return result;
+          }
           case "resources/list":
             return await client.listResources(values);
           case "resources/templates/list":
@@ -3094,6 +3162,88 @@ export class McpConnectionGatewayService {
       }
     });
     return await mcpDiscoveryContext.exit(async () => await mcpDiscoveryPhaseContext.exit(dispatch));
+  }
+
+  /**
+   * Every Sandboxer tool call reaches the upstream server here, on the
+   * profile's owner, whether it came through a thread's native MCP bridge or
+   * `call_mcp_tool`. A successful `create_sandbox` is recorded against the
+   * calling thread. Recording never affects the call's result.
+   */
+  private observeToolResult(
+    grant: BridgeGrant,
+    toolName: unknown,
+    result: CallToolResult,
+  ): void {
+    if (grant.connectionId !== SANDBOXER_MCP_CONNECTION_ID || toolName !== "create_sandbox") return;
+    const thread = readGrantThread(grant.threadId);
+    if (!thread) return;
+    try {
+      const sandbox = readCreatedSandbox(result);
+      if (!sandbox) return;
+      this.recordCreatedSandbox({
+        connectionId: grant.connectionId,
+        ...sandbox,
+        ...thread,
+        now: Date.now(),
+      });
+    } catch (error) {
+      connectionLog.warn("failed to record a created sandbox", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * A tool session for PwrAgent's own calls, such as releasing a closed PR's
+   * sandboxes. It uses the same owner-broker path as an agent's call, so it
+   * works for a local process or a hosted endpoint alike, but it is not tied
+   * to a thread's MCP selection: the operator's cleanup switch governs it.
+   * The connection must still be enabled and signed in. Close it when done.
+   */
+  async openPwrAgentToolSession(params: {
+    connectionId: string;
+    scopeKey: string;
+    signal: AbortSignal;
+  }): Promise<SandboxerCleanupTransport> {
+    const registration = await this.registerBridge(
+      params.connectionId,
+      params.scopeKey,
+      params.signal,
+    );
+    const rpc = new ConnectionRpcClient(
+      registration.server.env.PWRAGENT_MCP_CONNECTION_SOCKET,
+      registration.server.env.PWRAGENT_MCP_CONNECTION_TOKEN,
+    );
+    return {
+      listToolNames: async () => {
+        const names: string[] = [];
+        let cursor: string | undefined;
+        for (let page = 0; page < 5; page += 1) {
+          const result = await rpc.request(
+            "tools/list",
+            cursor ? { cursor } : {},
+            params.signal,
+            Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
+          ) as { tools?: Array<{ name?: unknown }>; nextCursor?: unknown };
+          for (const tool of result.tools ?? []) {
+            if (typeof tool.name === "string") names.push(tool.name);
+          }
+          cursor = typeof result.nextCursor === "string" ? result.nextCursor : undefined;
+          if (!cursor) break;
+        }
+        return names;
+      },
+      callTool: async (name, args) => await rpc.request(
+        "tools/call",
+        { name, arguments: args },
+        params.signal,
+        undefined,
+        undefined,
+        MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
+      ) as CallToolResult,
+      close: () => registration.revoke(),
+    };
   }
 
   private respond(socket: Socket, response: BridgeResponse): void {
@@ -3146,6 +3296,35 @@ function secureTokenEqual(candidate: string, expected: string | undefined): bool
 }
 
 let mcpConnectionGatewayService: McpConnectionGatewayService | undefined;
+
+/**
+ * The thread a grant serves. Gateway calls carry `["gateway", backend,
+ * threadId]`; a thread's native bridge carries the bare thread id. Settings
+ * discovery and PwrAgent's own sessions name no thread.
+ */
+function readGrantThread(
+  scope: string | undefined,
+): { backend?: string; threadId: string } | undefined {
+  const value = scope?.trim();
+  if (!value) return undefined;
+  if (!value.startsWith("[")) return { threadId: value };
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      Array.isArray(parsed)
+      && parsed.length === 3
+      && parsed[0] === "gateway"
+      && typeof parsed[1] === "string"
+      && typeof parsed[2] === "string"
+      && parsed[2]
+    ) {
+      return { backend: parsed[1], threadId: parsed[2] };
+    }
+  } catch {
+    // Not a thread scope.
+  }
+  return undefined;
+}
 
 export function getMcpConnectionGatewayService(): McpConnectionGatewayService {
   mcpConnectionGatewayService ??= new McpConnectionGatewayService();

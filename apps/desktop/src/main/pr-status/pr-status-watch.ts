@@ -59,6 +59,15 @@ export class PrStatusWatchCoordinator {
       isBackgroundPollingEnabled?: () => boolean;
       /** Reads merge details from the forge; a throw falls back to cached status. */
       fetchTerminalDetails?: (pr: PrSummary) => Promise<PullRequestTerminalDetails | undefined>;
+      /**
+       * Work PwrAgent does for the watching thread before it wakes, such as
+       * releasing its sandboxes. Returns lines for the wake message. It must
+       * bound its own time; a throw only drops the lines.
+       */
+      prepareTerminalWake?: (params: {
+        watch: ThreadPullRequestWatchSummary;
+        pr: PrSummary;
+      }) => Promise<string[]>;
       now?: () => number;
     },
   ) {}
@@ -207,13 +216,22 @@ export class PrStatusWatchCoordinator {
       await release(false);
       return;
     }
+    let extraLines: string[] = [];
+    try {
+      extraLines = await this.options.prepareTerminalWake?.({
+        watch: claim.watch,
+        pr,
+      }) ?? [];
+    } catch {
+      extraLines = [];
+    }
     try {
       const submission = await this.options.registry.submitTurnIfIdle({
         backend: claim.watch.backend,
         threadId: claim.watch.threadId,
         input: [{
           type: "text",
-          text: buildPrTerminalWatchPrompt({ details, observedAt }),
+          text: buildPrTerminalWatchPrompt({ details, observedAt, extraLines }),
         }],
         origin: "automation",
         messageOrigin: {
@@ -370,8 +388,11 @@ export function getPrStatusWatchOutcome(
 export function buildPrTerminalWatchPrompt(params: {
   details: PullRequestTerminalDetails;
   observedAt: number;
+  /** Lines from work PwrAgent already did, such as sandbox cleanup. */
+  extraLines?: string[];
 }): string {
   const merged = params.details.outcome === "merged";
+  const extraLines = params.extraLines ?? [];
   return [
     `PwrAgent resumed this thread because its pull request watch saw the PR ${
       merged ? "merged" : "closed without merge"
@@ -380,8 +401,11 @@ export function buildPrTerminalWatchPrompt(params: {
     "Pull request notification",
     ...formatTerminalDetailsLines(params.details),
     `- Observed at: ${new Date(params.observedAt).toISOString()}`,
+    ...extraLines,
     "",
-    "Release what this thread created only for this PR, such as a Sandboxer sandbox used to test it, unless the operator asked to keep it. "
+    (extraLines.length > 0
+      ? "PwrAgent has already acted on the sandboxes listed above: do not stop or delete them yourself, and report any it could not clean up. Release anything else this thread created only for this PR, unless the operator asked to keep it. "
+      : "Release what this thread created only for this PR, such as a Sandboxer sandbox used to test it, unless the operator asked to keep it. ")
       + (merged
         ? "Report the merge, and continue only if the operator's prior request asked for follow-up after it lands."
         : "Report the close, and do not reopen or recreate the PR unless the operator asked for that.")

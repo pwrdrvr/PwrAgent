@@ -27,6 +27,7 @@ import {
   type SetMcpConnectionEnabledRequest,
   type SetMcpConnectionSelectForNewThreadsRequest,
   type SetMcpConnectionToolApprovalRequest,
+  type SetSandboxerCleanupOnPrCloseRequest,
   type ReadThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsResponse,
@@ -58,6 +59,7 @@ import {
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
+  MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
@@ -260,6 +262,22 @@ export function registerMcpConnectionIpcHandlers(
           request.toolApproval,
         );
       return { connectionId: request.connectionId, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
+    async (
+      event,
+      request: SetSandboxerCleanupOnPrCloseRequest,
+    ): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      if (typeof request?.enabled !== "boolean") {
+        throw new Error("Choose whether Sandboxer cleans up when PRs close.");
+      }
+      const connection: McpConnectionStatus =
+        await service.setSandboxerCleanupOnPrClose(request.enabled);
+      return { connectionId: connection.id, connection };
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
@@ -559,6 +577,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_AUTHORIZE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL);
