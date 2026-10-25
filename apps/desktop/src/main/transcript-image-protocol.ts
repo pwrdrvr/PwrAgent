@@ -347,7 +347,7 @@ export async function materializeTranscriptImageUrlsForRenderer(
  * Ordinary remote URLs remain remote URLs for adapters that can embed them.
  */
 export async function materializeTranscriptMessageImagesForMessaging(
-  response: AppServerReadThreadResponse,
+  owner: Pick<AppServerReadThreadResponse, "backend" | "threadId">,
   message: AppServerThreadMessage,
   dependencies: Partial<TranscriptImageMaterializerDependencies> = {},
   options: TranscriptImageMaterializationOptions = {},
@@ -362,29 +362,34 @@ export async function materializeTranscriptMessageImagesForMessaging(
         ],
       };
   const scopedResponse: AppServerReadThreadResponse = {
-    ...response,
+    backend: owner.backend,
+    fetchedAt: 0,
+    threadId: owner.threadId,
     replay: {
-      ...response.replay,
       entries: [],
       messages: [scopedMessage],
+      pagination: { supportsPagination: false, hasPreviousPage: false },
     },
   };
+  // One resolver for both passes, consulted only for a file that the default
+  // roots do not cover. Looking up a thread's approved roots parses its
+  // overlay, which a reply with no local image never needs.
+  const resolveApprovedLocalImageRoots = createApprovedLocalImageRootResolver(options);
   const materialized = await materializeTranscriptImageUrlsForRenderer(
     scopedResponse,
     dependencies,
-    options,
+    { resolveApprovedLocalImageRoots },
   );
   const materializedMessage = materialized.replay.messages[0];
   if (!materializedMessage) {
     return [];
   }
 
-  const approvedLocalImageRoots = await createApprovedLocalImageRootResolver(options)();
   return await resolveMessageImagePartsForMessaging(
     materializedMessage,
     async (url) => await transcriptImageUrlForMessaging(
       url,
-      approvedLocalImageRoots,
+      resolveApprovedLocalImageRoots,
     ),
   );
 }
@@ -413,7 +418,7 @@ async function resolveMessageImagePartsForMessaging(
 
 async function transcriptImageUrlForMessaging(
   url: string,
-  approvedLocalImageRoots: readonly string[],
+  resolveApprovedLocalImageRoots: ApprovedLocalImageRootResolver,
 ): Promise<string | undefined> {
   if (url.startsWith("data:image/") || /^https:\/\//iu.test(url)) {
     return url;
@@ -428,9 +433,12 @@ async function transcriptImageUrlForMessaging(
     return undefined;
   }
 
-  const resolution = await resolveTranscriptImageFile(sourcePath, {
-    additionalAllowedRoots: approvedLocalImageRoots,
-  });
+  let resolution = await resolveTranscriptImageFile(sourcePath);
+  if (!resolution.ok && resolution.status === 403) {
+    resolution = await resolveTranscriptImageFile(sourcePath, {
+      additionalAllowedRoots: await resolveApprovedLocalImageRoots(),
+    });
+  }
   if (!resolution.ok) {
     return undefined;
   }

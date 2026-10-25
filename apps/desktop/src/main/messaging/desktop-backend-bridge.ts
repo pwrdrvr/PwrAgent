@@ -89,6 +89,7 @@ import type {
 } from "./core/messaging-adapter";
 import { MessagingFederatedThreadTargetError } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { buildMessageContent } from "../codex-app-server/client";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
@@ -713,6 +714,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   async resolveAssistantMessageImages(request: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
+    item?: Record<string, unknown>;
     itemId?: string;
     text: string;
     threadId: string;
@@ -753,6 +755,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   private async resolveAssistantMessageImagesOnce(request: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
+    item?: Record<string, unknown>;
     itemId?: string;
     text: string;
     threadId: string;
@@ -767,9 +770,81 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         ? await this.resolveRemoteAssistantMessageImages(request, target, remote)
         : [];
     }
-    // Runs twice at every bound turn end, before the reply is posted. Only the
-    // transcript is used: a full read also rescans the thread's pricing ledger
-    // and Token Miser accounting, which blocked the app on long threads.
+    const message = request.turnId || request.itemId
+      ? await this.readFinishedTurnAssistantMessage(request)
+      : await this.readLastPageAssistantMessage(request);
+    const parts = await materializeTranscriptMessageImagesForMessaging(
+      request,
+      message,
+      {},
+      {
+        includeTemporaryImageRoots: true,
+        resolveApprovedLocalImageRoots: async () =>
+          await this.registry.getThreadTranscriptImageRoots({
+            backend: request.backend,
+            threadId: request.threadId,
+          }),
+      },
+    );
+    return parts.map((part) => ({
+      ...part,
+      source: "assistant" as const,
+    }));
+  }
+
+  /**
+   * The reply a bound turn just finished, from that turn alone. A transcript
+   * page here re-parsed up to 20 turns, the overlay, and the page merge on the
+   * main process at every turn end, which blocked long threads. One turn's
+   * replay carries the same parts a page would: Codex attaches the turn's
+   * tool screenshots to its final reply, which the event stream cannot show.
+   * Without that read, the completed item from the event is the message.
+   */
+  private async readFinishedTurnAssistantMessage(request: {
+    backend: AppServerBackendKind;
+    item?: Record<string, unknown>;
+    itemId?: string;
+    text: string;
+    threadId: string;
+    turnId?: string;
+  }): Promise<AppServerThreadMessage> {
+    let replay: AppServerThreadReplay | undefined;
+    if (request.turnId) {
+      try {
+        replay = await this.registry.readThreadTurnReplay({
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: request.turnId,
+        });
+      } catch {
+        // The completed item below still carries the reply's own images.
+      }
+    }
+    const fromTurn = replay
+      ? findAssistantMessageForText(replay, request.text, request.itemId, request.turnId)
+      : undefined;
+    if (fromTurn) {
+      return fromTurn;
+    }
+    const id = request.itemId ?? `turn:${request.turnId ?? "unknown"}:assistant`;
+    if (request.item) {
+      const content = buildMessageContent(request.item);
+      return {
+        id,
+        role: "assistant",
+        text: content.text,
+        ...(content.parts ? { parts: content.parts } : {}),
+      };
+    }
+    return { id, role: "assistant", text: request.text };
+  }
+
+  /** The resume repost has no turn, so it finds its message in the last page. */
+  private async readLastPageAssistantMessage(request: {
+    backend: AppServerBackendKind;
+    text: string;
+    threadId: string;
+  }): Promise<AppServerThreadMessage> {
     const response = await this.registry.readThread({
       backend: request.backend,
       includeAccounting: false,
@@ -777,33 +852,11 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       threadId: request.threadId,
       viewOnly: true,
     });
-    const message = findAssistantMessageForText(
-      response.replay,
-      request.text,
-      request.itemId,
-      request.turnId,
-    ) ?? {
-      id: request.itemId ?? `turn:${request.turnId ?? "unknown"}:assistant`,
-      role: "assistant" as const,
+    return findAssistantMessageForText(response.replay, request.text) ?? {
+      id: "turn:unknown:assistant",
+      role: "assistant",
       text: request.text,
     };
-    const roots = await this.registry.getThreadTranscriptImageRoots({
-      backend: request.backend,
-      threadId: request.threadId,
-    });
-    const parts = await materializeTranscriptMessageImagesForMessaging(
-      response,
-      message,
-      {},
-      {
-        approvedLocalImageRoots: roots,
-        includeTemporaryImageRoots: true,
-      },
-    );
-    return parts.map((part) => ({
-      ...part,
-      source: "assistant" as const,
-    }));
   }
 
   /**

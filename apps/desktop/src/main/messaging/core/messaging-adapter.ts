@@ -222,6 +222,12 @@ export type MessagingBackendBridge = {
   resolveAssistantMessageImages?(request: {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
+    /**
+     * The completed assistant item from the event stream, when the reply
+     * finished as one. A turn end resolves from it and its turn, never from a
+     * transcript page.
+     */
+    item?: Record<string, unknown>;
     itemId?: string;
     text: string;
     threadId: string;

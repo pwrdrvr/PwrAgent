@@ -1022,6 +1022,8 @@ export class MessagingController {
   private readonly capabilityProfile: MessagingCapabilityProfile;
   private readonly statusRenderLock = new PerKeyAsyncLock();
   private readonly deliveredAssistantMessageKeys = new Set<string>();
+  /** Turns whose final assistant item already resolved its images, per binding. */
+  private readonly finalAssistantImageTurns = new Map<string, true>();
   private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
   private readonly assistantStreamDeliveryQueues = new Map<
     string,
@@ -8207,14 +8209,31 @@ export class MessagingController {
     if (!resolveImages) {
       return [];
     }
+    const itemId = assistantItemIdForBackendEvent(event);
+    const turnId = turnIdForBackendEvent(event);
+    // Once per turn. The final item's lookup already covers the turn's images,
+    // so turn/completed only resolves a turn that finished without one, such
+    // as an ACP turn or a Codex turn whose only output was a tool screenshot.
+    const turnKey = turnId
+      ? [binding.id, binding.backend, binding.threadId, turnId].join("\0")
+      : undefined;
+    if (turnKey && itemId) {
+      rememberBoundedMap(this.finalAssistantImageTurns, turnKey, true, 256);
+    } else if (turnKey && this.finalAssistantImageTurns.has(turnKey)) {
+      return [];
+    }
+    const item = itemId
+      ? asPlainRecord((event.notification.params as { item?: unknown }).item)
+      : undefined;
     try {
       const images = await resolveImages({
         backend: binding.backend,
         federationTarget: federationTargetForBinding(binding),
-        itemId: assistantItemIdForBackendEvent(event),
+        ...(item ? { item } : {}),
+        itemId,
         text,
         threadId: binding.threadId,
-        turnId: turnIdForBackendEvent(event),
+        turnId,
       });
       return selectAssistantImagesForCapability(images, this.capabilityProfile);
     } catch (error) {

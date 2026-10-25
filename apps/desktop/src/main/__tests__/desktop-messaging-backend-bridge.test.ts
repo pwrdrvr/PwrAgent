@@ -1115,9 +1115,11 @@ describe("DesktopMessagingBackendBridge", () => {
       },
     };
     const readThread = vi.fn(async () => response);
+    const readThreadTurnReplay = vi.fn(async () => response.replay);
     const bridge = new DesktopMessagingBackendBridge({
       getThreadTranscriptImageRoots: vi.fn(async () => []),
       readThread,
+      readThreadTurnReplay,
     } as unknown as DesktopBackendRegistry);
     const request = {
       backend: "codex" as const,
@@ -1147,7 +1149,9 @@ describe("DesktopMessagingBackendBridge", () => {
         },
       ],
     ]);
-    expect(readThread).toHaveBeenCalledTimes(1);
+    // A turn end reads only its own turn, once for both controllers.
+    expect(readThreadTurnReplay).toHaveBeenCalledTimes(1);
+    expect(readThread).not.toHaveBeenCalled();
   });
 
   it("resolves the exact image-only assistant replay message by item id", async () => {
@@ -1179,7 +1183,7 @@ describe("DesktopMessagingBackendBridge", () => {
     };
     const bridge = new DesktopMessagingBackendBridge({
       getThreadTranscriptImageRoots: vi.fn(async () => []),
-      readThread: vi.fn(async () => response),
+      readThreadTurnReplay: vi.fn(async () => response.replay),
     } as unknown as DesktopBackendRegistry);
 
     await expect(bridge.resolveAssistantMessageImages({
@@ -1221,7 +1225,7 @@ describe("DesktopMessagingBackendBridge", () => {
     };
     const bridge = new DesktopMessagingBackendBridge({
       getThreadTranscriptImageRoots: vi.fn(async () => []),
-      readThread: vi.fn(async () => response),
+      readThreadTurnReplay: vi.fn(async () => response.replay),
     } as unknown as DesktopBackendRegistry);
 
     await expect(bridge.resolveAssistantMessageImages({
@@ -1257,7 +1261,7 @@ describe("DesktopMessagingBackendBridge", () => {
     };
     const bridge = new DesktopMessagingBackendBridge({
       getThreadTranscriptImageRoots: vi.fn(async () => []),
-      readThread: vi.fn(async () => response),
+      readThreadTurnReplay: vi.fn(async () => response.replay),
     } as unknown as DesktopBackendRegistry);
 
     await expect(bridge.resolveAssistantMessageImages({
