@@ -131,16 +131,18 @@ test("keeps running work reachable after cancelling and following a blocker", as
     // Playwright's locator hit-testing can't reach into this frameless modal.
     const rendered = await dialog.evaluate(() => ({
       summary: document.querySelector("main.content p")?.textContent ?? "",
-      groups: [...document.querySelectorAll(".group")].map(
-        (group) => group.textContent ?? "",
-      ),
+      // Each heading is its label and its row count.
+      groups: [...document.querySelectorAll(".group")].map((group) => [
+        group.firstElementChild?.textContent ?? "",
+        group.querySelector(".group__count")?.textContent ?? "",
+      ]),
       rowCount: document.querySelectorAll("a.row").length,
       firstHref: document.querySelector("a.row")?.getAttribute("href") ?? "",
       countdown: document.getElementById("countdown")?.textContent ?? "",
     }));
 
     expect(rendered.summary).toBe("1 integrated terminal is running.");
-    expect(rendered.groups).toEqual(["Integrated terminals"]);
+    expect(rendered.groups).toEqual([["Integrated terminals", "1"]]);
     expect(rendered.rowCount).toBe(1);
     // A terminal row addresses a terminal, not a thread — a thread can own
     // several shells, and revealing the wrong one is the bug this encodes
