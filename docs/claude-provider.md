@@ -84,6 +84,23 @@ timeline notifications. Permission requests use the existing approval UI;
 request and removes it from the registry. Only explicit approval authorizes
 the tool; the bridge does not synthesize durable CLI permission rules.
 
+Claude Code's own tools get the rows other providers get. Read, Glob, Grep,
+WebSearch, and WebFetch rows name the file, pattern, query, or URL. A
+successful Edit, Write, or NotebookEdit row carries its unified diff, built
+from the tool result's structured patch; a new file with an empty patch diffs
+its content. Each edit also extends the turn's `turn/diff/updated`, which
+feeds the live Edited Files row and work rail. Diffs over 256 KB keep their
+line counts only. A TodoWrite call is the turn's plan: it emits
+`turn/plan/updated` and replaces one plan entry per turn instead of adding a
+tool row. Other tools keep a generic row with their input.
+
+Compaction is its own row with Claude's token counts and emits
+`thread/compacted`, the boundary Token Miser replay accounting uses.
+`/compact` itself runs in the CLI as a prompt. A model refusal is kept as a
+warning row. Compacting status, API retries, permission denials, and
+non-low-priority CLI notifications are activity-only warnings in the live
+transcript. Thinking blocks are not shown, matching the Codex transcript.
+
 | PwrAgent mode | SDK mode |
 | --- | --- |
 | Default | `default` |

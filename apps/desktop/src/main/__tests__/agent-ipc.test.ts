@@ -1749,7 +1749,7 @@ describe("agent ipc", () => {
     disposeAgentIpcHandlers();
   });
 
-  it("attaches pre-shaped live diff activity before broadcasting to renderer subscribers", async () => {
+  it.each(["codex", "claude"] as const)("attaches pre-shaped %s live diff activity before broadcasting to renderer subscribers", async (backend) => {
     const {
       registerAgentIpcHandlers,
       disposeAgentIpcHandlers,
@@ -1767,7 +1767,7 @@ describe("agent ipc", () => {
     registerAgentIpcHandlers();
 
     await registryListener?.({
-      backend: "codex",
+      backend,
       notification: {
         method: "turn/diff/updated",
         params: {

@@ -2152,3 +2152,151 @@ describe("Claude MCP elicitation bridge", () => {
     expect(cancelRequest).toHaveBeenCalledOnce();
   });
 });
+
+describe("Claude transcript fidelity", () => {
+  const init = { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+  const result = { type: "result", subtype: "success", is_error: false, result: "done" } as SDKMessage;
+  const call = (id: string, name: string, input: Record<string, unknown>) => ({
+    type: "assistant", parent_tool_use_id: null, message: { id: `message-${id}`, content: [{ type: "tool_use", id, name, input }] },
+  }) as SDKMessage;
+  const answer = (id: string, content: string, toolUseResult?: unknown) => ({
+    type: "user", parent_tool_use_id: null, tool_use_result: toolUseResult,
+    message: { content: [{ type: "tool_result", tool_use_id: id, content }] },
+  }) as SDKMessage;
+
+  it("shows a successful edit as a diff, live and in the replay", async () => {
+    let cwd = "";
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("edit-1", "Edit", { file_path: path.join(cwd, "src", "app.ts"), old_string: "a", new_string: "b" });
+      yield answer("edit-1", "The file has been updated.", {
+        filePath: path.join(cwd, "src", "app.ts"), oldString: "a", newString: "b", originalFile: "a\n",
+        structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ["-a", "+b"] }],
+        userModified: false, replaceAll: false,
+      });
+      yield result;
+    });
+    cwd = f.root;
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Edit" }] });
+    await f.waitForTurn();
+    const diffEvent = f.events.find((event) => event.notification.method === "turn/diff/updated");
+    expect(diffEvent?.notification.params).toMatchObject({
+      threadId, diff: "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1,1 +1,1 @@\n-a\n+b",
+    });
+    const row = (await f.backend.readThread(threadId)).entries.find((entry) => entry.type === "activity");
+    expect(row).toMatchObject({ summary: "Edited app.ts", status: "completed", details: [{
+      kind: "write", label: "Edited app.ts", path: path.join(f.root, "src", "app.ts"),
+      fileDiff: { kind: "update", additions: 1, removals: 1, diff: expect.stringContaining("+b") },
+    }] });
+  });
+
+  it("diffs a new file's content when its patch is empty, and keeps a failed edit's error", async () => {
+    let cwd = "";
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("write-1", "Write", { file_path: path.join(cwd, "notes.md"), content: "one\ntwo\n" });
+      yield answer("write-1", "File created.", {
+        type: "create", filePath: path.join(cwd, "notes.md"), content: "one\ntwo\n", structuredPatch: [], originalFile: null,
+      });
+      yield call("edit-2", "Edit", { file_path: path.join(cwd, "notes.md"), old_string: "x", new_string: "y" });
+      yield { type: "user", parent_tool_use_id: null, message: { content: [
+        { type: "tool_result", tool_use_id: "edit-2", content: "String to replace not found", is_error: true },
+      ] } } as SDKMessage;
+      yield result;
+    });
+    cwd = f.root;
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Write" }] });
+    await f.waitForTurn();
+    const [group] = (await f.backend.readThread(threadId)).entries.filter((entry) => entry.type === "activity");
+    if (group?.type !== "activity") throw new Error("Expected the edits' row");
+    expect(group.details[0]).toMatchObject({ label: "Wrote notes.md", fileDiff: {
+      kind: "add", additions: 2, removals: 0, diff: "diff --git a/notes.md b/notes.md\n--- /dev/null\n+++ b/notes.md\n@@ -0,0 +1,2 @@\n+one\n+two",
+    } });
+    expect(group.details.find((detail) => detail.id === "edit-2:output")).toMatchObject({ markdown: "String to replace not found", status: "failed" });
+  });
+
+  it("shows TodoWrite as the turn's plan instead of a tool row", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("todo-1", "TodoWrite", { todos: [
+        { content: "Read the code", status: "completed", activeForm: "Reading the code" },
+        { content: "Fix the bug", status: "in_progress", activeForm: "Fixing the bug" },
+      ] });
+      yield answer("todo-1", "Todos have been modified successfully.");
+      yield call("todo-2", "TodoWrite", { todos: [
+        { content: "Read the code", status: "completed", activeForm: "Reading the code" },
+        { content: "Fix the bug", status: "completed", activeForm: "Fixing the bug" },
+      ] });
+      yield answer("todo-2", "Todos have been modified successfully.");
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Plan" }] });
+    await f.waitForTurn();
+    const plans = f.events.filter((event) => event.notification.method === "turn/plan/updated");
+    expect(plans).toHaveLength(2);
+    expect(plans[0].notification.params).toMatchObject({ plan: { steps: [
+      { step: "Read the code", status: "completed" }, { step: "Fix the bug", status: "in_progress" },
+    ] } });
+    const entries = (await f.backend.readThread(threadId)).entries;
+    expect(entries.filter((entry) => entry.type === "activity")).toEqual([]);
+    expect(entries.filter((entry) => entry.type === "plan")).toMatchObject([{ steps: [
+      { step: "Read the code", status: "completed" }, { step: "Fix the bug", status: "completed" },
+    ] }]);
+  });
+
+  it("names what file and web tools read", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("read-1", "Read", { file_path: "/repo/src/index.ts" });
+      yield answer("read-1", "1\texport {}");
+      yield call("grep-1", "Grep", { pattern: "TODO", path: "/repo/src" });
+      yield answer("grep-1", "src/index.ts");
+      yield call("fetch-1", "WebFetch", { url: "https://example.com/docs", prompt: "Summarize" });
+      yield answer("fetch-1", "A summary");
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Look" }] });
+    await f.waitForTurn();
+    const [group] = (await f.backend.readThread(threadId)).entries.filter((entry) => entry.type === "activity");
+    if (group?.type !== "activity") throw new Error("Expected the tools' row");
+    expect(group.details.filter((detail) => !detail.id.endsWith(":output")).map((detail) => detail.label)).toEqual([
+      "Read index.ts", "Searched for TODO in src", "Fetched https://example.com/docs",
+    ]);
+    expect(group.details.find((detail) => detail.id === "fetch-1")).toMatchObject({ url: "https://example.com/docs" });
+  });
+
+  it("records compaction as its own row and a compaction boundary, and reports retries without a toast", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("read-1", "Read", { file_path: "/repo/a.ts" });
+      yield answer("read-1", "a");
+      yield { type: "system", subtype: "status", status: "compacting" } as SDKMessage;
+      yield { type: "system", subtype: "compact_boundary", uuid: "boundary-1",
+        compact_metadata: { trigger: "auto", pre_tokens: 180_000, post_tokens: 12_000 } } as unknown as SDKMessage;
+      yield { type: "system", subtype: "api_retry", attempt: 1, max_retries: 10, retry_delay_ms: 2_000,
+        error_status: 529, error: "server_error" } as unknown as SDKMessage;
+      yield call("read-2", "Read", { file_path: "/repo/b.ts" });
+      yield answer("read-2", "b");
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Work" }] });
+    await f.waitForTurn();
+    expect(f.events.find((event) => event.notification.method === "thread/compacted")?.notification.params)
+      .toEqual({ threadId, itemId: "boundary-1" });
+    const warnings = f.events.filter((event) => event.notification.method === "warning").map((event) => event.notification.params);
+    expect(warnings).toEqual([
+      { threadId, message: "Claude is compacting the conversation.", presentation: "activity-only" },
+      { threadId, message: "A Claude API request failed (HTTP 529). Retrying in 2s, attempt 1 of 10.", presentation: "activity-only" },
+    ]);
+    const activities = (await f.backend.readThread(threadId)).entries.filter((entry) => entry.type === "activity");
+    expect(activities.map((entry) => entry.type === "activity" ? entry.summary : "")).toEqual([
+      "Read a.ts", "Compacted context", "Read b.ts",
+    ]);
+    expect(activities[1]).toMatchObject({ details: [{ label: "180,000 → 12,000 tokens, automatically" }] });
+  });
+});

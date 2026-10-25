@@ -34,6 +34,10 @@ function normalizeSavedCommand(entry: AppServerThreadActivityEntry): AppServerTh
   }
 }
 
+function isClaudeNotice(entry: AppServerThreadActivityEntry): boolean {
+  return entry.id.startsWith("notice:");
+}
+
 /** Fold consecutive calls, retaining every detail and each conversation boundary. */
 export function groupClaudeActivities(entries: AppServerThreadEntry[]): AppServerThreadEntry[] {
   const grouped: AppServerThreadEntry[] = [];
@@ -41,7 +45,8 @@ export function groupClaudeActivities(entries: AppServerThreadEntry[]): AppServe
   for (const rawEntry of entries) {
     const entry = rawEntry.type === "activity" ? normalizeSavedCommand(rawEntry) : rawEntry;
     const previous = grouped.at(-1);
-    if (entry.type !== "activity" || previous?.type !== "activity"
+    // A notice, such as a compaction, is its own row, never a folded tool.
+    if (entry.type !== "activity" || previous?.type !== "activity" || isClaudeNotice(entry) || isClaudeNotice(previous)
       || !entry.turn?.id || previous.turn?.id !== entry.turn.id) {
       grouped.push(entry);
       callCount = entry.type === "activity" ? 1 : 0;

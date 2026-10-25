@@ -8,8 +8,8 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerBackgroundTask, AppServerPendingRequestNotification, AppServerReviewContext,
-  AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadReplay,
-  AppServerThreadReviewEntry, AppServerThreadSummary,
+  AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadPlanEntry,
+  AppServerThreadPlanStep, AppServerThreadReplay, AppServerThreadReviewEntry, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
@@ -27,6 +27,7 @@ import {
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
+import { CLAUDE_TODO_TOOL, claudeFileDiff, claudeTodoSteps, claudeToolDetail } from "./claude-tool-activity";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
   CLAUDE_REPORT_FINDINGS_TOOL, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
@@ -163,6 +164,8 @@ type RunningTurn = {
   pendingReports: Map<string, { report: ClaudeFindingsReport; model?: string; input: unknown }>;
   /** Some successful tools update existing state without adding transcript entries. */
   hasCompletedToolActivity: boolean;
+  /** Each successful file edit's diff, in order: the turn's live diff. */
+  fileDiffs: string[];
   ending?: boolean;
   titlePrompt?: string;
   /** Owned by the turn, but never awaited by the streaming message pump. */
@@ -278,7 +281,7 @@ function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
   return {
     ended: claudeDeferred(),
     turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), pendingSteers: new Set(),
-    completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, lastResultSeq: 0,
+    completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, fileDiffs: [], lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
     ...(followUp ? { followUp, started: true } : {}),
   };
@@ -915,6 +918,7 @@ export class ClaudeBackend {
         const taskMessage = message.type === "system" && CLAUDE_TASK_SUBTYPES.has(message.subtype);
         if (taskMessage) await this.consumeTaskMessage(message, live);
         if (turn) await this.consumeCompleteMessage(message, live, turn);
+        await this.consumeNotice(message, live, turn);
         // The probe is a control round-trip that can wait 1.5s; never hold
         // the stream for it. The result boundary below reads it in order.
         if (turn && message.type === "assistant" && !message.parent_tool_use_id) {
@@ -1579,15 +1583,26 @@ export class ClaudeBackend {
           turn.pendingReports.set(block.id, { report, model: message.message.model, input: block.input });
           continue;
         }
+        // The checklist is the turn's plan, which the transcript and the
+        // live work rail show as one card.
+        const steps = block.name === CLAUDE_TODO_TOOL ? claudeTodoSteps(block.input) : undefined;
+        if (steps) {
+          await this.publishPlan(live, turn, steps);
+          continue;
+        }
         const input = block.input as Record<string, unknown>;
         const command = block.name === "Bash" && typeof input.command === "string" ? input.command : undefined;
+        const detail = command === undefined
+          ? claudeToolDetail({ id: block.id, name: block.name, input, status: "in_progress" }) : undefined;
         const activity: AppServerThreadActivityEntry = {
           ...(command !== undefined
             ? claudeCommandActivity({ id: block.id, command, status: "in_progress" })
-            : {
-              type: "activity" as const, id: block.id, summary: block.name, status: "in_progress" as const,
-              details: [{ id: block.id, kind: "read" as const, label: block.name, markdown: JSON.stringify(input) }],
-            }),
+            : detail
+              ? { type: "activity" as const, id: block.id, summary: detail.label, status: "in_progress" as const, details: [detail] }
+              : {
+                type: "activity" as const, id: block.id, summary: block.name, status: "in_progress" as const,
+                details: [{ id: block.id, kind: "read" as const, label: block.name, markdown: JSON.stringify(input) }],
+              }),
           createdAt: Date.now(), turn: { id: turnId },
         };
         turn.entries.set(block.id, activity);
@@ -1637,8 +1652,17 @@ export class ClaudeBackend {
         entry.status = block.is_error ? "failed" : launchedTask ? "in_progress" : "completed";
         const output = typeof block.content === "string" ? block.content : JSON.stringify(block.content);
         const command = entry.details[0].command?.rawCommand;
+        // A successful edit shows its diff instead of the tool's acknowledgement.
+        const edit = entry.details[0].kind === "write" && !block.is_error
+          ? claudeFileDiff(message.tool_use_result, live.session.cwd) : undefined;
         if (command !== undefined) {
           entry.details = claudeCommandActivity({ id: entry.id, command, status: entry.status, output }).details;
+        } else if (edit) {
+          entry.details = [{ ...entry.details[0], status: entry.status, fileDiff: edit.fileDiff }];
+          if (edit.diff) {
+            turn.fileDiffs.push(edit.diff);
+            await this.emit({ method: "turn/diff/updated", params: { threadId, turnId, diff: turn.fileDiffs.join("\n") } });
+          }
         } else {
           // Keep the invocation when updating generic tools, too.
           const outputId = `${entry.id}:output`;
@@ -1657,6 +1681,84 @@ export class ClaudeBackend {
         };
         await this.emit({ method: "item/completed", params: { threadId, turnId, item } });
       }
+    }
+  }
+
+  /** Each TodoWrite call replaces the turn's plan. */
+  private async publishPlan(live: LiveSession, turn: RunningTurn, steps: AppServerThreadPlanStep[]): Promise<void> {
+    const threadId = live.session.thread.id;
+    const id = `plan:${turn.turnId}`;
+    const previous = turn.entries.get(id);
+    const entry: AppServerThreadPlanEntry = {
+      type: "plan", id, createdAt: previous?.createdAt ?? Date.now(), steps, turn: { id: turn.turnId },
+    };
+    turn.entries.set(id, entry);
+    await this.store.append(threadId, [entry]);
+    await this.emit({ method: "turn/plan/updated", params: { threadId, turnId: turn.turnId, plan: { steps } } });
+  }
+
+  /**
+   * Claude's own notices: compaction, retries, refusals, and denials. Each
+   * shows in the transcript without a toast; compaction and a refusal also
+   * stay in the thread's history.
+   */
+  private async consumeNotice(message: SDKMessage, live: LiveSession, turn: RunningTurn | undefined): Promise<void> {
+    if (message.type !== "system") return;
+    const threadId = live.session.thread.id;
+    const warn = async (text: string) => {
+      await this.emit({ method: "warning", params: { threadId, message: text, presentation: "activity-only" } });
+    };
+    const record = async (summary: string, label: string, tone?: "warning") => {
+      if (!turn) return;
+      const id = `notice:${message.uuid}`;
+      const entry: AppServerThreadActivityEntry = {
+        type: "activity", id, summary, status: "completed", ...(tone ? { tone } : {}),
+        details: [{ id: `${id}:detail`, kind: "read", label, status: "completed" }],
+        createdAt: Date.now(), turn: { id: turn.turnId },
+      };
+      turn.entries.set(id, entry);
+      await this.store.append(threadId, [entry]);
+    };
+    switch (message.subtype) {
+      case "compact_boundary": {
+        const { trigger, pre_tokens: before, post_tokens: after } = message.compact_metadata;
+        const tokens = after !== undefined
+          ? `${before.toLocaleString()} → ${after.toLocaleString()} tokens`
+          : `${before.toLocaleString()} tokens summarized`;
+        await record("Compacted context", trigger === "auto" ? `${tokens}, automatically` : tokens);
+        await this.emit({ method: "thread/compacted", params: { threadId, itemId: message.uuid } });
+        return;
+      }
+      case "status":
+        if (message.status === "compacting") await warn("Claude is compacting the conversation.");
+        return;
+      case "api_retry": {
+        const status = message.error_status ? ` (HTTP ${message.error_status})` : "";
+        const delay = Math.max(1, Math.round(message.retry_delay_ms / 1000));
+        await warn(`A Claude API request failed${status}. Retrying in ${delay}s, attempt ${message.attempt} of ${message.max_retries}.`);
+        return;
+      }
+      case "permission_denied":
+        await warn(`Claude could not use ${message.tool_name}: ${message.message}`);
+        return;
+      case "model_refusal_fallback": {
+        const text = message.content.trim()
+          || `${message.original_model} declined the request; Claude used ${message.fallback_model} instead.`;
+        await record(`Switched to ${message.fallback_model}`, text, "warning");
+        await warn(text);
+        return;
+      }
+      case "model_refusal_no_fallback": {
+        const text = message.content.trim() || `${message.original_model} declined the request.`;
+        await record("Model declined the request", text, "warning");
+        await warn(text);
+        return;
+      }
+      case "notification":
+        if (message.priority !== "low" && message.text.trim()) await warn(message.text.trim());
+        return;
+      default:
+        return;
     }
   }
 
