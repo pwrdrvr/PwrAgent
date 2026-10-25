@@ -732,12 +732,45 @@ jobs:
         timeout-minutes: 5
         run: git lfs pull
 
+      - name: Check the guest's persistent pnpm store
+        # The guest keeps its disk between jobs, so the pnpm store and the
+        # Electron download caches live outside the workspace, in a directory
+        # only this repository uses, where checkout's clean cannot delete
+        # them. A warm store skips the ~50 s restore of the 750 MB dependency
+        # cache. A cold or expired store takes the configure-nodejs path once
+        # and is then moved onto the guest. See the script for the expiry.
+        id: guest-store
+        shell: bash
+        timeout-minutes: 5
+        run: bash ./scripts/ci/macos-e2e-guest-store.sh check
+
       - name: Install Node.js and dependencies
+        if: steps.guest-store.outputs.warm != 'true'
         uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
         timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
+
+      - name: Seed the guest pnpm store
+        if: steps.guest-store.outputs.warm != 'true'
+        shell: bash
+        timeout-minutes: 5
+        run: bash ./scripts/ci/macos-e2e-guest-store.sh seed
+
+      - name: Set up Node.js
+        if: steps.guest-store.outputs.warm == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        timeout-minutes: 5
+        with:
+          node-version: "^24.22.1"
+          package-manager-cache: false
+
+      - name: Install dependencies from the guest pnpm store
+        if: steps.guest-store.outputs.warm == 'true'
+        shell: bash
+        timeout-minutes: 10
+        run: bash ./scripts/ci/macos-e2e-guest-store.sh install
 
       - name: Clear leftover Electron state from previous jobs
         # This runner is a persistent Tart guest, not a fresh VM per job, so a
@@ -757,6 +790,17 @@ jobs:
         timeout-minutes: 5
         run: bash ./scripts/ci/macos-e2e-pre-run-cleanup.sh
 
+      - name: Build or restore apps/desktop/out
+        # A guest usually runs two lanes of one commit, and a re-run repeats
+        # all four, so the electron-vite build is kept on the guest, keyed on
+        # the Git tree SHA plus a build-environment guard. A miss builds and
+        # saves; the test step's test:e2e:prebuilt then refuses an out/ that
+        # was not stamped for this tree. Local `pnpm test:desktop-e2e` still
+        # builds first.
+        shell: bash
+        timeout-minutes: 10
+        run: node scripts/ci/desktop-out-cache.mjs prepare
+
       - name: Run desktop replay-backed Electron tests
         # Tart's AppleParavirtGPU can reset under Electron load. The early
         # PWRAGENT_E2E_DISABLE_GPU gate selects software rendering before
@@ -771,7 +815,7 @@ jobs:
           # strategy comment.
           PWTEST_SHARD_WEIGHTS: "9:12:12:14"
         run: >-
-          pnpm --filter @pwragent/desktop test:e2e
+          pnpm --filter @pwragent/desktop test:e2e:prebuilt
           --shard=${{ matrix.lane }}/4
 
       - name: Upload macOS Playwright artifacts
