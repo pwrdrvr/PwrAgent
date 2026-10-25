@@ -10319,10 +10319,11 @@ describe("SettingsScreen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Use as local command" }));
     // Split once, for the operator to check: quotes kept one argument whole.
     expect(screen.getByRole("radio", { name: /Local command/ })).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByLabelText(/^Command/)).toHaveValue("npx");
-    expect(screen.getByLabelText(/^Arguments/)).toHaveValue(
-      "-y\n@modelcontextprotocol/server-filesystem\n/home/example/My Projects",
+    expect(screen.getByLabelText(/^Command line/)).toHaveValue(
+      "npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'",
     );
+    // The split is on screen, one chip per word, before anything runs.
+    expect(screen.getByText("/home/example/My Projects", { selector: "code" })).toBeInTheDocument();
     expect(screen.getByText(/this computer, as you/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Test" }));
@@ -10387,7 +10388,7 @@ describe("SettingsScreen", () => {
     fireEvent.change(screen.getByPlaceholderText("Project files"), {
       target: { value: "Fixture server" },
     });
-    fireEvent.change(screen.getByLabelText(/^Command/), {
+    fireEvent.change(screen.getByLabelText(/^Command line/), {
       target: { value: "fixture-server" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
@@ -10417,6 +10418,46 @@ describe("SettingsScreen", () => {
         },
       });
     });
+  });
+
+  it("moves NAME=value words from a pasted line into variables, and refuses an open quote", async () => {
+    const testMcpStdioConnection = vi.fn();
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          testMcpStdioConnection,
+          listMcpConnections: vi.fn(async () => ({ connections: [] })),
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [],
+          })),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("radio", { name: /Local command/ }));
+    const commandLine = screen.getByLabelText(/^Command line/);
+    fireEvent.change(commandLine, {
+      target: { value: "FIXTURE_API_TOKEN=fixture-secret LOG_LEVEL=debug npx -y fixture-server" },
+    });
+    fireEvent.blur(commandLine);
+
+    expect(commandLine).toHaveValue("npx -y fixture-server");
+    // A credential-looking name starts hidden; the operator can still flip it.
+    expect(screen.getByLabelText("FIXTURE_API_TOKEN value")).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("FIXTURE_API_TOKEN value")).toHaveValue("fixture-secret");
+    expect(screen.getByLabelText("LOG_LEVEL value")).toHaveAttribute("type", "text");
+
+    fireEvent.change(commandLine, { target: { value: "npx -y 'fixture-server" } });
+    expect(screen.getByText("A quote is not closed.")).toBeInTheDocument();
+    expect(commandLine).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
+    expect(testMcpStdioConnection).not.toHaveBeenCalled();
   });
 
   it("lists a local command by its command line and edits it without echoing a stored secret", async () => {
@@ -10468,8 +10509,13 @@ describe("SettingsScreen", () => {
     expect(secret).toHaveValue("");
     expect(secret).toHaveAttribute("placeholder", "Stored encrypted");
     expect(within(dialog).getByText(/restarts it in the 2 threads/)).toBeInTheDocument();
-    fireEvent.change(within(dialog).getByLabelText(/^Arguments/), {
-      target: { value: "-y\n@modelcontextprotocol/server-filesystem\n/home/example/Other" },
+    // Shown as one line, the way it was pasted, with the resolved program.
+    const commandLine = within(dialog).getByLabelText(/^Command line/);
+    expect(commandLine).toHaveValue(
+      "/opt/fixture/bin/npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'",
+    );
+    fireEvent.change(commandLine, {
+      target: { value: "/opt/fixture/bin/npx -y @modelcontextprotocol/server-filesystem /home/example/Other" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 

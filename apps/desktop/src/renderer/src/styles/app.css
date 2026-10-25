@@ -16195,7 +16195,42 @@ a.button {
   line-height: 1.45;
 }
 
-.settings-mcp-local__hint--ok {
+.settings-mcp-local__hint--err {
+  color: var(--danger-text);
+}
+
+/* The command line as it was split: one chip per word, so a quoted path that
+   stayed whole, or one that did not, is visible before anything runs. */
+.settings-mcp-local__argv {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-mcp-local__argv-label {
+  margin-right: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-mcp-local__argv code {
+  max-width: 100%;
+  padding: 1px 5px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.settings-mcp-local__argv .settings-mcp-local__argv-program {
   color: var(--success-text);
 }
 

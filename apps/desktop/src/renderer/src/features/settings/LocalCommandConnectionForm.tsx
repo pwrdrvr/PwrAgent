@@ -1,5 +1,7 @@
 import { useId } from "react";
 import {
+  formatMcpCommandLine,
+  MCP_STDIO_ENV_NAME_PATTERN,
   splitMcpCommandLine,
   type McpStdioLaunch,
   type McpStdioLaunchInput,
@@ -22,11 +24,15 @@ export type LocalCommandEnvDraft = {
   stored: boolean;
 };
 
-/** A local command as the add form and the edit dialog hold it. */
+/**
+ * A local command as the add form and the edit dialog hold it.
+ *
+ * The command and its arguments are one line, the way a server's README
+ * prints it. It is split once, without a shell, and stored as argv; the form
+ * shows the split so quoting is never a guess.
+ */
 export type LocalCommandDraft = {
-  command: string;
-  /** One argument per line, exactly as typed. */
-  args: string;
+  commandLine: string;
   cwd: string;
   env: LocalCommandEnvDraft[];
 };
@@ -38,13 +44,12 @@ function nextEnvKey(): string {
 }
 
 export function emptyLocalCommandDraft(): LocalCommandDraft {
-  return { command: "", args: "", cwd: "", env: [] };
+  return { commandLine: "", cwd: "", env: [] };
 }
 
 export function localCommandDraftFromLaunch(launch: McpStdioLaunch): LocalCommandDraft {
   return {
-    command: launch.command,
-    args: launch.args.join("\n"),
+    commandLine: formatMcpCommandLine(launch),
     cwd: launch.cwd ?? "",
     env: launch.env.map((entry) => ({
       key: nextEnvKey(),
@@ -56,6 +61,46 @@ export function localCommandDraftFromLaunch(launch: McpStdioLaunch): LocalComman
   };
 }
 
+/** Names that usually hold a credential, so a pasted value starts hidden. */
+const SECRET_NAME = /TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|_KEY$|CREDENTIAL/i;
+
+/**
+ * Move `NAME=value` words from the front of the command line into
+ * environment rows, as a shell would apply them. READMEs often write
+ * `GITHUB_TOKEN=… npx …`; run as-is, `GITHUB_TOKEN=…` would be the program.
+ * Returns the draft unchanged when there is nothing to move, or when the line
+ * cannot be split.
+ */
+export function moveLeadingAssignments(draft: LocalCommandDraft): LocalCommandDraft {
+  const argv = splitMcpCommandLine(draft.commandLine.trim());
+  if (!argv?.length) return draft;
+  const env = [...draft.env];
+  let index = 0;
+  for (; index < argv.length - 1; index += 1) {
+    const word = argv[index]!;
+    const equals = word.indexOf("=");
+    const name = equals > 0 ? word.slice(0, equals) : "";
+    if (!MCP_STDIO_ENV_NAME_PATTERN.test(name)) break;
+    const value = word.slice(equals + 1);
+    const existing = env.findIndex((entry) => entry.name === name);
+    const row: LocalCommandEnvDraft = {
+      key: existing >= 0 ? env[existing]!.key : nextEnvKey(),
+      name,
+      value,
+      secret: SECRET_NAME.test(name),
+      stored: false,
+    };
+    if (existing >= 0) env[existing] = row;
+    else env.push(row);
+  }
+  if (index === 0) return draft;
+  return {
+    ...draft,
+    commandLine: formatMcpCommandLine({ command: argv[index]!, args: argv.slice(index + 1) }),
+    env,
+  };
+}
+
 /**
  * Turn a pasted command line into a draft, once, for the operator to check.
  * Undefined when it cannot be split (an unterminated quote) or is empty.
@@ -63,17 +108,20 @@ export function localCommandDraftFromLaunch(launch: McpStdioLaunch): LocalComman
 export function localCommandDraftFromCommandLine(text: string): LocalCommandDraft | undefined {
   const argv = splitMcpCommandLine(text.trim());
   if (!argv?.length) return undefined;
-  return { command: argv[0]!, args: argv.slice(1).join("\n"), cwd: "", env: [] };
+  return moveLeadingAssignments({ commandLine: text.trim(), cwd: "", env: [] });
 }
 
-/**
- * The draft as the main process takes it. Blank argument lines are dropped:
- * an empty argument cannot be told apart from a stray newline in this field.
- */
+/** The draft's argv, or undefined while it cannot be split. */
+function draftArgv(draft: LocalCommandDraft): string[] | undefined {
+  return splitMcpCommandLine(draft.commandLine.trim());
+}
+
+/** The draft as the main process takes it. */
 export function localCommandLaunchInput(draft: LocalCommandDraft): McpStdioLaunchInput {
+  const argv = draftArgv(draft) ?? [];
   return {
-    command: draft.command.trim(),
-    args: draft.args.split(/\r?\n/).filter((line) => line.length > 0),
+    command: argv[0] ?? "",
+    args: argv.slice(1),
     ...(draft.cwd.trim() ? { cwd: draft.cwd.trim() } : {}),
     env: draft.env
       .filter((entry) => entry.name.trim() || entry.value)
@@ -87,16 +135,16 @@ export function localCommandLaunchInput(draft: LocalCommandDraft): McpStdioLaunc
 }
 
 export function localCommandDraftReady(draft: LocalCommandDraft): boolean {
-  return draft.command.trim().length > 0;
+  return Boolean(draftArgv(draft)?.length);
 }
 
-/** The command, arguments, folder and variables of a local command. */
+/** The command line, folder and variables of a local command. */
 export function LocalCommandFields(props: {
   draft: LocalCommandDraft;
   desktopApi?: DesktopApi;
   disabled: boolean;
   onChange: (draft: LocalCommandDraft) => void;
-  /** The absolute path the last test ran, shown under the command. */
+  /** The absolute path the last test ran, shown under the command line. */
   resolvedCommand?: string;
 }) {
   const id = useId();
@@ -108,54 +156,62 @@ export function LocalCommandFields(props: {
     const picked = await props.desktopApi?.pickDirectoryFromDisk?.();
     if (picked && !picked.canceled) change({ cwd: picked.path });
   };
+  const argv = draftArgv(draft);
+  const unterminated = argv === undefined;
   return (
     <div className="settings-mcp-local">
-      <label className="settings-mcp-local__field">
-        <span className="settings-mcp-local__label">
-          Command
-          <small>A program name or full path</small>
-        </span>
+      <div className="settings-mcp-local__field">
+        <label className="settings-mcp-local__label" htmlFor={`${id}-command`}>
+          Command line
+          <small>As the server&rsquo;s README gives it</small>
+        </label>
         <span className="settings-mcp-local__control">
           <input
+            aria-describedby={`${id}-command-hint`}
+            aria-invalid={unterminated ? true : undefined}
             autoCapitalize="off"
             autoComplete="off"
             className="settings-input"
             disabled={disabled}
-            placeholder="npx"
+            id={`${id}-command`}
+            placeholder="npx -y @modelcontextprotocol/server-filesystem /Users/you/Projects"
             spellCheck={false}
-            value={draft.command}
-            onChange={(event) => change({ command: event.target.value })}
+            value={draft.commandLine}
+            onBlur={() => {
+              const moved = moveLeadingAssignments(draft);
+              if (moved !== draft) props.onChange(moved);
+            }}
+            onChange={(event) => change({ commandLine: event.target.value })}
           />
-          {props.resolvedCommand && props.resolvedCommand !== draft.command.trim() ? (
-            <span className="settings-mcp-local__hint settings-mcp-local__hint--ok">
-              Runs <code>{props.resolvedCommand}</code>
+          {argv?.length ? (
+            // How the line was split, word by word. Quotes are the one thing
+            // that changes a split, so this is where a mistake shows. After a
+            // test, the program is the absolute path that actually ran.
+            <span className="settings-mcp-local__argv">
+              <span className="settings-mcp-local__argv-label">Runs</span>
+              <code
+                className={props.resolvedCommand ? "settings-mcp-local__argv-program" : undefined}
+                title={props.resolvedCommand ? "The program the last test ran" : undefined}
+              >
+                {props.resolvedCommand ?? argv[0]}
+              </code>
+              {argv.slice(1).map((arg, index) => (
+                <code key={index}>{arg === "" ? "\u00a0" : arg}</code>
+              ))}
             </span>
           ) : null}
+          {unterminated ? (
+            <span className="settings-mcp-local__hint settings-mcp-local__hint--err" id={`${id}-command-hint`}>
+              A quote is not closed.
+            </span>
+          ) : (
+            <span className="settings-mcp-local__hint" id={`${id}-command-hint`}>
+              Split into words the way a shell would, but nothing is expanded:
+              {" "}<code>~</code> and <code>$VARS</code> reach the server as typed.
+            </span>
+          )}
         </span>
-      </label>
-      <label className="settings-mcp-local__field">
-        <span className="settings-mcp-local__label">
-          Arguments
-          <small>One per line</small>
-        </span>
-        <span className="settings-mcp-local__control">
-          <textarea
-            aria-describedby={`${id}-args`}
-            autoCapitalize="off"
-            autoComplete="off"
-            className="settings-input settings-input--multiline"
-            disabled={disabled}
-            placeholder={"-y\n@modelcontextprotocol/server-filesystem\n/Users/you/Projects"}
-            rows={3}
-            spellCheck={false}
-            value={draft.args}
-            onChange={(event) => change({ args: event.target.value })}
-          />
-          <span className="settings-mcp-local__hint" id={`${id}-args`}>
-            Passed exactly as written. There is no shell, so <code>~</code> and <code>$VARS</code> are not expanded.
-          </span>
-        </span>
-      </label>
+      </div>
       <div className="settings-mcp-local__field">
         <label className="settings-mcp-local__label" htmlFor={`${id}-cwd`}>
           Working folder

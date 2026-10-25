@@ -44,10 +44,14 @@ select_for_new_threads = false
 tool_approval = "auto"
 ```
 
-- `args` is an array, never one string. The form splits a pasted command line
-  once (`splitMcpCommandLine`: quotes group, a backslash escapes only before
-  whitespace, a quote or a backslash, nothing expands) and shows the result.
-  PwrAgent never re-parses a stored string.
+- `args` is an array, never one string. The form takes one command line, as
+  a server's README gives it, and splits it once (`splitMcpCommandLine`:
+  quotes group, a backslash escapes only before whitespace, a quote or a
+  backslash, nothing expands). It shows the resulting words under the field.
+  Leading `NAME=value` words move into the variable rows, marked secret when
+  the name looks like a token or key. PwrAgent never re-parses a stored
+  string; the edit dialog shows the stored argv re-quoted
+  (`formatMcpCommandLine`), which splits back to the same words.
 - `command` is the absolute path found when the operator tested or saved it.
   A bare name is resolved on the login-shell PATH that Codex uses, once, so a
   later PATH change cannot silently swap in another program of the same name.
