@@ -28,6 +28,8 @@ export type AppNoticeToastNotice = {
   dismissGroup?: {
     key: string;
     label: string;
+    /** The group button's text, when closing hides rather than dismisses. */
+    actionLabel?: string;
   };
   id: string;
   title: string;
@@ -70,6 +72,7 @@ export function AppNoticeToast(props: {
     total: number;
     dismissAll?: {
       label: string;
+      actionLabel?: string;
       onDismiss: () => void;
     };
     onPrevious?: () => void;
@@ -179,6 +182,7 @@ export function AppNoticeToast(props: {
               ? "error"
               : "neutral";
   const facts = props.notice.facts ?? [];
+  const dismissAllText = props.navigation?.dismissAll?.actionLabel ?? "Dismiss all";
   const dismissNotice = props.notice.onDismiss ?? props.onDismiss;
   const { warningSuppressionId } = props.notice;
   const onSuppressCodexWarning = props.onSuppressCodexWarning;
@@ -361,11 +365,11 @@ export function AppNoticeToast(props: {
                 <button
                   className="button app-notice-toast__button app-notice-toast__dismiss-all"
                   type="button"
-                  aria-label={`Dismiss all ${props.navigation.dismissAll.label}`}
-                  title={`Dismiss all ${props.navigation.dismissAll.label}`}
+                  aria-label={`${dismissAllText} ${props.navigation.dismissAll.label}`}
+                  title={`${dismissAllText} ${props.navigation.dismissAll.label}`}
                   onClick={props.navigation.dismissAll.onDismiss}
                 >
-                  Dismiss all
+                  {dismissAllText}
                 </button>
               ) : null}
             </div>
