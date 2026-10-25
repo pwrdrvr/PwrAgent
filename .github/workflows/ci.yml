@@ -482,7 +482,8 @@ jobs:
       # whole in lane 1 as one group. That lane ran 249s of tests on macOS
       # against 145-184s for the other lanes, and set the end of the whole CI
       # run. It is now 57 tests: five surfaces in each of eleven color
-      # themes, plus one ARIA-only block in the two Tangerine themes.
+      # themes, plus the composer autocomplete block in the two Tangerine
+      # themes.
       #
       # Two settings move that work. `a11y.spec.ts` runs in `parallel` mode,
       # so each of its tests is its own group (workers stay at 1, so this

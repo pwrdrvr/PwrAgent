@@ -31,9 +31,10 @@
 // color tokens only, and no component branches on it, so work that
 // cannot see color skips the extra color themes. Tangerine
 // dark and light run the full WCAG AA tag set on every surface; the other
-// color themes run only the color rules (`COLOR_RULES`). The ARIA-only
-// composer block runs in the Tangerine pair only, and the directories
-// block's functional steps run in Tangerine dark only.
+// color themes run only the color rules (`COLOR_RULES`). The composer
+// autocomplete block runs in the Tangerine pair only, because
+// theme-contract.test.tsx measures the popup's tokens in every theme, and
+// the directories block's functional steps run in Tangerine dark only.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
@@ -226,17 +227,31 @@ const WCAG_AA_TAGS = [
 // ~250ms against ~390ms for the full tag set.
 const COLOR_RULES = ["color-contrast", "link-in-text-block"];
 
-// Selectors waived from the axe scan, with a written reason. The
-// baseline is empty — every previously waived violation has been
-// fixed in the renderer. If a new pre-existing violation surfaces
-// (e.g. on a new surface added to the suite below) and is too
-// invasive to fix in the same PR, add an entry here so the gate
-// stays green AND surfaces the debt, then file a follow-up.
+// Selectors waived from the axe scan, with a written reason. Every
+// earlier waiver was fixed in the renderer; the one entry below is
+// pre-existing debt that the composer popup scan found. If a new
+// pre-existing violation surfaces (e.g. on a new surface added to the
+// suite below) and is too invasive to fix in the same PR, add an entry
+// here so the gate stays green AND surfaces the debt, then file a
+// follow-up.
 const KNOWN_VIOLATIONS: ReadonlyArray<{
   selector: string;
   rule: string;
   reason: string;
-}> = [];
+}> = [
+  {
+    // The `@` picker's path on the keyboard-active row is `--text-muted` on
+    // the 12% accent tint over the raised panel: 4.37:1 in Tangerine dark and
+    // 4.38:1 in light. The `+` reference picker, the project picker, and
+    // Move to Project draw their paths the same way. Every other color theme
+    // clears 4.55:1 there, which theme-contract.test.tsx measures. Remove
+    // this entry when the active row's path takes a stronger token.
+    selector:
+      ".composer__autocomplete--directories .composer__autocomplete-option.is-active .composer__autocomplete-meta",
+    rule: "color-contrast",
+    reason: "Tangerine --text-muted on --accent-soft over --bg-panel-elevated is 4.37:1",
+  },
+];
 
 /**
  * Direct `listitem` children of a list. `Locator.getByRole` matches every
@@ -1110,10 +1125,12 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
   });
 }
 
-// Role structure only, so the extra color themes add nothing here: a color
-// theme changes no role, name or attribute, and both scans below run ARIA
-// rules alone. It runs in the Tangerine pair, one launch per scheme, under
-// the same describe titles the loop above gives Tangerine.
+// Nothing else opens the composer popups, so the Tangerine pair scans them
+// for every WCAG AA rule, contrast included, one launch per scheme, under the
+// same describe titles the loop above gives Tangerine. The extra color themes
+// skip this block: a color theme changes no role, name or attribute, and the
+// popup paints only tokens, which theme-contract.test.tsx measures in every
+// theme.
 for (const theme of AUDIT_THEMES) {
   test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme)`, () => {
     // The default smoke fixture never opens a composer autocomplete, so its
@@ -1144,9 +1161,7 @@ for (const theme of AUDIT_THEMES) {
             "aria-activedescendant",
             await activeOption.getAttribute("id") ?? "missing-option-id",
           );
-          await runAxeScan(app.window, "skills autocomplete", {
-            rules: ["aria-required-children", "aria-required-parent"],
-          });
+          await runAxeScan(app.window, "skills autocomplete");
         });
 
         await test.step("directory autocomplete with sibling actions", async () => {
@@ -1165,9 +1180,6 @@ for (const theme of AUDIT_THEMES) {
           await runAxeScan(
             app.window,
             "directory autocomplete with sibling actions",
-            {
-              rules: ["aria-required-children", "aria-required-parent"],
-            },
           );
         });
       } finally {

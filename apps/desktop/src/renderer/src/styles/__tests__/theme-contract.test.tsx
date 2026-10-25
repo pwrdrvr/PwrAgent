@@ -1223,9 +1223,11 @@ describe("Tangerine Terminal theme contract", () => {
     // the Windows test below): there the rail runs the full column height, so
     // the header has to stop at it. Assert the exception is exactly one rule
     // and that it is platform-scoped, rather than dropping the guard.
+    // Anchored at a rule boundary: unanchored, the leading `[^{}]*` retried
+    // from every character of the stylesheet and cost about 0.6s.
     const headerRailGutters = [
       ...css.matchAll(
-        /([^{}]*\.thread-header[^{}]*)\{([^}]*padding-right:\s*calc\(var\(--context-rail-effective[^}]*)\}/g,
+        /(?:^|[{}])([^{}]*\.thread-header[^{}]*)\{([^}]*padding-right:\s*calc\(var\(--context-rail-effective[^}]*)\}/g,
       ),
     ];
     expect(headerRailGutters).toHaveLength(1);
@@ -2044,8 +2046,10 @@ describe("Tangerine Terminal theme contract", () => {
     // Text centres by cap height, chevrons by x-height. A flex-centred line
     // box puts the capitals wherever the font's ascent and descent do.
     // The selector list of a grouped rule, minus the comment above it.
+    // Anchored at a rule boundary: unanchored, `[^{}]+` retried from every
+    // character of the stylesheet.
     const groupedSelectors = (declaration: string): string[] => {
-      const match = new RegExp(`([^{}]+)\\{\\s*${declaration}\\s*\\}`).exec(css);
+      const match = new RegExp(`(?:^|[{}])([^{}]+)\\{\\s*${declaration}\\s*\\}`).exec(css);
       expect(match, `app.css should group \`${declaration}\``).not.toBeNull();
       return match![1].split("*/").pop()!.split(",").map((part) => part.trim());
     };
@@ -2751,6 +2755,12 @@ describe("color theme contract", () => {
     "phosphor-dark",
   ];
   const LIGHT_THEMES = ["catppuccin-latte", "solarized-light", "gray-light", "blue-light"];
+  // The floors the COLOR THEMES comment in app.css states: text at WCAG AA
+  // plus 0.05 of margin for rendering, and non-text marks at 3:1 plus the
+  // same margin. Tangerine is not held to them; its blocks carry their own
+  // contrast notes, including a list of known light-theme debt.
+  const TEXT_FLOOR = 4.55;
+  const MARK_FLOOR = 3.05;
   const blockFor = (theme: string): Record<string, string> =>
     extractTokensForSelector(css, `:root[data-color-theme="${theme}"]`);
   // The cascade each theme actually renders with: the scheme block it
@@ -2880,7 +2890,7 @@ describe("color theme contract", () => {
     }
   });
 
-  it("keeps every text token at AA on the lowest-contrast surface it can land on", () => {
+  it("keeps every text token at its stated floor on the lowest-contrast surface it can land on", () => {
     for (const [name, theme] of Object.entries(themes)) {
       const backgrounds = textBackgrounds(theme);
       for (const token of [
@@ -2904,7 +2914,7 @@ describe("color theme contract", () => {
         "savings-over",
       ]) {
         expect(worstCase(theme, token, backgrounds), `${name}: ${token}`)
-          .toBeGreaterThanOrEqual(4.5);
+          .toBeGreaterThanOrEqual(TEXT_FLOOR);
       }
       for (const [text, soft] of [
         ["danger-text", "danger-soft"],
@@ -2913,14 +2923,14 @@ describe("color theme contract", () => {
       ]) {
         const tinted = backgrounds.map((background) => paint(theme, theme[soft], background));
         expect(worstCase(theme, text, [...backgrounds, ...tinted]), `${name}: ${text}`)
-          .toBeGreaterThanOrEqual(4.5);
+          .toBeGreaterThanOrEqual(TEXT_FLOOR);
       }
       for (const fill of ["accent-fill", "accent-fill-strong"]) {
         for (const ink of ["button-text", "accent-on"]) {
           expect(
             contrastRatio(theme[ink], paint(theme, theme[fill], "#000000")),
             `${name}: ${ink} on ${fill}`,
-          ).toBeGreaterThanOrEqual(4.5);
+          ).toBeGreaterThanOrEqual(TEXT_FLOOR);
         }
       }
       expect(
@@ -2929,7 +2939,78 @@ describe("color theme contract", () => {
           theme["terminal-bg"],
         ),
         `${name}: terminal-fg`,
-      ).toBeGreaterThanOrEqual(4.5);
+      ).toBeGreaterThanOrEqual(TEXT_FLOOR);
+    }
+  });
+
+  it("keeps the composer autocomplete popup's text at its floor in every theme", () => {
+    // The `$` and `@` popups are a raised panel, and a hovered or keyboard
+    // active row lays the 12% accent tint over it. The sweep above tints the
+    // panel, sidebar, and hover surfaces, not the raised panel, and the E2E
+    // gate scans the open popup's contrast in Tangerine only. Every color
+    // the popup paints comes from a token, so the theme blocks are measured
+    // here. The tokens are read from the popup's own rules.
+    expect(extractRuleBody(css, ".composer__autocomplete")).toContain(
+      "background: var(--bg-panel-elevated);",
+    );
+    const activeRow = extractRuleBody(
+      css,
+      ".composer__autocomplete-option:hover:not(:disabled),\n.composer__autocomplete-option.is-active",
+    );
+    expect(activeRow).toContain("background: var(--accent-soft);");
+    expect(activeRow).toContain("color: var(--accent-bright);");
+
+    const inks = { text: new Set<string>(), mark: new Set<string>() };
+    for (const rule of collectRules(css)) {
+      if (!/\.(?:composer__autocomplete|skill-origin-chip)\b/.test(rule.selector)) continue;
+      for (const [, token] of rule.body.matchAll(/(?:^|[;\s])color:\s*var\(--([a-z0-9-]+)\)/g)) {
+        // An icon is a non-text mark; everything else in a row is text.
+        inks[/>\s*svg$/.test(rule.selector) ? "mark" : "text"].add(token);
+      }
+    }
+    expect([...inks.text].sort()).toEqual(
+      ["accent-bright", "text-muted", "text-primary", "text-secondary"],
+    );
+    expect([...inks.mark]).toEqual(["text-muted"]);
+
+    // Tangerine is held to plain AA, as its own blocks are, and carries one
+    // known miss: the `@` picker's `--text-muted` path on an active row,
+    // 4.37:1 dark and 4.38:1 light. The `+` reference and project pickers
+    // draw their paths the same way. Fixing it removes the entry.
+    const KNOWN_MISSES: Record<string, string[]> = {
+      "tangerine-dark": ["text-muted on the active row"],
+      "tangerine-light": ["text-muted on the active row"],
+    };
+    const root = extractRootTokens(css);
+    const appearances = {
+      "tangerine-dark": root,
+      "tangerine-light": {
+        ...root,
+        ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+      },
+      ...themes,
+    };
+    for (const [name, theme] of Object.entries(appearances)) {
+      const tangerine = name.startsWith("tangerine-");
+      const panel = paint(theme, theme["bg-panel-elevated"], "#000000");
+      const surfaces = {
+        panel,
+        "active row": paint(theme, theme["accent-soft"], panel),
+      };
+      const misses: string[] = [];
+      for (const [kind, tokens] of Object.entries(inks)) {
+        const floor = kind === "text"
+          ? (tangerine ? 4.5 : TEXT_FLOOR)
+          : (tangerine ? 3 : MARK_FLOOR);
+        for (const token of tokens) {
+          for (const [surface, background] of Object.entries(surfaces)) {
+            if (contrastRatio(paint(theme, theme[token], background), background) < floor) {
+              misses.push(`${token} on the ${surface}`);
+            }
+          }
+        }
+      }
+      expect(misses, name).toEqual(KNOWN_MISSES[name] ?? []);
     }
   });
 
@@ -3006,16 +3087,16 @@ describe("color theme contract", () => {
       if (MARKS.includes(token)) {
         const flat = ["bg-app", "bg-sidebar", "bg-panel", "bg-panel-elevated", "bg-panel-hover", "bg-input"]
           .map((name) => paint(theme, theme[name], "#000000"));
-        return [worstCase(theme, token, flat), 3.05];
+        return [worstCase(theme, token, flat), MARK_FLOOR];
       }
       if (token === "accent-fill") {
-        return [contrastRatio(theme["button-text"], paint(theme, theme[token], "#000000")), 4.55];
+        return [contrastRatio(theme["button-text"], paint(theme, theme[token], "#000000")), TEXT_FLOOR];
       }
       const soft = SOFT[token];
       const tinted = soft
         ? backgrounds.map((background) => paint(theme, theme[soft], background))
         : [];
-      return [worstCase(theme, token, [...backgrounds, ...tinted]), 4.55];
+      return [worstCase(theme, token, [...backgrounds, ...tinted]), TEXT_FLOOR];
     };
     for (const [name, upstream] of Object.entries(UPSTREAM)) {
       const theme = themes[name];
@@ -3071,7 +3152,7 @@ describe("color theme contract", () => {
     }
   });
 
-  it("keeps non-text marks at 3:1 on every flat surface", () => {
+  it("keeps non-text marks at their stated floor on every flat surface", () => {
     for (const [name, theme] of Object.entries(themes)) {
       const flat = [
         "bg-app",
@@ -3091,7 +3172,7 @@ describe("color theme contract", () => {
         "usage-series-5",
       ]) {
         expect(worstCase(theme, token, flat), `${name}: ${token}`)
-          .toBeGreaterThanOrEqual(3);
+          .toBeGreaterThanOrEqual(MARK_FLOOR);
       }
     }
   });

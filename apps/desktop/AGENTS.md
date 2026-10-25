@@ -824,8 +824,9 @@ Things to know when extending the audit:
   only. Tangerine dark and light run the full WCAG AA tag set; the other
   color themes run only `COLOR_RULES` (`color-contrast`,
   `link-in-text-block`), through the loop's local `runAxe`. A block whose
-  scans run only ARIA rules (the composer autocomplete block) runs outside
-  the loop in the Tangerine pair, and behavior checks with no scan run only when
+  colors a unit test already measures in every theme (the composer
+  autocomplete block, through `theme-contract.test.tsx`) runs outside the
+  loop in the Tangerine pair, and behavior checks with no scan run only when
   `runsFunctionalChecks` is true (Tangerine dark). Put a new block like that
   in the same place; each Electron launch in the loop costs eleven.
 - **`runAxe(window, { include })` narrows the scan to one subtree.** No

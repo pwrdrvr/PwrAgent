@@ -871,7 +871,7 @@
   --danger-base: #e43b36;
   --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
   --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
-  --danger-text: #f1a2a0;
+  --danger-text: #f2a3a1;
   --danger-text-light: #f1a281;
   --success-soft: color-mix(in srgb, #859900 18%, transparent);
   --success-border: color-mix(in srgb, #859900 32%, transparent);
