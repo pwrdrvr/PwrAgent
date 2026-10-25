@@ -8,6 +8,7 @@ import { readBootstrapAppearance, themedWindowAdditionalArguments } from "./sett
 import { themedWindowBackgroundColor } from "./native-appearance";
 import { auxiliaryWindowChromeOptions } from "./auxiliary-window-chrome";
 import { getMainLogger } from "./log";
+import { describeWebContentsLoad } from "./window-load-diagnostics";
 
 const storageLog = getMainLogger("pwragent:storage-maintenance");
 
@@ -190,13 +191,18 @@ export async function runStartupStorageMaintenance(options: {
       if (!window.isDestroyed()) window.close();
       return;
     }
-    if (loaded === "timeout") {
+    // The timer measures wall time, so a main thread blocked by startup work
+    // can fire it after the page finished but before the load promise did.
+    if (
+      loaded === "timeout"
+      && (window.isDestroyed() || window.webContents.isLoading?.() !== false)
+    ) {
       // Skip the job for this launch rather than keep the app windowless.
       // cancel() records the attempt, so the next try waits for the usual
       // interval instead of repeating this wait on every launch.
       storageLog.warn("startup storage maintenance window did not load; continuing startup without it", {
         timeoutMs: STORAGE_WINDOW_LOAD_TIMEOUT_MS,
-        ...windowLoadState(window),
+        ...describeWebContentsLoad(window.webContents),
       });
       cancel();
       if (!window.isDestroyed()) window.close();
@@ -218,16 +224,4 @@ export async function runStartupStorageMaintenance(options: {
   } finally {
     clearTimeout(loadTimer);
   }
-}
-
-function windowLoadState(window: BrowserWindow): Record<string, unknown> {
-  if (window.isDestroyed()) return { destroyed: true };
-  const contents = window.webContents;
-  return {
-    url: contents.getURL?.(),
-    isLoading: contents.isLoading?.(),
-    isWaitingForResponse: contents.isWaitingForResponse?.(),
-    isCrashed: contents.isCrashed?.(),
-    rendererPid: contents.getOSProcessId?.(),
-  };
 }

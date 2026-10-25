@@ -247,3 +247,23 @@ it("a quit during a stalled load releases startup at once", async () => {
   expect(fixture.windows[0].close).toHaveBeenCalled();
   expect(fixture.workers).toHaveLength(0);
 });
+
+it("keeps a page that finished loading while the timer was due", async () => {
+  // The load promise has not settled, but the browser reports the page done:
+  // a main thread blocked by startup work delayed the promise, not the page.
+  fixture.load = () => new Promise<void>(() => {});
+  vi.useFakeTimers();
+  const done = run();
+  await vi.waitFor(() => expect(fixture.windows).toHaveLength(1));
+  const window = fixture.windows[0] as FakeWindow & {
+    show: () => void;
+    webContents: { isLoading?: () => boolean };
+  };
+  window.webContents.isLoading = () => false;
+  await vi.advanceTimersByTimeAsync(STORAGE_WINDOW_LOAD_TIMEOUT_MS);
+  expect(window.show).toHaveBeenCalledOnce();
+  expect(fixture.warn).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(fixture.workers).toHaveLength(1));
+  await command({ action: "cancel" });
+  await done;
+});

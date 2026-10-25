@@ -504,9 +504,12 @@ export function createMainWindow(options?: {
     });
     window.show();
   };
-  window.once("ready-to-show", () => {
-    recordStartupProfileEvent({ type: "window-ready-to-show" });
-    showWindow("ready-to-show");
+  let initialRequestSent = false;
+  const sendInitialRequest = (): void => {
+    if (initialRequestSent || window.isDestroyed?.()) {
+      return;
+    }
+    initialRequestSent = true;
     if (options?.initialThread) {
       window.webContents.send(
         WINDOW_SHOW_THREAD_CHANNEL,
@@ -515,11 +518,20 @@ export function createMainWindow(options?: {
     } else if (options?.initialLaunchpad) {
       window.webContents.send(WINDOW_OPEN_NEW_THREAD_CHANNEL);
     }
+  };
+  window.once("ready-to-show", () => {
+    recordStartupProfileEvent({ type: "window-ready-to-show" });
+    showWindow("ready-to-show");
+    sendInitialRequest();
   });
   if (typeof window.webContents.on === "function") {
     watchMainWindowStartup(window, {
-      isShown: () => windowShown,
-      show: () => showWindow("watchdog"),
+      // A window the watchdog shows, or one already on screen, gets no
+      // ready-to-show, so the initial thread rides along here instead.
+      show: () => {
+        showWindow("watchdog");
+        sendInitialRequest();
+      },
     });
   }
   if (!isMac) {

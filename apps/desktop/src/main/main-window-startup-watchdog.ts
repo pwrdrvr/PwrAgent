@@ -1,5 +1,6 @@
-import { app, type BrowserWindow } from "electron";
+import type { BrowserWindow } from "electron";
 import { getMainLogger } from "./log";
+import { describeWebContentsLoad } from "./window-load-diagnostics";
 
 const mainLog = getMainLogger("pwragent:main");
 
@@ -20,18 +21,23 @@ type LoadMilestone =
   | "ready-to-show";
 
 /**
- * Watch a hidden main window until it appears.
+ * Watch a new main window until its page loads and it is on screen.
+ * `show` must be idempotent: the watchdog calls it whenever the page is ready
+ * for it, including for a window that already appeared.
  *
- * At the deadline it logs where the page load got to, then shows the window
- * so the operator has a window and its Reload command. A page that has not
- * even parsed its document is reloaded once. It never raises a dialog: macOS
- * can hold back the first paint while the login session is locked, and #1887
- * removed a startup-timeout dialog that fired in that case.
+ * At the deadline it logs where the page load got to. A page that loaded but
+ * never painted is shown. A page that never parsed its document is reloaded
+ * once and shown when the reload finishes, so anything that treats `show` as
+ * "the renderer is ready" (federation viewers, the initial thread) reaches a
+ * loaded page. If the reload stalls too, the window is shown anyway.
+ *
+ * It never raises a dialog: macOS can hold back the first paint while the
+ * login session is locked, and #1887 removed a startup-timeout dialog that
+ * fired in that case.
  */
 export function watchMainWindowStartup(
   window: BrowserWindow,
   options: {
-    isShown: () => boolean;
     show: () => void;
     timeoutMs?: number;
   },
@@ -43,30 +49,25 @@ export function watchMainWindowStartup(
   const mark = (milestone: LoadMilestone) => {
     milestones[milestone] ??= Date.now() - createdAt;
   };
-  let reloadedAt: number | undefined;
-  let loadedSinceReload = false;
+  let reloading = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
-  const state = (): Record<string, unknown> => {
-    const rendererPid = contents.getOSProcessId();
-    const metric = app.getAppMetrics().find((entry) => entry.pid === rendererPid);
-    return {
-      elapsedMs: Date.now() - createdAt,
-      milestones: { ...milestones },
-      url: contents.getURL(),
-      isLoading: contents.isLoading(),
-      isWaitingForResponse: contents.isWaitingForResponse(),
-      isCrashed: contents.isCrashed(),
-      rendererPid,
-      rendererCpuPercent: metric?.cpu.percentCPUUsage,
-    };
-  };
+  const state = (): Record<string, unknown> => ({
+    elapsedMs: Date.now() - createdAt,
+    milestones: { ...milestones },
+    visible: window.isVisible(),
+    ...describeWebContentsLoad(contents),
+  });
 
   contents.on("did-start-loading", () => mark("did-start-loading"));
   contents.on("dom-ready", () => mark("dom-ready"));
   contents.on("did-finish-load", () => {
     mark("did-finish-load");
-    if (reloadedAt !== undefined) loadedSinceReload = true;
+    if (!reloading) return;
+    reloading = false;
+    if (timer) clearTimeout(timer);
+    mainLog.info("main window loaded after a reload", state());
+    options.show();
   });
   window.once("ready-to-show", () => mark("ready-to-show"));
   // A hung renderer otherwise leaves no trace in the log.
@@ -89,25 +90,33 @@ export function watchMainWindowStartup(
   };
 
   arm(() => {
-    if (options.isShown()) return;
-    const parsed = milestones["dom-ready"] !== undefined;
-    mainLog.warn("main window has not appeared; showing it", {
+    if (milestones["dom-ready"] !== undefined) {
+      // Loaded. Normally already shown; otherwise it never painted.
+      if (!window.isVisible()) {
+        mainLog.warn("main window has not appeared; showing it", {
+          ...state(),
+          timeoutMs,
+        });
+      }
+      options.show();
+      return;
+    }
+    // Reload even a window something else already showed: Settings shows
+    // the main window directly, which leaves a stalled page on screen.
+    mainLog.warn("main window page has not loaded; reloading it", {
       ...state(),
       timeoutMs,
-      reloading: !parsed,
     });
-    if (!parsed) {
-      reloadedAt = Date.now();
-      contents.reload();
-      arm(() => {
-        if (loadedSinceReload) return;
-        mainLog.error("main window has not loaded after a reload", {
-          ...state(),
-          sinceReloadMs: Date.now() - (reloadedAt ?? createdAt),
-        });
+    reloading = true;
+    contents.reload();
+    arm(() => {
+      if (!reloading) return;
+      mainLog.error("main window has not loaded after a reload; showing it", {
+        ...state(),
+        timeoutMs,
       });
-    }
-    options.show();
+      options.show();
+    });
   });
 
   window.once("closed", () => {
