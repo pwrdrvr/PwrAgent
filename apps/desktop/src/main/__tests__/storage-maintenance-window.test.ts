@@ -17,6 +17,8 @@ const fixture = vi.hoisted(() => ({
   handlers: new Map<string, (event: { sender: unknown }, command: StorageMaintenanceCommand) => Promise<StorageMaintenanceStatus>>(),
   otherInstance: false,
   record: { historyEnabled: true } as Record<string, unknown>,
+  load: (): Promise<void> => Promise.resolve(),
+  warn: vi.fn(),
 }));
 vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
@@ -27,8 +29,8 @@ vi.mock("electron", async () => {
     show = vi.fn();
     close = vi.fn(() => { this.destroyed = true; this.emit("closed"); });
     isDestroyed = () => this.destroyed;
-    loadFile = async () => {};
-    loadURL = async () => {};
+    loadFile = () => fixture.load();
+    loadURL = () => fixture.load();
     constructor() { super(); fixture.windows.push(this); }
   }
   return {
@@ -48,9 +50,10 @@ vi.mock("../profile", () => ({
   resolveActiveProfileName: () => "fixture",
   resolveActiveProfilePath: () => "/synthetic/state.db",
 }));
+vi.mock("../log", () => ({ getMainLogger: () => ({ info: vi.fn(), warn: fixture.warn, error: vi.fn() }) }));
 vi.mock("../settings/appearance-bootstrap", () => ({ readBootstrapAppearance: () => ({ theme: "dark" }), themedWindowAdditionalArguments: () => [] }));
 vi.mock("../native-appearance", () => ({ themedWindowBackgroundColor: () => "black", themedTitleBarOverlay: () => ({}) }));
-import { runStartupStorageMaintenance } from "../storage-maintenance";
+import { runStartupStorageMaintenance, STORAGE_WINDOW_LOAD_TIMEOUT_MS } from "../storage-maintenance";
 
 const write = vi.fn((_key: string, value: string) => { fixture.record = JSON.parse(value); });
 const state = { raw: {
@@ -69,6 +72,7 @@ afterEach(() => {
   for (const window of fixture.windows) window.close();
   fixture.windows.length = 0; fixture.workers.length = 0; fixture.handlers.clear();
   fixture.otherInstance = false; fixture.record = { historyEnabled: true }; write.mockClear(); vi.restoreAllMocks(); vi.useRealTimers();
+  fixture.load = () => Promise.resolve(); fixture.warn.mockClear();
 });
 
 it("releases startup on completion and keeps a held window above the app with its settings", async () => {
@@ -201,4 +205,45 @@ it("failed automatic discovery does not save the effective default as a preferen
   expect((await command({ action: "status" })).phase).toBe("error");
   expect(fixture.record.historyEnabled).toBeUndefined();
   expect(fixture.record.attemptedAt).toEqual(expect.any(Number));
+});
+
+// A page that never loads kept 1.3.2 running with no window: startup awaited
+// the hidden storage window, so neither it nor the main window ever appeared.
+function stalledLoad(): void {
+  fixture.load = () => new Promise<void>((_resolve, reject) => {
+    // Electron rejects a pending load when its window closes.
+    queueMicrotask(() => fixture.windows.at(-1)!.once("closed", () => reject(new Error("ERR_ABORTED"))));
+  });
+}
+
+it("continues startup without the storage window when its page never loads", async () => {
+  stalledLoad();
+  fixture.record = {};
+  vi.useFakeTimers();
+  let released = false;
+  const done = run().then(() => { released = true; });
+  await vi.waitFor(() => expect(fixture.windows).toHaveLength(1));
+  // vi.waitFor advances fake timers while it polls, so leave headroom.
+  await vi.advanceTimersByTimeAsync(STORAGE_WINDOW_LOAD_TIMEOUT_MS - 1000);
+  expect(released).toBe(false);
+  await vi.advanceTimersByTimeAsync(1000);
+  await done;
+  const window = fixture.windows[0] as FakeWindow & { show: () => void };
+  expect(window.show).not.toHaveBeenCalled();
+  expect(window.close).toHaveBeenCalled();
+  expect(fixture.workers).toHaveLength(0);
+  expect(fixture.warn).toHaveBeenCalledWith(expect.stringContaining("did not load"), expect.objectContaining({ timeoutMs: STORAGE_WINDOW_LOAD_TIMEOUT_MS }));
+  // Recorded as an attempt, so the next launch does not wait again.
+  expect(fixture.record.attemptedAt).toEqual(expect.any(Number));
+});
+
+it("a quit during a stalled load releases startup at once", async () => {
+  stalledLoad();
+  vi.useFakeTimers();
+  const done = run();
+  await vi.waitFor(() => expect(fixture.windows).toHaveLength(1));
+  app.emit("before-quit", {});
+  await done;
+  expect(fixture.windows[0].close).toHaveBeenCalled();
+  expect(fixture.workers).toHaveLength(0);
 });

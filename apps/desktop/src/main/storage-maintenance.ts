@@ -7,6 +7,16 @@ import { STORAGE_MAINTENANCE_CHANNEL, STORAGE_MAINTENANCE_EVENT, type StorageMai
 import { readBootstrapAppearance, themedWindowAdditionalArguments } from "./settings/appearance-bootstrap";
 import { themedWindowBackgroundColor } from "./native-appearance";
 import { auxiliaryWindowChromeOptions } from "./auxiliary-window-chrome";
+import { getMainLogger } from "./log";
+
+const storageLog = getMainLogger("pwragent:storage-maintenance");
+
+/**
+ * Startup waits for this window before it creates the main window, and the
+ * window stays hidden until its page loads. A page that never loads would
+ * leave the app running with no window at all, so the wait is bounded.
+ */
+export const STORAGE_WINDOW_LOAD_TIMEOUT_MS = 15_000;
 
 let interruptMaintenance: (() => Promise<void>) | undefined;
 export async function interruptStartupStorageMaintenance(): Promise<void> {
@@ -36,6 +46,12 @@ export async function runStartupStorageMaintenance(options: {
     return instances.some((instance) => instance.process_id !== process.pid && storageProcessAlive(instance.process_id));
   };
   if (otherInstances()) return;
+  const startedAt = Date.now();
+  storageLog.info("startup storage maintenance due", {
+    bytes,
+    automatic: policy.automatic,
+    historyEnabled: policy.historyEnabled,
+  });
   const appearance = readBootstrapAppearance();
   const window = new BrowserWindow({
     width: 540, height: 460, title: "PwrAgent storage", show: false,
@@ -70,6 +86,10 @@ export async function runStartupStorageMaintenance(options: {
     app.removeListener("before-quit", cancel);
     interruptMaintenance = undefined;
     if (ownershipTimer) clearInterval(ownershipTimer);
+    storageLog.info("startup storage maintenance released startup", {
+      phase: status.phase,
+      durationMs: Date.now() - startedAt,
+    });
     release();
   };
   const cancel = () => {
@@ -149,15 +169,65 @@ export async function runStartupStorageMaintenance(options: {
     ipcMain.removeHandler(STORAGE_MAINTENANCE_CHANNEL);
     cancel();
   });
+  const load = process.env.ELECTRON_RENDERER_URL
+    ? window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/storage-maintenance.html`)
+    : window.loadFile(join(__dirname, "../renderer/storage-maintenance.html"));
+  // Closing the window aborts the load; that rejection is expected and must
+  // not reach the process-level unhandled-rejection handler.
+  load.catch(() => {});
+  let loadTimer: ReturnType<typeof setTimeout> | undefined;
+  const loadTimedOut = new Promise<"timeout">((resolve) => {
+    loadTimer = setTimeout(() => resolve("timeout"), STORAGE_WINDOW_LOAD_TIMEOUT_MS);
+  });
   try {
-    if (process.env.ELECTRON_RENDERER_URL) await window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/storage-maintenance.html`);
-    else await window.loadFile(join(__dirname, "../renderer/storage-maintenance.html"));
+    const loaded = await Promise.race([
+      load.then(() => "loaded" as const),
+      loadTimedOut,
+      // A quit cancels the job while the page is still loading.
+      done.then(() => "released" as const),
+    ]);
+    if (loaded === "released") {
+      if (!window.isDestroyed()) window.close();
+      return;
+    }
+    if (loaded === "timeout") {
+      // Skip the job for this launch rather than keep the app windowless.
+      // cancel() records the attempt, so the next try waits for the usual
+      // interval instead of repeating this wait on every launch.
+      storageLog.warn("startup storage maintenance window did not load; continuing startup without it", {
+        timeoutMs: STORAGE_WINDOW_LOAD_TIMEOUT_MS,
+        ...windowLoadState(window),
+      });
+      cancel();
+      if (!window.isDestroyed()) window.close();
+      await done;
+      return;
+    }
     window.show();
     if (policy.automatic) void start();
     await done;
-  } catch {
+  } catch (error) {
+    if (!finished) {
+      storageLog.warn("startup storage maintenance window failed to load", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     cancel();
     if (!window.isDestroyed()) window.close();
     await done;
+  } finally {
+    clearTimeout(loadTimer);
   }
+}
+
+function windowLoadState(window: BrowserWindow): Record<string, unknown> {
+  if (window.isDestroyed()) return { destroyed: true };
+  const contents = window.webContents;
+  return {
+    url: contents.getURL?.(),
+    isLoading: contents.isLoading?.(),
+    isWaitingForResponse: contents.isWaitingForResponse?.(),
+    isCrashed: contents.isCrashed?.(),
+    rendererPid: contents.getOSProcessId?.(),
+  };
 }

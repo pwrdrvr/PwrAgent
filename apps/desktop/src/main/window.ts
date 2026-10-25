@@ -54,6 +54,7 @@ import {
   WINDOW_SHOW_THREAD_CHANNEL,
 } from "../shared/ipc";
 import { mainWindowEventChannels } from "./main-window-channels";
+import { watchMainWindowStartup } from "./main-window-startup-watchdog";
 import {
   readBootstrapAppearance,
   themedWindowAdditionalArguments,
@@ -483,14 +484,18 @@ export function createMainWindow(options?: {
   }
 
   let windowShown = false;
-  const showWindow = (reason: "ready-to-show" | "fallback"): void => {
+  const windowCreatedAt = Date.now();
+  const showWindow = (reason: "ready-to-show" | "fallback" | "watchdog"): void => {
     if (windowShown || window.isDestroyed?.()) {
       return;
     }
     windowShown = true;
-    if (isDevelopment) {
-      mainLog.info("showing window", { reason });
-    }
+    // Once per window, in every build: a slow or stalled first paint is
+    // otherwise invisible in an operator's log.
+    mainLog.info("showing main window", {
+      reason,
+      elapsedMs: Date.now() - windowCreatedAt,
+    });
     recordStartupProfileEvent({
       type: "window-show",
       detail: {
@@ -511,6 +516,12 @@ export function createMainWindow(options?: {
       window.webContents.send(WINDOW_OPEN_NEW_THREAD_CHANNEL);
     }
   });
+  if (typeof window.webContents.on === "function") {
+    watchMainWindowStartup(window, {
+      isShown: () => windowShown,
+      show: () => showWindow("watchdog"),
+    });
+  }
   if (!isMac) {
     window.webContents.once("did-finish-load", () => {
       recordStartupProfileEvent({ type: "window-did-finish-load-fallback-arm" });
