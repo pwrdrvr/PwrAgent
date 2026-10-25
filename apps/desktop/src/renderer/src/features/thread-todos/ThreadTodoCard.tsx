@@ -6,6 +6,7 @@ import {
   useState,
   type ComponentType,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from "react";
 import type {
   ThreadReviewItem,
@@ -323,13 +324,12 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
       <ThreadTodoCardHead
         todo={todo}
         titleId={titleId}
-        now={props.now}
-        progress={progress}
         copying={copying}
         onCollapse={props.onCollapse}
         dismissLabel="Dismiss review"
         onDismiss={() => props.onResolve(todo, "dismissed")}
       />
+      <ThreadTodoCardMeta todo={todo} now={props.now} progress={progress} />
       <div className="thread-todo-card__body">
         {review && items.length === 0 ? (
           <p className="review-todo__summary">
@@ -438,13 +438,13 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
   );
 }
 
-/** The title row every card shares: kind glyph, title, age, then the tools. */
+/**
+ * The title row every card shares: kind glyph, title, then the tools. The
+ * counts sit on the row below, so the title keeps the width.
+ */
 function ThreadTodoCardHead(props: {
   todo: ThreadTodo;
   titleId: string;
-  now?: number;
-  /** Checked steps of a card with a checklist. */
-  progress?: { checked: number; total: number };
   copying: TodoCopying;
   onCollapse?: () => void;
   dismissLabel: string;
@@ -458,14 +458,6 @@ function ThreadTodoCardHead(props: {
         {KindIcon ? <KindIcon size={13} /> : <span className="thread-todo-card__ring" />}
       </span>
       <h3 id={props.titleId} className="thread-todo-card__title">{todo.title}</h3>
-      {props.progress ? (
-        <span className="thread-todo-card__progress">
-          {props.progress.checked} of {props.progress.total}
-        </span>
-      ) : null}
-      <span className="thread-todo-card__age">
-        {formatTodoAge(todo.createdAt, props.now)}
-      </span>
       <div className="thread-todo-card__tools">
         <button
           ref={copying.buttonRef}
@@ -498,6 +490,34 @@ function ThreadTodoCardHead(props: {
           <CloseIcon size={13} />
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The row under the title: the card's project on the left, its progress and
+ * age on the right.
+ */
+function ThreadTodoCardMeta(props: {
+  todo: ThreadTodo;
+  now?: number;
+  /** Checked steps of a card with a checklist. */
+  progress?: { checked: number; total: number };
+  project?: ReactNode;
+}) {
+  return (
+    <div className="thread-todo-card__meta">
+      {props.project}
+      <span className="thread-todo-card__stats">
+        {props.progress ? (
+          <span className="thread-todo-card__progress">
+            {props.progress.checked} of {props.progress.total}
+          </span>
+        ) : null}
+        <span className="thread-todo-card__age">
+          {formatTodoAge(props.todo.createdAt, props.now)}
+        </span>
+      </span>
     </div>
   );
 }
@@ -809,19 +829,23 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       <ThreadTodoCardHead
         todo={todo}
         titleId={titleId}
-        now={props.now}
-        progress={progress}
         copying={copying}
         onCollapse={props.onCollapse}
         dismissLabel={`Dismiss to-do: ${todo.title}`}
         onDismiss={() => props.onResolve(todo, "dismissed")}
       />
-
-      {/* A review starts on the card's own thread, so it has no project to change. */}
-      <TodoProjectPicker
+      <ThreadTodoCardMeta
         todo={todo}
-        menu={todo.kind === "review" ? undefined : props.projectMenu}
-        disabled={props.running}
+        now={props.now}
+        progress={progress}
+        project={(
+          // A review starts on the card's own thread, so it has no project to change.
+          <TodoProjectPicker
+            todo={todo}
+            menu={todo.kind === "review" ? undefined : props.projectMenu}
+            disabled={props.running}
+          />
+        )}
       />
 
       {todo.detail || progress || facts.length > 0 || prompt || todo.error ? (

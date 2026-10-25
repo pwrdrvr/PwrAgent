@@ -139,6 +139,18 @@ describe("to-do card copy", () => {
     expect(screen.getByRole("button", { name: "Copy to-do" })).toBeTruthy();
   });
 
+  it("keeps the title row to the title and its tools", () => {
+    // Progress, age and three tools in one row left a 340px card's title
+    // about 150px. The counts sit on the project row instead.
+    const { container } = render(<ThreadTodoCard {...props(card([true]))} />);
+
+    const head = container.querySelector(".thread-todo-card__head")!;
+    expect(head.textContent).toBe("Add stdio server support");
+    const meta = container.querySelector(".thread-todo-card__meta")!;
+    expect(meta.querySelector(".thread-todo-card__progress")?.textContent).toBe("1 of 5");
+    expect(meta.querySelector(".thread-todo-card__age")?.textContent).toBe("now");
+  });
+
   it("offers Copy step for the step under a right-click", async () => {
     render(<ThreadTodoCard {...props(card())} />);
 
