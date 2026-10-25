@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -921,6 +922,79 @@ describe("Claude SDK backend", () => {
     expect(await restarted.usageAccountKey()).toBe(account);
     expect(restarted.limitObservation()).toMatchObject({ accountKey: account, planType: "max",
       observedAt: (await f.store.readRateLimits()).observedAt });
+  });
+
+  it("names a turn's account only after its session confirms the signed-in account", async () => {
+    const resetsAt = Date.now() + 86_400_000;
+    const snapshot = { rate_limits_available: true, rate_limits: {
+      seven_day: { utilization: 56, resets_at: new Date(resetsAt).toISOString() },
+    }, session: { model_usage: {} } };
+    const accountInfo = vi.fn().mockResolvedValueOnce({ apiProvider: "firstParty", email: "first@example.com" })
+      .mockResolvedValue({ apiProvider: "firstParty", email: "second@example.com" });
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn().mockResolvedValue(snapshot), accountInfo });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+
+    // The registry asks for the account when the turn starts, as here; the
+    // new session names the second account only after that.
+    const emit = f.backendOptions.emit;
+    const atStart: Array<Promise<string | undefined>> = [];
+    f.backendOptions.emit = async (event) => {
+      if (event.notification.method === "turn/started") atStart.push(f.backend.usageAccountKey(threadId));
+      await emit(event);
+    };
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    const second = createHash("sha256").update(JSON.stringify(["firstParty", "", "second@example.com"])).digest("hex").slice(0, 16);
+    expect(atStart).toHaveLength(1);
+    expect(await atStart[0]).toBe(second);
+  });
+
+  it("does not date windows a sparse stream update left out as read now", async () => {
+    const resetsAt = Date.now() + 86_400_000;
+    const snapshot = { rate_limits_available: true, rate_limits: {
+      five_hour: { utilization: 10, resets_at: new Date(resetsAt).toISOString() },
+      seven_day: { utilization: 56, resets_at: new Date(resetsAt).toISOString() },
+    }, session: { model_usage: {} } };
+    // The first turn reads the snapshot; later probes fail.
+    const usage = vi.fn().mockResolvedValueOnce(snapshot).mockRejectedValue(new Error("Probe unavailable"));
+    let turn = 0;
+    const f = await fixture(async function* () {
+      turn += 1;
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      if (turn === 2) {
+        yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "five_hour",
+          utilization: 0.2, resetsAt: Math.round(resetsAt / 1000) } } as SDKMessage;
+      }
+      if (turn === 3) {
+        yield { type: "rate_limit_event", rate_limit_info: { status: "allowed", unifiedWindows: {
+          five_hour: { utilization: 0.3, resetsAt: Math.round(resetsAt / 1000) },
+          seven_day: { utilization: 0.6, resetsAt: Math.round(resetsAt / 1000) },
+        } } } as unknown as SDKMessage;
+      }
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    const first = f.backend.limitObservation()!.observedAt;
+
+    const realNow = Date.now.bind(Date);
+    vi.spyOn(Date, "now").mockImplementation(() => realNow() + 60_000);
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    // The weekly window was not reported again, so the reading keeps its time.
+    expect(f.backend.limitObservation()).toMatchObject({ observedAt: first,
+      limits: [expect.objectContaining({ limitId: "five_hour", usedPercent: 20 }), expect.objectContaining({ limitId: "seven_day" })] });
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    // An update naming every window is a reading of all of them.
+    expect(f.backend.limitObservation()!.observedAt).toBeGreaterThanOrEqual(first + 60_000);
   });
 
   it("clears remembered limits when Claude is signed out", async () => {

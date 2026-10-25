@@ -5708,13 +5708,16 @@ function buildLiveThreadUsageLine(params: {
   };
 }
 
+/** Backends other than Codex whose account limits Usage Activity charts. */
+const PROVIDER_LIMIT_BACKENDS: readonly AppServerBackendKind[] = ["claude", "acp:grok"];
+
 /** Codex readings are the ones that carry no provider, or OpenAI's. */
 function isCodexLimitObservation(reading: UsageLimitObservation): boolean {
   return reading.provider === undefined || reading.provider === "openai";
 }
 
 function fallbackUsageProvider(backend: AppServerBackendKind): string {
-  return backend === "claude" ? "anthropic" : backend === "acp:qwen" ? "qwen" : "openai";
+  return backend === "claude" ? "anthropic" : backend === "acp:qwen" ? "qwen" : backend === "acp:grok" ? "xai" : "openai";
 }
 
 /**
@@ -17330,13 +17333,13 @@ export class DesktopBackendRegistry {
         backend === "codex" || hasAcpStructuredHelper(backend)) };
   }
 
-  private async captureUsageAccount(backend: AppServerBackendKind): Promise<string | undefined> {
+  private async captureUsageAccount(backend: AppServerBackendKind, threadId?: string): Promise<string | undefined> {
     // Read the group synchronously: editing Settings during an in-flight turn
     // must affect the next request, never this one.
     try {
       const group = this.resolveUsageAccountGroupsFn()[backend];
       // Claude names its own account; an operator's group still wins.
-      if (!group && backend === "claude") return await this.claudeBackend.usageAccountKey();
+      if (!group && backend === "claude") return await this.claudeBackend.usageAccountKey(threadId);
       if (group || backend !== "codex") return usageAccountKey(undefined, group);
       const account = this.codexClient.readAccount
         ? await this.codexClient.readAccount()
@@ -17377,24 +17380,25 @@ export class DesktopBackendRegistry {
 
   /** Account limits from providers other than Codex, each with its ledger provider. */
   private providerLimitObservations(): UsageLimitObservation[] {
-    const claude = this.claudeBackend.limitObservation();
-    let groups: Record<string, string> = {};
-    try { groups = this.resolveUsageAccountGroupsFn(); } catch { /* Readings keep their own keys. */ }
+    return PROVIDER_LIMIT_BACKENDS.flatMap((backend) => this.providerLimitObservation(backend) ?? []);
+  }
+
+  /** One non-Codex backend's account limits, keyed as its turns' account is. */
+  private providerLimitObservation(backend: AppServerBackendKind): UsageLimitObservation | undefined {
+    const reading = backend === "claude" ? this.claudeBackend.limitObservation()
+      : isAcpBackendId(backend) ? this.acpBackend.limitObservation?.(backend) : undefined;
+    if (!reading) return undefined;
+    let group: string | undefined;
+    try { group = this.resolveUsageAccountGroupsFn()[backend]; } catch { /* The reading keeps its own key. */ }
     // An operator's Account group names the account its turns record, so the
     // reading takes the same key and joins their history, as Codex's does.
-    const backends: Record<string, AppServerBackendKind> = { anthropic: "claude", xai: "acp:grok" };
-    return [...claude ? [claude] : [], ...this.acpBackend.limitObservations?.() ?? []].map((reading) => {
-      const backend = reading.provider ? backends[reading.provider] : undefined;
-      const accountKey = backend ? usageAccountKey(undefined, groups[backend]) : undefined;
-      return accountKey ? { ...reading, accountKey } : reading;
-    });
+    const accountKey = usageAccountKey(undefined, group);
+    return accountKey ? { ...reading, accountKey } : reading;
   }
 
   /** The reading a provider's finished turn records, when it describes that turn's account. */
   private turnLimitObservation(backend: AppServerBackendKind): UsageLimitObservation | undefined {
-    if (backend === "codex") return this.codexLimitObservation();
-    const provider = backend === "claude" ? "anthropic" : backend === "acp:grok" ? "xai" : undefined;
-    return provider ? this.providerLimitObservations().find((reading) => reading.provider === provider) : undefined;
+    return backend === "codex" ? this.codexLimitObservation() : this.providerLimitObservation(backend);
   }
 
   /**
@@ -46262,7 +46266,7 @@ export class DesktopBackendRegistry {
       if (turnId) {
         const accountKey = JSON.stringify([event.backend, threadId, turnId]);
         if (!this.usageTurnAccounts.has(accountKey)) {
-          this.usageTurnAccounts.set(accountKey, this.captureUsageAccount(event.backend));
+          this.usageTurnAccounts.set(accountKey, this.captureUsageAccount(event.backend, threadId));
           if (this.usageTurnAccounts.size > 1_000) {
             this.usageTurnAccounts.delete(this.usageTurnAccounts.keys().next().value!);
           }

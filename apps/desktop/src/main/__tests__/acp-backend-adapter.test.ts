@@ -3365,12 +3365,12 @@ describe("AcpBackendAdapter", () => {
       isAcpAgentEnabled: () => enabled,
     });
 
-    expect(adapter.limitObservations()).toEqual([]);
+    expect(adapter.limitObservation(backendId)).toBeUndefined();
     const before = Date.now();
     await adapter.getClient(backendId);
     await adapter.describeInstalledBackends();
-    await vi.waitFor(() => expect(adapter.limitObservations()).toHaveLength(1));
-    const [reading] = adapter.limitObservations();
+    await vi.waitFor(() => expect(adapter.limitObservation(backendId)).toBeDefined());
+    const reading = adapter.limitObservation(backendId)!;
     expect(reading).toEqual({
       observedAt: expect.any(Number), provider: "xai", planType: "SuperGrok",
       limits: [{ name: "Monthly limit", limitId: undefined, usedPercent: 18, resetAt: 1_800_000_000_000,
@@ -3378,7 +3378,7 @@ describe("AcpBackendAdapter", () => {
     });
     expect(reading.observedAt).toBeGreaterThanOrEqual(before);
     enabled = false;
-    expect(adapter.limitObservations()).toEqual([]);
+    expect(adapter.limitObservation(backendId)).toBeUndefined();
 
     await adapter.close();
   });

@@ -26,7 +26,8 @@ import {
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
-import { USAGE_ACTIVITY_FOCUS_PROVIDER_EVENT_CHANNEL, USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
+import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
+import { createUsageActivityFocusSubscription } from "./usage-activity-focus";
 import type {
   ListThreadTodoProjectsResponse,
   ListThreadTodoProjectsRequest,
@@ -1182,6 +1183,8 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
   },
 );
 
+const subscribeToUsageActivityFocus = createUsageActivityFocusSubscription(ipcRenderer);
+
 let federationJumpSearchRequestSequence = 0;
 let threadSearchRequestSequence = 0;
 
@@ -2132,15 +2135,7 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(USAGE_ACTIVITY_ANALYZE_CHANNEL, request),
   openUsageActivity: async (request?: OpenUsageActivityRequest): Promise<void> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL, request),
-  onUsageActivityFocusProvider: (callback: (provider: string) => void): (() => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, provider: unknown) => {
-      if (typeof provider === "string") callback(provider);
-    };
-    ipcRenderer.on(USAGE_ACTIVITY_FOCUS_PROVIDER_EVENT_CHANNEL, listener);
-    return () => {
-      ipcRenderer.off(USAGE_ACTIVITY_FOCUS_PROVIDER_EVENT_CHANNEL, listener);
-    };
-  },
+  onUsageActivityFocusProvider: subscribeToUsageActivityFocus,
   openUsageThreadInMainWindow: async (request: WindowShowThreadRequest): Promise<void> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, request),
   inspectTokenMiserOutput: async (

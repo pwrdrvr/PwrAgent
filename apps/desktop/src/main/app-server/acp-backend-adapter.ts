@@ -27,6 +27,7 @@ import {
   type ThreadExecutionMode,
   type UsageLimitObservation,
   isAcpBackendId,
+  usageLimitProviderForBackend,
 } from "@pwragent/shared";
 import {
   AcpAgentStore,
@@ -149,9 +150,6 @@ export type { AcpSessionMetadata };
 
 export const ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR =
   "This ACP agent cannot hand off a workspace after the first message in a thread. Start a new thread in the target workspace instead.";
-
-/** The ledger provider of each agent that reports account limits. */
-const ACP_LIMIT_PROVIDERS: Partial<Record<AcpBackendId, string>> = { "acp:grok": "xai" };
 
 const acpBackendAdapterLog = getMainLogger("pwragent:acp-backend-adapter");
 const ACP_PROVIDER_STATUS_CACHE_TTL_MS = 60_000;
@@ -1460,26 +1458,25 @@ export class AcpBackendAdapter {
   }
 
   /**
-   * The account limits each enabled agent last reported, as Usage Activity
-   * readings. Grok reports a plan but no account identity, so its readings
+   * The account limits an enabled agent last reported, as a Usage Activity
+   * reading. Grok reports a plan but no account identity, so its readings
    * stay with the instance that read them.
    */
-  limitObservations(): UsageLimitObservation[] {
-    return [...this.providerStatuses].flatMap(([backend, status]) => {
-      const observedAt = this.providerStatusObservedAt.get(backend);
-      const provider = ACP_LIMIT_PROVIDERS[backend];
-      if (!provider || observedAt === undefined || !status.rateLimits?.length
-        || (this.isAcpAgentEnabled && !this.isAcpAgentEnabled(backend.slice("acp:".length)))) return [];
-      return [{
-        observedAt,
-        provider,
-        planType: status.account?.planType,
-        limits: status.rateLimits.map((limit) => ({
-          name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
-          resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
-        })),
-      }];
-    });
+  limitObservation(backend: AcpBackendId): UsageLimitObservation | undefined {
+    const status = this.providerStatuses.get(backend);
+    const observedAt = this.providerStatusObservedAt.get(backend);
+    const provider = usageLimitProviderForBackend(backend);
+    if (!provider || !status?.rateLimits?.length || observedAt === undefined
+      || (this.isAcpAgentEnabled && !this.isAcpAgentEnabled(backend.slice("acp:".length)))) return undefined;
+    return {
+      observedAt,
+      provider,
+      planType: status.account?.planType,
+      limits: status.rateLimits.map((limit) => ({
+        name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
+        resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
+      })),
+    };
   }
 
   invalidateLocalAgentDiscovery(): void {
