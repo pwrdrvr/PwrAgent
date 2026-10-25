@@ -1689,8 +1689,8 @@ describe("SettingsScreen", () => {
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
 
     // Each category is a group named by its heading, in nav order, holding
-    // its section rows in order. The exact list also proves that no section
-    // was dropped or listed twice.
+    // its section rows in order, none listed twice. A section left out of
+    // every category fails typecheck in SettingsScreen.tsx instead.
     const categories = within(nav).getAllByRole("group").map((group) => [
       document.getElementById(group.getAttribute("aria-labelledby") ?? "")
         ?.textContent,

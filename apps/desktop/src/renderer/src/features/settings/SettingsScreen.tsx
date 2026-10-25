@@ -135,11 +135,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
  *   binds messaging actors only, so it follows Messaging.
  * - Support: previews, diagnostics, and the build.
  */
-const SETTINGS_NAV_CATEGORIES: ReadonlyArray<{
-  id: string;
-  label: string;
-  sections: readonly SettingsSection[];
-}> = [
+const SETTINGS_NAV_CATEGORIES = [
   {
     id: "app",
     label: "App",
@@ -166,7 +162,21 @@ const SETTINGS_NAV_CATEGORIES: ReadonlyArray<{
     label: "Support",
     sections: ["experimental", "troubleshooting", "about"],
   },
-];
+] as const satisfies ReadonlyArray<{
+  id: string;
+  label: string;
+  sections: readonly SettingsSection[];
+}>;
+
+/** Fails typecheck when a section is in no category, so a new section
+ *  cannot ship without a nav row. */
+type UncategorizedSettingsSection = Exclude<
+  SettingsSection,
+  (typeof SETTINGS_NAV_CATEGORIES)[number]["sections"][number]
+>;
+const _everySectionCategorized: [UncategorizedSettingsSection] extends [never]
+  ? true
+  : UncategorizedSettingsSection = true;
 
 /** Sections whose nav row expands into a sub-list (thread-list caret). */
 const SETTINGS_NAV_GROUPS = new Set<SettingsSection>([
@@ -292,13 +302,6 @@ const SECTION_LABELS = new Map(
   SECTIONS.map((section) => [section.id, section.label] as const),
 );
 
-const NAV_CATEGORIES = SETTINGS_NAV_CATEGORIES.map((category) => ({
-  ...category,
-  items: category.sections.map((id) => ({
-    id,
-    label: SECTION_LABELS.get(id) ?? id,
-  })),
-}));
 
 export function SettingsScreen(props: {
   /** Live theme + density controller from the App root. Threaded down to
@@ -671,7 +674,7 @@ export function SettingsScreen(props: {
             scrolling, and at the 640px minimum window height its tail
             was unreachable by pointer. See `.settings-nav__sections`. */}
         <div className="settings-nav__sections">
-          {NAV_CATEGORIES.map((category) => (
+          {SETTINGS_NAV_CATEGORIES.map((category) => (
             <div
               key={category.id}
               aria-labelledby={`settings-nav-category-${category.id}`}
@@ -684,7 +687,8 @@ export function SettingsScreen(props: {
               >
                 {category.label}
               </p>
-              {category.items.map((item) => {
+              {category.sections.map((id) => {
+                const item = { id, label: SECTION_LABELS.get(id) ?? id };
                 const isGroup = SETTINGS_NAV_GROUPS.has(item.id);
                 const open = openGroups[item.id] === true;
                 const sublistId = `settings-nav-sublist-${item.id}`;
