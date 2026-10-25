@@ -222,6 +222,18 @@ describe("EnvironmentsSettings list", () => {
     expect(await screen.findByRole("combobox", { name: "Project" })).toHaveTextContent("pwragent-demo");
     await waitFor(() => expect(api.listCodexEnvironmentFiles).toHaveBeenCalledWith({ directoryPath: worktree }));
   });
+
+  it("still lists a routed project's environments when the project list fails", async () => {
+    const { api } = createApi({
+      listCodexEnvironmentProjects: vi.fn(async () => {
+        throw new Error("The project list is unavailable.");
+      }),
+    });
+    render(<Harness api={api} initialSub={encodeEnvironmentsRoute({ project: PROJECT })} />);
+
+    expect(await screen.findByText("The project list is unavailable.")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Open Node dev settings" })).toBeInTheDocument();
+  });
 });
 
 describe("EnvironmentsSettings editor", () => {
@@ -301,6 +313,35 @@ describe("EnvironmentsSettings editor", () => {
       ["Lint", "test", "pnpm lint"],
       ["Tests", "test", "pnpm test"],
     ]);
+  });
+
+  it("returns focus to Add action when the focused row is deleted", async () => {
+    const { api } = createApi();
+    await openEditor(api);
+
+    const actions = screen.getByRole("region", { name: "Actions" });
+    fireEvent.click(within(actions).getByRole("button", { name: "More for Dev server" }));
+    const remove = screen.getByRole("menuitem", { name: "Delete" });
+    act(() => remove.focus());
+    fireEvent.click(remove);
+
+    expect(within(actions).getByRole("button", { name: "Add action" })).toHaveFocus();
+  });
+
+  it("points the breadcrumb at the saved name after a rename", async () => {
+    const { api, save } = createApi();
+    const onRoute = vi.fn();
+    render(<Harness api={api} initialSub={editorRoute()} onRoute={onRoute} />);
+    await screen.findByRole("heading", { name: "Node dev", level: 1 });
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Node 22" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onRoute).toHaveBeenCalledWith(editorRoute("environment.toml", "Node 22")));
+    expect(environmentsRouteLabel(onRoute.mock.calls.at(-1)![0])).toBe("Node 22");
   });
 
   it("holds the save while the environment has no name or an action has no command", async () => {

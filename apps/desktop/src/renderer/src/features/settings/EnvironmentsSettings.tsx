@@ -2,7 +2,6 @@ import {
   useCallback,
   useEffect,
   useId,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -256,14 +255,19 @@ function EnvironmentList(props: {
         </div>
       </SettingsSection>
 
+      {/* A project named by the route (the composer's workspace) still
+          opens when the project list can't load. */}
       {projects.status === "error" ? (
         <p className="settings-row__error" role="alert">{projects.message}</p>
-      ) : projects.status === "loading" ? (
+      ) : null}
+      {projects.status === "loading" && !props.project ? (
         <p className="settings-empty">Loading projects…</p>
       ) : !selected ? (
-        <p className="settings-empty">
-          No projects on this machine yet. Add a folder to PwrAgent to give it environments.
-        </p>
+        projects.status === "error" ? null : (
+          <p className="settings-empty">
+            No projects on this machine yet. Add a folder to PwrAgent to give it environments.
+          </p>
+        )
       ) : (
         <SettingsSection
           eyebrow="Project"
@@ -410,6 +414,16 @@ function EnvironmentEditor(props: {
   const [editingKey, setEditingKey] = useState<string>();
   const [navigateTo, setNavigateTo] = useState<string>();
   const nextActionKeyRef = useRef(0);
+  const addActionRef = useRef<HTMLButtonElement>(null);
+  // A deleted row takes its ⋯ button, and the focus in it, along.
+  const refocusAfterDeleteRef = useRef(false);
+  useEffect(() => {
+    if (!refocusAfterDeleteRef.current) return;
+    refocusAfterDeleteRef.current = false;
+    if (document.activeElement === null || document.activeElement === document.body) {
+      addActionRef.current?.focus();
+    }
+  });
 
   useEffect(() => {
     if (props.create) return;
@@ -490,13 +504,13 @@ function EnvironmentEditor(props: {
           setDraft(response.document);
           setRevision(response.revision);
           setEditingKey(undefined);
-          if (props.create) {
-            setNavigateTo(encodeEnvironmentsRoute({
-              project: props.project,
-              file: fileName,
-              name: response.document.name,
-            }));
-          }
+          // A new file opens its own page. An edited one stays, and the
+          // route takes the saved name so the breadcrumb follows a rename.
+          setNavigateTo(encodeEnvironmentsRoute({
+            project: props.project,
+            file: fileName,
+            name: response.document.name.trim(),
+          }));
           return true;
         case "conflict":
           setBanner({ kind: "conflict" });
@@ -765,6 +779,7 @@ function EnvironmentEditor(props: {
                   onChange={(next) => setActions((actions) =>
                     actions.map((entry) => (entry.key === action.key ? next : entry)))}
                   onDelete={() => {
+                    refocusAfterDeleteRef.current = true;
                     setActions((actions) => actions.filter((entry) => entry.key !== action.key));
                     if (editingKey === action.key) setEditingKey(undefined);
                   }}
@@ -786,7 +801,12 @@ function EnvironmentEditor(props: {
             <p className="env-empty">No actions yet.</p>
           )}
           <div>
-            <button className="button button--secondary" type="button" onClick={addAction}>
+            <button
+              ref={addActionRef}
+              className="button button--secondary"
+              type="button"
+              onClick={addAction}
+            >
               Add action
             </button>
           </div>
@@ -1339,11 +1359,6 @@ function ActionMenu(props: {
     document.addEventListener("pointerdown", handlePointerDown, true);
     return () => document.removeEventListener("pointerdown", handlePointerDown, true);
   }, [close, open]);
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])')?.focus();
-  }, [open]);
 
   const item = (text: string, enabled: boolean, run: () => void, danger = false) => (
     <button

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -135,6 +135,21 @@ describe("codex environment editor: writing", () => {
       ["name = \"Demo\" # shown in the chip", "name = \"Demo app\" # shown in the chip"],
       ["command = \"pnpm test\"", "command = \"pnpm test --watch=false\""],
     ]);
+  });
+
+  it("keeps the comment after a multiline value's closing delimiter", () => {
+    const source = [
+      "[setup]",
+      "script = '''",
+      "pnpm install",
+      "''' # keep in sync with CI",
+      "",
+    ].join("\n");
+    const document = read(source);
+    document.setup.script = "pnpm install --frozen-lockfile\n";
+    const next = writeCodexEnvironmentDocumentSource(source, document);
+    expect(next).toContain("# keep in sync with CI");
+    expect(read(next).setup.script).toContain("pnpm install --frozen-lockfile");
   });
 
   it("moves whole action entries, with their comments and unknown keys, when reordered", () => {
@@ -358,6 +373,16 @@ describe("codex environment editor: files", () => {
       },
     ]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "lists the other files when one is a dangling link",
+    async () => {
+      await writeFile(path.join(environments, "environment.toml"), COMMENTED);
+      await symlink(path.join(root, "missing.toml"), path.join(environments, "broken.toml"));
+      const result = await listCodexEnvironmentFiles(root);
+      expect(result.files.map((file) => file.fileName)).toEqual(["environment.toml"]);
+    },
+  );
 
   it("lists nothing for a project without the folder", async () => {
     await rm(path.join(root, ".codex"), { recursive: true, force: true });

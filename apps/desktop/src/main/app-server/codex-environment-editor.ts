@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { copyFile, link, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   CODEX_ENVIRONMENT_PLATFORMS,
@@ -118,33 +119,65 @@ export async function listCodexEnvironmentFiles(
     throw error;
   }
 
-  const files: CodexEnvironmentFileSummary[] = [];
-  for (const fileName of entries.sort((a, b) => a.localeCompare(b))) {
-    if (!fileName.endsWith(".toml") || !isValidCodexEnvironmentFileName(fileName)) continue;
-    const filePath = path.join(directory, fileName);
-    if (!(await stat(filePath)).isFile()) continue;
-    const result = readCodexEnvironmentDocumentSource(await readFile(filePath, "utf8"), filePath);
-    if (result.status !== "ok") {
-      files.push({
-        fileName,
-        setupPlatforms: [],
-        actionCount: 0,
-        error: { message: result.message, ...(result.line ? { line: result.line } : {}) },
-      });
-      continue;
-    }
-    const { document } = result;
-    files.push({
+  const names = entries
+    .filter((fileName) => fileName.endsWith(".toml") && isValidCodexEnvironmentFileName(fileName))
+    .sort((a, b) => a.localeCompare(b));
+  const summaries = await Promise.all(
+    names.map((fileName) => summarizeEnvironmentFile(directory, fileName)),
+  );
+  return {
+    directoryPath,
+    files: summaries.filter((summary): summary is CodexEnvironmentFileSummary => summary !== undefined),
+  };
+}
+
+/**
+ * One row of the list. A file that vanished since `readdir`, or a dangling
+ * link, is left out; any other read failure is listed as unreadable, so one
+ * bad file never hides the rest.
+ */
+async function summarizeEnvironmentFile(
+  directory: string,
+  fileName: string,
+): Promise<CodexEnvironmentFileSummary | undefined> {
+  const filePath = path.join(directory, fileName);
+  let source: string;
+  try {
+    if (!(await stat(filePath)).isFile()) return undefined;
+    source = await readFile(filePath, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    return {
       fileName,
-      ...(document.name.trim() ? { name: document.name.trim() } : {}),
-      setupPlatforms: document.setup.mode === "perPlatform"
-        ? CODEX_ENVIRONMENT_PLATFORMS.filter((platform) =>
-          document.setup.platformScripts[platform] !== undefined)
-        : [],
-      actionCount: document.actions.length,
-    });
+      setupPlatforms: [],
+      actionCount: 0,
+      error: { message: `PwrAgent can't read this file (${code ?? errorText(error)}).` },
+    };
   }
-  return { directoryPath, files };
+  const result = readCodexEnvironmentDocumentSource(source, filePath);
+  if (result.status !== "ok") {
+    return {
+      fileName,
+      setupPlatforms: [],
+      actionCount: 0,
+      error: { message: result.message, ...(result.line ? { line: result.line } : {}) },
+    };
+  }
+  const { document } = result;
+  return {
+    fileName,
+    ...(document.name.trim() ? { name: document.name.trim() } : {}),
+    setupPlatforms: document.setup.mode === "perPlatform"
+      ? CODEX_ENVIRONMENT_PLATFORMS.filter((platform) =>
+        document.setup.platformScripts[platform] !== undefined)
+      : [],
+    actionCount: document.actions.length,
+  };
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function readCodexEnvironmentFile(
@@ -204,10 +237,15 @@ export async function saveCodexEnvironmentFile(
     const temporary = path.join(path.dirname(sourcePath), `.${request.fileName}.${randomUUID()}.tmp`);
     try {
       await writeFile(temporary, next, { encoding: "utf8", flag: "wx" });
-      if (request.expectedRevision === undefined && await readOptional(sourcePath) !== undefined) {
-        return { status: "exists" };
+      if (request.expectedRevision === undefined) {
+        // A new file must not replace one that appeared since the check
+        // above. link() fails when the name exists; rename() would not.
+        if (!(await linkIfAbsent(temporary, sourcePath))) {
+          return { status: "exists" };
+        }
+      } else {
+        await rename(temporary, sourcePath);
       }
-      await rename(temporary, sourcePath);
     } finally {
       await rm(temporary, { force: true });
     }
@@ -218,6 +256,31 @@ export async function saveCodexEnvironmentFile(
     return { status: "unreadable", message: saved.message };
   }
   return { status: "saved", document: saved.document, revision: revisionOf(next), sourcePath };
+}
+
+/**
+ * Gives `temporary`'s content the name `target` only if nothing has it yet.
+ * A volume without hard links gets an exclusive copy instead. Either way an
+ * existing file is never replaced. Answers false when `target` exists.
+ */
+async function linkIfAbsent(temporary: string, target: string): Promise<boolean> {
+  try {
+    await link(temporary, target);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") return false;
+    if (code !== "EPERM" && code !== "ENOTSUP" && code !== "ENOSYS" && code !== "EXDEV") {
+      throw error;
+    }
+  }
+  try {
+    await copyFile(temporary, target, fsConstants.COPYFILE_EXCL);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  }
 }
 
 function excerptAround(source: string, line: number): Array<{ line: number; text: string }> {
@@ -418,7 +481,8 @@ class EnvironmentSourceEditor {
     const text = `${key} = ${formatCodexTomlValue(value)}`;
     const newLines = text.split("\n");
     if (entry) {
-      newLines[newLines.length - 1] += entry.length === 1 ? entry.trailing : "";
+      // The comment after the value, single-line or after a closing """.
+      newLines[newLines.length - 1] += entry.trailing;
       this.replaceLines(block, entry.offset, entry.length, newLines);
       entry.value = value;
       entry.length = newLines.length;
