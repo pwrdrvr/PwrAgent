@@ -767,10 +767,15 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         ? await this.resolveRemoteAssistantMessageImages(request, target, remote)
         : [];
     }
+    // Runs twice at every bound turn end, before the reply is posted. Only the
+    // transcript is used: a full read also rescans the thread's pricing ledger
+    // and Token Miser accounting, which blocked the app on long threads.
     const response = await this.registry.readThread({
       backend: request.backend,
+      includeAccounting: false,
       limit: 20,
       threadId: request.threadId,
+      viewOnly: true,
     });
     const message = findAssistantMessageForText(
       response.replay,
