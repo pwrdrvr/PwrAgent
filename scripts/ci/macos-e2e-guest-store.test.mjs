@@ -76,7 +76,9 @@ afterEach(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-describe("macos-e2e-guest-store.sh", () => {
+// The script runs only on the macOS guest. Windows unit lanes have no POSIX
+// paths for its absolute-root guard, so skip there as the cleanup test does.
+describe.skipIf(process.platform === "win32")("macos-e2e-guest-store.sh", () => {
   it("reports a cold store on a fresh guest and exports the root", () => {
     const result = run("check");
     expect(result.status).toBe(0);
