@@ -22580,6 +22580,66 @@ command = "pnpm dev:messaging"
     }
   });
 
+  it("surfaces environment options on existing Claude threads", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-thread-env-"));
+    const worktree = path.join(root, "worktree");
+    await mkdir(path.join(worktree, ".codex", "environments"), { recursive: true });
+    await writeFile(
+      path.join(worktree, ".codex", "environments", "environment.toml"),
+      `
+version = 1
+name = "PwrAgnt"
+
+[[actions]]
+name = "Dev - Messaging"
+command = "pnpm dev:messaging"
+`,
+      "utf8",
+    );
+    const sessions = new ClaudeSessionStore(path.join(root, "sessions"));
+    await sessions.save({ cwd: worktree, thread: {
+      id: "c1111111-1111-4111-8111-111111111111", source: "claude", title: "Claude thread", titleSource: "explicit",
+      projectKey: worktree,
+      linkedDirectories: [{
+        id: path.join(root, "repo"), kind: "worktree", label: "repo",
+        path: path.join(root, "repo"), worktreePath: worktree,
+      }],
+    } });
+
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      agentToolMcpServer: null,
+      pdfToolMcpServer: null,
+      claudeBackendOptions: { store: sessions },
+    });
+
+    try {
+      await expect(registry.listThreads({ backend: "claude" })).resolves.toEqual([
+        expect.objectContaining({
+          id: "c1111111-1111-4111-8111-111111111111",
+          source: "claude",
+          codexEnvironmentOptions: [
+            expect.objectContaining({
+              id: "environment",
+              name: "PwrAgnt",
+              actions: [
+                expect.objectContaining({
+                  id: "dev-messaging",
+                  name: "Dev - Messaging",
+                  command: "pnpm dev:messaging",
+                }),
+              ],
+            }),
+          ],
+        }),
+      ]);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("surfaces environment options on existing ACP threads", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-thread-env-"));
     await mkdir(path.join(root, ".codex", "environments"), { recursive: true });

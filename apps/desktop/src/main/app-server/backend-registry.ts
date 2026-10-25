@@ -12706,7 +12706,10 @@ export class DesktopBackendRegistry {
       ownerId: this.threadListCacheOwnerId,
     };
     if (params.backend === "claude") {
-      const threads = await this.claudeBackend.listThreads(params);
+      const threads = await this.withThreadEnvironmentOptions(
+        "claude",
+        await this.claudeBackend.listThreads(params),
+      );
       this.rememberThreadListContexts(threads, displayMetadataObservationSequence, true, params.archived);
       this.persistProviderThreadSnapshot("claude", threads, params);
       return threads;
@@ -13596,6 +13599,33 @@ export class DesktopBackendRegistry {
       ),
     );
     return threadLists.flat();
+  }
+
+  /**
+   * Attaches the environments defined in each thread's workspace. The Codex
+   * and ACP lists do this inline; without it a Claude thread showed its
+   * environment's Run chip but no Environment picker.
+   */
+  private async withThreadEnvironmentOptions(
+    backend: AppServerBackendKind,
+    threads: AppServerThreadSummary[],
+  ): Promise<AppServerThreadSummary[]> {
+    return await Promise.all(
+      threads.map(async (thread) => {
+        const overlay = await this.overlayStore.getThreadOverlayState({
+          backend,
+          threadId: thread.id,
+        });
+        const cwd = resolveThreadWorkspaceCwd(
+          thread,
+          overlay?.extraLinkedDirectories ?? [],
+        );
+        const codexEnvironmentOptions = cwd
+          ? await listCodexEnvironmentOptions(cwd).catch(() => [])
+          : [];
+        return { ...thread, codexEnvironmentOptions };
+      }),
+    );
   }
 
   private async listInstalledAcpThreads(
