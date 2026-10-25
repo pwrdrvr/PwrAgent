@@ -1319,6 +1319,26 @@ describe("PluginsSettings", () => {
       expect(await screen.findByText("Linear")).toBeInTheDocument();
     });
 
+    it("keeps an action's notice when a background re-read fails", async () => {
+      const api = managedApi([managed()]);
+      let announce: ((event: { connectionIds: string[] }) => void) | undefined;
+      api.onMcpConnectionsChanged = vi.fn((listener) => {
+        announce = listener;
+        return () => undefined;
+      });
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const row = within(await findRow("Datadog"));
+      chooseSelectOption(row.getByRole("combobox", { name: "Tool approval" }), "Allow all tools");
+      const notice = await screen.findByText("Datadog runs every tool without asking.");
+
+      vi.mocked(api.listMcpConnections!).mockRejectedValueOnce(new Error("Broker restarting"));
+      await act(async () => {
+        announce?.({ connectionIds: ["datadog"] });
+      });
+      expect(notice).toBeInTheDocument();
+      expect(screen.queryByText("Broker restarting")).toBeNull();
+    });
+
     it("offers Sandboxer cleanup when PRs close, on by default, on Sandboxer only", async () => {
       const sandboxer = managed({
         id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",

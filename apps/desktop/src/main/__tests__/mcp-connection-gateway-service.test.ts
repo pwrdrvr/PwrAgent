@@ -605,6 +605,36 @@ describe("McpConnectionGatewayService", () => {
     await retryFailure;
   });
 
+  it("announces a sign-in that failed, as it would one that succeeded", async () => {
+    const registry = temporaryRegistry();
+    const connection = registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/mcp",
+    });
+    const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+    Object.assign(service, {
+      openAuthorizationUrl: async () => undefined,
+      coordinatorFor: () => ({
+        abandonAuthorization: () => {},
+        configured: async () => false,
+        authorize: async () => {
+          throw new Error("The provider refused the sign-in.");
+        },
+      }),
+    });
+    const changes: string[][] = [];
+    service.onConnectionsChanged((event) => changes.push(event.connectionIds));
+
+    await expect(service.authorizeConnection(connection.id)).rejects.toThrow("refused");
+    expect(changes).toEqual([[connection.id]]);
+  });
+
   /**
    * The coordinator's own attempt counter stops a superseded flow from
    * committing tokens. It does not close that flow's listener, so without this

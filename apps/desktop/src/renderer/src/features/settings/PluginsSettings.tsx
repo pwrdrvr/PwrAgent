@@ -536,7 +536,9 @@ export function PluginsSettings(props: {
               : []),
           ].join(" · ");
 
-  const loadConnections = useCallback(async () => {
+  // `background` is a re-read nobody asked for. Its failure must not replace
+  // the notice an action just set; the next read reports a lasting problem.
+  const loadConnections = useCallback(async (options: { background?: boolean } = {}) => {
     if (!props.desktopApi?.listMcpConnections) {
       setConnectionNotice({
         kind: "error",
@@ -554,6 +556,7 @@ export function PluginsSettings(props: {
       setConnections(response.connections);
       return true;
     } catch (error) {
+      if (options.background) return false;
       setConnectionNotice({
         kind: "error",
         text: error instanceof Error ? error.message : String(error),
@@ -573,7 +576,9 @@ export function PluginsSettings(props: {
   // without a manual refresh. This pane's own actions reload already; the
   // extra read is answered from main's caches.
   useEffect(
-    () => props.desktopApi?.onMcpConnectionsChanged?.(() => void loadConnections()),
+    () => props.desktopApi?.onMcpConnectionsChanged?.(
+      () => void loadConnections({ background: true }),
+    ),
     [loadConnections, props.desktopApi],
   );
 

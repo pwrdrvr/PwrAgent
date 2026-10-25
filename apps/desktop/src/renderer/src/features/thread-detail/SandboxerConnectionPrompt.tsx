@@ -35,8 +35,9 @@ function about(cleanupOnPrClose: boolean) {
       + "Sandboxer CLI's own login.",
     note: cleanupOnPrClose
       ? "Each thread opts in with its own switch. Once all of a thread's PRs "
-        + "merge or close, PwrAgent deletes the sandboxes it created. Closing "
-        + "the thread does not."
+        + "merge or close, PwrAgent deletes the sandboxes that thread created, "
+        + "or stops them if Sandboxer offers no delete. Closing the thread "
+        + "does not."
       : "Each thread opts in with its own switch. Closing a thread or merging "
         + "its PRs does not stop its sandboxes; auto-stop or the agent does.",
   };
@@ -79,7 +80,12 @@ export function SandboxerConnectionPrompt(props: {
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const { status: connection, refresh, readError } = usePwrSuiteConnectionStatus(read);
+  // A read clears a stale switch error, as on the PwrSuite tiles, so the
+  // line can show what changed since.
+  const { status: connection, refresh, readError } = usePwrSuiteConnectionStatus(
+    read,
+    () => setError(undefined),
+  );
 
   useEffect(() => {
     if (!read || !onConnectionsChanged) return;

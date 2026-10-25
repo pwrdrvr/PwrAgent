@@ -1063,6 +1063,9 @@ export class McpConnectionGatewayService {
           ? cause.message
           : "The secure connection could not be completed.",
       );
+      // Its sessions are already closed and its state moved; other windows
+      // must hear it as they would a success.
+      this.announceChanged([connectionId]);
       throw cause;
     } finally {
       if (this.pendingAuthorizations.get(connectionId)?.abandon === callback.abandon) {

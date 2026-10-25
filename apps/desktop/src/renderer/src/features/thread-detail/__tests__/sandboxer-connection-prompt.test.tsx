@@ -166,6 +166,25 @@ describe("SandboxerConnectionPrompt", () => {
     expect(desktopApi.listMcpConnections).toHaveBeenCalledTimes(2);
   });
 
+  it("drops a failed switch's error once status is read again", async () => {
+    const desktopApi = api(
+      [sandboxer()],
+      [sandboxer({ sandboxerCliState: "billing_issue" })],
+    );
+    renderTile(desktopApi, {
+      onEnabledChange: async () => {
+        throw new Error("Owner broker restarting");
+      },
+    });
+    fireEvent.click(await screen.findByLabelText("Use Sandboxer in this thread"));
+    expect(await screen.findByText("Owner broker restarting")).toBeInTheDocument();
+    await act(async () => {
+      desktopApi.announce({ connectionIds: [SANDBOXER_MCP_CONNECTION_ID] });
+    });
+    expect(await screen.findByText(/Billing issue/)).toBeInTheDocument();
+    expect(screen.queryByText("Owner broker restarting")).toBeNull();
+  });
+
   it("asks main for a recent Sandboxer answer, so a terminal sign-in shows on return", async () => {
     const desktopApi = api([sandboxer()]);
     renderTile(desktopApi);
@@ -175,7 +194,7 @@ describe("SandboxerConnectionPrompt", () => {
 
   it("says in About whether merged or closed PRs release a thread's sandboxes", async () => {
     for (const [cleanup, text] of [
-      [undefined, "Once all of a thread's PRs merge or close, PwrAgent deletes the sandboxes it created."],
+      [undefined, "PwrAgent deletes the sandboxes that thread created, or stops them if Sandboxer offers no delete."],
       [false, "Closing a thread or merging its PRs does not stop its sandboxes"],
     ] as const) {
       const view = renderTile(api([sandboxer({ sandboxerCleanupOnPrClose: cleanup })]));
