@@ -207,6 +207,7 @@ import type {
   ListBackendsResponse,
   ListMcpConnectionsRequest,
   ListMcpConnectionsResponse,
+  McpConnectionsChangedEvent,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
   ListThreadMcpServersRequest,
@@ -622,6 +623,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
   readTranscriptImage?: (url: string) => Promise<{ dataBase64: string; mimeType: string }>;
   listMcpConnections?: (request?: ListMcpConnectionsRequest) => Promise<ListMcpConnectionsResponse>;
+  /** This machine's connection changes only; a federation viewer hears none. */
+  onMcpConnectionsChanged?: (
+    callback: (event: McpConnectionsChangedEvent) => void,
+  ) => () => void;
   createMcpConnection?: (
     request: CreateMcpConnectionRequest,
   ) => Promise<CreateMcpConnectionResponse>;

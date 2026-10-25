@@ -1294,6 +1294,31 @@ describe("PluginsSettings", () => {
       expect(api.setMcpConnectionSelectForNewThreads).not.toHaveBeenCalled();
     });
 
+    it("shows a connection an agent added without a manual refresh", async () => {
+      const api = managedApi([managed()]);
+      vi.mocked(api.listMcpConnections!)
+        .mockResolvedValueOnce({ connections: [managed()] })
+        .mockResolvedValue({
+          connections: [
+            managed(),
+            managed({ id: "linear", displayName: "Linear", serverUrl: "https://mcp.linear.app/mcp" }),
+          ],
+        });
+      let announce: ((event: { connectionIds: string[] }) => void) | undefined;
+      api.onMcpConnectionsChanged = vi.fn((listener) => {
+        announce = listener;
+        return () => undefined;
+      });
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      await findRow("Datadog");
+      expect(screen.queryByText("Linear")).toBeNull();
+
+      await act(async () => {
+        announce?.({ connectionIds: ["linear"] });
+      });
+      expect(await screen.findByText("Linear")).toBeInTheDocument();
+    });
+
     it("offers Sandboxer cleanup when PRs close, on by default, on Sandboxer only", async () => {
       const sandboxer = managed({
         id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",

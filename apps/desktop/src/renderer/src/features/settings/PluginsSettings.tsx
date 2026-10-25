@@ -569,6 +569,14 @@ export function PluginsSettings(props: {
     void loadConnections();
   }, [loadConnections, loadServers]);
 
+  // A connection an agent added, or a Sandboxer answer that changed, shows
+  // without a manual refresh. This pane's own actions reload already; the
+  // extra read is answered from main's caches.
+  useEffect(
+    () => props.desktopApi?.onMcpConnectionsChanged?.(() => void loadConnections()),
+    [loadConnections, props.desktopApi],
+  );
+
   useEffect(() => {
     const signIns = codexSignInsRef.current;
     const waiters = startupWaitersRef.current;

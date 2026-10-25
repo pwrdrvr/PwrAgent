@@ -50,6 +50,7 @@ import {
   MCP_CONNECTION_CREATE_CHANNEL,
   MCP_CONNECTION_DISCONNECT_CHANNEL,
   MCP_CONNECTION_LIST_CHANNEL,
+  MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL,
   MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL,
   MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL,
   MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL,
@@ -98,6 +99,10 @@ import { federationWindowTargetForWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
 
 let unsubscribeInstallerEvents: (() => void) | undefined;
+let unsubscribeConnectionChanges: (() => void) | undefined;
+
+/** The freshest Sandboxer answer a list read may demand; `sbx status` runs at most this often. */
+const MIN_SANDBOXER_STATUS_AGE_MS = 1_000;
 
 export function registerMcpConnectionIpcHandlers(
   service: McpConnectionGatewayService = getMcpConnectionGatewayService(),
@@ -113,6 +118,16 @@ export function registerMcpConnectionIpcHandlers(
       );
     }
   };
+  unsubscribeConnectionChanges?.();
+  unsubscribeConnectionChanges = service.onConnectionsChanged((change) => {
+    for (const webContents of subscribersForChannel(
+      MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL,
+    )) {
+      if (!webContents.isDestroyed()) {
+        webContents.send(MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL, change);
+      }
+    }
+  });
   ipcMain.removeHandler(MCP_CONNECTION_LIST_CHANNEL);
   ipcMain.handle(
     MCP_CONNECTION_LIST_CHANNEL,
@@ -128,7 +143,14 @@ export function registerMcpConnectionIpcHandlers(
           .remoteBackend(target)
           .listMcpConnections();
       }
-      return { connections: await service.listConnections() };
+      const maxAge = request.sandboxerStatusMaxAgeMs;
+      return {
+        connections: await service.listConnections(
+          typeof maxAge === "number" && Number.isFinite(maxAge)
+            ? { sandboxerStatusMaxAgeMs: Math.max(maxAge, MIN_SANDBOXER_STATUS_AGE_MS) }
+            : {},
+        ),
+      };
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
@@ -568,6 +590,8 @@ function registerPwrSuiteInstallerHandlers(
 export function disposeMcpConnectionIpcHandlers(): void {
   unsubscribeInstallerEvents?.();
   unsubscribeInstallerEvents = undefined;
+  unsubscribeConnectionChanges?.();
+  unsubscribeConnectionChanges = undefined;
   ipcMain.removeHandler(PWRSUITE_INSTALLER_READ_CHANNEL);
   ipcMain.removeHandler(PWRSUITE_INSTALLER_START_CHANNEL);
   ipcMain.removeHandler(PWRSUITE_INSTALLER_CANCEL_CHANNEL);

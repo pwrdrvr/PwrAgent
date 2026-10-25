@@ -5,6 +5,7 @@ import {
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
   type McpConnectionStatus,
+  type McpConnectionsChangedEvent,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
@@ -31,39 +32,45 @@ function sandboxer(patch: Partial<McpConnectionStatus> = {}): McpConnectionStatu
   };
 }
 
-function api(...answers: McpConnectionStatus[][]): DesktopApi {
+function api(...answers: McpConnectionStatus[][]): DesktopApi & {
+  announce: (event: McpConnectionsChangedEvent) => void;
+} {
   const listMcpConnections = vi.fn();
   for (const connections of answers) {
     listMcpConnections.mockResolvedValueOnce({ connections });
   }
   listMcpConnections.mockResolvedValue({ connections: answers.at(-1) ?? [] });
-  return { listMcpConnections } as unknown as DesktopApi;
+  const listeners = new Set<(event: McpConnectionsChangedEvent) => void>();
+  return {
+    listMcpConnections,
+    onMcpConnectionsChanged: (listener: (event: McpConnectionsChangedEvent) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    announce: (event: McpConnectionsChangedEvent) => {
+      for (const listener of listeners) listener(event);
+    },
+  } as unknown as DesktopApi & { announce: (event: McpConnectionsChangedEvent) => void };
 }
 
 type TileOverrides = {
   enabled?: boolean;
   remote?: boolean;
-  settingsOpen?: boolean;
   onEnabledChange?: (enabled: boolean) => Promise<void>;
   onOpenSettings?: () => void;
 };
 
-function tile(desktopApi: DesktopApi, overrides: TileOverrides = {}) {
-  return (
+function renderTile(desktopApi: DesktopApi, overrides: TileOverrides = {}) {
+  return render(
     <SandboxerConnectionPrompt
       backend="claude"
       desktopApi={desktopApi}
       enabled={overrides.enabled ?? false}
       remote={overrides.remote ?? false}
-      settingsOpen={overrides.settingsOpen}
       onEnabledChange={overrides.onEnabledChange ?? (async () => undefined)}
       onOpenSettings={overrides.onOpenSettings}
-    />
+    />,
   );
-}
-
-function renderTile(desktopApi: DesktopApi, overrides: TileOverrides = {}) {
-  return render(tile(desktopApi, overrides));
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -140,19 +147,43 @@ describe("SandboxerConnectionPrompt", () => {
     expect(desktopApi.listMcpConnections).toHaveBeenCalledTimes(2);
   });
 
-  it("catches up after Settings closes over it, which moves no window focus", async () => {
+  it("catches up when main announces a Sandboxer change, such as a setting changed in Settings", async () => {
     const desktopApi = api(
       [sandboxer({ enabled: false })],
       [sandboxer()],
     );
-    const onOpenSettings = vi.fn();
-    const view = renderTile(desktopApi, { onOpenSettings });
-    fireEvent.click(await screen.findByRole("button", { name: "Set up Sandboxer in Settings" }));
-    view.rerender(tile(desktopApi, { onOpenSettings, settingsOpen: true }));
+    renderTile(desktopApi, { onOpenSettings: () => undefined });
+    expect(await screen.findByRole("button", { name: "Set up Sandboxer in Settings" })).toBeInTheDocument();
+    // Another connection's change is not this tile's business.
+    await act(async () => {
+      desktopApi.announce({ connectionIds: [PWRGIT_MCP_CONNECTION_ID] });
+    });
     expect(desktopApi.listMcpConnections).toHaveBeenCalledTimes(1);
-    view.rerender(tile(desktopApi, { onOpenSettings, settingsOpen: false }));
+    await act(async () => {
+      desktopApi.announce({ connectionIds: [SANDBOXER_MCP_CONNECTION_ID] });
+    });
     expect(await screen.findByLabelText("Use Sandboxer in this thread")).toBeInTheDocument();
     expect(desktopApi.listMcpConnections).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks main for a recent Sandboxer answer, so a terminal sign-in shows on return", async () => {
+    const desktopApi = api([sandboxer()]);
+    renderTile(desktopApi);
+    await screen.findByLabelText("Use Sandboxer in this thread");
+    expect(desktopApi.listMcpConnections).toHaveBeenCalledWith({ sandboxerStatusMaxAgeMs: 2_000 });
+  });
+
+  it("says in About whether merged or closed PRs release a thread's sandboxes", async () => {
+    for (const [cleanup, text] of [
+      [undefined, "Once all of a thread's PRs merge or close, PwrAgent deletes the sandboxes it created."],
+      [false, "Closing a thread or merging its PRs does not stop its sandboxes"],
+    ] as const) {
+      const view = renderTile(api([sandboxer({ sandboxerCleanupOnPrClose: cleanup })]));
+      await screen.findByLabelText("Use Sandboxer in this thread");
+      fireEvent.click(screen.getByRole("button", { name: "About Sandboxer" }));
+      expect(screen.getByRole("dialog", { name: "About Sandboxer" })).toHaveTextContent(text);
+      view.unmount();
+    }
   });
 
   it("keeps re-reading once set up, so a fixed billing problem clears", async () => {

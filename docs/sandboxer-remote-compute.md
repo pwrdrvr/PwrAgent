@@ -115,10 +115,23 @@ quickstart and the Info and site buttons explaining and linking the service.
 Sign-in, a plan, and offering it to threads are finished in Settings, so those
 states show Set up, which opens Settings → Plugins. Once Sandboxer is signed in
 and offered, the tile is the thread's Use in thread switch; a billing problem
-keeps the switch so a thread can still stop running sandboxes. The tile reads
-status from the connection list, so it never retires live sessions, and it
-reads again when the window regains focus. A remote thread shows no tile:
-its tools run on the owner, whose CLI this window cannot see.
+keeps the switch so a thread can still stop running sandboxes. Its About
+note follows Clean up when PRs close. The tile reads status from the
+connection list, so it never retires live sessions. It asks for a Sandboxer
+answer no older than two seconds (main refuses anything fresher than one), so
+a window coming back from `sbx onboard` in a terminal shows the new login. It
+reads on mount, on window focus, after a failed read, and when main announces
+a Sandboxer change. A remote thread shows no tile: its tools run on the owner,
+whose CLI this window cannot see.
+
+Main announces MCP connection changes on `mcp-connections:changed` to this
+instance's local windows: every successful mutation (whether this instance
+owns the connections or forwards to the owner broker), and each `sbx status`
+answer that differs from the last. The event carries connection ids only.
+The launchpad tile and Settings → Plugins re-read the list when they hear it,
+so a setting changed in Settings or a connection an agent added shows without
+a refresh. A change made from another PwrAgent instance on the profile is not
+announced; focus reads cover it. Nothing is persisted.
 
 The existing `search_mcp_tools` / `call_mcp_tool` path carries the official
 server's eight tools: create, list, exec, read/write files, host a port, stop,

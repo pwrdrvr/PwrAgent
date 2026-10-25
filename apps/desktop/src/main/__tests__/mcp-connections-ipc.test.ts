@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => {
   };
   return {
     handlers,
+    subscribers: [] as Array<{ isDestroyed: () => boolean; send: (...args: unknown[]) => void }>,
     listMcpConnections: vi.fn(async () => ({ connections: [{ id: "rovo" }] })),
     readThreadMcpConnections: vi.fn(async () => ({ connectionIds: ["rovo"], providerServersEnabled: true })),
     setThreadMcpConnections: vi.fn(async () => ({ connectionIds: ["rovo"], providerServersEnabled: false })),
@@ -57,6 +58,10 @@ vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => ({ remoteBackend: mocks.remoteBackend }),
 }));
 
+vi.mock("../window-channels", () => ({
+  subscribersForChannel: () => mocks.subscribers,
+}));
+
 vi.mock("../window", () => ({
   federationWindowTargetForWebContents: (sender: unknown) =>
     sender === remoteSender ? federationTarget : undefined,
@@ -81,7 +86,14 @@ describe("MCP connection IPC", () => {
     configured: false,
     state: "disconnected",
   };
+  let announce: ((event: { connectionIds: string[] }) => void) | undefined;
   const service = {
+    onConnectionsChanged: vi.fn((listener: (event: { connectionIds: string[] }) => void) => {
+      announce = listener;
+      return () => {
+        if (announce === listener) announce = undefined;
+      };
+    }),
     listConnections: vi.fn(async () => [managedConnection]),
     createConnection: vi.fn(async () => managedConnection),
     authorizeConnection: vi.fn(async () => ({
@@ -205,6 +217,47 @@ describe("MCP connection IPC", () => {
     }
     expect(operation).toHaveBeenCalledTimes(3);
     expect(service.listConnections).not.toHaveBeenCalled();
+  });
+
+  it("sends this machine's connection changes to subscribed windows until disposed", async () => {
+    const {
+      disposeMcpConnectionIpcHandlers,
+      registerMcpConnectionIpcHandlers,
+    } = await import("../ipc/mcp-connections");
+    const { MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL } = await import("../../shared/ipc");
+    const live = { isDestroyed: () => false, send: vi.fn() };
+    const closed = { isDestroyed: () => true, send: vi.fn() };
+    mocks.subscribers = [live, closed];
+    try {
+      registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
+      // Registering again replaces the subscription rather than doubling it.
+      registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
+      announce?.({ connectionIds: ["builtin:sandboxer"] });
+      expect(live.send).toHaveBeenCalledOnce();
+      expect(live.send).toHaveBeenCalledWith(MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL, {
+        connectionIds: ["builtin:sandboxer"],
+      });
+      expect(closed.send).not.toHaveBeenCalled();
+
+      disposeMcpConnectionIpcHandlers();
+      expect(announce).toBeUndefined();
+    } finally {
+      mocks.subscribers = [];
+    }
+  });
+
+  it("passes a local list's Sandboxer max age through, never fresher than a second", async () => {
+    const { registerMcpConnectionIpcHandlers } = await import("../ipc/mcp-connections");
+    const { MCP_CONNECTION_LIST_CHANNEL } = await import("../../shared/ipc");
+    registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
+    const list = mocks.handlers.get(MCP_CONNECTION_LIST_CHANNEL)!;
+
+    await list({ sender: { id: 18 } }, { sandboxerStatusMaxAgeMs: 2_000 });
+    expect(service.listConnections).toHaveBeenLastCalledWith({ sandboxerStatusMaxAgeMs: 2_000 });
+    await list({ sender: { id: 18 } }, { sandboxerStatusMaxAgeMs: 0 });
+    expect(service.listConnections).toHaveBeenLastCalledWith({ sandboxerStatusMaxAgeMs: 1_000 });
+    await list({ sender: { id: 18 } }, {});
+    expect(service.listConnections).toHaveBeenLastCalledWith({});
   });
 
   it("surfaces an unavailable owner without falling back to local connections", async () => {

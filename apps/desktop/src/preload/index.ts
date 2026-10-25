@@ -148,6 +148,7 @@ import type {
   ListBackendsResponse,
   ListMcpConnectionsRequest,
   ListMcpConnectionsResponse,
+  McpConnectionsChangedEvent,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
   ListThreadMcpServersRequest,
@@ -886,6 +887,7 @@ import {
   MCP_CONNECTION_CREATE_CHANNEL,
   MCP_CONNECTION_DISCONNECT_CHANNEL,
   MCP_CONNECTION_LIST_CHANNEL,
+  MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL,
   MCP_CONNECTION_REMOVE_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
@@ -1216,6 +1218,18 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(TRANSCRIPT_IMAGE_READ_CHANNEL, url),
   listMcpConnections: async (request?: ListMcpConnectionsRequest): Promise<ListMcpConnectionsResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_LIST_CHANNEL, request),
+  onMcpConnectionsChanged: (
+    callback: (event: McpConnectionsChangedEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: McpConnectionsChangedEvent,
+    ) => callback(payload);
+    ipcRenderer.on(MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
   createMcpConnection: async (
     request: CreateMcpConnectionRequest,
   ): Promise<CreateMcpConnectionResponse> =>

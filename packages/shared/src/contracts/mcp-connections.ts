@@ -297,10 +297,27 @@ export function mcpConnectionsForPeer(connections: McpConnectionStatus[]): McpCo
 
 export type ListMcpConnectionsRequest = {
   federationTarget?: FederationRemoteTarget;
+  /**
+   * Accept a cached Sandboxer status only this recent, in milliseconds.
+   * Absent uses the ordinary cache. An owner broker from an older build
+   * ignores it.
+   */
+  sandboxerStatusMaxAgeMs?: number;
 };
 
 export type ListMcpConnectionsResponse = {
   connections: McpConnectionStatus[];
+};
+
+/**
+ * Pushed to this instance's windows when a connection's status may have
+ * changed: a setting, a sign-in, a removal, or a Sandboxer CLI answer that
+ * differs from the last one. Carries ids only; re-read the list for status.
+ * A change made from another PwrAgent instance on the same profile is not
+ * announced here, so status reads still happen on window focus.
+ */
+export type McpConnectionsChangedEvent = {
+  connectionIds: McpConnectionId[];
 };
 
 /**

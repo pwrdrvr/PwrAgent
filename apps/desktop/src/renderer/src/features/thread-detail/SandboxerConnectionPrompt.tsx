@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   SANDBOXER_LINKS,
   SANDBOXER_MCP_CONNECTION_ID,
@@ -17,18 +17,30 @@ import { usePwrSuiteConnectionStatus } from "./usePwrSuiteConnectionStatus";
 
 const PITCH = "Cloud Linux machines for your agent · paid service";
 
-const ABOUT = {
-  eyebrow: "Third-party service · paid",
-  title: "Cloud Linux machines for your agent",
-  body:
-    "Sandboxer runs Linux machines your agent can build, test, and host apps "
-    + "on, while the thread stays on this computer. It is a separate paid "
-    + "service, billed per second while a machine runs. PwrAgent uses the "
-    + "Sandboxer CLI's own login.",
-  note:
-    "Each thread opts in with its own switch. Closing a thread does not stop "
-    + "its sandbox; auto-stop or the agent does.",
-};
+/**
+ * A Sandboxer answer older than this is checked again. Setup finishes in a
+ * terminal (`sbx onboard`), so a window coming back to the launchpad must
+ * not show the login that command replaced. Main runs one check at a time.
+ */
+const FRESH_STATUS_MS = 2_000;
+
+function about(cleanupOnPrClose: boolean) {
+  return {
+    eyebrow: "Third-party service · paid",
+    title: "Cloud Linux machines for your agent",
+    body:
+      "Sandboxer runs Linux machines your agent can build, test, and host apps "
+      + "on, while the thread stays on this computer. It is a separate paid "
+      + "service, billed per second while a machine runs. PwrAgent uses the "
+      + "Sandboxer CLI's own login.",
+    note: cleanupOnPrClose
+      ? "Each thread opts in with its own switch. Once all of a thread's PRs "
+        + "merge or close, PwrAgent deletes the sandboxes it created. Closing "
+        + "the thread does not."
+      : "Each thread opts in with its own switch. Closing a thread or merging "
+        + "its PRs does not stop its sandboxes; auto-stop or the agent does.",
+  };
+}
 
 /**
  * The launchpad's Sandboxer tile: an ad until it is set up, then a switch.
@@ -40,8 +52,9 @@ const ABOUT = {
  *
  * Status comes from the connection list, which reads `sbx status` through
  * main's cache. It never retires live sessions the way Refresh status can.
- * It is read again on window focus, after a failed read, and on the way
- * back from Settings, which opens over this view without a focus change.
+ * It is read again on window focus, after a failed read, and when main
+ * announces a Sandboxer change: a setting changed in Settings or by an
+ * agent, or a CLI answer that differs from the last.
  */
 export function SandboxerConnectionPrompt(props: {
   backend: AppServerBackendKind;
@@ -49,15 +62,16 @@ export function SandboxerConnectionPrompt(props: {
   enabled: boolean;
   /** A remote thread's tools run on its owner, whose CLI this window can't see. */
   remote: boolean;
-  /** Settings is open over this view. Closing it re-reads status. */
-  settingsOpen?: boolean;
   onEnabledChange: (enabled: boolean) => Promise<void>;
   onOpenSettings?: () => void;
 }) {
   const listConnections = props.desktopApi?.listMcpConnections;
+  const onConnectionsChanged = props.desktopApi?.onMcpConnectionsChanged;
   const read = useMemo(
     () => (listConnections && !props.remote
-      ? async () => (await listConnections()).connections.find(
+      ? async () => (await listConnections({
+        sandboxerStatusMaxAgeMs: FRESH_STATUS_MS,
+      })).connections.find(
         (entry) => entry.id === SANDBOXER_MCP_CONNECTION_ID,
       ) ?? null
       : undefined),
@@ -67,12 +81,12 @@ export function SandboxerConnectionPrompt(props: {
   const [error, setError] = useState<string>();
   const { status: connection, refresh, readError } = usePwrSuiteConnectionStatus(read);
 
-  const settingsOpen = props.settingsOpen === true;
-  const settingsWasOpen = useRef(settingsOpen);
   useEffect(() => {
-    if (settingsWasOpen.current && !settingsOpen) void refresh();
-    settingsWasOpen.current = settingsOpen;
-  }, [refresh, settingsOpen]);
+    if (!read || !onConnectionsChanged) return;
+    return onConnectionsChanged((change) => {
+      if (change.connectionIds.includes(SANDBOXER_MCP_CONNECTION_ID)) void refresh();
+    });
+  }, [onConnectionsChanged, read, refresh]);
 
   // A main without the built-in connection has nothing to offer.
   if (!read || connection === null) return null;
@@ -171,7 +185,7 @@ export function SandboxerConnectionPrompt(props: {
       name="Sandboxer"
       icon={sandboxerMark}
       ariaLabel="Sandboxer connection"
-      about={ABOUT}
+      about={about(connection?.sandboxerCleanupOnPrClose !== false)}
       connected={ready && state === "signed_in"}
       line={line}
       lineTone={tone}
