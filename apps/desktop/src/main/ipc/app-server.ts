@@ -1109,12 +1109,19 @@ function normalizePrStatusWatchEvents(
   const normalized = [...new Set(events)];
   if (
     normalized.length === 0
-    || normalized.some((event) => event !== "success" && event !== "failure")
+    || normalized.some((event) => !PR_STATUS_WATCH_EVENTS.has(event))
   ) {
     return undefined;
   }
   return normalized;
 }
+
+const PR_STATUS_WATCH_EVENTS: ReadonlySet<string> = new Set([
+  "success",
+  "failure",
+  "merged",
+  "closed",
+]);
 
 function normalizePrWatchUrl(url: string | undefined): string | undefined {
   const normalized = url?.trim().replace(/\/+$/, "").toLowerCase();
@@ -4158,7 +4165,7 @@ class DesktopAppServerService {
         ok: false,
         error: {
           code: "invalid_arguments",
-          message: "notifyOn must contain success, failure, or both.",
+          message: "notifyOn must contain one or more of success, failure, merged, and closed.",
         },
       };
     }
@@ -4196,7 +4203,44 @@ class DesktopAppServerService {
     const currentPrEntry = this.prStatusRegistry.get(prKey);
     const pr = currentPrEntry?.pr ?? attachedPr;
     const headSha = pr.headSha?.trim();
-    if (!headSha) {
+    const ciEvents = requestedEvents.filter((event) =>
+      event === "success" || event === "failure"
+    );
+    const terminalEvents = requestedEvents.filter((event) =>
+      event === "merged" || event === "closed"
+    );
+    const prAutomation = await this.getThreadPullRequestAutomationStatus({
+      backend: args.backend,
+      threadId,
+    });
+    const failureCoveredByAutoFix = prAutomation.autoFixActive
+      && ciEvents.includes("failure");
+    const coveredByAutoFix: ThreadPullRequestWatchEvent[] = failureCoveredByAutoFix
+      ? ["failure" as const]
+      : [];
+    if (isTerminalPullRequest(pr)) {
+      // A merged or closed PR has nothing left to watch. Report it now, with
+      // the same merge details a merge/close wake would carry.
+      const terminal = await this.getPrStatusWatchCoordinator()
+        .resolveTerminalDetails(pr);
+      const terminalOutcome = pr.lifecycleState === "merged" ? "merged" : "closed";
+      const currentOutcome = terminalEvents.length > 0 || ciEvents.length === 0
+        ? terminalOutcome
+        : getPrStatusWatchOutcome(pr);
+      return {
+        ok: true,
+        data: {
+          pullRequestWatch: {
+            ...(currentOutcome ? { currentOutcome } : {}),
+            ...(terminal ? { terminal } : {}),
+            coveredByAutoFix,
+            prAutomation,
+          },
+        },
+      };
+    }
+    // A terminal PR is answered above without a head; a CI watch needs one.
+    if (!headSha && ciEvents.length > 0) {
       return {
         ok: false,
         error: {
@@ -4206,30 +4250,18 @@ class DesktopAppServerService {
         },
       };
     }
-
-    const prAutomation = await this.getThreadPullRequestAutomationStatus({
-      backend: args.backend,
-      threadId,
-    });
-    const failureCoveredByAutoFix = prAutomation.autoFixActive
-      && requestedEvents.includes("failure");
-    const coveredByAutoFix: ThreadPullRequestWatchEvent[] = failureCoveredByAutoFix
-      ? ["failure" as const]
-      : [];
-    const notifyOn = requestedEvents;
     const currentOutcome = getPrStatusWatchOutcome(pr);
     const currentOutcomeIsFresh = Boolean(
       currentPrEntry
       && Date.now() - currentPrEntry.fetchedAt
         <= PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS,
     );
-    if (
+    const ciOutcomeAlreadyKnown = Boolean(
       currentOutcome
-      && (
-        isTerminalPullRequest(pr)
-        || (requestedEvents.includes(currentOutcome) && currentOutcomeIsFresh)
-      )
-    ) {
+      && ciEvents.includes(currentOutcome)
+      && currentOutcomeIsFresh,
+    );
+    if (ciOutcomeAlreadyKnown && terminalEvents.length === 0) {
       return {
         ok: true,
         data: {
@@ -4241,30 +4273,50 @@ class DesktopAppServerService {
         },
       };
     }
+    const createdAt = Date.now();
+    const baseWatch = {
+      backend: args.backend,
+      threadId,
+      prKey,
+      prUrl: pr.url,
+      prNumber: pr.number,
+      ...(pr.title ? { prTitle: pr.title } : {}),
+      createdAt,
+      failureHandledByAutoFix: coveredByAutoFix.length > 0,
+    };
     let watch: ThreadPullRequestWatchSummary | undefined;
-    if (notifyOn.length > 0) {
-      const createdAt = Date.now();
-      const candidate: ThreadPullRequestWatchSummary = {
-        watchId: randomUUID(),
-        backend: args.backend,
-        threadId,
-        prKey,
-        prUrl: pr.url,
-        prNumber: pr.number,
-        ...(pr.title ? { prTitle: pr.title } : {}),
-        headSha,
-        notifyOn,
-        createdAt,
-        failureHandledByAutoFix: coveredByAutoFix.length > 0,
-      };
+    if (ciEvents.length > 0 && headSha && !ciOutcomeAlreadyKnown) {
       const registration = await this.getOverlayStore().registerThreadPrStatusWatch({
-        watch: candidate,
+        watch: {
+          ...baseWatch,
+          watchId: randomUUID(),
+          headSha,
+          notifyOn: ciEvents,
+          kind: "checks",
+        },
         now: createdAt,
       });
       watch = registration.watch;
-      if (currentOutcomeIsFresh) {
-        await this.getPrStatusWatchCoordinator().handleStatusSnapshot(pr, createdAt);
-      }
+    }
+    let terminalWatch: ThreadPullRequestWatchSummary | undefined;
+    if (terminalEvents.length > 0) {
+      // Not bound to a head: pushes and CI results leave it in place until
+      // the PR merges or closes, and it survives restarts in sqlite.
+      const registration = await this.getOverlayStore().registerThreadPrStatusWatch({
+        watch: {
+          ...baseWatch,
+          watchId: randomUUID(),
+          headSha: headSha ?? "",
+          notifyOn: terminalEvents,
+          failureHandledByAutoFix: false,
+          kind: "terminal",
+        },
+        now: createdAt,
+      });
+      terminalWatch = registration.watch;
+    }
+    if (watch && currentOutcomeIsFresh) {
+      await this.getPrStatusWatchCoordinator().handleStatusSnapshot(pr, createdAt);
     }
 
     return {
@@ -4272,6 +4324,8 @@ class DesktopAppServerService {
       data: {
         pullRequestWatch: {
           ...(watch ? { watch } : {}),
+          ...(terminalWatch ? { terminalWatch } : {}),
+          ...(ciOutcomeAlreadyKnown && currentOutcome ? { currentOutcome } : {}),
           coveredByAutoFix,
           prAutomation: await this.getThreadPullRequestAutomationStatus({
             backend: args.backend,
@@ -4340,8 +4394,8 @@ class DesktopAppServerService {
           ? this.prAutoDispatchAllowed
             ? this.prAutoDispatchBudgetPaused
               ? "Background PR polling is active, but Auto-fix PR is paused because the profile's automatic repair budget is empty. Resume it from the safety notice when you are ready."
-              : "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
-            : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success/failure notification instead of polling or creating a monitor thread."
+              : "Background PR polling is active, but Auto-fix PR is off for this thread. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
+            : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
@@ -6002,6 +6056,11 @@ class DesktopAppServerService {
         this.startPrDiscoveryRefresh();
         appServerLog.info("background PR polling started", {
           trackedPrCount: this.collectPrPollTargets().length,
+        });
+        void this.retryPendingPrTerminalWatches().catch((error) => {
+          appServerLog.warn("pr terminal watch startup retry failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
       })
       .catch((error) => {
@@ -8160,6 +8219,8 @@ class DesktopAppServerService {
         store: this.getOverlayStore(),
         registry: getDesktopBackendRegistry(),
         isBackgroundPollingEnabled: () => this.backgroundPrPollingEnabled,
+        fetchTerminalDetails: async (pr) =>
+          await this.getPrFetcher().fetchPullRequestTerminalDetails(pr),
       });
     }
     return this.prStatusWatchCoordinator;
@@ -8268,6 +8329,63 @@ class DesktopAppServerService {
   async reconcileThreadDependencies(): Promise<void> {
     if (!getAppStateMode()) return;
     await this.getThreadDependencyCoordinator().reconcile();
+  }
+
+  /**
+   * A merge/close wake that found its thread busy is retried when the thread
+   * goes idle. The poller no longer fetches the PR, so nothing else would.
+   */
+  handleAgentEventForPrWatches(event: AgentEvent): void {
+    if (!getAppStateMode()) return;
+    if (event.federationTarget && isRemoteFederationTarget(event.federationTarget)) return;
+    const notification = event.notification as AppServerNotification;
+    const settled = notification.method === "turn/completed"
+      || notification.method === "turn/failed"
+      || notification.method === "turn/cancelled"
+      || (
+        notification.method === "thread/status/changed"
+        && typeof notification.params.status === "object"
+        && notification.params.status !== null
+        && "type" in notification.params.status
+        && notification.params.status.type === "idle"
+      );
+    if (!settled) return;
+    const threadId = (notification.params as { threadId?: string }).threadId?.trim();
+    if (!threadId) return;
+    void this.retryPendingPrTerminalWatches({ backend: event.backend, threadId })
+      .catch((error) => appServerLog.warn("pr terminal watch retry failed", {
+        threadId,
+        error: error instanceof Error ? error.message : String(error),
+      }));
+  }
+
+  /**
+   * Re-offer cached terminal status to undelivered merge/close watches: for
+   * one thread when it goes idle, or for all at startup. A wake interrupted by
+   * a busy thread or a quit has no later poll to deliver it, because
+   * `collectPrPollTargets` drops a PR once it is merged or closed. A watch
+   * whose PR is still open in the cache waits for the poller instead.
+   */
+  private async retryPendingPrTerminalWatches(
+    thread?: { backend: AppServerBackendKind; threadId: string },
+  ): Promise<void> {
+    if (!this.backgroundPrPollingEnabled) return;
+    const prKeys = await this.getOverlayStore()
+      .listPendingPrTerminalWatchPrKeys(thread ?? {});
+    if (prKeys.length === 0) return;
+    await this.loadPrStatusRegistry();
+    for (const prKey of prKeys) {
+      const pr = this.prStatusRegistry.get(prKey)?.pr;
+      if (!pr || !isTerminalPullRequest(pr)) continue;
+      const dispatched = await this.getPrStatusWatchCoordinator()
+        .handleTerminalSnapshot(pr, this.nextPrObservationTimestamp());
+      if (dispatched > 0) {
+        appServerLog.info("pr terminal watch completed", {
+          prKey,
+          watchCount: dispatched,
+        });
+      }
+    }
   }
 
   handleAgentEventForDependencies(event: AgentEvent): void {
@@ -8568,6 +8686,7 @@ export function registerAppServerIpcHandlers(): void {
     appServerService.handleAgentEventForWorkingState(event);
     appServerService.handleAgentEventForPrAttachments(event);
     appServerService.handleAgentEventForDependencies(event);
+    appServerService.handleAgentEventForPrWatches(event);
   });
   const localForgeRead = (operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext) => appServerService.readForgeForTool(operation, args, context);
   getDesktopBackendRegistry().setForgeReadHandlers(localForgeRead, createOwnerRoutedForgeReadHandler({

@@ -724,7 +724,7 @@ export type AppServerThreadMessageOrigin = {
     failedCheckUrl?: string;
     headSha: string;
     eventKinds?: ThreadPrAutoDispatchEventKind[];
-    outcome?: "success" | "failure";
+    outcome?: "success" | "failure" | "merged" | "closed";
   };
 };
 

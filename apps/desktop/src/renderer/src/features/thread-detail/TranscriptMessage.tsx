@@ -375,8 +375,11 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     props.message.origin?.kind === "pwragent"
     && prAutomationOrigin
   ) {
-    const outcomeTone = prAutomationOrigin.kind === "watch"
-      ? prAutomationOrigin.outcome === "success" ? "ok" : "error"
+    const outcomeTone: RailChipTone = prAutomationOrigin.kind === "watch"
+      ? prAutomationOrigin.outcome === "success" ? "ok"
+        : prAutomationOrigin.outcome === "merged" ? "merged"
+        : prAutomationOrigin.outcome === "closed" ? "neutral"
+        : "error"
       : "error";
     return (
       <article
@@ -1566,6 +1569,8 @@ function prAutomationResultLabel(
   origin: NonNullable<AppServerThreadMessageOrigin["prAutomation"]>,
 ): string {
   if (origin.kind === "watch") {
+    if (origin.outcome === "merged") return "Merged";
+    if (origin.outcome === "closed") return "Closed";
     return origin.outcome === "success" ? "Success" : "Failed";
   }
   const eventKinds = origin.eventKinds ?? [];
