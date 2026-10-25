@@ -297,7 +297,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
             <button
               aria-disabled={props.rewind.disabledReason ? true : undefined}
               aria-label={props.rewind.disabledReason ?? "Rewind to before the last prompt"}
-              className={`thread-header__rewind-toggle${
+              className={`thread-header__rewind-toggle thread-header__rewind-toggle--thread${
                 props.rewind.disabledReason ? " is-disabled" : ""
               }`}
               type="button"

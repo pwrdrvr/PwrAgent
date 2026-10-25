@@ -2645,6 +2645,8 @@ textarea,
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  /* Width-query container for the chrome rules below. */
+  container: thread-header / inline-size;
   -webkit-app-region: drag;
 }
 
@@ -2952,6 +2954,15 @@ textarea,
 .thread-header__rewind-toggle.is-disabled:hover {
   background: transparent;
   color: var(--text-muted);
+}
+
+/* In a narrow thread pane the rewind button would squeeze the title to
+   nothing. Each prompt keeps its own rewind control, so the header's
+   last-prompt shortcut is the one to drop. */
+@container thread-header (max-width: 480px) {
+  .thread-header__rewind-toggle--thread {
+    display: none;
+  }
 }
 
 .thread-header__terminal-toggle.is-open {
