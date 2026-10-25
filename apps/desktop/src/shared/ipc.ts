@@ -298,6 +298,7 @@ export const MCP_CONNECTION_DISCONNECT_CHANNEL = "mcp-connection:disconnect";
 export const MCP_CONNECTION_REMOVE_CHANNEL = "mcp-connection:remove";
 export const MCP_CONNECTION_UPDATE_CHANNEL = "mcp-connection:update";
 export const MCP_CONNECTION_PROBE_CHANNEL = "mcp-connection:probe";
+export const MCP_CONNECTION_TEST_STDIO_CHANNEL = "mcp-connection:test-stdio";
 export const MCP_CONNECTION_SET_ENABLED_CHANNEL =
   "mcp-connection:set-enabled";
 export const MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL =

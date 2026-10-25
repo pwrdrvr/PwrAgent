@@ -219,7 +219,9 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
                   type="button"
                   onClick={props.onOpenSettings}
                 >
-                  {connection.kind === "sandboxer" ? "Set up in Settings" : "Authorize"}
+                  {connection.kind === "sandboxer"
+                    ? "Set up in Settings"
+                    : connection.kind === "stdio" ? "Fix in Settings" : "Authorize"}
                 </button>
               ) : null;
               return (
@@ -232,6 +234,14 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
                       <span className="mcp-access-panel__detail">
                         {connection.detail
                           ?? formatMcpConnectionState(connection)}
+                      </span>
+                    ) : connection.kind === "stdio" ? (
+                      // Where it runs is the one thing a thread owner
+                      // needs before turning a local command on.
+                      <span className="mcp-access-panel__detail">
+                        {props.federationTarget
+                          ? "Local command · runs on that machine"
+                          : "Local command · runs on this computer"}
                       </span>
                     ) : null}
                   </div>

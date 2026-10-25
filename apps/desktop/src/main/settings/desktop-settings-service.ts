@@ -2459,6 +2459,19 @@ export class DesktopSettingsService {
     await this.options.secretStore.deleteSecret("mcpConnectionCredentials");
   }
 
+  /** Local command connections' secret environment values, one encrypted blob. */
+  async resolveMcpStdioConnectionSecrets(): Promise<string | undefined> {
+    return await this.options.secretStore.getSecret("mcpStdioConnectionSecrets");
+  }
+
+  async saveMcpStdioConnectionSecrets(value: string): Promise<void> {
+    await this.options.secretStore.setSecret("mcpStdioConnectionSecrets", value);
+  }
+
+  async clearMcpStdioConnectionSecrets(): Promise<void> {
+    await this.options.secretStore.deleteSecret("mcpStdioConnectionSecrets");
+  }
+
   async savePwrSnapMcpCredential(value: string): Promise<void> {
     await this.options.secretStore.setSecret("pwrsnapMcpCredential", value);
   }
@@ -4328,6 +4341,7 @@ function secretEnvironmentKey(
     case "federationCloudflareAccessClientSecret":
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
+    case "mcpStdioConnectionSecrets":
     case "decisionLocalApiKey":
     case "typesafeJevApiKey":
       return undefined;

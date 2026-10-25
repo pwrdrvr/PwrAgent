@@ -139,6 +139,7 @@ function secretSnapshotPath(
       return ["models", "decisionSecrets", "jevApiKey"];
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
+    case "mcpStdioConnectionSecrets":
       return undefined;
   }
 }

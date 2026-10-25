@@ -96,6 +96,12 @@ describe("MCP connection IPC", () => {
     openApplication: vi.fn(),
     openDownload: vi.fn(),
     openSandboxerLink: vi.fn(async () => ({ opened: true })),
+    testStdioConnection: vi.fn(async () => ({
+      ok: true as const,
+      command: "/opt/fixture/bin/server",
+      toolCount: 1,
+      elapsedMs: 5,
+    })),
   };
   const pwrGitLocalStatus: PwrGitConnectionStatus = {
     connectionId: "pwrgit",
@@ -388,6 +394,34 @@ describe("MCP connection IPC", () => {
       ).rejects.toThrow(/machine that owns this window/i);
     }
   });
+  it("tests a local command only for a window on the machine that would run it", async () => {
+    const { registerMcpConnectionIpcHandlers } = await import(
+      "../ipc/mcp-connections"
+    );
+    const { MCP_CONNECTION_TEST_STDIO_CHANNEL } = await import("../../shared/ipc");
+    registerMcpConnectionIpcHandlers(
+      service as never,
+      pwrGit as never,
+      installer as never,
+    );
+    const request = { stdio: { command: "server", args: [], env: [] } };
+
+    await expect(
+      mocks.handlers.get(MCP_CONNECTION_TEST_STDIO_CHANNEL)?.({ sender: { id: 18 } }, request),
+    ).resolves.toMatchObject({ ok: true, command: "/opt/fixture/bin/server" });
+    expect(service.testStdioConnection).toHaveBeenCalledWith(request);
+
+    service.testStdioConnection.mockClear();
+    // A peer's window must not start a program on the owner's machine.
+    await expect(
+      mocks.handlers.get(MCP_CONNECTION_TEST_STDIO_CHANNEL)?.(
+        { sender: remoteSender },
+        { ...request, federationTarget },
+      ),
+    ).rejects.toThrow(/machine that owns this window/i);
+    expect(service.testStdioConnection).not.toHaveBeenCalled();
+  });
+
   it("opens Sandboxer pages only from a local window, and only known ones", async () => {
     const { registerMcpConnectionIpcHandlers } = await import(
       "../ipc/mcp-connections"

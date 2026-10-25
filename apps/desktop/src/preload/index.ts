@@ -109,6 +109,8 @@ import type {
   CreateMcpConnectionResponse,
   UpdateMcpConnectionRequest,
   ProbeMcpConnectionRequest,
+  TestMcpStdioConnectionRequest,
+  TestMcpStdioConnectionResponse,
   ProbeMcpConnectionResponse,
   ListMcpConnectionToolsRequest,
   ListMcpConnectionToolsResponse,
@@ -896,6 +898,7 @@ import {
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
   MCP_CONNECTION_UPDATE_CHANNEL,
   MCP_CONNECTION_PROBE_CHANNEL,
+  MCP_CONNECTION_TEST_STDIO_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
@@ -1242,6 +1245,10 @@ const desktopApi = Object.freeze({
     request: ProbeMcpConnectionRequest,
   ): Promise<ProbeMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_PROBE_CHANNEL, request),
+  testMcpStdioConnection: async (
+    request: TestMcpStdioConnectionRequest,
+  ): Promise<TestMcpStdioConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_TEST_STDIO_CHANNEL, request),
   setMcpConnectionEnabled: async (
     request: SetMcpConnectionEnabledRequest,
   ): Promise<MutateMcpConnectionResponse> =>

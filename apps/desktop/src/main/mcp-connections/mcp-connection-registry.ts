@@ -8,8 +8,10 @@ import {
   SANDBOXER_MCP_CONNECTION_ID,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
+  MCP_STDIO_ENV_NAME_PATTERN,
   type McpConnectionRecord,
   type McpConnectionToolApproval,
+  type McpStdioLaunch,
 } from "@pwragent/shared";
 import { resolveDesktopConfigPath } from "../settings/desktop-config";
 import {
@@ -256,6 +258,40 @@ export class McpConnectionRegistry {
     );
   }
 
+  /**
+   * Add a local command connection.
+   *
+   * No duplicate check by command: the same server under two names, each
+   * with its own token or folder, is an ordinary setup (two GitHub accounts).
+   * The record is offered to threads at once, because a person added it in
+   * Settings and there is no sign-in step to wait for; no agent tool reaches
+   * this path.
+   */
+  createStdio(input: {
+    displayName: string;
+    launch: McpStdioLaunch;
+  }): McpConnectionRecord {
+    const displayName = normalizeDisplayName(input.displayName);
+    const current = this.readStoredConnections();
+    const id = this.uniqueId(displayName, current);
+    const now = this.now();
+    const connection: McpConnectionRecord = {
+      id,
+      displayName,
+      serverUrl: stdioIdentity(id),
+      authMode: "none",
+      kind: "stdio",
+      stdio: cloneLaunch(input.launch),
+      enabled: true,
+      selectForNewThreads: false,
+      toolApproval: "auto",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.writeStoredConnections([...current, connection]);
+    return connection;
+  }
+
   create(input: {
     displayName: string;
     serverUrl: string;
@@ -310,7 +346,8 @@ export class McpConnectionRegistry {
     connectionId: string;
     displayName?: string;
     serverUrl?: string;
-  }): { connection: McpConnectionRecord; serverUrlChanged: boolean } {
+    launch?: McpStdioLaunch;
+  }): { connection: McpConnectionRecord; serverUrlChanged: boolean; launchChanged: boolean } {
     if (isBuiltInMcpConnectionId(input.connectionId)) {
       throw new Error("Built-in MCP connections cannot be edited.");
     }
@@ -320,6 +357,32 @@ export class McpConnectionRegistry {
     );
     if (!target) {
       throw new Error("That MCP connection no longer exists.");
+    }
+    if (target.kind === "stdio") {
+      if (input.serverUrl !== undefined) {
+        throw new Error("A local command has no URL. Remove it and add a remote server instead.");
+      }
+      const displayName = input.displayName === undefined
+        ? target.displayName
+        : normalizeDisplayName(input.displayName);
+      const launch = input.launch ? cloneLaunch(input.launch) : target.stdio!;
+      const launchChanged = JSON.stringify(launch) !== JSON.stringify(target.stdio);
+      if (displayName === target.displayName && !launchChanged) {
+        return { connection: target, serverUrlChanged: false, launchChanged: false };
+      }
+      const updated: McpConnectionRecord = {
+        ...target,
+        displayName,
+        stdio: launch,
+        updatedAt: this.now(),
+      };
+      this.writeStoredConnections(
+        current.map((connection) => connection.id === input.connectionId ? updated : connection),
+      );
+      return { connection: updated, serverUrlChanged: false, launchChanged };
+    }
+    if (input.launch) {
+      throw new Error("A remote server has no command. Remove it and add a local command instead.");
     }
     const displayName =
       input.displayName === undefined
@@ -331,7 +394,7 @@ export class McpConnectionRegistry {
         : normalizeMcpServerUrl(input.serverUrl);
     const serverUrlChanged = serverUrl !== target.serverUrl;
     if (displayName === target.displayName && !serverUrlChanged) {
-      return { connection: target, serverUrlChanged: false };
+      return { connection: target, serverUrlChanged: false, launchChanged: false };
     }
     const updated: McpConnectionRecord = {
       ...target,
@@ -344,7 +407,7 @@ export class McpConnectionRegistry {
         connection.id === input.connectionId ? updated : connection,
       ),
     );
-    return { connection: updated, serverUrlChanged };
+    return { connection: updated, serverUrlChanged, launchChanged: false };
   }
 
   remove(connectionId: string): boolean {
@@ -421,6 +484,13 @@ export class McpConnectionRegistry {
       // would keep the `true` this row carried before.
       if (!next.selectForNewThreads) delete merged.select_for_new_threads;
       if (readToolApproval(next.toolApproval) === "auto") delete merged.tool_approval;
+      // The same for a local command's optional launch keys: an edit that
+      // clears the folder or the last variable must not inherit the old one.
+      if (next.kind === "stdio") {
+        if (!next.stdio?.cwd) delete merged.cwd;
+        if (!next.stdio?.env.some((entry) => !entry.secret)) delete merged.env;
+        if (!next.stdio?.env.some((entry) => entry.secret)) delete merged.secret_env;
+      }
       rows.push(merged);
     }
     for (const connection of connections) {
@@ -531,9 +601,117 @@ function slugifyConnectionId(value: string): string {
   return /^[a-z]/.test(slug) ? slug : `mcp-${slug || "connection"}`;
 }
 
+/**
+ * A local command's stored identity in `serverUrl`, which every record has.
+ * Not a URL anything fetches, and not written to the row: an older build
+ * finds no `server_url` on a stdio row, skips it, and keeps it on rewrite.
+ */
+function stdioIdentity(id: string): string {
+  return `stdio:${id}`;
+}
+
+/**
+ * A copy in the order the row stores it -- plain variables, then secret
+ * names -- so a launch read back from config compares equal to the one
+ * written, whatever order the form listed them in.
+ */
+function cloneLaunch(launch: McpStdioLaunch): McpStdioLaunch {
+  return {
+    command: launch.command,
+    args: [...launch.args],
+    ...(launch.cwd ? { cwd: launch.cwd } : {}),
+    env: [
+      ...launch.env
+        .filter((entry) => !entry.secret)
+        .map((entry) => ({ name: entry.name, secret: false as const, value: entry.value ?? "" })),
+      ...launch.env
+        .filter((entry) => entry.secret)
+        .map((entry) => ({ name: entry.name, secret: true as const })),
+    ],
+  };
+}
+
+/**
+ * The stdio row shape:
+ *
+ * ```toml
+ * [[mcp_connections.connections]]
+ * id = "github"
+ * display_name = "GitHub"
+ * transport = "stdio"
+ * command = "/opt/homebrew/bin/npx"
+ * args = ["-y", "@modelcontextprotocol/server-github"]
+ * env = ["GITHUB_TOOLSETS=repos,issues"]
+ * secret_env = ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+ * ```
+ *
+ * `env` holds `NAME=value` strings (split at the first `=`); `secret_env`
+ * holds only names, whose values live in encrypted storage.
+ */
+function stdioConnectionToRow(
+  connection: McpConnectionRecord,
+): Record<string, TomlEditScalar | string[]> {
+  const launch = connection.stdio!;
+  const plain = launch.env.filter((entry) => !entry.secret);
+  const secret = launch.env.filter((entry) => entry.secret);
+  return {
+    id: connection.id,
+    display_name: connection.displayName,
+    transport: "stdio",
+    command: launch.command,
+    args: [...launch.args],
+    ...(launch.cwd ? { cwd: launch.cwd } : {}),
+    ...(plain.length ? { env: plain.map((entry) => `${entry.name}=${entry.value ?? ""}`) } : {}),
+    ...(secret.length ? { secret_env: secret.map((entry) => entry.name) } : {}),
+    enabled: connection.enabled,
+    ...(connection.selectForNewThreads ? { select_for_new_threads: true } : {}),
+    ...(readToolApproval(connection.toolApproval) === "auto"
+      ? {}
+      : { tool_approval: readToolApproval(connection.toolApproval) }),
+    created_at: connection.createdAt,
+    updated_at: connection.updatedAt,
+  };
+}
+
+function stdioLaunchFromRow(row: StoredConnectionRow): McpStdioLaunch | undefined {
+  const command = typeof row.command === "string" ? row.command.trim() : "";
+  if (!command || !isAbsolutePath(command)) return undefined;
+  const args = row.args === undefined ? [] : row.args;
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string")) return undefined;
+  const cwd = typeof row.cwd === "string" && row.cwd.trim() ? row.cwd.trim() : undefined;
+  if (cwd && !isAbsolutePath(cwd)) return undefined;
+  const env: McpStdioLaunch["env"] = [];
+  const names = new Set<string>();
+  const plain = row.env === undefined ? [] : row.env;
+  if (!Array.isArray(plain)) return undefined;
+  for (const entry of plain) {
+    if (typeof entry !== "string") return undefined;
+    const equals = entry.indexOf("=");
+    const name = equals === -1 ? "" : entry.slice(0, equals);
+    if (!MCP_STDIO_ENV_NAME_PATTERN.test(name) || names.has(name)) return undefined;
+    names.add(name);
+    env.push({ name, secret: false, value: entry.slice(equals + 1) });
+  }
+  const secret = row.secret_env === undefined ? [] : row.secret_env;
+  if (!Array.isArray(secret)) return undefined;
+  for (const name of secret) {
+    if (typeof name !== "string" || !MCP_STDIO_ENV_NAME_PATTERN.test(name) || names.has(name)) {
+      return undefined;
+    }
+    names.add(name);
+    env.push({ name, secret: true });
+  }
+  return { command, args: [...(args as string[])], ...(cwd ? { cwd } : {}), env };
+}
+
+function isAbsolutePath(value: string): boolean {
+  return path.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
 function connectionToRow(
   connection: McpConnectionRecord,
-): Record<string, TomlEditScalar> {
+): Record<string, TomlEditScalar | string[]> {
+  if (connection.kind === "stdio") return stdioConnectionToRow(connection);
   return {
     id: connection.id,
     display_name: connection.displayName,
@@ -556,6 +734,27 @@ function connectionFromRow(
   if (MCP_CONNECTION_IDS.some((builtInId) => builtInId === id)) return undefined;
   const displayName =
     typeof row.display_name === "string" ? row.display_name.trim() : "";
+  // A local command row has no URL. Any other row keeps the URL shape, and a
+  // field this build does not know -- including another `transport` -- is
+  // carried through rewrites by the merge; a row it cannot read at all is
+  // skipped here and kept verbatim.
+  if (row.transport === "stdio") {
+    const launch = stdioLaunchFromRow(row);
+    if (!CONNECTION_ID_PATTERN.test(id) || !displayName || !launch) return undefined;
+    return {
+      id,
+      displayName,
+      serverUrl: stdioIdentity(id),
+      authMode: "none",
+      kind: "stdio",
+      stdio: launch,
+      enabled: row.enabled !== false,
+      selectForNewThreads: row.select_for_new_threads === true,
+      toolApproval: readToolApproval(row.tool_approval),
+      createdAt: typeof row.created_at === "number" ? row.created_at : 0,
+      updatedAt: typeof row.updated_at === "number" ? row.updated_at : 0,
+    };
+  }
   const serverUrl =
     typeof row.server_url === "string" ? row.server_url.trim() : "";
   if (!CONNECTION_ID_PATTERN.test(id) || !displayName || !serverUrl) {

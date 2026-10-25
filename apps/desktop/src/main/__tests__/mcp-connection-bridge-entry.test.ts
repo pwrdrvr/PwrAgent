@@ -4,6 +4,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const bridge = vi.hoisted(() => ({
+  attach: vi.fn(async () => true),
   request: vi.fn(),
   transport: undefined as Transport | undefined,
 }));
@@ -12,7 +13,7 @@ vi.mock("@modelcontextprotocol/sdk/server/stdio.js", () => ({
   StdioServerTransport: vi.fn(function () { return bridge.transport; }),
 }));
 vi.mock("../mcp-connections/mcp-connection-rpc-client.js", () => ({
-  ConnectionRpcClient: vi.fn(function () { return { request: bridge.request }; }),
+  ConnectionRpcClient: vi.fn(function () { return { attach: bridge.attach, request: bridge.request }; }),
 }));
 
 const clients: Client[] = [];
@@ -21,6 +22,7 @@ let now: number;
 beforeEach(() => {
   vi.resetModules();
   bridge.request.mockReset();
+  bridge.attach.mockClear();
   now = 1_000_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
   vi.spyOn(process, "exit").mockImplementation(() => { throw new Error("Unexpected native bridge exit."); });
@@ -48,6 +50,22 @@ async function openBridge(): Promise<Client> {
 const tail = { tools: [{ name: "tail", inputSchema: { type: "object" } }] };
 
 describe("native bridge catalog continuations", () => {
+  it("takes the gateway's attach lease before it asks for anything", async () => {
+    const order: string[] = [];
+    bridge.attach.mockImplementationOnce(async () => {
+      order.push("attach");
+      return true;
+    });
+    bridge.request.mockImplementation(async (operation: string) => {
+      order.push(operation);
+      if (operation === "describe") return { tools: true };
+      return tail;
+    });
+    const client = await openBridge();
+    await client.listTools();
+    expect(order.slice(0, 2)).toEqual(["attach", "describe"]);
+  });
+
   it("isolates overlapping reads with identical upstream cursors and out-of-order responses", async () => {
     const releases: Array<() => void> = [];
     const gates = [0, 1].map(() => new Promise<void>((resolve) => { releases.push(resolve); }));

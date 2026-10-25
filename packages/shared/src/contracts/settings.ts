@@ -692,6 +692,7 @@ export type DesktopSettingsSecretName =
   | "federationCloudflareAccessClientId"
   | "federationCloudflareAccessClientSecret"
   | "mcpConnectionCredentials"
+  | "mcpStdioConnectionSecrets"
   | "pwrsnapMcpCredential"
   | "pwrgitMcpCredential"
   | "decisionLocalApiKey"
@@ -736,6 +737,7 @@ export function isMessagingRuntimeSecret(
     case "federationCloudflareAccessClientId":
     case "federationCloudflareAccessClientSecret":
     case "mcpConnectionCredentials":
+    case "mcpStdioConnectionSecrets":
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
     case "decisionLocalApiKey":

@@ -16131,6 +16131,254 @@ a.button {
 }
 
 /*
+ * Settings → Plugins, local command (stdio) servers. A label column beside
+ * each control, the way the design review lays the form out; the add form's
+ * `label` rule is overridden because these fields carry a hint under the name.
+ */
+.settings-mcp-local {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-mcp-local .settings-mcp-local__field {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.settings-mcp-local__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 8px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.settings-mcp-local__label small {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.settings-mcp-local__control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-mcp-local__control--row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-mcp-local__control--row > .settings-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-mcp-local__control .settings-input--multiline {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.settings-mcp-local__hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.settings-mcp-local__hint--err {
+  color: var(--danger-text);
+}
+
+/* The command line as it was split: one chip per word, so a quoted path that
+   stayed whole, or one that did not, is visible before anything runs. */
+.settings-mcp-local__argv {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-mcp-local__argv-label {
+  margin-right: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-mcp-local__argv code {
+  max-width: 100%;
+  padding: 1px 5px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.settings-mcp-local__argv .settings-mcp-local__argv-program {
+  color: var(--success-text);
+}
+
+.settings-mcp-local__hint code,
+.settings-mcp-create__constraint code {
+  padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.settings-mcp-local__env {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-mcp-local .settings-mcp-local__secret {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 9px 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-mcp-local__secret-box {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.settings-mcp-local .settings-mcp-local__secret.is-on {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
+.settings-mcp-local__secret.is-on .settings-mcp-local__secret-box {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 3px, transparent 3.5px);
+}
+
+.settings-mcp-local__secret:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+.settings-mcp-local__secret:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.settings-mcp-create .settings-mcp-local__remove {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0 6px;
+}
+
+.settings-mcp-local__add {
+  align-self: flex-start;
+}
+
+.settings-mcp-local__where {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.settings-mcp-local__where strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.settings-mcp-local__where-key {
+  flex: 0 0 auto;
+  padding-top: 2px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-mcp-local__output {
+  max-height: 160px;
+  margin: 6px 0 0;
+  padding: 7px 9px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.settings-mcp-local__actions,
+.settings-mcp-create__convert {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-mcp-create__convert {
+  justify-content: flex-start;
+}
+
+/* Doubled class: the base dialog rule is declared later in this file. */
+.settings-confirm-dialog.settings-confirm-dialog--local-command {
+  width: min(680px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.settings-confirm-dialog--local-command .settings-mcp-local .settings-mcp-local__field {
+  grid-template-columns: 120px minmax(0, 1fr);
+}
+
+.settings-confirm-dialog__leading {
+  margin-right: auto;
+}
+
+/*
  * The two per-connection switches, each named for the question it answers.
  *
  * They sat in a narrow column beside the actions with a one-word label, which
@@ -16580,6 +16828,19 @@ a.button {
 @media (max-width: 820px) {
   .settings-mcp-create__fields {
     grid-template-columns: 1fr;
+  }
+
+  .settings-mcp-local .settings-mcp-local__field {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .settings-mcp-local__label {
+    padding-top: 0;
+  }
+
+  .settings-mcp-local__env {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 }
 

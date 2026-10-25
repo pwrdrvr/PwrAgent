@@ -11,6 +11,8 @@ import {
   type DescribeThreadMcpConnectionsResponse,
   type ProbeMcpConnectionRequest,
   type ProbeMcpConnectionResponse,
+  type TestMcpStdioConnectionRequest,
+  type TestMcpStdioConnectionResponse,
   type UpdateMcpConnectionRequest,
   type DisconnectMcpConnectionRequest,
   type ListMcpConnectionToolsRequest,
@@ -62,6 +64,7 @@ import {
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
   MCP_CONNECTION_UPDATE_CHANNEL,
   MCP_CONNECTION_PROBE_CHANNEL,
+  MCP_CONNECTION_TEST_STDIO_CHANNEL,
   PWRSUITE_INSTALLER_CANCEL_CHANNEL,
   PWRSUITE_INSTALLER_EVENT_CHANNEL,
   PWRSUITE_INSTALLER_OPEN_CHANNEL,
@@ -350,6 +353,18 @@ export function registerMcpConnectionIpcHandlers(
       return await service.probeConnection(request);
     },
   );
+  ipcMain.removeHandler(MCP_CONNECTION_TEST_STDIO_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_TEST_STDIO_CHANNEL,
+    async (
+      event,
+      request: TestMcpStdioConnectionRequest,
+    ): Promise<TestMcpStdioConnectionResponse> => {
+      // Runs a program on this machine: only its own windows may ask.
+      requireLocalOwner(event);
+      return await service.testStdioConnection(request);
+    },
+  );
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL);
   ipcMain.handle(
     MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
@@ -556,6 +571,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_UPDATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PROBE_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_TEST_STDIO_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL);

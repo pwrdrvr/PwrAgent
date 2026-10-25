@@ -96,6 +96,23 @@ export function formatMcpAuthStatus(status: CodexMcpAuthStatus): string {
 export function describeMcpConnectionAuth(
   connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "sandboxerCliState" | "detail">>,
 ): McpAuthStatusPresentation {
+  if (connection.authMode === "none") {
+    // A local command signs in to nothing. What it can be missing is a
+    // stored secret that encrypted storage no longer gives back.
+    return connection.configured
+      ? {
+          label: "Local command",
+          description: "PwrAgent starts this command on this computer. Its secrets are stored encrypted in this profile and passed as environment variables.",
+          tone: "ok",
+          canSignIn: false,
+        }
+      : {
+          label: "Secret missing",
+          description: connection.detail ?? "A stored secret for this server could not be read. Edit it and enter the secret again.",
+          tone: "warn",
+          canSignIn: false,
+        };
+  }
   if (connection.authMode === "local_cli") {
     // An account that can't start a machine is still signed in. Its own
     // chip names what the account lacks; this one says the login is fine.

@@ -15,10 +15,12 @@ import type {
   ProbeMcpConnectionResponse,
   PwrSnapConnectionStatus,
   PwrGitConnectionStatus,
+  TestMcpStdioConnectionResponse,
 } from "@pwragent/shared";
 import {
   describeMcpAuthStatus,
   describeMcpConnectionAuth,
+  formatMcpCommandLine,
   mcpConnectionIdsForNewThread,
   resolveMcpConnectionSetup,
   summarizeMcpConnectionReadiness,
@@ -32,12 +34,25 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useModalDialog } from "../../lib/useModalDialog";
 import {
+  SegmentedControl,
   SettingsField,
   SettingsPanelHead,
   SettingsPendingIndicator,
   SettingsSection,
   SettingsSectionStack,
 } from "./SettingsLayout";
+import {
+  LocalCommandFields,
+  LocalCommandTestResult,
+  LocalCommandWhereItRuns,
+  emptyLocalCommandDraft,
+  localCommandDraftFromCommandLine,
+  localCommandDraftFromLaunch,
+  localCommandDraftReady,
+  localCommandLaunchInput,
+  localCommandTestAllowsAddAnyway,
+  type LocalCommandDraft,
+} from "./LocalCommandConnectionForm";
 import {
   countMcpServerHealth,
   describeManagedMcpConnectionTools,
@@ -84,10 +99,14 @@ type ConnectionPendingAction = {
     | "newThreadDefault"
     | "probe"
     | "remove"
+    | "testLocal"
     | "toolApproval"
     | "update";
   connectionId?: string;
 };
+
+/** What the add form adds: a URL PwrAgent signs in to, or a program it runs. */
+type ConnectionAddKind = "remote" | "local";
 
 // What each mode does, said the way the gateway decides it. `auto` is
 // Codex's own rule, so the first line is the one a Codex user already knows.
@@ -112,9 +131,16 @@ type ConnectionEditDraft = {
    * that was never touched.
    */
   originalServerUrl: string;
+  /** Present for a local command, which has a launch instead of a URL. */
+  local?: {
+    draft: LocalCommandDraft;
+    /** Threads running it now; saving a changed launch restarts them. */
+    runningIn: number;
+  };
 };
 
 function editDraftRepointsServer(draft: ConnectionEditDraft): boolean {
+  if (draft.local) return false;
   return draft.serverUrl.trim() !== draft.originalServerUrl.trim();
 }
 
@@ -266,6 +292,15 @@ export function PluginsSettings(props: {
   const [connectionName, setConnectionName] = useState("");
   const [connectionUrl, setConnectionUrl] = useState("");
   const [probe, setProbe] = useState<ProbeMcpConnectionResponse>();
+  const [connectionAddKind, setConnectionAddKind] =
+    useState<ConnectionAddKind>("remote");
+  const [localDraft, setLocalDraft] = useState<LocalCommandDraft>(
+    emptyLocalCommandDraft,
+  );
+  /** The last Test of `localDraft`, cleared by any edit to it. */
+  const [localTest, setLocalTest] = useState<TestMcpStdioConnectionResponse>();
+  const [connectionEditTest, setConnectionEditTest] =
+    useState<TestMcpStdioConnectionResponse>();
   const [connectionEdit, setConnectionEdit] = useState<ConnectionEditDraft>();
   const [connectionRemoveCandidate, setConnectionRemoveCandidate] =
     useState<McpConnectionStatus>();
@@ -334,7 +369,10 @@ export function PluginsSettings(props: {
   const connectionEditDialogRef = useModalDialog<HTMLFormElement>({
     open: connectionEdit !== undefined,
     onClose: () => {
-      if (!connectionPending) setConnectionEdit(undefined);
+      if (!connectionPending) {
+        setConnectionEdit(undefined);
+        setConnectionEditTest(undefined);
+      }
     },
   });
   const connectionRemoveDialogRef = useModalDialog({
@@ -970,6 +1008,93 @@ export function PluginsSettings(props: {
     }
   };
 
+  /**
+   * Start the local command once, read its tools, and stop it. Nothing is
+   * saved, so a wrong path or a server that exits says so before a row
+   * exists for it.
+   */
+  const testLocalConnection = async () => {
+    if (connectionPending || !props.desktopApi?.testMcpStdioConnection) return;
+    setConnectionPending({ kind: "testLocal" });
+    setConnectionNotice(undefined);
+    try {
+      const result = await props.desktopApi.testMcpStdioConnection({
+        stdio: localCommandLaunchInput(localDraft),
+      });
+      setLocalTest(result);
+      if (result.ok && !connectionName.trim() && result.serverName) {
+        setConnectionName(result.serverName);
+      }
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
+  const createLocalConnection = async () => {
+    if (connectionPending || !props.desktopApi?.createMcpConnection) return;
+    const name = connectionName.trim();
+    setConnectionPending({ kind: "create" });
+    setConnectionNotice({ kind: "working", text: `Adding ${name}...` });
+    try {
+      await props.desktopApi.createMcpConnection({
+        displayName: name,
+        stdio: localCommandLaunchInput(localDraft),
+      });
+      setConnectionName("");
+      setLocalDraft(emptyLocalCommandDraft());
+      setLocalTest(undefined);
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: `${name} was added. Offer it to threads, or turn it on in a thread's MCP panel.`,
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
+  /** Test an edited local command, with the stored secrets for blank fields. */
+  const testConnectionEdit = async () => {
+    const draft = connectionEdit;
+    if (
+      !draft?.local
+      || connectionPending
+      || !props.desktopApi?.testMcpStdioConnection
+    ) {
+      return;
+    }
+    setConnectionPending({ kind: "testLocal", connectionId: draft.connectionId });
+    try {
+      setConnectionEditTest(await props.desktopApi.testMcpStdioConnection({
+        stdio: localCommandLaunchInput(draft.local.draft),
+        connectionId: draft.connectionId,
+      }));
+    } catch (error) {
+      setConnectionEditTest({
+        ok: false,
+        problem: "spawn_failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
+  const closeConnectionEdit = () => {
+    setConnectionEdit(undefined);
+    setConnectionEditTest(undefined);
+  };
+
   const saveConnectionEdit = async () => {
     const draft = connectionEdit;
     if (!draft || connectionPending || !props.desktopApi?.updateMcpConnection) {
@@ -977,12 +1102,18 @@ export function PluginsSettings(props: {
     }
     setConnectionPending({ kind: "update", connectionId: draft.connectionId });
     try {
-      await props.desktopApi.updateMcpConnection({
-        connectionId: draft.connectionId,
-        displayName: draft.displayName,
-        serverUrl: draft.serverUrl,
-      });
-      setConnectionEdit(undefined);
+      await props.desktopApi.updateMcpConnection(draft.local
+        ? {
+            connectionId: draft.connectionId,
+            displayName: draft.displayName,
+            stdio: localCommandLaunchInput(draft.local.draft),
+          }
+        : {
+            connectionId: draft.connectionId,
+            displayName: draft.displayName,
+            serverUrl: draft.serverUrl,
+          });
+      closeConnectionEdit();
       // A failed sign-in describes the server it was attempted against.
       if (editDraftRepointsServer(draft)) {
         setAuthorizationError(draft.connectionId);
@@ -994,7 +1125,9 @@ export function PluginsSettings(props: {
         // rather than letting the row look merely renamed.
         text: editDraftRepointsServer(draft)
           ? `${draft.displayName} now points at a different server. Authorize it again.`
-          : `${draft.displayName} was updated.`,
+          : draft.local && draft.local.runningIn > 0
+            ? `${draft.displayName} was updated. Threads using it get the new version on their next tool call.`
+            : `${draft.displayName} was updated.`,
       });
     } catch (error) {
       setConnectionNotice({
@@ -1291,6 +1424,14 @@ export function PluginsSettings(props: {
                       displayName: connection.displayName,
                       serverUrl: connection.serverUrl,
                       originalServerUrl: connection.serverUrl,
+                      ...(connection.stdio
+                        ? {
+                            local: {
+                              draft: localCommandDraftFromLaunch(connection.stdio),
+                              runningIn: connection.localProcesses ?? 0,
+                            },
+                          }
+                        : {}),
                     })
                   }
                   onNotice={setConnectionNotice}
@@ -1305,84 +1446,191 @@ export function PluginsSettings(props: {
             className="settings-mcp-create"
             onSubmit={(event) => {
               event.preventDefault();
+              if (connectionAddKind === "local") {
+                if (localTest?.ok) void createLocalConnection();
+                else void testLocalConnection();
+                return;
+              }
               void createConnection();
             }}
           >
-            <h3 className="settings-mcp-create__title">Add a remote MCP server</h3>
-            {/*
-              * The constraint belongs above the fields. `authMode` is the
-              * literal "oauth", so a command-line server -- which is what most
-              * people mean by "an MCP server" -- can never be added here.
-              * Saying so first is cheaper than a discovery failure after the
-              * record is written.
-              */}
-            <p className="settings-mcp-create__constraint">
-              It has to be a remote server that signs in with OAuth.
-              Command-line (stdio) servers belong in the agent&rsquo;s own
-              configuration file.
-            </p>
-            <div className="settings-mcp-create__fields">
-              <label>
-                <span>Name</span>
-                <input
-                  className="settings-input"
+            <h3 className="settings-mcp-create__title">Add an MCP server</h3>
+            <SegmentedControl<ConnectionAddKind>
+              disabled={Boolean(connectionPending)}
+              label="Server type"
+              options={[
+                { label: "Remote URL", meta: "Signs in with OAuth", value: "remote" },
+                { label: "Local command", meta: "Runs on this computer", value: "local" },
+              ]}
+              value={connectionAddKind}
+              onChange={(kind) => {
+                setConnectionAddKind(kind);
+                setConnectionNotice(undefined);
+              }}
+            />
+            {connectionAddKind === "remote" ? (
+              <>
+                {/*
+                  * The constraint belongs above the fields: a remote server
+                  * that wants a bearer token cannot be added here, and saying
+                  * so first is cheaper than a discovery failure afterwards.
+                  */}
+                <p className="settings-mcp-create__constraint">
+                  A remote server that signs in with OAuth. PwrAgent keeps its
+                  credentials and refreshes them.
+                </p>
+                <div className="settings-mcp-create__fields">
+                  <label>
+                    <span>Name</span>
+                    <input
+                      className="settings-input"
+                      disabled={Boolean(connectionPending)}
+                      placeholder="Datadog"
+                      value={connectionName}
+                      onChange={(event) => setConnectionName(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    <span>Remote MCP URL</span>
+                    <input
+                      className="settings-input"
+                      disabled={Boolean(connectionPending)}
+                      inputMode="url"
+                      placeholder="https://mcp.example.com/mcp"
+                      value={connectionUrl}
+                      onChange={(event) => {
+                        setConnectionUrl(event.target.value);
+                        // A probe describes one URL. Keeping a stale verdict
+                        // beside an edited field would offer to save
+                        // something that was never checked.
+                        setProbe(undefined);
+                      }}
+                    />
+                  </label>
+                  <button
+                    className="button button--secondary"
+                    disabled={
+                      Boolean(connectionPending)
+                      || !connectionUrl.trim()
+                      || (probe?.ok === true && !connectionName.trim())
+                    }
+                    type="submit"
+                  >
+                    {connectionPending?.kind === "probe"
+                      ? "Checking..."
+                      : connectionPending?.kind === "create"
+                        ? "Adding..."
+                        : probe?.ok
+                          ? "Add and authorize"
+                          : "Check"}
+                  </button>
+                </div>
+                {probe ? (
+                  <p
+                    className={`settings-mcp-probe settings-mcp-probe--${
+                      probe.ok ? "ok" : "err"
+                    }`}
+                    role={probe.ok ? "status" : "alert"}
+                  >
+                    {probe.ok
+                      ? `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. It signs in with OAuth${
+                          probe.toolCount === undefined
+                            ? ""
+                            : ` and offers ${probe.toolCount} tools`
+                        }. Nothing is saved yet.`
+                      // The probe's own sentence is written for an agent and
+                      // points it here; this screen offers the conversion.
+                      : probe.problem === "looks_like_stdio"
+                        ? "That looks like a command, not a URL. PwrAgent can run it as a local command."
+                        : probe.message}
+                  </p>
+                ) : null}
+                {probe && !probe.ok && probe.problem === "looks_like_stdio" ? (
+                  <div className="settings-mcp-create__convert">
+                    <button
+                      className="button button--secondary"
+                      disabled={Boolean(connectionPending)}
+                      type="button"
+                      onClick={() => {
+                        const converted = localCommandDraftFromCommandLine(connectionUrl);
+                        if (!converted) return;
+                        setLocalDraft(converted);
+                        setLocalTest(undefined);
+                        setConnectionUrl("");
+                        setProbe(undefined);
+                        setConnectionAddKind("local");
+                      }}
+                    >
+                      Use as local command
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <p className="settings-mcp-create__constraint">
+                  A program PwrAgent starts and talks to over its input and
+                  output, such as <code>npx</code>, <code>uvx</code>, or a
+                  server you built.
+                </p>
+                <div className="settings-mcp-local">
+                  <label className="settings-mcp-local__field">
+                    <span className="settings-mcp-local__label">Name</span>
+                    <span className="settings-mcp-local__control">
+                      <input
+                        className="settings-input"
+                        disabled={Boolean(connectionPending)}
+                        placeholder="Project files"
+                        value={connectionName}
+                        onChange={(event) => setConnectionName(event.target.value)}
+                      />
+                    </span>
+                  </label>
+                </div>
+                <LocalCommandFields
+                  desktopApi={props.desktopApi}
                   disabled={Boolean(connectionPending)}
-                  placeholder="Datadog"
-                  value={connectionName}
-                  onChange={(event) => setConnectionName(event.target.value)}
-                />
-              </label>
-              <label>
-                <span>Remote MCP URL</span>
-                <input
-                  className="settings-input"
-                  disabled={Boolean(connectionPending)}
-                  inputMode="url"
-                  placeholder="https://mcp.example.com/mcp"
-                  value={connectionUrl}
-                  onChange={(event) => {
-                    setConnectionUrl(event.target.value);
-                    // A probe describes one URL. Keeping a stale verdict beside
-                    // an edited field would offer to save something that was
-                    // never checked.
-                    setProbe(undefined);
+                  draft={localDraft}
+                  resolvedCommand={localTest?.ok ? localTest.command : undefined}
+                  onChange={(next) => {
+                    setLocalDraft(next);
+                    // A test describes one launch, as a probe does one URL.
+                    setLocalTest(undefined);
                   }}
                 />
-              </label>
-              <button
-                className="button button--secondary"
-                disabled={
-                  Boolean(connectionPending)
-                  || !connectionUrl.trim()
-                  || (probe?.ok === true && !connectionName.trim())
-                }
-                type="submit"
-              >
-                {connectionPending?.kind === "probe"
-                  ? "Checking..."
-                  : connectionPending?.kind === "create"
-                    ? "Adding..."
-                    : probe?.ok
-                      ? "Add and authorize"
-                      : "Check"}
-              </button>
-            </div>
-            {probe ? (
-              <p
-                className={`settings-mcp-probe settings-mcp-probe--${
-                  probe.ok ? "ok" : "err"
-                }`}
-                role={probe.ok ? "status" : "alert"}
-              >
-                {probe.ok
-                  ? `Found ${probe.serverName ?? "an MCP server"} at ${probe.serverUrl}. It signs in with OAuth${
-                      probe.toolCount === undefined
-                        ? ""
-                        : ` and offers ${probe.toolCount} tools`
-                    }. Nothing is saved yet.`
-                  : probe.message}
-              </p>
-            ) : null}
+                <LocalCommandWhereItRuns />
+                {localTest ? <LocalCommandTestResult result={localTest} /> : null}
+                <div className="settings-mcp-local__actions">
+                  {localCommandTestAllowsAddAnyway(localTest) ? (
+                    <button
+                      className="button button--ghost"
+                      disabled={Boolean(connectionPending) || !connectionName.trim()}
+                      type="button"
+                      onClick={() => void createLocalConnection()}
+                    >
+                      Add anyway
+                    </button>
+                  ) : null}
+                  <button
+                    className="button button--secondary"
+                    disabled={
+                      Boolean(connectionPending)
+                      || !localCommandDraftReady(localDraft)
+                      || (localTest?.ok === true && !connectionName.trim())
+                    }
+                    type="submit"
+                  >
+                    {connectionPending?.kind === "testLocal"
+                      ? "Testing..."
+                      : connectionPending?.kind === "create"
+                        ? "Adding..."
+                        : localTest?.ok
+                          ? "Add"
+                          : "Test"}
+                  </button>
+                </div>
+              </>
+            )}
           </form>
         </div>
       </SettingsSection>
@@ -1561,7 +1809,9 @@ export function PluginsSettings(props: {
             ref={connectionEditDialogRef}
             aria-labelledby="edit-managed-mcp-heading"
             aria-modal="true"
-            className="settings-confirm-dialog"
+            className={`settings-confirm-dialog${
+              connectionEdit.local ? " settings-confirm-dialog--local-command" : ""
+            }`}
             role="dialog"
             onSubmit={(event) => {
               event.preventDefault();
@@ -1584,22 +1834,55 @@ export function PluginsSettings(props: {
                   }
                 />
               </label>
-              <label>
-                <span>Remote MCP URL</span>
-                <input
-                  className="settings-input"
+              {connectionEdit.local ? null : (
+                <label>
+                  <span>Remote MCP URL</span>
+                  <input
+                    className="settings-input"
+                    disabled={Boolean(connectionPending)}
+                    inputMode="url"
+                    value={connectionEdit.serverUrl}
+                    onChange={(event) =>
+                      setConnectionEdit({
+                        ...connectionEdit,
+                        serverUrl: event.target.value,
+                      })
+                    }
+                  />
+                </label>
+              )}
+            </div>
+            {connectionEdit.local ? (
+              <>
+                <LocalCommandFields
+                  desktopApi={props.desktopApi}
                   disabled={Boolean(connectionPending)}
-                  inputMode="url"
-                  value={connectionEdit.serverUrl}
-                  onChange={(event) =>
+                  draft={connectionEdit.local.draft}
+                  resolvedCommand={
+                    connectionEditTest?.ok ? connectionEditTest.command : undefined
+                  }
+                  onChange={(next) => {
                     setConnectionEdit({
                       ...connectionEdit,
-                      serverUrl: event.target.value,
-                    })
-                  }
+                      local: { ...connectionEdit.local!, draft: next },
+                    });
+                    setConnectionEditTest(undefined);
+                  }}
                 />
-              </label>
-            </div>
+                {connectionEditTest ? (
+                  <LocalCommandTestResult result={connectionEditTest} />
+                ) : null}
+                {connectionEdit.local.runningIn > 0 ? (
+                  <p>
+                    Saving a changed command restarts it in the{" "}
+                    {connectionEdit.local.runningIn === 1
+                      ? "thread"
+                      : `${connectionEdit.local.runningIn} threads`}{" "}
+                    using it now.
+                  </p>
+                ) : null}
+              </>
+            ) : null}
             {editDraftRepointsServer(connectionEdit) ? (
               <p>
                 Changing the address discards the credentials the old server
@@ -1607,11 +1890,24 @@ export function PluginsSettings(props: {
               </p>
             ) : null}
             <div className="settings-confirm-dialog__actions">
+              {connectionEdit.local && props.desktopApi?.testMcpStdioConnection ? (
+                <button
+                  className="button button--ghost settings-confirm-dialog__leading"
+                  disabled={
+                    Boolean(connectionPending)
+                    || !localCommandDraftReady(connectionEdit.local.draft)
+                  }
+                  type="button"
+                  onClick={() => void testConnectionEdit()}
+                >
+                  {connectionPending?.kind === "testLocal" ? "Testing..." : "Test"}
+                </button>
+              ) : null}
               <button
                 className="button button--secondary"
                 disabled={Boolean(connectionPending)}
                 type="button"
-                onClick={() => setConnectionEdit(undefined)}
+                onClick={closeConnectionEdit}
               >
                 Cancel
               </button>
@@ -1620,7 +1916,9 @@ export function PluginsSettings(props: {
                 disabled={
                   Boolean(connectionPending)
                   || !connectionEdit.displayName.trim()
-                  || !connectionEdit.serverUrl.trim()
+                  || (connectionEdit.local
+                    ? !localCommandDraftReady(connectionEdit.local.draft)
+                    : !connectionEdit.serverUrl.trim())
                 }
                 type="submit"
               >
@@ -1890,6 +2188,7 @@ function ManagedMcpConnectionRow(props: {
   const [sandboxerSetupOpen, setSandboxerSetupOpen] = useState(false);
   const toolApproval = connection.toolApproval ?? "auto";
   const sandboxer = connection.kind === "sandboxer";
+  const stdio = connection.kind === "stdio";
   const app = connection.kind === "pwrgit"
     ? "PwrGit"
     : connection.kind === "pwrsnap" ? "PwrSnap" : undefined;
@@ -1914,9 +2213,24 @@ function ManagedMcpConnectionRow(props: {
   // An app that is missing or not running has nothing to sign in to yet: its
   // Get/Open action is the next step, and `Sign-in required` beside it would
   // point at the wrong one. Credentials held from before still say something.
-  const showAuthChip =
-    connection.configured
-    || (setup.state !== "app_not_installed" && setup.state !== "app_not_running");
+  // A local command has no sign-in; its chip only ever reports a secret
+  // that encrypted storage could not hand back.
+  const showAuthChip = stdio
+    ? !connection.configured
+    : connection.configured
+      || (setup.state !== "app_not_installed" && setup.state !== "app_not_running");
+  const runningIn = stdio ? connection.localProcesses ?? 0 : 0;
+  const lastFailure = connection.discovery?.state === "failed"
+    ? connection.discovery.lastFailure
+    : undefined;
+  // The server's own words, kept only while they explain the failure on
+  // screen: a later successful read retires both.
+  const failureOutput = stdio
+    && inventory?.status === "failed"
+    && lastFailure?.message === inventory.error
+    ? lastFailure.output
+    : undefined;
+  const couldNotStart = stdio && listable && inventory?.status === "failed";
   const selectedForNewThreads =
     connection.enabled && connection.selectForNewThreads === true;
   // Whether seeding would take it today, asked of the same predicate the
@@ -1973,9 +2287,11 @@ function ManagedMcpConnectionRow(props: {
             {connection.displayName}
           </span>
           <span className="settings-mcp-row__meta">
-            {!sandboxer
-              ? toolsMeta
-              : listable ? `remote Linux compute \u00b7 ${toolsMeta}` : "remote Linux compute"}
+            {sandboxer
+              ? listable ? `remote Linux compute \u00b7 ${toolsMeta}` : "remote Linux compute"
+              : stdio
+                ? listable ? `local command \u00b7 ${toolsMeta}` : "local command"
+                : toolsMeta}
           </span>
         </button>
         <div className="settings-mcp-row__chips">
@@ -1983,6 +2299,20 @@ function ManagedMcpConnectionRow(props: {
             || (sandboxer && sandboxerCannotStart(connection)) ? (
             <span className={`settings-pathrow__chip${chipToneClass(setup.tone)}`}>
               {setup.headline}
+            </span>
+          ) : null}
+          {couldNotStart ? (
+            <span className={`settings-pathrow__chip${chipToneClass("err")}`}>
+              Could not start
+            </span>
+          ) : runningIn > 0 ? (
+            <span
+              className={`settings-pathrow__chip${chipToneClass("ok")}`}
+              title={`${connection.displayName} is running on this computer for ${
+                runningIn === 1 ? "one thread" : `${runningIn} threads`
+              }.`}
+            >
+              Running · {runningIn === 1 ? "1 thread" : `${runningIn} threads`}
             </span>
           ) : null}
           {showAuthChip ? (
@@ -2055,7 +2385,7 @@ function ManagedMcpConnectionRow(props: {
                   }}
                   onNotice={props.onNotice}
                 />
-              ) : (
+              ) : stdio ? null : (
                 <button
                   className="button button--secondary"
                   disabled={props.disabled}
@@ -2077,7 +2407,9 @@ function ManagedMcpConnectionRow(props: {
                 * nothing on screen said so -- two destructive-looking buttons side
                 * by side with no way to tell which one you wanted.
                 */}
-              {connection.configured && connection.authMode !== "local_cli" ? (
+              {connection.configured
+                && connection.authMode !== "local_cli"
+                && connection.authMode !== "none" ? (
                 <button
                   className="button button--ghost"
                   disabled={props.disabled}
@@ -2088,7 +2420,7 @@ function ManagedMcpConnectionRow(props: {
                   Disconnect
                 </button>
               ) : null}
-              {connection.kind === "remote" ? (
+              {connection.kind === "remote" || stdio ? (
                 <>
                   {/*
                     * A connection's URL is not a write-once field. `create`
@@ -2097,9 +2429,15 @@ function ManagedMcpConnectionRow(props: {
                     * Remove and retype.
                     */}
                   <button
-                    className="button button--ghost"
+                    // A command that will not start is fixed here, so the
+                    // way out is drawn as the next step, not a quiet option.
+                    className={`button ${couldNotStart || !connection.configured
+                      ? "button--secondary"
+                      : "button--ghost"}`}
                     disabled={props.disabled}
-                    title={`Rename ${connection.displayName} or point it at a different URL. A changed URL discards the stored credentials, because they were issued by the old server.`}
+                    title={stdio
+                      ? `Rename ${connection.displayName}, or change its command, arguments, folder or environment. Threads running it restart with the change.`
+                      : `Rename ${connection.displayName} or point it at a different URL. A changed URL discards the stored credentials, because they were issued by the old server.`}
                     type="button"
                     onClick={props.onEdit}
                   >
@@ -2108,7 +2446,9 @@ function ManagedMcpConnectionRow(props: {
                   <button
                     className="button button--ghost settings-mcp-row__remove"
                     disabled={props.disabled}
-                    title={`Delete ${connection.displayName} from PwrAgent entirely -- the row, its URL, and its credentials. Threads that selected it lose access to it.`}
+                    title={stdio
+                      ? `Delete ${connection.displayName} from PwrAgent entirely -- the row, its command, and its stored secrets. Threads running it stop it.`
+                      : `Delete ${connection.displayName} from PwrAgent entirely -- the row, its URL, and its credentials. Threads that selected it lose access to it.`}
                     type="button"
                     onClick={props.onRemove}
                   >
@@ -2138,12 +2478,21 @@ function ManagedMcpConnectionRow(props: {
           />
         ) : (
           <>
-            <SettingsCopyValue
-              compact
-              desktopApi={props.desktopApi}
-              label={`${connection.displayName} MCP URL`}
-              value={connection.serverUrl}
-            />
+            {connection.stdio ? (
+              <SettingsCopyValue
+                compact
+                desktopApi={props.desktopApi}
+                label={`${connection.displayName} command`}
+                value={formatMcpCommandLine(connection.stdio)}
+              />
+            ) : (
+              <SettingsCopyValue
+                compact
+                desktopApi={props.desktopApi}
+                label={`${connection.displayName} MCP URL`}
+                value={connection.serverUrl}
+              />
+            )}
             {/*
               * While it waits, the remedy line would still be telling the operator
               * to authorize -- the thing they just did. It says where the sign-in
@@ -2175,6 +2524,14 @@ function ManagedMcpConnectionRow(props: {
         ) : null}
         {listable && inventory?.status === "failed" ? (
           <p className="settings-mcp-row__error">{inventory.error}</p>
+        ) : null}
+        {failureOutput ? (
+          <pre
+            aria-label={`${connection.displayName} output`}
+            className="settings-mcp-local__output"
+          >
+            {failureOutput}
+          </pre>
         ) : null}
       </div>
       {expanded ? (

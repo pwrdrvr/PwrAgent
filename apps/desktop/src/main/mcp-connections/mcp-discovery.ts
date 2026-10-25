@@ -83,9 +83,12 @@ export class McpDiscovery {
       log.warn("MCP discovery phase failed", diagnostic);
       if (preserveError && !this.signal.aborted) throw error;
       // These messages originate locally and contain no upstream content.
+      // A local command's launch failure is composed by PwrAgent from the
+      // exit status alone; its stderr travels separately, to Settings only.
       const localMessage = error instanceof Error && (
         error.message.startsWith("PwrSnap revoked this connection.")
         || error.message === "The MCP connection changed while its session was opening. Retry discovery."
+        || error.name === "McpStdioLaunchError"
       ) ? error.message : undefined;
       const detail = diagnostic.kind === "deadline" ? "discovery deadline expired"
         : diagnostic.kind === "cancelled" ? "request cancelled"

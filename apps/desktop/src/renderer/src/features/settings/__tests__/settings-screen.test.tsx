@@ -842,6 +842,34 @@ async function renderPlatformPageWithApprovedSurface(
   return assign;
 }
 
+/** A contrived local command connection, as main reports it. */
+function localCommandConnection(
+  overrides: Partial<McpConnectionStatus> = {},
+): McpConnectionStatus {
+  return {
+    id: "project-files",
+    displayName: "Project files",
+    serverUrl: "stdio:project-files",
+    authMode: "none",
+    kind: "stdio",
+    enabled: true,
+    toolApproval: "auto",
+    createdAt: 1,
+    updatedAt: 1,
+    configured: true,
+    state: "ready",
+    stdio: {
+      command: "/opt/fixture/bin/npx",
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/example/My Projects"],
+      env: [
+        { name: "FIXTURE_ROOT", secret: false, value: "/home/example" },
+        { name: "FIXTURE_TOKEN", secret: true },
+      ],
+    },
+    ...overrides,
+  };
+}
+
 function messagingRoutesHeader(): Element | null {
   return document.querySelector(
     '[aria-controls="settings-section-messaging-routes-body"]',
@@ -10237,20 +10265,30 @@ describe("SettingsScreen", () => {
     expect(screen.queryByText("Adding Datadog...")).not.toBeInTheDocument();
   });
 
-  it("refuses to save a URL the gateway cannot hold, and says where it belongs", async () => {
+  it("refuses to save a command as a URL, and turns it into a local command", async () => {
     const probeMcpConnection = vi.fn(async () => ({
       ok: false as const,
       problem: "looks_like_stdio" as const,
       message:
-        "That looks like a command line, not a URL. Command-line (stdio) MCP servers are configured in the agent itself — PwrAgent's gateway holds credentials for remote servers.",
+        "That is a command, not a URL. Add it as a local command instead; a person sets those up in Settings → Plugins.",
     }));
-    const createMcpConnection = vi.fn();
+    const createMcpConnection = vi.fn(async () => ({
+      connection: localCommandConnection(),
+    }));
+    const testMcpStdioConnection = vi.fn(async () => ({
+      ok: true as const,
+      command: "/opt/fixture/bin/npx",
+      serverName: "Project files",
+      toolCount: 3,
+      elapsedMs: 840,
+    }));
 
     render(
       <SettingsScreen
         desktopApi={{
           createMcpConnection,
           probeMcpConnection,
+          testMcpStdioConnection,
           listMcpConnections: vi.fn(async () => ({ connections: [] })),
           listCodexMcpServers: vi.fn(async () => ({
             codexHome: "/home/example/.codex",
@@ -10265,19 +10303,244 @@ describe("SettingsScreen", () => {
     );
 
     fireEvent.change(await screen.findByLabelText("Remote MCP URL"), {
-      target: { value: "npx -y @modelcontextprotocol/server-filesystem" },
+      target: { value: "npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check" }));
 
     expect(
-      await screen.findByText(/Command-line \(stdio\) MCP servers/),
+      await screen.findByText(/That looks like a command, not a URL/),
     ).toBeInTheDocument();
-    // The whole point: the record was never written, so there is no dead row
-    // to remove and no credentials to clean up.
+    // The record was never written, so there is no dead row to remove.
     expect(createMcpConnection).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("button", { name: "Add and authorize" }),
     ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use as local command" }));
+    // Split once, for the operator to check: quotes kept one argument whole.
+    expect(screen.getByRole("radio", { name: /Local command/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText(/^Command line/)).toHaveValue(
+      "npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'",
+    );
+    // The split is on screen, one chip per word, before anything runs.
+    expect(screen.getByText("/home/example/My Projects", { selector: "code" })).toBeInTheDocument();
+    expect(screen.getByText(/this computer, as you/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    expect(
+      await screen.findByText(/Started Project files in 0.8 s and read 3 tools/),
+    ).toBeInTheDocument();
+    expect(testMcpStdioConnection).toHaveBeenCalledWith({
+      stdio: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/example/My Projects"],
+        env: [],
+      },
+    });
+    expect(screen.getByText("/opt/fixture/bin/npx")).toBeInTheDocument();
+    // The server's own name filled the empty Name field.
+    expect(screen.getByPlaceholderText("Project files")).toHaveValue("Project files");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => {
+      expect(createMcpConnection).toHaveBeenCalledWith({
+        displayName: "Project files",
+        stdio: {
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/example/My Projects"],
+          env: [],
+        },
+      });
+    });
+  });
+
+  it("shows a local command's own output when it exits, and still lets it be added", async () => {
+    const createMcpConnection = vi.fn(async () => ({
+      connection: localCommandConnection(),
+    }));
+    const testMcpStdioConnection = vi.fn(async () => ({
+      ok: false as const,
+      problem: "exited" as const,
+      message: "The server exited before it answered (exit code 1). Its output is below.",
+      output: "error: FIXTURE_TOKEN •••• was rejected",
+      command: "/opt/fixture/bin/fixture-server",
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          createMcpConnection,
+          testMcpStdioConnection,
+          listMcpConnections: vi.fn(async () => ({ connections: [] })),
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [],
+          })),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("radio", { name: /Local command/ }));
+    fireEvent.change(screen.getByPlaceholderText("Project files"), {
+      target: { value: "Fixture server" },
+    });
+    fireEvent.change(screen.getByLabelText(/^Command line/), {
+      target: { value: "fixture-server" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    fireEvent.change(screen.getByLabelText("Variable 1 name"), {
+      target: { value: "FIXTURE_TOKEN" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Keep FIXTURE_TOKEN secret" }));
+    const value = screen.getByLabelText("FIXTURE_TOKEN value");
+    // A secret is typed into a password field and never echoed.
+    expect(value).toHaveAttribute("type", "password");
+    fireEvent.change(value, { target: { value: "fixture-secret" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    expect(await screen.findByLabelText("Server output")).toHaveTextContent(
+      "error: FIXTURE_TOKEN •••• was rejected",
+    );
+    expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add anyway" }));
+    await waitFor(() => {
+      expect(createMcpConnection).toHaveBeenCalledWith({
+        displayName: "Fixture server",
+        stdio: {
+          command: "fixture-server",
+          args: [],
+          env: [{ name: "FIXTURE_TOKEN", secret: true, value: "fixture-secret" }],
+        },
+      });
+    });
+  });
+
+  it("moves NAME=value words from a pasted line into variables, and refuses an open quote", async () => {
+    const testMcpStdioConnection = vi.fn();
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          testMcpStdioConnection,
+          listMcpConnections: vi.fn(async () => ({ connections: [] })),
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [],
+          })),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("radio", { name: /Local command/ }));
+    const commandLine = screen.getByLabelText(/^Command line/);
+    fireEvent.change(commandLine, {
+      target: { value: "FIXTURE_API_TOKEN=fixture-secret LOG_LEVEL=debug npx -y fixture-server" },
+    });
+    fireEvent.blur(commandLine);
+
+    expect(commandLine).toHaveValue("npx -y fixture-server");
+    // A credential-looking name starts hidden; the operator can still flip it.
+    expect(screen.getByLabelText("FIXTURE_API_TOKEN value")).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("FIXTURE_API_TOKEN value")).toHaveValue("fixture-secret");
+    expect(screen.getByLabelText("LOG_LEVEL value")).toHaveAttribute("type", "text");
+
+    // Pasting a line that sets a variable the operator marked secret keeps it secret.
+    fireEvent.click(screen.getByLabelText("Keep LOG_LEVEL secret"));
+    fireEvent.change(commandLine, { target: { value: "LOG_LEVEL=trace npx -y fixture-server" } });
+    fireEvent.blur(commandLine);
+    expect(screen.getByLabelText("LOG_LEVEL value")).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("LOG_LEVEL value")).toHaveValue("trace");
+
+    fireEvent.change(commandLine, { target: { value: "npx -y 'fixture-server" } });
+    expect(screen.getByText("A quote is not closed.")).toBeInTheDocument();
+    expect(commandLine).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
+    expect(testMcpStdioConnection).not.toHaveBeenCalled();
+  });
+
+  it("lists a local command by its command line and edits it without echoing a stored secret", async () => {
+    const connection = localCommandConnection({ localProcesses: 2 });
+    const mutated = { connectionId: connection.id, connection };
+    const updateMcpConnection = vi.fn(async () => mutated);
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          updateMcpConnection,
+          setMcpConnectionEnabled: vi.fn(async () => mutated),
+          setMcpConnectionSelectForNewThreads: vi.fn(async () => mutated),
+          listMcpConnections: vi.fn(async () => ({ connections: [connection] })),
+          listMcpConnectionTools: vi.fn(async () => ({
+            connectionId: connection.id,
+            tools: ["read_file", "list_directory"],
+            fetchedAt: 1,
+          })),
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [],
+          })),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const row = (await screen.findByText("Project files"))
+      .closest<HTMLElement>(".settings-mcp-row")!;
+    expect(within(row).getByText("Running · 2 threads")).toBeInTheDocument();
+    expect(
+      within(row).getByText(
+        "/opt/fixture/bin/npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'",
+      ),
+    ).toBeInTheDocument();
+    // Nothing to sign in to, and nothing to disconnect from.
+    expect(within(row).queryByRole("button", { name: /Authorize/ })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Disconnect" })).not.toBeInTheDocument();
+    expect(within(row).getByRole("switch", { name: "Offer Project files to threads" })).toBeInTheDocument();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit connection" });
+    expect(within(dialog).queryByLabelText("Remote MCP URL")).not.toBeInTheDocument();
+    const secret = within(dialog).getByLabelText("FIXTURE_TOKEN value");
+    expect(secret).toHaveValue("");
+    expect(secret).toHaveAttribute("placeholder", "Stored encrypted");
+    expect(within(dialog).getByText(/restarts it in the 2 threads/)).toBeInTheDocument();
+    // Shown as one line, the way it was pasted, with the resolved program.
+    const commandLine = within(dialog).getByLabelText(/^Command line/);
+    expect(commandLine).toHaveValue(
+      "/opt/fixture/bin/npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'",
+    );
+    fireEvent.change(commandLine, {
+      target: { value: "/opt/fixture/bin/npx -y @modelcontextprotocol/server-filesystem /home/example/Other" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(updateMcpConnection).toHaveBeenCalledWith({
+        connectionId: "project-files",
+        displayName: "Project files",
+        stdio: {
+          command: "/opt/fixture/bin/npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/example/Other"],
+          env: [
+            { name: "FIXTURE_ROOT", secret: false, value: "/home/example" },
+            // Left blank, so the stored value stays; no value travels.
+            { name: "FIXTURE_TOKEN", secret: true },
+          ],
+        },
+      });
+    });
   });
 
   it("disables MCP mutations when the selected Codex profile changed after startup", async () => {
