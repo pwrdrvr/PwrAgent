@@ -85,9 +85,11 @@ This is a new row shape, not a change to an existing key, so the
   any server output.
 - The test and all Settings mutations are local-owner IPC only; a peer's
   window cannot start a program on the owner's machine.
-- Spawned with `shell: false` and an argv array. On Windows, commands go
-  through `createCommandInvocation` so `.cmd` and `.bat` shims start without
-  a shell.
+- Spawned with `shell: false` and an argv array. On Windows, a `.cmd` or
+  `.bat` shim (such as `npx.cmd`) can only run under `cmd.exe`, so
+  `createCommandInvocation` wraps it in `cmd.exe /d /s /c` with each argument
+  escaped, the same path ACP agent launches take. Everything else starts
+  directly.
 - The environment is an allowlist, not PwrAgent's own environment: `HOME`,
   `USER`, `LOGNAME`, `SHELL`, `TERM`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TMPDIR`
   (and the Windows equivalents), plus the login-shell `PATH` with the
