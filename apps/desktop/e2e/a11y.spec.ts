@@ -47,6 +47,13 @@ import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
+// Lane balance only. `workers: 1` still runs these one at a time, in order;
+// `parallel` makes each test its own shard group so CI's weighted
+// `--shard` can split this file across lanes (see the desktop-e2e job in
+// .github/workflows/ci.yml). Every test launches its own app, so no state
+// crosses a test boundary.
+test.describe.configure({ mode: "parallel" });
+
 // Audit the settled, at-rest visual state. Several surfaces play a brief
 // mount/enter animation — e.g. the pinned context rail's `.context-panel`
 // runs a 220ms `context-panel-in` opacity 0 -> 1 fade — and these are all
