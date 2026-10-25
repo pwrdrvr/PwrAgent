@@ -776,6 +776,7 @@ import {
 } from "./thread-turn-queue";
 import {
   QueuedMessageTitler,
+  queuedMessageTitleContext,
   queuedMessageTitleSource,
   type QueuedMessageTitleRequest,
   type QueuedMessageTitleSettlement,
@@ -9370,17 +9371,7 @@ export class DesktopBackendRegistry {
   private readonly threadRenameQueues = new Map<string, Promise<void>>();
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
-  private readonly queuedMessageTitler = new QueuedMessageTitler({
-    generate: async (params) =>
-      await this.generateStructuredObject({
-        ...params,
-        helper: "queued_message_titles",
-      }),
-    apply: (request, title) => this.applyQueuedMessageTitle(request, title),
-    settle: async (request, settlement) =>
-      await this.recordQueuedMessageTitle(request, settlement),
-    log: (message, fields) => backendRegistryLog.info(message, fields),
-  });
+  private readonly queuedMessageTitler: QueuedMessageTitler;
   private automationInspectionHandler?: AutomationInspectionHandler;
   private appManagementHandler?: PwrAgentAppManagementHandler;
   private starMapHandler?: PwrAgentStarMapHandler;
@@ -9806,6 +9797,8 @@ export class DesktopBackendRegistry {
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
     runningTurnShutdownStopTimeoutMs?: number;
+    /** How long a queued message waits before it is titled. Tests only. */
+    queuedMessageTitleSettleMs?: number;
     acpWorktreeRepositoryResolver?: (
       cwd: string,
     ) => Promise<LinkedDirectorySummary | undefined>;
@@ -10602,6 +10595,21 @@ export class DesktopBackendRegistry {
           : undefined;
     this.modelCatalog = new BackendModelCatalog({
       codex: this.codexClient,
+    });
+    this.queuedMessageTitler = new QueuedMessageTitler({
+      generate: async (params) =>
+        await this.generateStructuredObject({
+          ...params,
+          helper: "queued_message_titles",
+        }),
+      isCurrent: (request) => this.isQueuedMessageTitleCurrent(request),
+      apply: (request, title) => this.applyQueuedMessageTitle(request, title),
+      settle: async (request, settlement) =>
+        await this.recordQueuedMessageTitle(request, settlement),
+      log: (message, fields) => backendRegistryLog.info(message, fields),
+      ...(options?.queuedMessageTitleSettleMs !== undefined
+        ? { settleMs: options.queuedMessageTitleSettleMs }
+        : {}),
     });
     this.threadTurnQueue = new ThreadTurnQueue({
       startTurn: async (entry) => await this.startTurnNow(entry),
@@ -19428,12 +19436,30 @@ export class DesktopBackendRegistry {
       this.queuedMessageTitler.forget(entry.id);
       return;
     }
+    const context = queuedMessageTitleContext({
+      origins: entry.agentMessageOrigins ?? [entry.messageOrigin],
+      recipientTitle: this.threadInfoStore.getTitle({
+        backend: entry.backend,
+        threadId: entry.threadId,
+      }),
+      lookupTitle: (identity) => this.threadInfoStore.getTitle(identity),
+    });
     this.queuedMessageTitler.request({
       entryId: entry.id,
       backend: entry.backend,
       threadId: entry.threadId,
       source,
+      ...(context ? { context } : {}),
     });
+  }
+
+  /** Whether the entry is still queued and still holds the titled text. */
+  private isQueuedMessageTitleCurrent(request: QueuedMessageTitleRequest): boolean {
+    const current = this.threadTurnQueue
+      .getAllQueuedEntries()
+      .find((entry) => entry.id === request.entryId);
+    return current !== undefined
+      && queuedMessageTitleSource(current.input) === request.source;
   }
 
   /**
@@ -19445,12 +19471,7 @@ export class DesktopBackendRegistry {
     request: QueuedMessageTitleRequest,
     title: string,
   ): boolean {
-    const current = this.threadTurnQueue
-      .getAllQueuedEntries()
-      .find((entry) => entry.id === request.entryId);
-    if (!current || queuedMessageTitleSource(current.input) !== request.source) {
-      return false;
-    }
+    if (!this.isQueuedMessageTitleCurrent(request)) return false;
     const entry = this.threadTurnQueue.setQueuedEntryTitle(request.entryId, title);
     if (!entry) return false;
     void this.emit({
@@ -27077,6 +27098,7 @@ export class DesktopBackendRegistry {
     }
     this.closed = true;
     this.threadTurnQueue.close();
+    this.queuedMessageTitler.close();
     await this.archiveCleanupQueue.close();
     this.tryCheckpointArchiveCleanupsForQuit("after-drain");
     this.backgroundTerminalGeneration += 1;
@@ -27280,6 +27302,8 @@ export class DesktopBackendRegistry {
     prompt: string;
     schema: Record<string, unknown>;
     schemaName?: string;
+    /** Removes shell, exec, and sub-agent tools from a data-only helper. */
+    disableExecution?: boolean;
     timeoutMs?: number;
     /** Model answering budget, separate from the protocol round-trips. */
     turnTimeoutMs?: number;
@@ -27305,6 +27329,7 @@ export class DesktopBackendRegistry {
         reasoningEffort: params.reasoningEffort,
         prompt: params.prompt,
         schema: params.schema,
+        ...(params.disableExecution ? { disableExecution: true } : {}),
         isMatch: (record) =>
           requiredKeys.every((key) =>
             structuredRequiredFieldMatches(params.schema, record, key)
