@@ -28,7 +28,7 @@ E2E window manager, then runs each check with a log and a status line.
 | Lint job | `verify.sh lint` | 46 s | `pnpm lint`: every CI Lint check, typecheck included |
 | Unit tests | `verify.sh unit` | 132 s | 1,271 files, about 20,000 tests |
 | Linux desktop E2E, one lane | `verify.sh e2e` | 585 s | 278 tests, one Playwright worker |
-| Linux desktop E2E, two lanes | `verify.sh e2e --lanes 2` | LANES_SECS s | the same tests in two concurrent shards |
+| Linux desktop E2E, two lanes | `verify.sh e2e --lanes 2` | about 360 s | the same tests in two concurrent shards |
 
 `large` is 8 vCPUs and 15 GB. Playwright runs one worker per lane. Two lanes
 peaked at a load average of about 4, so `all` uses two lanes. More lanes are
