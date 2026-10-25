@@ -17,7 +17,7 @@ export type LocalUsagePace = {
   account?: LimitAccount;
   /** Start of the window the rail follows: the account's longest limit. */
   windowStart?: number;
-  /** This instance's API-equivalent spend for turns contained in that window. */
+  /** The read instance's API-equivalent spend for turns contained in that window. */
   costMicros?: number;
 };
 
@@ -73,10 +73,11 @@ const accountOf = (data: ReadUsageActivityResponse) => {
 };
 
 /**
- * This instance's account limits and spend since the limit window began, read
- * the way the Usage Activity window reads its local source. Limits are
- * account-wide, so the percent and pace match the federated window; the spend
- * is this instance's alone.
+ * One instance's account limits and spend since the limit window began, read
+ * the way the Usage Activity window reads its local source. `read` picks the
+ * instance: this one, or a remote thread's owner. Limits are account-wide, so
+ * the percent and pace match the federated window; the spend is that
+ * instance's alone.
  *
  * Reads on mount and whenever `refreshKey` changes, never on a timer. A burst
  * of changes collapses into one refresh per `MIN_REREAD`. First readings are

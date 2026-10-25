@@ -36,7 +36,7 @@ import {
 } from "../../chrome/ChipContextMenu";
 import { MoreVerticalIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
-import { readRendererFederationTarget } from "../../../lib/federation-window";
+import { readRendererFederationLabel, readRendererFederationTarget } from "../../../lib/federation-window";
 import { useViewportTooltip } from "../../../lib/useViewportTooltip";
 import {
   formatTokenCount,
@@ -203,6 +203,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
   const { id, source, federation, updatedAt } = props.thread ?? {};
   const familyTarget = federation?.ref.target ?? readRendererFederationTarget();
   const familyOwner = familyTarget?.scope === "remote" ? familyTarget : undefined;
+  const ownerLabel = familyOwner ? federation?.instanceLabel ?? readRendererFederationLabel() ?? "Remote machine" : undefined;
   const snapshotVersion = federation?.ref.target.scope === "remote" && !federation.capabilities?.includes("event_subscriptions") ? updatedAt : undefined;
   const gateSource = useMemo<PricingGateSource>(() => ({
     desktopApi: props.desktopApi,
@@ -324,7 +325,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
           and every thread's spend across instances is the window it opens. */}
       {source === "claude"
         ? <ClaudeUsageLimits backend={props.backends?.find((backend) => backend.kind === "claude")} />
-        : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} />}
+        : <UsagePaceCard desktopApi={props.desktopApi} backends={props.backends} ownerLabel={ownerLabel} />}
 
       {/* Under the spend breakdown, above the turn rows: the gate's result is
           part of reading the bill, not a footnote to one turn of it. */}

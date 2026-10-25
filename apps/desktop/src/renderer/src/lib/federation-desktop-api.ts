@@ -13,6 +13,7 @@ export function scopeDesktopApiToFederationTarget(
   const openApplication = desktopApi.openApplication;
   const resolveTranscriptFiles = desktopApi.resolveTranscriptFiles;
   const readMarkdownFile = desktopApi.readMarkdownFile;
+  const readUsageActivity = desktopApi.readUsageActivity;
   const openMarkdownFileViewer = desktopApi.openMarkdownFileViewer;
   const refreshDirectoryGitStatuses = desktopApi.refreshDirectoryGitStatuses;
   const readPwrSnapConnectionStatus = desktopApi.readPwrSnapConnectionStatus;
@@ -86,6 +87,12 @@ export function scopeDesktopApiToFederationTarget(
       : undefined,
     readMarkdownFile: readMarkdownFile
       ? async (request) => await readMarkdownFile({ ...request, federationTarget })
+      : undefined,
+    // The Pricing rail's limit card is drawn from the owner's backends, so its
+    // limit history and spend must come from the owner's ledger too. The
+    // viewer's own ledger may hold no reading since a reset, or another account.
+    readUsageActivity: readUsageActivity
+      ? async (request) => await readUsageActivity({ ...request, federationTarget })
       : undefined,
     openMarkdownFileViewer: openMarkdownFileViewer
       ? async (request) => await openMarkdownFileViewer({
