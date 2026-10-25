@@ -29,10 +29,10 @@
 // Contrast is the one rule class that is genuinely theme-dependent —
 // roles, names, and focus order are not. A color theme in app.css sets
 // color tokens only, and no component branches on it, so work that
-// cannot see color runs once rather than in every appearance. Tangerine
+// cannot see color skips the extra color themes. Tangerine
 // dark and light run the full WCAG AA tag set on every surface; the other
 // color themes run only the color rules (`COLOR_RULES`). The ARIA-only
-// composer block sits outside the appearance loop, and the directories
+// composer block runs in the Tangerine pair only, and the directories
 // block's functional steps run in Tangerine dark only.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -222,7 +222,7 @@ const WCAG_AA_TAGS = [
 
 // The axe rules that read color. A color theme sets color tokens only, so
 // these are the only rules whose result can differ from Tangerine in the
-// same scheme. Measured on Linux CI hardware, a scan limited to them takes
+// same scheme. Measured on a Linux sandbox, a scan limited to them took
 // ~250ms against ~390ms for the full tag set.
 const COLOR_RULES = ["color-contrast", "link-in-text-block"];
 
@@ -1105,66 +1105,69 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
   });
 }
 
-// Role structure only, so one appearance covers it: a color theme changes no
-// role, name or attribute, and both scans below run ARIA rules alone. It
-// launches in the harness default, Tangerine dark. A contrast audit of these
-// popups would have to run per appearance, inside the loop above.
-test.describe("desktop renderer accessibility (ARIA structure, default appearance)", () => {
-  // The default smoke fixture never opens a composer autocomplete, so its
-  // listboxes and active-descendant targets otherwise remain outside the
-  // gate. Audit both shapes: `$` is the shared listbox-of-options pattern,
-  // while `@` also carries real Add buttons that must stay outside the
-  // listbox rather than masquerading as directory options.
-  test("composer autocomplete listbox semantics are valid", async () => {
-    const app = await launchAuditApp({
-      fixturePath: COMPOSER_AUTOCOMPLETE_FIXTURE,
-    });
-    try {
-      await app.window
-        .getByRole("button", { name: /Skill autocomplete replay/i })
-        .first()
-        .click();
-      const textbox = app.window.getByRole("textbox", { name: "Reply" });
-      await expect(textbox).toBeVisible();
-
-      await test.step("skills autocomplete", async () => {
-        await textbox.fill("$ce");
-        const skills = app.window.getByRole("listbox", { name: "Skills" });
-        const activeOption = skills.getByRole("option").first();
-        await expect(activeOption).toBeVisible();
-        await expect(activeOption).toHaveAttribute("aria-selected", "true");
-        await expect(textbox).toHaveAttribute(
-          "aria-activedescendant",
-          await activeOption.getAttribute("id") ?? "missing-option-id",
-        );
-        await runAxeScan(app.window, "skills autocomplete", {
-          rules: ["aria-required-children", "aria-required-parent"],
-        });
+// Role structure only, so the extra color themes add nothing here: a color
+// theme changes no role, name or attribute, and both scans below run ARIA
+// rules alone. It runs in the Tangerine pair, one launch per scheme, under
+// the same describe titles the loop above gives Tangerine.
+for (const theme of AUDIT_THEMES) {
+  test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme)`, () => {
+    // The default smoke fixture never opens a composer autocomplete, so its
+    // listboxes and active-descendant targets otherwise remain outside the
+    // gate. Audit both shapes: `$` is the shared listbox-of-options pattern,
+    // while `@` also carries real Add buttons that must stay outside the
+    // listbox rather than masquerading as directory options.
+    test("composer autocomplete listbox semantics are valid", async () => {
+      const app = await launchAuditApp({
+        theme,
+        fixturePath: COMPOSER_AUTOCOMPLETE_FIXTURE,
       });
+      try {
+        await app.window
+          .getByRole("button", { name: /Skill autocomplete replay/i })
+          .first()
+          .click();
+        const textbox = app.window.getByRole("textbox", { name: "Reply" });
+        await expect(textbox).toBeVisible();
 
-      await test.step("directory autocomplete with sibling actions", async () => {
-        await textbox.fill("@");
-        const directories = app.window.getByRole("listbox", {
-          name: "Projects and instances",
-        });
-        await expect(directories.getByRole("option").first()).toBeVisible();
-        await expect(directories.getByRole("button")).toHaveCount(0);
-        await expect(
-          app.window.getByRole("button", { name: "+ Add directory…" }),
-        ).toBeVisible();
-        await expect(
-          app.window.getByRole("button", { name: "+ Add file…" }),
-        ).toBeVisible();
-        await runAxeScan(
-          app.window,
-          "directory autocomplete with sibling actions",
-          {
+        await test.step("skills autocomplete", async () => {
+          await textbox.fill("$ce");
+          const skills = app.window.getByRole("listbox", { name: "Skills" });
+          const activeOption = skills.getByRole("option").first();
+          await expect(activeOption).toBeVisible();
+          await expect(activeOption).toHaveAttribute("aria-selected", "true");
+          await expect(textbox).toHaveAttribute(
+            "aria-activedescendant",
+            await activeOption.getAttribute("id") ?? "missing-option-id",
+          );
+          await runAxeScan(app.window, "skills autocomplete", {
             rules: ["aria-required-children", "aria-required-parent"],
-          },
-        );
-      });
-    } finally {
-      await app.close();
-    }
+          });
+        });
+
+        await test.step("directory autocomplete with sibling actions", async () => {
+          await textbox.fill("@");
+          const directories = app.window.getByRole("listbox", {
+            name: "Projects and instances",
+          });
+          await expect(directories.getByRole("option").first()).toBeVisible();
+          await expect(directories.getByRole("button")).toHaveCount(0);
+          await expect(
+            app.window.getByRole("button", { name: "+ Add directory…" }),
+          ).toBeVisible();
+          await expect(
+            app.window.getByRole("button", { name: "+ Add file…" }),
+          ).toBeVisible();
+          await runAxeScan(
+            app.window,
+            "directory autocomplete with sibling actions",
+            {
+              rules: ["aria-required-children", "aria-required-parent"],
+            },
+          );
+        });
+      } finally {
+        await app.close();
+      }
+    });
   });
-});
+}
