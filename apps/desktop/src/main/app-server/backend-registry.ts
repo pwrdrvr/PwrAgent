@@ -14001,10 +14001,13 @@ export class DesktopBackendRegistry {
       replay: replayWithMessageOrigins,
       subAgents: overlay?.subAgents,
     });
-    const pricing = await this.readThreadPricingWithLiveTokenMiser({
-      backend,
-      threadId: request.threadId,
-    });
+    const includeAccounting = request.includeAccounting !== false;
+    const pricing = includeAccounting
+      ? await this.readThreadPricingWithLiveTokenMiser({
+          backend,
+          threadId: request.threadId,
+        })
+      : undefined;
     // Tool accounting is durable, but the response replaces the renderer's
     // whole session snapshot — so omitting it here does not just leave the
     // field stale, it erases whatever the live
@@ -14013,7 +14016,8 @@ export class DesktopBackendRegistry {
     // Tool calls tab used to appear during a turn and vanish
     // the moment it finished.
     const storedToolAccounting =
-      typeof this.overlayStore.readThreadToolAccounting === "function"
+      includeAccounting
+      && typeof this.overlayStore.readThreadToolAccounting === "function"
         ? await this.overlayStore.readThreadToolAccounting({
             backend,
             ...(request.includeAllToolInvocations
@@ -14036,7 +14040,7 @@ export class DesktopBackendRegistry {
     return {
       backend,
       fetchedAt: Date.now(),
-      pricing,
+      ...(pricing ? { pricing } : {}),
       threadId: request.threadId,
       ...(overlay?.tokenMiserEnabled !== undefined
         ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
