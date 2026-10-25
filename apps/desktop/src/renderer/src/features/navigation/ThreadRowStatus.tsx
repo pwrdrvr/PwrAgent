@@ -7,10 +7,13 @@ import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 export type ThreadRowStatusKind = "thinking" | "unread";
 
 /**
- * Navigation is live for a parent turn or an owned worker. Renderer thinking
- * also covers a parent turn waiting for its backend status round-trip. Keep this
- * predicate shared with aggregate activity counts so their numbers match the
- * animated thread-row marker exactly.
+ * Navigation is live for a parent turn, an owned worker, or background tasks
+ * that outlived their turn. The transcript and composer read the turn status
+ * alone, so a thread waiting on background tasks still takes a new message
+ * without queueing it. Renderer thinking also covers a parent turn waiting
+ * for its backend status round-trip. Keep this predicate shared with aggregate
+ * activity counts so their numbers match the animated thread-row marker
+ * exactly.
  */
 export function isThreadActive(
   thread: NavigationThreadSummary,
@@ -20,6 +23,7 @@ export function isThreadActive(
   return (
     thread.threadStatus === "active"
     || thread.hasActiveSubAgent === true
+    || thread.hasBackgroundTasks === true
     || thinkingThreadKeys?.[threadKey] === true
   );
 }

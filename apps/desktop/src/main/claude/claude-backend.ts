@@ -1392,6 +1392,17 @@ export class ClaudeBackend {
     return this.sessions.has(threadId);
   }
 
+  /**
+   * Threads with published background tasks. Each change to that set emits
+   * `thread/backgroundTasks/updated`, including the clear when the session
+   * closes, so navigation can follow it without polling.
+   */
+  backgroundTaskThreadIds(): string[] {
+    return [...this.sessions]
+      .filter(([, live]) => live.publishedTasks.length > 0)
+      .map(([threadId]) => threadId);
+  }
+
   /** Retrieve Claude's native title without holding up the active turn. */
   private async updateTitle(live: LiveSession, turn: RunningTurn, allowRequest = true): Promise<boolean> {
     const { session } = live;

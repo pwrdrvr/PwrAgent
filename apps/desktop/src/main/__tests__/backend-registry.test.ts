@@ -51553,6 +51553,35 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("marks idle Claude threads with running background tasks as working in navigation", () => {
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+    onTestFinished(() => registry.close());
+    const claude = (registry as unknown as {
+      claudeBackend: { backgroundTaskThreadIds: () => string[] };
+    }).claudeBackend;
+    const backgroundTaskThreadIds = vi.spyOn(claude, "backgroundTaskThreadIds").mockReturnValue(["claude-thread"]);
+    const row = (id: string, source: "claude" | "codex") => ({
+      id, source, title: id, titleSource: "explicit" as const,
+      threadStatus: "idle" as const, linkedDirectories: [], inbox: { inInbox: false },
+    });
+
+    const [claudeRow, codexRow] = registry.withNavigationSubAgentActivity([
+      row("claude-thread", "claude"),
+      // The same id under another backend is a different thread.
+      row("claude-thread", "codex"),
+    ]);
+    // Only the navigation marker changes: the turn itself stays idle, so the
+    // composer sends rather than queues.
+    expect(claudeRow).toMatchObject({ threadStatus: "idle", hasBackgroundTasks: true });
+    expect(codexRow).not.toHaveProperty("hasBackgroundTasks");
+
+    backgroundTaskThreadIds.mockReturnValue([]);
+    const [settled] = registry.withNavigationSubAgentActivity([claudeRow!]);
+    expect(settled).not.toHaveProperty("hasBackgroundTasks");
+    expect(settled).toMatchObject({ threadStatus: "idle", hasActiveSubAgent: false });
+  });
+
   it("rejects task monitor delegations that only reference a parent Codex exec session", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

@@ -710,6 +710,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/agent/updated",
   "thread/archived",
   "thread/automations/updated",
+  "thread/backgroundTasks/updated",
   "thread/codexEnvironment/updated",
   "thread/codexInvalidIdRecovery/updated",
   "thread/executionMode/queueCleared",

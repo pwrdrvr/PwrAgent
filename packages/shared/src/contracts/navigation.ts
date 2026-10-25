@@ -139,6 +139,11 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   };
   /** Live worker owned by this thread; independent of the parent turn status. */
   hasActiveSubAgent?: boolean;
+  /**
+   * Background tasks the agent started are still running after its turn
+   * ended. The thread list shows it working; the composer stays open.
+   */
+  hasBackgroundTasks?: boolean;
   inbox: ThreadInboxState;
   /**
    * Normalized host/owner/repository identity resolved from the thread's
@@ -1940,6 +1945,8 @@ export type NavigationRow = {
   threadStatus?: AppServerThreadStatus;
   /** Owner-projected runtime activity, without loading worker history. */
   hasActiveSubAgent?: boolean;
+  /** Owner-projected background tasks that outlived their turn. */
+  hasBackgroundTasks?: boolean;
   inbox: ThreadInboxState;
   projectKey?: string;
   linkedDirectories: LinkedDirectorySummary[];

@@ -196,7 +196,9 @@ function directoryMemberThreads(
 }
 
 function isActive(thread: NavigationThreadSummary): boolean {
-  return thread.threadStatus === "active" || thread.hasActiveSubAgent === true;
+  return thread.threadStatus === "active"
+    || thread.hasActiveSubAgent === true
+    || thread.hasBackgroundTasks === true;
 }
 
 function countsForThreads(threads: readonly NavigationThreadSummary[]): NavigationCounts {
@@ -267,6 +269,7 @@ function projectNavigationRow(params: {
     ...(thread.archivedAt !== undefined ? { archivedAt: thread.archivedAt } : {}),
     ...(thread.threadStatus ? { threadStatus: thread.threadStatus } : {}),
     ...(thread.hasActiveSubAgent ? { hasActiveSubAgent: true } : {}),
+    ...(thread.hasBackgroundTasks ? { hasBackgroundTasks: true } : {}),
     inbox: thread.inbox,
     ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
     linkedDirectories: linkedDirectories.items ?? [],

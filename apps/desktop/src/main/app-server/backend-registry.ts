@@ -19783,16 +19783,35 @@ export class DesktopBackendRegistry {
     return undefined;
   }
 
-  /** Navigation and shutdown share runtime worker ownership, never durable history. */
+  /**
+   * Navigation and shutdown share runtime worker ownership, never durable
+   * history. Background tasks that outlive a turn mark the row as working too,
+   * the same tasks the quit prompt counts.
+   */
   withNavigationSubAgentActivity(
     threads: NavigationThreadSummary[],
   ): NavigationThreadSummary[] {
     const activeOwners = new Set(this.getInProgressThreadSnapshot().subAgentThreadKeys);
+    const backgroundTaskOwners = new Set(
+      this.claudeBackend
+        .backgroundTaskThreadIds()
+        .map((threadId) => buildThreadIdentityKey("claude", threadId)),
+    );
     return threads.map((thread) => {
       if (thread.federation) return thread;
-      const hasActiveSubAgent = activeOwners.has(buildThreadIdentityKey(thread.source, thread.id));
-      if (thread.hasActiveSubAgent === hasActiveSubAgent) return thread;
-      return { ...thread, hasActiveSubAgent };
+      const key = buildThreadIdentityKey(thread.source, thread.id);
+      const hasActiveSubAgent = activeOwners.has(key);
+      const hasBackgroundTasks = backgroundTaskOwners.has(key);
+      if (
+        thread.hasActiveSubAgent === hasActiveSubAgent
+        && Boolean(thread.hasBackgroundTasks) === hasBackgroundTasks
+      ) return thread;
+      const { hasBackgroundTasks: _previous, ...rest } = thread;
+      return {
+        ...rest,
+        hasActiveSubAgent,
+        ...(hasBackgroundTasks ? { hasBackgroundTasks: true } : {}),
+      };
     });
   }
 

@@ -106,3 +106,15 @@ it("retains worker-only membership after the parent completion baseline and remo
     threads: [{ ...idle, hasActiveSubAgent: false }], promoteOnTurnEnd: true });
   expect(finished.members.has(key)).toBe(false);
 });
+
+it("keeps a finished turn in Attention while its background tasks run", () => {
+  const row = { ...thread("background-tasks", 1), threadStatus: "idle" as const,
+    inbox: { inInbox: false }, hasBackgroundTasks: true };
+  const key = navigationAttentionIdentity(row);
+  const order = reconcileNavigationAttentionOrder({ threads: [row], promoteOnTurnEnd: true });
+  // Membership only: ordering still follows turns, which are idle here.
+  expect(order.members.get(key)).toMatchObject({ active: false });
+  const finished = reconcileNavigationAttentionOrder({ previous: order,
+    threads: [{ ...row, hasBackgroundTasks: false }], promoteOnTurnEnd: true });
+  expect(finished.members.has(key)).toBe(false);
+});

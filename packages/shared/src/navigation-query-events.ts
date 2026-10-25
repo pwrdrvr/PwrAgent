@@ -15,7 +15,7 @@ const ROW_CHANGE_METHODS = new Set([
   "thread/pin/added", "thread/pin/removed", "thread/pin/reordered",
   "thread/agent/updated", "thread/parent/set", "thread/parent/cleared", "thread/turnQueue/updated",
   "thread/subthreadOrder/updated", "thread/subthreadsCollapsed/updated", "thread/subAgents/updated",
-  "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
+  "thread/backgroundTasks/updated", "thread/modelSettings/updated", "thread/executionMode/updated", "thread/executionMode/queued",
   "thread/executionMode/queueCleared", "thread/prAutoDispatch/updated", "thread/prAutoDispatch/pendingUpdated",
   "thread/automations/updated", "automation/run/updated",
   "directory/pin/added", "directory/pin/removed", "directory/pin/reordered", "directory/threadsCollapsed/updated",
@@ -46,6 +46,8 @@ const THREAD_ROW_ONLY_METHODS = new Set([
   // Subagent detail and native-group presence belong to the named parent.
   // Ordinary child discovery uses thread/started and thread/parent/set.
   "thread/subAgents/updated",
+  // Background tasks only toggle the owning row's working marker.
+  "thread/backgroundTasks/updated",
   "turn/started", "turn/completed", "turn/failed", "turn/cancelled",
 ]);
 
