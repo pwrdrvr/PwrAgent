@@ -706,6 +706,30 @@ export type ThreadRewindTarget = {
   turnId?: string;
 };
 
+export type PreviewThreadRewindRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  target: ThreadRewindTarget;
+};
+
+/** What a rewind to before one prompt would put back, read without changing anything. */
+export type PreviewThreadRewindResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  target: ThreadRewindTarget;
+  /** Why this prompt cannot be rewound at all right now. */
+  unavailableReason?: string;
+  /** The files a conversation-and-files rewind restores, from a dry run. */
+  files?: {
+    paths: string[];
+    insertions: number;
+    deletions: number;
+  };
+  /** Why this prompt's files cannot be restored, where the provider otherwise can. */
+  filesUnavailableReason?: string;
+};
+
 export type RewindThreadRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
@@ -722,6 +746,8 @@ export type RewindThreadResponse = {
   updatedAt: number;
   /** The removed prompt's text, when the provider returns it. */
   promptText?: string;
+  /** Files the rewind restored, for a conversation-and-files rewind. */
+  restoredFileCount?: number;
 };
 
 export type GrokWorkflowBudgetPolicy = {

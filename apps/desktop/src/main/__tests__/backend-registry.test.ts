@@ -54201,6 +54201,59 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("rewinds a Claude thread with its files, announces it, and drains replies held meanwhile", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+    const internals = registry as unknown as {
+      claudeBackend: {
+        previewRewind: (threadId: string, target: unknown) => Promise<unknown>;
+        rewindThread: (params: unknown) => Promise<unknown>;
+      };
+      threadTurnQueue: { scheduleThreadDrain: (params: { backend: string; threadId: string }) => void };
+    };
+    const previewRewind = vi.spyOn(internals.claudeBackend, "previewRewind").mockResolvedValue({
+      files: { paths: ["src/a.ts"], insertions: 3, deletions: 1 },
+    });
+    const rewindThread = vi.spyOn(internals.claudeBackend, "rewindThread").mockResolvedValue({
+      promptText: "Second prompt", restoredFileCount: 1, updatedAt: 4_000,
+    });
+    const scheduleThreadDrain = vi.spyOn(internals.threadTurnQueue, "scheduleThreadDrain");
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const target = { messageId: "user:turn-2", turnId: "turn-2" };
+
+    await expect(registry.previewThreadRewind({ backend: "claude", threadId: "claude-1", target })).resolves.toEqual({
+      backend: "claude", threadId: "claude-1", target,
+      files: { paths: ["src/a.ts"], insertions: 3, deletions: 1 },
+    });
+    expect(previewRewind).toHaveBeenCalledWith("claude-1", target);
+    await expect(registry.rewindThread({
+      backend: "claude", threadId: "claude-1", target, mode: "conversation-and-files",
+    })).resolves.toEqual({
+      backend: "claude", threadId: "claude-1", target, mode: "conversation-and-files",
+      updatedAt: 4_000, promptText: "Second prompt", restoredFileCount: 1,
+    });
+    expect(rewindThread).toHaveBeenCalledWith({ threadId: "claude-1", target, mode: "conversation-and-files" });
+    expect(scheduleThreadDrain).toHaveBeenCalledWith({ backend: "claude", threadId: "claude-1" });
+    expect(events).toContainEqual({
+      backend: "claude",
+      notification: { method: "thread/rewound", params: { threadId: "claude-1", updatedAt: 4_000 } },
+    });
+    // Only Claude restores files; other providers still refuse the mode.
+    await expect(registry.rewindThread({
+      backend: "codex", threadId: "thread-1", target: { messageId: "user-1", turnId: "turn-1" }, mode: "conversation-and-files",
+    })).rejects.toThrow("cannot restore files");
+    // A provider without file restore previews nothing.
+    await expect(registry.previewThreadRewind({ backend: "codex", threadId: "thread-1", target }))
+      .resolves.toEqual({ backend: "codex", threadId: "thread-1", target });
+
+    await registry.close();
+  });
+
   it("refuses a Codex rewind without a target turn or while a turn runs", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read", "thread/resume", "turn/start"] },

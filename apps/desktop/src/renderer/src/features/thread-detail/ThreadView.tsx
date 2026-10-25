@@ -156,7 +156,7 @@ import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptError } from "./TranscriptError";
 import { TranscriptList } from "./TranscriptList";
 import { TranscriptMessage } from "./TranscriptMessage";
-import { ThreadRewindConfirm } from "./ThreadRewindConfirm";
+import { ThreadRewindConfirm, type ThreadRewindPreview } from "./ThreadRewindConfirm";
 import {
   collectRewindableMessageIds,
   rewoundPrompt,
@@ -1120,6 +1120,7 @@ type RewindConfirmState = {
   busy: boolean;
   error?: string;
   messageId: string;
+  preview?: ThreadRewindPreview;
   prompt: RewoundPrompt;
   summary: ThreadRewindSummary;
   turnId?: string;
@@ -1640,6 +1641,13 @@ export function ThreadView(props: ThreadViewProps) {
     : undefined;
   const transcriptEntriesRef = useRef(props.transcriptEntries);
   transcriptEntriesRef.current = props.transcriptEntries;
+  // What the confirmation's file dry run needs, read when it opens.
+  const rewindPreviewContextRef = useRef({
+    desktopApi: rewindDesktopApi, support: threadRewindSupport, thread: selectedThread,
+  });
+  rewindPreviewContextRef.current = {
+    desktopApi: rewindDesktopApi, support: threadRewindSupport, thread: selectedThread,
+  };
   const openRewindConfirm = useCallback(
     (message: AppServerThreadMessageEntry): void => {
       if (!rewindThreadSource) return;
@@ -1649,12 +1657,39 @@ export function ThreadView(props: ThreadViewProps) {
         rewindThreadSource,
       );
       if (!summary) return;
+      const { desktopApi, support, thread } = rewindPreviewContextRef.current;
+      const previewThreadRewind = desktopApi?.previewThreadRewind;
+      const preview = support?.files && previewThreadRewind && thread;
       setRewindConfirm({
         busy: false,
         messageId: message.id,
+        ...(preview ? { preview: { status: "loading" as const } } : {}),
         prompt: rewoundPrompt(message),
         summary,
         turnId: message.turn?.id,
+      });
+      if (!preview) return;
+      void previewThreadRewind({
+        backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+        threadId: thread.id,
+        target: { messageId: message.id, ...(message.turn?.id ? { turnId: message.turn.id } : {}) },
+      }).then(
+        (response): ThreadRewindPreview => ({
+          status: "ready",
+          ...(response.files ? { files: response.files } : {}),
+          ...(response.filesUnavailableReason ? { filesUnavailableReason: response.filesUnavailableReason } : {}),
+          ...(response.unavailableReason ? { unavailableReason: response.unavailableReason } : {}),
+        }),
+        (error: unknown): ThreadRewindPreview => ({
+          status: "ready",
+          filesUnavailableReason: error instanceof Error ? error.message : String(error),
+        }),
+      ).then((ready) => {
+        // The operator may have closed it or opened another prompt meanwhile.
+        setRewindConfirm((current) => current?.messageId === message.id && current.preview?.status === "loading"
+          ? { ...current, preview: ready }
+          : current);
       });
     },
     [rewindThreadSource],
@@ -4436,6 +4471,7 @@ export function ThreadView(props: ThreadViewProps) {
                       key={rewindConfirm.messageId}
                       busy={rewindConfirm.busy}
                       error={rewindConfirm.error}
+                      preview={rewindConfirm.preview}
                       providerLabel={rewindProviderLabel}
                       summary={rewindConfirm.summary}
                       support={threadRewindSupport}

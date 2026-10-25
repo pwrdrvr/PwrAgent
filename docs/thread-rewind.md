@@ -16,6 +16,7 @@ window's.
 | Provider | Conversation | Files | Undo |
 |---|---|---|---|
 | Codex | `thread/revert` `{ threadId, beforeTurnId }`, Codex 0.153 or later (`supportsThreadRevert` in `protocol-compatibility.ts`). Readers rehydrate the retained history through `thread/turns/list`. | No. The protocol leaves local files as they are. | No. Codex replaces the history. |
+| Claude | A query resumes the thread's SDK session at the entry before the prompt (`resumeSessionAt`) and continues on a new branch of the same session. See [claude-provider.md](claude-provider.md#rewind). | Yes, through `Query.rewindFiles` with checkpointing on every query: what Edit, Write, and NotebookEdit changed. Not shell commands, and not prompts sent before checkpointing. | Not yet. The removed branch stays in Claude's session file, and the rewind record names where it ends. |
 | Grok Build | `_x.ai/rewind/execute` with `mode: "conversation_only"`. Grok counts rewind points by prompt; the ACP adapter resolves the transcript message to its ordinal among the session's user messages, and refuses unless Grok's point at that index previews the same prompt. A user message Grok does not count would otherwise move the irreversible rewind onto a later prompt. | No. Grok's binary declares `files_only` and `code_only` rewind modes, but their behavior is undocumented, so PwrAgent does not use them. | No. |
 
 ## Contract
@@ -36,13 +37,21 @@ window's.
 - Remote threads go through the federation method `backend.rewindThread`,
   which needs the `turn_control` capability.
 
+- `PreviewThreadRewindRequest` reads what a rewind would put back without
+  changing anything. Only Claude answers it with files, from a dry run; its
+  `unavailableReason` blocks the rewind (a running task, a prompt Claude no
+  longer has) and `filesUnavailableReason` disables only the file option.
+
 ## Renderer
 
 The rewind sits beside Copy in a prompt's hover actions (`TranscriptMessage`),
 on the first prompt of each turn (`collectRewindableMessageIds`). It opens
 `ThreadRewindConfirm` under that prompt: how many later turns go, a Restore
 files option shown disabled with its reason when the provider cannot restore
-files, and whether the rewind can be undone. The thread header's History
+files, and whether the rewind can be undone. Where the provider restores
+files, the confirmation previews them first and holds the confirm button until
+the dry run answers; Restore files is then on, with the count, the line
+totals, and the first few paths. The thread header's History
 button opens the same confirmation on the last prompt, which is the keyboard
 path. The counts come from the loaded transcript (`summarizeThreadRewind`),
 which always runs contiguously from the target to the end. A collapsed history
