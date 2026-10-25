@@ -173,6 +173,14 @@ export type BackendCapabilities = {
   reviewCodexSubAgent?: boolean;
   interruptTurn: boolean;
   steerTurn: boolean;
+  /**
+   * A steer can carry `delivery: "now"`: the backend abandons the response it
+   * is streaming and reads the message at once, inside the same turn. Only
+   * Claude does this today (`priority: "now"`). Optional so an owner that
+   * predates it never advertises it, and a viewer never sends a delivery the
+   * owner would ignore.
+   */
+  interruptSteerTurn?: boolean;
   transcriptPagination: boolean;
   toolUse: boolean;
   approvalRequests: boolean;

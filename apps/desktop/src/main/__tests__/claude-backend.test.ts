@@ -703,6 +703,46 @@ describe("Claude SDK backend", () => {
     await expect(f.backend.steerTurn({ threadId, expectedTurnId: started.turnId, input: [] })).rejects.toThrow("no active turn");
   });
 
+  it("interrupts with priority now and keeps the turn open past the cut response", async () => {
+    // Shapes measured from CLI 0.3.301: the cut response ends in a success
+    // result with terminal_reason "aborted_streaming" that does not
+    // acknowledge the interjection; the answer to it arrives in the next one.
+    const cut = Promise.withResolvers<void>();
+    const cutProcessed = Promise.withResolvers<void>();
+    const answer = Promise.withResolvers<void>();
+    let interruptUuid: string | undefined;
+    const f = await fixture(async function* () {
+      await cut.promise;
+      yield { type: "result", subtype: "success", is_error: false, stop_reason: null,
+        terminal_reason: "aborted_streaming", result: "1\n2\n3" } as unknown as SDKMessage;
+      cutProcessed.resolve();
+      await answer.promise;
+      yield { type: "result", subtype: "success", is_error: false, stop_reason: "end_turn",
+        terminal_reason: "completed", result: "BANANA", user_message_uuids: [interruptUuid] } as unknown as SDKMessage;
+    });
+    expect(f.backend.summary().capabilities.interruptSteerTurn).toBe(true);
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    const started = await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Count to 300" }] });
+    const prompt = f.run.mock.calls[0][0].prompt;
+    if (typeof prompt === "string") throw new Error("Expected streaming input");
+    const iterator = prompt[Symbol.asyncIterator]();
+    await iterator.next();
+    await f.backend.steerTurn({ threadId, expectedTurnId: started.turnId, delivery: "now",
+      input: [{ type: "text", text: "Stop. Say BANANA." }] });
+    const streamed = (await iterator.next()).value;
+    interruptUuid = streamed.uuid;
+    expect(streamed).toMatchObject({ type: "user", priority: "now",
+      message: { content: [{ type: "text", text: "Stop. Say BANANA." }] } });
+    cut.resolve();
+    await cutProcessed.promise;
+    expect(f.events.some((event) => event.notification.method === "turn/completed")).toBe(false);
+    answer.resolve();
+    await f.waitForTurn();
+    const completed = f.events.filter((event) => event.notification.method === "turn/completed");
+    expect(completed).toHaveLength(1);
+    expect(completed[0]?.notification).toMatchObject({ params: { turn: { status: "completed" } } });
+  });
+
   it("accepts a steer sent after turn/started but before the query launches", async () => {
     const result = Promise.withResolvers<void>();
     let steerUuid: string | undefined;

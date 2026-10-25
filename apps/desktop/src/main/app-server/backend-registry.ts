@@ -8530,6 +8530,8 @@ function buildSteerRequestSignature(
     .update(JSON.stringify({
       input: params.input,
       messageOrigin: messageOrigin ?? null,
+      // An interrupt and a steer of the same text are different requests.
+      ...(params.delivery === "now" ? { delivery: "now" } : {}),
     }))
     .digest("hex");
 }
@@ -22792,6 +22794,10 @@ export class DesktopBackendRegistry {
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
+    // Refuse before any attachment is copied into private storage.
+    if (params.delivery === "now" && params.backend !== "claude") {
+      throw new Error("This backend cannot interrupt a running response. Steer or queue the message instead.");
+    }
     await this.assertThreadNotLocked(params.backend, params.threadId);
     const review = this.findReviewForParentTurn({
       backend: params.backend,

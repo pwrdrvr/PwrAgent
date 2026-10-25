@@ -42960,6 +42960,78 @@ button.composer__subthread-source-parent:hover {
   color: var(--accent-bright);
 }
 
+/* Mid-turn the menu also holds Queue, Steer, and Interrupt, each with a
+   clause that says what it does, so it widens to fit those lines. */
+.composer__schedule-menu--turn {
+  width: 300px;
+  max-width: calc(100vw - 32px);
+}
+
+.composer__schedule-menu-label {
+  padding: 6px 10px 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.composer__schedule-menu-separator {
+  height: 1px;
+  margin: 6px 2px;
+  background: var(--border-subtle);
+}
+
+.composer__schedule-menu-item--described {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.composer__schedule-menu-item-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The supporting clause stays muted through hover, like
+   .composer-dropdown__option-description. */
+.composer__schedule-menu-item-description {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Same chip as .thread-context-menu__shortcut. */
+.composer__schedule-menu-item-shortcut {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.composer__schedule-menu-item:hover .composer__schedule-menu-item-shortcut,
+.composer__schedule-menu-item:focus-visible .composer__schedule-menu-item-shortcut {
+  color: var(--accent-bright);
+}
+
+/* Unavailable for this provider or model. Still hoverable and readable: its
+   description says why. It takes no highlight, so it never reads as a target. */
+.composer__schedule-menu-item[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.composer__schedule-menu-item[aria-disabled="true"]:hover,
+.composer__schedule-menu-item[aria-disabled="true"]:focus-visible {
+  background: transparent;
+  color: var(--text-muted);
+}
+
 .context-window-moon {
   display: inline-flex;
   min-height: 26px;

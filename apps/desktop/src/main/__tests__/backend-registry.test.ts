@@ -28334,6 +28334,37 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("refuses an interrupt on a backend that cannot cut in mid-response", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
+    });
+
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Start active work" }],
+    });
+
+    // Delivering it as a plain steer would quietly do something else.
+    await expect(
+      registry.steerTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        expectedTurnId: "turn-1",
+        input: [{ type: "text", text: "Stop and change course" }],
+        requestId: "interrupt-1",
+        delivery: "now",
+      }),
+    ).rejects.toThrow("cannot interrupt a running response");
+    expect(codexClient.steerTurnCallCount).toBe(0);
+
+    await registry.close();
+  });
+
   it("merges accepted Codex steer attachments into the source turn cache", async () => {
     const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-steer-images-"));
     const previousHome = process.env.PWRAGENT_HOME;

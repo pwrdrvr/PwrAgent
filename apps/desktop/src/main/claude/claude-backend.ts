@@ -11,6 +11,7 @@ import type {
   AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadPlanEntry,
   AppServerThreadPlanStep, AppServerThreadReplay, AppServerThreadReviewEntry, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
+  SteerTurnDelivery,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
@@ -383,6 +384,7 @@ export class ClaudeBackend {
       capabilities: {
         listThreads: true, createThread: true, resumeThread: true, renameThread: true,
         readThread: true, startTurn: true, interruptTurn: true, steerTurn: true,
+        interruptSteerTurn: true,
         archiveThread: true, restoreThread: true, archiveWorktree: false,
         transcriptPagination: false, toolUse: true, approvalRequests: true,
         multiDirectoryThreads: false,
@@ -1889,7 +1891,9 @@ export class ClaudeBackend {
     await live.done;
   }
 
-  async steerTurn(params: { threadId: string; expectedTurnId: string; input: AppServerTurnInputItem[] }): Promise<{
+  async steerTurn(params: {
+    threadId: string; expectedTurnId: string; input: AppServerTurnInputItem[]; delivery?: SteerTurnDelivery;
+  }): Promise<{
     threadId: string; turnId: string; messageId: string;
   }> {
     const live = this.sessions.get(params.threadId);
@@ -1924,8 +1928,13 @@ export class ClaudeBackend {
       turn.entries.set(messageId, entry);
       turn.pendingSteers.add(uuid);
       // "next" joins the running turn at its next boundary. "now" aborts the
-      // in-flight response and ends that native turn with an error result.
-      live.input.push({ type: "user", uuid, priority: "next", parent_tool_use_id: null,
+      // in-flight response: Claude ends it with a success result whose
+      // terminal_reason is "aborted_streaming" (or "aborted_tools", when a
+      // running tool finishes first and the next model call is skipped). That
+      // result acknowledges only the earlier input, so pendingSteers keeps the
+      // turn open until the result that answers this message. Measured on CLI
+      // 0.3.301; a running tool is not killed.
+      live.input.push({ type: "user", uuid, priority: params.delivery === "now" ? "now" : "next", parent_tool_use_id: null,
         message: { role: "user", content } });
       // The message is already sent; turn completion persists every entry,
       // so an early-write failure must not report the steer as rejected.
