@@ -11111,7 +11111,9 @@ describe("Composer", () => {
       });
 
       await waitFor(() => expect(steerTurn).toHaveBeenCalledTimes(1));
-      expect(steerTurn.mock.calls[0]?.[0]).not.toHaveProperty("delivery");
+      expect(steerTurn).toHaveBeenCalledWith(
+        expect.not.objectContaining({ delivery: expect.anything() }),
+      );
       expect(screen.getByText("Steering now")).toBeInTheDocument();
     });
 
