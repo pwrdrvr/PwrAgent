@@ -74,12 +74,17 @@ export class SandboxerPrCleanupService {
 
   constructor(private readonly options: SandboxerPrCleanupOptions) {}
 
-  /** Concurrent callers for one thread share one run. */
+  /**
+   * Concurrent callers for one thread share one run. `createdBefore` is when
+   * the thread's last PR merged or closed: a sandbox created after that
+   * belongs to later work on the thread, not to the PRs that closed.
+   */
   async cleanupThread(params: {
     backend: string;
     threadId: string;
+    createdBefore?: number;
   }): Promise<SandboxCleanupReport> {
-    const key = JSON.stringify([params.backend, params.threadId]);
+    const key = JSON.stringify([params.backend, params.threadId, params.createdBefore ?? null]);
     const running = this.inFlight.get(key);
     if (running) return await running;
     const run = this.run(params).finally(() => {
@@ -92,9 +97,17 @@ export class SandboxerPrCleanupService {
   private async run(params: {
     backend: string;
     threadId: string;
+    createdBefore?: number;
   }): Promise<SandboxCleanupReport> {
-    const pending = this.options.store.pendingForThread(params);
-    const report: SandboxCleanupReport = { ...params, entries: [] };
+    const pending = this.options.store.pendingForThread(params)
+      .filter((record) =>
+        params.createdBefore === undefined || record.createdAt <= params.createdBefore
+      );
+    const report: SandboxCleanupReport = {
+      backend: params.backend,
+      threadId: params.threadId,
+      entries: [],
+    };
     if (pending.length === 0) return report;
     if (!this.options.isEnabled()) {
       report.entries = pending.map((record) => entry(record, "skipped",

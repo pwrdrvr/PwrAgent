@@ -265,6 +265,27 @@ describe("SandboxerPrCleanupService", () => {
     expect(onReport).not.toHaveBeenCalled();
   });
 
+  it("leaves a sandbox created after the thread's last PR closed", async () => {
+    created("sb_for_pr");
+    now = 5_000;
+    created("sb_later_work");
+    const connection = transport(SANDBOXER_TOOLS);
+    const { cleanup } = service(async () => connection.value);
+
+    const report = await cleanup.cleanupThread({
+      backend: "codex",
+      threadId: "thread-1",
+      createdBefore: 2_000,
+    });
+    expect(report.entries).toMatchObject([{ sandboxId: "sb_for_pr", action: "stopped" }]);
+    expect(connection.callTool.mock.calls).toEqual([["stop_sandbox", { sandboxId: "sb_for_pr" }]]);
+    expect(store.pendingForThread({ backend: "codex", threadId: "thread-1" }))
+      .toMatchObject([
+        { sandboxId: "sb_for_pr", status: "stopped" },
+        { sandboxId: "sb_later_work", status: "active" },
+      ]);
+  });
+
   it("shares one run between concurrent callers", async () => {
     created("sb_one");
     const connection = transport(SANDBOXER_TOOLS);

@@ -6472,13 +6472,22 @@ class DesktopAppServerService {
     const attachment = this.attachedPrsByThreadKey.get(
       buildThreadIdentityKey(backend, threadId),
     );
-    const prs = attachment?.prs ?? [];
-    if (prs.length === 0) return undefined;
-    const allTerminal = prs.every((pr) =>
-      isTerminalPullRequest(this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr)
+    const prs = (attachment?.prs ?? []).map((pr) =>
+      this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr
     );
-    if (!allTerminal) return undefined;
-    return await service.cleanupThread({ backend, threadId });
+    if (prs.length === 0) return undefined;
+    if (!prs.every((pr) => isTerminalPullRequest(pr))) return undefined;
+    // A sandbox created after the last PR closed is for later work on this
+    // thread. Without a forge timestamp, everything recorded so far counts.
+    const closedAt = prs.map((pr) => pr.mergedAt ?? pr.closedAt);
+    const createdBefore = closedAt.every((value) => typeof value === "number")
+      ? Math.max(...(closedAt as number[]))
+      : undefined;
+    return await service.cleanupThread({
+      backend,
+      threadId,
+      ...(createdBefore !== undefined ? { createdBefore } : {}),
+    });
   }
 
   /** Startup: threads whose PRs all closed while a cleanup was pending. */
