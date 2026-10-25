@@ -12813,70 +12813,24 @@ export class DesktopBackendRegistry {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
     };
-    if (params.backend === "claude") {
-      const threads = await this.withThreadEnvironmentOptions(
-        "claude",
-        await this.claudeBackend.listThreads(params),
-      );
-      this.rememberThreadListContexts(threads, displayMetadataObservationSequence, true, params.archived);
-      this.persistProviderThreadSnapshot("claude", threads, params);
-      return threads;
-    }
-    if (params.backend === "codex") {
-      const archiveGeneration = this.archiveCleanupReads.generation("codex");
-      const listed = await this.listCodexThreads({
-        archived: params.archived,
-        enrichDirectories: params.enrichDirectories,
-        filter: params.filter,
-        limit: params.limit,
-        maxPages: params.maxPages,
-        skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
-      }, diagnostics);
-      const threads = this.inheritIncompleteThreadList(
-        await this.filterArchivedThreadsPresentInActiveList({
-          archived: params.archived,
-          backend: "codex",
-          diagnostics,
-          filter: params.filter,
-          threads: listed,
-        }),
-        listed,
-      );
-      // Listings that began before a restore cannot authorize destructive
-      // cleanup, including archived reads made outside the cleanup pool.
-      if (!params.skipArchivedMetadataRefresh
-        && this.archiveCleanupReads.generation("codex") === archiveGeneration) {
-        this.scheduleThreadListArchiveStateCleanup({
-          backend: "codex",
-          filter: params.filter,
-          archived: params.archived,
-          threads,
-        });
-      }
-      this.rememberThreadListContexts(
-        threads,
-        displayMetadataObservationSequence,
-        params.enrichDirectories,
-        params.archived,
-      );
-      this.persistProviderThreadSnapshot("codex", threads, params);
-      return threads;
-    }
-
-    if (params.backend && isAcpBackendId(params.backend)) {
-      const threads = await this.listInstalledAcpThreads(
+    if (
+      params.backend === "claude"
+      || params.backend === "codex"
+      || (params.backend && isAcpBackendId(params.backend))
+    ) {
+      const listed = await this.readProviderThreadList(
         params.backend,
-        params.filter,
-        params.archived,
+        params,
+        diagnostics,
+      );
+      const threads = this.inheritIncompleteThreadList(
+        await this.withThreadEnvironmentOptions(listed.threads),
+        listed.threads,
       );
       this.rememberThreadListContexts(
         threads,
         displayMetadataObservationSequence,
-        // An ACP listing resolves linked directories for every row whatever the
-        // caller asked for, so its rows are enriched even when the request was
-        // not. Passing the request's flag would record them as unenriched and
-        // send every `requireEnriched` read back to the provider.
-        ACP_LISTINGS_ARE_ENRICHED,
+        listed.enriched,
         params.archived,
       );
       this.persistProviderThreadSnapshot(params.backend, threads, params);
@@ -12895,7 +12849,8 @@ export class DesktopBackendRegistry {
         maxPages: params.maxPages,
         skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
       }),
-      this.listAllInstalledAcpThreads(params.filter, params.archived),
+      this.listAllInstalledAcpThreads(params.filter, params.archived)
+        .then((threads) => this.withThreadEnvironmentOptions(threads)),
       this.listThreads({ ...params, backend: "claude" }),
     ]);
 
@@ -12935,6 +12890,73 @@ export class DesktopBackendRegistry {
   private async hasCodexExecutable(): Promise<boolean> {
     if (this.readCodexProvider().lastKnownGood?.selectedCommand) return true;
     return await this.resolveCodexRuntimeCommandFn?.().then(() => true, () => false) ?? false;
+  }
+
+  /**
+   * One backend's rows as its provider lists them, before the steps every
+   * listing shares. `enriched` is whether linked directories were resolved
+   * for every row.
+   */
+  private async readProviderThreadList(
+    backend: AppServerBackendKind,
+    params: {
+      archived?: boolean;
+      enrichDirectories: boolean;
+      filter?: string;
+      limit?: number;
+      maxPages?: number;
+      skipArchivedMetadataRefresh?: boolean;
+    },
+    diagnostics: { callerReason: ThreadListCallerReason; ownerId: string },
+  ): Promise<{ threads: AppServerThreadSummary[]; enriched: boolean }> {
+    if (backend === "claude") {
+      return { threads: await this.claudeBackend.listThreads(params), enriched: true };
+    }
+    if (backend === "codex") {
+      const archiveGeneration = this.archiveCleanupReads.generation("codex");
+      const listed = await this.listCodexThreads({
+        archived: params.archived,
+        enrichDirectories: params.enrichDirectories,
+        filter: params.filter,
+        limit: params.limit,
+        maxPages: params.maxPages,
+        skipArchivedMetadataRefresh: params.skipArchivedMetadataRefresh,
+      }, diagnostics);
+      const threads = this.inheritIncompleteThreadList(
+        await this.filterArchivedThreadsPresentInActiveList({
+          archived: params.archived,
+          backend: "codex",
+          diagnostics,
+          filter: params.filter,
+          threads: listed,
+        }),
+        listed,
+      );
+      // Listings that began before a restore cannot authorize destructive
+      // cleanup, including archived reads made outside the cleanup pool.
+      if (!params.skipArchivedMetadataRefresh
+        && this.archiveCleanupReads.generation("codex") === archiveGeneration) {
+        this.scheduleThreadListArchiveStateCleanup({
+          backend: "codex",
+          filter: params.filter,
+          archived: params.archived,
+          threads,
+        });
+      }
+      return { threads, enriched: params.enrichDirectories };
+    }
+    return {
+      threads: await this.listInstalledAcpThreads(
+        backend,
+        params.filter,
+        params.archived,
+      ),
+      // An ACP listing resolves linked directories for every row whatever the
+      // caller asked for, so its rows are enriched even when the request was
+      // not. Passing the request's flag would record them as unenriched and
+      // send every `requireEnriched` read back to the provider.
+      enriched: ACP_LISTINGS_ARE_ENRICHED,
+    };
   }
 
   private inheritIncompleteThreadList(
@@ -13710,28 +13732,36 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Attaches the environments defined in each thread's workspace. The Codex
-   * and ACP lists do this inline; without it a Claude thread showed its
-   * environment's Run chip but no Environment picker.
+   * Attaches the environments defined in each thread's workspace. Every
+   * provider listing passes through here, whatever its backend: when each
+   * backend's list did this itself, the Claude list never did, and its
+   * threads showed an environment's Run chip with no Environment picker.
    */
   private async withThreadEnvironmentOptions(
-    backend: AppServerBackendKind,
     threads: AppServerThreadSummary[],
   ): Promise<AppServerThreadSummary[]> {
     if (threads.length === 0) return threads;
     const readOverlays = this.overlayStore.getThreadListingOverlayStates
       ?? this.overlayStore.getThreadOverlayStates;
-    const overlaysByThreadId = await readOverlays.call(this.overlayStore, {
-      backend,
-      threadIds: threads.map((thread) => thread.id),
-    });
+    const threadIdsByBackend = new Map<AppServerBackendKind, string[]>();
+    for (const thread of threads) {
+      const ids = threadIdsByBackend.get(thread.source) ?? [];
+      ids.push(thread.id);
+      threadIdsByBackend.set(thread.source, ids);
+    }
+    const overlaysByBackend = new Map(await Promise.all(
+      [...threadIdsByBackend].map(async ([backend, threadIds]) => [
+        backend,
+        await readOverlays.call(this.overlayStore, { backend, threadIds }),
+      ] as const),
+    ));
     // Threads in one checkout share its environment files; read them once.
     const optionsByCwd = new Map<string, Promise<CodexEnvironmentOption[]>>();
     return await Promise.all(
       threads.map(async (thread) => {
         const cwd = resolveThreadWorkspaceCwd(
           thread,
-          overlaysByThreadId[thread.id]?.extraLinkedDirectories ?? [],
+          overlaysByBackend.get(thread.source)?.[thread.id]?.extraLinkedDirectories ?? [],
         );
         if (!cwd) return { ...thread, codexEnvironmentOptions: [] };
         let options = optionsByCwd.get(cwd);
@@ -13775,14 +13805,10 @@ export class DesktopBackendRegistry {
           overlay,
           backendId,
         );
-        const codexEnvironmentOptions = cwd
-          ? await listCodexEnvironmentOptions(cwd).catch(() => [])
-          : [];
         return {
           ...thread,
           executionMode,
           linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(linkedDirectories),
-          codexEnvironmentOptions,
         };
       }),
     );
@@ -29808,13 +29834,6 @@ export class DesktopBackendRegistry {
     const enrichedThreads = await Promise.all(
       visibleThreads.map(async (thread) => {
         const overlay = overlaysByThreadId[thread.id];
-        const cwd = resolveThreadWorkspaceCwd(
-          thread,
-          overlay?.extraLinkedDirectories ?? [],
-        );
-        const codexEnvironmentOptions = cwd
-          ? await listCodexEnvironmentOptions(cwd).catch(() => [])
-          : [];
         return {
           ...thread,
           ...this.persistedCodexNativeSubAgentDisclosure(thread, overlay),
@@ -29826,7 +29845,6 @@ export class DesktopBackendRegistry {
           linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
             thread.linkedDirectories,
           ),
-          codexEnvironmentOptions,
         };
       }),
     );
