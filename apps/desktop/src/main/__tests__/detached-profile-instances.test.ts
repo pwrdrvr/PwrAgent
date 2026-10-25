@@ -16,6 +16,18 @@ describe("detached E2E profile ownership", () => {
     expect(selectGraduatedProfilePids(rows, "personal")).toEqual([81002]);
   });
 
+  it("selects a Linux instance whose title Chromium rewrote with switches first", () => {
+    // `ps` and /proc/<pid>/cmdline both show the rewritten title, which moves
+    // the bare `--profile` switch ahead of the entry and the profile name.
+    const rows = parseProcessTable([
+      ` 2407 /opt/electron/electron --disable-accelerated-video-decode`
+        + ` --disable-accelerated-video-encode --profile ${ELECTRON_E2E_ENTRY} personal`,
+      ` 2408 /opt/electron/electron --profile ${ELECTRON_E2E_ENTRY} personal-two`,
+    ].join("\n"), " ");
+
+    expect(selectGraduatedProfilePids(rows, "personal")).toEqual([2407]);
+  });
+
   it("leaves the parent, other checkouts, other profiles, and ordinary app launches alone", () => {
     const otherEntry = path.join(path.dirname(ELECTRON_E2E_ENTRY), "other-checkout", "electron-bootstrap.mjs");
     const rows = [

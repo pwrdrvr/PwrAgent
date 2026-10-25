@@ -82,6 +82,7 @@ import type {
   DesktopProviderThreadModelMigration,
   HandoffThreadWorkspaceResponse,
   LinkedDirectorySummary,
+  FederationInstanceId,
   MarkThreadSeenRequest,
   SetThreadPinRequest,
   NavigationLaunchpadDefaults,
@@ -21996,6 +21997,82 @@ command = "pnpm grok"
     });
 
     await registry.close();
+  });
+
+  it("resolves a remote viewer's launchpad model against this instance's catalog", async () => {
+    // A remote viewer with its own Codex composes the draft against its own
+    // catalog and sends its own default model. The owner must start the
+    // thread and the review with a model it has, the one the remote window
+    // showed as the provider default.
+    const launchpad = {
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory" as const,
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "",
+      workMode: "local" as const,
+      model: "gpt-viewer-only",
+      reasoningEffort: "medium" as const,
+      createdAt: 1_000,
+      updatedAt: 2_000,
+    };
+    const createRegistry = () => {
+      const codexClient = new MockBackendClient({
+        initializeResult: {
+          serverInfo: { name: "Codex App Server", version: "1.0.0" },
+          methods: ["thread/start", "review/start"],
+        },
+        models: [
+          {
+            id: "gpt-5.4",
+            label: "GPT-5.4",
+            supportsReasoning: true,
+          },
+        ],
+      });
+      return {
+        codexClient,
+        registry: new DesktopBackendRegistry({
+          codexClient,
+          overlayStore: createOverlayStoreMock(),
+        }),
+      };
+    };
+
+    const remote = createRegistry();
+    const response = await remote.registry.materializeDirectoryLaunchpad(
+      {
+        directoryKey: launchpad.directoryKey,
+        reviewTarget: { type: "baseBranch", branch: "main" },
+        launchpad,
+      },
+      { sourceInstanceId: "pwr_viewer" as FederationInstanceId },
+    );
+    expect(response.turnStartFailure).toBeUndefined();
+    expect(remote.codexClient.lastStartThreadParams).toMatchObject({
+      model: "gpt-5.4",
+    });
+    expect(remote.codexClient.lastStartReviewParams).toMatchObject({
+      target: { type: "baseBranch", branch: "main" },
+      model: "gpt-5.4",
+    });
+    await remote.registry.close();
+
+    // The same draft from this instance's own window keeps the model it
+    // names, so the review refuses it as before.
+    const local = createRegistry();
+    const localResponse = await local.registry.materializeDirectoryLaunchpad({
+      directoryKey: launchpad.directoryKey,
+      reviewTarget: { type: "baseBranch", branch: "main" },
+      launchpad,
+    });
+    expect(localResponse.turnStartFailure).toMatchObject({
+      phase: "review",
+      message: expect.stringContaining("gpt-viewer-only"),
+    });
+    await local.registry.close();
   });
 
   it("names a thread launched straight into a review", async () => {

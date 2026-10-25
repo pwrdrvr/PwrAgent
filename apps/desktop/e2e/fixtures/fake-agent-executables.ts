@@ -141,6 +141,8 @@ export async function writeFakeCodexExecutable(params: {
   targetPath: string;
   protocolLogPath: string;
   launchMarkerPath: string;
+  /** `model/list` ids, default first. Defaults to the production default. */
+  models?: readonly string[];
 }): Promise<string> {
   await mkdir(path.dirname(params.targetPath), { recursive: true });
   await mkdir(path.dirname(params.protocolLogPath), { recursive: true });
@@ -156,6 +158,7 @@ export async function writeFakeCodexExecutable(params: {
   const versionLiteral = JSON.stringify(FAKE_CODEX_VERSION);
   const protocolLogEnvLiteral = JSON.stringify(FAKE_CODEX_PROTOCOL_LOG_ENV);
   const launchMarkerEnvLiteral = JSON.stringify(FAKE_CODEX_LAUNCH_MARKER_ENV);
+  const modelsLiteral = JSON.stringify(params.models ?? ["gpt-5.5", "gpt-5"]);
 
   await writeFile(
     params.targetPath,
@@ -173,6 +176,7 @@ const LAUNCH_MARKER =
   process.env[${launchMarkerEnvLiteral}] || BAKED_LAUNCH_MARKER;
 const SETUP_MARKER_NAME = ${setupMarkerNameLiteral};
 const VERSION = ${versionLiteral};
+const MODELS = ${modelsLiteral};
 
 function appendProtocol(entry) {
   try {
@@ -302,7 +306,7 @@ function handleRequest(request) {
       model:
         typeof params.model === "string" && params.model.trim()
           ? params.model.trim()
-          : "gpt-5.5",
+          : MODELS[0],
       modelProvider: "openai",
       serviceTier: null,
       cwd:
@@ -343,26 +347,18 @@ function handleRequest(request) {
   }
   if (method === "model/list") {
     // The desktop can carry its current Codex launchpad default into the new
-    // thread, then validates that same model again before review/start. Keep
-    // the fake catalog aligned with the production default while retaining a
-    // legacy option for tests that select it explicitly.
+    // thread, then validates that same model again before review/start. By
+    // default the catalog matches the production default and keeps a legacy
+    // option for tests that select it explicitly. A test that needs two
+    // instances with different catalogs passes its own list.
     return {
-      data: [
-        {
-          id: "gpt-5.5",
-          model: "gpt-5.5",
-          isDefault: true,
-          default: true,
-          supportsReasoning: true,
-        },
-        {
-          id: "gpt-5",
-          model: "gpt-5",
-          isDefault: false,
-          default: false,
-          supportsReasoning: true,
-        },
-      ],
+      data: MODELS.map((id, index) => ({
+        id,
+        model: id,
+        isDefault: index === 0,
+        default: index === 0,
+        supportsReasoning: true,
+      })),
       nextCursor: null,
     };
   }
@@ -638,11 +634,13 @@ export async function seedFakeCodexExecutable(params: {
   homeRoot: string;
   requestLogPath: string;
   launchMarkerPath: string;
+  models?: readonly string[];
 }): Promise<{ executablePath: string }> {
   const executablePath = await writeFakeCodexExecutable({
     targetPath: path.join(params.homeRoot, "bin", "fake-codex"),
     protocolLogPath: params.requestLogPath,
     launchMarkerPath: params.launchMarkerPath,
+    ...(params.models ? { models: params.models } : {}),
   });
   return { executablePath };
 }

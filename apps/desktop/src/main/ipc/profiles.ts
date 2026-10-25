@@ -1,5 +1,4 @@
 import { ipcMain, safeStorage, shell } from "electron";
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -35,6 +34,7 @@ import {
   PROFILES_SET_MENU_VISIBILITY_CHANNEL,
   PROFILES_WRITE_SECRETS_CHANNEL,
 } from "../../shared/ipc";
+import { spawnDetachedProcess } from "../detached-launch";
 import { StateDb } from "../state/state-db";
 import {
   PWRAGENT_PROFILE_ENV,
@@ -233,15 +233,12 @@ export function openDesktopPwrAgentProfile(
   // Deliberately retain ELECTRON_RENDERER_URL here. This is not a general
   // child execution context: it relaunches PwrAgent itself, whose development
   // main process needs electron-vite's renderer endpoint to render correctly.
-  const child = spawn(process.execPath, args, {
-    detached: true,
-    env: {
-      ...process.env,
-      [PWRAGENT_PROFILE_ENV]: profile,
-    },
-    stdio: "ignore",
+  // The new instance outlives this one, so it must not keep this process's
+  // open files (see spawnDetachedProcess).
+  spawnDetachedProcess(process.execPath, args, {
+    ...process.env,
+    [PWRAGENT_PROFILE_ENV]: profile,
   });
-  child.unref();
 
   return { opened: true, profile };
 }

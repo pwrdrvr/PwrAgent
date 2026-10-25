@@ -26208,7 +26208,9 @@ export class DesktopBackendRegistry {
 
   async materializeDirectoryLaunchpad(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: MaterializeDirectoryLaunchpadOptions,
+    options?: MaterializeDirectoryLaunchpadOptions & {
+      sourceInstanceId?: FederationInstanceId;
+    },
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
     if (!request.releaseLaunchpadOnSubmit) {
       return await this.materializeLaunchpadDraft(request, options);
@@ -26259,16 +26261,21 @@ export class DesktopBackendRegistry {
 
   private async materializeLaunchpadDraft(
     request: MaterializeDirectoryLaunchpadRequest,
-    options?: MaterializeDirectoryLaunchpadOptions,
+    options?: MaterializeDirectoryLaunchpadOptions & {
+      sourceInstanceId?: FederationInstanceId;
+    },
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
-    const launchpad =
+    const draft =
       request.launchpad ??
       (await this.overlayStore.getDirectoryLaunchpad({
         directoryKey: request.directoryKey,
       }));
-    if (!launchpad) {
+    if (!draft) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
+    const launchpad = options?.sourceInstanceId
+      ? await this.resolveRemoteLaunchpadModelSettings(draft)
+      : draft;
     if (
       request.scheduledFor !== undefined
       && (!Number.isFinite(request.scheduledFor) || request.scheduledFor < 0)
@@ -27467,6 +27474,36 @@ export class DesktopBackendRegistry {
       backends.find((backend) => backend.kind === preferred) ??
       backends.find((backend) => backend.kind === "codex") ??
       backends[0]!
+    );
+  }
+
+  /**
+   * Resolve a draft that another instance composed against this instance's
+   * provider catalog.
+   *
+   * A remote viewer composes and stores the draft for a thread that runs
+   * here, and the viewer fills its model settings from the viewer's own
+   * provider. A viewer with its own Codex therefore sends its own default
+   * model, which this Codex may not have. The remote window shows this
+   * instance's catalog and draws such a model as the provider default, so
+   * resolving it here starts the thread with the model the operator saw.
+   * A review could not start at all: review/start rejects a model the
+   * catalog lacks.
+   */
+  private async resolveRemoteLaunchpadModelSettings(
+    launchpad: NavigationLaunchpadDraft,
+  ): Promise<NavigationLaunchpadDraft> {
+    const projected = projectNavigationLaunchpadProviderSettings(launchpad);
+    const { backends } = await this.listBackends({ includeUnavailable: true });
+    const backend = backends.find(
+      (candidate) => candidate.kind === projected.backend,
+    );
+    if (!backend) {
+      return launchpad;
+    }
+    return applyNavigationLaunchpadProviderSettingsPatch(
+      projected,
+      await this.resolveLaunchpadModelSettings(backend, projected),
     );
   }
 
