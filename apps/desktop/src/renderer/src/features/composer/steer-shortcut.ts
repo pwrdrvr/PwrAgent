@@ -37,7 +37,7 @@ export function formatSteerShortcut(): string {
 
 /** Tooltip for a Queue button whose running turn can take a steer. */
 export function formatQueueButtonTooltip(): string {
-  return `Queue after this turn · ${formatPrimaryAccel("Enter")} to steer it in`;
+  return `Queue after this turn · ${formatSteerShortcut()} to steer it in`;
 }
 
 /**

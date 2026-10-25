@@ -505,7 +505,7 @@ describe("CompactComposer", () => {
       typeDraft();
       fireEvent.mouseEnter(screen.getByRole("button", { name: "Queue" }));
       expect((await screen.findByRole("tooltip")).textContent).toBe(
-        "Queue after this turn · ⌘Enter to steer it in",
+        "Queue after this turn · ⌘↵ to steer it in",
       );
     });
 
