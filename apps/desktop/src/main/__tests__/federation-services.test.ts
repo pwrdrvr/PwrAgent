@@ -347,7 +347,7 @@ it("answers Federation control requests while a transfer keeps streaming", async
   const released = new Promise<void>((resolve) => { release = resolve; });
   let sent = 0;
   let forwarder!: FederationServiceForwarder;
-  const receivedBytes = (): number => forwarder.list(1, "owner", thread)[0]!.receivedBytes;
+  const receivedBytes = (): number => forwarder.list(1, "owner", thread)[0]?.receivedBytes ?? 0;
   const server = createHttpServer((request, response) => {
     let received = 0;
     request.on("data", (data: Buffer) => { received += data.length; });
@@ -359,7 +359,7 @@ it("answers Federation control requests while a transfer keeps streaming", async
       let open = true;
       void released.then(() => { open = false; });
       const pump = (): void => {
-        if (!open) { response.end(); return; }
+        if (!open || response.destroyed) { response.end(); return; }
         if (sent - receivedBytes() < 2 * chunk.length) {
           sent += chunk.length;
           response.write(chunk);
@@ -370,6 +370,9 @@ it("answers Federation control requests while a transfer keeps streaming", async
     });
   });
   const port = await listen(server);
+  // Cleanups run in reverse: stop the pump before the server waits to close, even
+  // when an assertion fails before the release.
+  cleanups.push(() => release());
   const service = owner();
   const declaration = await service.advertise(thread, { port, name: "bulk", protocol: "http" });
   const { rpc, router } = routed(service, true);

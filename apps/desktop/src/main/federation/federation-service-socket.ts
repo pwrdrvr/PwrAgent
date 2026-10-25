@@ -45,6 +45,15 @@ export function waitServiceReadable(socket: Socket, milliseconds = 50, flushed?:
   });
 }
 
+/** Wait up to `milliseconds` for a pending write to flush. Resolves `false` on timeout. */
+export function waitServiceFlushed(flushed: Promise<unknown>, milliseconds = 50): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), milliseconds);
+    const done = (): void => { clearTimeout(timer); resolve(true); };
+    void flushed.then(done, done);
+  });
+}
+
 export async function writeServiceData(socket: Socket, bytes: Buffer, fin: boolean): Promise<void> {
   if (bytes.length) {
     if (socket.destroyed || socket.writableEnded) throw new Error("Service stream is closed.");

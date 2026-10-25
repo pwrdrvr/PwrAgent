@@ -7,7 +7,7 @@ import type {
 import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, isAppServerBackendKind } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import {
-  decodeServiceData, readServiceData, waitServiceReadable, writeServiceData,
+  decodeServiceData, readServiceData, waitServiceFlushed, waitServiceReadable, writeServiceData,
   SERVICE_CHUNK_BYTES, SERVICE_LEASE_MS, SERVICE_MAX_STREAMS, SERVICE_MAX_PEER_STREAMS,
 } from "./federation-service-socket";
 
@@ -214,6 +214,9 @@ export class FederationServices {
       // partial chunk or FIN drained the viewer's buffer: long-poll for the reply.
       const flushWakes = bytes.length === SERVICE_CHUNK_BYTES || !wrote;
       if (input.receive) await waitServiceReadable(stream.socket, 50, flushWakes ? stream.flushed : undefined);
+      // Without receive credit there is nothing to read, but a full chunk should
+      // still report its flush so the viewer can send the next one.
+      else if (flushWakes && stream.flushed) await waitServiceFlushed(stream.flushed);
       this.getLease(peerId, stream.lease.leaseId);
       if (stream.error) throw new Error(stream.error);
       const data = input.receive ? readServiceData(stream.socket) : Buffer.alloc(0);
