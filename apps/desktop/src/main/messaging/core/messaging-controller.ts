@@ -1814,7 +1814,11 @@ export class MessagingController {
           binding,
           await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
         );
+        const activeTurn = this.getActiveTurn(binding);
+        const sourceTurnActive = activeTurn?.turnId === turnId
+          && (activeTurn?.status === "working" || activeTurn?.status === "waiting");
         const deliveries = this.toolUpdatePolicy.processActivity({
+          ...(sourceTurnActive ? {} : { lifecycle: "window" as const }),
           activity: { id: key, kind: "tool", status: "completed", title: receipt.text },
           bindingId: binding.id,
           mode,
@@ -17932,7 +17936,7 @@ export class MessagingController {
       return;
     }
 
-    const intent = binding.channel.channel === "slack"
+    const intent = binding.channel.channel === "slack" && delivery.lifecycle !== "window"
       ? this.buildWorkingCardDeliveryIntent(delivery, binding.id, activities)
       : delivery.kind === "individual"
         ? buildToolUpdateMessageIntent({
@@ -17947,6 +17951,12 @@ export class MessagingController {
             createdAt: this.now(),
             id: this.newIntentId("tool-update-batch"),
           });
+    if (delivery.lifecycle === "window") {
+      // These receipts have no running turn to own a working card, cancellation
+      // surface or terminal cleanup. Their window owns only this delivery.
+      await this.deliver(intent, binding);
+      return;
+    }
     this.markProseActivitiesDelivered({ ...delivery, activities });
     const cancellation = this.ensureWorkingUpdateCancellationSignal(
       binding,

@@ -10730,6 +10730,9 @@ describe("MessagingController", () => {
   it.each(["show_none", "show_less", "show_some", "show_more", "show_all"] as const)("routes bounded delivery receipts through Working Updates at %s", async (mode) => {
     const harness = await createHarness({ toolUpdateDefaultMode: mode });
     await bindThread(harness);
+    await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+      method: "turn/started", params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1" } },
+    } });
     harness.delivered.length = 0;
     const body = "Review the fixture evidence. ".repeat(300) + "PRIVATE_TAIL";
     const receipt: AgentEvent = {
@@ -10764,6 +10767,44 @@ describe("MessagingController", () => {
       method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { id: "answer", type: "agentMessage", text: "Final response" } },
     } });
     expect(JSON.stringify(harness.delivered)).toContain("Final response");
+  });
+
+  it.each([false, true])("flushes delayed receipt windows after their source turn ends (next turn=%s)", async (nextTurn) => {
+    vi.useFakeTimers();
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_less" });
+    try {
+      await bindThread(harness);
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId: "thread-1", turnId: "source-turn", turn: { id: "source-turn" } },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/completed", params: { threadId: "thread-1", turnId: "source-turn", turn: { id: "source-turn", status: "completed", output: [] } },
+      } });
+      if (nextTurn) await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId: "thread-1", turnId: "next-turn", turn: { id: "next-turn" } },
+      } });
+      harness.delivered.length = 0;
+      const timersBeforeReceipts = vi.getTimerCount();
+      const receipt = (index: number): AgentEvent => ({ backend: "codex", notification: {
+        method: "item/completed", params: { threadId: "thread-1", turnId: "source-turn", item: {
+          id: `delayed-receipt-${index}`, type: "agentMessage",
+          origin: { kind: "pwragent", systemReason: "thread-correspondence", sourceThread: { backend: "codex", threadId: "thread-1", title: "Sender" } },
+          text: `**Message to [Recipient](pwragent://thread/recipient?backend=codex)** · Receiving thread started work\n\nDelayed receipt ${index}`,
+        } },
+      } });
+      for (const index of [1, 2, 3]) {
+        await harness.controller.handleBackendEvent(receipt(index));
+        await harness.controller.handleBackendEvent(receipt(index));
+        await vi.advanceTimersByTimeAsync(60_001);
+        await vi.waitFor(() => expect(harness.delivered.filter((intent) => intent.kind === "message")).toHaveLength(index));
+        const messages = harness.delivered.filter((intent) => intent.kind === "message");
+        expect(JSON.stringify(messages.at(-1))).toContain(`Delayed receipt ${index}`);
+        expect(vi.getTimerCount()).toBe(timersBeforeReceipts);
+      }
+    } finally {
+      harness.controller.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it("does not label structured cross-thread work as automation even on an automation queue", async () => {
@@ -10813,6 +10854,26 @@ describe("MessagingController", () => {
       method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { id: "answer", type: "agentMessage", text: "Final response" } },
     } });
     expect(JSON.stringify(harness.delivered)).toContain("Final response");
+  });
+
+  it("delivers a repeated handoff notice once after its child binding is attached", async () => {
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_none" });
+    const event: AgentEvent = { backend: "codex", notification: { method: "thread/incomingWork", params: {
+      threadId: "thread-1", turnId: "handoff-turn", deliveryId: "start:handoff-turn",
+      incomingWork: { recipientTitle: "Child", omittedMessageCount: 0, messages: [{
+        origin: { kind: "agent", sourceThread: { backend: "codex", threadId: "parent", title: "Parent" } },
+        preview: "Investigate the fixture.",
+      }] },
+    } } };
+    await harness.controller.handleBackendEvent(event);
+    expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([]);
+    await bindThread(harness);
+    harness.delivered.length = 0;
+    await harness.controller.handleBackendEvent(event);
+    await harness.controller.handleBackendEvent(event);
+    const messages = harness.delivered.filter((intent) => intent.kind === "message");
+    expect(messages).toHaveLength(1);
+    expect(JSON.stringify(messages)).toContain("Parent → Child");
   });
 
   it("names internal continuations by structured provenance and leaves ordinary starts quiet", async () => {

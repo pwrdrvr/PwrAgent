@@ -19774,22 +19774,31 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const result = await this.startTurnNow(params);
-    const incomingWork = buildIncomingWorkSummary(params, this.getCachedThreadSummary(params)?.title);
+    await this.publishIncomingWork({ ...params, threadId: result.threadId }, result.turnId);
+    return result;
+  }
+
+  private async publishIncomingWork(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    input: AppServerTurnInputItem[];
+    messageOrigin?: AppServerThreadMessageOrigin;
+  }, turnId: string, recipientTitle = this.getCachedThreadSummary(params)?.title): Promise<void> {
+    const incomingWork = buildIncomingWorkSummary(params, recipientTitle);
     if (incomingWork) await this.emit({
       backend: params.backend,
       notification: {
         method: "thread/incomingWork",
         params: {
-          threadId: result.threadId,
-          turnId: result.turnId,
-          deliveryId: `start:${result.turnId}`,
+          threadId: params.threadId,
+          turnId,
+          deliveryId: `start:${turnId}`,
           incomingWork,
         },
       },
     }).catch((error) => {
       backendRegistryLog.warn("Could not publish incoming thread work", { error: String(error) });
     });
-    return result;
   }
 
   private async startTurnNow(params: {
@@ -41080,6 +41089,14 @@ export class DesktopBackendRegistry {
       context: request.args.context,
       codexEnvironmentStartupFailure,
     });
+    const messageOrigin: AppServerThreadMessageOrigin = {
+      kind: "agent",
+      sourceThread: {
+        backend: sourceBackend,
+        threadId: sourceThreadId,
+        ...(sourceThread?.title ? { title: sourceThread.title } : {}),
+      },
+    };
     let turnId: string | undefined;
     let turnStartFailure: HandoffTaskResult["turnStartFailure"];
     try {
@@ -41099,14 +41116,7 @@ export class DesktopBackendRegistry {
             turnId: sourceTurnId,
           }),
         ],
-        messageOrigin: {
-          kind: "agent",
-          sourceThread: {
-            backend: sourceBackend,
-            threadId: sourceThreadId,
-            ...(sourceThread?.title ? { title: sourceThread.title } : {}),
-          },
-        },
+        messageOrigin,
         executionMode,
         model: inheritedSettings.model,
         reasoningEffort: inheritedSettings.reasoningEffort,
@@ -41143,6 +41153,14 @@ export class DesktopBackendRegistry {
       threadId,
       title,
     });
+    if (turnId && (messagingAttachment.outcome === "attached"
+      || messagingAttachment.outcome === "created_and_attached")) {
+      // The start event precedes creation of a handoff's messaging binding.
+      // Republish with the same delivery id; existing bindings deduplicate it.
+      await this.publishIncomingWork({
+        backend, threadId, input: [{ type: "text", text: prompt }], messageOrigin,
+      }, turnId, title);
+    }
     this.updatePendingThreadHandoff(handoffId, {
       status: turnStartFailure ? "failed" : "completed",
       phase: turnStartFailure ? "failed" : "completed",

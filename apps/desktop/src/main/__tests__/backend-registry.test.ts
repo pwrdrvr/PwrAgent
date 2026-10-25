@@ -37750,9 +37750,15 @@ command = "pnpm dev"
       threadTitleGenerationService: null,
     });
     const messagingRequests: unknown[] = [];
+    let childBindingAttached = false;
+    const noticesAfterAttachment: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      if (childBindingAttached && event.notification.method === "thread/incomingWork") noticesAfterAttachment.push(event);
+    });
     registry.setMessagingAgentToolService({
       async handlePwrAgentMessagingRequest(request) {
         messagingRequests.push(request);
+        childBindingAttached = true;
         return {
           ok: true,
           data: {
@@ -37850,6 +37856,16 @@ command = "pnpm dev"
     } as AppServerPendingRequestNotification);
 
     expect(response).toMatchObject({ success: true });
+    expect(noticesAfterAttachment).toHaveLength(1);
+    expect(noticesAfterAttachment[0]).toMatchObject({ notification: {
+      method: "thread/incomingWork", params: {
+        threadId: "thread-1", turnId: "turn-1", deliveryId: "start:turn-1",
+        incomingWork: { recipientTitle: "Investigate issue XYZ", messages: [{
+          origin: { kind: "agent", sourceThread: { backend: "codex", threadId: "ordinary-thread", title: "Parent Thread" } },
+          preview: expect.stringContaining("Investigate issue XYZ"),
+        }], omittedMessageCount: 0 },
+      },
+    } });
     const payload = JSON.parse(
       (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
     );

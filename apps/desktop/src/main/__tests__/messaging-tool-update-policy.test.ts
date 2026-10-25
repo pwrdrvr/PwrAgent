@@ -91,6 +91,33 @@ describe("MessagingToolUpdatePolicy", () => {
     ]);
   });
 
+  it.each(["show_none", "show_less", "show_some", "show_more", "show_all"] as const)("clears receipt-window state without a terminal event at %s", async (mode) => {
+    vi.useFakeTimers();
+    const delivered: string[] = [];
+    const policy = new MessagingToolUpdatePolicy({
+      now: () => Date.now(),
+      onBatchReady: (delivery) => { delivered.push(...delivery.activities.map((activity) => activity.id)); },
+    });
+    try {
+      for (const window of [1, 2]) {
+        // Reusing this id after the window proves its seen-id state was cleared.
+        const immediate = policy.processActivity({
+          bindingId: "binding", turnId: "finished-turn", mode, lifecycle: "window",
+          activity: { id: "receipt", kind: "tool", title: "Delivery confirmed", status: "completed" },
+        });
+        delivered.push(...immediate.flatMap((delivery) => delivery.activities.map((activity) => activity.id)));
+        await vi.advanceTimersByTimeAsync(60_001);
+        await policy.whenIdle();
+        expect(delivered).toHaveLength(mode === "show_none" ? 0 : window);
+        expect(vi.getTimerCount()).toBe(0);
+      }
+      expect(policy.flush()).toEqual([]);
+    } finally {
+      policy.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("lets its owner wait for a timer-started batch after dispose", async () => {
     const timers: Array<() => void> = [];
     let finishDelivery!: () => void;

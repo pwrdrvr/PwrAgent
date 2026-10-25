@@ -150,6 +150,11 @@ user starts add no notice. Sender-side delivery receipts use the existing
 Working Updates dial and coalescing policy; failures and held deliveries remain
 visible so the operator can act. Receipts are identified by their system origin,
 not by matching assistant prose, and never count as final assistant responses.
+Receipts for a source turn that is no longer running use self-contained flush
+windows: the window delivers its pending batch and removes its policy state.
+They do not reopen the completed turn's working card. A new handoff republishes
+its start notice after successful child attachment, using the same delivery ID
+so bindings that already saw it do not receive a duplicate.
 Internal Continue-after and PR resumptions retain their existing output policy
 but use their structured provenance for the start label; configured automations
 retain the automation label and delivery behavior.
