@@ -22,48 +22,52 @@ type BindableThread = Pick<NavigationThreadSummary, "id" | "source" | "federatio
 
 /**
  * Build the `messagingBindingsByThreadKey` record for the navigation
- * snapshot and the selected-thread detail. One read of the active bindings
- * serves every thread. Returns `undefined` (rather than an empty object)
- * when nothing is bound: `buildNavigationSnapshot` treats `undefined` and
- * `{}` the same, but `undefined` keeps the hash inputs minimal for users
- * with no messaging configured.
+ * snapshot and the selected-thread detail. Same read and matching as
+ * `buildNavigationIndexMessagingBindings`, so a row and the selected
+ * thread's detail show the same chips in the same order. Returns
+ * `undefined` (rather than an empty object) when nothing is bound:
+ * `buildNavigationSnapshot` treats `undefined` and `{}` the same, but
+ * `undefined` keeps the hash inputs minimal for users with no messaging
+ * configured.
  */
 export async function buildMessagingBindingsByThreadKey(
   threads: readonly AppServerThreadSummary[],
 ): Promise<Record<string, MessagingThreadBindingSummary[]> | undefined> {
-  if (threads.length === 0) return undefined;
-  const active = await readActiveBindings("navigation snapshot");
-  if (!active) return undefined;
-  const grouped = groupBindingsByThreadKey(threads, active);
+  const grouped = await buildNavigationIndexMessagingBindings(threads);
   return grouped.size > 0 ? Object.fromEntries(grouped) : undefined;
 }
 
 /**
- * Bindings for the sidebar's owner index, keyed by thread identity. Same
- * read and matching as `buildMessagingBindingsByThreadKey`, so a row and
- * the selected thread's detail show the same chips in the same order.
+ * Bindings keyed by thread identity, for the sidebar's owner index and the
+ * snapshot record above. One store read serves every thread.
  */
 export async function buildNavigationIndexMessagingBindings(
-  threads: readonly NavigationThreadSummary[],
+  threads: readonly BindableThread[],
 ): Promise<Map<string, MessagingThreadBindingSummary[]>> {
   if (threads.length === 0) return new Map();
-  const active = await readActiveBindings("navigation index");
+  const active = await readActiveBindings(threads);
   return active ? groupBindingsByThreadKey(threads, active) : new Map();
 }
 
 /**
- * Read every active binding once. Chips are an overlay on the list, so a
- * failed read returns `undefined` instead of failing the snapshot. The
- * messaging store is created after app state comes up, so an early read can
- * also land here.
+ * Read the active bindings with one query. A single thread, such as the
+ * selected-thread detail, uses the indexed per-thread query; a list reads
+ * every active binding once. Chips are an overlay on the list, so a failed
+ * read returns `undefined` instead of failing the snapshot. The messaging
+ * store is created after app state comes up, so an early read can also land
+ * here.
  */
 async function readActiveBindings(
-  surface: string,
+  threads: readonly BindableThread[],
 ): Promise<MessagingBindingRecord[] | undefined> {
   try {
-    return await getDesktopMessagingStore().findActiveBindings();
+    const store = getDesktopMessagingStore();
+    const only = threads.length === 1 ? threads[0] : undefined;
+    return only
+      ? await store.findActiveBindingsForThread({ backend: only.source, threadId: only.id })
+      : await store.findActiveBindings();
   } catch (error) {
-    log.warn(`messaging bindings unavailable for ${surface}`, {
+    log.warn("messaging bindings unavailable for navigation", {
       error: error instanceof Error ? error.message : String(error),
     });
     return undefined;
@@ -90,17 +94,20 @@ function groupBindingsByThreadKey(
   }
   if (byThreadId.size === 0) return result;
   for (const thread of threads) {
-    if (thread.federation?.ref.target.scope === "remote") continue;
+    if (thread.federation && isRemoteFederationTarget(thread.federation.ref.target)) continue;
     const bindings = byThreadId.get(thread.id)
       ?.filter((binding) => isBindingForThread(binding, { backend: thread.source, threadId: thread.id }))
       .sort(compareBindingsByCreation);
     if (!bindings?.length) continue;
-    result.set(buildThreadIdentityKey(thread.source, thread.id), bindings.map(toBindingSummary));
+    result.set(buildThreadIdentityKey(thread.source, thread.id), bindings.map(toMessagingThreadBindingSummary));
   }
   return result;
 }
 
-function toBindingSummary(binding: MessagingBindingRecord): MessagingThreadBindingSummary {
+/** The chip summary of one binding. Thread inspection uses it too. */
+export function toMessagingThreadBindingSummary(
+  binding: MessagingBindingRecord,
+): MessagingThreadBindingSummary {
   const conversation = binding.channel.conversation;
   return {
     bindingId: binding.id,

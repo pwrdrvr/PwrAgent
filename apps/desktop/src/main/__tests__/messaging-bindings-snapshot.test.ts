@@ -6,7 +6,9 @@ const mocks = vi.hoisted(() => ({
   available: true,
   messaging: {
     findActiveBindings: vi.fn(async (): Promise<MessagingBindingRecord[]> => []),
-    findActiveBindingsForThread: vi.fn(async (): Promise<MessagingBindingRecord[]> => []),
+    findActiveBindingsForThread: vi.fn(
+      async (_params: { backend: string; threadId: string }): Promise<MessagingBindingRecord[]> => [],
+    ),
   },
 }));
 vi.mock("../messaging/desktop-messaging-store", () => ({
@@ -47,6 +49,13 @@ function binding(
 
 const chipIds = (chips: Array<{ bindingId: string }> | undefined) => chips?.map((chip) => chip.bindingId);
 
+/** Serve both store queries from the same rows, as the SQLite store does. */
+function storeRows(rows: MessagingBindingRecord[]): void {
+  mocks.messaging.findActiveBindings.mockResolvedValue(rows);
+  mocks.messaging.findActiveBindingsForThread.mockImplementation(async (params) =>
+    rows.filter((row) => isBindingForThread(row, params as Parameters<typeof isBindingForThread>[1])));
+}
+
 afterEach(() => {
   mocks.available = true;
   mocks.messaging.findActiveBindings.mockReset().mockResolvedValue([]);
@@ -74,7 +83,7 @@ describe("isBindingForThread", () => {
 
 describe("buildMessagingBindingsByThreadKey", () => {
   it("reads the store once for every thread and groups by thread identity", async () => {
-    mocks.messaging.findActiveBindings.mockResolvedValue([
+    storeRows([
       // The store lists by updated_at DESC; chips stay in creation order.
       binding("bound-late", "bound", { createdAt: 5, updatedAt: 9 }),
       binding("bound-early", "bound", { createdAt: 2, updatedAt: 3 }),
@@ -101,25 +110,48 @@ describe("buildMessagingBindingsByThreadKey", () => {
   });
 
   it("returns undefined when nothing is bound, with no threads, or without a store", async () => {
-    mocks.messaging.findActiveBindings.mockResolvedValue([binding("elsewhere", "other")]);
+    storeRows([binding("elsewhere", "other")]);
     await expect(buildMessagingBindingsByThreadKey([thread("bound")])).resolves.toBeUndefined();
+    await expect(buildMessagingBindingsByThreadKey([thread("bound"), thread("unbound")]))
+      .resolves.toBeUndefined();
 
     mocks.messaging.findActiveBindings.mockClear();
+    mocks.messaging.findActiveBindingsForThread.mockClear();
     await expect(buildMessagingBindingsByThreadKey([])).resolves.toBeUndefined();
     expect(mocks.messaging.findActiveBindings).not.toHaveBeenCalled();
+    expect(mocks.messaging.findActiveBindingsForThread).not.toHaveBeenCalled();
 
     mocks.available = false;
     await expect(buildMessagingBindingsByThreadKey([thread("bound")])).resolves.toBeUndefined();
 
     mocks.available = true;
     mocks.messaging.findActiveBindings.mockRejectedValue(new Error("database is locked"));
+    mocks.messaging.findActiveBindingsForThread.mockRejectedValue(new Error("database is locked"));
     await expect(buildMessagingBindingsByThreadKey([thread("bound")])).resolves.toBeUndefined();
+    await expect(buildMessagingBindingsByThreadKey([thread("bound"), thread("unbound")]))
+      .resolves.toBeUndefined();
+  });
+
+  it("reads only the selected thread's rows for a single-thread detail", async () => {
+    storeRows([
+      binding("late", "bound", { createdAt: 3 }),
+      binding("early", "bound", { createdAt: 1 }),
+      binding("elsewhere", "other"),
+    ]);
+
+    const detail = await buildMessagingBindingsByThreadKey([thread("bound")]);
+
+    expect(mocks.messaging.findActiveBindingsForThread).toHaveBeenCalledTimes(1);
+    expect(mocks.messaging.findActiveBindingsForThread).toHaveBeenCalledWith({ backend: "codex", threadId: "bound" });
+    expect(mocks.messaging.findActiveBindings).not.toHaveBeenCalled();
+    expect(Object.keys(detail ?? {})).toEqual(["codex:bound"]);
+    expect(chipIds(detail?.["codex:bound"])).toEqual(["early", "late"]);
   });
 });
 
 describe("buildNavigationIndexMessagingBindings", () => {
   it("gives the sidebar row the same chips, in the same order, as the selected detail", async () => {
-    mocks.messaging.findActiveBindings.mockResolvedValue([
+    storeRows([
       binding("third", "bound", { createdAt: 3, updatedAt: 1 }),
       binding("first", "bound", { createdAt: 1, updatedAt: 3 }),
       binding("second-b", "bound", { createdAt: 2, updatedAt: 2 }),
@@ -132,11 +164,13 @@ describe("buildNavigationIndexMessagingBindings", () => {
     expect(index.get("codex:bound")).toEqual(detail?.["codex:bound"]);
     expect(chipIds(index.get("codex:bound"))).toEqual(["first", "second-a", "second-b", "third"]);
     expect(index.has("codex:unbound")).toBe(false);
-    expect(mocks.messaging.findActiveBindings).toHaveBeenCalledTimes(2);
+    // The detail runs the per-thread query and the index the full read.
+    expect(mocks.messaging.findActiveBindingsForThread).toHaveBeenCalledTimes(1);
+    expect(mocks.messaging.findActiveBindings).toHaveBeenCalledTimes(1);
   });
 
   it("gives a peer's row none of this machine's bindings", async () => {
-    mocks.messaging.findActiveBindings.mockResolvedValue([binding("local", "shared")]);
+    storeRows([binding("local", "shared")]);
     const remote = {
       ...thread("shared"),
       federation: {
@@ -155,6 +189,7 @@ describe("buildNavigationIndexMessagingBindings", () => {
     expect(mocks.messaging.findActiveBindings).not.toHaveBeenCalled();
 
     mocks.messaging.findActiveBindings.mockRejectedValue(new Error("database is locked"));
-    await expect(buildNavigationIndexMessagingBindings([thread("bound")])).resolves.toEqual(new Map());
+    await expect(buildNavigationIndexMessagingBindings([thread("bound"), thread("unbound")]))
+      .resolves.toEqual(new Map());
   });
 });

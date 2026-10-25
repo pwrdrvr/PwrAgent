@@ -333,6 +333,54 @@ describe("DesktopMessagingBackendBridge", () => {
     expect(readDirectoryStatuses).not.toHaveBeenCalled();
   });
 
+  it("reads messaging bindings once for the whole bridge snapshot", async () => {
+    const messagingStoreModule = await import("../messaging/desktop-messaging-store");
+    const thread = (id: string): AppServerThreadSummary => ({
+      id, title: id, titleSource: "explicit", source: "codex", linkedDirectories: [], updatedAt: 1,
+    });
+    const store = {
+      findActiveBindings: vi.fn(async () => [
+        {
+          id: "binding-beta", backend: "codex", threadId: "thread-beta", authorizedActorIds: [],
+          createdAt: 1, updatedAt: 1,
+          channel: { channel: "telegram", conversation: { kind: "topic", id: "topic-beta", title: "Beta" } },
+        },
+      ]),
+      findActiveBindingsForThread: vi.fn(async () => []),
+    };
+    const registry = {
+      canonicalizeNavigationThreadPullRequests: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      hydrateThreadGitWorkingStates: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      listThreads: vi.fn(async () => [thread("thread-alpha"), thread("thread-beta")]),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
+      readDirectoryStatuses: vi.fn(async () => ({})),
+      refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 0 })),
+      rememberCompleteNavigationSnapshot: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    messagingStoreModule.setDesktopMessagingStoreForTests(
+      store as unknown as Parameters<typeof messagingStoreModule.setDesktopMessagingStoreForTests>[0],
+    );
+    try {
+      await new DesktopMessagingBackendBridge(registry).getNavigationSnapshot({});
+
+      expect(store.findActiveBindings).toHaveBeenCalledTimes(1);
+      expect(store.findActiveBindingsForThread).not.toHaveBeenCalled();
+      expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(expect.objectContaining({
+        messagingBindingsByThreadKey: {
+          "codex:thread-beta": [expect.objectContaining({ bindingId: "binding-beta", conversationTitle: "Beta" })],
+        },
+      }));
+    } finally {
+      messagingStoreModule.resetDesktopMessagingStoreForTests();
+    }
+  });
+
   it("shares bounded owner queries for navigation search without queue or binding hydration", async () => {
     const listedThreads: AppServerThreadSummary[] = [
       {

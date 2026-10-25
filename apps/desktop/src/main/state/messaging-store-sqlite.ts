@@ -415,10 +415,10 @@ export class SqliteMessagingStore {
         "SELECT payload FROM bindings WHERE status = 'active' ORDER BY updated_at DESC, created_at DESC",
       )
       .all() as { payload: string }[];
+    // JSON.parse already returns fresh objects that no caller shares.
     return rows
       .map((row) => JSON.parse(row.payload) as MessagingBindingRecord)
-      .filter((binding) => !binding.revokedAt)
-      .map((binding) => structuredClone(binding));
+      .filter((binding) => !binding.revokedAt);
   }
 
   async findActiveBindingsForThread(params: {

@@ -275,6 +275,25 @@ describe("MessagingStore", () => {
     }
   });
 
+  it("matches a thread's bindings by the shared backend rule", async () => {
+    const { store } = await createStore();
+    // One conversation holds one binding, so each needs its own chat.
+    const inChat = (id: string, overrides: Partial<MessagingBindingRecord> = {}) => buildBinding({
+      id,
+      channel: { channel: "telegram", conversation: { id: `${id}:chat`, kind: "dm" } },
+      ...overrides,
+    });
+    await store.upsertBinding(inChat("codex-binding"));
+    // Older bindings never recorded a backend; they still belong to the thread.
+    await store.upsertBinding(inChat("legacy-binding", { backend: undefined as never }));
+    await store.upsertBinding(inChat("grok-binding", { backend: "acp:grok" }));
+    await store.upsertBinding(inChat("other-thread", { threadId: "thread-2" }));
+
+    const bindings = await store.findActiveBindingsForThread({ backend: "codex", threadId: "thread-1" });
+
+    expect(bindings.map((binding) => binding.id).sort()).toEqual(["codex-binding", "legacy-binding"]);
+  });
+
   it("persists bindings and pending intents across store instances", async () => {
     const { filePath, store } = await createStore();
     await store.upsertBinding(buildBinding());
