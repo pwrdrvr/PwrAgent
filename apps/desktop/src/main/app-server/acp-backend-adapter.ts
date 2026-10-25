@@ -24,7 +24,9 @@ import {
   type BackendSummary,
   type GrokWorkflowBudgetPolicy,
   type ThreadExecutionMode,
+  type UsageLimitObservation,
   isAcpBackendId,
+  usageLimitProviderForBackend,
 } from "@pwragent/shared";
 import {
   AcpAgentStore,
@@ -1234,6 +1236,8 @@ export class AcpBackendAdapter {
   private readonly modelRetryTracker = new AcpModelRetryTracker();
   private readonly liveNotificationFingerprints = new Map<string, string>();
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
+  /** When each provider status was read, for Usage Activity's limit history. */
+  private readonly providerStatusObservedAt = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
@@ -1457,6 +1461,7 @@ export class AcpBackendAdapter {
         return;
       }
       this.providerStatuses.set(backend, providerStatus);
+      this.providerStatusObservedAt.set(backend, Date.now());
       await this.emit({
         backend,
         notification: {
@@ -1470,6 +1475,28 @@ export class AcpBackendAdapter {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * The account limits an enabled agent last reported, as a Usage Activity
+   * reading. Grok reports a plan but no account identity, so its readings
+   * stay with the instance that read them.
+   */
+  limitObservation(backend: AcpBackendId): UsageLimitObservation | undefined {
+    const status = this.providerStatuses.get(backend);
+    const observedAt = this.providerStatusObservedAt.get(backend);
+    const provider = usageLimitProviderForBackend(backend);
+    if (!provider || !status?.rateLimits?.length || observedAt === undefined
+      || (this.isAcpAgentEnabled && !this.isAcpAgentEnabled(backend.slice("acp:".length)))) return undefined;
+    return {
+      observedAt,
+      provider,
+      planType: status.account?.planType,
+      limits: status.rateLimits.map((limit) => ({
+        name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
+        resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
+      })),
+    };
   }
 
   invalidateLocalAgentDiscovery(): void {
@@ -2662,6 +2689,7 @@ export class AcpBackendAdapter {
     this.liveToolUpdateResolver.clear();
     this.liveNotificationFingerprints.clear();
     this.providerStatuses.clear();
+    this.providerStatusObservedAt.clear();
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
     this.grokUpdateRefreshes.clear();

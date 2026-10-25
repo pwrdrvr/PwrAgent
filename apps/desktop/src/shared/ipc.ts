@@ -904,6 +904,8 @@ export const THREAD_FAMILY_PRICING_READ_CHANNEL = "pricing:readThreadFamilyPrici
 export const USAGE_ACTIVITY_ANALYZE_CHANNEL = "usage-activity:analyzeUsageActivity";
 /** Spawn or focus the dedicated Usage Activity window. */
 export const USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL = "usage-activity:openWindow";
+/** To an open Usage Activity window: focus a provider's account limits. */
+export const USAGE_ACTIVITY_FOCUS_PROVIDER_EVENT_CHANNEL = "usage-activity:focusProvider";
 /** From the Usage Activity window: focus the main window and open a thread there. */
 export const USAGE_ACTIVITY_OPEN_THREAD_CHANNEL = "usage-activity:openThreadInMainWindow";
 

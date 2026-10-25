@@ -87,4 +87,23 @@ describe("usage limit history", () => {
     } }]);
     expect(projectLimit(account.series[0])).toEqual({ kind: "atReset", percent: 50, resetAt: t0 + 5 * HOUR });
   });
+
+  it("keeps each provider's account apart and labels Claude's weekly limits by name", () => {
+    const claude: UsageLimitObservation = { observedAt: t0, provider: "anthropic", accountKey: "a", planType: "max", limits: [
+      { name: "Weekly Opus limit", limitId: "seven_day_opus", usedPercent: 3, resetAt: t0 + 5 * 24 * HOUR, windowMinutes: 10_080 },
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 30, resetAt: t0 + 5 * 24 * HOUR, windowMinutes: 10_080 },
+      { name: "5-hour limit", limitId: "five_hour", usedPercent: 9, resetAt: t0 + HOUR, windowMinutes: 300 },
+      { name: "Cloud session credits", limitId: "iguana_necktie", usedPercent: 30, resetAt: t0 + 9 * 24 * HOUR, expires: true },
+    ] };
+    // The same opaque key from two providers is two accounts.
+    const accounts = buildLimitAccounts([{ owner: "Studio", current: [weekly(t0 + HOUR, 9), claude] }]);
+    expect(accounts.map((account) => [account.key, account.provider])).toEqual([
+      ["account:a", "openai"], ["account:anthropic:a", "anthropic"]]);
+    const series = accounts[1].series;
+    // The account-wide weekly limit leads, whatever order Claude sent.
+    expect(series.map(limitLabel)).toEqual(["5-hour window", "Weekly limit", "Weekly Opus limit", "Cloud session credits"]);
+    expect(fiveHourSeries(accounts[1])?.name).toBe("5-hour limit");
+    expect(sinceResetSeries(accounts[1])?.limitId).toBe("seven_day");
+    expect(series.at(-1)!.latest.expires).toBe(true);
+  });
 });

@@ -112,6 +112,7 @@ import {
   parseCodexAsyncQuestionReply,
   readCodexEnvironmentActionRuns,
   summarizeCodexAsyncQuestionReply,
+  usageLimitProviderForBackend,
   withoutSupersededCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import {
@@ -14654,7 +14655,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           <ContextWindowMoon
             contextWindow={props.contextWindow}
             onOpenUsage={props.desktopApi?.openUsageActivity
-              ? () => void props.desktopApi?.openUsageActivity?.()
+              ? () => void props.desktopApi?.openUsageActivity?.({
+                provider: usageLimitProviderForBackend(props.thread?.source),
+              })
               : undefined}
           />
           {preparingSend ? (

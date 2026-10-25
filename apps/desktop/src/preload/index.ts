@@ -27,6 +27,7 @@ import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
+import { createUsageActivityFocusSubscription } from "./usage-activity-focus";
 import type {
   ListThreadTodoProjectsResponse,
   ListThreadTodoProjectsRequest,
@@ -48,7 +49,7 @@ import type {
   MarkOperatorItemsSeenRequest,
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
-import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse, OpenUsageActivityRequest } from "@pwragent/shared";
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
@@ -1181,6 +1182,8 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
   },
 );
 
+const subscribeToUsageActivityFocus = createUsageActivityFocusSubscription(ipcRenderer);
+
 let federationJumpSearchRequestSequence = 0;
 let threadSearchRequestSequence = 0;
 
@@ -2136,8 +2139,9 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(THREAD_FAMILY_PRICING_READ_CHANNEL, request),
   analyzeUsageActivity: async (request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_ANALYZE_CHANNEL, request),
-  openUsageActivity: async (): Promise<void> =>
-    await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL),
+  openUsageActivity: async (request?: OpenUsageActivityRequest): Promise<void> =>
+    await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL, request),
+  onUsageActivityFocusProvider: subscribeToUsageActivityFocus,
   openUsageThreadInMainWindow: async (request: WindowShowThreadRequest): Promise<void> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, request),
   inspectTokenMiserOutput: async (

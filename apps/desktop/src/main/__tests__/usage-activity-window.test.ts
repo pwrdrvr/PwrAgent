@@ -2,14 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   windows: [] as Array<{
-    options: Record<string, unknown>; webContents: { id: number }; on: ReturnType<typeof vi.fn>;
+    options: Record<string, unknown>; webContents: { id: number; send: ReturnType<typeof vi.fn> }; on: ReturnType<typeof vi.fn>;
     loadFile: ReturnType<typeof vi.fn>; loadURL: ReturnType<typeof vi.fn>;
     setAlwaysOnTop: ReturnType<typeof vi.fn>; isAlwaysOnTop: () => boolean; isDestroyed: () => boolean;
   }>,
 }));
 vi.mock("electron", () => ({
   BrowserWindow: class {
-    webContents = { id: state.windows.length + 1 };
+    webContents = { id: state.windows.length + 1, send: vi.fn() };
     on = vi.fn();
     loadFile = vi.fn();
     loadURL = vi.fn();
@@ -58,5 +58,16 @@ describe("Usage Activity native window", () => {
     closed();
     showUsageActivityWindow();
     expect(state.windows).toHaveLength(2);
+  });
+
+  it("opens on a provider's limits, and tells an open window to focus another", async () => {
+    const { showUsageActivityWindow } = await import("../usage-activity-window");
+    showUsageActivityWindow({}, { provider: "anthropic" });
+    expect(state.windows[0].loadFile).toHaveBeenCalledWith("/fixture/index.html", { hash: "usage-activity?provider=anthropic" });
+    expect(state.windows[0].webContents.send).not.toHaveBeenCalled();
+    showUsageActivityWindow({}, { provider: "openai" });
+    showUsageActivityWindow();
+    expect(state.windows).toHaveLength(1);
+    expect(state.windows[0].webContents.send.mock.calls).toEqual([["usage-activity:focusProvider", "openai"]]);
   });
 });

@@ -1,7 +1,14 @@
 import { useEffect } from "react";
+import { parseUsageLimitProvider } from "@pwragent/shared";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { BrandLockup } from "../chrome/BrandLockup";
 import { UsageActivity } from "./UsageActivity";
+
+/** The provider a surface opened the window on: `#usage-activity?provider=anthropic`. */
+function hashProvider(): string | undefined {
+  const query = window.location.hash.split("?")[1];
+  return query ? parseUsageLimitProvider(new URLSearchParams(query).get("provider")) : undefined;
+}
 
 export function UsageActivityWindow() {
   const desktopApi = useDesktopApi();
@@ -14,6 +21,6 @@ export function UsageActivityWindow() {
         <span className="activity-titlebar__current">Limits and spend</span></div>
       <div className="activity-titlebar__spacer" />
     </header>
-    <div className="activity-content usage-activity-content"><UsageActivity desktopApi={desktopApi} /></div>
+    <div className="activity-content usage-activity-content"><UsageActivity desktopApi={desktopApi} initialProvider={hashProvider()} /></div>
   </section></div>;
 }
