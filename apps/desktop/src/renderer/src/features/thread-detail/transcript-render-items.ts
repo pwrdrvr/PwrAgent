@@ -165,7 +165,7 @@ function buildActiveWorkGroups(
       continue;
     }
     if (
-      alwaysVisibleEntryIds?.has(entry.id)
+      staysInView(entry, alwaysVisibleEntryIds)
       || entry.turn?.id !== activeTurnId
       || !isConcreteWorkEntry(entry)
     ) {
@@ -274,7 +274,7 @@ function buildCompletedGroups(
       && (turnId === activeReview?.turnId
         || index < (lastReviewIndexByTurn.get(turnId ?? "") ?? -1));
     const canJoinGroup =
-      !alwaysVisibleEntryIds?.has(entry.id)
+      !staysInView(entry, alwaysVisibleEntryIds)
       && Boolean(turnId)
       && turnId !== excludeTurnId
       && (
@@ -364,7 +364,7 @@ function buildCommentaryOnlyGroups(
 
   for (const entry of entries) {
     if (
-      !alwaysVisibleEntryIds?.has(entry.id)
+      !staysInView(entry, alwaysVisibleEntryIds)
       && isAssistantCommentaryMessage(entry)
       && !isLiveInProgressTurn(entry.turn, completedTurnIds)
     ) {
@@ -432,6 +432,33 @@ function renderWithGroups(
   }
 
   return items;
+}
+
+/**
+ * A question waits on the operator, so it never folds into work, whatever its
+ * phase. Folded, it lost its answer controls and the To-dos row that links to
+ * it had nothing to scroll to.
+ */
+function staysInView(
+  entry: AppServerThreadEntry,
+  alwaysVisibleEntryIds: ReadonlySet<string> | undefined,
+): boolean {
+  return Boolean(alwaysVisibleEntryIds?.has(entry.id)) || isAsyncQuestionMessage(entry);
+}
+
+function isAsyncQuestionMessage(entry: AppServerThreadEntry): boolean {
+  return asyncQuestionsOfEntry(entry) !== undefined;
+}
+
+/** The questions Codex asked in an entry, when the entry draws a question card. */
+export function asyncQuestionsOfEntry(
+  entry: AppServerThreadEntry,
+): AppServerThreadMessageEntry["questions"] {
+  return isAssistantMessage(entry)
+    && entry.delivery === "async"
+    && entry.questions?.length
+    ? entry.questions
+    : undefined;
 }
 
 /**

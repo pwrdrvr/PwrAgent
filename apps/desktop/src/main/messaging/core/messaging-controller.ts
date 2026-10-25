@@ -2091,6 +2091,12 @@ export class MessagingController {
       const assistantText = standaloneReviewAssistantText ?? (
         isFinalReviewAssistant ? undefined : rawAssistantText
       );
+      // A question waits on the operator, so it is delivered like a final
+      // reply whatever its phase, never through the Working Updates dial.
+      const asyncQuestions = readCodexAsyncQuestionsFromNotification(event.notification);
+      const deliversAsReply =
+        Boolean(asyncQuestions)
+        || !isNonFinalAssistantTextForBackendEvent(event);
       if (
         assistantText
         && privateResponseFallback
@@ -2129,12 +2135,9 @@ export class MessagingController {
       } else if (
         assistantText
         && !suppressSourceResponse
-        && (
-          !privateReplyCompletion
-          || !isNonFinalAssistantTextForBackendEvent(event)
-        )
+        && (!privateReplyCompletion || deliversAsReply)
       ) {
-        if (!isNonFinalAssistantTextForBackendEvent(event)) {
+        if (deliversAsReply) {
           // Claim the stable backend item before image resolution yields. A
           // nearly-simultaneous idle/terminal event may flush the same buffered
           // deltas while this lookup is in flight; both paths must contend for
@@ -2149,7 +2152,6 @@ export class MessagingController {
             event,
             binding,
           );
-          const asyncQuestions = readCodexAsyncQuestionsFromNotification(event.notification);
           if (!assistantMessageClaimed) {
             await this.deliverAssistantImages(assistantImages, event, binding);
           } else if (asyncQuestions) {

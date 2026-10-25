@@ -7,7 +7,6 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
-  AppServerThreadMessageEntry,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
@@ -19,7 +18,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { withRendererSequence } from "../live-transcript-activity";
 import { TranscriptList } from "../TranscriptList";
@@ -2512,7 +2511,7 @@ Implementation notes remain in a readable bubble.`;
         questionItemId: JSON.stringify(["request_user_input_async", itemId, 0]),
       }])}\n</send_user_message_question_reply>`;
     const renderList = (
-      entries: AppServerThreadMessageEntry[],
+      entries: AppServerThreadEntry[],
       props: Partial<Parameters<typeof TranscriptList>[0]> = {},
     ) => render(
       <TranscriptList
@@ -2674,6 +2673,45 @@ Implementation notes remain in a readable bubble.`;
       expect(within(card).getAllByRole("listitem").map((item) => item.textContent))
         .toEqual(["Allow one command", "Keep policy"]);
       expect(within(card).queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("keeps a commentary question in view, answerable, and reachable from its To-dos link", async () => {
+      // Codex can tag the question commentary, between a finished turn's tools.
+      // Folded into its work group, the card lost its controls and the To-dos
+      // row had no transcript entry to scroll to.
+      const turn = { id: "turn-1", status: "completed" as const, durationMs: 284_000 };
+      const scrollIntoView = vi.fn();
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value: scrollIntoView,
+      });
+      onTestFinished(() => {
+        if (original) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", original);
+        else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+      });
+      const onLinkedMessageHandled = vi.fn();
+      renderList([
+        { type: "message", id: "c1", role: "assistant", phase: "commentary", text: "Checking the lab.", turn },
+        { type: "activity", id: "tool-1", summary: "Bash", details: [], turn },
+        { ...freeTextQuestion, phase: "commentary", turn },
+        { type: "activity", id: "tool-2", summary: "Bash", details: [], turn },
+        { type: "message", id: "f1", role: "assistant", phase: "final", text: "Blocked on the lab config.", turn },
+      ], {
+        linkedMessageId: "call-question",
+        linkedMessageRequestKey: 3,
+        onAnswerAsyncQuestions: vi.fn(async () => true),
+        onLinkedMessageHandled,
+      });
+
+      const card = screen.getByRole("group", { name: "Question from Codex" });
+      expect(within(card).getByLabelText("Your answer")).toBeInTheDocument();
+      expect(within(card).getByRole("button", { name: "Answer" })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+      });
+      expect(card.closest("[data-entry-id]")).toHaveAttribute("data-entry-id", "call-question");
+      expect(onLinkedMessageHandled).toHaveBeenCalledTimes(1);
     });
   });
 

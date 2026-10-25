@@ -1232,7 +1232,87 @@ describe("buildTranscriptRenderItems", () => {
       { type: "entry", entry: answer },
     ]);
   });
+
+  it("keeps a completed turn's commentary question out of its work group", () => {
+    const turn = completedTurn("turn-1", 284_000);
+    const first = commentary("c1", "Checking the lab.", turn);
+    const lookup = tool("tool-1", turn);
+    const asked = question("q1", "What is the path to the lab config?", turn, "commentary");
+    const later = tool("tool-2", turn);
+    const answer = final("f1", "Blocked on the lab config.", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [first, lookup, asked, later, answer],
+    });
+
+    expect(items).toContainEqual({ type: "entry", entry: asked });
+    expect(groupedEntries(items)).not.toContain(asked);
+  });
+
+  it("keeps an interim question that more work follows out of its work group", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const asked = question("q1", "Which runner should I use?", turn);
+    const before = tool("tool-1", turn);
+    const after = tool("tool-2", turn);
+    const answer = final("f1", "Done.", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [before, asked, after, answer],
+    });
+
+    expect(items).toContainEqual({ type: "entry", entry: asked });
+    expect(groupedEntries(items)).not.toContain(asked);
+  });
+
+  it("keeps a question out of the live work group", () => {
+    const turn = { id: "turn-1", status: "in_progress" as const, startedAt: 1_000 };
+    const before = tool("tool-1", turn);
+    const asked = question("q1", "Which runner should I use?", turn, "commentary");
+    const after = tool("tool-2", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [before, asked, after],
+      activeTurnId: "turn-1",
+      now: 1_000 + 5 * 60_000,
+    });
+
+    expect(items).toContainEqual({ type: "entry", entry: asked });
+    expect(groupedEntries(items)).not.toContain(asked);
+  });
+
+  it("keeps a commentary question out of a turnless commentary group", () => {
+    const first = commentary("c1", "First scan.");
+    const asked = question("q1", "Which runner should I use?", undefined, "commentary");
+    const answer = final("f1", "Final answer.");
+
+    const items = buildTranscriptRenderItems({ entries: [first, asked, answer] });
+
+    expect(items).toContainEqual({ type: "entry", entry: asked });
+    expect(groupedEntries(items)).not.toContain(asked);
+  });
 });
+
+function groupedEntries(items: ReturnType<typeof buildTranscriptRenderItems>): AppServerThreadEntry[] {
+  return items.flatMap((item) => item.type === "workPhaseGroup" ? item.entries : []);
+}
+
+function question(
+  id: string,
+  title: string,
+  turn?: AppServerThreadMessageEntry["turn"],
+  phase?: AppServerThreadMessageEntry["phase"],
+): AppServerThreadMessageEntry {
+  return {
+    type: "message",
+    id,
+    role: "assistant",
+    text: title,
+    delivery: "async",
+    questions: [{ title, options: null }],
+    ...(phase ? { phase } : {}),
+    ...(turn ? { turn } : {}),
+  };
+}
 
 function commentary(
   id: string,

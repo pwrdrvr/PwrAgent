@@ -53,6 +53,7 @@ import { SubAgentDetailsModal } from "./context-panels/SubAgentDetailsModal";
 import { RailStatusChip, type RailChipTone } from "./context-panels/RailStatusChip";
 import { subAgentTone } from "./context-panels/subagent-format";
 import { parseVoiceRequest } from "./voice-request";
+import { asyncQuestionsOfEntry } from "./transcript-render-items";
 
 type TranscriptMessageProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -532,11 +533,8 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     );
   }
 
-  const asyncQuestions = props.message.role === "assistant"
-    && props.message.delivery === "async"
-    ? props.message.questions
-    : undefined;
-  if (asyncQuestions?.length) {
+  const asyncQuestions = asyncQuestionsOfEntry(props.message);
+  if (asyncQuestions) {
     // Codex also writes the questions into the message text. The card shows
     // them once, with the controls to answer.
     const messageId = props.message.id;
