@@ -78,11 +78,11 @@ Work in the local worktree:
 ```sh
 sha="$(git rev-parse HEAD)"
 git fetch -q origin
-git merge-base --is-ancestor HEAD origin/main && echo "on origin/main"
+git branch -r --contains HEAD
 ```
 
-If the commit is on GitHub (on `origin/main` or on a pushed branch), the VM
-can fetch it by SHA. Skip the bundle.
+If that lists any `origin/` branch, the commit is on GitHub and the VM can
+fetch it by SHA. Skip the bundle.
 
 Otherwise bundle only the commits that `origin/main` does not have. The
 bundle is usually a few KB:
@@ -104,6 +104,7 @@ In the VM, fetch the commit and give it its own worktree. Never change a
 tree while a check runs in it.
 
 ```sh
+sha=<sha>
 cd ~/pwragent/repo
 git fetch -q origin
 git fetch -q "../$sha.bundle" HEAD      # bundle only
@@ -129,8 +130,11 @@ cat .local/sandboxer/status
 ```
 
 `all` runs setup, then lint, unit in two shards, and E2E in four lanes, and
-it continues after a failed check. Each check appends `<step> exit=<code> secs=<seconds>` to
-`.local/sandboxer/status`, and the final line is `all exit=<0|1>`.
+it continues after a failed check. Each invocation of `verify.sh` starts a
+new `.local/sandboxer/status`. Each check appends
+`<step> exit=<code> secs=<seconds>` to it, and `all` ends with
+`all exit=<0|1>`. To poll a single step started in the background, wait for
+its `^<step> ` line the same way.
 
 Run one step when that is all the change needs. Arguments pass through:
 
@@ -171,8 +175,8 @@ grep -nE '^\s+[0-9]+ (passed|failed|flaky|skipped)|^  [0-9]+\) ' .local/sandboxe
 Concurrent lanes load the VM more than one lane does. Without a retry, three
 two-lane runs each had at most one unexpected failure, a different test each
 time: `thread-image-fit.spec.ts:353` and `star-map-activity.spec.ts:11`. Each
-then passed 5 of 5 alone. One four-lane run had none. Rerun an unexpected failure or flaky test by itself
-before you treat it as caused by the change.
+then passed 5 of 5 alone. One four-lane run had none. Rerun an unexpected
+failure or flaky test by itself before you treat it as caused by the change.
 
 Playwright writes failure context to `apps/desktop/test-results/` in the
 lane's own worktree. Find the files with `exec` and read the text ones, such
@@ -205,6 +209,10 @@ Report the sandbox ID, the commit, and each status line. Name every failure.
   and stops compute billing. Stop and resume each took about 2 s, and the
   worktrees and `node_modules` survived.
 - Keep the stopped sandbox for the thread's next run while its PR is open.
+- Each verified commit leaves a worktree, and an E2E run with lanes leaves
+  `<worktree>-lane<N>` beside it. Keep the latest commit's worktrees for their
+  failure artifacts, and remove older ones with
+  `git -C ~/pwragent/repo worktree remove --force <path>`.
 - When the PR merges or closes, the sandbox should be deleted: every stopped
   sandbox keeps snapshots, and snapshots count against the account's storage
   allowance. The Sandboxer MCP has no delete tool yet. Until it does, stop the

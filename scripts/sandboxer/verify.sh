@@ -13,8 +13,8 @@
 #   scripts/sandboxer/verify.sh all          setup, lint, unit --shards 2, e2e --lanes 4;
 #                                            runs every step
 #
-# Each step writes .local/sandboxer/<step>.log and appends
-# "<step> exit=<code> secs=<seconds>" to .local/sandboxer/status.
+# Each invocation starts a new .local/sandboxer/status. Each step writes
+# .local/sandboxer/<step>.log and appends "<step> exit=<code> secs=<seconds>".
 # A step longer than the sandbox exec limit must run under nohup; poll status.
 set -uo pipefail
 
@@ -30,6 +30,26 @@ export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 # Sandboxer passes the account's GitHub token into the VM. CI checks run
 # without one, and no check needs it.
 unset GH_TOKEN GITHUB_TOKEN
+
+# Unit shards and E2E lanes run as background jobs. If this script exits early
+# or is killed, stop them and everything they started, so a rerun never shares
+# a worktree or the CPU with a stale run.
+kill_tree() {
+  local child
+  for child in $(pgrep -P "$1"); do
+    kill_tree "$child"
+  done
+  kill "$1" 2>/dev/null
+}
+stop_background_jobs() {
+  local pid
+  for pid in $(jobs -p); do
+    kill_tree "$pid"
+  done
+}
+trap stop_background_jobs EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 setup() {
   if [[ "$(node -v 2>/dev/null)" != "$node_version" ]]; then
@@ -101,18 +121,21 @@ e2e_lanes() {
   local head
   head="$(git rev-parse HEAD)" || return 1
   local lane dir
+  # Prepare every lane before starting any, so a failed setup leaves nothing
+  # running.
+  for ((lane = 2; lane <= lanes; lane++)); do
+    dir="$repo_root-lane$lane"
+    if [[ ! -d "$dir" ]]; then
+      git worktree add -q --detach "$dir" "$head" || return 1
+    fi
+    git -C "$dir" checkout -q --detach "$head" || return 1
+    (cd "$dir" && pnpm install --frozen-lockfile) \
+      > "$out_dir/e2e-lane$lane-setup.log" 2>&1 || return 1
+  done
   local pids=()
   for ((lane = 1; lane <= lanes; lane++)); do
     dir="$repo_root"
-    if ((lane > 1)); then
-      dir="$repo_root-lane$lane"
-      if [[ ! -d "$dir" ]]; then
-        git worktree add -q --detach "$dir" "$head" || return 1
-      fi
-      git -C "$dir" checkout -q --detach "$head" || return 1
-      (cd "$dir" && pnpm install --frozen-lockfile) \
-        > "$out_dir/e2e-lane$lane-setup.log" 2>&1 || return 1
-    fi
+    ((lane == 1)) || dir="$repo_root-lane$lane"
     (cd "$dir" && e2e --shard="$lane/$lanes" "$@") > "$out_dir/e2e-lane$lane.log" 2>&1 &
     pids+=("$!")
   done
@@ -165,6 +188,7 @@ step="${1:-}"
 [[ $# -gt 0 ]] && shift
 case "$step" in
   setup | unit | lint | e2e)
+    : > "$out_dir/status"
     run_step "$step" "$@"
     ;;
   all)
