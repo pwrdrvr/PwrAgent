@@ -877,6 +877,9 @@ type ReviewWorkspaceOption = {
 
 const DEFAULT_REASONING_EFFORT = "medium";
 
+/** Backends whose turns take Plan: Codex's collaboration mode, Claude's plan permission mode. */
+const PLAN_MODE_BACKENDS: ReadonlySet<string> = new Set(["codex", "claude"]);
+
 // Fast keeps the Fast toggle's own tooltip copy. Ultrafast claims only what
 // the catalog proves: the model advertises it, and nothing is priced yet.
 const CODEX_SPEED_DESCRIPTIONS: Record<CodexSpeed, string> = {
@@ -10785,8 +10788,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       mode.available || (backend.available && mode.mode === "auto"),
     ) ?? [];
   const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
-  const supportsPlanMode =
-    (props.launchpad?.backend ?? props.thread?.source) === "codex";
+  // Claude maps Plan to its own read-only plan permission mode.
+  const supportsPlanMode = PLAN_MODE_BACKENDS.has(props.launchpad?.backend ?? props.thread?.source ?? "");
   const supportsSteering =
     Boolean(backend?.capabilities.steerTurn) &&
     selectedModelOption?.supportsSteering !== false;

@@ -25692,6 +25692,42 @@ describe("Composer", () => {
     });
   });
 
+  it("offers Plan on Claude threads, sends it for one turn, and leaves other providers without it", async () => {
+    const startTurn = vi.fn().mockResolvedValue({ backend: "claude", threadId: "thread-1", turnId: "turn-1" });
+    const claudeThread = {
+      id: "thread-1", title: "Plan", titleSource: "explicit" as const,
+      source: "claude" as const, executionMode: "default" as const,
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    const { rerender } = render(
+      <Composer
+        backends={[backendSummary("claude")]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        skills={[]}
+        thread={claudeThread}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Plan this change" } });
+    fireEvent.click(screen.getByLabelText("Plan mode"));
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+    expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", threadId: "thread-1", collaborationMode: expect.objectContaining({ mode: "plan" }),
+    }));
+    await waitFor(() => expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false"));
+    rerender(
+      <Composer
+        backends={[backendSummary("acp:grok")]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        skills={[]}
+        thread={{ ...claudeThread, source: "acp:grok" }}
+      />,
+    );
+    expect(screen.queryByLabelText("Plan mode")).toBeNull();
+  });
+
   describe("permission-mode queue indicator", () => {
     function baseQueuedThread(overrides: {
       executionMode?: "default" | "full-access";

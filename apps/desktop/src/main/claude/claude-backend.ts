@@ -7,17 +7,18 @@ import {
   type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  AgentEvent, AppServerAvailableCommandSummary, AppServerBackgroundTask, AppServerPendingRequestNotification, AppServerReviewContext,
+  AgentEvent, AppServerAvailableCommandSummary, AppServerBackgroundTask, AppServerCollaborationModeRequest,
+  AppServerPendingRequestNotification, AppServerReviewContext,
   AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadPlanEntry,
   AppServerThreadPlanStep, AppServerThreadReplay, AppServerThreadReviewEntry, AppServerThreadSummary,
-  AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
-  SteerTurnDelivery, UsageLimitObservation,
+  AppServerTurnInputItem, BackendModelOption, LinkedDirectorySummary, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode,
+  CodexMcpServerSummary, SteerTurnDelivery, UsageLimitObservation,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
 import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
-import { createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
+import { CLAUDE_EXIT_PLAN_TOOL, createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
 import { createClaudeElicitationHandler } from "./claude-elicitation";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
@@ -209,6 +210,8 @@ type ClaudeSessionConfig = {
   instructions?: string;
   mcpServers?: Options["mcpServers"];
   mcpKey: string;
+  /** The thread's other linked directories, fixed when the process starts. */
+  additionalDirectories: string[];
   /** The thread environment's captured toolchain variables. */
   shellEnvironment?: Record<string, string>;
   shellEnvironmentKey: string;
@@ -277,6 +280,10 @@ type ClaudeTurnParams = {
   threadId: string; input: AppServerTurnInputItem[]; model?: string; reasoningEffort?: string;
   executionMode?: ThreadExecutionMode; instructions?: string;
   mcpServers?: Options["mcpServers"];
+  /** Plan runs this turn in Claude's read-only plan mode. */
+  collaborationMode?: AppServerCollaborationModeRequest;
+  /** Directories attached to the thread after it was created. */
+  attachedDirectories?: readonly LinkedDirectorySummary[];
   /** Variables the thread environment's setup captured, such as PATH. */
   shellEnvironment?: Record<string, string>;
 };
@@ -285,14 +292,27 @@ type ClaudeTurnStart = { backend: "claude"; threadId: string; turnId: string };
 
 const CLAUDE_EFFORTS = new Set<string>(["low", "medium", "high", "xhigh", "max"]);
 
+/** Every directory linked to the thread except its working directory, in a stable order. */
+function claudeAdditionalDirectories(session: ClaudeSession, attached: readonly LinkedDirectorySummary[] = []): string[] {
+  const paths = [...session.thread.linkedDirectories, ...attached].flatMap((directory) => {
+    const activePath = directory.kind === "worktree" ? directory.worktreePath ?? directory.path : directory.path;
+    return activePath ? [activePath] : [];
+  });
+  const cwd = path.resolve(session.cwd);
+  return [...new Set(paths.map((directory) => path.resolve(directory)))]
+    .filter((directory) => directory !== cwd).sort();
+}
+
 function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): ClaudeSessionConfig {
   return {
     model: params.model ?? session.thread.model,
     effort: CLAUDE_EFFORTS.has(params.reasoningEffort ?? "") ? params.reasoningEffort as Options["effort"] : undefined,
-    permissionMode: claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default"),
+    permissionMode: params.collaborationMode?.mode === "plan"
+      ? "plan" : claudePermissionMode(params.executionMode ?? session.thread.executionMode ?? "default"),
     instructions: params.instructions,
     mcpServers: params.mcpServers,
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
+    additionalDirectories: claudeAdditionalDirectories(session, params.attachedDirectories),
     shellEnvironment: params.shellEnvironment,
     shellEnvironmentKey: JSON.stringify(
       Object.entries(params.shellEnvironment ?? {}).sort(([a], [b]) => a.localeCompare(b)),
@@ -413,7 +433,7 @@ export class ClaudeBackend {
         interruptSteerTurn: true,
         archiveThread: true, restoreThread: true, archiveWorktree: false,
         transcriptPagination: false, toolUse: true, approvalRequests: true,
-        multiDirectoryThreads: false,
+        multiDirectoryThreads: true,
         // Claude runs no reviews itself, but this owner accepts a run mode
         // for a Claude thread whose review runs on another provider.
         reviewRunMode: true,
@@ -617,8 +637,10 @@ export class ClaudeBackend {
         abortController: controller,
         stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
         mcpServers: config.mcpServers,
+        ...(config.additionalDirectories.length ? { additionalDirectories: config.additionalDirectories } : {}),
         canUseTool: createClaudePermissionHandler({
           threadId, turnId: () => current.turn?.turnId ?? current.lastTurnId,
+          planTurn: () => current.config.permissionMode === "plan",
           request: this.options.request,
           cancelRequest: (requestId, turnId) => this.options.cancelRequest(threadId, turnId, requestId),
         }),
@@ -739,6 +761,12 @@ export class ClaudeBackend {
     if (config.instructions !== live.config.instructions) {
       if (!keepTasks) return false;
       claudeBackendLog.info("Deferring new Claude instructions until the session relaunches", {
+        threadId: live.session.thread.id, taskCount: live.tasks.active().length,
+      });
+    }
+    if (config.additionalDirectories.join("\n") !== live.config.additionalDirectories.join("\n")) {
+      if (!keepTasks) return false;
+      claudeBackendLog.info("Deferring new Claude directories until the session relaunches", {
         threadId: live.session.thread.id, taskCount: live.tasks.active().length,
       });
     }
@@ -1704,6 +1732,12 @@ export class ClaudeBackend {
           await this.publishPlan(live, turn, steps);
           continue;
         }
+        // A plan turn's proposal is a plan card, like Codex's, not a tool row.
+        const proposal = block.name === CLAUDE_EXIT_PLAN_TOOL ? (block.input as { plan?: unknown }).plan : undefined;
+        if (typeof proposal === "string" && proposal.trim()) {
+          await this.publishProposedPlan(live, turn, block.id, proposal.trim());
+          continue;
+        }
         const input = block.input as Record<string, unknown>;
         const command = block.name === "Bash" && typeof input.command === "string" ? input.command : undefined;
         const detail = command === undefined
@@ -1809,6 +1843,19 @@ export class ClaudeBackend {
     turn.entries.set(id, entry);
     await this.store.append(threadId, [entry]);
     await this.emit({ method: "turn/plan/updated", params: { threadId, turnId: turn.turnId, plan: { steps } } });
+  }
+
+  /** The plan a plan-mode turn proposes, shown for the operator to accept by replying. */
+  private async publishProposedPlan(live: LiveSession, turn: RunningTurn, id: string, markdown: string): Promise<void> {
+    const threadId = live.session.thread.id;
+    const entry: AppServerThreadPlanEntry = {
+      type: "plan", id, createdAt: Date.now(), markdown, steps: [], turn: { id: turn.turnId },
+    };
+    turn.entries.set(id, entry);
+    await this.store.append(threadId, [entry]);
+    await this.emit({ method: "item/completed", params: {
+      threadId, turnId: turn.turnId, item: { id, type: "plan", text: markdown },
+    } });
   }
 
   /**

@@ -110,6 +110,21 @@ transcript. Thinking blocks are not shown, matching the Codex transcript.
 The SDK may reject a mode that the installed CLI or selected model does not
 support. PwrAgent reports that error and retains the previous mode.
 
+The composer's **Plan** toggle runs one turn in Claude's `plan` permission
+mode, which keeps Claude read-only while it investigates; the next turn
+returns to the thread's mode. Claude ends a plan by calling `ExitPlanMode`
+with the plan as its input. PwrAgent shows that plan as the turn's plan card,
+as it shows a Codex plan, and declines the call without an approval card, so
+the turn ends with the plan in front of the operator, who replies to
+implement it.
+
+A thread's linked directories other than its working directory, including
+directories attached later with `attach_thread_directory`, are passed as
+`additionalDirectories`, so Claude can read and edit them without a
+per-file permission prompt. The set is fixed when the CLI starts: a change
+relaunches an idle session at the next message, and waits for the next
+relaunch while background tasks run.
+
 The adapter records metadata and append-only replay entries beneath the
 active profile's `state/claude/` directory. It does not inspect Claude-owned
 history files or store transcripts in SQLite. Normal desktop overlays continue

@@ -20390,6 +20390,8 @@ export class DesktopBackendRegistry {
           executionMode: params.executionMode ?? overlay?.executionMode,
           instructions,
           mcpServers,
+          // Directories attached to the thread, so Claude can work in them too.
+          attachedDirectories: overlay?.extraLinkedDirectories,
           shellEnvironment: overlay?.codexEnvironmentRuntime?.executionTarget === "local"
             ? overlay.codexEnvironmentRuntime.shellEnvironment
             : undefined,
