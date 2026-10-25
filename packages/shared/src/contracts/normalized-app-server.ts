@@ -1361,6 +1361,13 @@ export type AppServerReadThreadRequest = {
    * native sub-agent transcript viewer.
    */
   viewOnly?: boolean;
+  /**
+   * `false` skips the pricing ledger and tool and Token Miser accounting; the
+   * response then has no `pricing` or `toolAccounting`. For callers that read
+   * transcript content only. Each part rescans the whole thread, so on a long
+   * thread it is most of a read's main-process time.
+   */
+  includeAccounting?: boolean;
 };
 
 export type AppServerReadThreadResponse = {
