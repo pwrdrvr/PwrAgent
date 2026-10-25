@@ -87,7 +87,8 @@ export function moveLeadingAssignments(draft: LocalCommandDraft): LocalCommandDr
       key: existing >= 0 ? env[existing]!.key : nextEnvKey(),
       name,
       value,
-      secret: SECRET_NAME.test(name),
+      // Never un-hide a variable the operator already marked secret.
+      secret: SECRET_NAME.test(name) || (existing >= 0 && env[existing]!.secret),
       stored: false,
     };
     if (existing >= 0) env[existing] = row;

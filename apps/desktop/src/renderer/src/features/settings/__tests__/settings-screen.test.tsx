@@ -10453,6 +10453,13 @@ describe("SettingsScreen", () => {
     expect(screen.getByLabelText("FIXTURE_API_TOKEN value")).toHaveValue("fixture-secret");
     expect(screen.getByLabelText("LOG_LEVEL value")).toHaveAttribute("type", "text");
 
+    // Pasting a line that sets a variable the operator marked secret keeps it secret.
+    fireEvent.click(screen.getByLabelText("Keep LOG_LEVEL secret"));
+    fireEvent.change(commandLine, { target: { value: "LOG_LEVEL=trace npx -y fixture-server" } });
+    fireEvent.blur(commandLine);
+    expect(screen.getByLabelText("LOG_LEVEL value")).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("LOG_LEVEL value")).toHaveValue("trace");
+
     fireEvent.change(commandLine, { target: { value: "npx -y 'fixture-server" } });
     expect(screen.getByText("A quote is not closed.")).toBeInTheDocument();
     expect(commandLine).toHaveAttribute("aria-invalid", "true");
