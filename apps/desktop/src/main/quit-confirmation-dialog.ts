@@ -417,10 +417,7 @@ export async function showQuitConfirmationDialog(
       archiveCleanupCount: options.archiveCleanupCount ?? 0,
       items,
     }),
-    Math.max(
-      DIALOG_MIN_HEIGHT,
-      resolveQuitDialogPlacement(parent).area.height - DIALOG_SCREEN_MARGIN * 2,
-    ),
+    quitDialogHeightCap(resolveQuitDialogPlacement(parent).area.height),
   );
   const window = new BrowserWindow({
     width,
@@ -739,6 +736,18 @@ export function resolveQuitCountdownSeconds(
 const HARD_CEILING_GRACE_MS = 1_500;
 const QUIT_REFRESH_INTERVAL_MS = 500;
 const COMPLETION_REPORT_MS = 1_250;
+
+/**
+ * The tallest the window may open on a work area this tall: clear of both
+ * edges, but never under the floor unless the work area itself is shorter,
+ * in which case it fills the area rather than hang off its top.
+ */
+export function quitDialogHeightCap(workAreaHeight: number): number {
+  return Math.max(
+    Math.min(DIALOG_MIN_HEIGHT, workAreaHeight),
+    workAreaHeight - DIALOG_SCREEN_MARGIN * 2,
+  );
+}
 
 /*
  * Fixed measurements of the page below, in CSS pixels. The estimate only has

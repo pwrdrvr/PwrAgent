@@ -20,6 +20,7 @@ import {
   QUIT_DIALOG_PALETTES,
   buildQuitConfirmationHtml,
   estimateQuitDialogHeight,
+  quitDialogHeightCap,
   type QuitBlockerItem,
 } from "../quit-confirmation-dialog";
 
@@ -141,6 +142,14 @@ describe("quit dialog HTML", () => {
     // Never so short that the buttons crowd the heading.
     expect(estimateQuitDialogHeight({ inProgressThreadCount: 0, terminalSessionCount: 0, actionRunCount: 0, items: [] }))
       .toBe(360);
+  });
+
+  it("never opens taller than a small work area", () => {
+    expect(quitDialogHeightCap(900)).toBe(852);
+    // The floor holds while the area can fit it with its margins...
+    expect(quitDialogHeightCap(390)).toBe(360);
+    // ...and gives way to the area itself below that, so the top stays on screen.
+    expect(quitDialogHeightCap(340)).toBe(340);
   });
 
   it("names the owning peer on a remote terminal row", () => {
