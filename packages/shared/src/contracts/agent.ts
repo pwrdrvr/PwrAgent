@@ -615,6 +615,8 @@ export type ReloadCodexMcpConfigResponse = {
   queued: true;
 };
 
+export type SteerTurnDelivery = "next" | "now";
+
 export type SteerTurnRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
@@ -622,6 +624,13 @@ export type SteerTurnRequest = {
   input: AppServerTurnInputItem[];
   expectedTurnId: string;
   requestId: string;
+  /**
+   * When the message reaches the running turn. `"next"` (the default) joins
+   * at the turn's next boundary, usually the next tool call. `"now"` cuts off
+   * the response being streamed; only an owner advertising
+   * `capabilities.interruptSteerTurn` accepts it.
+   */
+  delivery?: SteerTurnDelivery;
   /**
    * Durable fallback accepted by main together with the steer request. Main
    * schedules it when the expected target is already stale.

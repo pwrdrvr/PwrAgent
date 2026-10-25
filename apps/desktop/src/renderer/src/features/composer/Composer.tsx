@@ -96,6 +96,7 @@ import type {
   PrSummary,
   RenderComposerPdfPreviewResponse,
   ReviewRunMode,
+  SteerTurnDelivery,
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -297,7 +298,12 @@ import {
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
 import { useComposerMentionSources } from "./useComposerMentionSources";
-import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
+import {
+  formatQueueShortcut,
+  formatSteerShortcut,
+  isSteerShortcut,
+  useQueueSteerTooltip,
+} from "./steer-shortcut";
 import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 import { useComposerTip } from "./useComposerTip";
@@ -748,6 +754,8 @@ type QueuedTurnDraft = {
 
 type PendingSteerDraft = QueuedTurnDraft & {
   clearComposerDraftOnAdmission?: boolean;
+  /** `"now"` interrupts the running response; absent steers at the next boundary. */
+  delivery?: "now";
   expectedTurnId: string;
   status: "pending" | "queued" | "steering";
 };
@@ -8116,7 +8124,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ? { ...current, status: "steering" }
         : current
     );
-    props.onPendingStatusChange?.("Steering");
+    props.onPendingStatusChange?.(
+      pending.delivery === "now" ? "Interrupting" : "Steering",
+    );
     try {
       const responsePromise = props.desktopApi.steerTurn({
         backend: props.thread.source,
@@ -8126,6 +8136,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         expectedTurnId: turnId,
         input: payload.input,
         requestId: pending.id,
+        ...(pending.delivery === "now" ? { delivery: "now" as const } : {}),
         fallback: {
           displayText: pending.text,
           imageAttachments: pending.imageAttachments,
@@ -8326,6 +8337,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     expectedTurnId = activeTurnIdRef.current,
     expectedScopeKey = composerScopeKey,
     clearComposerDraftOnAdmission = false,
+    delivery?: SteerTurnDelivery,
   ):
     | PendingSteerDraft
     | Promise<PendingSteerDraft | undefined>
@@ -8343,6 +8355,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       || !supportsSteering
     ) {
       setSendError("Steering is not available for this model.");
+      return undefined;
+    }
+    if (delivery === "now" && !supportsInterruptSteer) {
+      setSendError("Interrupting is not available for this backend.");
       return undefined;
     }
 
@@ -8365,6 +8381,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         const accepted: PendingSteerDraft = {
           ...pending,
           clearComposerDraftOnAdmission,
+          ...(delivery === "now" ? { delivery } : {}),
           expectedTurnId: turnId,
           input,
           status: "pending",
@@ -8388,7 +8405,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     return complete(inputOrPayload.input);
   };
 
-  const steerCurrentDraft = (): Promise<void> | undefined => {
+  const steerCurrentDraft = (
+    delivery?: SteerTurnDelivery,
+  ): Promise<void> | undefined => {
     if (!props.thread || !activeTurnIdRef.current || !props.desktopApi?.steerTurn) {
       void queueCurrentDraft();
       setSendError("Steering is not available for this backend.");
@@ -8413,6 +8432,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       expectedTurnId,
       expectedScopeKey,
       true,
+      delivery,
     );
     const continueSteering = (accepted?: PendingSteerDraft): void => {
       if (accepted) {
@@ -8611,7 +8631,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
 
   const submitTurn = async (
-    mode: "default" | "steer" = "default",
+    mode: "default" | "steer" | "interrupt" = "default",
     options?: { restoreComposerFocus?: boolean },
   ): Promise<void> => {
     // The status line under the tray says why: the message would reference
@@ -8682,8 +8702,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
 
     if (shouldQueueThreadSubmit()) {
-      if (activeTurnIdRef.current && mode === "steer") {
-        const steering = steerCurrentDraft();
+      if (
+        activeTurnIdRef.current
+        && (mode === "steer" || mode === "interrupt")
+      ) {
+        const steering = steerCurrentDraft(
+          mode === "interrupt" ? "now" : undefined,
+        );
         if (steering) {
           await steering;
         }
@@ -10684,6 +10709,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const supportsSteering =
     Boolean(backend?.capabilities.steerTurn) &&
     selectedModelOption?.supportsSteering !== false;
+  const supportsInterruptSteer =
+    supportsSteering && backend?.capabilities.interruptSteerTurn === true;
   const launchpadSubmitting = isLaunchpad && (sending || Boolean(props.launchpadMaterializing));
   // A launchpad with a parent starts a sub-thread. Detaching clears the
   // parent, and the copy goes back to a plain new thread.
@@ -10810,6 +10837,28 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const submitButtonSteerHint =
     submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
   const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
+  // Mid-turn the send menu also names how this message can meet the running
+  // turn. Steer and Interrupt stay listed where the provider or model cannot
+  // do them, dimmed with the reason, so the menu explains the gap.
+  const turnSendActionsVisible =
+    submitButtonLabel === "Queue"
+    && Boolean(activeTurnId)
+    && Boolean(props.thread)
+    && !isLaunchpad
+    && !parsedReviewCommand;
+  const turnBackendLabel = props.thread
+    ? formatBackendLabel(props.thread.source, props.backends)
+    : "This agent";
+  const steerUnavailableReason = supportsSteering
+    ? undefined
+    : backend?.capabilities.steerTurn
+      ? `${selectedModelOption?.label ?? selectedModelOption?.id ?? "This model"} can't take messages mid-turn`
+      : `${turnBackendLabel} can't take messages mid-turn`;
+  const interruptUnavailableReason = supportsInterruptSteer
+    ? undefined
+    : props.thread?.source === "claude" && props.thread.federation
+      ? "The instance running this thread can't interrupt yet"
+      : `${turnBackendLabel} can't cut in mid-response`;
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -11999,10 +12048,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           <div className="composer__queued-copy">
             <span className="composer__queued-label">
               {pendingSteer.status === "steering"
-                ? "Steering now"
+                ? pendingSteer.delivery === "now" ? "Interrupting" : "Steering now"
                 : pendingSteer.status === "queued"
                   ? "Queued by Grok"
-                  : "Pending steer"}
+                  : pendingSteer.delivery === "now"
+                    ? "Pending interrupt"
+                    : "Pending steer"}
             </span>
             <span className="composer__queued-text">
               {formatDraftPreview(pendingSteer)}
@@ -14479,7 +14530,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 <button
                   aria-expanded={scheduleMenuOpen}
                   aria-haspopup="menu"
-                  aria-label={props.launchpad ? "Schedule thread" : "Schedule message"}
+                  aria-label={
+                    props.launchpad
+                      ? "Schedule thread"
+                      : turnSendActionsVisible
+                        ? "Send options"
+                        : "Schedule message"
+                  }
                   className="button composer__send-schedule-button"
                   disabled={scheduleButtonDisabled}
                   type="button"
@@ -14551,7 +14608,66 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               {submitTooltip.tooltipNode}
             </div>
             {scheduleAffordanceVisible && scheduleMenuOpen ? (
-              <div className="composer__schedule-menu" role="menu">
+              <div
+                className={[
+                  "composer__schedule-menu",
+                  turnSendActionsVisible ? "composer__schedule-menu--turn" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                role="menu"
+              >
+                {turnSendActionsVisible ? (
+                  <>
+                    <div
+                      className="composer__schedule-menu-label"
+                      role="presentation"
+                    >
+                      Now · while {turnBackendLabel} works
+                    </div>
+                    <ComposerSendMenuItem
+                      description="Send when this turn ends"
+                      label="Queue"
+                      shortcut={formatQueueShortcut()}
+                      onSelect={() => {
+                        setScheduleMenuOpen(false);
+                        void submitTurn("default", { restoreComposerFocus: true });
+                      }}
+                    />
+                    <ComposerSendMenuItem
+                      description={steerUnavailableReason ?? "Add it at the next tool call"}
+                      disabled={Boolean(steerUnavailableReason)}
+                      label="Steer"
+                      shortcut={steerUnavailableReason ? undefined : formatSteerShortcut()}
+                      onSelect={() => {
+                        setScheduleMenuOpen(false);
+                        void submitTurn("steer", { restoreComposerFocus: true });
+                      }}
+                    />
+                    <ComposerSendMenuItem
+                      description={
+                        interruptUnavailableReason
+                        ?? "Cut off the current response and send now"
+                      }
+                      disabled={Boolean(interruptUnavailableReason)}
+                      label="Interrupt"
+                      onSelect={() => {
+                        setScheduleMenuOpen(false);
+                        void submitTurn("interrupt", { restoreComposerFocus: true });
+                      }}
+                    />
+                    <div
+                      className="composer__schedule-menu-separator"
+                      role="separator"
+                    />
+                    <div
+                      className="composer__schedule-menu-label"
+                      role="presentation"
+                    >
+                      Later
+                    </div>
+                  </>
+                ) : null}
                 {scheduledSendOptions.map((option) => (
                   <button
                     className="composer__schedule-menu-item"
@@ -14581,6 +14697,50 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     </>
   );
 });
+
+/**
+ * One row of the send menu: a name, the clause saying what it does (or why
+ * it can't), and the shortcut that does the same thing. An unavailable row
+ * stays readable and hoverable with `aria-disabled`, since its description
+ * is the answer to "why can't I?"; the menu's keyboard walk skips it.
+ */
+function ComposerSendMenuItem({
+  description,
+  disabled = false,
+  label,
+  shortcut,
+  onSelect,
+}: {
+  description: string;
+  disabled?: boolean;
+  label: string;
+  shortcut?: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      aria-disabled={disabled || undefined}
+      className="composer__schedule-menu-item composer__schedule-menu-item--described"
+      role="menuitem"
+      type="button"
+      onClick={() => {
+        if (!disabled) onSelect();
+      }}
+    >
+      <span className="composer__schedule-menu-item-body">
+        <span>{label}</span>
+        <span className="composer__schedule-menu-item-description">
+          {description}
+        </span>
+      </span>
+      {shortcut ? (
+        <span aria-hidden="true" className="composer__schedule-menu-item-shortcut">
+          {shortcut}
+        </span>
+      ) : null}
+    </button>
+  );
+}
 
 /**
  * Names the thread a sub-thread launchpad will start under, beside the input

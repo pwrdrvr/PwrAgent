@@ -11000,6 +11000,181 @@ describe("Composer", () => {
     expect(screen.queryByText("Steering now")).not.toBeInTheDocument();
   });
 
+  describe("mid-turn send menu", () => {
+    const runningThread = (source: BackendSummary["kind"]) => ({
+      id: "thread-1",
+      title: "Running thread",
+      titleSource: "explicit" as const,
+      source,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    });
+    const capableBackend = (
+      kind: BackendSummary["kind"],
+      capabilities: Partial<BackendSummary["capabilities"]>,
+    ): BackendSummary => ({
+      ...backendSummary(kind, {
+        models: [{ id: "model-1", label: "Model One", current: true }],
+      }),
+      capabilities: { ...backendSummary(kind).capabilities, ...capabilities },
+    });
+
+    it("interrupts a Claude turn from the menu with delivery now", async () => {
+      const steerTurn = vi.fn(async () => ({
+        backend: "claude" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const startTurn = vi.fn();
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[
+            capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+          ]}
+          desktopApi={{ startTurn, steerTurn }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("claude")}
+        />
+      );
+
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "Stop and use the other API" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      expect(screen.getByText("Now · while Claude works")).toBeInTheDocument();
+      const steer = screen.getByRole("menuitem", { name: /^Steer/ });
+      expect(steer).not.toHaveAttribute("aria-disabled");
+      expect(steer).toHaveTextContent("Add it at the next tool call");
+      // The delayed sends stay below the turn actions.
+      expect(screen.getByRole("menuitem", { name: "Send in 15m" })).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: /^Interrupt/ }));
+      });
+
+      await waitFor(() => {
+        expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+          backend: "claude",
+          expectedTurnId: "turn-1",
+          delivery: "now",
+          input: [{ type: "text", text: "Stop and use the other API" }],
+        }));
+      });
+      expect(screen.getByText("Interrupting")).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("steers from the menu without a delivery", async () => {
+      const steerTurn = vi.fn(async () => ({
+        backend: "claude" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[
+            capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+          ]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("claude")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Also cover Windows" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: /^Steer/ }));
+      });
+
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledTimes(1));
+      expect(steerTurn.mock.calls[0]?.[0]).not.toHaveProperty("delivery");
+      expect(screen.getByText("Steering now")).toBeInTheDocument();
+    });
+
+    it("explains an Interrupt the provider cannot do", async () => {
+      const steerTurn = vi.fn();
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[capableBackend("codex", { steerTurn: true })]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("codex")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("codex can't cut in mid-response");
+      fireEvent.click(interrupt);
+      expect(steerTurn).not.toHaveBeenCalled();
+      // A refused pick keeps the menu open on its explanation.
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+    });
+
+    it("explains a Steer the provider cannot do", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[capableBackend("acp:grok", { steerTurn: false })]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("acp:grok")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const steer = screen.getByRole("menuitem", { name: /^Steer/ });
+      expect(steer).toHaveAttribute("aria-disabled", "true");
+      expect(steer).toHaveTextContent("can't take messages mid-turn");
+      expect(
+        screen.getByRole("menuitem", { name: /^Queue/ }),
+      ).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("keeps the idle menu to delayed sends", () => {
+      render(
+        <Composer
+          backends={[
+            capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+          ]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("claude")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Later please" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+
+      expect(screen.queryByRole("menuitem", { name: /^Steer/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /^Interrupt/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Send in 15m" })).toBeInTheDocument();
+    });
+  });
+
   it("keeps a Grok next-turn steer projected until its queued message arrives", async () => {
     let agentEventHandler:
       | ((event: {

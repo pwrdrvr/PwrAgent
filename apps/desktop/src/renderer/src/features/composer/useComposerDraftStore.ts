@@ -90,6 +90,8 @@ export type ComposerQueuedTurnSnapshot = {
 export type ComposerPendingSteerSnapshot = {
   id: string;
   clearComposerDraftOnAdmission?: boolean;
+  /** `"now"` interrupts the running response instead of steering into it. */
+  delivery?: "now";
   expectedTurnId: string;
   input?: AppServerTurnInputItem[];
   text: string;
