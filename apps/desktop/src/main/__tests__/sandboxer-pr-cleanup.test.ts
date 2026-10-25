@@ -286,6 +286,54 @@ describe("SandboxerPrCleanupService", () => {
       ]);
   });
 
+  it("returns the earlier report when a retried wake finds nothing left", async () => {
+    created("sb_one");
+    const connection = transport([...SANDBOXER_TOOLS, "delete_sandbox"]);
+    const { cleanup, openTransport } = service(async () => connection.value);
+
+    const first = await cleanup.cleanupThread({ backend: "codex", threadId: "thread-1" });
+    expect(first.entries).toMatchObject([{ sandboxId: "sb_one", action: "deleted" }]);
+    // The thread was busy; the wake retries and cleans up again.
+    await expect(cleanup.cleanupThread({ backend: "codex", threadId: "thread-1" }))
+      .resolves.toBe(first);
+    expect(openTransport).toHaveBeenCalledOnce();
+  });
+
+  it("opens no session for stopped sandboxes while the connection has no delete tool", async () => {
+    created("sb_one");
+    const connection = transport(SANDBOXER_TOOLS);
+    const { cleanup, openTransport, onReport } = service(async () => connection.value);
+
+    await cleanup.cleanupThread({ backend: "codex", threadId: "thread-1" });
+    expect(openTransport).toHaveBeenCalledOnce();
+    expect(onReport).toHaveBeenCalledOnce();
+    const again = await cleanup.cleanupThread({ backend: "codex", threadId: "thread-1" });
+    expect(again.entries).toMatchObject([{ action: "pending-delete" }]);
+    expect(openTransport).toHaveBeenCalledOnce();
+    expect(onReport).toHaveBeenCalledOnce();
+
+    // After the capability window, the tool list is read again.
+    now += 60 * 60_000 + 1;
+    await cleanup.cleanupThread({ backend: "codex", threadId: "thread-1" });
+    expect(openTransport).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits before retrying a thread whose cleanup failed", async () => {
+    created("sb_one");
+    const { cleanup, openTransport } = service(async () => {
+      throw new Error("Sandboxer is not signed in");
+    });
+    const failed = await cleanup.cleanupThread({ backend: "codex", threadId: "thread-1" });
+    expect(failed.entries).toMatchObject([{ action: "failed" }]);
+    now += 60_000;
+    await expect(cleanup.cleanupThread({ backend: "codex", threadId: "thread-1" }))
+      .resolves.toBe(failed);
+    expect(openTransport).toHaveBeenCalledOnce();
+    now += 5 * 60_000;
+    await cleanup.cleanupThread({ backend: "codex", threadId: "thread-1" });
+    expect(openTransport).toHaveBeenCalledTimes(2);
+  });
+
   it("shares one run between concurrent callers", async () => {
     created("sb_one");
     const connection = transport(SANDBOXER_TOOLS);

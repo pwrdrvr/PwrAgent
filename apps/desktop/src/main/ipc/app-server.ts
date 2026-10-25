@@ -6494,9 +6494,7 @@ class DesktopAppServerService {
   private async retryPendingSandboxCleanups(): Promise<void> {
     const service = this.getSandboxerPrCleanup();
     if (!service) return;
-    const pendingThreadIds = new Set(
-      new ThreadSandboxStore(getAppStateDb().raw).threadIdsWithPending(),
-    );
+    const pendingThreadIds = new Set(service.threadIdsWithPending());
     if (pendingThreadIds.size === 0) return;
     await this.loadPrStatusRegistry();
     for (const threadKey of this.attachedPrsByThreadKey.keys()) {
@@ -8293,6 +8291,7 @@ class DesktopAppServerService {
     this.prAutoDispatchCoordinator?.close();
     this.prAutoDispatchCoordinator = undefined;
     this.prStatusWatchCoordinator = undefined;
+    this.sandboxerPrCleanup = undefined;
     this.attachedPrsByThreadKey.clear();
     this.primaryPrThreadsByKey.clear();
     this.publishedPrimaryGitRepositoriesByThreadKey.clear();

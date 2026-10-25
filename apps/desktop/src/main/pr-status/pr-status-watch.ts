@@ -148,8 +148,19 @@ export class PrStatusWatchCoordinator {
     );
     try {
       const details = await this.resolveTerminalDetails(pr);
-      for (const claim of claims) {
-        await this.dispatchTerminalClaim(claim, pr, details, observedAt);
+      // Each thread's sandbox cleanup can wait on a remote MCP, so prepare
+      // every wake at once rather than one thread after another.
+      const extraLines = details
+        ? await Promise.all(claims.map((claim) => this.prepareTerminalWake(claim, pr)))
+        : [];
+      for (const [index, claim] of claims.entries()) {
+        await this.dispatchTerminalClaim(
+          claim,
+          pr,
+          details,
+          observedAt,
+          extraLines[index] ?? [],
+        );
       }
     } finally {
       for (const stop of stopHeartbeats) stop();
@@ -197,11 +208,26 @@ export class PrStatusWatchCoordinator {
     }
   }
 
+  private async prepareTerminalWake(
+    claim: PrStatusWatchClaim,
+    pr: PrSummary,
+  ): Promise<string[]> {
+    try {
+      return await this.options.prepareTerminalWake?.({
+        watch: claim.watch,
+        pr,
+      }) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   private async dispatchTerminalClaim(
     claim: PrStatusWatchClaim,
     pr: PrSummary,
     details: PullRequestTerminalDetails | undefined,
     observedAt: number,
+    extraLines: string[],
   ): Promise<void> {
     const release = async (spendAttempt: boolean) =>
       await this.options.store.releaseThreadPrStatusWatch({
@@ -215,15 +241,6 @@ export class PrStatusWatchCoordinator {
     if (!details || !outcome || this.options.isBackgroundPollingEnabled?.() === false) {
       await release(false);
       return;
-    }
-    let extraLines: string[] = [];
-    try {
-      extraLines = await this.options.prepareTerminalWake?.({
-        watch: claim.watch,
-        pr,
-      }) ?? [];
-    } catch {
-      extraLines = [];
     }
     try {
       const submission = await this.options.registry.submitTurnIfIdle({

@@ -1316,7 +1316,7 @@ describe("PluginsSettings", () => {
       // Absent reads as on.
       expect(cleanup).toBeChecked();
       expect(row.getByText("Clean up when PRs close")).toBeInTheDocument();
-      expect(row.getByText(/Sandboxer has no delete tool yet/)).toBeInTheDocument();
+      expect(row.getByText(/Without a delete tool, PwrAgent stops it/)).toBeInTheDocument();
 
       fireEvent.click(cleanup);
       await waitFor(() => {

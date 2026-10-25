@@ -24,6 +24,12 @@ import type {
 export const SANDBOXER_DELETE_TOOL = "delete_sandbox";
 export const SANDBOXER_STOP_TOOL = "stop_sandbox";
 const CLEANUP_TIMEOUT_MS = 60_000;
+/** How long a tool list without delete_sandbox is trusted before relisting. */
+const NO_DELETE_TOOL_TTL_MS = 60 * 60_000;
+/** A thread whose cleanup failed is not retried sooner than this. */
+const FAILURE_RETRY_MS = 5 * 60_000;
+/** Recent non-empty reports kept so a retried wake can still describe them. */
+const REPORT_HISTORY_LIMIT = 64;
 const DETAIL_LIMIT = 200;
 
 export type SandboxCleanupAction =
@@ -55,7 +61,7 @@ export type SandboxerCleanupTransport = {
 };
 
 export type SandboxerPrCleanupOptions = {
-  store: Pick<ThreadSandboxStore, "pendingForThread" | "markOutcome">;
+  store: Pick<ThreadSandboxStore, "pendingForThread" | "markOutcome" | "threadIdsWithPending">;
   openTransport: (params: {
     connectionId: string;
     backend: string;
@@ -71,8 +77,19 @@ export type SandboxerPrCleanupOptions = {
 
 export class SandboxerPrCleanupService {
   private readonly inFlight = new Map<string, Promise<SandboxCleanupReport>>();
+  /** Per connection: until when its last tool list had no delete_sandbox. */
+  private readonly noDeleteToolUntil = new Map<string, number>();
+  /** Per thread: no new attempt before this, after a failed one. */
+  private readonly retryAfter = new Map<string, number>();
+  /** Per thread: the last run that did or reported something. */
+  private readonly lastReports = new Map<string, SandboxCleanupReport>();
 
   constructor(private readonly options: SandboxerPrCleanupOptions) {}
+
+  /** Thread ids that still hold a sandbox, for the startup sweep. */
+  threadIdsWithPending(): string[] {
+    return this.options.store.threadIdsWithPending();
+  }
 
   /**
    * Concurrent callers for one thread share one run. `createdBefore` is when
@@ -94,7 +111,41 @@ export class SandboxerPrCleanupService {
     return await run;
   }
 
+  /**
+   * A retried wake, or a repeated observation of the same closed PR, gets the
+   * last report back instead of a new attempt when nothing has changed:
+   * after a delete, nothing is pending, and the wake must still say what was
+   * deleted. A failed thread waits `FAILURE_RETRY_MS`, and a stopped
+   * sandbox waits until the connection may list delete_sandbox, so neither
+   * opens a Sandboxer session on every lookup.
+   */
   private async run(params: {
+    backend: string;
+    threadId: string;
+    createdBefore?: number;
+  }): Promise<SandboxCleanupReport> {
+    const threadKey = JSON.stringify([params.backend, params.threadId]);
+    const last = this.lastReports.get(threadKey);
+    if (last && (this.retryAfter.get(threadKey) ?? 0) > this.now()) return last;
+    const report = await this.attempt(params);
+    if (report.entries.length === 0) return last ?? report;
+    if (report.entries.some((item) => item.action === "failed")) {
+      this.retryAfter.set(threadKey, this.now() + FAILURE_RETRY_MS);
+    } else {
+      this.retryAfter.delete(threadKey);
+    }
+    this.lastReports.delete(threadKey);
+    this.lastReports.set(threadKey, report);
+    while (this.lastReports.size > REPORT_HISTORY_LIMIT) {
+      const oldest = this.lastReports.keys().next().value;
+      if (oldest === undefined) break;
+      this.lastReports.delete(oldest);
+      this.retryAfter.delete(oldest);
+    }
+    return report;
+  }
+
+  private async attempt(params: {
     backend: string;
     threadId: string;
     createdBefore?: number;
@@ -123,7 +174,18 @@ export class SandboxerPrCleanupService {
         record,
       ]);
     }
+    let changed = false;
     for (const [connectionId, records] of byConnection) {
+      if (
+        records.every((record) => record.status === "stopped")
+        && (this.noDeleteToolUntil.get(connectionId) ?? 0) > this.now()
+      ) {
+        // Nothing to do until the connection can delete: skip the session.
+        report.entries.push(...records.map((record) => entry(record, "pending-delete",
+          PENDING_DELETE_DETAIL)));
+        continue;
+      }
+      changed = true;
       report.entries.push(...await this.cleanupConnection({
         ...params,
         connectionId,
@@ -131,7 +193,7 @@ export class SandboxerPrCleanupService {
         signal,
       }));
     }
-    this.options.onReport?.(report);
+    if (changed) this.options.onReport?.(report);
     return report;
   }
 
@@ -159,6 +221,11 @@ export class SandboxerPrCleanupService {
     }
     const canDelete = tools.includes(SANDBOXER_DELETE_TOOL);
     const canStop = tools.includes(SANDBOXER_STOP_TOOL);
+    if (canDelete) {
+      this.noDeleteToolUntil.delete(params.connectionId);
+    } else {
+      this.noDeleteToolUntil.set(params.connectionId, this.now() + NO_DELETE_TOOL_TTL_MS);
+    }
     const entries: SandboxCleanupEntry[] = [];
     try {
       for (const record of params.records) {
@@ -169,8 +236,7 @@ export class SandboxerPrCleanupService {
         if (canDelete) {
           entries.push(await this.release(transport, record, "delete"));
         } else if (record.status === "stopped") {
-          entries.push(entry(record, "pending-delete",
-            "Already stopped. Deletion is pending: Sandboxer's MCP has no delete_sandbox tool."));
+          entries.push(entry(record, "pending-delete", PENDING_DELETE_DETAIL));
         } else if (canStop) {
           entries.push(await this.release(transport, record, "stop"));
         } else {
@@ -260,6 +326,9 @@ export function summarizeSandboxCleanup(report: SandboxCleanupReport): string {
   return [...counts].map(([action, count]) =>
     `${ACTION_LABELS[action]} ${count}`).join(", ");
 }
+
+const PENDING_DELETE_DETAIL =
+  "Already stopped. Deletion is pending: Sandboxer's MCP has no delete_sandbox tool.";
 
 const ACTION_LABELS: Record<SandboxCleanupAction, string> = {
   deleted: "deleted",

@@ -2680,9 +2680,8 @@ function ManagedMcpConnectionRow(props: {
                   Clean up when PRs close
                 </span>
                 <span className="settings-mcp-row__policy-hint">
-                  Stop each sandbox a thread created once all of its PRs merge
-                  or close. Sandboxer has no delete tool yet; PwrAgent deletes
-                  them when it adds one.
+                  Delete each sandbox a thread created once all of its PRs
+                  merge or close. Without a delete tool, PwrAgent stops it.
                 </span>
               </span>
             </div>

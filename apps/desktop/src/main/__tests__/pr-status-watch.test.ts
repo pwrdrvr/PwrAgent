@@ -724,6 +724,38 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
     expect(promptOf(submitTurnIfIdle, 1)).toContain("- Outcome: merged");
   });
 
+  it("prepares every thread's wake at once, so one slow cleanup does not hold the rest", async () => {
+    await registerTerminalWatch(store, ["merged"], "thread-1");
+    now += 1;
+    await registerTerminalWatch(store, ["merged"], "thread-2");
+    const submitTurnIfIdle: Mock<SubmitTurnIfIdle> = vi.fn(async () => ({
+      status: "started" as const,
+      turnId: "turn-1",
+    }));
+    const started: string[] = [];
+    let finish: () => void = () => {};
+    const bothStarted = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const coordinator = new PrStatusWatchCoordinator({
+      store,
+      registry: { submitTurnIfIdle },
+      fetchTerminalDetails: async () => squashDetails(),
+      prepareTerminalWake: async ({ watch }) => {
+        started.push(watch.threadId);
+        if (started.length === 2) finish();
+        // Neither returns until both have started.
+        await bothStarted;
+        return [`- cleaned ${watch.threadId}`];
+      },
+      now: () => now,
+    });
+    await expect(coordinator.handleTerminalSnapshot(mergedPr(), now)).resolves.toBe(2);
+    expect(started).toEqual(["thread-1", "thread-2"]);
+    expect(promptOf(submitTurnIfIdle, 0)).toContain("- cleaned thread-1");
+    expect(promptOf(submitTurnIfIdle, 1)).toContain("- cleaned thread-2");
+  });
+
   it("still wakes the thread when the merge-details lookup fails", async () => {
     await registerTerminalWatch();
     const harness = createTerminalHarness({
