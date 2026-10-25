@@ -475,18 +475,31 @@ jobs:
     if: needs.changes.outputs.code_impacting == 'true'
     strategy:
       # Playwright shards by test COUNT, in file order, without regard to
-      # duration. `a11y.spec.ts` sorts first and is 66 tests (six surfaces in
-      # each of eleven color themes) at ~4.2s apiece against ~2.5s for the
-      # rest of the suite, so whichever lane holds it runs long. With two
-      # lanes that lane spent 495-519s of its 600s test step on main, and one
-      # PR run that was ~19% slower across every file timed it out.
+      # duration, and a shard boundary never splits a group: with
+      # `fullyParallel: false` each file is one group. `a11y.spec.ts` sorts
+      # first and is 66 tests (six surfaces in each of eleven color themes)
+      # at ~3.5s apiece on macOS against ~2.4s for the rest of the suite.
+      # As one group it sat whole in lane 1, which ran 249s of tests on
+      # macOS against 145-184s for the other lanes, and set the end of the
+      # whole CI run.
       #
-      # Four lanes leave the a11y lane at ~340s (~57% of the step budget) and
-      # the others near ~220s. Splitting a11y into more files or running it
-      # in `parallel` mode would not help: its tests stay contiguous at the
-      # front of the count-based split, so it moves only once it outgrows a
-      # whole lane. Four also matches the macOS and Windows matrices, so a
-      # lane number names the same tests on every platform.
+      # Two settings move that work. `a11y.spec.ts` runs in `parallel` mode,
+      # so each of its tests is its own group (workers stay at 1, so this
+      # changes grouping only). PWTEST_SHARD_WEIGHTS on the test step then
+      # sizes the lanes 9:12:12:14 by test count (54/71/71/82 of 278), so
+      # lane 1 takes 54 a11y tests and lane 2 the rest. The weights count
+      # tests, not seconds. They were fit to per-test times from CI runs on
+      # all three platforms: a11y is relatively slowest on Linux, and the
+      # late files are slowest on Windows, so one set of weights cannot even
+      # out every platform. This set minimizes the worst lane summed over
+      # the three, which models macOS at ~178-198s per lane (was 158-234s).
+      # Refit them when a11y's cost or the suite's size moves a lane well
+      # off the others. Each lane's test count is the `Running N tests using
+      # 1 worker, shard K of 4` log line.
+      #
+      # The Linux, macOS and Windows test steps set the same weights and all
+      # run four lanes, so a lane number names the same tests on every
+      # platform. Change all three together.
       #
       # GitHub-hosted Linux capacity can run every lane concurrently. Keep
       # the other shards running after a failure so their artifacts still
@@ -520,6 +533,9 @@ jobs:
 
       - name: Run desktop replay-backed Electron tests
         timeout-minutes: 10
+        env:
+          # Lane sizes by test count; see the strategy comment above.
+          PWTEST_SHARD_WEIGHTS: "9:12:12:14"
         # Wide-layout specs request 1440px windows. Keep the virtual desktop
         # larger so Openbox does not constrain them to Xvfb's default width.
         # Keep Xvfb from resetting while short-lived readiness probes disconnect
@@ -748,6 +764,9 @@ jobs:
         env:
           PWRAGENT_E2E_DISABLE_GPU: "1"
           PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
+          # Same lane sizes as Linux and Windows; see the desktop-e2e
+          # strategy comment.
+          PWTEST_SHARD_WEIGHTS: "9:12:12:14"
         run: >-
           pnpm --filter @pwragent/desktop test:e2e
           --shard=${{ matrix.lane }}/4
@@ -807,11 +826,13 @@ jobs:
         # windows-latest provides an interactive desktop session, so unlike the
         # Linux lane this needs neither xvfb nor a window manager.
         #
-        # Sharding stays file-level, matching the macOS lane: the suite has no
-        # `beforeAll` and no serial describes, so `--fully-parallel` would be
-        # safe, but keeping both 4-lane matrices on identical semantics means a
-        # Windows-only failure is attributable to Windows and not to a
-        # different sharding mode.
+        # Sharding matches the Linux and macOS lanes exactly: the same
+        # grouping (file-level, except `a11y.spec.ts`, which runs in
+        # `parallel` mode) and the same weights. A Windows-only failure is
+        # then attributable to Windows and not to a different lane split.
+        # See the desktop-e2e strategy comment.
+        env:
+          PWTEST_SHARD_WEIGHTS: "9:12:12:14"
         run: >-
           pnpm --filter @pwragent/desktop test:e2e
           --shard=${{ matrix.lane }}/4
