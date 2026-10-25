@@ -5,6 +5,7 @@ import { hydrateComposerDraft } from "../composer-draft-hydration";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -11167,6 +11168,154 @@ describe("Composer", () => {
       expect(
         screen.getByRole("menuitem", { name: /^Queue/ }),
       ).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("dims Interrupt on a pinned peer thread whose owner it cannot see", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          // These are the local instance's summaries, not the peer's.
+          backends={[
+            capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+          ]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            ...runningThread("claude"),
+            federation: {
+              ref: {
+                backend: "claude",
+                target: { scope: "remote", instanceId: "peer-1" },
+                threadId: "thread-1",
+              },
+              instanceLabel: "Studio",
+            },
+          }}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("Open this instance's window to interrupt");
+      expect(
+        screen.getByRole("menuitem", { name: /^Steer/ }),
+      ).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("offers Interrupt on a peer thread in that peer's own window", () => {
+      const target = window as typeof window & {
+        __pwragentFederationTarget?: { scope: "remote"; instanceId: string };
+      };
+      target.__pwragentFederationTarget = { scope: "remote", instanceId: "peer-1" };
+      try {
+        render(
+          <Composer
+            activeTurnId="turn-1"
+            backends={[
+              capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+            ]}
+            desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+            disabled={false}
+            skills={[]}
+            thread={{
+              ...runningThread("claude"),
+              federation: {
+                ref: {
+                  backend: "claude",
+                  target: { scope: "remote", instanceId: "peer-1" },
+                  threadId: "thread-1",
+                },
+                instanceLabel: "Studio",
+              },
+            }}
+          />
+        );
+
+        fireEvent.change(screen.getByLabelText("Reply"), {
+          target: { value: "Change course" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+        expect(
+          screen.getByRole("menuitem", { name: /^Interrupt/ }),
+        ).not.toHaveAttribute("aria-disabled");
+      } finally {
+        delete target.__pwragentFederationTarget;
+      }
+    });
+
+    it("explains why a second steer cannot start while one is pending", async () => {
+      let resolveSteer: (() => void) | undefined;
+      const steerTurn = vi.fn(() => new Promise<{
+        backend: "claude";
+        threadId: string;
+        turnId: string;
+      }>((resolve) => {
+        resolveSteer = () => resolve({ backend: "claude", threadId: "thread-1", turnId: "turn-1" });
+      }));
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[
+            capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+          ]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("claude")}
+        />
+      );
+
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "First correction" } });
+      fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        resolveSteer?.();
+      });
+      expect(screen.getByLabelText("Pending steer message")).toBeInTheDocument();
+
+      fireEvent.change(textarea, { target: { value: "Second correction" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      for (const name of [/^Steer/, /^Interrupt/]) {
+        const row = screen.getByRole("menuitem", { name });
+        expect(row).toHaveAttribute("aria-disabled", "true");
+        expect(row).toHaveTextContent("Another message is already steering in");
+      }
+    });
+
+    it("moves focus into the menu and walks only the rows that can act", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[capableBackend("codex", { steerTurn: true })]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("codex")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      await user.click(screen.getByRole("button", { name: "Send options" }));
+
+      expect(screen.getByRole("menuitem", { name: /^Steer/ })).toHaveFocus();
+      await user.keyboard("{ArrowDown}");
+      // The dimmed Interrupt row is skipped.
+      expect(screen.getByRole("menuitem", { name: /^Queue/ })).toHaveFocus();
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Send options" })).toHaveFocus();
     });
 
     it("keeps the idle menu to delayed sends", () => {

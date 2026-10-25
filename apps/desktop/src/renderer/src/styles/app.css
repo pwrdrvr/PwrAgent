@@ -43026,7 +43026,8 @@ button.composer__subthread-source-parent:hover {
   cursor: default;
 }
 
-.composer__schedule-menu-item[aria-disabled="true"]:hover {
+.composer__schedule-menu-item[aria-disabled="true"]:hover,
+.composer__schedule-menu-item[aria-disabled="true"]:focus-visible {
   background: transparent;
   color: var(--text-muted);
 }

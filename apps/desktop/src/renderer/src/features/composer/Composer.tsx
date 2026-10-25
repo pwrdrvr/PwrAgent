@@ -145,6 +145,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import {
   agentEventMatchesThread,
   threadSummaryIdentityKey,
@@ -3139,10 +3140,29 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     () => setWorkspaceMenuOpen(false),
   );
   const [scheduleMenuOpen, setScheduleMenuOpen] = useState(false);
-  const scheduleMenuRef = useDismissableMenu<HTMLDivElement>(
-    scheduleMenuOpen,
-    () => setScheduleMenuOpen(false),
-  );
+  // The send split (pill and menu), the menu itself, and its caret. The
+  // menu takes the ARIA menu keyboard from useMenuNavigation, which leaves
+  // the pointer to us: a press outside the split closes it.
+  const scheduleMenuRef = useRef<HTMLDivElement>(null);
+  const scheduleMenuListRef = useRef<HTMLDivElement>(null);
+  const scheduleMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeScheduleMenu = useCallback(() => setScheduleMenuOpen(false), []);
+  useMenuNavigation({
+    open: scheduleMenuOpen,
+    menuRef: scheduleMenuListRef,
+    triggerRef: scheduleMenuTriggerRef,
+    onClose: closeScheduleMenu,
+  });
+  useEffect(() => {
+    if (!scheduleMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (!scheduleMenuRef.current?.contains(event.target as Node)) {
+        setScheduleMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [scheduleMenuOpen]);
   const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
   // Recently referenced files for the reference picker's Files tab —
   // loaded lazily from the main process each time the picker opens.
@@ -10709,8 +10729,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const supportsSteering =
     Boolean(backend?.capabilities.steerTurn) &&
     selectedModelOption?.supportsSteering !== false;
+  // The backend summaries describe the instance this window fronts. A
+  // peer's thread pinned into a local window is answered by an owner whose
+  // capabilities this window cannot see, and an owner that predates
+  // Interrupt would quietly deliver it as a Steer.
+  const threadOwnerTarget = props.thread?.federation?.ref.target;
+  const backendsDescribeThreadOwner =
+    threadOwnerTarget?.scope !== "remote"
+    || rendererFederationTarget?.instanceId === threadOwnerTarget.instanceId;
   const supportsInterruptSteer =
-    supportsSteering && backend?.capabilities.interruptSteerTurn === true;
+    supportsSteering
+    && backendsDescribeThreadOwner
+    && backend?.capabilities.interruptSteerTurn === true;
   const launchpadSubmitting = isLaunchpad && (sending || Boolean(props.launchpadMaterializing));
   // A launchpad with a parent starts a sub-thread. Detaching clears the
   // parent, and the copy goes back to a plain new thread.
@@ -10856,9 +10886,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : `${turnBackendLabel} can't take messages mid-turn`;
   const interruptUnavailableReason = supportsInterruptSteer
     ? undefined
-    : props.thread?.source === "claude" && props.thread.federation
-      ? "The instance running this thread can't interrupt yet"
+    : !backendsDescribeThreadOwner && supportsSteering
+      ? "Open this instance's window to interrupt"
       : `${turnBackendLabel} can't cut in mid-response`;
+  // One steer at a time: a second would be dropped while the first waits.
+  const pendingSteerReason = pendingSteer
+    ? "Another message is already steering in"
+    : undefined;
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -14530,6 +14564,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 <button
                   aria-expanded={scheduleMenuOpen}
                   aria-haspopup="menu"
+                  ref={scheduleMenuTriggerRef}
                   aria-label={
                     props.launchpad
                       ? "Schedule thread"
@@ -14615,6 +14650,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ]
                   .filter(Boolean)
                   .join(" ")}
+                ref={scheduleMenuListRef}
                 role="menu"
               >
                 {turnSendActionsVisible ? (
@@ -14629,10 +14665,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       Now · while {turnBackendLabel} works
                     </div>
                     <ComposerSendMenuItem
-                      description={steerUnavailableReason ?? "Add it at the next tool call"}
-                      disabled={Boolean(steerUnavailableReason)}
+                      description={
+                        steerUnavailableReason
+                        ?? pendingSteerReason
+                        ?? "Add it at the next tool call"
+                      }
+                      disabled={Boolean(steerUnavailableReason ?? pendingSteerReason)}
                       label="Steer"
-                      shortcut={steerUnavailableReason ? undefined : formatSteerShortcut()}
+                      shortcut={
+                        steerUnavailableReason ?? pendingSteerReason
+                          ? undefined
+                          : formatSteerShortcut()
+                      }
                       onSelect={() => {
                         setScheduleMenuOpen(false);
                         void submitTurn("steer", { restoreComposerFocus: true });
@@ -14641,9 +14685,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     <ComposerSendMenuItem
                       description={
                         interruptUnavailableReason
+                        ?? pendingSteerReason
                         ?? "Cut off the current response and send now"
                       }
-                      disabled={Boolean(interruptUnavailableReason)}
+                      disabled={Boolean(interruptUnavailableReason ?? pendingSteerReason)}
                       label="Interrupt"
                       onSelect={() => {
                         setScheduleMenuOpen(false);
@@ -14715,7 +14760,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
  * One row of the send menu: a name, the clause saying what it does (or why
  * it can't), and the shortcut that does the same thing. An unavailable row
  * stays readable and hoverable with `aria-disabled`, since its description
- * is the answer to "why can't I?"; the menu's keyboard walk skips it.
+ * is the answer to "why can't I?". useMenuNavigation's arrow walk skips it.
  */
 function ComposerSendMenuItem({
   description,
