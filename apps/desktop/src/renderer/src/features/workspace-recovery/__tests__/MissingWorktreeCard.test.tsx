@@ -143,7 +143,10 @@ describe("MissingWorktreeCard", () => {
   });
 
   it("moves to the main checkout and reports which branch was left alone", async () => {
-    const response = { backend: "codex" as const, threadId: "t1", repositoryPath: MAIN, branch: "main", warnings: [], completedAt: 1 };
+    const response = {
+      backend: "codex" as const, threadId: "t1", repositoryPath: MAIN, branch: "main", warnings: [], completedAt: 1,
+      linkedDirectory: { id: "pwragent-handoff:codex:t1", kind: "local" as const, label: "atlas", path: MAIN },
+    };
     const onRecovered = vi.fn();
     render(
       <MissingWorktreeCard

@@ -18372,6 +18372,7 @@ describe("Composer", () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
     const onMoveThreadToMainCheckout = vi.fn(async () => ({
       backend: "codex" as const, threadId: "thread-1", repositoryPath: "/repo", branch: "main", warnings: [], completedAt: 1,
+      linkedDirectory: { id: "pwragent-handoff:codex:thread-1", kind: "local" as const, label: "repo", path: "/repo" },
     }));
     const props: ComponentProps<typeof Composer> = {
       backends: [backendSummary("codex")],

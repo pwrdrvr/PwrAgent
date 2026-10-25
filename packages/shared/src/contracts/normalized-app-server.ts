@@ -1268,6 +1268,8 @@ export type MoveThreadToMainCheckoutResponse = {
   repositoryPath: string;
   /** The branch the main checkout is on, unchanged. */
   branch?: string;
+  /** The thread's workspace now, as its selected detail will show it. */
+  linkedDirectory: LinkedDirectorySummary;
   archivedWorktree?: WorktreeSnapshotSummary;
   warnings: string[];
   completedAt: number;

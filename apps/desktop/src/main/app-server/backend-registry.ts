@@ -15945,6 +15945,7 @@ export class DesktopBackendRegistry {
         threadId: request.threadId,
         repositoryPath,
         ...(branch ? { branch } : {}),
+        linkedDirectory,
         ...(archivedWorktree ? { archivedWorktree } : {}),
         warnings,
         completedAt: Date.now(),

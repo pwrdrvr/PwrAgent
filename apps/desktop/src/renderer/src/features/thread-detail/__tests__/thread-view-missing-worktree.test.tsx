@@ -72,6 +72,7 @@ describe("ThreadView with a missing worktree", () => {
   it("brings the composer back with a result row once the thread moves", async () => {
     const onMoveThreadToMainCheckout = vi.fn(async () => ({
       backend: "codex" as const, threadId: "t1", repositoryPath: "/home/dev/src/atlas", branch: "main", warnings: [], completedAt: 1,
+      linkedDirectory: { id: "pwragent-handoff:codex:t1", kind: "local" as const, label: "atlas", path: "/home/dev/src/atlas" },
     }));
     const { container } = render(
       <ThreadView {...baseProps} selectedThread={thread()} onMoveThreadToMainCheckout={onMoveThreadToMainCheckout} />,

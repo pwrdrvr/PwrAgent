@@ -47,10 +47,12 @@ export function primaryThreadWorktree(
 export async function detectMissingThreadWorkspace(
   thread: Pick<
     AppServerThreadSummary,
-    "linkedDirectories" | "gitBranch" | "observedGitBranch" | "worktreeSnapshots"
+    "linkedDirectories" | "gitBranch" | "observedGitBranch" | "worktreeSnapshots" | "archivedAt"
   >,
   probe: Partial<MissingThreadWorkspaceProbe> = {},
 ): Promise<ThreadMissingWorkspace | undefined> {
+  // Archiving a thread archives its worktree too, and Restore brings it back.
+  if (thread.archivedAt !== undefined) return undefined;
   const directory = primaryThreadWorktree(thread);
   if (!directory) return undefined;
   const pathExists = probe.pathExists ?? defaultPathExists;

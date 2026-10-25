@@ -41,7 +41,7 @@ export function formatCheckpointDay(archivedAt: number | undefined): string | un
 }
 
 /** `method_not_found` does not survive the IPC hop as a code; match the text. */
-function isOutdatedOwnerError(message: string): boolean {
+export function isOutdatedOwnerError(message: string): boolean {
   return /\bmethod_not_found\b/.test(message) || message.includes("No federation handler registered");
 }
 

@@ -8434,6 +8434,18 @@ export function useThreadNavigation(
     [desktopApi, refresh, restoreWorktreeRequest]
   );
 
+  // The owner has committed the workspace change before it answers. Refresh
+  // the thread and, when selected, its detail; workspace actions stay gated
+  // until that detail shows the change.
+  const refreshAfterWorkspaceChange = useCallback((threadKey: string) => {
+    void Promise.all([
+      refresh(threadKey),
+      selectedItemKeyRef.current === threadKey ? refreshSelectedThreadConfiguration() : Promise.resolve(),
+    ]).catch((error: unknown) => {
+      setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+    });
+  }, [refresh, refreshSelectedThreadConfiguration]);
+
   const handoffThreadWorkspace = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -8459,36 +8471,16 @@ export function useThreadNavigation(
         });
         const threadKey = threadSummaryIdentityKey(thread);
         setPendingWorkspaceHandoff({ threadKey, directory: response.linkedDirectory });
-        // The main process has committed the workspace change before its IPC
-        // response. Keep workspace actions gated until selected detail reflects
-        // that commit, while the dialog can close before Git-backed reads finish.
-        void (async () => {
-          await Promise.all([
-            refresh(threadKey),
-            selectedItemKeyRef.current === threadKey ? refreshSelectedThreadConfiguration() : Promise.resolve(),
-          ]);
-        })().catch((error) => {
-          setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
-        });
+        // The dialog can close before Git-backed reads finish.
+        refreshAfterWorkspaceChange(threadKey);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setWorktreeArchiveError(message);
         throw error;
       }
     },
-    [desktopApi, handoffThreadWorkspaceRequest, refresh, refreshSelectedThreadConfiguration]
+    [desktopApi, handoffThreadWorkspaceRequest, refreshAfterWorkspaceChange]
   );
-
-  // Both actions answer from the thread's owner. A refusal is a normal
-  // response the card explains, so only a thrown error is unexpected here.
-  const refreshAfterWorkspaceRecovery = useCallback((threadKey: string) => {
-    void Promise.all([
-      refresh(threadKey),
-      selectedItemKeyRef.current === threadKey ? refreshSelectedThreadConfiguration() : Promise.resolve(),
-    ]).catch((error: unknown) => {
-      setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
-    });
-  }, [refresh, refreshSelectedThreadConfiguration]);
 
   const recreateThreadWorktree = useCallback(
     async (
@@ -8505,11 +8497,11 @@ export function useThreadNavigation(
         threadId: thread.id,
       });
       if (response.status === "recreated") {
-        refreshAfterWorkspaceRecovery(threadSummaryIdentityKey(thread));
+        refreshAfterWorkspaceChange(threadSummaryIdentityKey(thread));
       }
       return response;
     },
-    [recreateThreadWorktreeRequest, refreshAfterWorkspaceRecovery]
+    [recreateThreadWorktreeRequest, refreshAfterWorkspaceChange]
   );
 
   const moveThreadToMainCheckout = useCallback(
@@ -8529,19 +8521,11 @@ export function useThreadNavigation(
       const threadKey = threadSummaryIdentityKey(thread);
       // As after a handoff: keep workspace actions gated until the selected
       // detail shows the thread in the main checkout.
-      setPendingWorkspaceHandoff({
-        threadKey,
-        directory: {
-          id: `pwragent-handoff:${thread.source}:${thread.id}`,
-          kind: "local",
-          label: response.repositoryPath.split(/[\\/]/).filter(Boolean).at(-1) ?? response.repositoryPath,
-          path: response.repositoryPath,
-        },
-      });
-      refreshAfterWorkspaceRecovery(threadKey);
+      setPendingWorkspaceHandoff({ threadKey, directory: response.linkedDirectory });
+      refreshAfterWorkspaceChange(threadKey);
       return response;
     },
-    [moveThreadToMainCheckoutRequest, refreshAfterWorkspaceRecovery]
+    [moveThreadToMainCheckoutRequest, refreshAfterWorkspaceChange]
   );
 
   const renameThread = useCallback(

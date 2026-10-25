@@ -64745,6 +64745,10 @@ describe("DesktopBackendRegistry workspace recovery", () => {
       });
 
       expect(response).toMatchObject({ repositoryPath: repo, branch: "main", warnings: [] });
+      // The renderer gates workspace actions on exactly this directory.
+      expect(response.linkedDirectory).toEqual({
+        id: "pwragent-handoff:codex:thread-1", kind: "local", label: "atlas", path: repo,
+      });
       expect(releaseMissingWorktree).toHaveBeenCalledWith({ repositoryPath: repo, worktreePath: worktree });
       expect(archive).not.toHaveBeenCalled();
       expect((await execFileAsync("git", ["-C", repo, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim()).toBe("main");
@@ -64761,6 +64765,28 @@ describe("DesktopBackendRegistry workspace recovery", () => {
           method: "navigation/threadDirectories/updated",
           params: { reason: "selected-thread", threadIds: ["thread-1"] },
         },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records a detached main checkout as HEAD, not the worktree's branch", async () => {
+    // Git names a detached checkout HEAD, so the thread stops claiming the worktree's branch.
+    const { root, repo, worktree } = await mainCheckout();
+    await execFileAsync("git", ["-C", repo, "switch", "--detach", "-q"]);
+    const { registry, codexClient } = registryFor(worktreeThread(repo, worktree), {
+      recovery: { releaseMissingWorktree: vi.fn(async () => true) },
+    });
+    try {
+      const response = await registry.moveThreadToMainCheckout({
+        backend: "codex", threadId: "thread-1", worktreePath: worktree,
+      });
+
+      expect(response.branch).toBe("HEAD");
+      expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
+        threadId: "thread-1", gitInfo: { branch: "HEAD" },
       });
     } finally {
       await registry.close();

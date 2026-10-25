@@ -136,6 +136,7 @@ import {
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import { InstanceChip, InstanceGlyph } from "../federation/InstanceGlyph";
+import { isOutdatedOwnerError } from "../workspace-recovery/MissingWorktreeCard";
 import { filterAtReferenceCandidates } from "../../lib/instance-references";
 import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
@@ -11115,8 +11116,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       const message = error instanceof Error ? error.message : String(error);
       // An owner that predates the keep-branch handoff answers
       // method_not_found; nothing moved. The text survives IPC, the code does not.
-      const outdated = keepLocalBranchSelected
-        && (/\bmethod_not_found\b/.test(message) || message.includes("No federation handler registered"));
+      const outdated = keepLocalBranchSelected && isOutdatedOwnerError(message);
       const owner = props.thread?.federation?.instanceLabel ?? "the other machine";
       setHandoffError(outdated
         ? `${owner} runs an older PwrAgent that can only hand off by switching Local’s branch. Update PwrAgent on ${owner}, or choose Move ${sourceBranch ?? "the branch"} to Local.`

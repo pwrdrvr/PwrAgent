@@ -37,6 +37,12 @@ describe("detectMissingThreadWorkspace", () => {
     expect(readBranch).not.toHaveBeenCalled();
   });
 
+  it("leaves archived threads to Restore, which brings their worktrees back", async () => {
+    const pathExists = vi.fn(async () => false);
+    expect(await detectMissingThreadWorkspace(thread({ archivedAt: 30 }), { pathExists })).toBeUndefined();
+    expect(pathExists).not.toHaveBeenCalled();
+  });
+
   it("ignores threads with no worktree", async () => {
     expect(await detectMissingThreadWorkspace(thread({
       linkedDirectories: [{ id: "d1", label: "atlas", kind: "local", path: MAIN }],
