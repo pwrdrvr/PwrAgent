@@ -508,7 +508,7 @@ Both screenshot pipelines honor two optional env vars that seed the
 launched profile's `[general.appearance]` block before Electron boots:
 
 - `PWRAGENT_SCREENSHOT_THEME` — `dark` (default), `light`, or `system`.
-- `PWRAGENT_SCREENSHOT_DENSITY` — `mission-control` (default) or `compact`.
+- `PWRAGENT_SCREENSHOT_DENSITY` — `mission-control` (default), `compact`, or `minimal`.
 
 Defaults match the committed PNGs (dark + mission-control), so omitting
 the variables leaves the existing pipeline pixel-stable. The pre-React
@@ -770,6 +770,27 @@ Use this when an account type appears to expose incomplete quota or usage
 information. The JSONL output contains every protocol frame and can include
 account identity, local paths, prompts, and model output. Keep captures under
 `.local/`, which is gitignored; never commit a raw account capture.
+
+## Thread Row Density and X-ray
+
+Density is `<html data-density>`: absent for Mission Control, `compact`, or
+`minimal`. It lives in CSS only, so a density change re-renders no row.
+
+- **Compact** hides every `.thread-row__chip` without the
+  `thread-row__chip--persistent` marker. PR chips and reactions stay.
+- **Minimal** hides every flow chip without the `thread-row__chip--essential`
+  marker (held or unsent messages, approvals, questions). The title line shows
+  `PrRollupChip` instead: one chip that wears the least ready PR's state
+  (`pr-rollup.ts`), with a hover list of every PR. Add `--essential` only to a
+  chip that is waiting on the operator.
+- **X-ray** (`lib/xray-mode.ts`): holding ⌘ (Ctrl off macOS) sets
+  `<html data-xray>`, which every density rule excludes, so the rows show all
+  chips. A double press, or the badge's pin, keeps it on.
+- **Previews.** The Settings and onboarding density pickers render real
+  `ThreadRow`s, inert, inside `.density-preview--<density>`. Write each density
+  rule twice: the `:root[data-density="…"]:not([data-xray]) … :not(.density-preview *)`
+  half and the `.density-preview--… ` half.
+  `styles/__tests__/density-contract.test.ts` fails when a rule lacks either.
 
 ## Accessibility
 

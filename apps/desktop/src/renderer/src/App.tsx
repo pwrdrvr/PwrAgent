@@ -3,6 +3,7 @@ import { FederationShutdownNotices } from "./features/notifications/FederationSh
 import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRenameNotice";
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
+import { XrayMode } from "./features/navigation/XrayBadge";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
 import { formatBackendLabel } from "./lib/backend-label";
@@ -4311,6 +4312,11 @@ function DesktopAppShell(props: {
           onCopyThreadDiagnostics={
             desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
           }
+        />
+        <XrayMode
+          density={props.appearanceController.appearance.density}
+          enabled={!sidebarHidden && layerView === undefined}
+          platform={desktopApi?.platform}
         />
         {/* Sibling of the sidebar, not a child: the seam straddles the
             sidebar's border, which the aside's overflow clip would cut off. */}

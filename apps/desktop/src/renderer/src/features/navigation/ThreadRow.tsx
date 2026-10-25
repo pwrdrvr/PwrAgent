@@ -27,6 +27,7 @@ import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { PrChip } from "../pr-status/PrChip";
+import { PrRollupChip } from "../pr-status/PrRollupChip";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import {
@@ -292,6 +293,12 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       position: { x: number; y: number; anchorTop?: number },
     ) => props.onOpenPullRequestContextMenu?.(props.thread, targetPr, position),
   );
+  // A string, not a callback or a Set: the memoized rollup chip compares it
+  // by value, and it is read during that chip's render.
+  const repoPrefixedPrUrls = prs
+    .filter((pr) => needsRepoPrefix(props.thread, pr, prs))
+    .map((pr) => pr.url)
+    .join("\n");
   const detachPr = useEventCallback((targetPr: PrSummary) =>
     props.onDetachPullRequest?.(props.thread, targetPr));
   const toggleReactionPicker = useCallback(
@@ -636,6 +643,24 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
               </button>
             ) : null}
             {pinTooltipController.tooltipNode}
+
+            {/* Minimal density's one PR chip. It renders in every density
+                and CSS shows it only in Minimal outside X-ray, so a density
+                change or an X-ray peek re-renders no row. It sits right of
+                the pin so the hover-only pin button never shifts it. */}
+            {prs.length > 0 ? (
+              <PrRollupChip
+                prs={prs}
+                threadTitle={props.thread.title}
+                repoPrefixedUrls={repoPrefixedPrUrls}
+                onOpen={openPrStable}
+                onOpenContextMenu={
+                  props.onOpenPullRequestContextMenu
+                    ? openPrContextMenu
+                    : undefined
+                }
+              />
+            ) : null}
 
             <span className="thread-row__time-lane">
               <span className="thread-row__time">

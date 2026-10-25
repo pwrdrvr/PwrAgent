@@ -406,6 +406,7 @@ export type DesktopColorTheme = DesktopDarkTheme | DesktopLightTheme;
 export const DESKTOP_APPEARANCE_DENSITIES = [
   "mission-control",
   "compact",
+  "minimal",
 ] as const;
 export type DesktopAppearanceDensity =
   (typeof DESKTOP_APPEARANCE_DENSITIES)[number];

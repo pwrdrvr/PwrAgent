@@ -276,7 +276,7 @@ test.describe("Onboarding wizard", () => {
       ).toBeVisible();
 
       // Pick Compact density (so we can later assert back-nav preserved it).
-      await app.window.getByText("Just the title", { exact: false }).click();
+      await app.window.getByRole("radio", { name: /^Compact/ }).click();
       await app.window.getByRole("button", { name: /^Continue/i }).click();
 
       // AI Providers — the deterministic executable override satisfies
@@ -433,7 +433,7 @@ test.describe("Onboarding wizard", () => {
       ).toBeVisible();
 
       // Pick Compact (default is Mission Control).
-      await app.window.getByText("Just the title", { exact: false }).click();
+      await app.window.getByRole("radio", { name: /^Compact/ }).click();
       // The hint reflects the selection — used to assert preservation later.
       await expect(
         app.window.locator(".onboarding-wizard__hint").first(),

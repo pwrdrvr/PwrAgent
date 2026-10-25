@@ -3415,7 +3415,7 @@ function readBootstrapAppearance(): {
   theme: "system" | "dark" | "light";
   darkTheme: DesktopDarkTheme;
   lightTheme: DesktopLightTheme;
-  density: "mission-control" | "compact";
+  density: "mission-control" | "compact" | "minimal";
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
 } {
@@ -3438,7 +3438,12 @@ function readBootstrapAppearance(): {
           ? raw.lightTheme
           : DESKTOP_LIGHT_THEME_DEFAULT;
       const density =
-        raw && (raw.density === "mission-control" || raw.density === "compact")
+        raw
+        && (
+          raw.density === "mission-control"
+          || raw.density === "compact"
+          || raw.density === "minimal"
+        )
           ? raw.density
           : "mission-control";
       // Shared guard, not a hand-copied literal list: a notch added to

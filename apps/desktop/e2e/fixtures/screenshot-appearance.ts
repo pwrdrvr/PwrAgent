@@ -4,7 +4,7 @@
  *
  * Reads two env vars, both optional:
  *   - PWRAGENT_SCREENSHOT_THEME: "dark" | "light" | "system"
- *   - PWRAGENT_SCREENSHOT_DENSITY: "mission-control" | "compact"
+ *   - PWRAGENT_SCREENSHOT_DENSITY: "mission-control" | "compact" | "minimal"
  *
  * Defaults match what `launchElectronApp` already does for every E2E
  * launch (theme=dark, density=mission-control) — the committed PNGs
@@ -51,7 +51,7 @@ function parseTheme(value: string | undefined): DesktopAppearanceTheme {
 }
 
 function parseDensity(value: string | undefined): DesktopAppearanceDensity {
-  if (value === "compact" || value === "mission-control") {
+  if (value === "compact" || value === "minimal" || value === "mission-control") {
     return value;
   }
   return "mission-control";
