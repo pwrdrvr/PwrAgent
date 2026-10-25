@@ -17,6 +17,7 @@ import type {
 import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { indexTokenMiserCachedReplays, indexTokenMiserPricingLines } from "../app-server/token-miser-ledger-index";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
@@ -114,12 +115,12 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     Object.assign(registry, { overlayStore: store });
     const internals = registry as unknown as {
       recordTokenMiserFocusedInference: NonNullable<TokenMiserServiceOptions["onFocusedInference"]>;
-      buildTokenMiserThreadSavings(params: { backend: "codex"; threadId: string; entries: TokenMiserObjectMetadata[]; invocations: never[] }): Promise<{ gateCostMicros: number; savingsMicros: number }>;
+      buildTokenMiserThreadSavings(params: { backend: "codex"; threadId: string; entries: TokenMiserObjectMetadata[]; replays: ReturnType<typeof indexTokenMiserCachedReplays> }): Promise<{ gateCostMicros: number; savingsMicros: number }>;
     };
     const tokenMiserStore = new TokenMiserStore(path.join(directory, "focused-store"));
     Object.assign(registry, { tokenMiserStore });
     const entry = { ...metadata(randomUUID(), "gate-helper"), parentModel: "gpt-6-astra" };
-    const savingsParams = { backend: "codex" as const, threadId: "thread-parent", entries: [entry], invocations: [] as never[] };
+    const savingsParams = { backend: "codex" as const, threadId: "thread-parent", entries: [entry], replays: indexTokenMiserCachedReplays([]) };
     const before = await internals.buildTokenMiserThreadSavings(savingsParams);
     const params = {
       threadId: "thread-parent", turnId: "turn-parent", inferenceId: "focused-inference",
@@ -848,7 +849,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     const entry = (await tokenMiserStore.readMetadata(objectId))!;
     const internals = registry as unknown as {
       withTokenMiserAccounting(params: { backend: "codex"; threadId: string; accounting: ThreadToolAccounting }): Promise<ThreadToolAccounting>;
-      buildTokenMiserLedgerArtifact(params: { entry: TokenMiserObjectMetadata; pricingLines: ThreadUsageLineRecord[] }): { subAgent: ThreadSubAgentSummary };
+      buildTokenMiserLedgerArtifact(params: { entry: TokenMiserObjectMetadata; indexes: { pricing: ReturnType<typeof indexTokenMiserPricingLines>; replays: ReturnType<typeof indexTokenMiserCachedReplays> } }): { subAgent: ThreadSubAgentSummary };
     };
     const readAccounting = async () => (await internals.withTokenMiserAccounting({
       backend: "codex", threadId: entry.threadId,
@@ -891,7 +892,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect((await tokenMiserStore.readMetadata(second.objectId))?.retrievalRequestCachedTokens ?? 0).toBe(0);
     const updated = (await tokenMiserStore.readMetadata(objectId))!;
     expect(updated.retrievalRequestCachedTokens).toBe(199_000);
-    const gate = internals.buildTokenMiserLedgerArtifact({ entry: updated, pricingLines: [] }).subAgent.tokenMiserAccounting;
+    const gate = internals.buildTokenMiserLedgerArtifact({ entry: updated, indexes: { pricing: indexTokenMiserPricingLines([]), replays: indexTokenMiserCachedReplays([]) } }).subAgent.tokenMiserAccounting;
     expect(buildTokenMiserSavingsSummary({ gateAccountings: [gate] })?.terms?.savingsMicros).toBe(after.savings!.savingsMicros);
     expect((await new TokenMiserStore(path.join(directory, "token-miser-objects")).readMetadata(objectId))?.retrievalRequestCachedTokens).toBe(199_000);
 

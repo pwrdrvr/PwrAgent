@@ -5,6 +5,12 @@ import { ForgeReadError, validateForgeReadArgs, type ForgeReadRequest } from "..
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
+  indexTokenMiserCachedReplays,
+  indexTokenMiserPricingLines,
+  type TokenMiserCachedReplayIndex,
+  type TokenMiserPricingIndex,
+} from "./token-miser-ledger-index";
+import {
   findAcpPermissionModeConfigOption,
   DEFAULT_THREAD_ARCHIVE_POLICY,
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
@@ -4172,6 +4178,56 @@ function buildTaskMonitorUsageSnapshot(params: {
   serviceTier?: string;
   tokenUsage: unknown;
 }): TaskMonitorUsageSnapshot | undefined {
+  const usage = buildTaskMonitorUsageTotals(params);
+  if (!usage) {
+    return undefined;
+  }
+  const { cost, tokenUsage } = usage;
+  const summary = [
+    `${formatTaskMonitorTokenCount(tokenUsage.uncachedInputTokens)} uncached in`,
+    `${formatTaskMonitorTokenCount(tokenUsage.cachedInputTokens)} cached`,
+    tokenUsage.reasoningOutputTokens > 0
+      ? `${formatTaskMonitorTokenCount(tokenUsage.outputTokens)} out (${formatTaskMonitorTokenCount(
+          tokenUsage.reasoningOutputTokens,
+        )} reasoning)`
+      : `${formatTaskMonitorTokenCount(tokenUsage.outputTokens)} out`,
+    cost ? `${formatTokenUsageUsd(cost.totalUsd)} list price` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return {
+    ...(cost ? { cost } : {}),
+    ...(usage.fastMode !== undefined ? { fastMode: usage.fastMode } : {}),
+    ...(usage.model ? { model: usage.model } : {}),
+    ...(usage.serviceTier ? { serviceTier: usage.serviceTier } : {}),
+    summary,
+    tokenUsage,
+  };
+}
+
+type TaskMonitorUsageTotals = Omit<TaskMonitorUsageSnapshot, "summary" | "tokenUsage"> & {
+  tokenUsage: {
+    cacheWriteInputTokens?: number;
+    cachedInputTokens: number;
+    inputTokens: number;
+    outputTokens: number;
+    reasoningOutputTokens: number;
+    totalTokens: number;
+    uncachedInputTokens: number;
+  };
+};
+
+/**
+ * The numbers behind a usage snapshot, without its locale-formatted summary.
+ * Totals that are only summed, such as Token Miser savings, use this so they
+ * never format text they discard.
+ */
+function buildTaskMonitorUsageTotals(params: {
+  fastMode?: boolean;
+  model?: string;
+  serviceTier?: string;
+  tokenUsage: unknown;
+}): TaskMonitorUsageTotals | undefined {
   const tokens = normalizeTaskMonitorTokenUsage(params.tokenUsage);
   if (!tokens) {
     return undefined;
@@ -4201,25 +4257,11 @@ function buildTaskMonitorUsageSnapshot(params: {
     uncachedInputTokens,
   });
 
-  const summary = [
-    `${formatTaskMonitorTokenCount(uncachedInputTokens)} uncached in`,
-    `${formatTaskMonitorTokenCount(cachedInputTokens)} cached`,
-    reasoningOutputTokens > 0
-      ? `${formatTaskMonitorTokenCount(outputTokens)} out (${formatTaskMonitorTokenCount(
-          reasoningOutputTokens,
-        )} reasoning)`
-      : `${formatTaskMonitorTokenCount(outputTokens)} out`,
-    cost ? `${formatTokenUsageUsd(cost.totalUsd)} list price` : undefined,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
   return {
     ...(cost ? { cost } : {}),
     ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
     ...(params.model ? { model: params.model } : {}),
     ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
-    summary,
     tokenUsage: {
       ...(tokens.cacheWriteInputTokens !== undefined
         ? { cacheWriteInputTokens }
@@ -4824,7 +4866,7 @@ function buildTaskMonitorUsageLine(params: {
   reasoningEffort?: string;
   serviceTier?: string;
   source: ThreadUsageLineRecord["source"];
-  usage: TaskMonitorUsageSnapshot;
+  usage: Pick<TaskMonitorUsageSnapshot, "cost" | "model" | "tokenUsage">;
 }): ThreadUsageLineRecord {
   const tokenUsage = params.usage.tokenUsage;
   const inputTokens = Math.max(0, tokenUsage.inputTokens ?? 0);
@@ -5043,45 +5085,83 @@ function buildTokenMiserSubAgentAccounting(params: {
   };
 }
 
+type TokenMiserLedgerIndexes = {
+  pricing: TokenMiserPricingIndex;
+  replays: TokenMiserCachedReplayIndex;
+};
+
+function tokenMiserMonitorId(entry: TokenMiserObjectMetadata): string {
+  return `system:token-miser:${entry.objectId}`;
+}
+
+/**
+ * One gate's dollar accounting and the lines it was priced from. The rail
+ * card and the thread savings total both call this, so they cannot drift.
+ * `usage` is the helper's reported usage; the card passes its display
+ * snapshot and the total passes bare numbers, which price identically.
+ */
+function resolveTokenMiserGateAccounting(params: {
+  entry: TokenMiserObjectMetadata;
+  indexes: TokenMiserLedgerIndexes;
+  usage?: Pick<TaskMonitorUsageSnapshot, "cost" | "model" | "tokenUsage">;
+}): {
+  gateUsageLine?: ThreadUsageLineRecord;
+  tokenMiserAccounting: ThreadSubAgentSummary["tokenMiserAccounting"];
+} {
+  const { entry, indexes, usage } = params;
+  const monitorId = tokenMiserMonitorId(entry);
+  let gateUsageLine = indexes.pricing.gateUsageLine(monitorId);
+  if (!gateUsageLine && usage) {
+    gateUsageLine = buildTaskMonitorUsageLine({
+      backend: "codex",
+      accountKey: entry.helperUsage?.accountKey,
+      model: entry.helperUsage?.model,
+      monitorId,
+      monitorThreadId:
+        entry.helperUsage?.helperThreadId ?? `token-miser:${entry.objectId}`,
+      monitorTurnId: entry.helperUsage?.helperTurnId ?? entry.turnId,
+      parentThreadId: entry.threadId,
+      reasoningEffort: entry.helperUsage?.reasoningEffort,
+      serviceTier: entry.helperUsage?.serviceTier,
+      source: "monitor",
+      usage,
+    });
+    gateUsageLine.createdAt = entry.createdAt;
+  }
+  const tokenMiserAccounting = buildTokenMiserSubAgentAccounting({
+    entry,
+    gateUsageLine,
+    legacyCachedReplayCount: countLegacyTokenMiserCachedReplays({
+      entry,
+      replays: indexes.replays,
+    }),
+    parentUsageLine: indexes.pricing.parentUsageLine(
+      entry.threadId,
+      entry.turnId,
+    ),
+  });
+  return {
+    ...(gateUsageLine ? { gateUsageLine } : {}),
+    tokenMiserAccounting,
+  };
+}
+
 function countLegacyTokenMiserCachedReplays(params: {
   entry: TokenMiserObjectMetadata;
-  invocations: readonly ThreadToolInvocationRecord[];
+  replays: TokenMiserCachedReplayIndex;
 }): number {
   if (params.entry.replayTrackingVersion === 2) {
     return 0;
   }
-  return countCachedReplaysAfterInvocation({
-    invocations: params.invocations,
+  return params.replays.countAfterInvocation({
     toolUseId: params.entry.toolUseId,
     turnId: params.entry.turnId,
   });
 }
 
-function countCachedReplaysAfterInvocation(params: {
-  invocations: readonly ThreadToolInvocationRecord[];
-  toolUseId: string;
-  turnId: string;
-}): number {
-  const ordered = [...params.invocations]
-    .filter((invocation) => invocation.turnId === params.turnId)
-    .sort((left, right) =>
-      left.observedAt - right.observedAt
-      || left.invocationId.localeCompare(right.invocationId)
-    );
-  const selectedIndex = ordered.findIndex(
-    (invocation) => invocation.itemId === params.toolUseId,
-  );
-  if (selectedIndex < 0) {
-    return 0;
-  }
-  // The first later round trip is the uncached request that initially receives
-  // the tool result. Cached replay begins with the following model request.
-  return Math.max(0, ordered.length - selectedIndex - 2);
-}
-
 function withLegacyTokenMiserReplayAccounting(
   accounting: ThreadTokenMiserAccounting,
-  invocations: readonly ThreadToolInvocationRecord[],
+  replays: TokenMiserCachedReplayIndex,
 ): ThreadTokenMiserAccounting {
   if (!accounting.interceptions) {
     return accounting;
@@ -5090,8 +5170,7 @@ function withLegacyTokenMiserReplayAccounting(
     if (entry.replayTrackingVersion === 2) {
       return entry;
     }
-    const cachedReplayCount = countCachedReplaysAfterInvocation({
-      invocations,
+    const cachedReplayCount = replays.countAfterInvocation({
       toolUseId: entry.toolUseId,
       turnId: entry.turnId,
     });
@@ -17416,14 +17495,18 @@ export class DesktopBackendRegistry {
         params.threadId,
         metadata,
       );
+      // One replay index serves the interception rows and the savings total.
+      const replays = indexTokenMiserCachedReplays(
+        params.accounting.invocations,
+      );
       const withReplays = withLegacyTokenMiserReplayAccounting(
         tokenMiser,
-        params.accounting.invocations,
+        replays,
       );
       const savings = await this.buildTokenMiserThreadSavings({
         backend: params.backend,
         entries: metadata,
-        invocations: params.accounting.invocations,
+        replays,
         threadId: params.threadId,
       });
       return {
@@ -36950,9 +37033,10 @@ export class DesktopBackendRegistry {
   /**
    * Thread-level dollar accounting for the gate.
    *
-   * Built from `buildTokenMiserLedgerArtifact`, the same per-gate computation
-   * behind the Pricing rail cards, so the Explorer's total and the rail's rows
-   * are the same arithmetic rather than two implementations that can drift.
+   * Built from `resolveTokenMiserGateAccounting`, the same per-gate
+   * computation behind the Pricing rail cards, so the Explorer's total and the
+   * rail's rows are the same arithmetic rather than two implementations that
+   * can drift. It skips the cards' display text: a total needs only numbers.
    *
    * Gates whose dollars are not resolvable yet — the helper's usage line has
    * not landed, or the parent turn has no known model or rate — contribute to
@@ -36962,7 +37046,7 @@ export class DesktopBackendRegistry {
   private async buildTokenMiserThreadSavings(params: {
     backend: AppServerBackendKind;
     entries: readonly TokenMiserObjectMetadata[];
-    invocations: readonly ThreadToolInvocationRecord[];
+    replays: TokenMiserCachedReplayIndex;
     threadId: string;
   }): Promise<ThreadTokenMiserSavings | undefined> {
     if (!this.tokenMiserStore) {
@@ -36978,11 +37062,18 @@ export class DesktopBackendRegistry {
           threadId: params.threadId,
         })
       : { lines: [], summaries: [] };
-    const pricingLines = [
-      ...pricing.lines,
-      ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
-    ];
+    // Persisted lines precede live ones, so a persisted price wins.
+    const indexes: TokenMiserLedgerIndexes = {
+      pricing: indexTokenMiserPricingLines([
+        ...pricing.lines,
+        ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
+      ]),
+      replays: params.replays,
+    };
 
+    let passThroughCount = 0;
+    let policyPassThroughCount = 0;
+    let helperDecisionCount = 0;
     let pricedGateCount = 0;
     let withoutGateCostMicros = 0;
     let gateCostMicros = 0;
@@ -36994,27 +37085,38 @@ export class DesktopBackendRegistry {
     let parentModel: string | undefined;
 
     for (const entry of entries) {
-      const replayCount = entry.replayTrackingVersion === 2
-        ? entry.cachedReplayCount ?? 0
-        : countLegacyTokenMiserCachedReplays({
-            entry,
-            invocations: params.invocations,
-          });
-      const accounting = this.buildTokenMiserLedgerArtifact({
-        entry,
-        pricingLines,
-        toolInvocations: params.invocations,
-      }).subAgent.tokenMiserAccounting;
+      if (entry.helperUsage) {
+        helperDecisionCount += 1;
+      }
+      if (entry.disposition === "passed_through") {
+        passThroughCount += 1;
+        if (!entry.helperUsage) {
+          policyPassThroughCount += 1;
+        }
+      }
+      const { tokenMiserAccounting: accounting } =
+        resolveTokenMiserGateAccounting({
+          entry,
+          indexes,
+          usage: entry.helperUsage?.tokenUsage
+            ? buildTaskMonitorUsageTotals({
+                model: entry.helperUsage.model,
+                serviceTier: entry.helperUsage.serviceTier,
+                tokenUsage: entry.helperUsage.tokenUsage,
+              })
+            : undefined,
+        });
       if (!accounting) {
         continue;
       }
       // Counted after the guard, with the dollars. Counting replays for a gate
       // whose dollars were skipped made the confidence chip report replays the
-      // savings figure does not include.
+      // savings figure does not include. The accounting carries the observed
+      // count for v2 gates and the reconstructed count for older ones.
       if (entry.replayTrackingVersion === 2) {
-        directlyObservedReplayCount += replayCount;
+        directlyObservedReplayCount += accounting.cachedReplayCount ?? 0;
       } else {
-        reconstructedReplayCount += replayCount;
+        reconstructedReplayCount += accounting.cachedReplayCount ?? 0;
       }
       pricedGateCount += 1;
       withoutGateCostMicros +=
@@ -37049,18 +37151,10 @@ export class DesktopBackendRegistry {
       directlyObservedReplayCount,
       gateCostMicros,
       gateCount: entries.length,
-      passThroughCount: entries.filter(
-        (entry) => entry.disposition === "passed_through",
-      ).length,
-      policyPassThroughCount: entries.filter(
-        (entry) => entry.disposition === "passed_through" && !entry.helperUsage,
-      ).length,
-      helperPassThroughCount: entries.filter(
-        (entry) => entry.disposition === "passed_through" && Boolean(entry.helperUsage),
-      ).length,
-      helperDecisionCount: entries.filter(
-        (entry) => Boolean(entry.helperUsage),
-      ).length,
+      passThroughCount,
+      policyPassThroughCount,
+      helperPassThroughCount: passThroughCount - policyPassThroughCount,
+      helperDecisionCount,
       ...(gateModel ? { gateModel } : {}),
       ...(parentModel ? { parentModel } : {}),
       pricedGateCount,
@@ -37071,16 +37165,19 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * The rail card for one gate. Callers pricing several gates against one
+   * ledger share one set of indexes rather than rescanning it per gate.
+   */
   private buildTokenMiserLedgerArtifact(params: {
     entry: TokenMiserObjectMetadata;
-    pricingLines: readonly ThreadUsageLineRecord[];
-    toolInvocations?: readonly ThreadToolInvocationRecord[];
+    indexes: TokenMiserLedgerIndexes;
   }): {
     gateUsageLine?: ThreadUsageLineRecord;
     subAgent: ThreadSubAgentSummary;
   } {
-    const { entry, pricingLines } = params;
-    const monitorId = `system:token-miser:${entry.objectId}`;
+    const { entry } = params;
+    const monitorId = tokenMiserMonitorId(entry);
     const usage = entry.helperUsage?.tokenUsage
       ? buildTaskMonitorUsageSnapshot({
           model: entry.helperUsage.model,
@@ -37088,41 +37185,12 @@ export class DesktopBackendRegistry {
           tokenUsage: entry.helperUsage.tokenUsage,
         })
       : undefined;
-    let gateUsageLine = pricingLines.find(
-      (line) => line.sourceItemId === monitorId,
-    );
-    if (!gateUsageLine && usage) {
-      gateUsageLine = buildTaskMonitorUsageLine({
-        backend: "codex",
-        accountKey: entry.helperUsage?.accountKey,
-        model: entry.helperUsage?.model,
-        monitorId,
-        monitorThreadId:
-          entry.helperUsage?.helperThreadId ?? `token-miser:${entry.objectId}`,
-        monitorTurnId: entry.helperUsage?.helperTurnId ?? entry.turnId,
-        parentThreadId: entry.threadId,
-        reasoningEffort: entry.helperUsage?.reasoningEffort,
-        serviceTier: entry.helperUsage?.serviceTier,
-        source: "monitor",
+    const { gateUsageLine, tokenMiserAccounting } =
+      resolveTokenMiserGateAccounting({
+        entry,
+        indexes: params.indexes,
         usage,
       });
-      gateUsageLine.createdAt = entry.createdAt;
-    }
-    const parentUsageLine = pricingLines.find((line) =>
-      line.scope !== "monitor"
-      && line.threadId === entry.threadId
-      && (line.turnId === entry.turnId || line.usageTurnId === entry.turnId)
-      && Boolean(line.model),
-    );
-    const tokenMiserAccounting = buildTokenMiserSubAgentAccounting({
-      entry,
-      gateUsageLine,
-      legacyCachedReplayCount: countLegacyTokenMiserCachedReplays({
-        entry,
-        invocations: params.toolInvocations ?? [],
-      }),
-      parentUsageLine,
-    });
     const policyPassThrough =
       entry.disposition === "passed_through"
       && !entry.helperUsage;
@@ -37214,8 +37282,10 @@ export class DesktopBackendRegistry {
     }
     const artifact = this.buildTokenMiserLedgerArtifact({
       entry,
-      pricingLines: [...linesById.values()],
-      toolInvocations: toolAccounting?.invocations,
+      indexes: {
+        pricing: indexTokenMiserPricingLines(linesById.values()),
+        replays: indexTokenMiserCachedReplays(toolAccounting?.invocations ?? []),
+      },
     });
     if (
       artifact.gateUsageLine
@@ -37296,20 +37366,25 @@ export class DesktopBackendRegistry {
       ?? new Map<string, ThreadSubAgentSummary>();
     const liveUsageLines = this.liveTokenMiserUsageLines.get(threadId)
       ?? new Map<string, ThreadUsageLineRecord>();
+    // A rebuilt gate line is keyed by its own monitor id, so adding it to the
+    // live lines can change only that gate's lookup. Index the lines once and
+    // record each addition rather than rescanning them per gate.
+    const indexes: TokenMiserLedgerIndexes = {
+      pricing: indexTokenMiserPricingLines(liveUsageLines.values()),
+      replays: indexTokenMiserCachedReplays([]),
+    };
     for (const entry of entries) {
       if (entry.threadId !== threadId) {
         continue;
       }
-      const artifact = this.buildTokenMiserLedgerArtifact({
-        entry,
-        pricingLines: [...liveUsageLines.values()],
-      });
+      const artifact = this.buildTokenMiserLedgerArtifact({ entry, indexes });
       liveSubAgents.set(artifact.subAgent.monitorId, artifact.subAgent);
       if (artifact.gateUsageLine) {
         liveUsageLines.set(
           artifact.gateUsageLine.usageLineId,
           artifact.gateUsageLine,
         );
+        indexes.pricing.appendGateUsageLine(artifact.gateUsageLine);
       }
     }
     this.liveTokenMiserSubAgents.set(threadId, liveSubAgents);
@@ -37413,13 +37488,13 @@ export class DesktopBackendRegistry {
       );
       const subAgents: ThreadSubAgentSummary[] = [];
       const usageLines: ThreadUsageLineRecord[] = [];
+      const indexes: TokenMiserLedgerIndexes = {
+        pricing: indexTokenMiserPricingLines(pricing?.lines ?? []),
+        replays: indexTokenMiserCachedReplays(toolAccounting?.invocations ?? []),
+      };
 
       for (const entry of entries) {
-        const artifact = this.buildTokenMiserLedgerArtifact({
-          entry,
-          pricingLines: pricing?.lines ?? [],
-          toolInvocations: toolAccounting?.invocations,
-        });
+        const artifact = this.buildTokenMiserLedgerArtifact({ entry, indexes });
         const existingSubAgent = existingSubAgents.get(
           artifact.subAgent.monitorId,
         );
