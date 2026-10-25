@@ -176,6 +176,8 @@ import {
   useOperatorRequests,
 } from "./features/operator-requests/useOperatorRequests";
 import { useOffscreenQuestionAnswers } from "./features/operator-requests/useOffscreenQuestionAnswers";
+import { useApprovalNotices } from "./features/operator-requests/approval-notices";
+import type { OperatorWait } from "./features/operator-requests/operator-waits";
 import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
@@ -2535,6 +2537,32 @@ function DesktopAppShell(props: {
     window.addEventListener("focus", mark);
     return () => window.removeEventListener("focus", mark);
   }, [markOperatorItemsSeen, selectedOpenTodos, selectedWaits]);
+  // A pending approval in a thread off screen gets a durable card. Hiding
+  // it only closes the card; the request stays in its thread and To-dos.
+  // One lookup for every surface that names a wait's thread.
+  const waitThreadTitle = useCallback(
+    (threadKey: string) => localThreadTitles.get(threadKey) ?? "Untitled thread",
+    [localThreadTitles],
+  );
+  const reviewApprovalNotice = useCallback((wait: OperatorWait): void => {
+    showThreadFromLink({
+      backend: wait.backend,
+      threadId: wait.threadId,
+      ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
+    });
+  }, [showThreadFromLink]);
+  const approvalNotices = useApprovalNotices({
+    waits: operatorRequests.waits,
+    selectedThreadKey,
+    threadTitleForKey: waitThreadTitle,
+    onReview: reviewApprovalNotice,
+  });
+  const durableNotices = useMemo(
+    () => approvalNotices.length > 0
+      ? [...approvalNotices, ...appNotices.durable]
+      : appNotices.durable,
+    [appNotices.durable, approvalNotices],
+  );
   const listThreadTodos = desktopApi?.listThreadTodos;
   const listThreadTodoProjects = desktopApi?.listThreadTodoProjects;
   const setThreadTodoProject = desktopApi?.setThreadTodoProject;
@@ -2703,7 +2731,7 @@ function DesktopAppShell(props: {
         });
       },
       ...offscreenQuestionAnswers,
-      threadTitleForKey: (threadKey) => localThreadTitles.get(threadKey) ?? "Untitled thread",
+      threadTitleForKey: waitThreadTitle,
       threadProjectForKey: (threadKey) => localThreadProjects.get(threadKey),
     };
   }, [
@@ -2720,6 +2748,7 @@ function DesktopAppShell(props: {
     threadTodoController,
     todoProjectMenu,
     todoHandoffInstances,
+    waitThreadTitle,
   ]);
   // Fetch the boot info once at mount. Stable for the renderer's
   // lifetime — the main process records the decision before this
@@ -4572,7 +4601,7 @@ function DesktopAppShell(props: {
         />
         <AppNoticeStack
           desktopApi={desktopApi}
-          durableNotices={appNotices.durable}
+          durableNotices={durableNotices}
           onDismissDurable={dismissAppNotice}
           onOpenThread={showThreadFromLink}
           onSuppressSkillQuestionsWarning={() => settings.writeConfig({
