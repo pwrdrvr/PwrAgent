@@ -80,7 +80,14 @@ export type AcpJsonRpcTransport = {
 };
 
 const ACP_PROTOCOL_VERSION = 1;
-const ACP_PROMPT_REQUEST_TIMEOUT_MS = 60 * 60_000;
+// A turn's prompt has no deadline. The agent answers it when the turn ends,
+// Stop sends session/cancel, and a dead agent process rejects every pending
+// request. A wall-clock limit only abandoned turns that were still working:
+// PwrAgent forgot the turn, the agent kept running and asking for approvals,
+// and Stop had no turn to cancel. The transport arms a timer for every
+// request, so this is the longest delay setTimeout accepts (about 24 days).
+const ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS = 2_147_483_647;
+const ACP_CONTROL_PROMPT_REQUEST_TIMEOUT_MS = 60 * 60_000;
 const ACP_TERMINAL_RESPONSE_GRACE_MS = 5_000;
 const ACP_PROVIDER_STATUS_REQUEST_TIMEOUT_MS = 20_000;
 const ACP_REWIND_REQUEST_TIMEOUT_MS = 20_000;
@@ -824,7 +831,16 @@ export class AcpAgentClient {
           },
         });
       })
-      .catch((error) => {
+      .catch(async (error) => {
+        if (promptMayStillBeRunning(error)) {
+          // The agent never answered this prompt, so it may still be working
+          // and asking for approvals. Cancel it while the turn is still
+          // tracked: no new prompt can start until then, so the cancel
+          // cannot reach the next turn.
+          await this.cancelSessionOperation(params.sessionId).catch(
+            () => undefined,
+          );
+        }
         this.finishTrackedTurn(params.sessionId, this.now());
         this.recordPromptFailure(params.sessionId, turnId, error);
         return Promise.resolve(
@@ -894,7 +910,7 @@ export class AcpAgentClient {
           sessionId: protocolSessionId,
           prompt: textPrompt(params.prompt),
         },
-        ACP_PROMPT_REQUEST_TIMEOUT_MS,
+        ACP_CONTROL_PROMPT_REQUEST_TIMEOUT_MS,
       );
       return {
         text:
@@ -1756,7 +1772,7 @@ export class AcpAgentClient {
         const timer = setTimeout(() => {
           if (this.activeTurns.get(params.sessionId) !== activeTurn) return;
           const displayName = this.options.agentDisplayName?.trim() || "ACP agent";
-          reject(new Error(
+          reject(new AcpPromptNotClosedError(
             `${displayName} reported that the turn ended, but its ACP prompt request did not close. The provider connection may be unavailable.`,
           ));
         }, ACP_TERMINAL_RESPONSE_GRACE_MS);
@@ -1770,7 +1786,7 @@ export class AcpAgentClient {
           sessionId: params.protocolSessionId,
           prompt: params.prompt,
         },
-        ACP_PROMPT_REQUEST_TIMEOUT_MS,
+        ACP_TURN_PROMPT_REQUEST_TIMEOUT_MS,
       ),
       terminalResponseGuard,
     ]);
@@ -2285,6 +2301,20 @@ function selectPermissionOptionId(
 
 function textPrompt(text: string): AcpPromptContentBlock[] {
   return [{ type: "text", text }];
+}
+
+/** PwrAgent stopped waiting for a prompt the agent reported finishing. */
+class AcpPromptNotClosedError extends Error {}
+
+/**
+ * True when PwrAgent gave up on a prompt the agent never answered: the
+ * agent's request is still open on its side. A JSON-RPC error response, or a
+ * closed transport, means the agent is done with it.
+ */
+function promptMayStillBeRunning(error: unknown): boolean {
+  return error instanceof AcpPromptNotClosedError
+    || (error instanceof Error
+      && error.message.startsWith("json-rpc timeout: session/prompt"));
 }
 
 function promptWasCancelled(result: unknown): boolean {
