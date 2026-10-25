@@ -21254,6 +21254,40 @@ describe("MessagingController", () => {
       })).toHaveLength(1);
     });
 
+    it("presents a commentary question as a questionnaire, never as a working update", async () => {
+      // Codex can tag the question commentary. A question waits on the
+      // operator, so the Working Updates dial must not batch or drop it.
+      const harness = await createHarness();
+      await bindThread(harness);
+      const binding = await harness.store.findActiveBindingForChannel(buildTextEvent("").channel);
+      await harness.store.upsertBinding({
+        ...binding!,
+        preferences: {
+          toolUpdateMode: "show_none",
+          updatedAt: 1000,
+        },
+        updatedAt: 1000,
+      });
+      harness.delivered.length = 0;
+      const event = asyncQuestionEvent();
+      const params = event.notification.params as { item: Record<string, unknown> };
+      params.item.phase = "commentary";
+
+      await harness.controller.handleBackendEvent(event);
+
+      expect(questionnaires(harness.delivered)).toEqual([
+        expect.objectContaining({
+          phase: "answering",
+          asyncReply: { backend: "codex", itemId: "call-question", threadId: "thread-1" },
+        }),
+      ]);
+      expect(await harness.store.findActivePendingAsyncQuestionnaires({
+        backend: "codex",
+        threadId: "thread-1",
+        now: 1000,
+      })).toHaveLength(1);
+    });
+
     it("drops a questionnaire the channel never showed", async () => {
       const harness = await createHarness({
         deliver: async (intent) => intent.kind === "questionnaire"
