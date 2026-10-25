@@ -357,8 +357,9 @@ function coalescedAgentEventLogKey(
   });
 }
 
+/** Any backend that reports a turn's cumulative diff gets its live row. */
 function withRendererActivityEntry(event: AgentEvent): AgentEvent {
-  if (event.backend !== "codex" || event.notification.method !== "turn/diff/updated") {
+  if (event.notification.method !== "turn/diff/updated") {
     return event;
   }
 
