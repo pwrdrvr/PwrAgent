@@ -244,6 +244,10 @@ import type {
   GetNavigationSnapshotTransportRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  MoveThreadToMainCheckoutRequest,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
   CancelProviderCatalogRefreshRequest,
@@ -769,6 +773,8 @@ import {
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
+  APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL,
+  APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL,
   APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
   APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
@@ -2184,6 +2190,14 @@ const desktopApi = Object.freeze({
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> =>
     await ipcRenderer.invoke(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL, request),
+  recreateThreadWorktree: async (
+    request: RecreateThreadWorktreeRequest,
+  ): Promise<RecreateThreadWorktreeResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL, request),
+  moveThreadToMainCheckout: async (
+    request: MoveThreadToMainCheckoutRequest,
+  ): Promise<MoveThreadToMainCheckoutResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL, request),
   renameThread: async (
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>

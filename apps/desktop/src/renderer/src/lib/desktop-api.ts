@@ -181,6 +181,10 @@ import type {
   GetNavigationSnapshotTransportRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  MoveThreadToMainCheckoutRequest,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   StopSubAgentRequest,
@@ -1006,6 +1010,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   handoffThreadWorkspace?: (
     request: HandoffThreadWorkspaceRequest
   ) => Promise<HandoffThreadWorkspaceResponse>;
+  recreateThreadWorktree?: (
+    request: RecreateThreadWorktreeRequest
+  ) => Promise<RecreateThreadWorktreeResponse>;
+  moveThreadToMainCheckout?: (
+    request: MoveThreadToMainCheckoutRequest
+  ) => Promise<MoveThreadToMainCheckoutResponse>;
   renameThread?: (
     request: RenameThreadRequest
   ) => Promise<RenameThreadResponse>;

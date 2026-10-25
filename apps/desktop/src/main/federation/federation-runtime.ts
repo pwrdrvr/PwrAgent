@@ -97,6 +97,10 @@ import type {
   FederationSessionId,
   ForkThreadResponse,
   HandoffThreadWorkspaceResponse,
+  MoveThreadToMainCheckoutRequest,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   InterruptTurnResponse,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
@@ -7614,6 +7618,16 @@ function localBackendOperations(): FederationBackendOperations {
       request: HandoffThreadWorkspaceRequest,
     ): Promise<HandoffThreadWorkspaceResponse> {
       return await getDesktopBackendRegistry().handoffThreadWorkspace(request);
+    },
+    async recreateThreadWorktree(
+      request: RecreateThreadWorktreeRequest,
+    ): Promise<RecreateThreadWorktreeResponse> {
+      return await getDesktopBackendRegistry().recreateThreadWorktree(request);
+    },
+    async moveThreadToMainCheckout(
+      request: MoveThreadToMainCheckoutRequest,
+    ): Promise<MoveThreadToMainCheckoutResponse> {
+      return await getDesktopBackendRegistry().moveThreadToMainCheckout(request);
     },
     async renameThread(
       request: RenameThreadRequest,

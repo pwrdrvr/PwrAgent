@@ -95,6 +95,10 @@ import {
   type GetNavigationSnapshotRequest,
   type HandoffThreadWorkspaceRequest,
   type HandoffThreadWorkspaceResponse,
+  type MoveThreadToMainCheckoutRequest,
+  type MoveThreadToMainCheckoutResponse,
+  type RecreateThreadWorktreeRequest,
+  type RecreateThreadWorktreeResponse,
   type GetGhStatusRequest,
   type GetGlabStatusRequest,
   type GlabStatus,
@@ -308,6 +312,8 @@ import {
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
+  APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL,
+  APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL,
   APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
   APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
@@ -1927,6 +1933,32 @@ class DesktopAppServerService {
     });
 
     return response;
+  }
+
+  async recreateThreadWorktree(
+    request: RecreateThreadWorktreeRequest,
+  ): Promise<RecreateThreadWorktreeResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .recreateThreadWorktree(remoteRequest);
+    }
+    const { federationTarget: _federationTarget, ...localRequest } = request;
+    return await getDesktopBackendRegistry().recreateThreadWorktree(localRequest);
+  }
+
+  async moveThreadToMainCheckout(
+    request: MoveThreadToMainCheckoutRequest,
+  ): Promise<MoveThreadToMainCheckoutResponse> {
+    if (request.federationTarget && isRemoteFederationTarget(request.federationTarget)) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .moveThreadToMainCheckout(remoteRequest);
+    }
+    const { federationTarget: _federationTarget, ...localRequest } = request;
+    return await getDesktopBackendRegistry().moveThreadToMainCheckout(localRequest);
   }
 
   async renameThread(
@@ -8912,6 +8944,26 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.handoffThreadWorkspace(request);
     },
   );
+  ipcMain.removeHandler(APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL,
+    async (
+      _event,
+      request: RecreateThreadWorktreeRequest,
+    ): Promise<RecreateThreadWorktreeResponse> => {
+      return await appServerService.recreateThreadWorktree(request);
+    },
+  );
+  ipcMain.removeHandler(APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL,
+    async (
+      _event,
+      request: MoveThreadToMainCheckoutRequest,
+    ): Promise<MoveThreadToMainCheckoutResponse> => {
+      return await appServerService.moveThreadToMainCheckout(request);
+    },
+  );
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.handle(
     APP_SERVER_RENAME_THREAD_CHANNEL,
@@ -9831,6 +9883,8 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_WORKTREE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTORE_WORKTREE_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RENAME_THREAD_CHANNEL);
   ipcMain.removeHandler(THREAD_SEARCH_CHANNEL);
   ipcMain.removeHandler(THREAD_SEARCH_CANCEL_CHANNEL);

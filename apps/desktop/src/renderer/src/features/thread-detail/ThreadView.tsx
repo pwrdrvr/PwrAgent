@@ -19,6 +19,9 @@ import {
   type CSSProperties,
 } from "react";
 import type {
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   AppServerAvailableCommandSummary,
   AcpThreadRewindPoint,
   AppServerCollaborationModeRequest,
@@ -184,6 +187,11 @@ import {
 } from "./live-transcript-activity";
 import { findTranscriptCommandDetailEntryIndex } from "./tool-call-details";
 import { ThreadLockCard } from "../thread-lock/ThreadLockCard";
+import {
+  MissingWorktreeCard,
+  WorkspaceRecoveryNotice,
+  type WorkspaceRecoveryOutcome,
+} from "../workspace-recovery/MissingWorktreeCard";
 import { ThreadLockDialog } from "../thread-lock/ThreadLockDialog";
 
 import {
@@ -1011,6 +1019,14 @@ export type ThreadViewProps = {
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
+  /** Puts the selected thread's deleted worktree back. Runs on the owner. */
+  onRecreateThreadWorktree?: (
+    request: Pick<RecreateThreadWorktreeRequest, "worktreePath" | "skipCheckpoint" | "detached">
+  ) => Promise<RecreateThreadWorktreeResponse>;
+  /** Moves the selected thread to its main checkout without switching it. */
+  onMoveThreadToMainCheckout?: (
+    worktreePath: string
+  ) => Promise<MoveThreadToMainCheckoutResponse>;
   onSetThreadModelSettings?: (
     patch: Partial<
       Pick<
@@ -3837,6 +3853,7 @@ export function ThreadView(props: ThreadViewProps) {
           onUserRepliedToThread: props.onUserRepliedToThread,
           onRefreshNavigation: props.onRefreshNavigation,
           onHandoffThreadWorkspace: props.onHandoffThreadWorkspace,
+          onMoveThreadToMainCheckout: props.onMoveThreadToMainCheckout,
           onBeforeStartTurn:
             selectedThread?.gitBranch && props.desktopApi?.checkThreadBranchDrift
               ? handleBeforeStartTurn
@@ -3871,6 +3888,53 @@ export function ThreadView(props: ThreadViewProps) {
           threadBusy: props.threadBusy,
           updatingExecutionMode: props.updatingExecutionMode,
         };
+  // A thread whose worktree folder is gone gets the recovery card in the
+  // composer's place. During a live turn the composer stays, so Stop is
+  // still reachable, and the card waits for the turn to end.
+  const [workspaceRecovery, setWorkspaceRecovery] = useState<{
+    threadKey: string;
+    outcome: WorkspaceRecoveryOutcome;
+  }>();
+  const workspaceRecoveryOutcome = workspaceRecovery && workspaceRecovery.threadKey === selectedThreadKey
+    ? workspaceRecovery.outcome
+    : undefined;
+  const missingWorkspace = threadView && !workspaceRecoveryOutcome
+    ? selectedThread?.workspaceMissing
+    : undefined;
+  const missingWorkspaceOwnerStatus = selectedThread?.federation?.peerStatus;
+  const missingWorkspaceTurnActive = Boolean(props.activeTurnId);
+  const composerReplacedByRecovery = Boolean(missingWorkspace) && !missingWorkspaceTurnActive;
+  const workspaceRecoverySlot = missingWorkspace && selectedThread && selectedThreadKey ? (
+    <MissingWorktreeCard
+      key={`${selectedThreadKey}:${missingWorkspace.worktreePath}`}
+      missing={missingWorkspace}
+      ownerLabel={selectedThread.federation?.instanceLabel ?? props.activeFederationOwnerLabel}
+      ownerOffline={
+        missingWorkspaceOwnerStatus !== undefined
+        && missingWorkspaceOwnerStatus !== "connected"
+        && missingWorkspaceOwnerStatus !== "degraded"
+      }
+      turnActive={missingWorkspaceTurnActive}
+      onRecreate={props.onRecreateThreadWorktree
+        ? async (options) => await props.onRecreateThreadWorktree!({
+            worktreePath: missingWorkspace.worktreePath,
+            ...options,
+          })
+        : undefined}
+      onMoveToMainCheckout={props.onMoveThreadToMainCheckout
+        ? async () => await props.onMoveThreadToMainCheckout!(missingWorkspace.worktreePath)
+        : undefined}
+      onArchive={props.onArchiveThread
+        ? async () => await props.onArchiveThread!(selectedThread)
+        : undefined}
+      onRecovered={(outcome) => setWorkspaceRecovery({ threadKey: selectedThreadKey, outcome })}
+    />
+  ) : workspaceRecoveryOutcome ? (
+    <WorkspaceRecoveryNotice
+      outcome={workspaceRecoveryOutcome}
+      onDismiss={() => setWorkspaceRecovery(undefined)}
+    />
+  ) : null;
   // ThreadView's one composer: the launchpad's centred column, or a flex item
   // of the thread's `.thread-view__primary` (the thread slot is
   // `display: contents`). The key decides when the composer survives a move
@@ -3926,10 +3990,10 @@ export function ThreadView(props: ThreadViewProps) {
             </section>
           )}
         </div>
-      ) : null}
+      ) : workspaceRecoverySlot}
       {/* Second child in both modes, so React matches it by position when
           the slot itself survives. */}
-      <Composer
+      {composerReplacedByRecovery ? null : <Composer
         backends={props.backends}
         applications={props.applications}
         codexFastAllowed={props.codexFastAllowed}
@@ -3980,7 +4044,7 @@ export function ThreadView(props: ThreadViewProps) {
         skills={props.skills}
         threads={props.threads}
         {...composerModeProps}
-      />
+      />}
     </div>
   ) : null;
 

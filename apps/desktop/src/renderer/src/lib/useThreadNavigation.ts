@@ -31,6 +31,9 @@ import type {
   FederationTarget,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   NavigationBrowseMode,
   NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
@@ -3158,6 +3161,14 @@ export function useThreadNavigation(
     thread: NavigationThreadSummary,
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
+  recreateThreadWorktree: (
+    thread: NavigationThreadSummary,
+    request: Pick<RecreateThreadWorktreeRequest, "worktreePath" | "skipCheckpoint" | "detached">
+  ) => Promise<RecreateThreadWorktreeResponse>;
+  moveThreadToMainCheckout: (
+    thread: NavigationThreadSummary,
+    worktreePath: string
+  ) => Promise<MoveThreadToMainCheckoutResponse>;
   renameThread: (thread: NavigationThreadSummary, name: string) => Promise<void>;
   setThreadReaction: (
     thread: NavigationThreadSummary,
@@ -3227,6 +3238,8 @@ export function useThreadNavigation(
   const archiveWorktreeRequest = desktopApi?.archiveWorktree;
   const restoreWorktreeRequest = desktopApi?.restoreWorktree;
   const handoffThreadWorkspaceRequest = desktopApi?.handoffThreadWorkspace;
+  const recreateThreadWorktreeRequest = desktopApi?.recreateThreadWorktree;
+  const moveThreadToMainCheckoutRequest = desktopApi?.moveThreadToMainCheckout;
   const renameThreadRequest = desktopApi?.renameThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
   const setAcpSessionRuntimeOption = desktopApi?.setAcpSessionRuntimeOption;
@@ -8466,6 +8479,71 @@ export function useThreadNavigation(
     [desktopApi, handoffThreadWorkspaceRequest, refresh, refreshSelectedThreadConfiguration]
   );
 
+  // Both actions answer from the thread's owner. A refusal is a normal
+  // response the card explains, so only a thrown error is unexpected here.
+  const refreshAfterWorkspaceRecovery = useCallback((threadKey: string) => {
+    void Promise.all([
+      refresh(threadKey),
+      selectedItemKeyRef.current === threadKey ? refreshSelectedThreadConfiguration() : Promise.resolve(),
+    ]).catch((error: unknown) => {
+      setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+    });
+  }, [refresh, refreshSelectedThreadConfiguration]);
+
+  const recreateThreadWorktree = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      request: Pick<RecreateThreadWorktreeRequest, "worktreePath" | "skipCheckpoint" | "detached">
+    ): Promise<RecreateThreadWorktreeResponse> => {
+      if (!recreateThreadWorktreeRequest) {
+        throw new Error("Desktop bridge is missing recreateThreadWorktree().");
+      }
+      const response = await recreateThreadWorktreeRequest({
+        ...request,
+        backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+        threadId: thread.id,
+      });
+      if (response.status === "recreated") {
+        refreshAfterWorkspaceRecovery(threadSummaryIdentityKey(thread));
+      }
+      return response;
+    },
+    [recreateThreadWorktreeRequest, refreshAfterWorkspaceRecovery]
+  );
+
+  const moveThreadToMainCheckout = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      worktreePath: string
+    ): Promise<MoveThreadToMainCheckoutResponse> => {
+      if (!moveThreadToMainCheckoutRequest) {
+        throw new Error("Desktop bridge is missing moveThreadToMainCheckout().");
+      }
+      const response = await moveThreadToMainCheckoutRequest({
+        backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+        threadId: thread.id,
+        worktreePath,
+      });
+      const threadKey = threadSummaryIdentityKey(thread);
+      // As after a handoff: keep workspace actions gated until the selected
+      // detail shows the thread in the main checkout.
+      setPendingWorkspaceHandoff({
+        threadKey,
+        directory: {
+          id: `pwragent-handoff:${thread.source}:${thread.id}`,
+          kind: "local",
+          label: response.repositoryPath.split(/[\\/]/).filter(Boolean).at(-1) ?? response.repositoryPath,
+          path: response.repositoryPath,
+        },
+      });
+      refreshAfterWorkspaceRecovery(threadKey);
+      return response;
+    },
+    [moveThreadToMainCheckoutRequest, refreshAfterWorkspaceRecovery]
+  );
+
   const renameThread = useCallback(
     async (thread: NavigationThreadSummary, name: string): Promise<void> => {
       const nextName = name.trim();
@@ -9501,6 +9579,8 @@ export function useThreadNavigation(
     archiveWorktree,
     restoreWorktree,
     handoffThreadWorkspace,
+    recreateThreadWorktree,
+    moveThreadToMainCheckout,
     renameThread,
     setThreadReaction,
     setThreadLock,

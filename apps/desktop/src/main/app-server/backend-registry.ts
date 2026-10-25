@@ -281,6 +281,10 @@ import {
   resolveDefaultLaunchpadExecutionMode,
   type RestoreWorktreeRequest,
   type RestoreWorktreeResponse,
+  type MoveThreadToMainCheckoutRequest,
+  type MoveThreadToMainCheckoutResponse,
+  type RecreateThreadWorktreeRequest,
+  type RecreateThreadWorktreeResponse,
   type ResolveMissingCodexThreadsRequest,
   type ResolveMissingCodexThreadsResponse,
   type RestoreThreadRequest,
@@ -670,6 +674,8 @@ import {
 } from "../acp/acp-available-commands-store";
 import { GitWorkspaceHandoffService } from "./git-workspace-handoff-service";
 import { MissingArchiveWorktreeError, WorktreeArchiveService } from "./worktree-archive-service";
+import { WorktreeRecoveryService } from "./worktree-recovery-service";
+import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
 import { ThreadArchiveSweeper, archiveCandidateLastActivity, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
@@ -811,6 +817,8 @@ const CODEX_RATE_LIMIT_BROADCAST_WINDOW_MS = 20_000;
 const THREAD_SEARCH_REUSE_WINDOW_MS = 2_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
+const ACTIVE_TURN_WORKSPACE_RECOVERY_ERROR =
+  "Wait for the current turn to finish, then try again.";
 const CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING =
   "Codex workspace CWD synchronization is pending and will retry automatically.";
 /**
@@ -8758,6 +8766,7 @@ export class DesktopBackendRegistry {
   private workingStateCacheLoad: Promise<void> | undefined;
   private readonly gitWorkspaceHandoffService: GitWorkspaceHandoffService;
   private readonly worktreeArchiveService: WorktreeArchiveService;
+  private readonly worktreeRecoveryService: WorktreeRecoveryService;
   private readonly worktreeContainerService: WorktreeContainerService;
   private readonly acpBackend: AcpBackendAdapter;
   private readonly claudeBackend: ClaudeBackend;
@@ -9629,6 +9638,7 @@ export class DesktopBackendRegistry {
     gitWorkingStateService?: GitWorkingStateService;
     gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
     worktreeArchiveService?: WorktreeArchiveService;
+    worktreeRecoveryService?: WorktreeRecoveryService;
     acpAgentStore?: AcpBackendAdapterOptions["acpAgentStore"];
     acpRolloutStore?: AcpBackendAdapterOptions["acpRolloutStore"];
     acpSessionStore?: AcpSessionStoreLike | null;
@@ -10269,6 +10279,9 @@ export class DesktopBackendRegistry {
     this.worktreeArchiveService =
       options?.worktreeArchiveService ??
       new WorktreeArchiveService({ gitEnv: codexEnv });
+    this.worktreeRecoveryService =
+      options?.worktreeRecoveryService ??
+      new WorktreeRecoveryService({ gitEnv: codexEnv });
     this.worktreeContainerService = new WorktreeContainerService({ codexHome });
     const agentToolMcpServer =
       options?.agentToolMcpServer === null
@@ -15765,6 +15778,221 @@ export class DesktopBackendRegistry {
           ],
         }
       : result;
+  }
+
+  /**
+   * Puts a thread's deleted worktree folder back at its recorded path, on its
+   * branch, with the checkpoint PwrAgent kept when it archived it. Expected
+   * refusals come back as `status: "failed"` so every surface can offer the
+   * next step; only unexpected errors throw.
+   */
+  async recreateThreadWorktree(
+    request: RecreateThreadWorktreeRequest,
+  ): Promise<RecreateThreadWorktreeResponse> {
+    return await this.withThreadLifecycleMutation(request, async () => {
+      await this.assertWorkspaceRecoveryAllowed(request);
+      const { missing } = await this.resolveRecoveryWorktree(request);
+      if (!missing) {
+        throw new Error("This thread's worktree folder exists again. Reopen the thread to continue.");
+      }
+      const result = await this.worktreeRecoveryService.recreate({
+        backend: request.backend,
+        threadId: request.threadId,
+        repositoryPath: missing.repositoryPath,
+        worktreePath: missing.worktreePath,
+        branch: missing.branch,
+        checkpoint: missing.checkpoint,
+        skipCheckpoint: request.skipCheckpoint,
+        detached: request.detached,
+      });
+      if (result.status !== "recreated") {
+        return result;
+      }
+
+      const overlay = await this.overlayStore.getThreadOverlayState(request);
+      const snapshot = missing.checkpoint
+        ? overlay?.worktreeSnapshots?.find((candidate) =>
+            candidate.snapshotRef === missing.checkpoint?.snapshotRef
+            && candidate.snapshotCommit === missing.checkpoint.snapshotCommit)
+        : undefined;
+      if (snapshot && result.checkpoint?.restored) {
+        await this.overlayStore.upsertWorktreeSnapshot({
+          backend: request.backend,
+          threadId: request.threadId,
+          snapshot: { ...snapshot, state: "restored", restoredAt: result.completedAt },
+        });
+      }
+      await this.updateThreadGitBranchMetadata({
+        backend: request.backend,
+        threadId: request.threadId,
+        branch: result.branch ?? "HEAD",
+      });
+      this.invalidateThreadListCache(request.backend, true);
+      this.threadInfoStore.invalidateSummaries({ backend: request.backend, threadId: request.threadId });
+      await this.publishLocalEvent({
+        backend: request.backend,
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: { reason: "selected-thread", threadIds: [request.threadId] },
+        },
+      });
+      return result;
+    });
+  }
+
+  /**
+   * Moves a worktree thread to the main checkout the worktree belongs to,
+   * leaving that checkout on whatever branch it is on. A present worktree the
+   * thread owns is archived with a checkpoint, as a handoff archives it; a
+   * deleted one only has Git's record of it cleared.
+   */
+  async moveThreadToMainCheckout(
+    request: MoveThreadToMainCheckoutRequest,
+  ): Promise<MoveThreadToMainCheckoutResponse> {
+    if (request.backend === "claude") throw new Error("Start a new Claude thread in the main checkout.");
+    return await this.withThreadLifecycleMutation(request, async () => {
+      await this.assertWorkspaceRecoveryAllowed(request);
+      if (isAcpBackendId(request.backend)) {
+        await this.assertAcpWorkspaceHandoffAllowed({
+          backend: request.backend,
+          threadId: request.threadId,
+        });
+      }
+      const { directory } = await this.resolveRecoveryWorktree(request);
+      const repositoryPath = directory.path;
+      if (!(await pathExists(repositoryPath))) {
+        throw new Error(`The main checkout is gone too: ${repositoryPath}`);
+      }
+      const worktreePath = directory.worktreePath ?? request.worktreePath;
+      const warnings: string[] = [];
+      let archivedWorktree: MoveThreadToMainCheckoutResponse["archivedWorktree"];
+      if (await pathExists(worktreePath)) {
+        if (directory.worktreeOwnership === "external") {
+          warnings.push("The worktree was created outside PwrAgent, so it was left on disk.");
+        } else {
+          archivedWorktree = await this.worktreeArchiveService.archive({
+            backend: request.backend,
+            threadId: request.threadId,
+            repositoryPath,
+            worktreePath,
+          });
+        }
+      } else {
+        // Git's record of a deleted folder keeps its branch checked out.
+        await this.worktreeRecoveryService.releaseMissingWorktree({ repositoryPath, worktreePath })
+          .catch((error: unknown) => {
+            warnings.push(error instanceof Error ? error.message : String(error));
+          });
+      }
+
+      const branch = await readCurrentGitBranch(repositoryPath).catch(() => undefined);
+      const linkedDirectory: LinkedDirectorySummary = {
+        id: `pwragent-handoff:${request.backend}:${request.threadId}`,
+        kind: "local",
+        label: path.basename(repositoryPath),
+        path: repositoryPath,
+      };
+      await this.replaceWorkspaceLinkedDirectory({
+        backend: request.backend,
+        threadId: request.threadId,
+        directory: linkedDirectory,
+        gitBranch: branch,
+      });
+      try {
+        await this.updateThreadWorkspaceCwd({
+          backend: request.backend,
+          threadId: request.threadId,
+          cwd: repositoryPath,
+        });
+      } catch (error) {
+        warnings.push(CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING);
+        backendRegistryLog.warn(
+          "Codex workspace CWD synchronization failed after moving to the main checkout; will retry",
+          {
+            error: error instanceof Error ? error.message : String(error),
+            threadId: request.threadId,
+            workspaceCwd: repositoryPath,
+          },
+        );
+      }
+      this.invalidateThreadListCache(request.backend, true);
+      await this.updateThreadGitBranchMetadata({
+        backend: request.backend,
+        threadId: request.threadId,
+        branch,
+      });
+      this.updateAcpSessionWorkspaceAfterHandoff({
+        backend: request.backend,
+        threadId: request.threadId,
+        cwd: repositoryPath,
+      });
+      if (archivedWorktree) {
+        await this.overlayStore.upsertWorktreeSnapshot({
+          backend: request.backend,
+          threadId: request.threadId,
+          snapshot: archivedWorktree,
+        });
+      }
+      await this.publishLocalEvent({
+        backend: request.backend,
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: { reason: "selected-thread", threadIds: [request.threadId] },
+        },
+      });
+      return {
+        backend: request.backend,
+        threadId: request.threadId,
+        repositoryPath,
+        ...(branch ? { branch } : {}),
+        ...(archivedWorktree ? { archivedWorktree } : {}),
+        warnings,
+        completedAt: Date.now(),
+      };
+    });
+  }
+
+  private async assertWorkspaceRecoveryAllowed(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    await this.assertThreadNotLocked(request.backend, request.threadId);
+    this.assertThreadNotHandingOff(request.backend, request.threadId);
+    if (this.threadHasActiveTurn(request.threadId, request.backend)) {
+      throw new Error(ACTIVE_TURN_WORKSPACE_RECOVERY_ERROR);
+    }
+  }
+
+  /**
+   * The worktree the operator acted on, matched by path so a stale card can
+   * never act on a different workspace than the one it showed.
+   */
+  private async resolveRecoveryWorktree(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    worktreePath: string;
+  }): Promise<{
+    directory: LinkedDirectorySummary;
+    missing: Awaited<ReturnType<typeof detectMissingThreadWorkspace>>;
+  }> {
+    const thread = this.getCachedThreadSummary(request) ?? await this.resolveThread(request);
+    const overlay = await this.overlayStore.getThreadOverlayState(request);
+    const requested = path.resolve(request.worktreePath);
+    const directory = [...(overlay?.extraLinkedDirectories ?? []), ...(thread?.linkedDirectories ?? [])]
+      .find((candidate) =>
+        candidate.kind === "worktree"
+        && candidate.worktreePath
+        && path.resolve(candidate.worktreePath) === requested);
+    if (!directory) {
+      throw new Error("This thread no longer works in that worktree. Reopen the thread to see its current workspace.");
+    }
+    const missing = await detectMissingThreadWorkspace({
+      linkedDirectories: [directory],
+      gitBranch: thread?.gitBranch,
+      observedGitBranch: thread?.observedGitBranch,
+      worktreeSnapshots: overlay?.worktreeSnapshots ?? thread?.worktreeSnapshots,
+    }, { readBranch: readCurrentGitBranch });
+    return { directory, missing };
   }
 
   private async assertAcpWorkspaceHandoffAllowed(params: {

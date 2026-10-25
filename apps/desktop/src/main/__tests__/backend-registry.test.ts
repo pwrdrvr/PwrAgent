@@ -64681,3 +64681,147 @@ describe("DesktopBackendRegistry queued turn pausing", () => {
     expect(codexClient.startTurnCalls[0]?.input).toEqual([{ type: "text", text: "second" }]);
   });
 });
+
+describe("DesktopBackendRegistry workspace recovery", () => {
+  async function mainCheckout(): Promise<{ root: string; repo: string; worktree: string }> {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-recovery-registry-")));
+    const repo = path.join(root, "atlas");
+    await mkdir(repo);
+    await execFileAsync("git", ["-C", repo, "init", "-b", "main"]);
+    await execFileAsync("git", ["-C", repo, "-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "--allow-empty", "-m", "initial"]);
+    return { root, repo, worktree: path.join(root, "worktrees", "mf3k2q", "atlas") };
+  }
+
+  function worktreeThread(repo: string, worktree: string): AppServerThreadSummary {
+    return {
+      id: "thread-1",
+      title: "Retry backoff",
+      titleSource: "explicit",
+      linkedDirectories: [{ id: "directory:wt", label: "atlas", path: repo, worktreePath: worktree, kind: "worktree" }],
+      source: "codex",
+      gitBranch: "fix/retry-backoff",
+      updatedAt: 2,
+    };
+  }
+
+  function registryFor(thread: AppServerThreadSummary, services: {
+    recovery?: Record<string, unknown>;
+    archive?: Record<string, unknown>;
+  }) {
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          extraLinkedDirectories: [...thread.linkedDirectories],
+        } as ThreadOverlayState,
+      },
+    });
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [thread],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      worktreeRecoveryService: services.recovery as never,
+      worktreeArchiveService: services.archive as never,
+    });
+    return { registry, overlayStore, codexClient };
+  }
+
+  it("moves a thread whose worktree is gone to the main checkout without switching it", async () => {
+    const { root, repo, worktree } = await mainCheckout();
+    const releaseMissingWorktree = vi.fn(async () => true);
+    const archive = vi.fn();
+    const { registry, overlayStore, codexClient } = registryFor(worktreeThread(repo, worktree), {
+      recovery: { releaseMissingWorktree },
+      archive: { archive },
+    });
+    const publish = vi.spyOn(registry, "publishLocalEvent");
+    try {
+      const response = await registry.moveThreadToMainCheckout({
+        backend: "codex", threadId: "thread-1", worktreePath: worktree,
+      });
+
+      expect(response).toMatchObject({ repositoryPath: repo, branch: "main", warnings: [] });
+      expect(releaseMissingWorktree).toHaveBeenCalledWith({ repositoryPath: repo, worktreePath: worktree });
+      expect(archive).not.toHaveBeenCalled();
+      expect((await execFileAsync("git", ["-C", repo, "rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim()).toBe("main");
+      expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({ threadId: "thread-1", cwd: repo });
+      await expect(overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))
+        .resolves.toMatchObject({
+          extraLinkedDirectories: [expect.objectContaining({
+            id: "pwragent-handoff:codex:thread-1", kind: "local", path: repo,
+          })],
+        });
+      expect(publish).toHaveBeenCalledWith({
+        backend: "codex",
+        notification: {
+          method: "navigation/threadDirectories/updated",
+          params: { reason: "selected-thread", threadIds: ["thread-1"] },
+        },
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("archives a present worktree with a checkpoint when the thread keeps Local's branch", async () => {
+    const { root, repo, worktree } = await mainCheckout();
+    await mkdir(worktree, { recursive: true });
+    const snapshot = {
+      id: "s1", backend: "codex" as const, threadId: "thread-1", worktreePath: worktree, repositoryPath: repo,
+      snapshotRef: "refs/codex/snapshots/s1", snapshotCommit: "abc", createdAt: 1, archivedAt: 1,
+      state: "archived" as const, ignoredFilesExcluded: true,
+    };
+    const archive = vi.fn(async () => snapshot);
+    const releaseMissingWorktree = vi.fn();
+    const { registry, overlayStore } = registryFor(worktreeThread(repo, worktree), {
+      recovery: { releaseMissingWorktree },
+      archive: { archive },
+    });
+    try {
+      const response = await registry.moveThreadToMainCheckout({
+        backend: "codex", threadId: "thread-1", worktreePath: worktree,
+      });
+
+      expect(archive).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", repositoryPath: repo, worktreePath: worktree });
+      expect(releaseMissingWorktree).not.toHaveBeenCalled();
+      expect(response.archivedWorktree).toEqual(snapshot);
+      await expect(overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))
+        .resolves.toMatchObject({ worktreeSnapshots: [snapshot] });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("recreates the recorded worktree and returns a refusal untouched", async () => {
+    const { root, repo, worktree } = await mainCheckout();
+    const refusal = {
+      status: "failed" as const, backend: "codex" as const, threadId: "thread-1", worktreePath: worktree,
+      reason: "branch-checked-out" as const, message: "checked out elsewhere", steps: [],
+    };
+    const recreate = vi.fn(async () => refusal);
+    const { registry } = registryFor(worktreeThread(repo, worktree), { recovery: { recreate } });
+    const publish = vi.spyOn(registry, "publishLocalEvent");
+    try {
+      await expect(registry.recreateThreadWorktree({
+        backend: "codex", threadId: "thread-1", worktreePath: worktree, detached: true,
+      })).resolves.toEqual(refusal);
+      expect(recreate).toHaveBeenCalledWith(expect.objectContaining({
+        repositoryPath: repo, worktreePath: worktree, branch: "fix/retry-backoff", detached: true,
+      }));
+      expect(publish).not.toHaveBeenCalled();
+
+      await expect(registry.recreateThreadWorktree({
+        backend: "codex", threadId: "thread-1", worktreePath: path.join(root, "some-other-folder"),
+      })).rejects.toThrow(/no longer works in that worktree/);
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

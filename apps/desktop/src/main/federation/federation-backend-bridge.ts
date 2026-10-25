@@ -82,6 +82,10 @@ import type {
   GetWorktreeUnpublishedCommitDiffResponse,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  MoveThreadToMainCheckoutRequest,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   ListBackendsRequest,
@@ -599,6 +603,8 @@ export const FEDERATION_BACKEND_METHODS = {
   getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
+  recreateThreadWorktree: "backend.recreateThreadWorktree",
+  moveThreadToMainCheckout: "backend.moveThreadToMainCheckout",
   renameThread: "backend.renameThread",
   readApplications: "backend.readApplications",
   openApplication: "backend.openApplication",
@@ -749,6 +755,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.recreateThreadWorktree]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout]: "turn_control",
   [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.readApplications]: "remote_window",
   [FEDERATION_BACKEND_METHODS.openApplication]: "remote_window",
@@ -1075,6 +1083,12 @@ export type FederationBackendOperations = {
   handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
+  recreateThreadWorktree?(
+    request: RecreateThreadWorktreeRequest,
+  ): Promise<RecreateThreadWorktreeResponse>;
+  moveThreadToMainCheckout?(
+    request: MoveThreadToMainCheckoutRequest,
+  ): Promise<MoveThreadToMainCheckoutResponse>;
   renameThread(request: RenameThreadRequest): Promise<RenameThreadResponse>;
   readApplications(): Promise<DesktopApplicationsSnapshot>;
   openApplication(
@@ -2058,6 +2072,34 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as HandoffThreadWorkspaceRequest,
       ),
   );
+  if (params.backend.recreateThreadWorktree) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.recreateThreadWorktree,
+      async (envelope) => {
+        const request = envelope.params as RecreateThreadWorktreeRequest;
+        return await params.backend.recreateThreadWorktree!({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+          ...(request.skipCheckpoint === true ? { skipCheckpoint: true } : {}),
+          ...(request.detached === true ? { detached: true } : {}),
+        });
+      },
+    );
+  }
+  if (params.backend.moveThreadToMainCheckout) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout,
+      async (envelope) => {
+        const request = envelope.params as MoveThreadToMainCheckoutRequest;
+        return await params.backend.moveThreadToMainCheckout!({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+        });
+      },
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.renameThread,
     async (envelope) =>
@@ -3196,6 +3238,27 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<HandoffThreadWorkspaceResponse>({
       method: FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
       params: request,
+    });
+  }
+
+  // Both run Git on the owner, which can take a while on a large checkout.
+  async recreateThreadWorktree(
+    request: RecreateThreadWorktreeRequest,
+  ): Promise<RecreateThreadWorktreeResponse> {
+    return await this.rpc.request<RecreateThreadWorktreeResponse>({
+      method: FEDERATION_BACKEND_METHODS.recreateThreadWorktree,
+      params: request,
+      timeoutMs: 120_000,
+    });
+  }
+
+  async moveThreadToMainCheckout(
+    request: MoveThreadToMainCheckoutRequest,
+  ): Promise<MoveThreadToMainCheckoutResponse> {
+    return await this.rpc.request<MoveThreadToMainCheckoutResponse>({
+      method: FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout,
+      params: request,
+      timeoutMs: 120_000,
     });
   }
 

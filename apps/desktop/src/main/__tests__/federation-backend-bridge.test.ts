@@ -4869,3 +4869,72 @@ describe("backend.setQueuedTurnPaused", () => {
     ).rejects.toThrow("Peer disconnected.");
   });
 });
+
+describe("federation workspace recovery methods", () => {
+  function route(backend: Partial<FederationBackendOperations>, capabilities: Parameters<FederationRouter["registerConnection"]>[0]["capabilities"]) {
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      now: () => 2_000,
+    });
+    router.registerConnection({ peerId: "viewer_one", capabilities, sendEnvelope: (envelope) => replies.push(envelope) });
+    registerFederationBackendHandlers({
+      router,
+      backend: backend as FederationBackendOperations,
+      resolveSourceInstance: () => ({ label: "Viewer Mac", celestialIcon: "moon" }),
+    });
+    const request = async (id: string, method: string, params: unknown) => {
+      await router.routeEnvelope({
+        sourcePeerId: "viewer_one",
+        envelope: {
+          id, kind: "request", method, params,
+          protocolVersion: 1, sourceInstanceId: "viewer_one", targetInstanceId: "owner_one", createdAt: 1_000,
+        },
+      });
+      return replies.find((reply) => reply.kind !== "request" && "requestId" in reply && reply.requestId === id);
+    };
+    return { request };
+  }
+
+  it("runs both on the owner with only the fields they need", async () => {
+    const recreateThreadWorktree = vi.fn(async () => ({ status: "recreated" }));
+    const moveThreadToMainCheckout = vi.fn(async () => ({ repositoryPath: "/repo" }));
+    const { request } = route({ recreateThreadWorktree, moveThreadToMainCheckout } as never, ["turn_control"]);
+
+    await request("recreate", FEDERATION_BACKEND_METHODS.recreateThreadWorktree, {
+      backend: "codex", threadId: "t1", worktreePath: "/wt", detached: true, skipCheckpoint: "yes",
+      federationTarget: { scope: "remote", instanceId: "elsewhere" },
+    });
+    await request("move", FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout, {
+      backend: "codex", threadId: "t1", worktreePath: "/wt", strategy: "move-branch",
+    });
+
+    expect(recreateThreadWorktree).toHaveBeenCalledWith({
+      backend: "codex", threadId: "t1", worktreePath: "/wt", detached: true,
+    });
+    expect(moveThreadToMainCheckout).toHaveBeenCalledWith({ backend: "codex", threadId: "t1", worktreePath: "/wt" });
+  });
+
+  it("refuses a viewer without turn control", async () => {
+    const moveThreadToMainCheckout = vi.fn();
+    const { request } = route({ moveThreadToMainCheckout } as never, ["thread_detail"]);
+
+    const reply = await request("move", FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout, {
+      backend: "codex", threadId: "t1", worktreePath: "/wt",
+    });
+
+    expect(moveThreadToMainCheckout).not.toHaveBeenCalled();
+    expect(reply).toMatchObject({ kind: "error" });
+  });
+
+  it("answers method_not_found where the owner has no implementation", async () => {
+    const { request } = route({}, ["turn_control"]);
+
+    const reply = await request("move", FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout, {
+      backend: "codex", threadId: "t1", worktreePath: "/wt",
+    });
+
+    expect(JSON.stringify(reply)).toContain("method_not_found");
+  });
+});

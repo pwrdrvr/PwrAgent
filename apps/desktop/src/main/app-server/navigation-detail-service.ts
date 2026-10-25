@@ -20,6 +20,7 @@ import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import { buildMessagingBindingsByThreadKey } from "../messaging/messaging-bindings-snapshot";
 import { listCodexEnvironmentOptions } from "./codex-environment-config";
 import { NavigationQueryError } from "./navigation-query-store";
+import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 
 function revision(value: unknown): string {
   return createHash("sha256")
@@ -227,7 +228,13 @@ export class NavigationDetailService {
       name, count: thread[name]?.length ?? 0,
       revision: revision({ ref: request.ref, name, values: thread[name] ?? [] }),
     }));
-    const configuration = { ...thread };
+    // Checked on every detail read, never stored: one stat while the folder
+    // exists. Viewers on other instances get the owner's answer.
+    const workspaceMissing = await detectMissingThreadWorkspace(thread, {
+      readBranch: async (repositoryPath) =>
+        (await this.registry.readSelectedWorkspaceGitStatus(repositoryPath))?.currentBranch,
+    });
+    const configuration = { ...thread, ...(workspaceMissing ? { workspaceMissing } : {}) };
     for (const name of NAVIGATION_DETAIL_COLLECTION_NAMES) delete configuration[name];
     configuration.activeSubAgents = projectActiveThreadSubAgents(thread.subAgents ?? []);
     let workspaceDirectories: NavigationSelectedDetailResponse["workspaceDirectories"];

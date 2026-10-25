@@ -69,6 +69,7 @@ import {
 import { createPortal, flushSync } from "react-dom";
 import type { JSONContent } from "@tiptap/react";
 import type {
+  MoveThreadToMainCheckoutResponse,
   AppServerAvailableCommandSummary,
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
@@ -553,6 +554,10 @@ export type ComposerProps = {
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
+  /** Handoff to Local that leaves the main checkout on its own branch. */
+  onMoveThreadToMainCheckout?: (
+    worktreePath: string
+  ) => Promise<MoveThreadToMainCheckoutResponse>;
   onBeforeStartTurn?: (signal?: AbortSignal) => Promise<boolean>;
   onSetThreadModelSettings?: (
     patch: Partial<
@@ -3164,6 +3169,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   >();
   const [localHandoffStrategy, setLocalHandoffStrategy] =
     useState<LocalHandoffStrategy>("detached-changes");
+  // Handoff to Local: keep the main checkout's branch (the default), or move
+  // the worktree's branch into it as before.
+  const [worktreeHandoffStrategy, setWorktreeHandoffStrategy] =
+    useState<"keep-local-branch" | "move-branch">("keep-local-branch");
   const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
   const [newLocalBranch, setNewLocalBranch] = useState("");
   const [projectTargetPath, setProjectTargetPath] = useState("");
@@ -10994,6 +11003,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : props.directory?.gitStatus?.currentBranch ??
         props.thread?.observedGitBranch ??
         props.thread?.gitBranch;
+  const keepLocalBranchAvailable = Boolean(props.onMoveThreadToMainCheckout)
+    && threadWorkspace?.mode === "worktree";
+  const keepLocalBranchSelected = handoffDialog === "worktree-to-local"
+    && keepLocalBranchAvailable
+    && worktreeHandoffStrategy === "keep-local-branch";
+  // The project's own status describes the main checkout, not the worktree.
+  const localCheckoutBranch = threadWorkspace?.mode === "worktree"
+    ? props.directory?.gitStatus?.currentBranch
+    : undefined;
   const leaveLocalBranchOptions = useMemo(
     () =>
       buildLeaveLocalBranchPickerOptions({
@@ -11036,6 +11054,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setHandoffDialog(direction);
     setProjectTargetPath("");
     setProjectSearch("");
+    if (direction === "worktree-to-local") {
+      setWorktreeHandoffStrategy(
+        props.onMoveThreadToMainCheckout ? "keep-local-branch" : "move-branch",
+      );
+    }
     if (direction === "local-to-worktree") {
       setLocalHandoffStrategy("detached-changes");
       setLeaveLocalBranch(branchOptions[0] ?? "");
@@ -11069,6 +11092,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         setHandoffDialog(undefined);
         return;
       }
+      if (keepLocalBranchSelected && props.onMoveThreadToMainCheckout) {
+        await props.onMoveThreadToMainCheckout(threadWorkspace.sourcePath);
+        setHandoffDialog(undefined);
+        return;
+      }
       await props.onHandoffThreadWorkspace({
         direction: handoffDialog!,
         ...(handoffStrategy ? { strategy: handoffStrategy } : {}),
@@ -11084,7 +11112,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       });
       setHandoffDialog(undefined);
     } catch (error) {
-      setHandoffError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      // An owner that predates the keep-branch handoff answers
+      // method_not_found; nothing moved. The text survives IPC, the code does not.
+      const outdated = keepLocalBranchSelected
+        && (/\bmethod_not_found\b/.test(message) || message.includes("No federation handler registered"));
+      const owner = props.thread?.federation?.instanceLabel ?? "the other machine";
+      setHandoffError(outdated
+        ? `${owner} runs an older PwrAgent that can only hand off by switching Local’s branch. Update PwrAgent on ${owner}, or choose Move ${sourceBranch ?? "the branch"} to Local.`
+        : message);
     } finally {
       setHandoffSubmitting(false);
     }
@@ -11123,7 +11159,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
   const handoffDisabled =
     handoffSubmitting ||
-    (handoffDialog === "to-project" ? !projectTargetPath.trim() : !sourceBranch) ||
+    (handoffDialog === "to-project"
+      ? !projectTargetPath.trim()
+      : !keepLocalBranchSelected && !sourceBranch) ||
     (handoffDialog === "local-to-worktree" &&
       ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
         (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
@@ -11642,8 +11680,57 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   ? "Continue this conversation in another Git project. Files and branches stay in their current locations."
                   : handoffDialog === "local-to-worktree"
                     ? "Choose how this thread should move into a new worktree."
-                    : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
+                    : keepLocalBranchAvailable
+                      ? <>Continue this thread in the main checkout, <code>{threadWorkspace.repositoryPath}</code>.</>
+                      : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
               </p>
+              {handoffDialog === "worktree-to-local" && keepLocalBranchAvailable ? (
+                <div
+                  aria-label="Handoff strategy"
+                  className="workspace-handoff-dialog__strategy-list"
+                  role="radiogroup"
+                >
+                  <button
+                    aria-checked={worktreeHandoffStrategy === "keep-local-branch"}
+                    className="workspace-handoff-dialog__strategy"
+                    disabled={handoffSubmitting}
+                    role="radio"
+                    type="button"
+                    onClick={() => setWorktreeHandoffStrategy("keep-local-branch")}
+                  >
+                    <span className="workspace-handoff-dialog__strategy-title">
+                      {localCheckoutBranch && localCheckoutBranch !== sourceBranch
+                        ? `Keep Local on ${localCheckoutBranch}`
+                        : "Keep Local on its branch"}
+                    </span>
+                    <span>
+                      Only the thread moves. Local stays on its branch. The worktree is
+                      archived with a checkpoint of its uncommitted changes, and
+                      {" "}{sourceBranch && sourceBranch !== "HEAD" ? <code>{sourceBranch}</code> : "its branch"}{" "}
+                      stays where it is.
+                    </span>
+                  </button>
+                  <button
+                    aria-checked={worktreeHandoffStrategy === "move-branch"}
+                    className="workspace-handoff-dialog__strategy"
+                    disabled={handoffSubmitting || !sourceBranch}
+                    role="radio"
+                    type="button"
+                    onClick={() => setWorktreeHandoffStrategy("move-branch")}
+                  >
+                    <span className="workspace-handoff-dialog__strategy-title">
+                      {sourceBranch && sourceBranch !== "HEAD"
+                        ? `Move ${sourceBranch} to Local`
+                        : "Move this worktree to Local"}
+                    </span>
+                    <span>
+                      Switch Local to the worktree&rsquo;s branch. Dirty tracked and
+                      non-ignored files are stashed and applied in Local, then the
+                      worktree is archived.
+                    </span>
+                  </button>
+                </div>
+              ) : null}
               {handoffDialog === "to-project" ? (
                 <div className="workspace-handoff-dialog__field">
                   <label htmlFor={projectDestinationInputId}>Destination project</label>
@@ -11668,7 +11755,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     onQueryChange={setProjectSearch}
                   />
                 </div>
-              ) : (
+              ) : keepLocalBranchSelected ? null : (
                 <dl className="workspace-handoff-dialog__summary">
                   <div>
                     <dt>
@@ -11796,7 +11883,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   dirty non-ignored changes on top.
                 </p>
               ) : null}
-              {handoffDialog !== "to-project" ? (
+              {keepLocalBranchSelected ? (
+                <p className="workspace-handoff-dialog__note">
+                  Uncommitted changes stay in the checkpoint; they are not copied into Local.
+                </p>
+              ) : handoffDialog !== "to-project" ? (
                 <p className="workspace-handoff-dialog__note">
                   Ignored files are not moved by handoff.
                 </p>

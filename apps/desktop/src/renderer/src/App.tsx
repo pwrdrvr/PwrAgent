@@ -3560,6 +3560,18 @@ function DesktopAppShell(props: {
     const thread = navigation.selectedThread;
     if (thread) await navigation.handoffThreadWorkspace(thread, request);
   });
+  const handleRecreateThreadWorktree = useEventCallback(async (
+    request: Parameters<NonNullable<ThreadViewProps["onRecreateThreadWorktree"]>>[0],
+  ) => {
+    const thread = navigation.selectedThread;
+    if (!thread) throw new Error("Select the thread again, then try once more.");
+    return await navigation.recreateThreadWorktree(thread, request);
+  });
+  const handleMoveThreadToMainCheckout = useEventCallback(async (worktreePath: string) => {
+    const thread = navigation.selectedThread;
+    if (!thread) throw new Error("Select the thread again, then try once more.");
+    return await navigation.moveThreadToMainCheckout(thread, worktreePath);
+  });
   const handleSetExecutionMode = useEventCallback(async (
     executionMode: Parameters<NonNullable<ThreadViewProps["onSetExecutionMode"]>>[0],
   ) => {
@@ -3821,6 +3833,10 @@ function DesktopAppShell(props: {
     workspaceActionsBlocked: navigation.selectedWorkspaceHandoffPending,
     onHandoffThreadWorkspace: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
       ? handleHandoffThreadWorkspace : undefined,
+    onRecreateThreadWorktree: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
+      ? handleRecreateThreadWorktree : undefined,
+    onMoveThreadToMainCheckout: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
+      ? handleMoveThreadToMainCheckout : undefined,
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: handleCancelLaunchpad,
