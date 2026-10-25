@@ -19,15 +19,15 @@ Node, and Python. The checks here mirror the CI `Lint`, `Test`, and
 the VM. It installs the Node version from `.nvmrc`, the pinned pnpm, and the
 E2E window manager, then runs each check with a log and a status line.
 
-## Measured on a `large` sandbox (2026-10-24, commit `d8ee319d5`)
+## Measured on a new `large` sandbox (2026-10-25, based on `d8ee319d5`)
 
-| Step | Command | Time | Result |
+| Step | Command | Time | Includes |
 | --- | --- | --- | --- |
-| First setup | `verify.sh setup` | about 1 min | Node download, apt packages, `pnpm install` (10 s) |
-| Later setup, new worktree | `verify.sh setup` | a few seconds | `pnpm install` reuses the VM's store |
-| Lint job | `verify.sh lint` | about 1 min | `pnpm lint`: every CI Lint check, typecheck included |
-| Unit tests | `verify.sh unit` | about 2.5 min | 20,063 passed |
-| Linux desktop E2E | `verify.sh e2e` | about 10 min | 278 tests, one worker |
+| First setup | `verify.sh setup` | 17 s | Node download, apt packages, `pnpm install` |
+| Setup, later worktree | `verify.sh setup` | 2 s | `pnpm install` from the VM's store |
+| Lint job | `verify.sh lint` | 46 s | `pnpm lint`: every CI Lint check, typecheck included |
+| Unit tests | `verify.sh unit` | 132 s | 1,271 files, about 20,000 tests |
+| Linux desktop E2E | `verify.sh e2e` | 585 s | 278 tests, one Playwright worker |
 
 `large` is 8 vCPUs and 15 GB. Playwright runs one worker, so E2E time does
 not improve with a larger machine.
@@ -147,6 +147,31 @@ Report the sandbox ID, the commit, and each status line. Name every failure.
   worktree. Never disable the Chromium sandbox.
 - The VM's `/tmp` does not survive a cold boot. Keep work under
   `/home/user/pwragent`.
+
+### Two E2E tests fail here and pass on CI
+
+On 2026-10-25, a full E2E run at `d8ee319d5` reported 270 passed, 6 skipped,
+and these 2 failed. Both fail every time in the VM. Both expose a bug that
+GitHub's runner hides; neither is caused by the change under test.
+
+- `e2e/federation-remote-window.spec.ts:1738` waits for `review/start` and
+  times out. The image installs real agent CLIs: `/usr/bin/codex`,
+  `/usr/bin/claude`, and `/usr/local/bin/kimi`. The test gives a fake Codex to
+  the owner only. The viewer finds the real Codex, and with a local Codex the
+  viewer's remote sub-thread review never reaches the owner. The runner has no
+  Codex. With the Codex CLI hidden, the test passes.
+- `e2e/onboarding-wizard.spec.ts:593` fails in teardown with "Electron close
+  timed out". This kernel allows unprivileged user namespaces, so the
+  graduated `personal` instance starts. On the runner the relaunch cannot
+  start, and the test takes its "bootstrap process didn't exit within 20s"
+  fallback. When `personal` does start, it inherits the bootstrap's DevTools
+  sockets. `killGraduatedProfileInstances` then cannot find it, because
+  Chromium moves `--profile` ahead of the profile name in the process title.
+
+Treat only these two as expected failures. Do not uninstall the image's agent
+CLIs or disable user namespaces to make them pass. Other work in the VM can
+need those CLIs, and the namespace setting affects the whole VM.
+Remove this section when the bugs are fixed.
 
 ## 6. Finish
 
