@@ -77,6 +77,7 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   agentEventMatchesThread,
+  federationTargetsEqual,
   threadSummaryIdentityKey,
 } from "../../lib/federated-thread-events";
 import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
@@ -96,6 +97,7 @@ import {
   type ComposerSlotLineage,
 } from "./composer-slot";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { isThreadRemoteWorkHere } from "../navigation/ThreadRowStatus";
 import type {
   IntegratedTerminalPaneRemote,
@@ -153,7 +155,9 @@ import { TranscriptMessage } from "./TranscriptMessage";
 import { ThreadRewindConfirm } from "./ThreadRewindConfirm";
 import {
   collectRewindableMessageIds,
+  rewoundPrompt,
   summarizeThreadRewind,
+  type RewoundPrompt,
   type ThreadRewindSummary,
 } from "./thread-rewind";
 import { LiveWorkRail } from "./LiveWorkRail";
@@ -1093,7 +1097,7 @@ type RewindConfirmState = {
   busy: boolean;
   error?: string;
   messageId: string;
-  promptText: string;
+  prompt: RewoundPrompt;
   summary: ThreadRewindSummary;
   turnId?: string;
 };
@@ -1343,6 +1347,7 @@ export function ThreadView(props: ThreadViewProps) {
     backend: NavigationThreadSummary["source"];
     federationTarget?: FederationTarget;
     text: string;
+    imageAttachments: RewoundPrompt["imageAttachments"];
   }>();
   const [workflowBudgetDialog, setWorkflowBudgetDialog] =
     useState<WorkflowBudgetDialogState>();
@@ -1574,10 +1579,32 @@ export function ThreadView(props: ThreadViewProps) {
   const onRefreshNavigationAfterRewind = props.onRefreshNavigation;
   const onReloadThreadAfterRewind = props.onReloadThread;
   const onShowRewindNotice = props.onShowNotice;
-  const threadRewindSupport = selectedThreadBackend?.available
-    ? selectedThreadBackend.capabilities.threadRewind
+  // A peer's thread pinned in this window is rewound by its owner, so the
+  // owner's summary decides whether to offer it. `props.backends` describes
+  // this window's own target, which is that owner only in a peer's window.
+  const threadOwnerTarget = selectedThread?.federation?.ref.target;
+  const peerOwnerInstanceId =
+    threadOwnerTarget?.scope === "remote"
+    && !federationTargetsEqual(threadOwnerTarget, readRendererFederationTarget())
+      ? threadOwnerTarget.instanceId
+      : undefined;
+  const peerOwnerTarget = useMemo<FederationTarget | undefined>(
+    () => peerOwnerInstanceId
+      ? { scope: "remote", instanceId: peerOwnerInstanceId }
+      : undefined,
+    [peerOwnerInstanceId],
+  );
+  const peerOwnerSummaries = useBackendSummaries(props.desktopApi, {
+    enabled: Boolean(peerOwnerTarget),
+    federationTarget: peerOwnerTarget,
+  });
+  const rewindOwnerBackend = peerOwnerTarget
+    ? peerOwnerSummaries.backends.find((backend) => backend.kind === selectedThread?.source)
+    : selectedThreadBackend;
+  const threadRewindSupport = rewindOwnerBackend?.available
+    ? rewindOwnerBackend.capabilities.threadRewind
     : undefined;
-  const rewindProviderLabel = selectedThreadBackend?.label ?? "The provider";
+  const rewindProviderLabel = rewindOwnerBackend?.label ?? "The provider";
   const rewindThreadSource = selectedThread?.source;
   const rewindableMessageIds = useMemo(
     () => rewindThreadSource && threadRewindSupport
@@ -1602,7 +1629,7 @@ export function ThreadView(props: ThreadViewProps) {
       setRewindConfirm({
         busy: false,
         messageId: message.id,
-        promptText: message.text,
+        prompt: rewoundPrompt(message),
         summary,
         turnId: message.turn?.id,
       });
@@ -1646,8 +1673,9 @@ export function ThreadView(props: ThreadViewProps) {
         mode,
       });
       setRewindConfirm(undefined);
-      const promptText = response.promptText ?? confirm.promptText;
-      if (promptText.trim()) {
+      const promptText = response.promptText ?? confirm.prompt.text;
+      const { droppedAttachmentCount, imageAttachments } = confirm.prompt;
+      if (promptText.trim() || imageAttachments.length > 0) {
         rewoundPromptRestoreId.current += 1;
         setRewoundPromptRestore({
           id: rewoundPromptRestoreId.current,
@@ -1655,6 +1683,17 @@ export function ThreadView(props: ThreadViewProps) {
           backend: thread.source,
           federationTarget,
           text: promptText,
+          imageAttachments,
+        });
+      }
+      if (droppedAttachmentCount > 0) {
+        onShowRewindNotice?.({
+          id: `rewind-attachments:${thread.id}`,
+          title: "Attachments not restored",
+          message: droppedAttachmentCount === 1
+            ? "One attachment from the rewound prompt could not return to the composer. Attach it again before you resend."
+            : `${droppedAttachmentCount} attachments from the rewound prompt could not return to the composer. Attach them again before you resend.`,
+          tone: "warning",
         });
       }
       await onRefreshNavigationAfterRewind?.();

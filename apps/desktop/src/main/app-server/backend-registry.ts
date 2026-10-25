@@ -9066,6 +9066,12 @@ export class DesktopBackendRegistry {
   >();
   private readonly observedCodexSettingsByThread = new Map<string, ObservedCodexSettings>();
   private readonly reservedCodexStartThreadIds = new Set<string>();
+  /**
+   * Codex reverts in flight, and whether Codex has already announced the
+   * revert (its thread/reverted, normalized to thread/rewound). The registry
+   * announces only a revert Codex did not, so windows reload once.
+   */
+  private readonly codexRevertsInFlight = new Map<string, { announced: boolean }>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new ActiveTurnKeySet();
   private readonly threadHandoffReservations = new Set<string>();
@@ -22729,7 +22735,12 @@ export class DesktopBackendRegistry {
     if (request.mode !== "conversation") {
       throw new Error("This provider cannot restore files when it rewinds a thread");
     }
-    let result: { promptText?: string; targetPromptIndex?: number; updatedAt: number };
+    let result: {
+      announced?: boolean;
+      promptText?: string;
+      targetPromptIndex?: number;
+      updatedAt: number;
+    };
     if (isAcpBackendId(request.backend)) {
       const backend = request.backend;
       result = await this.acpSessionPromptLocks.run(
@@ -22755,7 +22766,7 @@ export class DesktopBackendRegistry {
     } else {
       throw new Error("Rewind is not available for this provider");
     }
-    await this.emit({
+    if (!result.announced) await this.emit({
       backend: request.backend,
       notification: {
         method: "thread/rewound",
@@ -22781,7 +22792,7 @@ export class DesktopBackendRegistry {
   private async revertCodexThread(params: {
     threadId: string;
     beforeTurnId?: string;
-  }): Promise<{ updatedAt: number }> {
+  }): Promise<{ announced: boolean; updatedAt: number }> {
     if (!params.beforeTurnId) {
       throw new Error("This prompt has no Codex turn to rewind to");
     }
@@ -22799,6 +22810,8 @@ export class DesktopBackendRegistry {
     // Hold the start reservation so no turn or compaction begins on this
     // thread while Codex replaces its history.
     this.reservedCodexStartThreadIds.add(params.threadId);
+    const revert = { announced: false };
+    this.codexRevertsInFlight.set(params.threadId, revert);
     try {
       await this.withCodexThreadClient(params.threadId, async (client) => {
         if (!client.revertThread) {
@@ -22807,13 +22820,14 @@ export class DesktopBackendRegistry {
         await client.revertThread({ threadId: params.threadId, beforeTurnId });
       });
     } finally {
+      this.codexRevertsInFlight.delete(params.threadId);
       this.reservedCodexStartThreadIds.delete(params.threadId);
       // The reservation made the thread read as busy, so a reply sent during
       // the revert was queued. No turn ends to release it; drain here.
       this.threadTurnQueue.scheduleThreadDrain({ backend: "codex", threadId: params.threadId });
       this.maybeDrainCodexInvalidIdRecoveries();
     }
-    return { updatedAt: Date.now() };
+    return { announced: revert.announced, updatedAt: Date.now() };
   }
 
   async configureGrokWorkflowBudget(
@@ -28417,6 +28431,10 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        if (backend === "codex" && notification.method === "thread/rewound") {
+          const revert = this.codexRevertsInFlight.get(notification.params.threadId);
+          if (revert) revert.announced = true;
+        }
         // Match the client's running-turn ownership before the first await;
         // exit can arrive while lifecycle delivery is still in progress.
         if (backend === "codex" && notification.method === "turn/started") {

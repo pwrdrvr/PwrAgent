@@ -1,6 +1,8 @@
 import type {
   AppServerBackendKind,
   AppServerThreadEntry,
+  AppServerThreadMessageEntry,
+  NavigationLaunchpadImageAttachment,
 } from "@pwragent/shared";
 
 /**
@@ -74,4 +76,77 @@ export function summarizeThreadRewind(
     laterTurnCount: rewindable.size,
     ...(countKnown ? { changedFileCount: paths.size } : {}),
   };
+}
+
+export type RewoundPrompt = {
+  text: string;
+  imageAttachments: NavigationLaunchpadImageAttachment[];
+  /** Attachments the composer cannot send again, such as path-less files. */
+  droppedAttachmentCount: number;
+};
+
+const TRANSCRIPT_LOCAL_IMAGE_PREFIX = "pwragent-image://file/";
+
+/**
+ * What a rewind puts back in the composer: the prompt's text, and each image
+ * it can send again. A local image the transcript shows through
+ * `pwragent-image://file/` goes back as the `localImage` input it came from;
+ * the protocol URL stays only as the preview. Inline and web images resend by
+ * URL. A peer's image or a file part carries no path the composer can send.
+ */
+export function rewoundPrompt(message: AppServerThreadMessageEntry): RewoundPrompt {
+  const imageAttachments: NavigationLaunchpadImageAttachment[] = [];
+  let droppedAttachmentCount = 0;
+  (message.parts ?? []).forEach((part, index) => {
+    if (part.type === "file") {
+      droppedAttachmentCount += 1;
+      return;
+    }
+    if (part.type !== "image") {
+      return;
+    }
+    const id = `rewound:${message.id}:image:${index}`;
+    const localPath = transcriptLocalImagePath(part.url);
+    if (localPath) {
+      const name = part.alt ?? localPath.split(/[\\/]/).pop() ?? "Image";
+      imageAttachments.push({
+        id,
+        name,
+        size: 0,
+        type: "image/*",
+        url: part.url,
+        originalInput: { type: "localImage", name, path: localPath },
+      });
+      return;
+    }
+    if (/^(?:data:image\/|https?:)/i.test(part.url)) {
+      imageAttachments.push({
+        id,
+        name: part.alt ?? "Image",
+        size: 0,
+        type: /^data:([^;,]+)/i.exec(part.url)?.[1] ?? "image/*",
+        url: part.url,
+      });
+      return;
+    }
+    droppedAttachmentCount += 1;
+  });
+  return { text: message.text, imageAttachments, droppedAttachmentCount };
+}
+
+function transcriptLocalImagePath(url: string): string | undefined {
+  if (!url.startsWith(TRANSCRIPT_LOCAL_IMAGE_PREFIX)) {
+    return undefined;
+  }
+  try {
+    const source = decodeURIComponent(url.slice(TRANSCRIPT_LOCAL_IMAGE_PREFIX.length));
+    if (!source.startsWith("file:")) {
+      return source || undefined;
+    }
+    const pathname = decodeURIComponent(new URL(source).pathname);
+    // file:///C:/Users/... parses to /C:/Users/...
+    return /^\/[A-Za-z]:\//.test(pathname) ? pathname.slice(1) : pathname;
+  } catch {
+    return undefined;
+  }
 }

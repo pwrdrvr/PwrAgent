@@ -53929,6 +53929,49 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("announces a Codex rewind once when Codex reports the revert itself", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume"] },
+    });
+    // Codex sends thread/reverted (normalized to thread/rewound) before it
+    // answers the request.
+    const revertThread = vi.fn(async (params: { threadId: string }) => {
+      await codexClient.emit({
+        method: "thread/rewound",
+        params: { threadId: params.threadId, updatedAt: 1_234 },
+      });
+    });
+    Object.assign(codexClient, { revertThread });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await registry.rewindThread({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { messageId: "user-2", turnId: "turn-2" },
+      mode: "conversation",
+    });
+    await flushAsync();
+
+    expect(
+      events.filter((event) => event.notification.method === "thread/rewound"),
+    ).toEqual([{
+      backend: "codex",
+      notification: {
+        method: "thread/rewound",
+        params: { threadId: "thread-1", updatedAt: 1_234 },
+      },
+    }]);
+
+    await registry.close();
+  });
+
   it("refuses a Codex rewind without a target turn or while a turn runs", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read", "thread/resume", "turn/start"] },

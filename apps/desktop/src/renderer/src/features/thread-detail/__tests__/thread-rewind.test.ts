@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AppServerThreadEntry } from "@pwragent/shared";
 import {
   collectRewindableMessageIds,
+  rewoundPrompt,
   summarizeThreadRewind,
 } from "../thread-rewind";
 
@@ -60,5 +61,53 @@ describe("thread rewind targets", () => {
       },
     ];
     expect(summarizeThreadRewind(collapsed, "u1", "codex")).toEqual({ laterTurnCount: 0 });
+  });
+
+  it("returns images the composer can send again and counts the rest", () => {
+    const local = `pwragent-image://file/${encodeURIComponent("file:///Users/pat/shots/lock%20race.png")}`;
+    const windows = `pwragent-image://file/${encodeURIComponent("file:///C:/Users/pat/trace.png")}`;
+    const peer = `pwragent-image://federation/peer-1/${encodeURIComponent("/srv/shot.png")}`;
+    const prompt = rewoundPrompt({
+      type: "message",
+      id: "u9",
+      role: "user",
+      text: "Why does this fail?",
+      parts: [
+        { type: "text", text: "Why does this fail?" },
+        { type: "image", url: local },
+        { type: "image", url: windows, alt: "trace" },
+        { type: "image", url: "data:image/png;base64,AAAA" },
+        { type: "image", url: peer },
+        { type: "file", name: "notes.pdf" },
+      ],
+    });
+
+    expect(prompt.text).toBe("Why does this fail?");
+    expect(prompt.imageAttachments).toEqual([
+      {
+        id: "rewound:u9:image:1",
+        name: "lock race.png",
+        size: 0,
+        type: "image/*",
+        url: local,
+        originalInput: { type: "localImage", name: "lock race.png", path: "/Users/pat/shots/lock race.png" },
+      },
+      {
+        id: "rewound:u9:image:2",
+        name: "trace",
+        size: 0,
+        type: "image/*",
+        url: windows,
+        originalInput: { type: "localImage", name: "trace", path: "C:/Users/pat/trace.png" },
+      },
+      {
+        id: "rewound:u9:image:3",
+        name: "Image",
+        size: 0,
+        type: "image/png",
+        url: "data:image/png;base64,AAAA",
+      },
+    ]);
+    expect(prompt.droppedAttachmentCount).toBe(2);
   });
 });

@@ -581,6 +581,113 @@ describe("ThreadView", () => {
     expect(prompt.contains(confirm)).toBe(true);
   });
 
+  it("returns the rewound prompt's images to the composer and reports the rest", async () => {
+    const local = `pwragent-image://file/${encodeURIComponent("file:///Users/pat/lock-race.png")}`;
+    const onShowNotice = vi.fn();
+    const entries: AppServerThreadEntry[] = [
+      rewindTranscript[0]!,
+      rewindTranscript[1]!,
+      {
+        type: "message",
+        id: "prompt-2",
+        role: "user",
+        text: "Why does this race?",
+        parts: [
+          { type: "text", text: "Why does this race?" },
+          { type: "image", url: local },
+          { type: "file", name: "notes.pdf" },
+        ],
+        turn: { id: "turn-2" },
+      },
+    ];
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[rewindBackend("codex", "Codex")]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{
+          rewindThread: vi.fn(async () => ({
+            backend: "codex" as const,
+            threadId: "codex-thread",
+            target: { messageId: "prompt-2", turnId: "turn-2" },
+            mode: "conversation" as const,
+            updatedAt: 2000,
+          })),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={entries.length}
+        onLoadOlder={async () => undefined}
+        onShowNotice={onShowNotice}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={rewindThread("codex")}
+        skills={[]}
+        transcriptEntries={entries}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Rewind to before this message" })[1]!);
+    fireEvent.click(screen.getByRole("button", { name: "Rewind and edit" }));
+
+    expect(await screen.findByRole("button", { name: "Remove lock-race.png" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Reply" })).toHaveTextContent("Why does this race?");
+    });
+    expect(onShowNotice).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Attachments not restored",
+      tone: "warning",
+    }));
+  });
+
+  it("offers rewind on a pinned peer thread only when its owner can rewind", async () => {
+    const remoteThread: NavigationThreadSummary = {
+      ...rewindThread("codex"),
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-1" },
+          threadId: "codex-thread",
+        },
+      },
+    } as NavigationThreadSummary;
+    const props = {
+      addOptimisticUserMessage: (_text: string) => "optimistic-1",
+      // This window's own Codex can rewind; the peer's may not.
+      backends: [rewindBackend("codex", "Codex")],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      loading: false,
+      loadingMore: false,
+      messageCount: 4,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: (_id: string) => undefined,
+      selectedThread: remoteThread,
+      skills: [],
+      transcriptEntries: rewindTranscript,
+    };
+    const olderOwner = vi.fn(async () => ({
+      fetchedAt: 1,
+      backends: [rewindBackend("codex", "Codex", null)],
+    }));
+    const view = render(<ThreadView {...props} desktopApi={{ listBackends: olderOwner, rewindThread: vi.fn() }} />);
+    await waitFor(() => expect(olderOwner).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: { scope: "remote", instanceId: "peer-1" },
+    })));
+    expect(screen.queryByRole("button", { name: "Rewind to before this message" }))
+      .not.toBeInTheDocument();
+    view.unmount();
+
+    const currentOwner = vi.fn(async () => ({
+      fetchedAt: 1,
+      backends: [rewindBackend("codex", "Codex")],
+    }));
+    render(<ThreadView {...props} desktopApi={{ listBackends: currentOwner, rewindThread: vi.fn() }} />);
+    expect(
+      await screen.findAllByRole("button", { name: "Rewind to before this message" }),
+    ).toHaveLength(3);
+  });
+
   it("keeps the rewind open with the provider's error and offers none without the capability", async () => {
     const rewindThreadApi = vi.fn(async () => {
       throw new Error("Update Codex to rewind threads");

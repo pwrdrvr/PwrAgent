@@ -385,6 +385,7 @@ export type ComposerProps = {
     backend: AppServerBackendKind;
     federationTarget?: FederationTarget;
     text: string;
+    imageAttachments?: NavigationLaunchpadImageAttachment[];
   };
   /**
    * Focus the input once this composer shows the named thread and can take
@@ -4275,6 +4276,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
     };
     setComposerDraftFromCanonical(restore.text);
+    setImageAttachments(restore.imageAttachments ?? []);
     requestAnimationFrame(() => inputRef.current?.focus());
     // The helpers are recreated each render; the id guard applies once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
