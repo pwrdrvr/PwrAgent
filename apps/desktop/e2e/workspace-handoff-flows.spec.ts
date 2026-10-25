@@ -235,6 +235,9 @@ async function handoffBackToLocal(page: Page) {
   await page.getByRole("menuitem", { name: "Handoff to Local" }).click();
   const dialog = page.getByRole("dialog", { name: "Handoff to Local" });
   await expect(dialog).toBeVisible();
+  // These flows carry WIP back on the worktree's branch; the dialog
+  // defaults to keeping Local's branch.
+  await dialog.getByRole("radio", { name: /^Move .+ to Local/ }).click();
   await dialog.getByRole("button", { name: "Handoff" }).click();
   await expect(dialog).toBeHidden();
 }
@@ -361,6 +364,7 @@ test.describe("workspace handoff git flows", () => {
       await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
       const returnDialog = app.window.getByRole("dialog", { name: "Handoff to Local" });
       await expect(returnDialog).toBeVisible();
+      await returnDialog.getByRole("radio", { name: /^Move .+ to Local/ }).click();
       await returnDialog.getByRole("button", { name: "Handoff" }).click();
 
       await expect(returnDialog).toContainText(

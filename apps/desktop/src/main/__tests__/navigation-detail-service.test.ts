@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type {
@@ -339,5 +342,45 @@ describe("NavigationDetailService", () => {
       ...request,
       cursor: second.nextCursor,
     })).toThrow("Queue changed while paging");
+  });
+
+  it("tells the selected thread its worktree folder is gone, with the main checkout's branch", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-detail-missing-"));
+    try {
+      const selected = {
+        ...thread("selected"),
+        gitBranch: "fix/retry-backoff",
+        linkedDirectories: [{
+          id: "wt", label: "atlas", kind: "worktree" as const,
+          path: root, worktreePath: path.join(root, "gone", "atlas"),
+        }],
+      };
+      mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
+      const registry = {
+        readSelectedWorkspaceGitStatus: vi.fn(async () => ({ currentBranch: "main" })),
+        getCachedThreadSummary: vi.fn(() => selected),
+        getQueuedExecutionModeForThread: vi.fn(() => undefined),
+        hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
+        canonicalizeNavigationThreadPullRequests: vi.fn(async (threads) => threads),
+        mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted ?? [],
+      } as unknown as DesktopBackendRegistry;
+      const service = new NavigationDetailService(registry);
+
+      const missing = await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" } });
+      expect(missing.thread?.workspaceMissing).toEqual({
+        worktreePath: path.join(root, "gone", "atlas"),
+        repositoryPath: root,
+        repositoryAvailable: true,
+        branch: "fix/retry-backoff",
+        mainCheckoutBranch: "main",
+      });
+
+      mkdirSync(path.join(root, "gone", "atlas"), { recursive: true });
+      const present = await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" } });
+      expect(present.thread).not.toHaveProperty("workspaceMissing");
+      expect(present.revision).not.toBe(missing.revision);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

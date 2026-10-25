@@ -18769,6 +18769,103 @@ describe("Composer", () => {
     expect(screen.queryByRole("option", { name: "HEAD" })).not.toBeInTheDocument();
   });
 
+  it("hands a worktree thread to Local without switching Local's branch by default", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    const onMoveThreadToMainCheckout = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", repositoryPath: "/repo", branch: "main", warnings: [], completedAt: 1,
+      linkedDirectory: { id: "pwragent-handoff:codex:thread-1", kind: "local" as const, label: "repo", path: "/repo" },
+    }));
+    const props: ComponentProps<typeof Composer> = {
+      backends: [backendSummary("codex")],
+      directory: {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "PwrAgent",
+        path: "/repo",
+        gitStatus: { currentBranch: "main", branches: ["main", "feature/handoff"] },
+      },
+      onHandoffThreadWorkspace,
+      onMoveThreadToMainCheckout,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Worktree thread",
+        titleSource: "explicit",
+        source: "codex",
+        executionMode: "default",
+        gitBranch: "feature/handoff",
+        linkedDirectories: [{
+          id: "dir-1", label: "PwrAgent", path: "/repo",
+          worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree",
+        }],
+        inbox: { inInbox: false },
+      },
+    };
+    render(<Composer {...props} />);
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to Local" });
+    const keep = within(dialog).getByRole("radio", { name: /^Keep Local on main/ });
+    expect(keep).toHaveAttribute("aria-checked", "true");
+    expect(within(dialog).getByRole("radio", { name: /^Move feature\/handoff to Local/ }))
+      .toHaveAttribute("aria-checked", "false");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onMoveThreadToMainCheckout).toHaveBeenCalledWith("/repo/.worktrees/pwragent-feature");
+    });
+    expect(onHandoffThreadWorkspace).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Handoff to Local" })).toBeNull());
+
+    // Today's behavior is still one click away.
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    const again = screen.getByRole("dialog", { name: "Handoff to Local" });
+    fireEvent.click(within(again).getByRole("radio", { name: /^Move feature\/handoff to Local/ }));
+    fireEvent.click(within(again).getByRole("button", { name: "Handoff" }));
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "worktree-to-local",
+        repositoryPath: "/repo",
+        sourcePath: "/repo/.worktrees/pwragent-feature",
+        sourceBranch: "feature/handoff",
+      });
+    });
+  });
+
+  it("names the machine to update when its owner cannot keep Local's branch", async () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{ key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo", gitStatus: { currentBranch: "main", branches: ["main"] } }}
+        onHandoffThreadWorkspace={vi.fn(async () => undefined)}
+        onMoveThreadToMainCheckout={async () => {
+          throw new Error("Error invoking remote method: Error: method_not_found: No federation handler registered for backend.moveThreadToMainCheckout");
+        }}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "codex",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+          federation: {
+            ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "studio" } },
+            instanceLabel: "studio-mac",
+            peerStatus: "connected",
+          },
+        } as ComponentProps<typeof Composer>["thread"]}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
+
+    expect(await screen.findByText(/studio-mac runs an older PwrAgent that can only hand off by switching Local’s branch/))
+      .toBeInTheDocument();
+  });
+
   it("shows handoff to local for existing worktree threads", async () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
     const openApplication = vi.fn(async () => ({ opened: true as const }));

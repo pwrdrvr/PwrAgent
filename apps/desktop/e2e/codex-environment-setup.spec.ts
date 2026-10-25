@@ -621,6 +621,8 @@ test("thread environment Run command uses the current cwd after workspace handof
     await app.window.getByRole("menuitem", { name: "Handoff to Local" }).click();
     const returnDialog = app.window.getByRole("dialog", { name: "Handoff to Local" });
     await expect(returnDialog).toBeVisible();
+    // Moving the branch is the flow this cwd check was written against.
+    await returnDialog.getByRole("radio", { name: /^Move .+ to Local/ }).click();
     await returnDialog.getByRole("button", { name: "Handoff" }).click();
     await expect(returnDialog).toBeHidden();
 

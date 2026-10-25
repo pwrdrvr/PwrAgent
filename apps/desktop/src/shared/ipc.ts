@@ -144,6 +144,10 @@ export const APP_SERVER_ARCHIVE_WORKTREE_CHANNEL = "app-server:archive-worktree"
 export const APP_SERVER_RESTORE_WORKTREE_CHANNEL = "app-server:restore-worktree";
 export const APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL =
   "app-server:handoff-thread-workspace";
+export const APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL =
+  "app-server:recreate-thread-worktree";
+export const APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL =
+  "app-server:move-thread-to-main-checkout";
 export const APP_SERVER_RENAME_THREAD_CHANNEL = "app-server:rename-thread";
 export const THREAD_MIGRATION_LIST_SOURCES_CHANNEL =
   "thread-migration:list-sources";

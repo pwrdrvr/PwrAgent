@@ -635,6 +635,8 @@ export type AppServerThreadSummary = {
     available: boolean;
     unavailableReason?: string;
   };
+  /** Set by the owner's selected-detail read when the worktree folder is gone. */
+  workspaceMissing?: ThreadMissingWorkspace;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   worktreeSnapshots?: WorktreeSnapshotSummary[];
   /** Native Codex provenance when this summary itself is a spawned worker. */
@@ -1165,6 +1167,119 @@ export type RestoreWorktreeResponse = {
   threadId: ThreadIdentifier;
   restoredAt: number;
   snapshot: WorktreeSnapshotSummary;
+};
+
+/**
+ * A thread whose recorded worktree folder no longer exists, as its owner saw
+ * it while serving the thread's detail. Computed per read and never stored.
+ */
+export type ThreadMissingWorkspace = {
+  /** The recorded worktree folder that is gone. */
+  worktreePath: string;
+  /** The main checkout the worktree belonged to. */
+  repositoryPath: string;
+  /** False when the main checkout is gone too. */
+  repositoryAvailable: boolean;
+  /** Branch the worktree last had checked out, when known. */
+  branch?: string;
+  /** Branch the main checkout is on now. Moving there leaves it on this branch. */
+  mainCheckoutBranch?: string;
+  /** Checkpoint PwrAgent kept when it archived this worktree. */
+  checkpoint?: {
+    snapshotRef: string;
+    snapshotCommit: string;
+    archivedAt?: number;
+  };
+};
+
+export type WorktreeRecoveryStepId =
+  | "check-path"
+  | "clear-record"
+  | "find-checkpoint"
+  | "add-worktree"
+  | "apply-checkpoint";
+
+export type WorktreeRecoveryStep = {
+  id: WorktreeRecoveryStepId;
+  status: "done" | "skipped" | "failed";
+  detail?: string;
+};
+
+export type WorktreeRecoveryFailureReason =
+  | "repository-missing"
+  | "path-occupied"
+  | "record-locked"
+  | "checkpoint-missing"
+  | "branch-missing"
+  | "branch-checked-out";
+
+export type RecreateThreadWorktreeRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  /** The missing folder the operator saw. The owner refuses any other. */
+  worktreePath: string;
+  /** Go ahead after the checkpoint turned out to be gone. */
+  skipCheckpoint?: boolean;
+  /** Add the worktree on a detached HEAD instead of its branch. */
+  detached?: boolean;
+};
+
+export type RecreateThreadWorktreeResponse =
+  | {
+      status: "recreated";
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      worktreePath: string;
+      /** Undefined when the worktree was added on a detached HEAD. */
+      branch?: string;
+      steps: WorktreeRecoveryStep[];
+      checkpoint?: {
+        snapshotCommit: string;
+        /** False when the checkpoint conflicted and nothing was applied. */
+        restored: boolean;
+        changedFileCount?: number;
+      };
+      warnings: string[];
+      completedAt: number;
+    }
+  | {
+      status: "failed";
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      worktreePath: string;
+      reason: WorktreeRecoveryFailureReason;
+      message: string;
+      steps: WorktreeRecoveryStep[];
+      branch?: string;
+      /** Where the branch is checked out, for `branch-checked-out`. */
+      branchCheckedOutAt?: string;
+    };
+
+/**
+ * Move a worktree thread to its main checkout without switching that
+ * checkout's branch. A present, thread-owned worktree is archived with a
+ * checkpoint; a missing one only has Git's record of it cleared.
+ */
+export type MoveThreadToMainCheckoutRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  /** The worktree the thread is leaving. The owner refuses any other. */
+  worktreePath: string;
+};
+
+export type MoveThreadToMainCheckoutResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  repositoryPath: string;
+  /** The branch the main checkout is on, unchanged. */
+  branch?: string;
+  /** The thread's workspace now, as its selected detail will show it. */
+  linkedDirectory: LinkedDirectorySummary;
+  archivedWorktree?: WorktreeSnapshotSummary;
+  warnings: string[];
+  completedAt: number;
 };
 
 export type RenameThreadRequest = {
