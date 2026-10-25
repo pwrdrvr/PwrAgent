@@ -3518,6 +3518,52 @@ describe("ThreadView", () => {
     expect(screen.queryByRole("textbox", { name: /^(New thread|Reply)$/ })).toBeNull();
   });
 
+  // Reusing the empty state's <div> as the layout box made the layout's
+  // padding-right transition run whenever it opened a launchpad: the
+  // column slid from 16px of padding to the pinned rail's gutter, and the
+  // composer rewrapped as it narrowed. jsdom runs no transitions, so pin
+  // the cause.
+  it("mounts a new layout box when the empty state opens a launchpad", () => {
+    const { result } = renderHook(useComposerDraftStore);
+    const props: Omit<ThreadViewProps, "terminals"> = {
+      addOptimisticUserMessage: () => "optimistic-1",
+      backends: [],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      composerDraftStore: result.current,
+      transcriptEntries: [],
+      loading: false,
+      loadingMore: false,
+      messageCount: 0,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: () => undefined,
+      skills: [],
+    };
+    const view = render(<ThreadView {...props} />);
+    const emptyState = document.querySelector(".thread-empty-state");
+    expect(emptyState).not.toBeNull();
+
+    view.rerender(
+      <ThreadView
+        {...props}
+        selectedDirectory={{
+          key: "directory:/repo", kind: "directory", label: "Example", path: "/repo",
+        }}
+        selectedLaunchpad={{
+          backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+          directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+          prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+        }}
+      />,
+    );
+
+    const layout = document.querySelector(".thread-view__layout");
+    expect(screen.getByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+    expect(layout).not.toBeNull();
+    expect(layout).not.toBe(emptyState);
+    expect(emptyState?.isConnected).toBe(false);
+  });
+
   it("opens submitted image previews while the launchpad is materializing", () => {
     const dataUrl = "data:image/png;base64,aGVsbG8=";
     render(
