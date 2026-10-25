@@ -21,7 +21,10 @@ import {
 } from "../pr-status/pr-status-watch";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
-import { measureSqliteWrites } from "../state/sqlite-write-metrics";
+import {
+  measureSqliteWrites,
+  SQLITE_WRITE_METRICS_ENV,
+} from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import {
   createTempStateDb,
@@ -58,6 +61,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const db of extraDbs.splice(0)) db.close();
   stateDb.close();
   if (tempDir !== undefined) {
@@ -449,6 +453,12 @@ async function registerTerminalWatch(
   return (await targetStore.registerThreadPrStatusWatch({ watch, now })).watch;
 }
 
+/** Budgets need the metrics wrapper, which StateDb.open installs, and a WAL file. */
+function useMeasuredFileStateDb(): void {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  useFileStateDb();
+}
+
 function mergedPr(overrides: Partial<PrSummary> = {}): PrSummary {
   return pr({
     state: "passing",
@@ -717,6 +727,7 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
   });
 
   it("records one commit per terminal watch registration and delivery", async () => {
+    useMeasuredFileStateDb();
     const { writes: registration } = await measureSqliteWrites(async () => {
       await registerTerminalWatch();
     });
@@ -737,6 +748,7 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
   });
 
   it("adds no commits to the poll path while the PR stays open", async () => {
+    useMeasuredFileStateDb();
     await registerTerminalWatch();
     const harness = createTerminalHarness();
     const { writes } = await measureSqliteWrites(async () => {
