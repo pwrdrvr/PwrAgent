@@ -73,6 +73,21 @@ export function isSandboxerLinkTarget(value: unknown): value is SandboxerLinkTar
   return SANDBOXER_LINK_TARGETS.some((target) => target === value);
 }
 
+export const SANDBOXER_ORIGIN = "https://sandboxer.com";
+
+/**
+ * Every fixed Sandboxer page, for main's link handler and the launchpad
+ * tile. The dashboard link comes from the CLI.
+ */
+export const SANDBOXER_LINKS: Readonly<Record<Exclude<SandboxerLinkTarget, "dashboard">, string>> = {
+  home: `${SANDBOXER_ORIGIN}/`,
+  pricing: `${SANDBOXER_ORIGIN}/pricing`,
+  quickstart: `${SANDBOXER_ORIGIN}/docs/quickstart`,
+  docs_mcp: `${SANDBOXER_ORIGIN}/docs/mcp`,
+  docs_machines: `${SANDBOXER_ORIGIN}/docs/machines`,
+  docs_billing: `${SANDBOXER_ORIGIN}/docs/billing`,
+};
+
 export type OpenSandboxerLinkRequest = { target: SandboxerLinkTarget };
 export type OpenSandboxerLinkResponse = { opened: boolean; error?: string };
 

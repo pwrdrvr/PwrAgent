@@ -861,6 +861,8 @@ export type ThreadViewProps = {
   threads?: NavigationThreadSummary[];
   pendingForkEnvironmentSetup?: PendingForkEnvironmentSetup;
   suppressBranchDriftDialog?: boolean;
+  /** Settings is open over this view, which stays mounted beneath it. */
+  settingsOpen?: boolean;
   fullAccessRiskWarningDismissed?: boolean;
   backgroundPrPollingEnabled?: boolean;
   prAutoDispatchAllowed?: boolean;
@@ -4342,6 +4344,7 @@ export function ThreadView(props: ThreadViewProps) {
                 ) === true
               }
               remote={props.activeFederationTarget !== undefined}
+              settingsOpen={props.settingsOpen}
               onEnabledChange={async (enabled) => {
                 await props.onUpdateLaunchpad?.(
                   composerLaunchpad.directoryKey,

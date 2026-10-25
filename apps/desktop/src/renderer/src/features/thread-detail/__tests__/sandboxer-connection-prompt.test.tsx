@@ -40,22 +40,30 @@ function api(...answers: McpConnectionStatus[][]): DesktopApi {
   return { listMcpConnections } as unknown as DesktopApi;
 }
 
-function renderTile(desktopApi: DesktopApi, overrides: {
+type TileOverrides = {
   enabled?: boolean;
   remote?: boolean;
+  settingsOpen?: boolean;
   onEnabledChange?: (enabled: boolean) => Promise<void>;
   onOpenSettings?: () => void;
-} = {}) {
-  return render(
+};
+
+function tile(desktopApi: DesktopApi, overrides: TileOverrides = {}) {
+  return (
     <SandboxerConnectionPrompt
       backend="claude"
       desktopApi={desktopApi}
       enabled={overrides.enabled ?? false}
       remote={overrides.remote ?? false}
+      settingsOpen={overrides.settingsOpen}
       onEnabledChange={overrides.onEnabledChange ?? (async () => undefined)}
       onOpenSettings={overrides.onOpenSettings}
-    />,
+    />
   );
+}
+
+function renderTile(desktopApi: DesktopApi, overrides: TileOverrides = {}) {
+  return render(tile(desktopApi, overrides));
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -130,6 +138,52 @@ describe("SandboxerConnectionPrompt", () => {
     expect(await screen.findByLabelText("Use Sandboxer in this thread")).toBeInTheDocument();
     // Status comes from the connection list, never the session-retiring refresh.
     expect(desktopApi.listMcpConnections).toHaveBeenCalledTimes(2);
+  });
+
+  it("catches up after Settings closes over it, which moves no window focus", async () => {
+    const desktopApi = api(
+      [sandboxer({ enabled: false })],
+      [sandboxer()],
+    );
+    const onOpenSettings = vi.fn();
+    const view = renderTile(desktopApi, { onOpenSettings });
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Sandboxer in Settings" }));
+    view.rerender(tile(desktopApi, { onOpenSettings, settingsOpen: true }));
+    expect(desktopApi.listMcpConnections).toHaveBeenCalledTimes(1);
+    view.rerender(tile(desktopApi, { onOpenSettings, settingsOpen: false }));
+    expect(await screen.findByLabelText("Use Sandboxer in this thread")).toBeInTheDocument();
+    expect(desktopApi.listMcpConnections).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps re-reading once set up, so a fixed billing problem clears", async () => {
+    renderTile(api(
+      [sandboxer({ sandboxerCliState: "billing_issue" })],
+      [sandboxer()],
+    ), { enabled: true });
+    expect(await screen.findByText(/Billing issue/)).toBeInTheDocument();
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(await screen.findByText("Bills per second while a sandbox runs")).toBeInTheDocument();
+  });
+
+  it("stays on the launchpad through a failed read, and explains repeated failures", async () => {
+    const listMcpConnections = vi.fn()
+      .mockRejectedValueOnce(new Error("broker socket refused"))
+      .mockRejectedValueOnce(new Error("broker socket refused"))
+      .mockResolvedValue({ connections: [sandboxer()] });
+    renderTile({ listMcpConnections } as unknown as DesktopApi);
+    const card = await screen.findByRole("complementary", { name: "Sandboxer connection" });
+    await waitFor(() => expect(listMcpConnections).toHaveBeenCalledTimes(1));
+    expect(card).toHaveTextContent("Checking…");
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(await screen.findByText(/MCP connections are temporarily unavailable/)).toBeInTheDocument();
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(await screen.findByLabelText("Use Sandboxer in this thread")).toBeInTheDocument();
   });
 
   it("shows nothing on a remote thread, or without a Sandboxer connection", async () => {

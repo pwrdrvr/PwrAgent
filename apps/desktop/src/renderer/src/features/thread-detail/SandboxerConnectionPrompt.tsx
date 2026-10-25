@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  SANDBOXER_LINKS,
   SANDBOXER_MCP_CONNECTION_ID,
   backendLoadsMcpConnections,
   isSandboxerAccountLimited,
   withMcpConnection,
   type AppServerBackendKind,
-  type McpConnectionStatus,
 } from "@pwragent/shared";
 import sandboxerMark from "../../assets/sandboxer/sandboxer-mark.svg";
 import { PopoutIcon } from "../../icons";
@@ -13,9 +13,8 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { openExternalUrl } from "../../lib/open-external-url";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
 import { PwrSuiteTile, type PwrSuiteTileLineTone } from "./PwrSuiteTile";
+import { usePwrSuiteConnectionStatus } from "./usePwrSuiteConnectionStatus";
 
-const SITE_URL = "https://sandboxer.com/";
-const QUICKSTART_URL = "https://sandboxer.com/docs/quickstart";
 const PITCH = "Cloud Linux machines for your agent · paid service";
 
 const ABOUT = {
@@ -41,6 +40,8 @@ const ABOUT = {
  *
  * Status comes from the connection list, which reads `sbx status` through
  * main's cache. It never retires live sessions the way Refresh status can.
+ * It is read again on window focus, after a failed read, and on the way
+ * back from Settings, which opens over this view without a focus change.
  */
 export function SandboxerConnectionPrompt(props: {
   backend: AppServerBackendKind;
@@ -48,43 +49,35 @@ export function SandboxerConnectionPrompt(props: {
   enabled: boolean;
   /** A remote thread's tools run on its owner, whose CLI this window can't see. */
   remote: boolean;
+  /** Settings is open over this view. Closing it re-reads status. */
+  settingsOpen?: boolean;
   onEnabledChange: (enabled: boolean) => Promise<void>;
   onOpenSettings?: () => void;
 }) {
   const listConnections = props.desktopApi?.listMcpConnections;
-  const [connection, setConnection] = useState<McpConnectionStatus | null>();
+  const read = useMemo(
+    () => (listConnections && !props.remote
+      ? async () => (await listConnections()).connections.find(
+        (entry) => entry.id === SANDBOXER_MCP_CONNECTION_ID,
+      ) ?? null
+      : undefined),
+    [listConnections, props.remote],
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const { status: connection, refresh, readError } = usePwrSuiteConnectionStatus(read);
 
-  const refresh = useCallback(async () => {
-    if (!listConnections) return;
-    try {
-      const response = await listConnections();
-      setConnection(
-        response.connections.find((entry) => entry.id === SANDBOXER_MCP_CONNECTION_ID) ?? null,
-      );
-    } catch {
-      setConnection(null);
-    }
-  }, [listConnections]);
-
+  const settingsOpen = props.settingsOpen === true;
+  const settingsWasOpen = useRef(settingsOpen);
   useEffect(() => {
-    if (props.remote) return;
-    void refresh();
-  }, [props.remote, refresh]);
+    if (settingsWasOpen.current && !settingsOpen) void refresh();
+    settingsWasOpen.current = settingsOpen;
+  }, [refresh, settingsOpen]);
+
+  // A main without the built-in connection has nothing to offer.
+  if (!read || connection === null) return null;
 
   const ready = connection?.configured === true && connection.enabled;
-  // Setup finishes in a terminal or in Settings. Coming back to this window
-  // reads status again, so the tile catches up without a refresh control.
-  useEffect(() => {
-    if (props.remote || connection === undefined || ready) return;
-    const onFocus = () => void refresh();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [connection, props.remote, ready, refresh]);
-
-  if (props.remote || !listConnections || connection === null) return null;
-
   const backendSupported = backendLoadsMcpConnections(props.backend);
   const state = connection?.sandboxerCliState;
   const limited = isSandboxerAccountLimited(state);
@@ -93,6 +86,9 @@ export function SandboxerConnectionPrompt(props: {
   let tone: PwrSuiteTileLineTone = "pitch";
   if (error) {
     [line, tone] = [error, "error"];
+  } else if (readError) {
+    // Repeated failed reads; the last status, if any, stays meanwhile.
+    [line, tone] = [readError, "error"];
   } else if (!connection) {
     // Checking; the pitch says what this is meanwhile.
   } else if (state === "cli_missing") {
@@ -122,13 +118,13 @@ export function SandboxerConnectionPrompt(props: {
 
   let action;
   if (!connection) {
-    action = <span className="pwrsuite-tile__state">Checking…</span>;
+    action = readError ? null : <span className="pwrsuite-tile__state">Checking…</span>;
   } else if (state === "cli_missing") {
     action = (
       <button
         className="button button--secondary"
         type="button"
-        onClick={() => openExternalUrl(QUICKSTART_URL)}
+        onClick={() => openExternalUrl(SANDBOXER_LINKS.quickstart)}
       >
         Get Sandboxer
         <PopoutIcon size={12} />
@@ -171,7 +167,7 @@ export function SandboxerConnectionPrompt(props: {
 
   return (
     <PwrSuiteTile
-      siteUrl={SITE_URL}
+      siteUrl={SANDBOXER_LINKS.home}
       name="Sandboxer"
       icon={sandboxerMark}
       ariaLabel="Sandboxer connection"

@@ -4,7 +4,9 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { shell } from "electron";
 import {
   SANDBOXER_CLI_PATH,
+  SANDBOXER_LINKS,
   SANDBOXER_MCP_LAUNCH_ARGS,
+  SANDBOXER_ORIGIN,
   SANDBOXER_SETUP_COMMAND,
   type McpConnectionStatus,
   type OpenSandboxerLinkResponse,
@@ -13,19 +15,12 @@ import {
   type SandboxerLinkTarget,
 } from "@pwragent/shared";
 
-export { SANDBOXER_CLI_PATH, SANDBOXER_MCP_ARGS, SANDBOXER_SETUP_COMMAND } from "@pwragent/shared";
-
-const SANDBOXER_ORIGIN = "https://sandboxer.com";
-
-/** Every page Settings opens. The dashboard link comes from the CLI. */
-export const SANDBOXER_LINKS: Record<Exclude<SandboxerLinkTarget, "dashboard">, string> = {
-  home: `${SANDBOXER_ORIGIN}/`,
-  pricing: `${SANDBOXER_ORIGIN}/pricing`,
-  quickstart: `${SANDBOXER_ORIGIN}/docs/quickstart`,
-  docs_mcp: `${SANDBOXER_ORIGIN}/docs/mcp`,
-  docs_machines: `${SANDBOXER_ORIGIN}/docs/machines`,
-  docs_billing: `${SANDBOXER_ORIGIN}/docs/billing`,
-};
+export {
+  SANDBOXER_CLI_PATH,
+  SANDBOXER_LINKS,
+  SANDBOXER_MCP_ARGS,
+  SANDBOXER_SETUP_COMMAND,
+} from "@pwragent/shared";
 
 type CliStatus = Pick<
   McpConnectionStatus,
