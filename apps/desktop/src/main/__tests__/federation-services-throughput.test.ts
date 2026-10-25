@@ -10,6 +10,7 @@ import { createServer, connect, type AddressInfo, type Server, type Socket } fro
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import { randomBytes } from "node:crypto";
 import { Session } from "node:inspector/promises";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import type { FederationCapability, FederationProtocolEnvelope, ServiceThread } from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES } from "../federation/federation-services";
 import { FederationServiceForwarder } from "../federation/federation-service-forwarder";
@@ -159,10 +160,12 @@ async function measure(params: { path: Path; rttMs: number; direction: Direction
   await new Promise<void>((resolve) => setTimeout(resolve, Math.max(300, params.rttMs * 4)));
   const session = PROFILE ? new Session() : undefined;
   if (session) { session.connect(); await session.post("Profiler.enable"); await session.post("Profiler.start"); }
+  const threadsBefore = PROFILE ? threadTicks() : undefined;
   const start = { ...counts, frames: fixture.frames(), cpu: process.cpuUsage(), at: performance.now() };
   await new Promise<void>((resolve) => setTimeout(resolve, params.seconds * 1000));
   const hot = session ? topSelfTime((await session.post("Profiler.stop")).profile) : undefined;
   session?.disconnect();
+  const threads = threadsBefore ? threadTickDelta(threadsBefore, threadTicks()) : undefined;
   const cpu = process.cpuUsage(start.cpu);
   const elapsed = (performance.now() - start.at) / 1000;
   const up = counts.up - start.up;
@@ -176,7 +179,27 @@ async function measure(params: { path: Path; rttMs: number; direction: Direction
     cpuShare: +(((cpu.user + cpu.system) / 1e6) / elapsed).toFixed(3),
     viewerFramesPerMiB: movedMiB > 0 ? +((fixture.frames() - start.frames) / movedMiB).toFixed(1) : null,
     ...(hot ? { hot } : {}),
+    ...(threads ? { threads } : {}),
   };
+}
+
+/** Linux only: user+system clock ticks per thread of this process. */
+function threadTicks(): Map<string, number> {
+  const ticks = new Map<string, number>();
+  if (!existsSync("/proc/self/task")) return ticks;
+  for (const tid of readdirSync("/proc/self/task")) {
+    try {
+      const stat = readFileSync(`/proc/self/task/${tid}/stat`, "utf8");
+      const name = stat.slice(stat.indexOf("(") + 1, stat.lastIndexOf(")"));
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      ticks.set(`${tid}:${name}`, Number(fields[11]) + Number(fields[12]));
+    } catch { /* thread exited */ }
+  }
+  return ticks;
+}
+function threadTickDelta(before: Map<string, number>, after: Map<string, number>): string[] {
+  return [...after.entries()].map(([key, value]) => [key, value - (before.get(key) ?? 0)] as const)
+    .filter(([, delta]) => delta > 0).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([key, delta]) => `${delta} ${key}`);
 }
 
 type CpuProfile = { nodes: Array<{ id: number; callFrame: { functionName: string; url: string; lineNumber: number } }>; samples?: number[]; timeDeltas?: number[] };
