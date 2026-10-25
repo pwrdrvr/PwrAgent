@@ -165,31 +165,9 @@ Report the sandbox ID, the commit, and each status line. Name every failure.
   worktree. Never disable the Chromium sandbox.
 - The VM's `/tmp` does not survive a cold boot. Keep work under
   `/home/user/pwragent`.
-
-### Two E2E tests fail here and pass on CI
-
-On 2026-10-25, a full E2E run at `d8ee319d5` reported 270 passed, 6 skipped,
-and these 2 failed. Both fail every time in the VM. Both expose a bug that
-GitHub's runner hides; neither is caused by the change under test.
-
-- `e2e/federation-remote-window.spec.ts:1738` waits for `review/start` and
-  times out. The image installs real agent CLIs: `/usr/bin/codex`,
-  `/usr/bin/claude`, and `/usr/local/bin/kimi`. The test gives a fake Codex to
-  the owner only. The viewer finds the real Codex, and with a local Codex the
-  viewer's remote sub-thread review never reaches the owner. The runner has no
-  Codex. With the Codex CLI hidden, the test passes.
-- `e2e/onboarding-wizard.spec.ts:593` fails in teardown with "Electron close
-  timed out". This kernel allows unprivileged user namespaces, so the
-  graduated `personal` instance starts. On the runner the relaunch cannot
-  start, and the test takes its "bootstrap process didn't exit within 20s"
-  fallback. When `personal` does start, it inherits the bootstrap's DevTools
-  sockets. `killGraduatedProfileInstances` then cannot find it, because
-  Chromium moves `--profile` ahead of the profile name in the process title.
-
-Treat only these two as expected failures. Do not uninstall the image's agent
-CLIs or disable user namespaces to make them pass. Other work in the VM can
-need those CLIs, and the namespace setting affects the whole VM.
-Remove this section when the bugs are fixed.
+- Unlike the GitHub runner, the image installs real agent CLIs (`codex`,
+  `claude`, `kimi`) and allows unprivileged user namespaces. A failure that
+  appears only here can be a bug that the runner hides. #2867 fixed two.
 
 ## 6. Finish
 
