@@ -65744,6 +65744,100 @@ command = "pnpm dev"
     }
   });
 
+  it("keeps an environment from an ACP child whose agent cannot load a session", async () => {
+    const { root, repoPath, worktreePath } = await environmentProject("pwragent-handoff-env-acp-");
+    const commandRunner = vi.fn(async () => ({ durationMs: 5, exitCode: 0, output: "installed" }));
+    const linkedDirectory = {
+      id: expectedDir(repoPath),
+      kind: "local" as const,
+      label: "repo",
+      path: expectedDir(repoPath),
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
+      threads: [{
+        id: "ordinary-thread",
+        title: "Parent Thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [linkedDirectory],
+        updatedAt: 1000,
+      }],
+    });
+    const { acpBackendId, registry } = createKimiAcpRegistry({
+      codexClient,
+      codexEnvironmentCommandRunner: commandRunner,
+      runtimeCapabilities: { agentCapabilities: { loadSession: false } } as BackendAcpRuntimeCapabilities,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:ordinary-thread": {
+            backend: "codex",
+            threadId: "ordinary-thread",
+            executionMode: "full-access",
+            codexEnvironmentRuntime: parentRuntime(repoPath),
+            extraLinkedDirectories: [linkedDirectory],
+          },
+        },
+      }),
+      gitDirectoryService: {
+        inspectWorkspaceGit: vi.fn(async () => ({
+          kind: "worktree" as const,
+          branch: "main",
+          hasCommits: true,
+          headHasCommit: true,
+          worktreeCreationAvailable: true,
+        })),
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+        resolvePrimaryWorkspacePath: vi.fn(async (cwd: string) => cwd),
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: { threadId: "ordinary-thread", turnId: "turn-1", turn: { id: "turn-1" } },
+      },
+    });
+    const handoff = async (callId: string, args: Record<string, unknown>) => {
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "ordinary-thread",
+          turnId: "turn-1",
+          callId,
+          requestId: callId,
+          namespace: "pwragent",
+          tool: "handoff_task",
+          arguments: { task: "Fix the recorder crash.", backend: acpBackendId, ...args },
+        },
+      } as AppServerPendingRequestNotification);
+      return JSON.parse((response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text);
+    };
+    try {
+      await expect(handoff("call-named", { environment: "PwrAgent" })).resolves.toEqual({
+        code: "invalid_arguments",
+        message: `backend="${acpBackendId}" cannot start with an environment, because its agent cannot reload a session. Pass environment="none", or choose another backend.`,
+      });
+
+      // Inheriting would fail the child's first turn, so the child starts without it.
+      const inherited = await handoff("call-inherited", {});
+      expect(commandRunner).not.toHaveBeenCalled();
+      expect(inherited.inheritedSettings.codexEnvironmentRuntime).toBeUndefined();
+      expect(inherited.environment).toEqual({
+        source: "none",
+        message: `Started with no environment: backend="${acpBackendId}" cannot start with an environment, because its agent cannot reload a session.`,
+      });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("rejects an unknown handoff environment before creating a child", async () => {
     const fixture = await environmentHandoffFixture({ prefix: "pwragent-handoff-env-unknown-" });
     try {

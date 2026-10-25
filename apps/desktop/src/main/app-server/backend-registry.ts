@@ -712,6 +712,7 @@ import {
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
 import { ensureAcpHelperWorkspace } from "../acp/acp-capability-probe";
+import { acpRuntimeSupportsSessionLoad } from "../acp/acp-runtime-capabilities";
 import { getMainLogger } from "../log";
 import {
   getDesktopConfigStore,
@@ -41378,6 +41379,16 @@ export class DesktopBackendRegistry {
     }
 
     const requestedEnvironment = request.args.environment?.trim() || undefined;
+    // An ACP agent takes an environment by reloading its session into a new
+    // process on the first turn. One that cannot load a session cannot take
+    // one, so inheriting it would fail the child's first turn.
+    const childEnvironmentUnavailable =
+      isAcpBackendId(backend)
+      && !acpRuntimeSupportsSessionLoad(
+        this.acpBackend.getInstalledAgent(backend)?.runtimeCapabilities,
+      )
+        ? `backend="${backend}" cannot start with an environment, because its agent cannot reload a session.`
+        : undefined;
     const callerProjectBoundary = await this.resolveHandoffProjectBoundaryPath({
       cwd: callerCwd,
       linkedDirectory: callerLinkedDirectory,
@@ -41388,6 +41399,18 @@ export class DesktopBackendRegistry {
           linkedDirectory: sourceLinkedDirectory,
         })
       : undefined;
+    // A same-project child inherits the parent's environment, whatever its
+    // provider. A named environment, or none, replaces it.
+    const parentEnvironmentApplies =
+      !requestedEnvironment
+      && Boolean(sourceOverlay.codexEnvironmentRuntime?.environmentId)
+      && shouldInheritHandoffCodexEnvironmentRuntime({
+        callerCwd,
+        callerProjectBoundary,
+        requestedCwd,
+        requestedProjectBoundary,
+        workspaceMode,
+      });
     const inheritedSettings: HandoffTaskInheritedSettings = {
       backend,
       executionMode,
@@ -41407,17 +41430,8 @@ export class DesktopBackendRegistry {
         (backend === sourceBackend ? sourceOverlay.fastMode : undefined),
       approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.args.sandbox ?? modeSettings.sandbox,
-      // A same-project child inherits the parent's environment, whatever its
-      // provider. A named environment, or none, replaces it.
       codexEnvironmentRuntime:
-        !requestedEnvironment
-        && shouldInheritHandoffCodexEnvironmentRuntime({
-          callerCwd,
-          callerProjectBoundary,
-          requestedCwd,
-          requestedProjectBoundary,
-          workspaceMode,
-        })
+        parentEnvironmentApplies && !childEnvironmentUnavailable
           ? sourceOverlay.codexEnvironmentRuntime
           : undefined,
     };
@@ -41455,16 +41469,27 @@ export class DesktopBackendRegistry {
     ) {
       // Resolve before creating anything, so a typo costs no worktree. The
       // child's checkout carries the same config as its source.
-      const resolution = cwdForChild?.trim()
-        ? resolveCodexEnvironmentSelector(
-            requestedEnvironment,
-            await listCodexEnvironmentOptions(cwdForChild).catch(() => []),
-            sourceLinkedDirectory?.label || path.basename(cwdForChild),
-          )
-        : {
+      const resolution = childEnvironmentUnavailable
+        ? {
             kind: "missing" as const,
-            message: `environment="${requestedEnvironment}" needs a project workspace, and workspaceMode="none" has none. Pass cwd for the project, or omit environment.`,
-          };
+            message: `${childEnvironmentUnavailable} Pass environment="none", or choose another backend.`,
+          }
+        : cwdForChild?.trim()
+          ? await listCodexEnvironmentOptions(cwdForChild).then(
+              (options) => resolveCodexEnvironmentSelector(
+                requestedEnvironment,
+                options,
+                sourceLinkedDirectory?.label || path.basename(cwdForChild),
+              ),
+              (error: unknown) => ({
+                kind: "missing" as const,
+                message: `Could not read the project's environments in ${cwdForChild}: ${error instanceof Error ? error.message : String(error)}`,
+              }),
+            )
+          : {
+              kind: "missing" as const,
+              message: `environment="${requestedEnvironment}" needs a project workspace, and workspaceMode="none" has none. Pass cwd for the project, or omit environment.`,
+            };
       if (resolution.kind === "missing") {
         this.failPendingThreadHandoff(handoffId, new Error(resolution.message));
         return threadOrchestrationFailure("invalid_arguments", resolution.message);
@@ -41668,6 +41693,9 @@ export class DesktopBackendRegistry {
     const environment = describeCreatedThreadEnvironment({
       source: environmentSource,
       requested: requestedEnvironment,
+      ...(parentEnvironmentApplies && childEnvironmentUnavailable
+        ? { noneReason: childEnvironmentUnavailable }
+        : {}),
       runtime: inheritedSettings.codexEnvironmentRuntime,
       failure: codexEnvironmentStartupFailure,
       setupRan:

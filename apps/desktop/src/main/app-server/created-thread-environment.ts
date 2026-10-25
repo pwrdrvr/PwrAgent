@@ -18,6 +18,8 @@ export function describeCreatedThreadEnvironment(params: {
   failure?: CodexEnvironmentStartupFailure;
   /** False when the thread reuses a workspace where setup already ran. */
   setupRan: boolean;
+  /** Why a thread that would have inherited an environment has none. */
+  noneReason?: string;
 }): CreatedThreadEnvironmentReport {
   const requested = params.requested ? { requested: params.requested } : {};
   const runtime = params.runtime;
@@ -30,7 +32,13 @@ export function describeCreatedThreadEnvironment(params: {
         message: `The thread started without environment "${params.requested}". The owning instance may run an older PwrAgent that matches environments only by id.`,
       };
     }
-    return { source: "none", ...requested, message: "Started with no environment." };
+    return {
+      source: "none",
+      ...requested,
+      message: params.noneReason
+        ? `Started with no environment: ${params.noneReason}`
+        : "Started with no environment.",
+    };
   }
 
   const label = `${runtime.environmentName ?? runtime.environmentId} (${runtime.environmentId})`;

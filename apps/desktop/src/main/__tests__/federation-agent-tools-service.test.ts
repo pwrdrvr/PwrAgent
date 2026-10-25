@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   CreateInstanceThreadResult,
@@ -1919,6 +1922,7 @@ describe("create_instance_thread environments", () => {
 
   function environmentSnapshot(params: {
     launchpad?: boolean;
+    path?: string;
     threads?: NavigationSnapshot["threads"];
   } = {}) {
     return buildSnapshot({
@@ -1927,7 +1931,7 @@ describe("create_instance_thread environments", () => {
         key: "dir:/repo",
         kind: "directory",
         label: "Repo",
-        path: "/repo",
+        path: params.path ?? "/repo",
         threadKeys: [],
         needsAttentionCount: 0,
         ...(params.launchpad === false ? {} : { launchpad: projectLaunchpad }),
@@ -2091,16 +2095,31 @@ describe("create_instance_thread environments", () => {
     expect(environment.setupOutputTail!.endsWith("tail")).toBe(true);
   });
 
-  it("gives a same-project local thread the calling thread's environment", async () => {
+  async function projectWithEnvironments(ids: string[]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-create-thread-env-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    for (const id of ids) {
+      await writeFile(path.join(root, ".codex", "environments", `${id}.toml`), `version = 1\nname = "${id}"\n`, "utf8");
+    }
+    return root;
+  }
+
+  it.each([
+    { defined: true, expected: { codexEnvironmentId: "pwragent", codexEnvironmentActionId: undefined } },
+    // Config only the caller's worktree has: keep the preset rather than drop to nothing.
+    { defined: false, expected: { codexEnvironmentId: "project", codexEnvironmentActionId: "dev" } },
+  ])("inherits the calling thread's environment in its own local project (defined=$defined)", async ({ defined, expected }) => {
+    const projectPath = await projectWithEnvironments(defined ? ["project", "pwragent"] : ["project"]);
     const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
     const snapshot = environmentSnapshot({
+      path: projectPath,
       threads: [{
         id: "thread-1",
         source: "codex",
         title: "Parent",
         titleSource: "derived",
         inbox: { inInbox: false },
-        linkedDirectories: [{ id: "/repo", kind: "worktree", label: "Repo", path: "/repo", worktreePath: "/worktrees/parent/repo" }],
+        linkedDirectories: [{ id: projectPath, kind: "worktree", label: "Repo", path: projectPath, worktreePath: "/worktrees/parent/repo" }],
         codexEnvironmentRuntime: {
           environmentId: "pwragent",
           environmentName: "PwrAgent",
@@ -2120,21 +2139,40 @@ describe("create_instance_thread environments", () => {
         })) as never,
       }),
     });
+    try {
+      const response = await handler({
+        operation: "create_instance_thread",
+        context,
+        args: { instanceId: "pwr_local", projectKey: "dir:/repo" },
+      });
 
-    const response = await handler({
+      expect(response).toMatchObject({ ok: true });
+      const launchpad = materializeDirectoryLaunchpad.mock.calls[0][0].launchpad!;
+      expect({
+        codexEnvironmentId: launchpad.codexEnvironmentId,
+        codexEnvironmentActionId: launchpad.codexEnvironmentActionId,
+      }).toEqual(expected);
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the preset's action when the agent names the preset's environment", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
+    const handler = remoteHandler(environmentSnapshot(), materializeDirectoryLaunchpad);
+
+    await handler({
       operation: "create_instance_thread",
       context,
-      args: { instanceId: "pwr_local", projectKey: "dir:/repo" },
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo", environment: "project" },
     });
-
-    expect(response).toMatchObject({ ok: true });
 
     const request = materializeDirectoryLaunchpad.mock.calls[0][0];
+    expect(request.codexEnvironmentSelector).toBe("project");
     expect(request.launchpad).toMatchObject({
-      codexEnvironmentId: "pwragent",
-      codexEnvironmentExecutionTarget: "local",
+      codexEnvironmentId: "project",
+      codexEnvironmentActionId: "dev",
     });
-    expect(request.launchpad!.codexEnvironmentActionId).toBeUndefined();
   });
 
   it("keeps the project's preset for a local thread in another project", async () => {
