@@ -94,8 +94,9 @@
 - Sandboxer is Ubuntu x64. It verifies Linux behavior only.
   macOS-specific and Windows-specific changes still need CI or the PwrSuiteLab
   skills below.
-- Verify a commit, not a dirty tree. Reuse the thread's sandbox, and stop it
-  when the work is done.
+- Verify a commit, not a dirty tree. Use one sandbox per thread, started from
+  the `pwragent-base` snapshot. Stop it after each run, and delete it when
+  its PR merges or closes.
 - Report the sandbox ID, the commit, and each check's exit status.
 - Without the Sandboxer MCP, run the checks locally as this file describes.
 

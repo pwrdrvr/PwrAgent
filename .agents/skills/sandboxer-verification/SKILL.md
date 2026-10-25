@@ -47,15 +47,24 @@ samples over the step, as a share of all 8 vCPUs.
 
 ## 1. Get a sandbox
 
-Reuse the thread's sandbox. Call `list_sandboxes` first. If this thread
-already has one, use its ID. `resume_sandbox` brings back a stopped one.
+Use one sandbox per thread. Name it `pwragent-<branch>`, with each `/`
+replaced by `-`, so `list_sandboxes` shows which thread owns it.
 
-Otherwise call `create_sandbox` with `type: "large"`, a `name` for the work,
-and `ttlSeconds: 7200`. The TTL is a wall-clock stop timer, not an idle
-timer. Pass the `sandboxId` on every later call. The MCP default is the last
-sandbox this server used, which can be another task's.
+Call `list_sandboxes` first. If this thread's sandbox exists, use its ID.
+`resume_sandbox` brings back a stopped one in about 2 s.
 
-Clone the public repository once. A blob-less clone takes a few seconds:
+Otherwise call `create_sandbox` with `from: "pwragent-base"`,
+`type: "large"`, the name, and `ttlSeconds: 3600`. The `pwragent-base`
+snapshot already holds Node, pnpm, the E2E packages, the Electron download, a
+warm pnpm store, and a clone at `~/pwragent/repo`. A sandbox from it was ready
+3 s after the call, and a fetched commit was ready to test 4 s later. The TTL
+is a wall-clock stop timer, not an idle timer. Pass the `sandboxId` on every
+later call. The MCP default is the last sandbox this server used, which can
+be another task's.
+
+If `pwragent-base` does not exist, create the sandbox without `from` and
+clone the public repository once. A blob-less clone takes a few seconds, and
+the first `verify.sh setup` installs the rest in about 17 s:
 
 ```sh
 git clone -q --filter=blob:none https://github.com/pwrdrvr/PwrAgent.git ~/pwragent/repo
@@ -185,8 +194,49 @@ Report the sandbox ID, the commit, and each status line. Name every failure.
   `claude`, `kimi`) and allows unprivileged user namespaces. A failure that
   appears only here can be a bug that the runner hides. #2867 fixed two.
 
-## 6. Finish
+## 6. Lifetime and cleanup
 
-Call `stop_sandbox` when the thread's verification is done. Stopping keeps a
-snapshot and stops billing; `resume_sandbox` brings it back. Do not delete a
-sandbox that holds work another thread may need.
+- Call `stop_sandbox` after each verification run. Stopping keeps a snapshot
+  and stops compute billing. Stop and resume each took about 2 s, and the
+  worktrees and `node_modules` survived.
+- Keep the stopped sandbox for the thread's next run while its PR is open.
+- Delete the sandbox when its PR merges or closes. The MCP has no delete
+  tool, so use the CLI: `sbx delete <sandbox-id> --yes`. A deleted sandbox
+  cannot come back; a new one from `pwragent-base` takes seconds.
+- Every stopped sandbox keeps snapshots, and snapshots count against the
+  account's storage allowance. Nothing deletes a sandbox when its PR merges.
+  The thread that learns of the merge deletes its own. To find leftovers,
+  match `sbx list --all` entries named `pwragent-*` to branches whose PR
+  `gh pr view <branch> --json state` reports as `MERGED` or `CLOSED`.
+- Do not delete a sandbox that another thread owns.
+
+## 7. Refresh the base snapshot
+
+Refresh `pwragent-base` when `pnpm-lock.yaml`, `.nvmrc`, the Electron
+version, or `verify.sh setup` changes, or when its clone is far behind
+`origin/main`. Saving under an existing name replaces the snapshot, and new
+sandboxes use the new one.
+
+Create a builder sandbox from `pwragent-base` (or a fresh one with the clone
+above), named `pwragent-base-builder`. In the builder:
+
+```sh
+cd ~/pwragent/repo
+git fetch -q origin
+git checkout -q --detach origin/main
+scripts/sandboxer/verify.sh setup
+rm -rf .local/sandboxer
+git worktree list
+```
+
+`git worktree list` must show only `~/pwragent/repo`. Then save and delete
+the builder from the local shell:
+
+```sh
+sbx snapshot <builder-id> pwragent-base
+sbx delete <builder-id> --yes
+```
+
+The save took 3 s. Every new sandbox gets a copy of the base, so never leave
+a worktree, a log, or a credential in it. Sandboxer passes the account's
+`GH_TOKEN` to each sandbox when it starts. The snapshot does not store it.
