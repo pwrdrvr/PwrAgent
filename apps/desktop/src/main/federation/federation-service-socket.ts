@@ -21,20 +21,27 @@ export function readServiceData(socket: Socket): Buffer {
   return (socket.read(Math.min(socket.readableLength, SERVICE_CHUNK_BYTES)) as Buffer | null) ?? Buffer.alloc(0);
 }
 
-export function waitServiceReadable(socket: Socket, milliseconds = 50): Promise<void> {
-  if (socket.readableLength || socket.readableEnded || socket.destroyed) return Promise.resolve();
+/**
+ * Wait until the socket has data or EOF to read, `flushed` settles, or `milliseconds`
+ * pass. EOF that was already read ends the wait only when there is no write to wait for.
+ * Resolves `false` when the timer ended the wait.
+ */
+export function waitServiceReadable(socket: Socket, milliseconds = 50, flushed?: Promise<unknown>): Promise<boolean> {
+  if (socket.readableLength || socket.destroyed || (socket.readableEnded && !flushed)) return Promise.resolve(true);
   return new Promise((resolve) => {
-    const done = (): void => {
+    const finish = (progressed: boolean): void => {
       clearTimeout(timer);
       socket.off("readable", done);
       socket.off("end", done);
       socket.off("close", done);
-      resolve();
+      resolve(progressed);
     };
-    const timer = setTimeout(done, milliseconds);
+    const done = (): void => finish(true);
+    const timer = setTimeout(() => finish(false), milliseconds);
     socket.once("readable", done);
     socket.once("end", done);
     socket.once("close", done);
+    void flushed?.then(done, done);
   });
 }
 

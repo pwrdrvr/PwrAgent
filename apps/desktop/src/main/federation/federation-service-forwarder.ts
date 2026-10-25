@@ -5,7 +5,7 @@ import type {
 } from "@pwragent/shared";
 import { FEDERATION_SERVICE_METHODS as METHODS } from "@pwragent/shared";
 import {
-  decodeServiceData, readServiceData, writeServiceData, SERVICE_MAX_PEER_STREAMS,
+  decodeServiceData, readServiceData, waitServiceReadable, writeServiceData, SERVICE_MAX_PEER_STREAMS,
 } from "./federation-service-socket";
 
 export type ServiceRpc = {
@@ -136,9 +136,19 @@ export class FederationServiceForwarder {
       let remoteFin = false;
       let ownerWritable: boolean = true;
       let writing = false;
+      let flushed: Promise<void> | undefined;
+      let finSent = false;
       let writeError: unknown;
       while (!abort.signal.aborted) {
         if (writeError) throw writeError;
+        // A pending local write withholds receive credit. With nothing to upload
+        // either, the exchange would carry nothing: wait for the write or local data.
+        // Without owner credit, keep polling: that is how the credit comes back.
+        const uploadPending = socket.readableLength > 0 || (socket.readableEnded && !finSent);
+        if (flushed && ownerWritable && !uploadPending && !socket.destroyed) {
+          await waitServiceReadable(socket, 50, flushed);
+          continue;
+        }
         const data: Buffer = ownerWritable ? readServiceData(socket) : Buffer.alloc(0);
         const fin: boolean = ownerWritable && socket.readableEnded;
         const result: ServiceExchangeResult = await forward.rpc.request<ServiceExchangeResult>({ method: METHODS.exchange,
@@ -149,19 +159,22 @@ export class FederationServiceForwarder {
         if (received.length || (result.fin && !socket.writableEnded && !writing)) {
           if (writing) throw new Error("Service exceeded viewer receive credit.");
           writing = true;
-          void writeServiceData(socket, received, result.fin)
+          flushed = writeServiceData(socket, received, result.fin)
             .catch((error: unknown) => { writeError = error; })
-            .finally(() => { writing = false; });
+            .finally(() => { writing = false; flushed = undefined; });
         }
         if (received.length) forward.view.error = undefined;
         forward.view.sentBytes += data.length;
         forward.view.receivedBytes += received.length;
+        finSent ||= fin;
         remoteFin = result.fin;
+        const creditReturned = result.writable && !ownerWritable;
         ownerWritable = result.writable;
         seq += 1;
         if (fin && remoteFin && !writing) break;
-        // Even an ended remote readable must not cause an idle busy loop.
-        if (!data.length && !received.length) await new Promise<void>((resolve) => setTimeout(resolve, 10));
+        // Even an ended remote readable must not cause an idle busy loop. Returned
+        // write credit is progress: the next exchange can carry the queued upload.
+        if (!data.length && !received.length && !creditReturned) await new Promise<void>((resolve) => setTimeout(resolve, 10));
       }
     } catch (error) {
       if (!abort.signal.aborted) forward.view.error = error instanceof Error ? error.message : "Service connection failed.";
