@@ -12711,7 +12711,10 @@ export class DesktopBackendRegistry {
       ownerId: this.threadListCacheOwnerId,
     };
     if (params.backend === "claude") {
-      const threads = await this.claudeBackend.listThreads(params);
+      const threads = await this.withThreadEnvironmentOptions(
+        "claude",
+        await this.claudeBackend.listThreads(params),
+      );
       this.rememberThreadListContexts(threads, displayMetadataObservationSequence, true, params.archived);
       this.persistProviderThreadSnapshot("claude", threads, params);
       return threads;
@@ -13601,6 +13604,41 @@ export class DesktopBackendRegistry {
       ),
     );
     return threadLists.flat();
+  }
+
+  /**
+   * Attaches the environments defined in each thread's workspace. The Codex
+   * and ACP lists do this inline; without it a Claude thread showed its
+   * environment's Run chip but no Environment picker.
+   */
+  private async withThreadEnvironmentOptions(
+    backend: AppServerBackendKind,
+    threads: AppServerThreadSummary[],
+  ): Promise<AppServerThreadSummary[]> {
+    if (threads.length === 0) return threads;
+    const readOverlays = this.overlayStore.getThreadListingOverlayStates
+      ?? this.overlayStore.getThreadOverlayStates;
+    const overlaysByThreadId = await readOverlays.call(this.overlayStore, {
+      backend,
+      threadIds: threads.map((thread) => thread.id),
+    });
+    // Threads in one checkout share its environment files; read them once.
+    const optionsByCwd = new Map<string, Promise<CodexEnvironmentOption[]>>();
+    return await Promise.all(
+      threads.map(async (thread) => {
+        const cwd = resolveThreadWorkspaceCwd(
+          thread,
+          overlaysByThreadId[thread.id]?.extraLinkedDirectories ?? [],
+        );
+        if (!cwd) return { ...thread, codexEnvironmentOptions: [] };
+        let options = optionsByCwd.get(cwd);
+        if (!options) {
+          options = listCodexEnvironmentOptions(cwd).catch(() => []);
+          optionsByCwd.set(cwd, options);
+        }
+        return { ...thread, codexEnvironmentOptions: await options };
+      }),
+    );
   }
 
   private async listInstalledAcpThreads(

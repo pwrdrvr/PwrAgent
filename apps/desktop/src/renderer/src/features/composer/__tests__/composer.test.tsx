@@ -3074,6 +3074,65 @@ describe("Composer", () => {
     });
   });
 
+  it("keeps the selected environment on the chip when its config is no longer discoverable", async () => {
+    // A thread whose worktree was deleted (or moved to a checkout without
+    // `.codex/environments/`) reports no environment options, but its runtime
+    // still names the environment and carries its commands. The commands
+    // stayed on screen while the picker that names them disappeared.
+    const setCodexThreadEnvironment = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+    }));
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Deleted worktree",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [
+        {
+          id: "fixture-repo",
+          label: "FixtureRepo",
+          path: "/repo/FixtureRepo",
+          worktreePath: "/repo/.worktrees/deleted/FixtureRepo",
+          kind: "worktree",
+        },
+      ],
+      inbox: { inInbox: false },
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        environmentName: "PwrAgnt",
+        executionTarget: "local",
+        sourcePath: "/repo/.worktrees/older/FixtureRepo/.codex/environments/environment.toml",
+        actions: [{ id: "work", name: "Work", command: "pnpm dev" }],
+      },
+      codexEnvironmentOptions: [],
+    };
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ runCodexEnvironmentAction: vi.fn(), setCodexThreadEnvironment }}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Work");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
+
+    chooseDropdownOption("Environment", "No environment");
+    await waitFor(() => {
+      expect(setCodexThreadEnvironment).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        environmentId: undefined,
+        actionId: undefined,
+      });
+    });
+  });
+
   it("shows No environment while retained action runs still expose logs and Stop", () => {
     const onStopEnvActionRun = vi.fn();
     const thread: NavigationThreadSummary = {

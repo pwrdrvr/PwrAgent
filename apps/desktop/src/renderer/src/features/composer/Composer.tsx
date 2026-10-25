@@ -10890,6 +10890,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           actions: threadCodexEnvironmentActions,
         }
       : undefined);
+  // The picker lists the environments discovered in the thread's workspace,
+  // plus the one its runtime has selected when that one is not among them.
+  // A deleted worktree, or a checkout without `.codex/environments/`, reports
+  // no options while the runtime keeps its environment and commands; without
+  // this the Run chip stayed and nothing said which environment it ran.
+  const threadCodexEnvironmentPickerOptions =
+    selectedThreadCodexEnvironmentForAction && !selectedThreadCodexEnvironmentOption
+      ? [...threadCodexEnvironmentOptions, selectedThreadCodexEnvironmentForAction]
+      : threadCodexEnvironmentOptions;
   const selectedThreadCodexActionId = resolveSelectedCodexEnvironmentActionId({
     environment: selectedThreadCodexEnvironmentForAction,
     actionId:
@@ -14296,7 +14305,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               />
             ) : null}
 
-            {!props.launchpad && threadCodexEnvironmentOptions.length > 0 ? (
+            {!props.launchpad && threadCodexEnvironmentPickerOptions.length > 0 ? (
               <ComposerDropdown
                 ariaLabel="Environment"
                 busy={threadEnvironmentBusy}
@@ -14306,13 +14315,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 value={threadEnvironmentValue}
                 options={[
                   { label: "No environment", value: "" },
-                  ...threadCodexEnvironmentOptions.map((environment) => ({
-                    label: environment.name,
-                    value: environment.id,
-                  })),
+                  ...threadCodexEnvironmentPickerOptions.map((environment) =>
+                    threadCodexEnvironmentOptions.includes(environment)
+                      ? { label: environment.name, value: environment.id }
+                      : {
+                          // Main re-reads the workspace to select one, so an
+                          // environment it cannot find stays on the chip only.
+                          description: "Not found in this workspace",
+                          disabled: true,
+                          label: environment.name,
+                          value: environment.id,
+                        },
+                  ),
                 ]}
                 onChange={(value) => {
-                  const environment = threadCodexEnvironmentOptions.find(
+                  const environment = threadCodexEnvironmentPickerOptions.find(
                     (candidate) => candidate.id === value,
                   );
                   const actionId = resolveSelectedCodexEnvironmentActionId({
