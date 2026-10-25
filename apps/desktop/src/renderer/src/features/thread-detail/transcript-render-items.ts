@@ -447,9 +447,18 @@ function staysInView(
 }
 
 function isAsyncQuestionMessage(entry: AppServerThreadEntry): boolean {
+  return asyncQuestionsOfEntry(entry) !== undefined;
+}
+
+/** The questions Codex asked in an entry, when the entry draws a question card. */
+export function asyncQuestionsOfEntry(
+  entry: AppServerThreadEntry,
+): AppServerThreadMessageEntry["questions"] {
   return isAssistantMessage(entry)
     && entry.delivery === "async"
-    && Boolean(entry.questions?.length);
+    && entry.questions?.length
+    ? entry.questions
+    : undefined;
 }
 
 /**

@@ -18,7 +18,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { withRendererSequence } from "../live-transcript-activity";
 import { TranscriptList } from "../TranscriptList";
@@ -2681,9 +2681,14 @@ Implementation notes remain in a readable bubble.`;
       // row had no transcript entry to scroll to.
       const turn = { id: "turn-1", status: "completed" as const, durationMs: 284_000 };
       const scrollIntoView = vi.fn();
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
       Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
         configurable: true,
         value: scrollIntoView,
+      });
+      onTestFinished(() => {
+        if (original) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", original);
+        else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
       });
       const onLinkedMessageHandled = vi.fn();
       renderList([
