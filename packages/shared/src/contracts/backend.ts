@@ -185,6 +185,20 @@ export type BackendCapabilities = {
   toolUse: boolean;
   approvalRequests: boolean;
   multiDirectoryThreads: boolean;
+  /**
+   * This backend can rewind a thread to before one of its prompts. Absent
+   * when it cannot, and on federation owners that predate generic rewind,
+   * so a viewer never offers a rewind the owner would refuse.
+   */
+  threadRewind?: ThreadRewindSupport;
+};
+
+/** What a provider can put back when it rewinds a thread. */
+export type ThreadRewindSupport = {
+  /** The provider can restore files its own edit tools changed. */
+  files: boolean;
+  /** The provider keeps the removed branch, so a rewind can be undone. */
+  undo: boolean;
 };
 
 export type BackendModelOption = {

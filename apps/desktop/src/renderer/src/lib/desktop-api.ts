@@ -192,8 +192,6 @@ import type {
   StopSubAgentRequest,
   StopSubAgentResponse,
   LatestCodexConfigWarningResponse,
-  ListAcpThreadRewindPointsRequest,
-  ListAcpThreadRewindPointsResponse,
   ListAutomationReplayCandidatesRequest,
   ListAutomationReplayCandidatesResponse,
   OpenAutomationRunWindowRequest,
@@ -448,8 +446,8 @@ import type {
   QueueThreadExecutionModeResponse,
   ReloadCodexMcpConfigRequest,
   ReloadCodexMcpConfigResponse,
-  RewindAcpThreadRequest,
-  RewindAcpThreadResponse,
+  RewindThreadRequest,
+  RewindThreadResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -1127,12 +1125,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: StopSubAgentRequest,
   ) => Promise<StopSubAgentResponse>;
   steerTurn?: (request: SteerTurnRequest) => Promise<SteerTurnResponse>;
-  listAcpThreadRewindPoints?: (
-    request: ListAcpThreadRewindPointsRequest,
-  ) => Promise<ListAcpThreadRewindPointsResponse>;
-  rewindAcpThread?: (
-    request: RewindAcpThreadRequest,
-  ) => Promise<RewindAcpThreadResponse>;
+  rewindThread?: (
+    request: RewindThreadRequest,
+  ) => Promise<RewindThreadResponse>;
   configureGrokWorkflowBudget?: (
     request: ConfigureGrokWorkflowBudgetRequest,
   ) => Promise<ConfigureGrokWorkflowBudgetResponse>;

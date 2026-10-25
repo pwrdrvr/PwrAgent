@@ -74,6 +74,7 @@ import type {
   CheckThreadBranchDriftResponse,
   CompactThreadResponse,
   ControlActiveTurnResponse,
+  RewindThreadResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
@@ -187,6 +188,7 @@ import {
   type CheckThreadBranchDriftRequest,
   type CompactThreadRequest,
   type ControlActiveTurnRequest,
+  type RewindThreadRequest,
   type ForkThreadRequest,
   type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
@@ -7296,6 +7298,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: CompactThreadRequest,
     ): Promise<CompactThreadResponse> {
       return await getDesktopBackendRegistry().compactThread(request);
+    },
+    async rewindThread(
+      request: RewindThreadRequest,
+    ): Promise<RewindThreadResponse> {
+      return await getDesktopBackendRegistry().rewindThread(request);
     },
     async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
       return {

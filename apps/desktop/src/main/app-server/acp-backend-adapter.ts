@@ -6,7 +6,6 @@ import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   findAcpPermissionModeConfigOption,
   type AcpBackendId,
-  type AcpThreadRewindPoint,
   type AgentEvent,
   type AppServerBackendKind,
   type AppServerNotification,
@@ -466,6 +465,9 @@ export function buildAcpCapabilities(
     toolUse: true,
     approvalRequests: true,
     multiDirectoryThreads: true,
+    ...(agentCapabilities?.conversationRewind
+      ? { threadRewind: { files: false, undo: false } }
+      : {}),
   };
 }
 
@@ -568,6 +570,24 @@ function acpAgentLaunchIdentity(agent: AcpInstalledAgentRecord): string {
       : undefined,
   });
 }
+function rewindPointShowsPrompt(
+  point: { promptIndex: number; promptPreview: string },
+  promptText: string,
+): boolean {
+  // Grok sent no preview; `listRewindPoints` filled in a placeholder.
+  if (point.promptPreview === `Prompt ${point.promptIndex + 1}`) {
+    return true;
+  }
+  const normalize = (value: string): string =>
+    value.replace(/\s+/g, " ").trim().toLowerCase();
+  const preview = normalize(point.promptPreview)
+    .replace(/(?:\u2026|\.\.\.)$/, "")
+    .trimEnd()
+    .slice(0, 40);
+  const text = normalize(promptText);
+  return text.startsWith(preview) || preview.startsWith(text);
+}
+
 function effectiveAcpAgentCapabilities(
   agent: AcpInstalledAgentRecord,
 ): AcpAgentCapabilities {
@@ -1682,24 +1702,16 @@ export class AcpBackendAdapter {
     }
   }
 
-  async listRewindPoints(
-    backend: AcpBackendId,
-    sessionId: string,
-  ): Promise<AcpThreadRewindPoint[]> {
-    const session = this.requireIdleGrokRewindSession(backend, sessionId);
-    const client = await this.getClientForSession(backend, sessionId);
-    if (!client.listRewindPoints) {
-      throw new Error("Installed Grok Build does not support conversation rewind");
-    }
-    await client.ensureSession(session);
-    return await client.listRewindPoints(sessionId);
-  }
-
-  async rewindSession(params: {
+  /**
+   * Rewinds a Grok session to before a transcript user message. Grok counts
+   * its rewind points by prompt, so the message resolves to its ordinal among
+   * the session's user messages, which must be a point Grok still offers.
+   */
+  async rewindSessionBeforeMessage(params: {
     backend: AcpBackendId;
     sessionId: string;
-    targetPromptIndex: number;
-  }): Promise<{ promptText?: string; updatedAt: number }> {
+    messageId: string;
+  }): Promise<{ promptText?: string; targetPromptIndex: number; updatedAt: number }> {
     const session = this.requireIdleGrokRewindSession(
       params.backend,
       params.sessionId,
@@ -1708,14 +1720,37 @@ export class AcpBackendAdapter {
       params.backend,
       params.sessionId,
     );
-    if (!client.rewindSession) {
+    if (!client.listRewindPoints || !client.rewindSession) {
       throw new Error("Installed Grok Build does not support conversation rewind");
     }
     await client.ensureSession(session);
-    return await client.rewindSession({
+    const replay = await this.readReplay(params.backend, params.sessionId);
+    const userMessages = replay.entries.filter(
+      (entry) => entry.type === "message" && entry.role === "user",
+    );
+    const targetPromptIndex = userMessages.findIndex(
+      (entry) => entry.id === params.messageId,
+    );
+    const target = userMessages[targetPromptIndex];
+    if (!target || target.type !== "message") {
+      throw new Error("This prompt is no longer in the Grok conversation");
+    }
+    const points = await client.listRewindPoints(params.sessionId);
+    const point = points.find((candidate) => candidate.promptIndex === targetPromptIndex);
+    if (!point) {
+      throw new Error("Grok cannot rewind to before this prompt");
+    }
+    // The rewind cannot be undone. A user message Grok does not count as a
+    // prompt would shift the ordinal onto a later prompt, so the point Grok
+    // offers at that index must show this prompt's text.
+    if (!rewindPointShowsPrompt(point, target.text)) {
+      throw new Error("Grok's rewind points do not match this transcript; reload the thread and try again");
+    }
+    const result = await client.rewindSession({
       sessionId: params.sessionId,
-      targetPromptIndex: params.targetPromptIndex,
+      targetPromptIndex,
     });
+    return { ...result, targetPromptIndex };
   }
 
   async steerSession(params: {

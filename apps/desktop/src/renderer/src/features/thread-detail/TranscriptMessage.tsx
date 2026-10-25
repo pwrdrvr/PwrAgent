@@ -30,6 +30,7 @@ import type {
   ThreadSubAgentSummary,
   AppServerThreadTextPart,
 } from "@pwragent/shared";
+import { HistoryIcon } from "../../icons/HistoryIcon";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
@@ -81,6 +82,16 @@ type TranscriptMessageProps = {
   asyncQuestionsDismissed?: boolean;
   onAnswerAsyncQuestions?: (text: string) => Promise<boolean>;
   onAsyncQuestionsDismissedChange?: (messageId: string, dismissed: boolean) => void;
+  /** Opens the rewind confirmation for this prompt; set only on prompts a rewind can target. */
+  onRewind?: (message: AppServerThreadMessageEntry) => void;
+  rewindDisabledReason?: string;
+  rewindOpen?: boolean;
+};
+
+type MessageRewindControl = {
+  disabledReason?: string;
+  open: boolean;
+  onActivate: () => void;
 };
 
 // Keep text-only markdown props referentially stable when protocol refreshes
@@ -197,6 +208,15 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     [monitorOrigin?.monitorId, props.subAgents, loadedMonitor],
   );
 
+  const onRewind = props.onRewind;
+  const rewind: MessageRewindControl | undefined = onRewind
+    ? {
+        disabledReason: props.rewindDisabledReason,
+        open: props.rewindOpen === true,
+        onActivate: () => onRewind(props.message),
+      }
+    : undefined;
+
   if (voiceRequest) {
     const parts = contentParts.map((part) => part.type === "text"
       ? { ...part, text: voiceRequest.request }
@@ -208,6 +228,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
           desktopApi: props.desktopApi,
           message: props.message,
           label: "Voice request",
+          rewind,
           sourceThreadLink,
           threadLinks,
           text: messageCopyText,
@@ -614,6 +635,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
           continuation: false,
           desktopApi: props.desktopApi,
           message: props.message,
+          rewind,
           sourceThreadLink,
           threadLinks,
           text: messageCopyText,
@@ -643,6 +665,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
             continuation: index > 0,
             desktopApi: props.desktopApi,
             message: props.message,
+            rewind,
             segmentText:
               segment.type === "table" && messageSegments.length > 1
                 ? segment.text
@@ -1147,6 +1170,7 @@ function renderMessageHeader(params: {
   desktopApi?: Pick<DesktopApi, "copyText" | "copyRichText">;
   message: AppServerThreadMessageEntry;
   label?: string;
+  rewind?: MessageRewindControl;
   segmentText?: string;
   sourceThreadLink?: ResolvedThreadLink;
   threadLinks: ReturnType<typeof useThreadLinks>;
@@ -1225,6 +1249,7 @@ function renderMessageHeader(params: {
       </span>
       <span className="transcript-message__header-actions">
         {segmentCopyButton}
+        {params.rewind ? renderRewindButton(params.rewind) : null}
         {params.text ? (
           <TranscriptCopyButton
             className="transcript-copy-button--message"
@@ -1247,6 +1272,30 @@ function renderMessageHeader(params: {
         ) : null}
       </span>
     </header>
+  );
+}
+
+function renderRewindButton(rewind: MessageRewindControl): ReactNode {
+  const label = rewind.disabledReason ?? "Rewind to before this message";
+  return (
+    <button
+      aria-disabled={rewind.disabledReason ? true : undefined}
+      aria-expanded={rewind.open}
+      aria-haspopup="dialog"
+      aria-label={label}
+      className={`transcript-copy-button transcript-copy-button--message transcript-rewind-button${
+        rewind.disabledReason ? " is-disabled" : ""
+      }`}
+      title={label}
+      type="button"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!rewind.disabledReason) rewind.onActivate();
+      }}
+    >
+      <HistoryIcon size={14} />
+    </button>
   );
 }
 

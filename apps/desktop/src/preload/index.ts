@@ -172,13 +172,11 @@ import type {
   SetThreadMcpConnectionsResponse,
   RemoveCodexMcpServerRequest,
   RemoveCodexMcpServerResponse,
-  RewindAcpThreadRequest,
-  RewindAcpThreadResponse,
+  RewindThreadRequest,
+  RewindThreadResponse,
   StartCodexMcpServerLoginRequest,
   StartCodexMcpServerLoginResponse,
   LatestCodexConfigWarningResponse,
-  ListAcpThreadRewindPointsRequest,
-  ListAcpThreadRewindPointsResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -677,7 +675,6 @@ import {
   AGENT_EVENT_CHANNEL,
   AGENT_FORK_THREAD_CHANNEL,
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
-  AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
@@ -693,7 +690,7 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
-  AGENT_REWIND_ACP_THREAD_CHANNEL,
+  AGENT_REWIND_THREAD_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -2376,14 +2373,10 @@ const desktopApi = Object.freeze({
     request: SteerTurnRequest
   ): Promise<SteerTurnResponse> =>
     await ipcRenderer.invoke(AGENT_STEER_TURN_CHANNEL, request),
-  listAcpThreadRewindPoints: async (
-    request: ListAcpThreadRewindPointsRequest,
-  ): Promise<ListAcpThreadRewindPointsResponse> =>
-    await ipcRenderer.invoke(AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL, request),
-  rewindAcpThread: async (
-    request: RewindAcpThreadRequest,
-  ): Promise<RewindAcpThreadResponse> =>
-    await ipcRenderer.invoke(AGENT_REWIND_ACP_THREAD_CHANNEL, request),
+  rewindThread: async (
+    request: RewindThreadRequest,
+  ): Promise<RewindThreadResponse> =>
+    await ipcRenderer.invoke(AGENT_REWIND_THREAD_CHANNEL, request),
   configureGrokWorkflowBudget: async (
     request: ConfigureGrokWorkflowBudgetRequest,
   ): Promise<ConfigureGrokWorkflowBudgetResponse> =>

@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -78,6 +79,18 @@ type TranscriptViewport = {
 };
 
 type TranscriptListProps = {
+  /**
+   * Rewind controls: the prompts a rewind can target, the stable opener, why
+   * the control is unavailable right now, and the confirmation to render
+   * under the prompt it is open on.
+   */
+  rewind?: {
+    disabledReason?: string;
+    messageIds: ReadonlySet<string>;
+    openMessageId?: string;
+    confirmation?: ReactNode;
+    onOpen: (message: AppServerThreadMessageEntry) => void;
+  };
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   applications?: DesktopApplicationsSnapshot;
@@ -1586,6 +1599,13 @@ export function TranscriptList(props: TranscriptListProps) {
                   asyncQuestionsDismissed={props.dismissedAsyncQuestionMessageIds?.has(item.entry.id)}
                   onAnswerAsyncQuestions={props.onAnswerAsyncQuestions}
                   onAsyncQuestionsDismissedChange={props.onAsyncQuestionsDismissedChange}
+                  onRewind={
+                    props.rewind?.messageIds.has(item.entry.id)
+                      ? props.rewind.onOpen
+                      : undefined
+                  }
+                  rewindDisabledReason={props.rewind?.disabledReason}
+                  rewindOpen={props.rewind?.openMessageId === item.entry.id}
                 />
               );
             return (
@@ -1608,6 +1628,10 @@ export function TranscriptList(props: TranscriptListProps) {
                 }
               >
                 {body}
+                {item.type !== "workPhaseGroup"
+                && item.entry.id === props.rewind?.openMessageId
+                  ? props.rewind.confirmation
+                  : null}
               </div>
             );
           })}

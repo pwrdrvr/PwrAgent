@@ -23,7 +23,6 @@ import type {
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
   AppServerAvailableCommandSummary,
-  AcpThreadRewindPoint,
   AppServerCollaborationModeRequest,
   AppServerBackendKind,
   AppServerPendingRequestNotification,
@@ -48,6 +47,7 @@ import type {
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   FederationRemoteTarget,
+  FederationTarget,
   HandoffThreadWorkspaceRequest,
   MarkdownFileViewerContext,
   MessagingChannelKind,
@@ -57,6 +57,7 @@ import type {
   ThreadExecutionMode,
   ThreadCompactionRecord,
   ThreadPricingSummary,
+  ThreadRewindMode,
   ThreadTodo,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
@@ -79,6 +80,7 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   agentEventMatchesThread,
+  federationTargetsEqual,
   threadSummaryIdentityKey,
 } from "../../lib/federated-thread-events";
 import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
@@ -98,6 +100,7 @@ import {
   type ComposerSlotLineage,
 } from "./composer-slot";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { isThreadRemoteWorkHere } from "../navigation/ThreadRowStatus";
 import type {
   IntegratedTerminalPaneRemote,
@@ -152,6 +155,14 @@ import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptError } from "./TranscriptError";
 import { TranscriptList } from "./TranscriptList";
 import { TranscriptMessage } from "./TranscriptMessage";
+import { ThreadRewindConfirm } from "./ThreadRewindConfirm";
+import {
+  collectRewindableMessageIds,
+  rewoundPrompt,
+  summarizeThreadRewind,
+  type RewoundPrompt,
+  type ThreadRewindSummary,
+} from "./thread-rewind";
 import { LiveWorkRail } from "./LiveWorkRail";
 import {
   McpInventoryPanel,
@@ -1098,12 +1109,13 @@ type BranchDriftDialogState = {
   threadKey: string;
 };
 
-type RewindDialogState = {
+type RewindConfirmState = {
   busy: boolean;
   error?: string;
-  loading: boolean;
-  points: AcpThreadRewindPoint[];
-  selectedPromptIndex?: number;
+  messageId: string;
+  prompt: RewoundPrompt;
+  summary: ThreadRewindSummary;
+  turnId?: string;
 };
 
 type WorkflowBudgetDialogState = {
@@ -1343,7 +1355,16 @@ export function ThreadView(props: ThreadViewProps) {
   const onEditedFilesDockChange = props.onEditedFilesDockChange ?? noop;
   const onActionRunsDockChange = props.onActionRunsDockChange ?? noop;
   const onToggleSidebar = props.onToggleSidebar ?? noop;
-  const [rewindDialog, setRewindDialog] = useState<RewindDialogState>();
+  const [rewindConfirm, setRewindConfirm] = useState<RewindConfirmState>();
+  const rewoundPromptRestoreId = useRef(0);
+  const [rewoundPromptRestore, setRewoundPromptRestore] = useState<{
+    id: number;
+    threadId: string;
+    backend: NavigationThreadSummary["source"];
+    federationTarget?: FederationTarget;
+    text: string;
+    imageAttachments: RewoundPrompt["imageAttachments"];
+  }>();
   const [workflowBudgetDialog, setWorkflowBudgetDialog] =
     useState<WorkflowBudgetDialogState>();
   // Transcript element the in-thread find bar (⌘F) searches + highlights.
@@ -1370,7 +1391,7 @@ export function ThreadView(props: ThreadViewProps) {
     setLaunchpadSetupProgress(undefined);
     setSetupFailureContinuing(false);
     setSetupFailureContinueError(undefined);
-    setRewindDialog(undefined);
+    setRewindConfirm(undefined);
     setWorkflowBudgetDialog(undefined);
   }, [
     props.selectedLaunchpad?.directoryKey,
@@ -1551,12 +1572,6 @@ export function ThreadView(props: ThreadViewProps) {
   const [branchDriftBusy, setBranchDriftBusy] = useState(false);
   // Escape answers as each dialog's close button does, which its own request
   // in flight disables.
-  const rewindDialogRef = useModalDialog({
-    open: rewindDialog !== undefined,
-    onClose: () => {
-      if (!rewindDialog?.busy) setRewindDialog(undefined);
-    },
-  });
   const workflowBudgetDialogRef = useModalDialog({
     open: workflowBudgetDialog !== undefined,
     onClose: () => {
@@ -1580,79 +1595,127 @@ export function ThreadView(props: ThreadViewProps) {
   const onRefreshNavigationAfterRewind = props.onRefreshNavigation;
   const onReloadThreadAfterRewind = props.onReloadThread;
   const onShowRewindNotice = props.onShowNotice;
-  const openRewindDialog = useCallback(async (): Promise<void> => {
-    if (!selectedThread || selectedThread.source !== "acp:grok") {
-      return;
-    }
-    const listRewindPoints = rewindDesktopApi?.listAcpThreadRewindPoints;
-    if (!listRewindPoints) {
-      setRewindDialog({
-        busy: false,
-        error: "This PwrAgent build does not expose Grok conversation rewind.",
-        loading: false,
-        points: [],
-      });
-      return;
-    }
-    setRewindDialog({ busy: false, loading: true, points: [] });
-    try {
-      const response = await listRewindPoints({
-        backend: "acp:grok",
-        threadId: selectedThread.id,
-      });
-      const points = [...response.rewindPoints].sort(
-        (left, right) => right.promptIndex - left.promptIndex,
+  // A peer's thread pinned in this window is rewound by its owner, so the
+  // owner's summary decides whether to offer it. `props.backends` describes
+  // this window's own target, which is that owner only in a peer's window.
+  const threadOwnerTarget = selectedThread?.federation?.ref.target;
+  const peerOwnerInstanceId =
+    threadOwnerTarget?.scope === "remote"
+    && !federationTargetsEqual(threadOwnerTarget, readRendererFederationTarget())
+      ? threadOwnerTarget.instanceId
+      : undefined;
+  const peerOwnerTarget = useMemo<FederationTarget | undefined>(
+    () => peerOwnerInstanceId
+      ? { scope: "remote", instanceId: peerOwnerInstanceId }
+      : undefined,
+    [peerOwnerInstanceId],
+  );
+  const peerOwnerSummaries = useBackendSummaries(props.desktopApi, {
+    enabled: Boolean(peerOwnerTarget),
+    federationTarget: peerOwnerTarget,
+  });
+  const rewindOwnerBackend = peerOwnerTarget
+    ? peerOwnerSummaries.backends.find((backend) => backend.kind === selectedThread?.source)
+    : selectedThreadBackend;
+  const threadRewindSupport = rewindOwnerBackend?.available
+    ? rewindOwnerBackend.capabilities.threadRewind
+    : undefined;
+  const rewindProviderLabel = rewindOwnerBackend?.label ?? "The provider";
+  const rewindThreadSource = selectedThread?.source;
+  const rewindableMessageIds = useMemo(
+    () => rewindThreadSource && threadRewindSupport
+      ? collectRewindableMessageIds(props.transcriptEntries, rewindThreadSource)
+      : undefined,
+    [props.transcriptEntries, rewindThreadSource, threadRewindSupport],
+  );
+  const rewindDisabledReason = props.threadBusy
+    ? "Wait for the active turn to finish before rewinding"
+    : undefined;
+  const transcriptEntriesRef = useRef(props.transcriptEntries);
+  transcriptEntriesRef.current = props.transcriptEntries;
+  const openRewindConfirm = useCallback(
+    (message: AppServerThreadMessageEntry): void => {
+      if (!rewindThreadSource) return;
+      const summary = summarizeThreadRewind(
+        transcriptEntriesRef.current,
+        message.id,
+        rewindThreadSource,
       );
-      setRewindDialog({
+      if (!summary) return;
+      setRewindConfirm({
         busy: false,
-        loading: false,
-        points,
-        selectedPromptIndex: points[0]?.promptIndex,
+        messageId: message.id,
+        prompt: rewoundPrompt(message),
+        summary,
+        turnId: message.turn?.id,
       });
-    } catch (error) {
-      setRewindDialog({
-        busy: false,
-        error: error instanceof Error ? error.message : String(error),
-        loading: false,
-        points: [],
-      });
+    },
+    [rewindThreadSource],
+  );
+  const openLastPromptRewind = (): void => {
+    const entries = props.transcriptEntries;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      if (entry?.type === "message" && rewindableMessageIds?.has(entry.id)) {
+        // The window pins only the newest user message, which can be a later
+        // steer; the confirmation renders under its prompt, so mount it.
+        expandTranscriptEntryLimit(entries.length - index);
+        openRewindConfirm(entry);
+        return;
+      }
     }
-  }, [rewindDesktopApi, selectedThread]);
-  const executeRewind = useCallback(async (): Promise<void> => {
-    if (
-      !selectedThread
-      || selectedThread.source !== "acp:grok"
-      || rewindDialog?.selectedPromptIndex === undefined
-    ) {
+  };
+  const executeRewind = async (mode: ThreadRewindMode): Promise<void> => {
+    const confirm = rewindConfirm;
+    const rewindThread = rewindDesktopApi?.rewindThread;
+    if (!selectedThread || !confirm || confirm.busy) return;
+    if (!rewindThread) {
+      setRewindConfirm({ ...confirm, error: "This PwrAgent build cannot rewind threads." });
       return;
     }
-    const rewindAcpThread = rewindDesktopApi?.rewindAcpThread;
-    if (!rewindAcpThread) {
-      setRewindDialog((current) => current
-        ? { ...current, error: "This PwrAgent build cannot rewind Grok threads." }
-        : current);
-      return;
-    }
-    setRewindDialog((current) => current
-      ? { ...current, busy: true, error: undefined }
-      : current);
+    const thread = selectedThread;
+    const federationTarget = thread.federation?.ref.target
+      ?? readRendererFederationTarget();
+    setRewindConfirm({ ...confirm, busy: true, error: undefined });
     try {
-      await rewindAcpThread({
-        backend: "acp:grok",
-        threadId: selectedThread.id,
-        targetPromptIndex: rewindDialog.selectedPromptIndex,
+      const response = await rewindThread({
+        backend: thread.source,
+        federationTarget,
+        threadId: thread.id,
+        target: {
+          messageId: confirm.messageId,
+          ...(confirm.turnId ? { turnId: confirm.turnId } : {}),
+        },
+        mode,
       });
+      setRewindConfirm(undefined);
+      const promptText = response.promptText ?? confirm.prompt.text;
+      const { droppedAttachmentCount, imageAttachments } = confirm.prompt;
+      if (promptText.trim() || imageAttachments.length > 0) {
+        rewoundPromptRestoreId.current += 1;
+        setRewoundPromptRestore({
+          id: rewoundPromptRestoreId.current,
+          threadId: thread.id,
+          backend: thread.source,
+          federationTarget,
+          text: promptText,
+          imageAttachments,
+        });
+      }
+      if (droppedAttachmentCount > 0) {
+        onShowRewindNotice?.({
+          id: `rewind-attachments:${thread.id}`,
+          title: "Attachments not restored",
+          message: droppedAttachmentCount === 1
+            ? "One attachment from the rewound prompt could not return to the composer. Attach it again before you resend."
+            : `${droppedAttachmentCount} attachments from the rewound prompt could not return to the composer. Attach them again before you resend.`,
+          tone: "warning",
+        });
+      }
       await onRefreshNavigationAfterRewind?.();
       await onReloadThreadAfterRewind?.();
-      setRewindDialog(undefined);
-      onShowRewindNotice?.({
-        id: `grok-rewind:${selectedThread.id}`,
-        message: "The active Grok conversation was rewound. Files were not changed.",
-        title: "Conversation rewound",
-        tone: "success",
-      });
     } catch (error) {
-      setRewindDialog((current) => current
+      setRewindConfirm((current) => current?.messageId === confirm.messageId
         ? {
             ...current,
             busy: false,
@@ -1660,14 +1723,7 @@ export function ThreadView(props: ThreadViewProps) {
           }
         : current);
     }
-  }, [
-    onRefreshNavigationAfterRewind,
-    onReloadThreadAfterRewind,
-    onShowRewindNotice,
-    rewindDesktopApi,
-    rewindDialog?.selectedPromptIndex,
-    selectedThread,
-  ]);
+  };
   const openWorkflowBudgetDialog = useCallback(async (): Promise<void> => {
     if (!selectedThread || selectedThread.source !== "acp:grok") {
       return;
@@ -3841,6 +3897,7 @@ export function ThreadView(props: ThreadViewProps) {
           onLockThread: lockThreadFromComposer,
           mcpConnectionCount: threadMcpConnectionCount,
           replySubmission: asyncQuestionReply,
+          draftRestore: rewoundPromptRestore,
           onReplySubmissionSettled: handleReplySubmissionSettled,
           reviewRequest: todoReviewRequest,
           focusRequest: props.composerFocusRequest,
@@ -4153,15 +4210,13 @@ export function ThreadView(props: ThreadViewProps) {
         onToggleTerminal: toggleSelectedThreadTerminal,
       }}
       rewind={
-        selectedThread?.source === "acp:grok"
-        && selectedThread.federation?.ref.target.scope !== "remote"
+        threadRewindSupport
           ? {
-              disabledReason: props.threadBusy
-                ? "Wait for the active Grok turn to finish before rewinding"
-                : undefined,
-              onOpen: () => {
-                void openRewindDialog();
-              },
+              disabledReason: rewindDisabledReason
+                ?? (rewindableMessageIds?.size
+                  ? undefined
+                  : "No prompts to rewind to yet"),
+              onOpen: openLastPromptRewind,
             }
           : undefined
       }
@@ -4334,6 +4389,30 @@ export function ThreadView(props: ThreadViewProps) {
       >
         <TranscriptList
           entries={visibleTranscriptEntries}
+          rewind={
+            rewindableMessageIds && threadRewindSupport
+              ? {
+                  disabledReason: rewindDisabledReason,
+                  messageIds: rewindableMessageIds,
+                  openMessageId: rewindConfirm?.messageId,
+                  confirmation: rewindConfirm ? (
+                    <ThreadRewindConfirm
+                      key={rewindConfirm.messageId}
+                      busy={rewindConfirm.busy}
+                      error={rewindConfirm.error}
+                      providerLabel={rewindProviderLabel}
+                      summary={rewindConfirm.summary}
+                      support={threadRewindSupport}
+                      onCancel={() => setRewindConfirm(undefined)}
+                      onConfirm={(mode) => {
+                        void executeRewind(mode);
+                      }}
+                    />
+                  ) : undefined,
+                  onOpen: openRewindConfirm,
+                }
+              : undefined
+          }
           permissionTransitions={selectedThread!.permissionTransitionLog}
           messagingBindingTransitions={
             selectedThread!.messagingBindingTransitionLog
@@ -4631,102 +4710,6 @@ export function ThreadView(props: ThreadViewProps) {
       )}
 
       {composerView ? imageLightbox : null}
-
-      {threadView && rewindDialog ? (
-        <div className="workspace-handoff-modal">
-          <div
-            ref={rewindDialogRef}
-            aria-labelledby="grok-rewind-title"
-            aria-modal="true"
-            className="workspace-handoff-dialog rewind-dialog"
-            role="dialog"
-          >
-            <div className="workspace-handoff-dialog__header">
-              <h2 id="grok-rewind-title">Rewind Grok conversation</h2>
-              <button
-                aria-label="Close rewind dialog"
-                className="workspace-handoff-dialog__close"
-                disabled={rewindDialog.busy}
-                type="button"
-                onClick={() => setRewindDialog(undefined)}
-              >
-                x
-              </button>
-            </div>
-            <p>
-              Choose the prompt to remove. That prompt and every later turn will be
-              discarded from Grok&apos;s active conversation.
-            </p>
-            {rewindDialog.loading ? (
-              <p role="status">Loading rewind points...</p>
-            ) : rewindDialog.points.length > 0 ? (
-              <div
-                aria-label="Grok conversation rewind points"
-                className="rewind-dialog__points"
-                role="radiogroup"
-              >
-                {rewindDialog.points.map((point) => (
-                  <button
-                    aria-checked={
-                      rewindDialog.selectedPromptIndex === point.promptIndex
-                    }
-                    className="rewind-dialog__point"
-                    disabled={rewindDialog.busy}
-                    key={point.promptIndex}
-                    role="radio"
-                    type="button"
-                    onClick={() => setRewindDialog((current) => current
-                      ? { ...current, selectedPromptIndex: point.promptIndex }
-                      : current)}
-                  >
-                    <span>{point.promptPreview}</span>
-                    <small>
-                      Prompt {point.promptIndex + 1}
-                      {point.createdAt
-                        ? ` · ${new Date(point.createdAt).toLocaleString()}`
-                        : ""}
-                    </small>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p role="status">This conversation has no rewind points.</p>
-            )}
-            <p className="rewind-dialog__warning">
-              Files stay exactly as they are. Grok does not provide undo for the
-              discarded conversation branch, and PwrAgent cannot fork ACP threads yet.
-            </p>
-            {rewindDialog.error ? (
-              <p className="rewind-dialog__error" role="alert">
-                {rewindDialog.error}
-              </p>
-            ) : null}
-            <div className="rewind-dialog__actions">
-              <button
-                disabled={rewindDialog.busy}
-                type="button"
-                onClick={() => setRewindDialog(undefined)}
-              >
-                Cancel
-              </button>
-              <button
-                className="rewind-dialog__confirm"
-                disabled={
-                  rewindDialog.busy
-                  || rewindDialog.loading
-                  || rewindDialog.selectedPromptIndex === undefined
-                }
-                type="button"
-                onClick={() => {
-                  void executeRewind();
-                }}
-              >
-                {rewindDialog.busy ? "Rewinding..." : "Rewind conversation"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {threadView && workflowBudgetDialog ? (
         <div className="workspace-handoff-modal">

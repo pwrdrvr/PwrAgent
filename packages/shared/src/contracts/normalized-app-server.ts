@@ -2351,7 +2351,8 @@ export type AppServerNotification =
       method: "thread/rewound";
       params: {
         threadId: string;
-        targetPromptIndex: number;
+        /** ACP prompt index the rewind removed from; absent for other providers. */
+        targetPromptIndex?: number;
         updatedAt: number;
       };
     }

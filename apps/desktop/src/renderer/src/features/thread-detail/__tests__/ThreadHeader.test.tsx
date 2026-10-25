@@ -226,7 +226,7 @@ describe("ThreadHeader", () => {
     expect(toggle).toHaveTextContent("");
   });
 
-  it("opens Grok conversation rewind from the header control", () => {
+  it("opens the thread rewind from the header control", () => {
     const onOpen = vi.fn();
     render(
       <ThreadHeader
@@ -236,7 +236,7 @@ describe("ThreadHeader", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Rewind Grok conversation" }),
+      screen.getByRole("button", { name: "Rewind to before the last prompt" }),
     );
 
     expect(onOpen).toHaveBeenCalledOnce();

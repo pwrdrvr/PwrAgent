@@ -16,6 +16,15 @@ describe("Codex App Server protocol compatibility", () => {
   });
 
   it.each([
+    [undefined, false],
+    ["0.144.0", false],
+    ["0.153.0", true],
+    ["codex-cli 0.159.2", true],
+  ])("gates thread revert for %s", (version, supported) => {
+    expect(resolveCodexProtocolCompatibility(version).supportsThreadRevert).toBe(supported);
+  });
+
+  it.each([
     {
       version: undefined,
       expected: {
@@ -24,6 +33,7 @@ describe("Codex App Server protocol compatibility", () => {
         includePersistExtendedHistory: true,
         supportsOnFailureApprovalPolicy: true,
         supportsThreadScopedMcpServerStatus: false,
+        supportsThreadRevert: false,
       },
     },
     {
@@ -34,6 +44,7 @@ describe("Codex App Server protocol compatibility", () => {
         includePersistExtendedHistory: true,
         supportsOnFailureApprovalPolicy: true,
         supportsThreadScopedMcpServerStatus: false,
+        supportsThreadRevert: false,
       },
     },
     {
@@ -44,6 +55,7 @@ describe("Codex App Server protocol compatibility", () => {
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: true,
         supportsThreadScopedMcpServerStatus: false,
+        supportsThreadRevert: false,
       },
     },
     {
@@ -54,6 +66,7 @@ describe("Codex App Server protocol compatibility", () => {
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: true,
         supportsThreadScopedMcpServerStatus: false,
+        supportsThreadRevert: false,
       },
     },
     {
@@ -64,6 +77,7 @@ describe("Codex App Server protocol compatibility", () => {
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: false,
         supportsThreadScopedMcpServerStatus: false,
+        supportsThreadRevert: false,
       },
     },
     {
@@ -74,6 +88,7 @@ describe("Codex App Server protocol compatibility", () => {
         includePersistExtendedHistory: false,
         supportsOnFailureApprovalPolicy: false,
         supportsThreadScopedMcpServerStatus: true,
+        supportsThreadRevert: false,
       },
     },
   ])("negotiates the wire features for $version", ({ version, expected }) => {

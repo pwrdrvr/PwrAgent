@@ -1320,6 +1320,15 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/revert") {
+      this.messageHandler(JSON.stringify({
+        jsonrpc: "2.0",
+        id: payload.id,
+        result: { turnsBackwardsCursor: null, itemsBackwardsCursor: null },
+      }));
+      return;
+    }
+
     if (payload.method === "turn/steer" || payload.method === "thread/compact/start") {
       this.messageHandler(JSON.stringify({
         jsonrpc: "2.0",
@@ -1478,6 +1487,58 @@ describe("CodexAppServerClient", () => {
       const methods = requests.map((request) => request.method);
       expect(methods.indexOf("thread/settings/update")).toBeLessThan(methods.indexOf("thread/compact/start"));
       expect(methods).not.toContain("turn/start");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("reverts a thread to before a turn after rejoining it", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    try {
+      await client.revertThread({ threadId: "thread-2", beforeTurnId: "turn-7" });
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+      const methods = requests.map((request) => request.method);
+      expect(methods.indexOf("thread/resume")).toBeLessThan(methods.indexOf("thread/revert"));
+      expect(requests.find((request) => request.method === "thread/revert")?.params).toEqual({
+        threadId: "thread-2", beforeTurnId: "turn-7",
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("refuses to revert on Codex releases without thread/revert", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverVersion = "0.144.0";
+    const client = new CodexAppServerClient();
+    try {
+      await expect(client.revertThread({ threadId: "thread-2", beforeTurnId: "turn-7" }))
+        .rejects.toThrow("Update Codex to rewind threads");
+      const requests = MockTransport.instances.flatMap((transport) =>
+        transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.some((request) => request.method === "thread/revert")).toBe(false);
+    } finally {
+      MockTransport.serverVersion = "1.0.0";
+      await client.close();
+    }
+  });
+
+  it("reports a Codex thread/reverted as a provider-neutral rewind", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    const notifications: AppServerNotification[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    try {
+      await client.readRateLimits();
+      MockTransport.instances.at(-1)!.emitInbound({
+        method: "thread/reverted", params: { threadId: "thread-2" },
+      });
+      await vi.waitFor(() => expect(notifications.some((n) => n.method === "thread/rewound")).toBe(true));
+      expect(notifications.find((n) => n.method === "thread/rewound")).toEqual({
+        method: "thread/rewound",
+        params: { threadId: "thread-2", updatedAt: expect.any(Number) },
+      });
     } finally {
       await client.close();
     }

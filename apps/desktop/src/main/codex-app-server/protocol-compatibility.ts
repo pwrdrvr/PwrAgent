@@ -5,6 +5,7 @@ const NAMESPACED_DYNAMIC_TOOLS_MIN_VERSION = [0, 141, 0] as const;
 const ON_FAILURE_APPROVAL_REMOVED_VERSION = [0, 143, 0] as const;
 const GENERATED_MODEL_LIST_MIN_VERSION = [0, 144, 0] as const;
 const THREAD_SCOPED_MCP_STATUS_MIN_VERSION = [0, 144, 0] as const;
+const THREAD_REVERT_MIN_VERSION = [0, 153, 0] as const;
 
 export type CodexProtocolCompatibility = {
   supportsAutoReview: boolean;
@@ -12,6 +13,7 @@ export type CodexProtocolCompatibility = {
   includePersistExtendedHistory: boolean;
   supportsOnFailureApprovalPolicy: boolean;
   supportsThreadScopedMcpServerStatus: boolean;
+  supportsThreadRevert: boolean;
 };
 
 type ModernDynamicToolFunction = Extract<
@@ -43,6 +45,8 @@ export type CompatibleApprovalPolicy =
  * - 0.141.0 changed dynamic tools to function/namespace discriminated specs.
  * - 0.143.0 removed the `on-failure` approval policy.
  * - 0.144.0 made MCP status inventory thread-scoped.
+ * - `thread/revert` arrived after 0.144.0; 0.153.0 is the oldest tested
+ *   release that has it.
  *
  * Missing or unparseable versions stay on the legacy shape. That preserves
  * the contract PwrAgent used before this migration instead of assuming that
@@ -67,6 +71,7 @@ export function resolveCodexProtocolCompatibility(
       !isAtLeast(ON_FAILURE_APPROVAL_REMOVED_VERSION),
     supportsThreadScopedMcpServerStatus:
       isAtLeast(THREAD_SCOPED_MCP_STATUS_MIN_VERSION),
+    supportsThreadRevert: isAtLeast(THREAD_REVERT_MIN_VERSION),
   };
 }
 

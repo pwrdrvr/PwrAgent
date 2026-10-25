@@ -125,6 +125,7 @@ import type {
   ThreadSettingsUpdateParams as CodexThreadSettingsUpdateParams,
   ThreadStartParams as CodexThreadStartParams,
   ThreadTurnsListParams as CodexThreadTurnsListParams,
+  ThreadRevertParams as CodexThreadRevertParams,
   ThreadTurnsListResponse as CodexThreadTurnsListResponse,
   Turn as CodexTurn,
   TurnInterruptParams as CodexTurnInterruptParams,
@@ -526,6 +527,7 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "turn/diff/updated",
   "serverRequest/resolved",
   "thread/compacted",
+  "thread/reverted",
   "thread/archived",
   "thread/deleted",
   "thread/unarchived",
@@ -1389,6 +1391,14 @@ function normalizeServerNotification(
   }
 
   const record = asRecord(params) ?? {};
+  // A revert from any client replaces the thread's history. Downstream
+  // consumers already reload a thread on PwrAgent's provider-neutral rewind.
+  if (method === "thread/reverted" && typeof record.threadId === "string") {
+    return {
+      method: "thread/rewound",
+      params: { threadId: record.threadId, updatedAt: Date.now() },
+    };
+  }
   if (method === "guardianWarning" && typeof record.message === "string") {
     return { method: "warning", params: {
       ...(typeof record.threadId === "string" ? { threadId: record.threadId } : {}),
@@ -11114,6 +11124,44 @@ export class CodexAppServerClient {
         turnId: params.turnId,
       };
     }
+  }
+
+  /**
+   * Replaces the thread's history with the prefix before `beforeTurnId`.
+   * Codex leaves local files as they are. Readers hydrate the retained
+   * history through `thread/turns/list`.
+   */
+  async revertThread(params: {
+    threadId: string;
+    beforeTurnId: string;
+  }): Promise<void> {
+    await this.ensureInitialized();
+    if (!this.getProtocolCompatibility().supportsThreadRevert) {
+      throw new Error("Update Codex to rewind threads");
+    }
+    const connection = this.createThreadOperationConnection();
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads(
+        { threadId: params.threadId },
+        this.getProtocolCompatibility(),
+      ),
+      timeoutMs,
+    });
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/revert"],
+      payloads: [
+        {
+          threadId: params.threadId,
+          beforeTurnId: params.beforeTurnId,
+        } satisfies CodexThreadRevertParams,
+      ],
+      timeoutMs,
+    });
+    this.invalidateThreadListings();
   }
 
   async compactThread(params: {
