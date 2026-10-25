@@ -5388,7 +5388,8 @@ describe("Composer", () => {
     fireEvent.mouseEnter(moon);
     expect(within(screen.getByRole("tooltip")).getByText(/Usage Activity/)).toBeInTheDocument();
     fireEvent.click(moon);
-    expect(openUsageActivity).toHaveBeenCalledOnce();
+    // The window opens on the limits of the account this thread's turns use.
+    expect(openUsageActivity).toHaveBeenCalledExactlyOnceWith({ provider: "openai" });
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 

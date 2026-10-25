@@ -3329,6 +3329,60 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("reports Grok's billing limit as a Usage Activity reading while Grok is enabled", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+    };
+    let enabled = true;
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => [],
+        getSession: () => undefined,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: () =>
+        ({
+          initialize: vi.fn(async () => undefined),
+          readProviderStatus: vi.fn(async () => ({
+            account: { type: "provider", label: "Grok account", planType: "SuperGrok" },
+            rateLimits: [{ name: "Monthly limit", usedPercent: 18, resetAt: 1_800_000_000_000 }],
+          })),
+          dispose: vi.fn(async () => undefined),
+        }) as never,
+      discoverLocalAcpAgents: async () => [],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => enabled,
+    });
+
+    expect(adapter.limitObservations()).toEqual([]);
+    const before = Date.now();
+    await adapter.getClient(backendId);
+    await adapter.describeInstalledBackends();
+    await vi.waitFor(() => expect(adapter.limitObservations()).toHaveLength(1));
+    const [reading] = adapter.limitObservations();
+    expect(reading).toEqual({
+      observedAt: expect.any(Number), provider: "xai", planType: "SuperGrok",
+      limits: [{ name: "Monthly limit", limitId: undefined, usedPercent: 18, resetAt: 1_800_000_000_000,
+        windowMinutes: undefined }],
+    });
+    expect(reading.observedAt).toBeGreaterThanOrEqual(before);
+    enabled = false;
+    expect(adapter.limitObservations()).toEqual([]);
+
+    await adapter.close();
+  });
+
   it("checks Grok updates in the background and persists one daily result", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     let stored: AcpInstalledAgentRecord = {

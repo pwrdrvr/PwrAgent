@@ -889,6 +889,40 @@ describe("Claude SDK backend", () => {
     expect(restarted.summary().rateLimits).toEqual(expected);
   });
 
+  it("describes its limits as a dated Usage Activity reading for the signed-in account", async () => {
+    const resetsAt = Date.now() + 86_400_000;
+    const snapshot = { rate_limits_available: true, rate_limits: {
+      five_hour: { utilization: 12, resets_at: new Date(resetsAt).toISOString() },
+      seven_day: { utilization: 56, resets_at: new Date(resetsAt).toISOString() },
+    }, session: { model_usage: {} } };
+    const accountInfo = vi.fn().mockResolvedValue({ apiProvider: "firstParty", email: "first@example.com", subscriptionType: "max" });
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: vi.fn().mockResolvedValue(snapshot), accountInfo });
+    expect(f.backend.limitObservation()).toBeUndefined();
+    const before = Date.now();
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await f.waitForTurn();
+    const account = await f.backend.usageAccountKey();
+    expect(account).toMatch(/^[0-9a-f]{16}$/);
+    const reading = f.backend.limitObservation()!;
+    expect(reading).toMatchObject({ provider: "anthropic", accountKey: account, planType: "max", limits: [
+      { name: "5-hour limit", limitId: "five_hour", usedPercent: 12, windowMinutes: 300 },
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 56, windowMinutes: 10_080 },
+    ] });
+    expect(reading.observedAt).toBeGreaterThanOrEqual(before);
+
+    // A restart reads back when the limits were reported, and for which plan.
+    await vi.waitFor(async () => expect((await f.store.readRateLimits()).plan).toBe("max"));
+    const restarted = new ClaudeBackend(f.backendOptions);
+    await restarted.discover({ models: false });
+    expect(await restarted.usageAccountKey()).toBe(account);
+    expect(restarted.limitObservation()).toMatchObject({ accountKey: account, planType: "max",
+      observedAt: (await f.store.readRateLimits()).observedAt });
+  });
+
   it("clears remembered limits when Claude is signed out", async () => {
     const f = await fixture();
     await f.store.saveRateLimits([{ name: "Weekly limit", limitId: "seven_day", usedPercent: 40 }]);

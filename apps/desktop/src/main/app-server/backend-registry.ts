@@ -5708,6 +5708,11 @@ function buildLiveThreadUsageLine(params: {
   };
 }
 
+/** Codex readings are the ones that carry no provider, or OpenAI's. */
+function isCodexLimitObservation(reading: UsageLimitObservation): boolean {
+  return reading.provider === undefined || reading.provider === "openai";
+}
+
 function fallbackUsageProvider(backend: AppServerBackendKind): string {
   return backend === "claude" ? "anthropic" : backend === "acp:qwen" ? "qwen" : "openai";
 }
@@ -17299,6 +17304,7 @@ export class DesktopBackendRegistry {
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
     if (!this.overlayStore.readUsageActivity) throw new Error("Usage ledger unavailable.");
     const activity = await this.overlayStore.readUsageActivity(request);
+    const codex = this.codexLimitObservation();
     return { ...activity,
       // Navigation indexing can lag a live thread or rename. The information
       // store retains titles independently of query caches; consult it on the
@@ -17312,7 +17318,14 @@ export class DesktopBackendRegistry {
       })),
       readAt: Date.now(),
       rateLimits: this.codexBackendSummary?.rateLimits ?? [],
-      limitObservation: this.codexLimitObservation(),
+      limitObservation: codex,
+      // Older viewers chart every `limitHistory` reading as a Codex account.
+      limitHistory: activity.limitHistory.filter(isCodexLimitObservation),
+      limitObservations: [
+        ...codex ? [{ ...codex, provider: "openai" }] : [],
+        ...this.providerLimitObservations(),
+      ],
+      providerLimitHistory: activity.limitHistory.filter((reading) => !isCodexLimitObservation(reading)),
       analysisModelBackends: USAGE_ANALYSIS_MODEL_BACKENDS.filter((backend) =>
         backend === "codex" || hasAcpStructuredHelper(backend)) };
   }
@@ -17322,6 +17335,8 @@ export class DesktopBackendRegistry {
     // must affect the next request, never this one.
     try {
       const group = this.resolveUsageAccountGroupsFn()[backend];
+      // Claude names its own account; an operator's group still wins.
+      if (!group && backend === "claude") return await this.claudeBackend.usageAccountKey();
       if (group || backend !== "codex") return usageAccountKey(undefined, group);
       const account = this.codexClient.readAccount
         ? await this.codexClient.readAccount()
@@ -17358,6 +17373,28 @@ export class DesktopBackendRegistry {
     turnId: string | undefined,
   ): Promise<string | undefined> {
     return turnId ? await this.usageTurnAccounts.get(JSON.stringify([backend, threadId, turnId])) : undefined;
+  }
+
+  /** Account limits from providers other than Codex, each with its ledger provider. */
+  private providerLimitObservations(): UsageLimitObservation[] {
+    const claude = this.claudeBackend.limitObservation();
+    let groups: Record<string, string> = {};
+    try { groups = this.resolveUsageAccountGroupsFn(); } catch { /* Readings keep their own keys. */ }
+    // An operator's Account group names the account its turns record, so the
+    // reading takes the same key and joins their history, as Codex's does.
+    const backends: Record<string, AppServerBackendKind> = { anthropic: "claude", xai: "acp:grok" };
+    return [...claude ? [claude] : [], ...this.acpBackend.limitObservations?.() ?? []].map((reading) => {
+      const backend = reading.provider ? backends[reading.provider] : undefined;
+      const accountKey = backend ? usageAccountKey(undefined, groups[backend]) : undefined;
+      return accountKey ? { ...reading, accountKey } : reading;
+    });
+  }
+
+  /** The reading a provider's finished turn records, when it describes that turn's account. */
+  private turnLimitObservation(backend: AppServerBackendKind): UsageLimitObservation | undefined {
+    if (backend === "codex") return this.codexLimitObservation();
+    const provider = backend === "claude" ? "anthropic" : backend === "acp:grok" ? "xai" : undefined;
+    return provider ? this.providerLimitObservations().find((reading) => reading.provider === provider) : undefined;
   }
 
   /**
@@ -46767,7 +46804,7 @@ export class DesktopBackendRegistry {
       // usage event to carry the end time into the pricing row.
       if (turnId && this.overlayStore.completeThreadUsageTurn) {
         const accountKey = await this.usageAccountForTurn(event.backend, notification.params.threadId, turnId);
-        const limits = event.backend === "codex" ? this.codexLimitObservation() : undefined;
+        const limits = this.turnLimitObservation(event.backend);
         const completed = await this.overlayStore.completeThreadUsageTurn({
           backend: event.backend,
           threadId: notification.params.threadId,

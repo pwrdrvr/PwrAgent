@@ -25,6 +25,7 @@ import {
   type BackendSummary,
   type GrokWorkflowBudgetPolicy,
   type ThreadExecutionMode,
+  type UsageLimitObservation,
   isAcpBackendId,
 } from "@pwragent/shared";
 import {
@@ -148,6 +149,9 @@ export type { AcpSessionMetadata };
 
 export const ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR =
   "This ACP agent cannot hand off a workspace after the first message in a thread. Start a new thread in the target workspace instead.";
+
+/** The ledger provider of each agent that reports account limits. */
+const ACP_LIMIT_PROVIDERS: Partial<Record<AcpBackendId, string>> = { "acp:grok": "xai" };
 
 const acpBackendAdapterLog = getMainLogger("pwragent:acp-backend-adapter");
 const ACP_PROVIDER_STATUS_CACHE_TTL_MS = 60_000;
@@ -1214,6 +1218,8 @@ export class AcpBackendAdapter {
   private readonly modelRetryTracker = new AcpModelRetryTracker();
   private readonly liveNotificationFingerprints = new Map<string, string>();
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
+  /** When each provider status was read, for Usage Activity's limit history. */
+  private readonly providerStatusObservedAt = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
@@ -1437,6 +1443,7 @@ export class AcpBackendAdapter {
         return;
       }
       this.providerStatuses.set(backend, providerStatus);
+      this.providerStatusObservedAt.set(backend, Date.now());
       await this.emit({
         backend,
         notification: {
@@ -1450,6 +1457,29 @@ export class AcpBackendAdapter {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * The account limits each enabled agent last reported, as Usage Activity
+   * readings. Grok reports a plan but no account identity, so its readings
+   * stay with the instance that read them.
+   */
+  limitObservations(): UsageLimitObservation[] {
+    return [...this.providerStatuses].flatMap(([backend, status]) => {
+      const observedAt = this.providerStatusObservedAt.get(backend);
+      const provider = ACP_LIMIT_PROVIDERS[backend];
+      if (!provider || observedAt === undefined || !status.rateLimits?.length
+        || (this.isAcpAgentEnabled && !this.isAcpAgentEnabled(backend.slice("acp:".length)))) return [];
+      return [{
+        observedAt,
+        provider,
+        planType: status.account?.planType,
+        limits: status.rateLimits.map((limit) => ({
+          name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
+          resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
+        })),
+      }];
+    });
   }
 
   invalidateLocalAgentDiscovery(): void {
@@ -2627,6 +2657,7 @@ export class AcpBackendAdapter {
     this.liveToolUpdateResolver.clear();
     this.liveNotificationFingerprints.clear();
     this.providerStatuses.clear();
+    this.providerStatusObservedAt.clear();
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
     this.grokUpdateRefreshes.clear();

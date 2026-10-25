@@ -9,10 +9,29 @@ export type ReadUsageActivityRequest = {
   federationTarget?: FederationTarget;
 };
 
+/** Opening the Usage Activity window from a provider's surface. */
+export type OpenUsageActivityRequest = {
+  /** Focus this ledger provider's account limits (`openai`, `anthropic`, `xai`). */
+  provider?: string;
+};
+
+/** Providers whose account limits Usage Activity charts. */
+export const USAGE_LIMIT_PROVIDERS = ["openai", "anthropic", "xai"] as const;
+
+/** The ledger provider whose account limits a backend's turns count against. */
+export function usageLimitProviderForBackend(backend: string | undefined): string | undefined {
+  return backend === "codex" ? "openai" : backend === "claude" ? "anthropic" : backend === "acp:grok" ? "xai" : undefined;
+}
+
+/** A provider named by an untrusted caller, if it is one Usage Activity knows. */
+export function parseUsageLimitProvider(value: unknown): string | undefined {
+  return typeof value === "string" && (USAGE_LIMIT_PROVIDERS as readonly string[]).includes(value) ? value : undefined;
+}
+
 /** One account limit as its owner last received it from the provider. */
 export type UsageLimitReading = Pick<BackendRateLimitSummary,
   "name" | "limitId" | "windowKey" | "usedPercent" | "used" | "limit" | "resetAt" | "windowMinutes"
-  | "hasCredits" | "unlimited">;
+  | "hasCredits" | "unlimited" | "expires">;
 
 /**
  * An owner's account-limit snapshot. Recorded on a turn's ledger row when the
@@ -22,6 +41,11 @@ export type UsageLimitReading = Pick<BackendRateLimitSummary,
 export type UsageLimitObservation = {
   /** When the owner last received these limits, not when the turn ended. */
   observedAt: number;
+  /**
+   * The ledger provider whose account these limits describe (`openai`,
+   * `anthropic`, `xai`). Absent means OpenAI: older owners reported Codex only.
+   */
+  provider?: string;
   /** Opaque per-account key, so owners on different accounts never blend. */
   accountKey?: string;
   planType?: string;
@@ -58,13 +82,25 @@ export type ReadUsageActivityResponse = {
   truncated: boolean;
   readAt: number;
   rateLimits: BackendRateLimitSummary[];
-  /** The owner's current account limits; absent from older peers. */
+  /** The owner's current Codex account limits; absent from older peers. */
   limitObservation?: UsageLimitObservation;
   /**
-   * Distinct readings stamped on the window's completed turns, oldest first.
-   * A reading can predate its turn's completion; readings are never per-thread.
+   * Distinct Codex readings stamped on the window's completed turns, oldest
+   * first. A reading can predate its turn's completion; readings are never
+   * per-thread.
    */
   limitHistory?: UsageLimitObservation[];
+  /**
+   * The owner's current limits for every provider that reports them, each
+   * with its `provider`. Absent from older peers, which report Codex only in
+   * `limitObservation`.
+   */
+  limitObservations?: UsageLimitObservation[];
+  /**
+   * Readings from providers other than Codex, as `limitHistory`. Kept apart
+   * so a viewer that predates them never charts them as a Codex account.
+   */
+  providerLimitHistory?: UsageLimitObservation[];
   /**
    * Backends this owner can run usage analysis on. Absent from older peers,
    * which run it on Codex only and ignore `modelBackend`.
@@ -145,10 +181,12 @@ export function parseUsageLimitObservation(value: unknown): UsageLimitObservatio
       windowMinutes: finite(limit.windowMinutes),
       hasCredits: typeof limit.hasCredits === "boolean" ? limit.hasCredits : undefined,
       unlimited: typeof limit.unlimited === "boolean" ? limit.unlimited : undefined,
+      expires: limit.expires === true ? true : undefined,
     });
   }
   return {
     observedAt,
+    provider: typeof source.provider === "string" && source.provider ? source.provider.slice(0, 32) : undefined,
     accountKey: typeof source.accountKey === "string" ? source.accountKey.slice(0, 64) : undefined,
     planType: typeof source.planType === "string" ? source.planType.slice(0, 64) : undefined,
     limits,

@@ -972,8 +972,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   /** Stored totals for a local thread and every sub-thread under it. */
   readThreadFamilyPricing?: (request: ReadThreadFamilyPricingRequest) => Promise<ReadThreadFamilyPricingResponse>;
   analyzeUsageActivity?: (request: AnalyzeUsageActivityRequest) => Promise<AnalyzeUsageActivityResponse>;
-  /** Spawns or focuses the dedicated Usage Activity window. */
-  openUsageActivity?: () => Promise<void>;
+  /** Spawns or focuses the dedicated Usage Activity window, on a provider's limits when named. */
+  openUsageActivity?: (request?: import("@pwragent/shared").OpenUsageActivityRequest) => Promise<void>;
+  /** In the Usage Activity window: another surface asked to focus a provider's limits. */
+  onUsageActivityFocusProvider?: (callback: (provider: string) => void) => () => void;
   /** From the Usage Activity window: focus the main window and open a thread there. */
   openUsageThreadInMainWindow?: (request: WindowShowThreadRequest) => Promise<void>;
   inspectTokenMiserOutput?: (

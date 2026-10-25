@@ -11,7 +11,7 @@ import type {
   AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadPlanEntry,
   AppServerThreadPlanStep, AppServerThreadReplay, AppServerThreadReviewEntry, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
-  SteerTurnDelivery,
+  SteerTurnDelivery, UsageLimitObservation,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
@@ -335,6 +335,10 @@ export class ClaudeBackend {
   private rateLimitWrites = Promise.resolve();
   /** The account the limits describe, as `claudeAccountKey`. */
   private rateLimitAccount?: string;
+  /** When Claude last reported the limits, changed or not. */
+  private rateLimitsObservedAt?: number;
+  /** The account's subscription, as Claude reports it (`max`, `pro`). */
+  private rateLimitPlan?: string;
   private rateLimitExpiry?: ReturnType<typeof setTimeout>;
   // Last command list Claude reported per working directory. Project
   // commands and skills differ by folder, so the folder is the key.
@@ -1395,21 +1399,30 @@ export class ClaudeBackend {
     const info = await claudeTelemetry(() => live.query!.accountInfo());
     if (!info) return;
     const account = claudeAccountKey(info);
+    const plan = info.subscriptionType?.trim() || undefined;
     await this.loadRateLimits();
-    if (account === this.rateLimitAccount) return;
+    if (account === this.rateLimitAccount) {
+      if (plan === this.rateLimitPlan) return;
+      this.rateLimitPlan = plan;
+      this.saveRateLimits();
+      return;
+    }
     const previous = this.rateLimitAccount;
     this.rateLimitAccount = account;
+    this.rateLimitPlan = plan;
     // A file from before accounts were recorded is adopted, not discarded.
     if (previous !== undefined) this.setRateLimits([]);
     else this.saveRateLimits();
   }
 
   private async loadRateLimits(): Promise<void> {
-    this.rateLimitsLoad ??= this.store.readRateLimits().then(({ limits, account }) => {
+    this.rateLimitsLoad ??= this.store.readRateLimits().then(({ limits, account, observedAt, plan }) => {
       // A reading taken since launch is newer than the file.
       if (this.rateLimits !== undefined) return;
       this.rateLimits = liveClaudeRateLimits(limits, Date.now());
       this.rateLimitAccount ??= account;
+      this.rateLimitPlan ??= plan;
+      this.rateLimitsObservedAt ??= observedAt;
       this.scheduleRateLimitExpiry();
     });
     await this.rateLimitsLoad;
@@ -1417,6 +1430,8 @@ export class ClaudeBackend {
 
   /** Returns whether the reading changed; a change is also written for the next launch. */
   private setRateLimits(limits: BackendRateLimitSummary[]): boolean {
+    // An unchanged reading is still a newer one; only a change is written.
+    this.rateLimitsObservedAt = limits.length > 0 ? Date.now() : undefined;
     if (this.rateLimits && JSON.stringify(limits) === JSON.stringify(this.rateLimits)) return false;
     this.rateLimits = limits;
     this.saveRateLimits();
@@ -1427,11 +1442,40 @@ export class ClaudeBackend {
   private saveRateLimits(): void {
     const limits = this.rateLimits ?? [];
     const account = this.rateLimitAccount;
+    const reading = { observedAt: this.rateLimitsObservedAt, plan: this.rateLimitPlan };
     this.rateLimitWrites = this.rateLimitWrites
-      .then(() => this.store.saveRateLimits(limits, account))
+      .then(() => this.store.saveRateLimits(limits, account, reading))
       .catch((error: unknown) => {
         claudeBackendLog.warn("Could not save Claude usage limits", error);
       });
+  }
+
+  /**
+   * The account Claude's limits describe, as an opaque hash. Turns record it,
+   * so a reading only ever joins the history of the account that ran them.
+   * A sign-in to another account is seen when its next session starts.
+   */
+  async usageAccountKey(): Promise<string | undefined> {
+    await this.loadRateLimits().catch(() => undefined);
+    return this.rateLimitAccount;
+  }
+
+  /** The limits summary() shows, as a Usage Activity reading. */
+  limitObservation(): UsageLimitObservation | undefined {
+    const observedAt = this.rateLimitsObservedAt;
+    const limits = this.summary().rateLimits ?? [];
+    if (observedAt === undefined || limits.length === 0) return undefined;
+    return {
+      observedAt,
+      provider: "anthropic",
+      accountKey: this.rateLimitAccount,
+      planType: this.rateLimitPlan,
+      limits: limits.map((limit) => ({
+        name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
+        resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
+        ...(limit.expires ? { expires: true } : {}),
+      })),
+    };
   }
 
   /**

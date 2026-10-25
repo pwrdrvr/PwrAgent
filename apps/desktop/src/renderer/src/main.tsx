@@ -198,7 +198,8 @@ const routes: Array<{
     render: () => <FederationActivityWindow />,
   },
   {
-    match: (hash) => hash === "usage-activity",
+    // `usage-activity?provider=anthropic` opens on that provider's limits.
+    match: (hash) => hash.split("?")[0] === "usage-activity",
     render: () => <UsageActivityWindow />,
   },
   {

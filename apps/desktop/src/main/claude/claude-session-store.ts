@@ -22,6 +22,10 @@ export type ClaudeRateLimitsRecord = {
   limits: BackendRateLimitSummary[];
   /** Hash of the account the limits describe; never the account's own identifiers. */
   account?: string;
+  /** When Claude last reported these limits. Absent from files before it was recorded. */
+  observedAt?: number;
+  /** The account's subscription, as Claude names it (`max`, `pro`). */
+  plan?: string;
 };
 
 /**
@@ -83,10 +87,21 @@ export class ClaudeSessionStore {
       }];
     });
     const account = "account" in record && typeof record.account === "string" ? record.account : undefined;
-    return { limits, ...(account ? { account } : {}) };
+    const observedAt = "observedAt" in record && finite(record.observedAt) ? record.observedAt : undefined;
+    const plan = "plan" in record && typeof record.plan === "string" && record.plan ? record.plan : undefined;
+    return {
+      limits,
+      ...(account ? { account } : {}),
+      ...(observedAt !== undefined ? { observedAt } : {}),
+      ...(plan ? { plan } : {}),
+    };
   }
 
-  async saveRateLimits(limits: BackendRateLimitSummary[], account?: string): Promise<void> {
+  async saveRateLimits(
+    limits: BackendRateLimitSummary[],
+    account?: string,
+    reading: Pick<ClaudeRateLimitsRecord, "observedAt" | "plan"> = {},
+  ): Promise<void> {
     const destination = path.join(this.root, RATE_LIMITS_FILE);
     if (limits.length === 0) {
       await rm(destination, { force: true });
@@ -94,7 +109,12 @@ export class ClaudeSessionStore {
     }
     await mkdir(this.root, { recursive: true, mode: 0o700 });
     const temporary = `${destination}.${randomUUID()}.tmp`;
-    const record: ClaudeRateLimitsRecord = { limits, ...(account ? { account } : {}) };
+    const record: ClaudeRateLimitsRecord = {
+      limits,
+      ...(account ? { account } : {}),
+      ...(reading.observedAt !== undefined ? { observedAt: reading.observedAt } : {}),
+      ...(reading.plan ? { plan: reading.plan } : {}),
+    };
     try {
       await writeFile(temporary, JSON.stringify(record), { mode: 0o600 });
       await rename(temporary, destination);
