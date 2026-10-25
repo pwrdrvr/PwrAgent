@@ -27,10 +27,12 @@ E2E window manager, then runs each check with a log and a status line.
 | Setup, later worktree | `verify.sh setup` | 2 s | `pnpm install` from the VM's store |
 | Lint job | `verify.sh lint` | 46 s | `pnpm lint`: every CI Lint check, typecheck included |
 | Unit tests | `verify.sh unit` | 132 s | 1,271 files, about 20,000 tests |
-| Linux desktop E2E | `verify.sh e2e` | 585 s | 278 tests, one Playwright worker |
+| Linux desktop E2E, one lane | `verify.sh e2e` | 585 s | 278 tests, one Playwright worker |
+| Linux desktop E2E, two lanes | `verify.sh e2e --lanes 2` | LANES_SECS s | the same tests in two concurrent shards |
 
-`large` is 8 vCPUs and 15 GB. Playwright runs one worker, so E2E time does
-not improve with a larger machine.
+`large` is 8 vCPUs and 15 GB. Playwright runs one worker per lane. Two lanes
+peaked at a load average of about 4, so `all` uses two lanes. More lanes are
+untested.
 
 ## 1. Get a sandbox
 
@@ -102,8 +104,8 @@ for i in $(seq 1 55); do grep -q '^all ' .local/sandboxer/status 2>/dev/null && 
 cat .local/sandboxer/status
 ```
 
-`all` runs setup, then lint, unit, and E2E, and it continues after a failed
-check. Each check appends `<step> exit=<code> secs=<seconds>` to
+`all` runs setup, then lint, unit, and E2E in two lanes, and it continues
+after a failed check. Each check appends `<step> exit=<code> secs=<seconds>` to
 `.local/sandboxer/status`, and the final line is `all exit=<0|1>`.
 
 Run one step when that is all the change needs. Arguments pass through:
@@ -113,12 +115,20 @@ scripts/sandboxer/verify.sh setup
 scripts/sandboxer/verify.sh lint
 scripts/sandboxer/verify.sh unit apps/desktop/src/main/__tests__/backend-registry.test.ts
 scripts/sandboxer/verify.sh e2e e2e/thread-branch-drift.spec.ts
+scripts/sandboxer/verify.sh e2e --lanes 2
 scripts/sandboxer/verify.sh e2e --shard=2/4
 ```
 
+`--lanes` must come first after `e2e`. Lane 1 runs in the worktree. Each
+later lane runs in a sibling worktree at the same commit, `<worktree>-lane<N>`,
+because Playwright writes `test-results/` and `.local/` at fixed paths. The
+script creates and updates those sibling worktrees itself. Each lane writes
+`.local/sandboxer/e2e-lane<N>.log`, and `e2e.log` holds one exit line per
+lane.
+
 Run setup once per worktree before a single step. Run only one `verify.sh`
 at a time in a worktree, because each step writes the same status file.
-Run one E2E at a time in a VM.
+Run one E2E step at a time in a VM.
 
 ## 4. Read the results
 
@@ -126,10 +136,17 @@ Read logs with bounded output, never whole:
 
 ```sh
 tail -n 30 .local/sandboxer/unit.log
-grep -nE '^\s+[0-9]+ (passed|failed|flaky|skipped)|^  [0-9]+\) ' .local/sandboxer/e2e.log
+grep -nE '^\s+[0-9]+ (passed|failed|flaky|skipped)|^  [0-9]+\) ' .local/sandboxer/e2e*.log
 ```
 
-Playwright writes failure context to `apps/desktop/test-results/`. Read one
+Two lanes load the VM more than one lane does. Without a retry, three
+two-lane runs each had at most one unexpected failure, a different test each
+time: `thread-image-fit.spec.ts:353` and `star-map-activity.spec.ts:11`. Each
+then passed 5 of 5 alone. Rerun an unexpected failure or flaky test by itself
+before you treat it as caused by the change.
+
+Playwright writes failure context to `apps/desktop/test-results/` in the
+lane's own worktree. Read one
 file with `read_file`, or copy a directory back with `sbx scp --recursive`
 into a `.local/` directory.
 
@@ -139,9 +156,10 @@ Report the sandbox ID, the commit, and each status line. Name every failure.
 
 - The VM sets `GH_TOKEN` for the Sandboxer account. `verify.sh` unsets
   `GH_TOKEN` and `GITHUB_TOKEN` before every check, as CI runs without them.
-- The local default is `CI` unset: no Playwright retry and no failure
-  screenshots or videos. Add `CI=1` to a step to match CI's single retry and
-  failure artifacts.
+- `verify.sh e2e` sets `CI=1`, as the CI lane does: Playwright retries a
+  failed test once, reports a test that passes on retry as flaky, and keeps
+  failure screenshots and videos. Prefix the command with `CI=` to turn the
+  retry off. Report every flaky test; a retry does not make it pass.
 - Electron started without the setuid helper repair on this image. If it
   reports the fatal SUID sandbox error, run `pnpm fix:linux-sandbox` in the
   worktree. Never disable the Chromium sandbox.

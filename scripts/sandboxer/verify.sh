@@ -46,8 +46,10 @@ setup() {
 }
 
 e2e() {
-  # Same display and window manager as the CI "Linux Desktop E2E" lanes.
-  xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24 -noreset" \
+  # Same display, window manager, and Playwright CI mode as the CI "Linux
+  # Desktop E2E" lanes. CI mode retries a failed test once, reports it as
+  # flaky, and keeps failure screenshots and videos.
+  CI="${CI:-1}" xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24 -noreset" \
     bash .github/scripts/run-linux-desktop-e2e.sh "$@"
 }
 
