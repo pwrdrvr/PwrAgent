@@ -4255,6 +4255,7 @@ function tableColumnExists(
     | "automation_runs"
     | "pr_lookup_cache"
     | "pr_status_cache"
+    | "pr_status_watches"
     | "thread_message_origins"
     | "thread_pricing_summaries"
     | "remote_thread_pins"
@@ -4295,6 +4296,7 @@ function readTableInfo(
     | "automation_runs"
     | "pr_lookup_cache"
     | "pr_status_cache"
+    | "pr_status_watches"
     | "thread_message_origins"
     | "thread_pricing_summaries"
     | "remote_thread_pins"
@@ -4322,6 +4324,10 @@ function readTableInfo(
       }>;
     case "pr_status_cache":
       return db.prepare("PRAGMA table_info(pr_status_cache)").all() as Array<{
+        name: string;
+      }>;
+    case "pr_status_watches":
+      return db.prepare("PRAGMA table_info(pr_status_watches)").all() as Array<{
         name: string;
       }>;
     case "thread_message_origins":
