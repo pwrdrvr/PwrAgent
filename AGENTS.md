@@ -25,6 +25,21 @@
 - Exclude `apps/desktop/.local/protocol-captures/` from broad searches.
   - Search that directory only for captured E2E protocol work.
 
+### Deferred work
+
+- The operator does not read notes in PR descriptions about work that was left out.
+- When you find work that should be done but you are not doing it in this change, raise a PwrAgent to-do card with the `add_todo` tool.
+- Do not write it up in the PR body, a commit message, or a code comment instead.
+- This rule covers:
+  - Out-of-scope gaps.
+  - Deferred follow-ups.
+  - Code-review findings that you skipped but that are still worth doing.
+- Give the card a `start_thread` action.
+  - Its prompt must stand alone. The new thread does not see the original thread.
+  - The operator can then track the item and spawn a thread when ready.
+- A finding that is not worth doing needs no card.
+  - Say so in your reply to the operator instead.
+
 ### Command output
 
 - Keep model-visible command output bounded.
