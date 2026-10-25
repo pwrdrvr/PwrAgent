@@ -9538,9 +9538,8 @@ describe("SettingsScreen", () => {
     expect(
       within(nav).getByRole("button", { name: "MCP Gateway" }),
     ).toBeInTheDocument();
-    expect(within(nav).getByRole("separator")).toHaveClass(
-      "settings-nav__divider",
-    );
+    // Category headings replaced the one unlabeled divider.
+    expect(within(nav).queryByRole("separator")).not.toBeInTheDocument();
   });
 
   /**
