@@ -8,9 +8,9 @@ import type {
  *
  * Each gate needs its helper's usage line and its parent turn's usage line.
  * Scanning the ledger for both, once per gate, made a thread read cost
- * G × P. These indexes are built once per computation from the caller's
- * snapshot and dropped with it, so a fresh read always sees fresh rows.
- * They return exactly what the first-match scans returned.
+ * G × P. These indexes belong to one computation and are dropped with it,
+ * so a fresh read always sees fresh rows. They return exactly what the
+ * first-match scans returned.
  */
 export type TokenMiserPricingIndex = {
   /** The first line whose `sourceItemId` is `monitorId`. */
@@ -72,7 +72,9 @@ export function indexTokenMiserPricingLines(
  * tracking: model round trips in the same turn after the tool's own
  * invocation, less the first, which received the result uncached.
  *
- * Each turn is ordered once, on first use, instead of once per gate.
+ * Each turn is ordered once, on first use, instead of once per gate. The
+ * caller's array is grouped on the first query, not at construction, so a
+ * thread with no legacy gate never groups it; do not mutate it in between.
  */
 export type TokenMiserCachedReplayIndex = {
   countAfterInvocation(params: { toolUseId: string; turnId: string }): number;

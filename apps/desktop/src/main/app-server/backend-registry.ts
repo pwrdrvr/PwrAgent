@@ -4205,16 +4205,12 @@ function buildTaskMonitorUsageSnapshot(params: {
   };
 }
 
+type TaskMonitorTokenUsage = TaskMonitorUsageSnapshot["tokenUsage"];
+
+/** A snapshot without its summary; every count except cache writes is set. */
 type TaskMonitorUsageTotals = Omit<TaskMonitorUsageSnapshot, "summary" | "tokenUsage"> & {
-  tokenUsage: {
-    cacheWriteInputTokens?: number;
-    cachedInputTokens: number;
-    inputTokens: number;
-    outputTokens: number;
-    reasoningOutputTokens: number;
-    totalTokens: number;
-    uncachedInputTokens: number;
-  };
+  tokenUsage: Required<Omit<TaskMonitorTokenUsage, "cacheWriteInputTokens">>
+    & Pick<TaskMonitorTokenUsage, "cacheWriteInputTokens">;
 };
 
 /**
@@ -5097,20 +5093,25 @@ function tokenMiserMonitorId(entry: TokenMiserObjectMetadata): string {
 /**
  * One gate's dollar accounting and the lines it was priced from. The rail
  * card and the thread savings total both call this, so they cannot drift.
- * `usage` is the helper's reported usage; the card passes its display
- * snapshot and the total passes bare numbers, which price identically.
+ * `helperUsage` supplies the helper's reported usage, which prices a gate
+ * whose usage line has not landed. It runs only then. The card passes its
+ * display snapshot and the total passes bare numbers, which price
+ * identically.
  */
 function resolveTokenMiserGateAccounting(params: {
   entry: TokenMiserObjectMetadata;
+  helperUsage: () =>
+    | Pick<TaskMonitorUsageSnapshot, "cost" | "model" | "tokenUsage">
+    | undefined;
   indexes: TokenMiserLedgerIndexes;
-  usage?: Pick<TaskMonitorUsageSnapshot, "cost" | "model" | "tokenUsage">;
 }): {
   gateUsageLine?: ThreadUsageLineRecord;
   tokenMiserAccounting: ThreadSubAgentSummary["tokenMiserAccounting"];
 } {
-  const { entry, indexes, usage } = params;
+  const { entry, indexes } = params;
   const monitorId = tokenMiserMonitorId(entry);
   let gateUsageLine = indexes.pricing.gateUsageLine(monitorId);
+  const usage = gateUsageLine ? undefined : params.helperUsage();
   if (!gateUsageLine && usage) {
     gateUsageLine = buildTaskMonitorUsageLine({
       backend: "codex",
@@ -37097,14 +37098,15 @@ export class DesktopBackendRegistry {
       const { tokenMiserAccounting: accounting } =
         resolveTokenMiserGateAccounting({
           entry,
+          helperUsage: () =>
+            entry.helperUsage?.tokenUsage
+              ? buildTaskMonitorUsageTotals({
+                  model: entry.helperUsage.model,
+                  serviceTier: entry.helperUsage.serviceTier,
+                  tokenUsage: entry.helperUsage.tokenUsage,
+                })
+              : undefined,
           indexes,
-          usage: entry.helperUsage?.tokenUsage
-            ? buildTaskMonitorUsageTotals({
-                model: entry.helperUsage.model,
-                serviceTier: entry.helperUsage.serviceTier,
-                tokenUsage: entry.helperUsage.tokenUsage,
-              })
-            : undefined,
         });
       if (!accounting) {
         continue;
@@ -37188,8 +37190,8 @@ export class DesktopBackendRegistry {
     const { gateUsageLine, tokenMiserAccounting } =
       resolveTokenMiserGateAccounting({
         entry,
+        helperUsage: () => usage,
         indexes: params.indexes,
-        usage,
       });
     const policyPassThrough =
       entry.disposition === "passed_through"
@@ -37259,8 +37261,11 @@ export class DesktopBackendRegistry {
           threadId: entry.threadId,
         })
       : { lines: [], summaries: [] };
+    // Invocations only reconstruct replays for gates that predate observed
+    // replay tracking. A v2 gate never reads them, so skip the full read.
     const toolAccounting =
-      typeof this.overlayStore.readThreadToolAccounting === "function"
+      entry.replayTrackingVersion !== 2
+      && typeof this.overlayStore.readThreadToolAccounting === "function"
         ? await this.overlayStore.readThreadToolAccounting({
             backend: "codex",
             includeAllInvocations: true,
@@ -37417,7 +37422,7 @@ export class DesktopBackendRegistry {
     const liveUsageLines = this.liveTokenMiserUsageLines.get(threadId);
     let changed = false;
     for (const entry of entries) {
-      const monitorId = `system:token-miser:${entry.objectId}`;
+      const monitorId = tokenMiserMonitorId(entry);
       changed = liveSubAgents?.delete(monitorId) === true || changed;
       for (const [usageLineId, line] of liveUsageLines ?? []) {
         if (line.sourceItemId === monitorId) {
@@ -37471,8 +37476,10 @@ export class DesktopBackendRegistry {
             threadId,
           })
         : undefined;
+      // Only gates that predate observed replay tracking read invocations.
       const toolAccounting =
-        typeof this.overlayStore.readThreadToolAccounting === "function"
+        entries.some((entry) => entry.replayTrackingVersion !== 2)
+        && typeof this.overlayStore.readThreadToolAccounting === "function"
           ? await this.overlayStore.readThreadToolAccounting({
               backend: "codex",
               includeAllInvocations: true,

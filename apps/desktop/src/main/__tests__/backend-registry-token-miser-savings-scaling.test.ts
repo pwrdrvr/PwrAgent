@@ -73,9 +73,7 @@ describe("Token Miser savings scaling", () => {
         onPendingRequest: () => () => {},
       } as never,
       overlayStore: store,
-      registrySessionId: "registry-session-fixture",
-      runtimeInstanceId: "runtime-instance-fixture",
-    } as never);
+    });
     internals = registry as unknown as Internals;
     internals.tokenMiserStore = new TestTokenMiserStore(
       path.join(directory, "token-miser"),
@@ -191,16 +189,37 @@ describe("Token Miser savings scaling", () => {
     ).toMatchSnapshot("live replay usage lines");
   });
 
+  it("skips the invocation read when every persisted gate tracks replays directly", async () => {
+    const work = buildWorkload(1);
+    const observed = work.entries.filter((entry) => entry.replayTrackingVersion === 2);
+    expect(observed.length).toBeGreaterThan(0);
+    vi.spyOn(store, "readThreadPricing").mockResolvedValue({
+      lines: work.persistedLines,
+      summaries: [],
+    });
+    const readInvocations = vi.spyOn(store, "readThreadToolAccounting");
+    await internals.persistTokenMiserLedgerEntries(observed);
+    expect(readInvocations).not.toHaveBeenCalled();
+    const overlay = await store.getThreadOverlayState({ backend: "codex", threadId: THREAD_ID });
+    expect(overlay?.subAgents?.map((subAgent) => subAgent.monitorId).sort()).toEqual(
+      observed.map((entry) => `system:token-miser:${entry.objectId}`).sort(),
+    );
+  });
+
   it("reads the pricing ledger and invocations a bounded number of times per thread read", async () => {
     const measured = [];
     for (const multiple of [6, 24]) {
       const work = buildWorkload(multiple);
       const counter = new ReadCounter();
+      // Spies are restored per sample: re-spying returns the same spy, whose
+      // calls would otherwise accumulate across samples.
       const formats = countNumberFormatting();
       const result = await readSavings(work, counter);
+      const formatting = formats.calls();
+      formats.restore();
       expect(result.tokenMiser?.savings?.gateCount).toBe(work.entries.length);
       measured.push({
-        formatting: formats.calls(),
+        formatting,
         gates: work.entries.length,
         invocationReads: counter.reads.invocations,
         invocations: work.invocations.length,
@@ -308,18 +327,24 @@ class ReadCounter {
  * Counts locale number formatting: the gate card's character counts and the
  * helper usage summary both format through these. Savings totals need none.
  */
-function countNumberFormatting(): { calls(): number } {
+function countNumberFormatting(): { calls(): number; restore(): void } {
   const toLocaleString = vi.spyOn(Number.prototype, "toLocaleString");
   const NumberFormat = Intl.NumberFormat;
   let constructed = 0;
-  vi.spyOn(Intl, "NumberFormat").mockImplementation(function (
+  const numberFormat = vi.spyOn(Intl, "NumberFormat").mockImplementation(function (
     this: unknown,
     ...args: ConstructorParameters<typeof Intl.NumberFormat>
   ) {
     constructed += 1;
     return new NumberFormat(...args);
   } as typeof Intl.NumberFormat);
-  return { calls: () => toLocaleString.mock.calls.length + constructed };
+  return {
+    calls: () => toLocaleString.mock.calls.length + constructed,
+    restore: () => {
+      toLocaleString.mockRestore();
+      numberFormat.mockRestore();
+    },
+  };
 }
 
 function projectSubAgent(subAgent: ThreadSubAgentSummary) {
