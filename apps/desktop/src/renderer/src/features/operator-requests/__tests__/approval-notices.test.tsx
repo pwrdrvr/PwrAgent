@@ -36,7 +36,7 @@ const commandApproval = serverRequest("item/commandExecution/requestApproval", {
 const mcpApproval = serverRequest("mcpServer/elicitation/request", {
   serverName: "playwright",
   mode: "form",
-  _meta: null,
+  _meta: { codex_approval_kind: "mcp_tool_call" },
   message: "Allow the playwright MCP server to run tool \"browser_tabs\"?",
   requestedSchema: { type: "object", properties: {} },
 }, { createdAt: 2_000, threadId: "thread-b" });
