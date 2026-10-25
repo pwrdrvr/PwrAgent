@@ -208,6 +208,15 @@ export type McpConnectionRecord = {
    * absent reads as `auto`.
    */
   toolApproval?: McpConnectionToolApproval;
+  /**
+   * Only the Sandboxer connection uses this. When true, PwrAgent stops or
+   * deletes the sandboxes a thread created through this connection once
+   * every PR attached to that thread has merged or closed.
+   *
+   * Optional because an owner broker from an older build answers without it;
+   * absent reads as `true`.
+   */
+  sandboxerCleanupOnPrClose?: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -335,6 +344,11 @@ export type SetMcpConnectionEnabledRequest = {
 export type SetMcpConnectionSelectForNewThreadsRequest = {
   connectionId: McpConnectionId;
   selectForNewThreads: boolean;
+};
+
+/** See `McpConnectionRecord.sandboxerCleanupOnPrClose`. */
+export type SetSandboxerCleanupOnPrCloseRequest = {
+  enabled: boolean;
 };
 
 /** See `McpConnectionRecord.toolApproval`. */

@@ -160,6 +160,22 @@ export class McpConnectionRegistry {
   }
 
   /**
+   * Choose whether PwrAgent cleans up the sandboxes a thread created once
+   * every PR attached to that thread has merged or closed.
+   *
+   * Only Sandboxer has the setting. The default is on, so absence reads as
+   * `true`; the scalar is written either way so the operator's choice is
+   * visible in config.toml.
+   */
+  setSandboxerCleanupOnPrClose(enabled: boolean): McpConnectionRecord {
+    this.writeScalar(
+      ["mcp_connections", "sandboxer_cleanup_on_pr_close"],
+      enabled,
+    );
+    return this.sandboxerConnection();
+  }
+
+  /**
    * Choose when a gateway call to this connection asks first.
    *
    * The default is stored as absence: `auto` except for Sandboxer's `prompt`.
@@ -247,6 +263,7 @@ export class McpConnectionRegistry {
       selectForNewThreads: table?.sandboxer_select_for_new_threads === true,
       toolApproval: isMcpConnectionToolApproval(table?.sandboxer_tool_approval)
         ? table.sandboxer_tool_approval : "prompt",
+      sandboxerCleanupOnPrClose: table?.sandboxer_cleanup_on_pr_close !== false,
       createdAt: 0,
       updatedAt: 0,
     };

@@ -59,6 +59,15 @@ export class PrStatusWatchCoordinator {
       isBackgroundPollingEnabled?: () => boolean;
       /** Reads merge details from the forge; a throw falls back to cached status. */
       fetchTerminalDetails?: (pr: PrSummary) => Promise<PullRequestTerminalDetails | undefined>;
+      /**
+       * Work PwrAgent does for the watching thread before it wakes, such as
+       * releasing its sandboxes. Returns lines for the wake message. It must
+       * bound its own time; a throw only drops the lines.
+       */
+      prepareTerminalWake?: (params: {
+        watch: ThreadPullRequestWatchSummary;
+        pr: PrSummary;
+      }) => Promise<string[]>;
       now?: () => number;
     },
   ) {}
@@ -139,8 +148,19 @@ export class PrStatusWatchCoordinator {
     );
     try {
       const details = await this.resolveTerminalDetails(pr);
-      for (const claim of claims) {
-        await this.dispatchTerminalClaim(claim, pr, details, observedAt);
+      // Each thread's sandbox cleanup can wait on a remote MCP, so prepare
+      // every wake at once rather than one thread after another.
+      const extraLines = details
+        ? await Promise.all(claims.map((claim) => this.prepareTerminalWake(claim, pr)))
+        : [];
+      for (const [index, claim] of claims.entries()) {
+        await this.dispatchTerminalClaim(
+          claim,
+          pr,
+          details,
+          observedAt,
+          extraLines[index] ?? [],
+        );
       }
     } finally {
       for (const stop of stopHeartbeats) stop();
@@ -188,11 +208,26 @@ export class PrStatusWatchCoordinator {
     }
   }
 
+  private async prepareTerminalWake(
+    claim: PrStatusWatchClaim,
+    pr: PrSummary,
+  ): Promise<string[]> {
+    try {
+      return await this.options.prepareTerminalWake?.({
+        watch: claim.watch,
+        pr,
+      }) ?? [];
+    } catch {
+      return [];
+    }
+  }
+
   private async dispatchTerminalClaim(
     claim: PrStatusWatchClaim,
     pr: PrSummary,
     details: PullRequestTerminalDetails | undefined,
     observedAt: number,
+    extraLines: string[],
   ): Promise<void> {
     const release = async (spendAttempt: boolean) =>
       await this.options.store.releaseThreadPrStatusWatch({
@@ -213,7 +248,7 @@ export class PrStatusWatchCoordinator {
         threadId: claim.watch.threadId,
         input: [{
           type: "text",
-          text: buildPrTerminalWatchPrompt({ details, observedAt }),
+          text: buildPrTerminalWatchPrompt({ details, observedAt, extraLines }),
         }],
         origin: "automation",
         messageOrigin: {
@@ -370,8 +405,11 @@ export function getPrStatusWatchOutcome(
 export function buildPrTerminalWatchPrompt(params: {
   details: PullRequestTerminalDetails;
   observedAt: number;
+  /** Lines from work PwrAgent already did, such as sandbox cleanup. */
+  extraLines?: string[];
 }): string {
   const merged = params.details.outcome === "merged";
+  const extraLines = params.extraLines ?? [];
   return [
     `PwrAgent resumed this thread because its pull request watch saw the PR ${
       merged ? "merged" : "closed without merge"
@@ -380,8 +418,11 @@ export function buildPrTerminalWatchPrompt(params: {
     "Pull request notification",
     ...formatTerminalDetailsLines(params.details),
     `- Observed at: ${new Date(params.observedAt).toISOString()}`,
+    ...extraLines,
     "",
-    "Release what this thread created only for this PR, such as a Sandboxer sandbox used to test it, unless the operator asked to keep it. "
+    (extraLines.length > 0
+      ? "PwrAgent has already acted on the sandboxes listed above: do not stop or delete them yourself, and report any it could not clean up. Release anything else this thread created only for this PR, unless the operator asked to keep it. "
+      : "Release what this thread created only for this PR, such as a Sandboxer sandbox used to test it, unless the operator asked to keep it. ")
       + (merged
         ? "Report the merge, and continue only if the operator's prior request asked for follow-up after it lands."
         : "Report the close, and do not reopen or recreate the PR unless the operator asked for that.")

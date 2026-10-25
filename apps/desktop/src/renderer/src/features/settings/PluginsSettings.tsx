@@ -99,6 +99,7 @@ type ConnectionPendingAction = {
     | "newThreadDefault"
     | "probe"
     | "remove"
+    | "sandboxerCleanup"
     | "testLocal"
     | "toolApproval"
     | "update";
@@ -1231,6 +1232,37 @@ export function PluginsSettings(props: {
     }
   };
 
+  const setSandboxerCleanupOnPrClose = async (
+    connection: McpConnectionStatus,
+    enabled: boolean,
+  ) => {
+    if (
+      connectionPending
+      || !props.desktopApi?.setSandboxerCleanupOnPrClose
+    ) return;
+    setConnectionPending({
+      kind: "sandboxerCleanup",
+      connectionId: connection.id,
+    });
+    try {
+      await props.desktopApi.setSandboxerCleanupOnPrClose({ enabled });
+      await loadConnections();
+      setConnectionNotice({
+        kind: "success",
+        text: enabled
+          ? "PwrAgent stops or deletes a thread's sandboxes once all of its PRs merge or close."
+          : "PwrAgent leaves sandboxes running when a thread's PRs merge or close.",
+      });
+    } catch (error) {
+      setConnectionNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setConnectionPending(undefined);
+    }
+  };
+
   const setConnectionToolApproval = async (
     connection: McpConnectionStatus,
     toolApproval: McpConnectionToolApproval,
@@ -1414,6 +1446,13 @@ export function PluginsSettings(props: {
                     props.desktopApi?.setMcpConnectionToolApproval
                       ? (toolApproval) =>
                           void setConnectionToolApproval(connection, toolApproval)
+                      : undefined
+                  }
+                  onSandboxerCleanupOnPrCloseChange={
+                    connection.kind === "sandboxer"
+                    && props.desktopApi?.setSandboxerCleanupOnPrClose
+                      ? (enabled) =>
+                          void setSandboxerCleanupOnPrClose(connection, enabled)
                       : undefined
                   }
                   onChanged={() => void loadConnections()}
@@ -2174,6 +2213,8 @@ function ManagedMcpConnectionRow(props: {
   onAvailabilityChange?: (enabled: boolean) => void;
   onSelectForNewThreadsChange?: (selectForNewThreads: boolean) => void;
   onToolApprovalChange?: (toolApproval: McpConnectionToolApproval) => void;
+  /** Sandboxer only. */
+  onSandboxerCleanupOnPrCloseChange?: (enabled: boolean) => void;
   onChanged: () => void;
   onDisconnect: () => void;
   onEdit: () => void;
@@ -2621,6 +2662,26 @@ function ManagedMcpConnectionRow(props: {
                     : seedable
                       ? "New threads start with it selected. Existing threads keep theirs."
                       : "New threads skip it until it is signed in again."}
+                </span>
+              </span>
+            </div>
+          ) : null}
+          {sandboxer && props.onSandboxerCleanupOnPrCloseChange ? (
+            <div className="settings-mcp-row__policy-item">
+              <SettingsSwitch
+                // Absent reads as on: an older owner answers without it.
+                checked={connection.sandboxerCleanupOnPrClose !== false}
+                disabled={disabled}
+                label="Clean up Sandboxer sandboxes when PRs close"
+                onChange={props.onSandboxerCleanupOnPrCloseChange}
+              />
+              <span className="settings-mcp-row__policy-text">
+                <span className="settings-mcp-row__policy-label">
+                  Clean up when PRs close
+                </span>
+                <span className="settings-mcp-row__policy-hint">
+                  Delete each sandbox a thread created once all of its PRs
+                  merge or close. Without a delete tool, PwrAgent stops it.
                 </span>
               </span>
             </div>

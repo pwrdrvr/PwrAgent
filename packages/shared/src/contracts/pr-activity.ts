@@ -5,7 +5,7 @@ export type PrActivityTone = "ok" | "active" | "warning" | "error";
 export type PrActivityEvent = {
   id: number;
   occurredAt: number;
-  category: "check" | "repair" | "budget";
+  category: "check" | "repair" | "budget" | "cleanup";
   source: string;
   message: string;
   threadKeys: string[];
