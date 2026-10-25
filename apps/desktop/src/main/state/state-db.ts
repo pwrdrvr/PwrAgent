@@ -2367,12 +2367,6 @@ export class StateDb {
         .run(now - PR_STATUS_WATCH_HISTORY_RETENTION_MS);
       this.db
         .prepare(
-          `DELETE FROM thread_sandboxes
-           WHERE status = 'deleted' AND updated_at < ?`,
-        )
-        .run(now - PR_STATUS_WATCH_HISTORY_RETENTION_MS);
-      this.db
-        .prepare(
           `DELETE FROM composer_draft_journal
            WHERE id IN (
              SELECT id FROM composer_draft_journal

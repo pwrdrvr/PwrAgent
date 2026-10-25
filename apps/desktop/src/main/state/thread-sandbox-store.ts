@@ -14,7 +14,9 @@ import type Database from "better-sqlite3";
  * - `stopped`: PwrAgent stopped it because the connection had no delete
  *   tool. Deletion is still pending; a later cleanup deletes it once the
  *   connection lists one.
- * - `deleted`: deleted, or the connection reported it no longer exists.
+ *
+ * A deleted sandbox (or one the connection reports no longer exists) drops
+ * its row: nothing reads it again, so the table holds only what is pending.
  */
 export const THREAD_SANDBOX_SCHEMA = `
 CREATE TABLE IF NOT EXISTS thread_sandboxes (
@@ -33,7 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_thread_sandboxes_pending
   ON thread_sandboxes(thread_id) WHERE status IN ('active', 'stopped');
 `;
 
-export type ThreadSandboxStatus = "active" | "stopped" | "deleted";
+export type ThreadSandboxStatus = "active" | "stopped";
 
 export type ThreadSandboxRecord = {
   connectionId: string;
@@ -66,9 +68,7 @@ function decode(row: Row): ThreadSandboxRecord {
     ...(row.backend ? { backend: row.backend } : {}),
     threadId: row.thread_id,
     ...(row.name ? { name: row.name } : {}),
-    status: row.status === "stopped" || row.status === "deleted"
-      ? row.status
-      : "active",
+    status: row.status === "stopped" ? "stopped" : "active",
     ...(row.note ? { note: row.note } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -138,6 +138,12 @@ export class ThreadSandboxStore {
     note?: string;
     now: number;
   }): void {
+    if (params.status === "deleted") {
+      this.db.prepare(
+        "DELETE FROM thread_sandboxes WHERE connection_id = ? AND sandbox_id = ?",
+      ).run(params.connectionId, params.sandboxId);
+      return;
+    }
     this.db.prepare(
       `UPDATE thread_sandboxes
        SET status = ?, note = ?, updated_at = ?
