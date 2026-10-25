@@ -151,7 +151,11 @@ export type McpStdioLaunchInput = {
   env: McpStdioEnvironmentInput[];
 };
 
-export const MCP_STDIO_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/**
+ * A portable variable name. `__proto__` is refused: every place that holds
+ * these names as object keys would turn it into a prototype assignment.
+ */
+export const MCP_STDIO_ENV_NAME_PATTERN = /^(?!__proto__$)[A-Za-z_][A-Za-z0-9_]*$/;
 export const MCP_STDIO_LIMITS = {
   args: 128,
   argLength: 4_096,

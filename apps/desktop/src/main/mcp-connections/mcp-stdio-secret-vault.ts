@@ -36,7 +36,8 @@ export class McpStdioSecretVault {
 
   /** The stored values for one connection. Throws when storage is unreadable. */
   async read(connectionId: string): Promise<Record<string, string>> {
-    return { ...((await this.readEnvelope()).connections[connectionId] ?? {}) };
+    const connections = (await this.readEnvelope()).connections;
+    return Object.assign(dictionary<string>(), Object.hasOwn(connections, connectionId) ? connections[connectionId] : {});
   }
 
   /**
@@ -48,13 +49,14 @@ export class McpStdioSecretVault {
     await this.enqueue(async () => {
       const envelope = await this.readEnvelope();
       if (Object.keys(values).length === 0) {
-        if (!(connectionId in envelope.connections)) return;
+        if (!Object.hasOwn(envelope.connections, connectionId)) return;
         delete envelope.connections[connectionId];
       } else {
-        envelope.connections[connectionId] = { ...values };
+        envelope.connections[connectionId] = Object.assign(dictionary<string>(), values);
       }
       await this.persist(envelope);
-      const saved = (await this.readEnvelope()).connections[connectionId] ?? {};
+      const after = (await this.readEnvelope()).connections;
+      const saved = Object.hasOwn(after, connectionId) ? after[connectionId]! : {};
       if (JSON.stringify(sorted(saved)) !== JSON.stringify(sorted(values))) {
         throw new Error(
           "PwrAgent could not save this server's secrets. Encrypted storage may be unavailable.",
@@ -75,18 +77,20 @@ export class McpStdioSecretVault {
 
   private async readEnvelope(): Promise<SecretEnvelope> {
     const raw = await this.settings.resolveMcpStdioConnectionSecrets();
-    if (!raw) return { version: 1, connections: {} };
+    if (!raw) return { version: 1, connections: dictionary() };
     try {
       const parsed = JSON.parse(raw) as Partial<SecretEnvelope>;
       if (parsed.version !== 1 || !parsed.connections || typeof parsed.connections !== "object") {
         throw new Error("invalid envelope");
       }
-      const connections: SecretEnvelope["connections"] = {};
+      const connections = dictionary<Record<string, string>>();
       for (const [id, values] of Object.entries(parsed.connections)) {
         if (!values || typeof values !== "object" || Array.isArray(values)) continue;
-        connections[id] = Object.fromEntries(
-          Object.entries(values).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-        );
+        const entries = dictionary<string>();
+        for (const [name, value] of Object.entries(values)) {
+          if (typeof value === "string") entries[name] = value;
+        }
+        connections[id] = entries;
       }
       return { version: 1, connections };
     } catch (cause) {
@@ -101,6 +105,14 @@ export class McpStdioSecretVault {
     }
     await this.settings.saveMcpStdioConnectionSecrets(JSON.stringify(envelope));
   }
+}
+
+/**
+ * A map with no prototype. Connection ids and variable names are operator
+ * text, and `constructor` or `__proto__` must be keys, not inherited members.
+ */
+function dictionary<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
 }
 
 function sorted(values: Record<string, string>): Array<[string, string]> {

@@ -564,6 +564,7 @@ export class McpConnectionGatewayService {
    * thread's agent has let go and a local command started for it is stopped.
    */
   private readonly bridgeAttachments = new Map<string, Set<Socket>>();
+  private bridgeAttachmentCount = 0;
   private readonly rpcSockets = new Set<Socket>();
   private activeRpcSockets = 0;
 
@@ -740,9 +741,8 @@ export class McpConnectionGatewayService {
   /**
    * Start a local command once, read its tools, and stop it.
    *
-   * Nothing is written. The process counts toward the connection's running
-   * copies while it lives and is stopped on every path out of here,
-   * including shutdown.
+   * Nothing is written. The process is not one of a thread's running copies,
+   * and it is stopped on every path out of here, including shutdown.
    */
   async testStdioConnection(
     request: TestMcpStdioConnectionRequest,
@@ -777,7 +777,8 @@ export class McpConnectionGatewayService {
     try {
       const { launch, secretValues } = await this.prepareStdioLaunch(request.stdio, existing?.id);
       command = launch.command;
-      transport = await this.createStdioTransport(existing?.id ?? "", launch, secretValues);
+      // Not counted toward "Running": no thread is using this copy.
+      transport = await this.createStdioTransport("", launch, secretValues);
       this.stdioTestTransports.add(transport);
       const client = new Client({ name: "pwragent-settings-test", version: "1.0.0" }, { capabilities: {} });
       const abort = (): void => { void transport?.close().catch(() => undefined); };
@@ -855,7 +856,8 @@ export class McpConnectionGatewayService {
       }
     }
     let stored: Record<string, string> | undefined;
-    const secretValues: Record<string, string> = {};
+    // Keyed by variable names the operator typed: no prototype to collide with.
+    const secretValues: Record<string, string> = Object.create(null) as Record<string, string>;
     for (const entry of normalized.env) {
       if (!entry.secret) continue;
       if (entry.value !== undefined && entry.value !== "") {
@@ -871,8 +873,9 @@ export class McpConnectionGatewayService {
             "PwrAgent could not read this server's stored secrets. Enter each secret again.",
           );
         }
-        if (stored[entry.name] !== undefined) {
-          secretValues[entry.name] = stored[entry.name]!;
+        const kept = Object.hasOwn(stored, entry.name) ? stored[entry.name] : undefined;
+        if (kept !== undefined) {
+          secretValues[entry.name] = kept;
           continue;
         }
       }
@@ -1109,20 +1112,32 @@ export class McpConnectionGatewayService {
     const prepared = request.stdio
       ? await this.prepareStdioLaunch(request.stdio, existing.id)
       : undefined;
+    // A save from the edit dialog always carries the launch. Only a launch or
+    // secret that actually changed restarts running copies; a rename must not
+    // throw away every thread's server state.
+    const previousSecrets = prepared
+      ? await this.stdioSecrets.read(existing.id).catch(() => undefined)
+      : undefined;
+    const secretsChanged = prepared !== undefined
+      && !sameSecretValues(previousSecrets, prepared.secretValues);
     const { connection, launchChanged } = this.registry.update({
       connectionId: existing.id,
       ...(request.displayName === undefined ? {} : { displayName: request.displayName }),
       ...(prepared ? { launch: prepared.launch } : {}),
     });
-    if (prepared) {
+    if (prepared && secretsChanged) {
       try {
         await this.stdioSecrets.write(existing.id, prepared.secretValues);
       } catch (error) {
-        this.registry.update({ connectionId: existing.id, launch: existing.stdio! });
+        this.registry.update({
+          connectionId: existing.id,
+          displayName: existing.displayName,
+          launch: existing.stdio!,
+        });
         throw error;
       }
     }
-    if (launchChanged || prepared) {
+    if (launchChanged || secretsChanged) {
       await this.closeConnectionSessions(existing.id);
       this.discoveryHealth.delete(existing.id);
     }
@@ -1404,9 +1419,10 @@ export class McpConnectionGatewayService {
     if (connection.kind === "stdio") {
       this.invalidateConnectionTools(connectionId);
       this.discoveryHealth.delete(connectionId);
-      const removed = this.registry.remove(connectionId);
+      // Secrets first: if storage refuses, the row stays and Remove can be
+      // tried again, rather than leaving a token with no row to reach it.
       await this.stdioSecrets.delete(connectionId);
-      return removed;
+      return this.registry.remove(connectionId);
     }
     await this.coordinatorFor(connection).disconnect();
     this.coordinators.delete(connectionId);
@@ -1544,6 +1560,7 @@ export class McpConnectionGatewayService {
       for (const socket of sockets) socket.destroy();
     }
     this.bridgeAttachments.clear();
+    this.bridgeAttachmentCount = 0;
     await Promise.all([...this.stdioTestTransports].map(async (transport) =>
       await transport.close().catch(() => undefined)));
     this.stdioTestTransports.clear();
@@ -2175,7 +2192,7 @@ export class McpConnectionGatewayService {
     if (secretNames.length > 0) {
       try {
         const stored = await this.stdioSecrets.read(connection.id);
-        const missing = secretNames.find((name) => stored[name] === undefined);
+        const missing = secretNames.find((name) => !Object.hasOwn(stored, name));
         if (missing) {
           detail = `PwrAgent could not read the stored value of ${missing}. Edit this connection and enter it again.`;
         }
@@ -2663,9 +2680,7 @@ export class McpConnectionGatewayService {
    */
   private attachBridge(token: string, grant: BridgeGrant, socket: Socket): void {
     if (this.rpcSockets.delete(socket)) this.activeRpcSockets -= 1;
-    let total = 0;
-    for (const sockets of this.bridgeAttachments.values()) total += sockets.size;
-    if (total >= MAX_BRIDGE_ATTACHMENTS) {
+    if (this.bridgeAttachmentCount >= MAX_BRIDGE_ATTACHMENTS) {
       this.respond(socket, { ok: false, error: "too many attached bridges" });
       return;
     }
@@ -2676,9 +2691,11 @@ export class McpConnectionGatewayService {
       this.bridgeAttachments.set(token, sockets);
     }
     sockets.add(socket);
+    this.bridgeAttachmentCount += 1;
     const detach = (): void => {
       const current = this.bridgeAttachments.get(token);
       if (!current?.delete(socket)) return;
+      this.bridgeAttachmentCount -= 1;
       if (current.size > 0) return;
       this.bridgeAttachments.delete(token);
       if (this.registry.get(grant.connectionId)?.kind === "stdio") {
@@ -3099,6 +3116,16 @@ function grantThreadId(grant: BridgeGrant): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function sameSecretValues(
+  previous: Record<string, string> | undefined,
+  next: Record<string, string>,
+): boolean {
+  if (!previous) return false;
+  const names = Object.keys(next);
+  return names.length === Object.keys(previous).length
+    && names.every((name) => Object.hasOwn(previous, name) && previous[name] === next[name]);
 }
 
 function hasStdioSecretStore(

@@ -537,6 +537,18 @@ describe("McpConnectionRegistry local commands", () => {
     expect(() => registry.update({ connectionId: created.id, serverUrl: "https://example.com/mcp" }))
       .toThrow();
     expect(registry.update({ connectionId: created.id, displayName: "Renamed" }).launchChanged).toBe(false);
+    // The form may list a secret before a plain variable; the row cannot.
+    const interleaved = {
+      command: launch.command,
+      args: [],
+      env: [
+        { name: "FIXTURE_TOKEN", secret: true },
+        { name: "FIXTURE_ROOT", secret: false, value: "/home/example" },
+      ],
+    };
+    registry.update({ connectionId: created.id, launch: interleaved });
+    const reread = new McpConnectionRegistry({ configPath: target });
+    expect(reread.update({ connectionId: created.id, launch: interleaved }).launchChanged).toBe(false);
   });
 
   it("keeps a row from a newer build that it cannot read, byte for byte, through its own writes", () => {

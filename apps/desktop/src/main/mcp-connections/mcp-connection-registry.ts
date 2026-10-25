@@ -610,14 +610,24 @@ function stdioIdentity(id: string): string {
   return `stdio:${id}`;
 }
 
+/**
+ * A copy in the order the row stores it -- plain variables, then secret
+ * names -- so a launch read back from config compares equal to the one
+ * written, whatever order the form listed them in.
+ */
 function cloneLaunch(launch: McpStdioLaunch): McpStdioLaunch {
   return {
     command: launch.command,
     args: [...launch.args],
     ...(launch.cwd ? { cwd: launch.cwd } : {}),
-    env: launch.env.map((entry) => entry.secret
-      ? { name: entry.name, secret: true }
-      : { name: entry.name, secret: false, value: entry.value ?? "" }),
+    env: [
+      ...launch.env
+        .filter((entry) => !entry.secret)
+        .map((entry) => ({ name: entry.name, secret: false as const, value: entry.value ?? "" })),
+      ...launch.env
+        .filter((entry) => entry.secret)
+        .map((entry) => ({ name: entry.name, secret: true as const })),
+    ],
   };
 }
 

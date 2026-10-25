@@ -24174,11 +24174,12 @@ export class DesktopBackendRegistry {
       this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
       // A connection the thread turned off keeps its grant until the agent
       // reloads its servers, but a local command started for this thread has
-      // no reason to keep running in the meantime.
+      // no reason to keep running in the meantime. Not awaited: stopping a
+      // process can take seconds, and the operator's switch should not wait.
       const kept = new Set(state.mcpConnectionIds ?? []);
       const released = (previousState?.mcpConnectionIds ?? []).filter((id) => !kept.has(id));
       if (released.length > 0) {
-        await this.mcpConnectionService?.closeThreadSessions?.(request.threadId, released)
+        void this.mcpConnectionService?.closeThreadSessions?.(request.threadId, released)
           .catch((error: unknown) => {
             backendRegistryLog.warn("connection_mcp_session_release_failed", {
               error: error instanceof Error ? error.message : String(error),

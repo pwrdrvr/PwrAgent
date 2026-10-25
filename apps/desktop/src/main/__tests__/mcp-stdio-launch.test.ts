@@ -60,6 +60,9 @@ describe("normalizeStdioLaunchInput", () => {
       command: "npx", args: [], env: [{ name: "1BAD", secret: false, value: "x" }],
     }))).toBe("invalid");
     expect(problemOf(() => normalizeStdioLaunchInput({
+      command: "npx", args: [], env: [{ name: "__proto__", secret: false, value: "x" }],
+    }))).toBe("invalid");
+    expect(problemOf(() => normalizeStdioLaunchInput({
       command: "npx", args: [], env: [
         { name: "TWICE", secret: false, value: "a" },
         { name: "TWICE", secret: false, value: "b" },
@@ -194,6 +197,11 @@ describe("McpStdioSecretVault", () => {
     await vault.delete("a");
     expect(await vault.read("a")).toEqual({});
     expect(await vault.read("b")).toEqual({ TOKEN: "two" });
+    // Ids and names are operator text; `constructor` is a key like any other.
+    expect(await vault.read("constructor")).toEqual({});
+    await vault.write("constructor", { toString: "three" });
+    expect(await vault.read("constructor")).toEqual({ toString: "three" });
+    await vault.delete("constructor");
     await vault.delete("b");
     expect(settings.clearMcpStdioConnectionSecrets).toHaveBeenCalled();
   });

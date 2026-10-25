@@ -256,6 +256,8 @@ export class OwnedStdioClientTransport implements Transport {
   private outputTail = "";
   private exit?: { code: number | null; signal: NodeJS.Signals | null };
   private closing?: Promise<void>;
+  /** The group reap started when the server exited on its own. */
+  private reaping?: Promise<void>;
   private closed = false;
 
   constructor(
@@ -324,7 +326,7 @@ export class OwnedStdioClientTransport implements Transport {
         if (this.child === child) this.child = undefined;
         // The leader is gone; anything it started may not be. Reap the group
         // before anyone treats this server as stopped.
-        void terminateOwnedProcessTree(child, {
+        this.reaping = terminateOwnedProcessTree(child, {
           gracefulTimeoutMs: TERMINATE_GRACE_MS,
           forceTimeoutMs: FORCE_TERMINATE_MS,
         }).catch(() => undefined);
@@ -363,8 +365,24 @@ export class OwnedStdioClientTransport implements Transport {
       const ok = stdin.write(serializeMessage(message), (error) => {
         if (error) reject(error);
       });
-      if (ok) resolve();
-      else stdin.once("drain", () => resolve());
+      if (ok) {
+        resolve();
+        return;
+      }
+      // A server that exits with this write still buffered never drains, so
+      // the close has to settle the wait too.
+      const settle = (error?: Error): void => {
+        stdin.removeListener("drain", onDrain);
+        stdin.removeListener("close", onClose);
+        stdin.removeListener("error", settle);
+        if (error) reject(error);
+        else resolve();
+      };
+      const onDrain = (): void => settle();
+      const onClose = (): void => settle(new Error("The MCP server stopped reading its input."));
+      stdin.once("drain", onDrain);
+      stdin.once("close", onClose);
+      stdin.once("error", settle);
     });
   }
 
@@ -377,7 +395,12 @@ export class OwnedStdioClientTransport implements Transport {
     if (this.closing) return await this.closing;
     const child = this.child;
     this.closing = (async () => {
-      if (!child) return;
+      // Already exited and being reaped: signalling its process group again
+      // later could reach an unrelated group that reused the id.
+      if (!child) {
+        await this.reaping;
+        return;
+      }
       try {
         child.stdin?.end();
       } catch {
@@ -460,11 +483,13 @@ export function resolveStdioLaunch(params: {
   loginShellPath?: string;
   platform?: NodeJS.Platform;
 }): ResolvedStdioLaunch {
-  const variables: Record<string, string> = {};
+  const variables = Object.create(null) as Record<string, string>;
   const secrets: string[] = [];
   for (const entry of params.launch.env) {
     if (entry.secret) {
-      const value = params.secretValues[entry.name];
+      const value = Object.hasOwn(params.secretValues, entry.name)
+        ? params.secretValues[entry.name]
+        : undefined;
       if (value === undefined) {
         throw new McpStdioLaunchError(
           "secret_unavailable",

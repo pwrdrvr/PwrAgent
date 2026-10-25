@@ -386,6 +386,15 @@ describe.skipIf(process.platform === "win32")("local command MCP connections", (
     expect(afterEdit.plain).toBe("edited");
     expect(afterEdit.pid).not.toBe(beforeEdit.pid);
 
+    // The edit dialog always sends the launch. A rename that leaves it alone
+    // keeps the server and its state.
+    await service.updateConnection({
+      connectionId: connection.id,
+      displayName: "Renamed files",
+      stdio: launch(fixture, [{ name: "FIXTURE_PLAIN", secret: false, value: "edited" }]),
+    });
+    expect(await whoami(again.rpc)).toMatchObject({ pid: afterEdit.pid, calls: 2 });
+
     await service.close();
     await waitFor(() => !alive(afterEdit.pid), "the server to stop on shutdown");
   });
@@ -405,6 +414,18 @@ describe.skipIf(process.platform === "win32")("local command MCP connections", (
     });
     const bridge = await bridgeFor(service, connection.id, "thread-a");
     expect((await whoami(bridge.rpc)).token).toBe(SECRET);
+
+    // A variable that shares a name with an Object member is still a key.
+    await service.updateConnection({
+      connectionId: connection.id,
+      stdio: launch(fixture, [
+        { name: "FIXTURE_TOKEN", secret: true },
+        { name: "constructor", secret: true },
+      ]),
+    }).then(
+      () => { throw new Error("a blank new secret must be refused"); },
+      (error: Error) => expect(error.message).toContain("Enter a value for constructor"),
+    );
 
     await secretSettings.clearMcpStdioConnectionSecrets();
     const status = (await service.listConnections()).find((entry) => entry.id === connection.id);
