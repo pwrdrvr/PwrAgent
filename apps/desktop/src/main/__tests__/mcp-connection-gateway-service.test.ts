@@ -420,9 +420,12 @@ describe("McpConnectionGatewayService", () => {
       ? { content: [{ type: "text", text: created }] }
       : { content: [{ type: "text", text: "{}" }] });
     const recordCreatedSandbox = vi.fn();
+    const registry = temporaryRegistry();
+    registry.setEnabled("builtin:sandboxer", true);
     const service = new McpConnectionGatewayService({
       sandboxer: sandboxerStub(),
       settings: createSettings(),
+      registry,
       leaseManager: null,
       recordCreatedSandbox,
     });

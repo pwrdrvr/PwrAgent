@@ -116,7 +116,7 @@ describe("ThreadSandboxStore", () => {
       created("sb_one", "thread-1", "pwragent-feat-x");
     });
     expectSqliteWriteBudget({
-      note: "one observed create_sandbox result: 1 commit/~16 KB WAL per sandbox; at 50 sandboxes/day ~0.8 MB/day, zero idle writes",
+      note: "one observed create_sandbox result: 1 commit/~12.4 KB WAL per sandbox; ~0.6 MB/day at 50 sandboxes/day, zero idle writes",
       scenario: "thread-sandbox-record-created",
       writes,
     });
@@ -286,7 +286,7 @@ describe("SandboxerPrCleanupService", () => {
       await cleanup.cleanupThread({ backend: "codex", threadId: "thread-1" });
     });
     expectSqliteWriteBudget({
-      note: "stop two sandboxes after a thread's PRs closed: 1 commit/~12 KB WAL per sandbox; at 50 sandboxes/day ~0.6 MB/day, zero idle writes",
+      note: "stop two sandboxes after a thread's PRs closed: 1 commit/~8 KB WAL per sandbox; ~0.4 MB/day at 50 sandboxes/day, zero idle writes",
       scenario: "thread-sandbox-cleanup-two",
       writes,
     });
