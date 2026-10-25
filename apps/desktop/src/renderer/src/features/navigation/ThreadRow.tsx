@@ -257,6 +257,10 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   const canReact = Boolean(props.onSetReaction);
   const onSetThreadPin = props.onSetThreadPin;
   const bindings = props.thread.messagingBindings ?? [];
+  // A peer's thread is bound on the peer. Unbind here would ask this
+  // machine's messaging runtime, which does not hold that binding.
+  const canUnbind = Boolean(props.onUnbindMessagingBinding)
+    && props.thread.federation?.ref.target.scope !== "remote";
   // Pull straight from the navigation snapshot — main persists PR state
   // to the overlay store and surfaces it through the snapshot, so the
   // chips render instantly on app launch and stay in sync without any
@@ -725,7 +729,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
               key={binding.bindingId}
               binding={binding}
               onUnbind={
-                props.onUnbindMessagingBinding
+                canUnbind
                   ? (target) =>
                       void props.onUnbindMessagingBinding!(props.thread, target)
                   : undefined

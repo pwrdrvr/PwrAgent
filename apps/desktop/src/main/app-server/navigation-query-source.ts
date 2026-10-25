@@ -3,6 +3,7 @@ import type {
   NavigationDirectorySummary,
 } from "@pwragent/shared";
 import {
+  buildThreadIdentityKey,
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
   navigationQueryEventRequiresRefresh,
 } from "@pwragent/shared";
@@ -10,6 +11,7 @@ import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backen
 import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
+import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
 import { NavigationIndexReadPool } from "./navigation-index-read-pool";
 import {
   directorySetMayHaveChanged,
@@ -28,8 +30,10 @@ function sourceId(value: object): number {
 
 /**
  * Build the complete compact membership index used by bounded navigation
- * reads. This intentionally does not hydrate queue entries, messaging
- * bindings, launchpad environments, or any other selected-thread collection.
+ * reads. This intentionally does not hydrate queue entries, launchpad
+ * environments, or any other selected-thread collection. Messaging bindings
+ * are the exception: every row draws its binding chips and Unbind items from
+ * them, so they come from one read of the active bindings.
  */
 export async function loadLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
@@ -132,8 +136,14 @@ async function buildLocalNavigationQueryIndex(params: {
     workspaceRoots: resolveScratchProjectsRoots(),
   });
   params.signal?.throwIfAborted();
+  const bindings = await buildNavigationIndexMessagingBindings(index.threads);
+  params.signal?.throwIfAborted();
+  const boundThreads = bindings.size === 0 ? index.threads : index.threads.map((thread) => {
+    const messagingBindings = bindings.get(buildThreadIdentityKey(thread.source, thread.id));
+    return messagingBindings ? { ...thread, messagingBindings } : thread;
+  });
   const canonicalThreads = await registry.canonicalizeNavigationThreadPullRequests(
-    index.threads,
+    boundThreads,
   );
   params.signal?.throwIfAborted();
   const threads = await registry.hydrateThreadGitWorkingStates(canonicalThreads, {

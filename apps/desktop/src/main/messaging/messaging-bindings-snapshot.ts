@@ -1,6 +1,8 @@
+import type { MessagingBindingRecord } from "@pwragent/messaging-interface";
 import type {
   AppServerThreadSummary,
   MessagingThreadBindingSummary,
+  NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
@@ -59,24 +61,67 @@ export async function buildMessagingBindingsByThreadKey(
     }
     if (bindings.length === 0) continue;
     const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-    result[threadKey] = bindings.map((binding) => {
-      const conversation = binding.channel.conversation;
-      return {
-        bindingId: binding.id,
-        platform: binding.channel.channel,
-        conversationKind: conversation.kind,
-        // Title of the conversation NODE itself — topic name, channel
-        // name, DM peer name, supergroup name. Renderer falls back to
-        // a generic placeholder ("Topic" / "Thread" / "channel") when
-        // the adapter hasn't populated this. We intentionally do not
-        // fall through to the desktop thread title or actor display
-        // name here — those leak unrelated context into the chip.
-        conversationTitle: conversation.title,
-        parentTitle: conversation.parentTitle,
-        ancestorTitle: conversation.ancestorTitle,
-        activeAt: binding.updatedAt,
-      };
-    });
+    result[threadKey] = bindings.map(toBindingSummary);
   }
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/**
+ * Bindings for the sidebar's owner index, keyed by thread identity. One
+ * read of the active bindings serves every listed thread, so the index
+ * build does not run a query per thread. Matching follows
+ * `findActiveBindingsForThread`: same thread id, and the binding's backend
+ * equals the thread's or was never recorded. A row for another instance's
+ * thread gets nothing: this machine's bindings are not the peer's.
+ */
+export async function buildNavigationIndexMessagingBindings(
+  threads: readonly NavigationThreadSummary[],
+): Promise<Map<string, MessagingThreadBindingSummary[]>> {
+  const result = new Map<string, MessagingThreadBindingSummary[]>();
+  if (threads.length === 0) return result;
+  let active: MessagingBindingRecord[];
+  try {
+    active = await getDesktopMessagingStore().findActiveBindings();
+  } catch (error) {
+    // Chips are an overlay on the list; a failed read must not fail it.
+    log.warn("messaging bindings unavailable for navigation index", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return result;
+  }
+  const byThreadId = new Map<string, MessagingBindingRecord[]>();
+  for (const binding of active) {
+    if (binding.federatedThread && isRemoteFederationTarget(binding.federatedThread.target)) continue;
+    const list = byThreadId.get(binding.threadId);
+    if (list) list.push(binding);
+    else byThreadId.set(binding.threadId, [binding]);
+  }
+  if (byThreadId.size === 0) return result;
+  for (const thread of threads) {
+    if (thread.federation?.ref.target.scope === "remote") continue;
+    const bindings = byThreadId.get(thread.id)
+      ?.filter((binding) => !binding.backend || binding.backend === thread.source);
+    if (!bindings?.length) continue;
+    result.set(buildThreadIdentityKey(thread.source, thread.id), bindings.map(toBindingSummary));
+  }
+  return result;
+}
+
+function toBindingSummary(binding: MessagingBindingRecord): MessagingThreadBindingSummary {
+  const conversation = binding.channel.conversation;
+  return {
+    bindingId: binding.id,
+    platform: binding.channel.channel,
+    conversationKind: conversation.kind,
+    // Title of the conversation NODE itself — topic name, channel
+    // name, DM peer name, supergroup name. Renderer falls back to
+    // a generic placeholder ("Topic" / "Thread" / "channel") when
+    // the adapter hasn't populated this. We intentionally do not
+    // fall through to the desktop thread title or actor display
+    // name here — those leak unrelated context into the chip.
+    conversationTitle: conversation.title,
+    parentTitle: conversation.parentTitle,
+    ancestorTitle: conversation.ancestorTitle,
+    activeAt: binding.updatedAt,
+  };
 }
