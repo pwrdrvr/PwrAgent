@@ -773,12 +773,12 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
     // neither, so borrowing that fixture would scan an empty lens and stay
     // green over the bug this block exists to catch.
     test("directories lens has no violations", async () => {
-      // Three unscoped scans plus a launch in one budget, against a window
+      // Four unscoped scans plus a launch in one budget, against a window
       // rendering 15 sidebar rows. The neighbouring blocks do two, or scan
       // the much smaller map window. A slow guest otherwise reports "Test
       // timeout of 30000ms exceeded" from inside whichever step was running,
       // which costs exactly the attributability the per-step split buys.
-      test.setTimeout(60_000);
+      test.setTimeout(75_000);
 
       const app = await launchAuditApp({
         fixturePath: DIRECTORIES_FIXTURE,
@@ -947,6 +947,25 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
 
           await settle();
           await runAxe(app.window, "directories lens, expanded directory");
+        });
+
+        await test.step("thread context menu", async () => {
+          // A pinned row's menu has every item kind: the Pinned and Keep at
+          // Top checkboxes, shortcut hints, the sub-thread cascade, and the
+          // check-column indent. Its rows sit at exactly the 24px
+          // target-size floor, so a padding change that shrinks them fails
+          // here. The scan runs with the pointer still on the row, as a
+          // right-click leaves it.
+          await settle();
+          await threads.locator('[data-thread-pin-state="pinned"]').first().click({ button: "right" });
+          const menu = app.window.locator('.thread-context-menu[role="menu"]');
+          await expect(menu).toBeVisible();
+          await expect(
+            menu.getByRole("menuitemcheckbox", { name: "Pinned", exact: true }),
+          ).toHaveAttribute("aria-checked", "true");
+          await runAxe(app.window, "directories lens, thread context menu");
+          await app.window.keyboard.press("Escape");
+          await expect(menu).toHaveCount(0);
         });
 
         await test.step("expanded unpinned overflow", async () => {
