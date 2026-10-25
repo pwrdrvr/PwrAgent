@@ -19,6 +19,7 @@ import {
   COLOR_THEME_QUIT_DIALOG_PALETTES,
   QUIT_DIALOG_PALETTES,
   buildQuitConfirmationHtml,
+  estimateQuitDialogHeight,
   type QuitBlockerItem,
 } from "../quit-confirmation-dialog";
 
@@ -84,6 +85,62 @@ describe("quit dialog HTML", () => {
 
     // Ten rows must not blow the dialog open — the list scrolls inside it.
     expect(html).toContain("overflow-y: auto");
+    // Group headings carry their row counts.
+    expect(html).toContain('<span>Integrated terminals</span><span class="group__count">10</span>');
+  });
+
+  // The page used to grow past its fixed-size window, and the autofocused
+  // Quit button then scrolled the document: the title strip slid off the top.
+  it("pins the title strip and buttons and scrolls only the middle", () => {
+    const html = buildQuitConfirmationHtml({
+      countdownSeconds: 10,
+      inProgressThreadCount: 1,
+      terminalSessionCount: 10,
+      actionRunCount: 1,
+      items,
+      navigationPrefix: "pwragent-quit-confirmation://tok/",
+      colorScheme: "dark",
+      palette: QUIT_DIALOG_PALETTES.dark,
+    });
+    const css = html.slice(html.indexOf("<style>"), html.indexOf("</style>"));
+    /** The declarations of the first rule written exactly as `selector {`. */
+    const rule = (selector: string): string => {
+      const start = css.indexOf(`\n      ${selector} {`);
+      return start < 0 ? "" : css.slice(start, css.indexOf("}", start));
+    };
+
+    expect(rule("body")).toMatch(/height: 100%;/);
+    expect(rule("body")).toMatch(/overflow: hidden;/);
+    expect(rule("body")).not.toMatch(/min-height/);
+    expect(rule(".scroll")).toMatch(/overflow-y: auto;/);
+    expect(rule(".scroll > .list")).toMatch(/overflow-y: auto;/);
+    expect(rule(".footer")).toMatch(/flex: 0 0 auto;/);
+
+    // The list sits in the scrolling region; the buttons sit outside it.
+    const body = html.slice(html.indexOf("<body>"));
+    const scrollStart = body.indexOf('<div class="scroll" id="scroll">');
+    const footerStart = body.indexOf('<footer class="footer">');
+    expect(scrollStart).toBeGreaterThan(body.indexOf('<header class="titlebar">'));
+    expect(body.indexOf('<div class="list" id="list">')).toBeGreaterThan(scrollStart);
+    expect(body.indexOf('<div class="list" id="list">')).toBeLessThan(footerStart);
+    expect(body.indexOf('id="quit"')).toBeGreaterThan(footerStart);
+  });
+
+  it("sizes the window to its content, between a floor and a ceiling", () => {
+    const counts = { inProgressThreadCount: 2, terminalSessionCount: 0, actionRunCount: 0 };
+    const turns = items.slice(0, 1);
+    const one = estimateQuitDialogHeight({ ...counts, items: turns });
+    const three = estimateQuitDialogHeight({ ...counts, items: [...turns, ...items.slice(1, 3)] });
+    // A second group heading and two rows.
+    expect(three - one).toBe(30 + 30 * 2);
+    // The peer notice is a paragraph of its own.
+    expect(estimateQuitDialogHeight({ ...counts, federationPeerCount: 2, items: turns }))
+      .toBeGreaterThan(one + 40);
+    // Never taller than the ceiling; the list scrolls past it.
+    expect(estimateQuitDialogHeight({ ...counts, terminalSessionCount: 10, actionRunCount: 1, items })).toBe(620);
+    // Never so short that the buttons crowd the heading.
+    expect(estimateQuitDialogHeight({ inProgressThreadCount: 0, terminalSessionCount: 0, actionRunCount: 0, items: [] }))
+      .toBe(360);
   });
 
   it("names the owning peer on a remote terminal row", () => {

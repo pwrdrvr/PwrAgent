@@ -837,4 +837,35 @@ describe("where the quit dialog opens", () => {
     window.listeners.get("closed")?.();
     await expect(pending).resolves.toBe("manual-cancel");
   });
+  // A dialog taller than the display put its title strip or its buttons out
+  // of reach. The page pins both, so a shorter window costs list rows only.
+  it("never opens taller than the display's work area", async () => {
+    dialogPlacement.cursorDisplayArea = { x: 0, y: 0, width: 1280, height: 500 };
+    try {
+      const pending = showQuitConfirmationDialog({
+        countdownSeconds: 10,
+        federationPeerCount: 1,
+        inProgressThreadCount: 12,
+        terminalSessionCount: 0,
+        items: Array.from({ length: 12 }, (_, index) => ({
+          kind: "turn" as const,
+          backend: "claude",
+          threadId: `t${index}`,
+          threadKey: `claude:t${index}`,
+          title: `Thread ${index + 1}`,
+        })),
+      });
+      const window = dialogWindows.at(-1)!;
+      const constructorOptions = vi.mocked(BrowserWindow).mock.calls.at(-1)?.[0];
+
+      // 24px clear of each edge of the 500px work area.
+      expect(constructorOptions?.height).toBe(452);
+      expect(constructorOptions?.y).toBe(24);
+
+      window.listeners.get("closed")?.();
+      await expect(pending).resolves.toBe("manual-cancel");
+    } finally {
+      dialogPlacement.cursorDisplayArea = { x: 0, y: 0, width: 1440, height: 900 };
+    }
+  });
 });
