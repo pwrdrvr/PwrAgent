@@ -965,6 +965,7 @@ function threadSummariesEqual(
     left.updatedAt === right.updatedAt &&
     left.threadStatus === right.threadStatus &&
     left.hasActiveSubAgent === right.hasActiveSubAgent &&
+    left.hasBackgroundTasks === right.hasBackgroundTasks &&
     left.gitBranch === right.gitBranch &&
     left.observedGitBranch === right.observedGitBranch &&
     left.primaryGitRepository === right.primaryGitRepository &&

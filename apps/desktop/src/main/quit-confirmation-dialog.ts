@@ -1,4 +1,4 @@
-import { app, BrowserWindow, nativeTheme, screen } from "electron";
+import { app, BrowserWindow, nativeTheme, screen, type Rectangle } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
 import type {
   DesktopAppearanceTheme,
@@ -314,6 +314,22 @@ function resolveQuitDialogParent(): BrowserWindow | undefined {
   return main && !main.isDestroyed() ? main : undefined;
 }
 
+/** The parent's bounds, and the work area of the display the prompt opens on. */
+function resolveQuitDialogPlacement(parent: BrowserWindow | undefined): {
+  anchor: Rectangle | undefined;
+  area: Rectangle;
+} {
+  // A minimized window on Windows reports off-screen sentinel bounds
+  // (-32000, -32000); anchor on where it will be once raiseQuitDialog restores it.
+  const anchor = parent?.isMinimized()
+    ? parent.getNormalBounds()
+    : parent?.getBounds();
+  const area = anchor
+    ? screen.getDisplayMatching(anchor).workArea
+    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  return { anchor, area };
+}
+
 /**
  * Centre the prompt over its parent, kept on the parent's display; with no
  * parent, on the display under the pointer. macOS draws a modal child as a
@@ -325,14 +341,7 @@ function resolveQuitDialogPosition(
   width: number,
   height: number,
 ): { x: number; y: number } {
-  // A minimized window on Windows reports off-screen sentinel bounds
-  // (-32000, -32000); anchor on where it will be once raiseQuitDialog restores it.
-  const anchor = parent?.isMinimized()
-    ? parent.getNormalBounds()
-    : parent?.getBounds();
-  const area = anchor
-    ? screen.getDisplayMatching(anchor).workArea
-    : screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+  const { anchor, area } = resolveQuitDialogPlacement(parent);
   const target = anchor ?? area;
   const clamp = (value: number, min: number, max: number): number =>
     Math.max(min, Math.min(value, max));
@@ -394,12 +403,22 @@ export async function showQuitConfirmationDialog(
     options.countdownSeconds,
     items.length,
   );
-  const width = 460;
+  const width = QUIT_DIALOG_WIDTH;
   // The list is scrollable, but a dialog that always reserves room for ten
   // rows would look absurd when nothing is running. Grow with the content up
-  // to a ceiling, then let the list scroll inside it.
-  const height =
-    quitDialogHeight(items.length) + (options.federationPeerCount ? 72 : 0);
+  // to a ceiling, and never past the display, then let the list scroll inside
+  // it. The page pins its title strip and buttons, so a short window costs
+  // list rows, never the chrome.
+  const height = Math.min(
+    estimateQuitDialogHeight({
+      ...options,
+      automationRunCount: options.automationRunCount ?? 0,
+      actionRunCount: options.actionRunCount ?? 0,
+      archiveCleanupCount: options.archiveCleanupCount ?? 0,
+      items,
+    }),
+    quitDialogHeightCap(resolveQuitDialogPlacement(parent).area.height),
+  );
   const window = new BrowserWindow({
     width,
     height,
@@ -685,9 +704,11 @@ export async function showQuitConfirmationDialog(
   });
 }
 
-const DIALOG_BASE_HEIGHT = 340;
-const DIALOG_ROW_HEIGHT = 46;
+const QUIT_DIALOG_WIDTH = 460;
 const DIALOG_MAX_HEIGHT = 620;
+const DIALOG_MIN_HEIGHT = 360;
+/** Keep the prompt clear of the work area's edges. */
+const DIALOG_SCREEN_MARGIN = 24;
 
 /** Per listed item, on top of the base countdown. Ten terminals is not a
  *  ten-second read. */
@@ -716,11 +737,64 @@ const HARD_CEILING_GRACE_MS = 1_500;
 const QUIT_REFRESH_INTERVAL_MS = 500;
 const COMPLETION_REPORT_MS = 1_250;
 
-function quitDialogHeight(itemCount: number): number {
-  if (itemCount === 0) return DIALOG_BASE_HEIGHT;
-  // + section headers (at most three) and the list's own padding.
-  const listHeight = itemCount * DIALOG_ROW_HEIGHT + 56;
-  return Math.min(DIALOG_MAX_HEIGHT, DIALOG_BASE_HEIGHT + listHeight);
+/**
+ * The tallest the window may open on a work area this tall: clear of both
+ * edges, but never under the floor unless the work area itself is shorter,
+ * in which case it fills the area rather than hang off its top.
+ */
+export function quitDialogHeightCap(workAreaHeight: number): number {
+  return Math.max(
+    Math.min(DIALOG_MIN_HEIGHT, workAreaHeight),
+    workAreaHeight - DIALOG_SCREEN_MARGIN * 2,
+  );
+}
+
+/*
+ * Fixed measurements of the page below, in CSS pixels. The estimate only has
+ * to be close: under, and the list scrolls a little sooner; over, and its
+ * framed well shows a little empty space.
+ */
+const DIALOG_CHROME_HEIGHT =
+  2 // body border
+  + 40 // title strip
+  + 18 // top padding
+  + 37 // h1 and its margin
+  + 112 // footer: hairline, countdown, buttons, padding
+  + 4; // rounding slack: an underestimate would scroll the middle region
+const DIALOG_TEXT_LINE_HEIGHT = 20;
+const DIALOG_PARAGRAPH_GAP = 12;
+/** 14px text across the 412px column. */
+const DIALOG_CHARS_PER_LINE = 56;
+const DIALOG_LIST_FRAME_HEIGHT = 2 + 4 + 16; // border, padding, bottom margin
+const DIALOG_GROUP_HEIGHT = 30;
+const DIALOG_ROW_HEIGHT = 30;
+const DIALOG_ROW_DETAIL_HEIGHT = 15;
+
+function estimateParagraphHeight(text: string): number {
+  const lines = Math.max(1, Math.ceil(text.length / DIALOG_CHARS_PER_LINE));
+  return lines * DIALOG_TEXT_LINE_HEIGHT + DIALOG_PARAGRAPH_GAP;
+}
+
+export function estimateQuitDialogHeight(
+  options: QuitDialogCopyOptions & { items: QuitBlockerItem[] },
+): number {
+  const copy = quitDialogCopy(options);
+  let height = DIALOG_CHROME_HEIGHT
+    + (copy.peerText ? estimateParagraphHeight(copy.peerText) : 0)
+    + estimateParagraphHeight(copy.countText)
+    + estimateParagraphHeight(copy.impactText);
+  if (options.items.length > 0) {
+    const groups = QUIT_ITEM_GROUPS.filter((group) =>
+      options.items.some((item) => item.kind === group.kind));
+    height += DIALOG_LIST_FRAME_HEIGHT
+      + groups.length * DIALOG_GROUP_HEIGHT
+      + options.items.reduce(
+        (total, item) => total + DIALOG_ROW_HEIGHT
+          + (item.detail?.trim() ? DIALOG_ROW_DETAIL_HEIGHT : 0),
+        0,
+      );
+  }
+  return Math.min(DIALOG_MAX_HEIGHT, Math.max(DIALOG_MIN_HEIGHT, Math.ceil(height)));
 }
 
 const QUIT_ITEM_GROUPS: ReadonlyArray<{
@@ -823,31 +897,39 @@ function buildQuitItemListHtml(options: {
         </a>`;
       })
       .join("");
-    return `<p class="group">${escapeHtml(group.heading)}</p>${rows}`;
+    return `<p class="group"><span>${escapeHtml(group.heading)}</span><span class="group__count">${groupItems.length}</span></p>${rows}`;
   }).join("");
 
   return `<div class="list" id="list">${sections}</div>`;
 }
 
-export function buildQuitConfirmationHtml(options: {
+type QuitDialogCopyOptions = {
   federationPeerCount?: number;
-  countdownSeconds: number;
   inProgressThreadCount: number;
   automationRunCount?: number;
   terminalSessionCount: number;
   actionRunCount: number;
   archiveCleanupCount?: number;
   items: QuitBlockerItem[];
-  navigationPrefix: string;
-  colorScheme: "dark" | "light";
-  palette: QuitDialogPalette;
-}): string {
+};
+
+/** The prose above the list. The height estimate reads the same strings. */
+function quitDialogCopy(options: QuitDialogCopyOptions): {
+  peerOnly: boolean;
+  peerText?: string;
+  countText: string;
+  impactText: string;
+} {
   const peerOnly = Boolean(options.federationPeerCount)
     && options.inProgressThreadCount === 0
     && (options.automationRunCount ?? 0) === 0
     && options.terminalSessionCount === 0
     && options.actionRunCount === 0
     && (options.archiveCleanupCount ?? 0) === 0;
+  const peerCount = options.federationPeerCount ?? 0;
+  const peerText = peerCount
+    ? `${peerCount} connected peer${peerCount === 1 ? "" : "s"} will lose access through this instance. Peers that support shutdown notices have been notified.`
+    : undefined;
   const countText = peerOnly ? "No local work is running." : describeQuitBlockers({
     inProgressThreadCount: options.inProgressThreadCount,
     automationRunCount: options.automationRunCount,
@@ -855,7 +937,7 @@ export function buildQuitConfirmationHtml(options: {
     actionRunCount: options.actionRunCount,
     archiveCleanupCount: options.archiveCleanupCount ?? 0,
   });
-  const interruptionText = peerOnly ? "Work on other machines may continue after this instance disconnects." : describeQuitImpact({
+  const impactText = peerOnly ? "Work on other machines may continue after this instance disconnects." : describeQuitImpact({
     inProgressThreadCount: options.inProgressThreadCount,
     automationRunCount: options.automationRunCount,
     terminalSessionCount: options.terminalSessionCount,
@@ -863,6 +945,21 @@ export function buildQuitConfirmationHtml(options: {
     archiveCleanupCount: options.archiveCleanupCount ?? 0,
     hasItems: options.items.length > 0,
   });
+  return { peerOnly, ...(peerText ? { peerText } : {}), countText, impactText };
+}
+
+export function buildQuitConfirmationHtml(options: QuitDialogCopyOptions & {
+  countdownSeconds: number;
+  navigationPrefix: string;
+  colorScheme: "dark" | "light";
+  palette: QuitDialogPalette;
+}): string {
+  const {
+    peerOnly,
+    peerText,
+    countText,
+    impactText: interruptionText,
+  } = quitDialogCopy(options);
   const listHtml = buildQuitItemListHtml({
     items: options.items,
     navigationPrefix: options.navigationPrefix,
@@ -900,9 +997,18 @@ export function buildQuitConfirmationHtml(options: {
         font-family: "Geist", "IBM Plex Sans", "SF Pro Text", "Inter", system-ui, sans-serif;
       }
       * { box-sizing: border-box; }
+      html {
+        height: 100%;
+        overflow: hidden;
+      }
+      /* Exactly the window, never taller. Content that grows past it scrolls
+         inside the list (or the middle region), so nothing can scroll the page
+         itself: an autofocused button below the fold once pushed the title
+         strip off the top of the window. */
       body {
         margin: 0;
-        min-height: 100vh;
+        height: 100%;
+        overflow: hidden;
         display: flex;
         flex-direction: column;
         background: var(--bg);
@@ -945,31 +1051,77 @@ export function buildQuitConfirmationHtml(options: {
       .content {
         display: flex;
         flex-direction: column;
-        /* min-height:0 is what actually lets .list scroll instead of blowing
-           the flex column past the window. */
+        /* min-height:0 is what actually lets the middle region shrink instead
+           of blowing the flex column past the window. */
         min-height: 0;
         flex: 1 1 auto;
-        padding: 18px 24px 22px;
       }
-      /* The list of still-running work. Scrolls inside the dialog; the row
-         links cancel the quit and navigate. */
-      .list {
+      /* Heading, prose, and list between the pinned title strip and footer.
+         The list takes the spare height and scrolls itself; this region
+         scrolls only when even the list's minimum cannot fit. */
+      .scroll {
+        display: flex;
+        flex-direction: column;
         min-height: 0;
         flex: 1 1 auto;
         overflow-y: auto;
-        margin: 4px -6px 0;
-        padding: 0 6px;
+        padding: 18px 24px 0;
       }
+      .scroll > * {
+        flex: 0 0 auto;
+      }
+      /* The list of still-running work, in a framed well that scrolls inside
+         the dialog; the row links cancel the quit and navigate. */
+      .scroll > .list {
+        flex: 1 1 auto;
+        /* A heading, two rows, and part of a third, so a short window still
+           shows that the list scrolls. */
+        min-height: 112px;
+        overflow-y: auto;
+        margin: 2px 0 16px;
+        padding: 0 4px 4px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--sidebar);
+      }
+      /* A fade at the bottom edge while rows remain below it. */
+      .scroll > .list::after {
+        content: "";
+        position: sticky;
+        bottom: 0;
+        z-index: 1;
+        display: block;
+        height: 28px;
+        margin-top: -28px;
+        background: linear-gradient(to bottom, transparent, var(--sidebar));
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 120ms ease;
+      }
+      .scroll > .list.has-more::after {
+        opacity: 1;
+      }
+      /* Each heading stays in view while its rows scroll beneath it. */
       .group {
-        margin: 10px 0 6px;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        margin: 0;
+        padding: 10px 4px 6px;
+        background: var(--sidebar);
         color: var(--text-muted);
         font-size: 11px;
         font-weight: 600;
         letter-spacing: 0.06em;
         text-transform: uppercase;
       }
-      .group:first-child {
-        margin-top: 0;
+      .group__count {
+        color: var(--text-secondary);
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0;
       }
       .row {
         display: flex;
@@ -1038,18 +1190,23 @@ export function buildQuitConfirmationHtml(options: {
         margin: 0 0 12px;
         line-height: 1.45;
       }
-      .countdown {
-        margin: 14px 0 0;
+      /* Countdown and buttons stay pinned to the bottom of the window. */
+      .footer {
         flex: 0 0 auto;
+        padding: 12px 24px 18px;
+        border-top: 1px solid var(--border);
+      }
+      .countdown {
+        margin: 0;
+        min-height: 20px;
         color: var(--text-muted);
         font-weight: 600;
       }
       .actions {
         display: flex;
-        flex: 0 0 auto;
         justify-content: flex-end;
         gap: 8px;
-        margin-top: 16px;
+        margin-top: 12px;
       }
       /* Mirrors the .button / .button--primary / .button--secondary primitives
          in app.css. */
@@ -1122,17 +1279,21 @@ export function buildQuitConfirmationHtml(options: {
       <button class="close" id="close" type="button" aria-label="Stay open" title="Stay open (Esc)">&#10005;</button>
     </header>
     <main class="content">
-      <h1>Quit PwrAgent?</h1>
-      ${options.federationPeerCount ? `<p>${options.federationPeerCount} connected peer${options.federationPeerCount === 1 ? "" : "s"} will lose access through this instance. Peers that support shutdown notices have been notified.</p>` : ""}
-      <p id="blocker-count">${escapeHtml(countText)}</p>
-      <p id="blocker-impact">${escapeHtml(interruptionText)}</p>
-      ${listHtml}
-      <p class="countdown" id="countdown"></p>
-      <div class="actions">
-        <button id="stay" class="secondary" type="button">Stay Open</button>
-        ${peerOnly ? "" : '<button id="wait" class="secondary" type="button">Wait for Work</button>'}
-        <button id="quit" class="primary" type="button" autofocus>Quit Now</button>
+      <div class="scroll" id="scroll">
+        <h1>Quit PwrAgent?</h1>
+        ${peerText ? `<p>${escapeHtml(peerText)}</p>` : ""}
+        <p id="blocker-count">${escapeHtml(countText)}</p>
+        <p id="blocker-impact">${escapeHtml(interruptionText)}</p>
+        ${listHtml}
       </div>
+      <footer class="footer">
+        <p class="countdown" id="countdown"></p>
+        <div class="actions">
+          <button id="stay" class="secondary" type="button">Stay Open</button>
+          ${peerOnly ? "" : '<button id="wait" class="secondary" type="button">Wait for Work</button>'}
+          <button id="quit" class="primary" type="button" autofocus>Quit Now</button>
+        </div>
+      </footer>
     </main>
     <script>
       const navigationPrefix = ${JSON.stringify(options.navigationPrefix)};
@@ -1193,14 +1354,35 @@ export function buildQuitConfirmationHtml(options: {
         }
         if (snapshot.listHtml) {
           if (currentList) {
+            // Keep the reader's place: the replacement is a fresh element.
+            const scrollTop = currentList.scrollTop;
             currentList.outerHTML = snapshot.listHtml;
+            const nextList = document.getElementById("list");
+            if (nextList) nextList.scrollTop = scrollTop;
           } else {
-            countdown.insertAdjacentHTML("beforebegin", snapshot.listHtml);
+            document.getElementById("scroll").insertAdjacentHTML("beforeend", snapshot.listHtml);
           }
         } else {
           currentList?.remove();
         }
+        updateListFade();
       };
+      function updateListFade() {
+        const list = document.getElementById("list");
+        if (!list) return;
+        // A short list keeps its own height rather than the scroll minimum,
+        // so it never pushes the middle region into scrolling.
+        list.style.minHeight = Math.min(112, list.scrollHeight + 2) + "px";
+        list.classList.toggle(
+          "has-more",
+          list.scrollTop + list.clientHeight < list.scrollHeight - 1,
+        );
+      }
+      // Capture, because scroll does not bubble and the list is replaced on
+      // refresh.
+      document.addEventListener("scroll", updateListFade, { capture: true, passive: true });
+      window.addEventListener("resize", updateListFade);
+      updateListFade();
       render();
       timer = setInterval(() => {
         remaining -= 1;

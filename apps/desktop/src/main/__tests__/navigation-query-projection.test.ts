@@ -115,6 +115,17 @@ describe("navigation query projection", () => {
     expect(directories.directories[0]?.counts.active).toBe(2);
   });
 
+  it("counts threads with background tasks as active without changing turn status", () => {
+    const source = snapshot([
+      thread("background", { threadStatus: "idle", hasBackgroundTasks: true }),
+      thread("finished", { threadStatus: "idle", hasBackgroundTasks: false }),
+    ]);
+    const attention = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "attention" }) });
+    expect(attention.counts.active).toBe(1);
+    expect(attention.entries.map(({ row }) => row.id)).toEqual(["background"]);
+    expect(attention.entries[0]?.row).toMatchObject({ threadStatus: "idle", hasBackgroundTasks: true });
+  });
+
   it.each(["active", "unread"])("shows an Attention child whose parent is outside the lens (%s)", (signal) => {
     const child = thread("child", {
       parentThreadId: "parent", parentThreadBackend: "codex",

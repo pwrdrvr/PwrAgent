@@ -515,7 +515,9 @@ async function listAttentionThreads(
       threadId: row.id,
       title: row.title,
       ...(row.updatedAt !== undefined ? { updatedAt: row.updatedAt } : {}),
-      running: row.threadStatus === "active" || row.hasActiveSubAgent === true,
+      running: row.threadStatus === "active"
+        || row.hasActiveSubAgent === true
+        || row.hasBackgroundTasks === true,
       unread: row.inbox.inInbox,
       needsInput: row.needsInput === true,
       threadLink: buildThreadMarkdownLink({

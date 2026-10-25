@@ -1643,6 +1643,8 @@ describe("Claude SDK backend", () => {
     // The task outlives its turn, and so does the process that runs it.
     expect(f.close).not.toHaveBeenCalled();
     expect(f.backend.liveSessionThreadIds()).toEqual([threadId]);
+    // Navigation marks the thread as working while the task runs.
+    expect(f.backend.backgroundTaskThreadIds()).toEqual([threadId]);
     expect(f.backend.listBackgroundTasks(threadId).terminals).toEqual([{
       itemId: "tool-bash", processId: "task-1", command: "pnpm dev", cwd: f.root,
     }]);
@@ -1676,6 +1678,7 @@ describe("Claude SDK backend", () => {
     expect(f.close).toHaveBeenCalled();
     expect(f.run).toHaveBeenCalledOnce();
     expect(f.backend.liveSessionThreadIds()).toEqual([]);
+    expect(f.backend.backgroundTaskThreadIds()).toEqual([]);
     expect(f.events.filter((event) => event.notification.method === "turn/completed")).toHaveLength(2);
     expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/completed", params: { turnId: followUpId } });
     expect(f.events.filter((event) => event.notification.method === "thread/backgroundTasks/updated").at(-1)?.notification.params)

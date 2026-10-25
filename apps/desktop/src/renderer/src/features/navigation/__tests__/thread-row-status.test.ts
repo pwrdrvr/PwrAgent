@@ -50,3 +50,10 @@ it("shows idle parents with live workers in navigation and clears them when work
   expect(isThreadNeedingAttention(thread)).toBe(true);
   expect(isThreadActive({ ...thread, hasActiveSubAgent: false })).toBe(false);
 });
+
+it("shows idle threads with background tasks as thinking and clears them when the tasks end", () => {
+  const thread = { ...buildRemoteThread(), threadStatus: "idle" as const, hasBackgroundTasks: true };
+  expect(isThreadActive(thread)).toBe(true);
+  expect(getThreadRowStatus(thread)).toBe("thinking");
+  expect(isThreadActive({ ...thread, hasBackgroundTasks: false })).toBe(false);
+});
