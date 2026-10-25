@@ -476,6 +476,11 @@ type SidebarProps = {
     pr: PrSummary,
   ) => Promise<void>;
   /**
+   * Copies the same report as Help → Copy Diagnostics Info, but for the
+   * thread the menu was opened on. It must not select that thread.
+   */
+  onCopyThreadDiagnostics?: (thread: NavigationThreadSummary) => void;
+  /**
    * Called when the user unbinds a messaging conversation from a
    * thread via the binding chip. Receives the thread + binding so the
    * parent can call the IPC and refresh navigation.
@@ -3819,6 +3824,19 @@ export function Sidebar(props: SidebarProps) {
                     onClick={() => copyFromContextMenu(contextMenuBranchName)}
                   >
                     Copy Branch Name
+                  </button>
+                ) : null}
+                {props.onCopyThreadDiagnostics ? (
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      const thread = contextMenu.thread;
+                      setContextMenu(undefined);
+                      props.onCopyThreadDiagnostics?.(thread);
+                    }}
+                  >
+                    Copy Diagnostics Info
                   </button>
                 ) : null}
               </div>

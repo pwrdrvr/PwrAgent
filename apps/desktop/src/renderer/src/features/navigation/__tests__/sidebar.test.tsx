@@ -7676,6 +7676,65 @@ describe("Sidebar", () => {
     expect(copyText).toHaveBeenNthCalledWith(3, "codex/thread-centric-ui");
   });
 
+  it("copies diagnostics for the menu's thread without selecting it", () => {
+    const onCopyThreadDiagnostics = vi.fn();
+    const onSelectThread = vi.fn();
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:some-other-thread"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={onSelectThread}
+        onArchiveThread={async () => undefined}
+        onCopyThreadDiagnostics={onCopyThreadDiagnostics}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Copy Diagnostics Info" }),
+    );
+
+    expect(onCopyThreadDiagnostics).toHaveBeenCalledTimes(1);
+    expect(onCopyThreadDiagnostics).toHaveBeenCalledWith(sharedThread);
+    expect(onSelectThread).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
+  it("omits Copy Diagnostics Info without a handler", () => {
+    render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={directories}
+        inboxThreads={[sharedThread]}
+        loading={false}
+        creatingThread={undefined}
+        selectedItemKey="codex:thread-1"
+        threads={[sharedThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onArchiveThread={async () => undefined}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
+
+    expect(
+      screen.queryByRole("menuitem", { name: "Copy Diagnostics Info" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("hides optional copy actions without matching thread metadata", () => {
     render(
       <Sidebar

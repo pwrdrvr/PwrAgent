@@ -1902,17 +1902,15 @@ function DesktopAppShell(props: {
     return () => { disposed = true; unsubscribe?.(); };
   }, [acknowledgeThreadSpendAlert, desktopApi, normalAppEnabled, pendingSpendAlertCapacity]);
 
-  useEffect(() => {
-    if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
-      return;
-    }
-    return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
-      const thread = navigation.selectedThread;
-      const metadataPromise = desktopApi.readAppMetadata?.();
+  // Help → Copy Diagnostics Info reports the selected thread; the sidebar's
+  // thread menu reports the thread it was opened on, without selecting it.
+  const copyThreadDiagnosticsInfo = useEventCallback(
+    (thread: NavigationThreadSummary | undefined): void => {
+      const metadataPromise = desktopApi?.readAppMetadata?.();
       if (!metadataPromise) {
         return;
       }
-      const federationHealthPromise = desktopApi.readFederationHealth
+      const federationHealthPromise = desktopApi?.readFederationHealth
         ? desktopApi.readFederationHealth({})
             .then((response) => response.health)
             .catch(() => undefined)
@@ -1946,8 +1944,17 @@ function DesktopAppShell(props: {
           desktopApi,
         );
       });
+    },
+  );
+
+  useEffect(() => {
+    if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
+      return;
+    }
+    return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
+      copyThreadDiagnosticsInfo(navigation.selectedThread);
     });
-  }, [desktopApi, liveFederationHealth, navigation.selectedThread]);
+  }, [copyThreadDiagnosticsInfo, desktopApi, navigation.selectedThread]);
   const recentRemoteThreads = useRecentRemoteThreads({
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
@@ -4250,6 +4257,7 @@ function DesktopAppShell(props: {
           onPrefetchGitWorkingState={gitWorkingState.prefetch}
           onDetachPullRequest={detachThreadPullRequest}
           onUnbindMessagingBinding={unbindMessagingBinding}
+          onCopyThreadDiagnostics={copyThreadDiagnosticsInfo}
         />
         {/* Sibling of the sidebar, not a child: the seam straddles the
             sidebar's border, which the aside's overflow clip would cut off. */}
