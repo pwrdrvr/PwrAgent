@@ -3,7 +3,7 @@ import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
-import { createCommandInvocation, prependCommandDirToPath } from "@pwrdrvr/agent-transport";
+import { createCommandInvocation } from "@pwrdrvr/agent-transport";
 import { ReadBuffer, serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
@@ -190,7 +190,18 @@ export function buildStdioServerEnvironment(params: {
   }
   const pathValue = params.loginShellPath ?? readEnv(params.processEnv, "PATH", platform);
   if (pathValue) env.PATH = pathValue;
-  Object.assign(env, prependCommandDirToPath(params.command, env) as Record<string, string>);
+  // The command's own folder first, so a `#!/usr/bin/env node` script finds
+  // the runtime installed beside it. Uses `platform`'s path rules, not the
+  // host's, like everything else here.
+  const paths = platform === "win32" ? path.win32 : path.posix;
+  if (paths.isAbsolute(params.command)) {
+    const directory = paths.dirname(params.command);
+    const entries = env.PATH ? env.PATH.split(paths.delimiter) : [];
+    const present = entries.some((entry) => platform === "win32"
+      ? entry.toLowerCase() === directory.toLowerCase()
+      : entry === directory);
+    if (!present) env.PATH = [directory, ...entries].join(paths.delimiter);
+  }
   for (const [name, value] of Object.entries(params.variables)) {
     if (platform === "win32") {
       for (const key of Object.keys(env)) {

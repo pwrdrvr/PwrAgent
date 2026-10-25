@@ -135,6 +135,8 @@ describe("buildStdioServerEnvironment", () => {
       platform: "win32",
     });
     expect(env.temp).toBe("D:\\Scratch");
+    // The target platform's separator, whichever host runs the suite.
+    expect(env.PATH).toBe("C:\\Tools;C:\\Windows");
     expect(env.TEMP).toBeUndefined();
     expect(env.SYSTEMROOT ?? env.SystemRoot).toBe("C:\\Windows");
   });
