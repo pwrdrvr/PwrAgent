@@ -13,6 +13,10 @@ const browserWindowState: {
   setTitle?: ReturnType<typeof vi.fn>;
   setWindowOpenHandler?: ReturnType<typeof vi.fn>;
   show?: ReturnType<typeof vi.fn>;
+  reload?: ReturnType<typeof vi.fn>;
+  // Hold back ready-to-show, as a renderer whose first load stalls does.
+  deferReadyToShow?: boolean;
+  visible?: boolean;
 } = {};
 
 const windowEventHandlers = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -117,7 +121,7 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
     windowEventHandlers.set(event, handlers);
   });
   browserWindowState.once = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-    if (event === "ready-to-show") {
+    if (event === "ready-to-show" && !browserWindowState.deferReadyToShow) {
       handler();
       return;
     }
@@ -141,11 +145,17 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
   );
   browserWindowState.setTitle = vi.fn();
   browserWindowState.setWindowOpenHandler = vi.fn();
-  browserWindowState.show = vi.fn(() => emitWindowEvent("show"));
+  browserWindowState.visible = false;
+  browserWindowState.show = vi.fn(() => {
+    browserWindowState.visible = true;
+    emitWindowEvent("show");
+  });
+  browserWindowState.reload = vi.fn();
 
   return {
     id: BrowserWindowMock.mock.calls.length,
     isDestroyed: () => false,
+    isVisible: () => browserWindowState.visible === true,
     loadFile: browserWindowState.loadFile,
     loadURL: browserWindowState.loadURL,
     on: browserWindowState.on,
@@ -155,7 +165,7 @@ const BrowserWindowMock = vi.fn(function BrowserWindow(
     webContents: {
       id: BrowserWindowMock.mock.calls.length,
       isDestroyed: () => false,
-      reload: vi.fn(),
+      reload: browserWindowState.reload,
       send: browserWindowState.send,
       on: browserWindowState.webContentsOn,
       once: browserWindowState.webContentsOnce,
@@ -283,10 +293,47 @@ describe("createMainWindow", () => {
     webContentsEventHandlers.clear();
     webContentsOnceHandlers.clear();
     delete process.env.ELECTRON_RENDERER_URL;
+    browserWindowState.deferReadyToShow = false;
   });
 
   afterEach(() => {
     delete process.env.ELECTRON_RENDERER_URL;
+    vi.useRealTimers();
+  });
+
+  it("reloads a stalled first load, then shows the window and sends its initial thread", async () => {
+    const { MAIN_WINDOW_APPEAR_TIMEOUT_MS } = await import("../main-window-startup-watchdog");
+    const { WINDOW_SHOW_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const { createMainWindow } = await import("../window");
+    vi.useFakeTimers();
+    browserWindowState.deferReadyToShow = true;
+    const onShown = vi.fn(() => {
+      // Federation viewers send queued requests here, so the page must be
+      // loaded by the time the window appears.
+      expect(browserWindowState.reload).toHaveBeenCalledOnce();
+      expect(browserWindowState.send).not.toHaveBeenCalled();
+    });
+    const initialThread = { backend: "codex" as const, threadId: "thread-1" };
+    createMainWindow({ initialThread, onShown });
+    emitWebContentsEvent("did-start-loading");
+
+    await vi.advanceTimersByTimeAsync(MAIN_WINDOW_APPEAR_TIMEOUT_MS);
+    expect(browserWindowState.reload).toHaveBeenCalledOnce();
+    expect(browserWindowState.show).not.toHaveBeenCalled();
+
+    emitWebContentsEvent("did-finish-load");
+    expect(onShown).toHaveBeenCalledOnce();
+    expect(browserWindowState.show).toHaveBeenCalledOnce();
+    expect(browserWindowState.send).toHaveBeenCalledWith(
+      WINDOW_SHOW_THREAD_CHANNEL,
+      initialThread,
+    );
+
+    // A late first paint must not send the initial thread a second time.
+    emitWindowEvent("ready-to-show");
+    expect(
+      browserWindowState.send!.mock.calls.filter(([channel]) => channel === WINDOW_SHOW_THREAD_CHANNEL),
+    ).toHaveLength(1);
   });
 
   it("creates a BrowserWindow with a preload script and loads the dev renderer URL", async () => {
