@@ -1801,6 +1801,78 @@ describe("Claude SDK backend", () => {
     expect(firstGrants).toHaveBeenCalledOnce();
   });
 
+  it("runs a Plan turn in Claude's plan mode and shows its proposal as a plan card", async () => {
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      if (options.permissionMode === "plan") {
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "propose", content: [
+          { type: "tool_use", id: "exit-plan", name: "ExitPlanMode", input: { plan: "## Plan\n1. Fix the lock\n2. Add a test" } },
+        ] } } as SDKMessage;
+        yield { type: "user", parent_tool_use_id: null, message: { content: [
+          { type: "tool_result", tool_use_id: "exit-plan", content: "The operator has your plan.", is_error: true },
+        ] } } as SDKMessage;
+      }
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: `reply-${options.permissionMode}`, content: [{ type: "text", text: "Ready." }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "Ready." } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Plan the fix" }], collaborationMode: { mode: "plan" } });
+    await f.waitForTurn();
+    expect(f.queries[0].permissionMode).toBe("plan");
+    expect(f.events.find((event) => event.notification.method === "item/completed"
+      && (event.notification.params.item as { type?: string }).type === "plan")?.notification.params)
+      .toMatchObject({ threadId, item: { id: "exit-plan", type: "plan", text: "## Plan\n1. Fix the lock\n2. Add a test" } });
+    const entries = (await f.backend.readThread(threadId)).entries;
+    expect(entries.filter((entry) => entry.type === "activity")).toEqual([]);
+    expect(entries.find((entry) => entry.type === "plan")).toMatchObject({ id: "exit-plan", markdown: "## Plan\n1. Fix the lock\n2. Add a test" });
+    // Plan applies to its own turn only.
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Implement it" }] });
+    await f.waitForTurn();
+    expect(f.queries[1].permissionMode).toBe("default");
+  });
+
+  it("gives Claude every directory linked to the thread except its working directory", async () => {
+    const f = await fixture();
+    const other = path.join(f.root, "other");
+    const worktree = path.join(f.root, "wt");
+    const attached = path.join(f.root, "attached");
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default", linkedDirectories: [
+      { id: f.root, kind: "local", label: "root", path: f.root },
+      { id: other, kind: "worktree", label: "other", path: other, worktreePath: worktree },
+    ] });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }], additionalDirectories: [attached, f.root, attached] });
+    await f.waitForTurn();
+    expect(f.queries[0].additionalDirectories).toEqual([attached, worktree].sort());
+  });
+
+  it("relaunches to give Claude a newly attached directory once no task would stop", async () => {
+    const f = await fixture(async function* (options) {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      if (options.resume) {
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "seen", content: [{ type: "text", text: "Seen." }] } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "Seen." } as SDKMessage;
+        return;
+      }
+      yield { type: "system", subtype: "task_started", task_id: "task-1", description: "sleep", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: "waiting" } as SDKMessage;
+      yield { type: "system", subtype: "task_notification", task_id: "task-1", status: "completed", output_file: "", summary: "done" } as SDKMessage;
+      await new Promise<void>((resolve) => {
+        options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    const backend = new ClaudeBackend({ ...f.backendOptions, taskFollowUpGraceMs: 60_000 });
+    const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
+    await f.waitForTurn();
+    await vi.waitFor(() => expect(backend.listBackgroundTasks(threadId).terminals).toEqual([]));
+    const attached = path.join(f.root, "attached");
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Look there" }], additionalDirectories: [attached] });
+    await f.waitForTurn();
+    expect(f.run).toHaveBeenCalledTimes(2);
+    expect(f.queries[0].additionalDirectories).toBeUndefined();
+    expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", additionalDirectories: [attached] });
+  });
+
   describe("stopping a turn while a background task runs", () => {
     const capabilities = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"];
     async function stoppable(params: { capabilities?: string[]; answer?: boolean; interruptGraceMs?: number } = {}) {
@@ -2080,6 +2152,14 @@ describe("Claude permission bridge", () => {
     }), expect.any(AbortSignal));
     expect(result?.behavior).toBe(behavior);
     expect(result).not.toHaveProperty("updatedPermissions");
+  });
+
+  it("answers a request to leave plan mode without an approval card", async () => {
+    const request = vi.fn();
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", request, cancelRequest: async () => {} });
+    const result = await handler("ExitPlanMode", { plan: "1. Do it" }, { signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
+    expect(request).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ behavior: "deny", message: expect.stringContaining("end your turn") });
   });
 
   it("settles and removes a pending approval on cancellation", async () => {

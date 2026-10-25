@@ -10,6 +10,17 @@ export function claudePermissionMode(mode: ThreadExecutionMode): PermissionMode 
   }
 }
 
+/** Claude's request to leave plan mode, whose input carries the plan. */
+export const CLAUDE_EXIT_PLAN_TOOL = "ExitPlanMode";
+
+/**
+ * A plan turn ends with the plan, as Codex's does: the operator reads it and
+ * replies to implement it. The transcript shows the plan, so the request to
+ * leave plan mode is answered here instead of becoming an approval card.
+ */
+const CLAUDE_PLAN_HANDOFF = "The operator has your plan and will reply when it should be implemented. "
+  + "Stay in plan mode and end your turn now.";
+
 export function createClaudePermissionHandler(options: {
   threadId: string;
   /**
@@ -22,6 +33,7 @@ export function createClaudePermissionHandler(options: {
 }): CanUseTool {
   return async (toolName, input, context) => {
     if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
+    if (toolName === CLAUDE_EXIT_PLAN_TOOL) return { behavior: "deny", message: CLAUDE_PLAN_HANDOFF };
     const requestId = randomUUID();
     const turnId = options.turnId();
     const request: AppServerPendingRequestNotification = toolName === "AskUserQuestion"
