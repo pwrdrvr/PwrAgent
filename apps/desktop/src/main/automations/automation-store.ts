@@ -726,6 +726,44 @@ export class AutomationStore {
     return row ? this.runFromRow(row) : undefined;
   }
 
+  /**
+   * The run each backend turn id belongs to, for many turns in one scan:
+   * the newest running run, else the newest run in any status. That is
+   * `findRunningRunByBackendTurnId ?? findRunByBackendTurnId` for every id.
+   * A thread's pricing event names every turn in the thread, and the table
+   * has no index on `backend_turn_id`, so a lookup per turn scanned it once
+   * per line.
+   */
+  findRunsByBackendTurnIds(params: {
+    backend: AppServerBackendKind;
+    backendTurnIds: readonly string[];
+  }): Map<string, AutomationRunSummary> {
+    const runs = new Map<string, AutomationRunSummary>();
+    if (params.backendTurnIds.length === 0) return runs;
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT * FROM automation_runs
+         WHERE backend = ?
+           AND backend_turn_id IN (SELECT value FROM json_each(?))
+         ORDER BY updated_at DESC, rowid DESC`,
+      )
+      .all(params.backend, JSON.stringify(params.backendTurnIds)) as AutomationRunRow[];
+    const chosen = new Map<string, AutomationRunRow>();
+    for (const row of rows) {
+      const turnId = row.backend_turn_id;
+      if (!turnId) continue;
+      const current = chosen.get(turnId);
+      if (!current || (current.status !== "running" && row.status === "running")) {
+        chosen.set(turnId, row);
+      }
+    }
+    for (const [turnId, row] of chosen) {
+      const run = this.runFromRow(row);
+      if (run) runs.set(turnId, run);
+    }
+    return runs;
+  }
+
   upsertRunArtifact(
     input: UpsertAutomationRunArtifactInput,
   ): AutomationRunArtifact | undefined {

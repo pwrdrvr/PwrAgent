@@ -145,6 +145,13 @@
     "rowsChanged": 49,
     "statements": 45
   },
+  "codex-turn-end-with-token-miser-gates": {
+    "commits": 3,
+    "note": "one Codex turn end on a 2,000-turn thread with 2,000 stored gate cards and 5 new gates: the final usage line, the gate cards, and the gate usage lines; unchanged by reading the ledger once. ~3.6 MB WAL, almost all from rewriting the whole overlay row for the new cards: ~360 MB/day at 100 such turn ends. Excessive; reported to the operator, and owned by moving gate cards out of the overlay row",
+    "observedWalBytes": 3576160,
+    "rowsChanged": 15,
+    "statements": 15
+  },
   "codex-ultrafast-profile-reset": {
     "commits": 3,
     "note": "one explicit profile reset of one Ultrafast thread, one launchpad and sticky defaults",

@@ -576,11 +576,13 @@ describe("DesktopAutomationService", () => {
       vi.spyOn(store, "findRunningRunByBackendTurnId"),
       vi.spyOn(store, "findRunByBackendTurnId"),
     ];
+    const batchedLookups = vi.spyOn(store, "findRunsByBackendTurnIds");
     for (const totalCostMicros of [100_000, 100_000, 123_456]) {
       await Promise.all(
         registryListeners.map((listener) => listener(pricingEvent(totalCostMicros))),
       );
     }
+    expect(batchedLookups).toHaveBeenCalledTimes(3);
     expect(perTurnLookups.map((spy) => spy.mock.calls.length)).toEqual([0, 0]);
     expect(setRunUsage).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);

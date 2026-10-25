@@ -298,7 +298,9 @@ describe("turn end read budget", () => {
       tokenMiserAccountingBuilds: 0,
     });
     expect(large).toEqual(small);
-    expect(overlayParses).toMatchInlineSnapshot();
+    // Each parse reads the whole overlay row, which holds every gate card.
+    // Moving the cards to their own table makes these cheap, not fewer.
+    expect(overlayParses).toMatchInlineSnapshot(`8`);
   }, 60_000);
 
   it("holds one turn end with new gates to its write budget", async () => {

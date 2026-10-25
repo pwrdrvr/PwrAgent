@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
+import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
 import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
@@ -116,6 +117,14 @@ import type {
 } from "./remote-thread-target-store.js";
 
 const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
+// The focused thread, its context panel, and a few threads open in other
+// windows. A long thread's ledger holds a few MB.
+const THREAD_PRICING_CACHE_THREADS = 8;
+
+type ThreadPricingLedgerRead = {
+  lines: ThreadUsageLineRecord[];
+  summaries: ThreadPricingSummary[];
+};
 // A live usage flush stamps one `updated_at` per batch, one line per turn
 // running at that moment. On a real 22,000-line profile no flush stamp was
 // shared by more than 2 lines; one migration stamp was shared by 7,251.
@@ -739,6 +748,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     backendChanges: number;
     state: { knownThreadKeys: string[]; lastSnapshotHash?: string } | undefined;
   };
+
+  /** Recent whole-ledger reads, least recently used first. */
+  private readonly threadPricingCache = new Map<string, {
+    dataVersion: number;
+    ledgerVersion: number;
+    pricing: ThreadPricingLedgerRead;
+  }>();
 
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
   private readonly directoryLaunchpadListeners = new Set<() => void>();
@@ -2749,10 +2765,57 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     } : undefined;
   }
 
+  /**
+   * One thread's whole pricing ledger.
+   *
+   * A turn end publishes the ledger once, and the renderer then reads it again
+   * for the accounting display, the transcript, and an open context panel.
+   * On a long thread each read materialized thousands of rows. A read is
+   * reused until a row of this thread's ledger changes on this connection
+   * (`sqliteUsageLedgerVersions`) or another connection commits. Callers
+   * receive their own copy, because several of them decorate the lines.
+   */
   async readThreadPricing(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
-  }): Promise<{ lines: ThreadUsageLineRecord[]; summaries: ThreadPricingSummary[] }> {
+  }): Promise<ThreadPricingLedgerRead> {
+    const db = this.stateDb.raw;
+    const ledgerVersions = sqliteUsageLedgerVersions(db);
+    if (!ledgerVersions || db.inTransaction) {
+      return this.materializeThreadPricing(params);
+    }
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    const dataVersion = db.pragma("data_version", { simple: true }) as number;
+    const cached = this.threadPricingCache.get(key);
+    this.threadPricingCache.delete(key);
+    if (
+      cached
+      && cached.dataVersion === dataVersion
+      && cached.ledgerVersion === (ledgerVersions.get(params.threadId) ?? 0)
+    ) {
+      this.threadPricingCache.set(key, cached);
+      return structuredClone(cached.pricing);
+    }
+    const pricing = this.materializeThreadPricing(params);
+    // Lazy repricing may have written; record the version after it.
+    this.threadPricingCache.set(key, {
+      dataVersion,
+      ledgerVersion: ledgerVersions.get(params.threadId) ?? 0,
+      pricing,
+    });
+    for (const staleKey of this.threadPricingCache.keys()) {
+      if (this.threadPricingCache.size <= THREAD_PRICING_CACHE_THREADS) {
+        break;
+      }
+      this.threadPricingCache.delete(staleKey);
+    }
+    return structuredClone(pricing);
+  }
+
+  private materializeThreadPricing(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): ThreadPricingLedgerRead {
     const lineRows = this.stateDb.raw
       .prepare(
         `SELECT *
@@ -2829,7 +2892,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
       if (repairs.length > 0) {
         this.persistThreadUsagePricingRepairsSync(repairs);
-        return this.readThreadPricing(params);
+        return this.materializeThreadPricing(params);
       }
     }
 
@@ -3674,60 +3737,103 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             AND parent_thread_id = ?
             AND thread_id != ?`,
       )
-      .all(backend, threadId, backend, threadId, threadId) as Array<{
-      completed_at: number | null;
-      started_at: number | null;
-      usage_turn_id: string;
-      observed_cold_replay_count: number | null;
-      observed_cold_replay_uncached_tokens: number | null;
-      observed_hot_replay_cached_tokens: number | null;
-      observed_hot_replay_count: number | null;
-      final_context_tokens: number | null;
-      peak_context_tokens: number | null;
-      model_context_window: number | null;
-    }>;
-    if (turnRows.length === 0) {
-      return;
+      .all(backend, threadId, backend, threadId, threadId) as UsageTurnMetadataRow[];
+    applyUsageTurnMetadata(lines, turnRows);
+  }
+
+  /**
+   * The ledger rows that price a batch of Token Miser gates: rows naming a
+   * gate as their source item, and this thread's own rows for a gate's turn.
+   * Those are the only rows `indexTokenMiserPricingLines` lookups return, so
+   * this gives them the whole-ledger read's rows, order, turn metadata, and
+   * repricing without materializing every line of a long thread. SQLite still
+   * filters the thread's index range; only matches become records.
+   */
+  async readTokenMiserGatePricingLines(params: {
+    backend: ThreadOverlayState["backend"];
+    sourceItemIds: readonly string[];
+    threadId: string;
+    turnIds: readonly string[];
+  }): Promise<ThreadUsageLineRecord[]> {
+    if (params.sourceItemIds.length === 0 && params.turnIds.length === 0) {
+      return [];
     }
-    const byTurnId = new Map(turnRows.map((row) => [row.usage_turn_id, row]));
-    for (const line of lines) {
-      if (!line.usageTurnId) {
-        continue;
-      }
-      const turn = byTurnId.get(line.usageTurnId);
-      if (!turn) {
-        continue;
-      }
-      if (turn.started_at !== null) {
-        line.startedAt = turn.started_at;
-      }
-      if (line.completedAt === undefined && turn.completed_at !== null) {
-        line.completedAt = turn.completed_at;
-      }
-      if (turn.observed_cold_replay_count !== null) {
-        line.observedColdReplayCount = turn.observed_cold_replay_count;
-      }
-      if (turn.observed_cold_replay_uncached_tokens !== null) {
-        line.observedColdReplayUncachedTokens =
-          turn.observed_cold_replay_uncached_tokens;
-      }
-      if (turn.observed_hot_replay_cached_tokens !== null) {
-        line.observedHotReplayCachedTokens =
-          turn.observed_hot_replay_cached_tokens;
-      }
-      if (turn.observed_hot_replay_count !== null) {
-        line.observedHotReplayCount = turn.observed_hot_replay_count;
-      }
-      if (turn.final_context_tokens !== null) {
-        line.finalContextTokens = turn.final_context_tokens;
-      }
-      if (turn.peak_context_tokens !== null) {
-        line.peakContextTokens = turn.peak_context_tokens;
-      }
-      if (turn.model_context_window !== null) {
-        line.modelContextWindow = turn.model_context_window;
-      }
+    const sourceItemIds = JSON.stringify(params.sourceItemIds);
+    const turnIds = JSON.stringify(params.turnIds);
+    const lineRows = this.stateDb.raw
+      .prepare(
+        `SELECT *
+         FROM (
+           SELECT *
+           FROM thread_usage_lines
+           WHERE backend = ?
+             AND status != 'superseded'
+             AND thread_id = ?
+             AND (
+               source_item_id IN (SELECT value FROM json_each(?))
+               OR turn_id IN (SELECT value FROM json_each(?))
+               OR usage_turn_id IN (SELECT value FROM json_each(?))
+             )
+           UNION ALL
+           SELECT *
+           FROM thread_usage_lines
+           WHERE backend = ?
+             AND status != 'superseded'
+             AND parent_thread_id = ?
+             AND thread_id != ?
+             AND source_item_id IN (SELECT value FROM json_each(?))
+         )
+         ORDER BY created_at DESC, usage_line_id DESC`,
+      )
+      .all(
+        params.backend,
+        params.threadId,
+        sourceItemIds,
+        turnIds,
+        turnIds,
+        params.backend,
+        params.threadId,
+        params.threadId,
+        sourceItemIds,
+      ) as ThreadUsageLineRow[];
+    const lines = lineRows.map(threadUsageLineFromRow);
+    const usageTurnIds = [...new Set(lines.flatMap((line) =>
+      line.usageTurnId ? [line.usageTurnId] : []))];
+    if (usageTurnIds.length > 0) {
+      const turnRows = this.stateDb.raw
+        .prepare(
+          `SELECT usage_turn_id,
+                  started_at,
+                  completed_at,
+                  observed_cold_replay_count,
+                  observed_cold_replay_uncached_tokens,
+                  observed_hot_replay_cached_tokens,
+                  observed_hot_replay_count,
+                  final_context_tokens,
+                  peak_context_tokens,
+                  model_context_window
+             FROM thread_usage_turns
+            WHERE usage_turn_id IN (SELECT value FROM json_each(?))
+              AND backend = ?
+              AND (thread_id = ? OR parent_thread_id = ?)`,
+        )
+        .all(
+          JSON.stringify(usageTurnIds),
+          params.backend,
+          params.threadId,
+          params.threadId,
+        ) as UsageTurnMetadataRow[];
+      applyUsageTurnMetadata(lines, turnRows);
     }
+    // The whole-ledger read persists the repricing it finds; this read only
+    // borrows it, and leaves the write to the next ledger read.
+    return lines.map((line) => {
+      if (line.priceStatus === "priced") {
+        return line;
+      }
+      const repaired = repriceTokenUsageLine(line);
+      return repaired.priceStatus === "priced" ? repaired : line;
+    });
   }
 
   async upsertThreadSubAgent(params: {
@@ -9576,6 +9682,67 @@ function enrichProtectedThreadUsage(
   // Never copy the incoming cost or reprice a finalized priced row. A missing
   // model/context ceiling can price an unpriced row using its frozen tokens.
   return preserved.priceStatus === "priced" ? enriched : repriceTokenUsageLine(enriched);
+}
+
+type UsageTurnMetadataRow = {
+  completed_at: number | null;
+  started_at: number | null;
+  usage_turn_id: string;
+  observed_cold_replay_count: number | null;
+  observed_cold_replay_uncached_tokens: number | null;
+  observed_hot_replay_cached_tokens: number | null;
+  observed_hot_replay_count: number | null;
+  final_context_tokens: number | null;
+  peak_context_tokens: number | null;
+  model_context_window: number | null;
+};
+
+function applyUsageTurnMetadata(
+  lines: ThreadUsageLineRecord[],
+  turnRows: readonly UsageTurnMetadataRow[],
+): void {
+  if (turnRows.length === 0) {
+    return;
+  }
+  const byTurnId = new Map(turnRows.map((row) => [row.usage_turn_id, row]));
+  for (const line of lines) {
+    if (!line.usageTurnId) {
+      continue;
+    }
+    const turn = byTurnId.get(line.usageTurnId);
+    if (!turn) {
+      continue;
+    }
+    if (turn.started_at !== null) {
+      line.startedAt = turn.started_at;
+    }
+    if (line.completedAt === undefined && turn.completed_at !== null) {
+      line.completedAt = turn.completed_at;
+    }
+    if (turn.observed_cold_replay_count !== null) {
+      line.observedColdReplayCount = turn.observed_cold_replay_count;
+    }
+    if (turn.observed_cold_replay_uncached_tokens !== null) {
+      line.observedColdReplayUncachedTokens =
+        turn.observed_cold_replay_uncached_tokens;
+    }
+    if (turn.observed_hot_replay_cached_tokens !== null) {
+      line.observedHotReplayCachedTokens =
+        turn.observed_hot_replay_cached_tokens;
+    }
+    if (turn.observed_hot_replay_count !== null) {
+      line.observedHotReplayCount = turn.observed_hot_replay_count;
+    }
+    if (turn.final_context_tokens !== null) {
+      line.finalContextTokens = turn.final_context_tokens;
+    }
+    if (turn.peak_context_tokens !== null) {
+      line.peakContextTokens = turn.peak_context_tokens;
+    }
+    if (turn.model_context_window !== null) {
+      line.modelContextWindow = turn.model_context_window;
+    }
+  }
 }
 
 function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {
