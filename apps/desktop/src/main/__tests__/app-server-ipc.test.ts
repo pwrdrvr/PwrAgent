@@ -3598,6 +3598,45 @@ describe("app server ipc", () => {
     })).rejects.toThrow("invalid remote navigation payload");
   });
 
+  it("reads messaging bindings once for the whole navigation snapshot", async () => {
+    const messagingStoreModule = await import("../messaging/desktop-messaging-store");
+    const binding = (id: string, backend: string | undefined, createdAt: number) => ({
+      id, backend, threadId: "thread-1", authorizedActorIds: [], createdAt, updatedAt: 10 - createdAt,
+      channel: { channel: "telegram", conversation: { kind: "topic", id: `${id}:topic`, title: id } },
+    });
+    const store = {
+      // The store lists by updated_at DESC; chips stay in creation order.
+      findActiveBindings: vi.fn(async () => [
+        binding("grok-binding", "acp:grok", 3),
+        binding("legacy-binding", undefined, 2),
+        binding("codex-binding", "codex", 1),
+      ]),
+      findActiveBindingsForThread: vi.fn(async () => []),
+    };
+    messagingStoreModule.setDesktopMessagingStoreForTests(
+      store as unknown as Parameters<typeof messagingStoreModule.setDesktopMessagingStoreForTests>[0],
+    );
+    try {
+      registerAppServerIpcHandlers();
+      await readLegacyOwnerMaterialization?.({}, {} satisfies GetNavigationSnapshotRequest);
+
+      expect(store.findActiveBindings).toHaveBeenCalledTimes(1);
+      expect(store.findActiveBindingsForThread).not.toHaveBeenCalled();
+      const chipIds = (bindings: Array<{ bindingId: string }> | undefined) =>
+        bindings?.map((chip) => chip.bindingId);
+      const { messagingBindingsByThreadKey } = reconcileNavigationSnapshot.mock.lastCall![0] as {
+        messagingBindingsByThreadKey: Record<string, Array<{ bindingId: string }>>;
+      };
+      // Both threads share an id. A binding with no backend belongs to each.
+      expect(chipIds(messagingBindingsByThreadKey["codex:thread-1"]))
+        .toEqual(["codex-binding", "legacy-binding"]);
+      expect(chipIds(messagingBindingsByThreadKey["acp:grok:thread-1"]))
+        .toEqual(["legacy-binding", "grok-binding"]);
+    } finally {
+      messagingStoreModule.resetDesktopMessagingStoreForTests();
+    }
+  });
+
   it("aggregates navigation snapshots across backends by default", async () => {
     getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
 

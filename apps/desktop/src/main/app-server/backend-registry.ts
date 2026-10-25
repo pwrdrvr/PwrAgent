@@ -82,7 +82,6 @@ import type {
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import type {
   MessagingApprovalDecision,
-  MessagingBindingRecord,
 } from "@pwragent/messaging-interface";
 import type {
   CodexProtocolCaptureResult,
@@ -686,6 +685,8 @@ import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
 import { ThreadArchiveSweeper, archiveCandidateLastActivity, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
+import { compareBindingsByCreation } from "../messaging/core/messaging-binding-thread-match";
+import { toMessagingThreadBindingSummary } from "../messaging/messaging-bindings-snapshot";
 import {
   createCompositeJsonRpcObserver,
   createProtocolLogObserverFromEnv,
@@ -45591,7 +45592,8 @@ export class DesktopBackendRegistry {
       if (bindings.length === 0) {
         return undefined;
       }
-      return bindings.map(toMessagingThreadBindingSummary);
+      // Chip order: creation, then id, as the sidebar and detail show it.
+      return [...bindings].sort(compareBindingsByCreation).map(toMessagingThreadBindingSummary);
     } catch (error) {
       backendRegistryLog.warn("failed to resolve thread inspection messaging bindings", {
         backend: params.backend,
@@ -48233,21 +48235,6 @@ function summarizeLinkedRepositories(
     byRepositoryPath.set(repositoryPath, current);
   }
   return [...byRepositoryPath.values()];
-}
-
-function toMessagingThreadBindingSummary(
-  binding: MessagingBindingRecord,
-): MessagingThreadBindingSummary {
-  const conversation = binding.channel.conversation;
-  return {
-    bindingId: binding.id,
-    platform: binding.channel.channel,
-    conversationKind: conversation.kind,
-    conversationTitle: conversation.title,
-    parentTitle: conversation.parentTitle,
-    ancestorTitle: conversation.ancestorTitle,
-    activeAt: binding.updatedAt,
-  };
 }
 
 function nonEmptyStringArray(value: unknown): string[] | undefined {

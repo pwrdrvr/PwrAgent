@@ -5,16 +5,24 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { NavigationQueryIndex } from "../app-server/navigation-query-projection";
 import budgets from "./fixtures/navigation-listing-budgets.json";
 
-const mocks = vi.hoisted(() => ({
-  store: {
-    readNavigationSourceVersion: vi.fn(() => "unchanged"),
-    readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
-    readDirectoryGitStatusCache: async () => ({}),
-  },
-  messaging: {
-    findActiveBindings: vi.fn(async (): Promise<MessagingBindingRecord[]> => []),
-  },
-}));
+const mocks = vi.hoisted(() => {
+  const findActiveBindings = vi.fn(async (): Promise<MessagingBindingRecord[]> => []);
+  return {
+    store: {
+      readNavigationSourceVersion: vi.fn(() => "unchanged"),
+      readNavigationQueryIndex: vi.fn((_params: { threads: NavigationThreadSummary[] }): NavigationQueryIndex => ({ threads: [], directories: [] })),
+      readDirectoryGitStatusCache: async () => ({}),
+    },
+    messaging: {
+      findActiveBindings,
+      // A one-thread index uses the per-thread query. Answer it from the same
+      // rows without counting a full read.
+      findActiveBindingsForThread: async (params: { backend: string; threadId: string }) =>
+        (await findActiveBindings.getMockImplementation()!()).filter((binding) =>
+          binding.threadId === params.threadId && (!binding.backend || binding.backend === params.backend)),
+    },
+  };
+});
 vi.mock("../app-server/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => mocks.store }));
 vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
