@@ -1653,15 +1653,16 @@ describe("SettingsScreen", () => {
     expect(nav).not.toBeNull();
     expect(lane).not.toBeNull();
 
-    // Every scrolling part, not just the rows: the collapsible sublists and
-    // the divider come out of the same map, and a refactor that hoisted the
-    // sublists out — to stop the scroller clipping them, say — would leave a
-    // rows-only assertion green while group children stopped scrolling with
-    // their parent row.
+    // Every scrolling part, not just the rows: the category groups, their
+    // headings and the collapsible sublists come out of the same map, and a
+    // refactor that hoisted the sublists out — to stop the scroller clipping
+    // them, say — would leave a rows-only assertion green while group
+    // children stopped scrolling with their parent row.
     for (const selector of [
       ".settings-nav__row",
       ".settings-nav__sublist",
-      ".settings-nav__divider",
+      ".settings-nav__category",
+      ".settings-nav__group-label",
     ]) {
       const members = [...container.querySelectorAll(selector)];
       expect(members.length).toBeGreaterThan(0);
@@ -1676,6 +1677,63 @@ describe("SettingsScreen", () => {
       expect(chrome).not.toBeNull();
       expect(chrome?.parentElement).toBe(nav);
     }
+  });
+
+  it("lists every section once, under a category heading that is not a control", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+
+    // Each category is a group named by its heading, in nav order, holding
+    // its section rows in order. The exact list also proves that no section
+    // was dropped or listed twice.
+    const categories = within(nav).getAllByRole("group").map((group) => [
+      document.getElementById(group.getAttribute("aria-labelledby") ?? "")
+        ?.textContent,
+      [...group.querySelectorAll(".settings-nav__button")].map(
+        (button) => button.textContent,
+      ),
+    ]);
+    expect(categories).toEqual([
+      ["App", ["General", "Keyboard", "Updates", "Applications", "Profiles"]],
+      ["Agents", ["AI Providers", "Plugins", "Usage & Pricing"]],
+      ["Projects", ["Git", "Worktrees", "Environments"]],
+      ["Threads", ["Thread Management", "Archived Threads"]],
+      ["Remote Access", ["Messaging", "Access Control", "Federation"]],
+      ["Support", ["Experimental", "Troubleshooting", "About"]],
+    ]);
+    expect(within(nav).getByRole("group", { name: "Agents" })).toContainElement(
+      within(nav).getByRole("button", { name: "AI Providers" }),
+    );
+
+    // A heading is plain text: no route, no Tab stop, nothing to activate.
+    const headings = [...nav.querySelectorAll(".settings-nav__group-label")];
+    expect(headings).toHaveLength(6);
+    for (const heading of headings) {
+      expect(heading.tagName).toBe("P");
+      expect(heading).not.toHaveAttribute("tabindex");
+      expect(heading.closest("button, a")).toBeNull();
+    }
+  });
+
+  it("opens a deep-linked section inside its category with the page marker", () => {
+    render(
+      <SettingsScreen
+        initialSection="environments"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const projects = within(
+      screen.getByRole("navigation", { name: "Settings sections" }),
+    ).getByRole("group", { name: "Projects" });
+    expect(
+      within(projects).getByRole("button", { name: "Environments" }),
+    ).toHaveAttribute("aria-current", "page");
   });
 
   it("switches sections and saves settings", async () => {
