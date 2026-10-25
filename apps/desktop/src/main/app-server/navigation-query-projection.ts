@@ -1,6 +1,7 @@
 import { sortSubthreadSummaries } from "@pwragent/shared";
 import { createHash } from "node:crypto";
 import type {
+  AppServerBackendKind,
   NavigationCounts,
   NavigationStarMapFacetCounts,
   NavigationStarMapSignals,
@@ -199,7 +200,10 @@ function isActive(thread: NavigationThreadSummary): boolean {
   return thread.threadStatus === "active" || thread.hasActiveSubAgent === true;
 }
 
-function countsForThreads(threads: readonly NavigationThreadSummary[]): NavigationCounts {
+function countsForThreads(
+  threads: readonly NavigationThreadSummary[],
+  options: { backends?: boolean } = {},
+): NavigationCounts {
   const distinct = new Map<string, NavigationThreadSummary>();
   for (const thread of threads) {
     if (!isOrdinaryThread(thread)) {
@@ -221,6 +225,12 @@ function countsForThreads(threads: readonly NavigationThreadSummary[]): Navigati
     if (threadUnread) unread += 1;
     if (threadUnread && !threadActive) review += 1;
   }
+  // Provider chips need to know whether every thread shares one provider.
+  const backends = options.backends
+    ? [...new Set<AppServerBackendKind>(
+        [...distinct.values()].map((thread) => thread.source),
+      )].sort()
+    : undefined;
   return {
     total: distinct.size,
     active,
@@ -228,6 +238,7 @@ function countsForThreads(threads: readonly NavigationThreadSummary[]): Navigati
     ...(pinned ? { pinned } : {}),
     unread,
     review,
+    ...(backends ? { backends } : {}),
   };
 }
 
@@ -993,7 +1004,7 @@ export function projectNavigationQuery(params: {
       : params.index.threads;
   return {
     coverage: params.index.coverage ?? { state: "complete" },
-    counts: countsForThreads(countsThreads),
+    counts: countsForThreads(countsThreads, { backends: query.kind === "directory-index" }),
     ...(query.kind === "exact" && selectedThreads.length ? {
       // Resolve the canonical home from the complete compact index. A linked
       // worktree path is not necessarily the directory key shown by the viewer.
