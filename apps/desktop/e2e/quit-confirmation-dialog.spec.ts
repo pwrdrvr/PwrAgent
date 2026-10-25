@@ -57,6 +57,75 @@ async function openIntegratedTerminal(page: Page) {
   );
 }
 
+type LaunchedApp = Awaited<ReturnType<typeof launchElectronApp>>;
+
+/** The smoke fixture's only thread, as the terminal registry keys it. */
+const SMOKE_THREAD_KEY = "codex:thread-smoke";
+
+/**
+ * Spawn local shells under known ids and run a long foreground command in
+ * each, so every one blocks a quit.
+ *
+ * This goes through the terminal IPC rather than the UI: the dialog needs
+ * more blockers than anyone would open by hand, and each pane would mount an
+ * xterm the test never looks at.
+ */
+async function createTerminals(page: Page, sessionIds: string[]) {
+  await page.evaluate(async ({ ids, threadKey }) => {
+    const api = (
+      window as unknown as {
+        pwragent: {
+          createIntegratedTerminal: (request: unknown) => Promise<unknown>;
+        };
+      }
+    ).pwragent;
+    for (const sessionId of ids) {
+      await api.createIntegratedTerminal({
+        sessionId,
+        threadKey,
+        cols: 80,
+        rows: 24,
+      });
+    }
+  }, { ids: sessionIds, threadKey: SMOKE_THREAD_KEY });
+}
+
+async function writeTerminals(page: Page, sessionIds: string[], data: string) {
+  await page.evaluate(async ({ ids, text }) => {
+    const api = (
+      window as unknown as {
+        pwragent: {
+          writeIntegratedTerminal: (request: unknown) => Promise<void>;
+        };
+      }
+    ).pwragent;
+    for (const sessionId of ids) {
+      await api.writeIntegratedTerminal({ sessionId, data: text });
+    }
+  }, { ids: sessionIds, text: data });
+}
+
+async function startBlockingTerminals(app: LaunchedApp, sessionIds: string[]) {
+  await createTerminals(app.window, sessionIds);
+  // A shell that is still starting can drop typeahead, so re-send the command
+  // to any terminal the quit snapshot does not yet count. A duplicate only
+  // queues a second sleep behind the first.
+  let lastWrite = 0;
+  await expect
+    .poll(async () => {
+      const blocking = new Set(
+        (await app.getIntegratedTerminalQuitSnapshot())?.sessionIds ?? [],
+      );
+      const missing = sessionIds.filter((id) => !blocking.has(id));
+      if (missing.length > 0 && Date.now() - lastWrite > 3_000) {
+        lastWrite = Date.now();
+        await writeTerminals(app.window, missing, "sleep 600\r");
+      }
+      return missing.length;
+    }, { timeout: 45_000 })
+    .toBe(0);
+}
+
 /**
  * The quit dialog is a standalone `data:` HTML window with no preload: it talks
  * to main by navigating to a fake scheme that `will-navigate` intercepts. That
@@ -253,6 +322,169 @@ test("keeps running work reachable after cancelling and following a blocker", as
   } finally {
     // Disarm before teardown so an assertion failure while the command is
     // still active cannot open a dialog that nobody is there to answer.
+    await setQuitConfirmation(app.window, false).catch(() => undefined);
+    await app.close();
+  }
+});
+
+/**
+ * A long blocker list scrolls inside its framed well while the title strip
+ * and footer stay pinned. The page script that keeps it that way —
+ * `updateListFade` and the list swap in `__pwragentUpdateQuitSnapshot` — has
+ * no other coverage: the unit tests only read the markup.
+ */
+test("scrolls a long blocker list inside the dialog and keeps its place across refreshes", async () => {
+  // Thirteen login shells plus a second BrowserWindow.
+  test.setTimeout(150_000);
+
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
+  });
+
+  try {
+    await setQuitConfirmation(app.window, true);
+    await expect(
+      app.window.getByRole("button", { name: /Replay smoke thread/i }).first(),
+    ).toBeVisible();
+
+    // Far more rows than the 620px window can show at once.
+    const sessionIds = Array.from(
+      { length: 12 },
+      (_, index) => `e2e-quit-scroll-${index + 1}`,
+    );
+    await startBlockingTerminals(app, sessionIds);
+
+    const dialogPromise = app.electronApp.waitForEvent("window");
+    void app.electronApp
+      .evaluate(({ app: electronApp }) => {
+        electronApp.quit();
+      })
+      .catch(() => undefined);
+    const dialog = await dialogPromise;
+    await expect(
+      dialog.getByRole("heading", { name: "Quit PwrAgent?" }),
+    ).toBeVisible();
+
+    // Stop the auto-quit before anything else, so the hard ceiling cannot
+    // close the app while the list is being read. Shift, not an arrow key: a
+    // key with a default scroll action could move the list under test.
+    await dialog.keyboard.press("Shift");
+    await expect
+      .poll(async () => await dialog.locator("#countdown").innerText())
+      .toBe("Auto-quit cancelled. Choose an option below.");
+
+    // Read the DOM directly, as above: hit-testing can't reach this window.
+    const readLayout = async () =>
+      await dialog.evaluate(() => {
+        const list = document.getElementById("list");
+        const titlebar = document.querySelector(".titlebar");
+        const footer = document.querySelector(".footer");
+        return {
+          documentScrollTop: document.scrollingElement?.scrollTop ?? -1,
+          // The body's 1px hairline sits above the strip.
+          titlebarTop:
+            (titlebar?.getBoundingClientRect().top ?? -1)
+            - document.body.clientTop,
+          footerBottom: footer?.getBoundingClientRect().bottom ?? -1,
+          viewportHeight: window.innerHeight,
+          rowCount: document.querySelectorAll("#list a.row").length,
+          listScrollTop: list?.scrollTop ?? -1,
+          listClientHeight: list?.clientHeight ?? -1,
+          listScrollHeight: list?.scrollHeight ?? -1,
+          hasMore: list?.classList.contains("has-more") ?? false,
+        };
+      });
+
+    // The chrome stays put: the document never scrolls, the title strip sits
+    // at the window top (inside the body's hairline), and the footer ends
+    // inside the window.
+    const expectPinnedChrome = (
+      layout: Awaited<ReturnType<typeof readLayout>>,
+    ) => {
+      expect(layout.documentScrollTop).toBe(0);
+      expect(layout.titlebarTop).toBe(0);
+      expect(layout.footerBottom).toBeGreaterThan(0);
+      expect(layout.footerBottom).toBeLessThanOrEqual(layout.viewportHeight);
+    };
+
+    await expect
+      .poll(async () => (await readLayout()).rowCount)
+      .toBe(sessionIds.length);
+    const opened = await readLayout();
+    expectPinnedChrome(opened);
+    // The list overflows its well and shows the fade while rows remain below.
+    expect(opened.listScrollTop).toBe(0);
+    expect(opened.listScrollHeight).toBeGreaterThan(
+      opened.listClientHeight + 30,
+    );
+    expect(opened.hasMore).toBe(true);
+
+    // At the end of the list the fade goes away. The scroll event, not this
+    // assignment, is what has to clear it.
+    await dialog.evaluate(() => {
+      const list = document.getElementById("list");
+      if (list) list.scrollTop = list.scrollHeight;
+    });
+    await expect.poll(async () => (await readLayout()).hasMore).toBe(false);
+    const atEnd = await readLayout();
+    expectPinnedChrome(atEnd);
+    expect(atEnd.listScrollTop).toBeGreaterThan(0);
+
+    // Partway down, the fade is back.
+    const partway = Math.floor(
+      (atEnd.listScrollHeight - atEnd.listClientHeight) / 2,
+    );
+    expect(partway).toBeGreaterThan(0);
+    await dialog.evaluate((top) => {
+      const list = document.getElementById("list");
+      if (list) list.scrollTop = top;
+    }, partway);
+    await expect.poll(async () => (await readLayout()).hasMore).toBe(true);
+    const beforeRefresh = await readLayout();
+    expect(Math.abs(beforeRefresh.listScrollTop - partway)).toBeLessThanOrEqual(1);
+
+    // Mark the current list. A refresh replaces it with a fresh element, so a
+    // list without the mark is proof the swap ran.
+    await dialog.evaluate(() => {
+      document.getElementById("list")?.setAttribute("data-e2e-stale", "");
+    });
+
+    // Change the blocker set: one more running shell. This blocks on every
+    // platform, so the refresh is not POSIX-only. The dialog's 500ms refresh
+    // picks it up from main.
+    const addedSessionId = "e2e-quit-scroll-added";
+    await createTerminals(app.window, [addedSessionId]);
+    let lastWrite = 0;
+    await expect
+      .poll(async () => {
+        const refreshed = await dialog.evaluate(() => {
+          const list = document.getElementById("list");
+          return {
+            replaced: list ? !list.hasAttribute("data-e2e-stale") : false,
+            rowCount: document.querySelectorAll("#list a.row").length,
+          };
+        });
+        const done = refreshed.replaced
+          && refreshed.rowCount === sessionIds.length + 1;
+        if (!done && Date.now() - lastWrite > 3_000) {
+          lastWrite = Date.now();
+          await writeTerminals(app.window, [addedSessionId], "sleep 600\r");
+        }
+        return done;
+      }, { timeout: 45_000 })
+      .toBe(true);
+
+    // The reader's place survives the swap.
+    const afterRefresh = await readLayout();
+    expectPinnedChrome(afterRefresh);
+    expect(
+      Math.abs(afterRefresh.listScrollTop - beforeRefresh.listScrollTop),
+    ).toBeLessThanOrEqual(1);
+    expect(afterRefresh.hasMore).toBe(true);
+
+    await dialog.locator("#stay").dispatchEvent("click");
+    await dialog.waitForEvent("close");
+  } finally {
     await setQuitConfirmation(app.window, false).catch(() => undefined);
     await app.close();
   }
