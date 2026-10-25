@@ -1900,3 +1900,283 @@ describe("list_attention_threads", () => {
       .toMatchObject({ ok: false, error: { code: "not_found" } });
   });
 });
+
+describe("create_instance_thread environments", () => {
+  const projectLaunchpad = {
+    backend: "codex",
+    executionMode: "default",
+    workMode: "worktree",
+    directoryKey: "dir:/repo",
+    directoryKind: "directory",
+    directoryLabel: "Repo",
+    prompt: "",
+    codexEnvironmentId: "project",
+    codexEnvironmentExecutionTarget: "local",
+    codexEnvironmentActionId: "dev",
+    createdAt: 1,
+    updatedAt: 2,
+  } as const;
+
+  function environmentSnapshot(params: {
+    launchpad?: boolean;
+    threads?: NavigationSnapshot["threads"];
+  } = {}) {
+    return buildSnapshot({
+      threads: params.threads ?? [],
+      directories: [{
+        key: "dir:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        ...(params.launchpad === false ? {} : { launchpad: projectLaunchpad }),
+      }] as NavigationSnapshot["directories"],
+    });
+  }
+
+  function remoteHandler(
+    snapshot: NavigationSnapshot,
+    materializeDirectoryLaunchpad: (
+      request: MaterializeDirectoryLaunchpadRequest,
+    ) => Promise<unknown>,
+  ) {
+    return createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth({ peers: [{
+          id: "pwr_studio",
+          label: "Studio Mac",
+          role: "client",
+          status: "connected",
+          capabilities: ["thread_navigation"],
+        }] }),
+        remoteBackend: (() => ({
+          readPopulation: async () => snapshot,
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+  }
+
+  const created = (request: MaterializeDirectoryLaunchpadRequest) => ({
+    backend: request.launchpad!.backend,
+    threadId: "child",
+    executionMode: request.launchpad!.executionMode,
+    workMode: request.launchpad!.workMode!,
+  });
+
+  it("asks the owning peer to resolve and set up a named environment", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => ({
+      ...created(request),
+      codexEnvironmentRuntime: {
+        environmentId: "docs",
+        environmentName: "Docs Site",
+        executionTarget: "local" as const,
+        cwd: "/worktrees/abc/repo",
+        setupStatus: "completed" as const,
+        setupExitCode: 0,
+        setupDurationMs: 1200,
+      },
+    }));
+    const handler = remoteHandler(environmentSnapshot(), materializeDirectoryLaunchpad);
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo", environment: "Docs Site" },
+    });
+
+    const request = materializeDirectoryLaunchpad.mock.calls[0][0];
+    expect(request.codexEnvironmentSelector).toBe("Docs Site");
+    // An older owner reads only the draft, and matches it as an id.
+    expect(request.launchpad).toMatchObject({
+      codexEnvironmentId: "Docs Site",
+      codexEnvironmentExecutionTarget: "local",
+    });
+    // The preset's auto-started action belongs to the preset's environment.
+    expect(request.launchpad!.codexEnvironmentActionId).toBeUndefined();
+    expect((response as { ok: true; data: CreateInstanceThreadResult }).data.environment).toEqual({
+      source: "requested",
+      requested: "Docs Site",
+      environmentId: "docs",
+      environmentName: "Docs Site",
+      setup: "completed",
+      setupExitCode: 0,
+      setupDurationMs: 1200,
+      message: "Started with environment Docs Site (docs). Setup completed in the child's workspace.",
+    });
+  });
+
+  it("reports a named environment an older owner did not apply", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
+    const handler = remoteHandler(environmentSnapshot(), materializeDirectoryLaunchpad);
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo", environment: "Docs Site" },
+    });
+
+    expect(response).toMatchObject({ ok: true, data: { threadId: "child" } });
+    expect((response as { ok: true; data: CreateInstanceThreadResult }).data.environment).toEqual({
+      source: "requested",
+      requested: "Docs Site",
+      setup: "not_applied",
+      message:
+        'The thread started without environment "Docs Site". The owning instance may run an older PwrAgent that matches environments only by id.',
+    });
+  });
+
+  it("starts without the project's environment when environment is none", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
+    const handler = remoteHandler(environmentSnapshot(), materializeDirectoryLaunchpad);
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo", environment: "none" },
+    });
+
+    const request = materializeDirectoryLaunchpad.mock.calls[0][0];
+    expect(request.codexEnvironmentSelector).toBeUndefined();
+    expect(request.launchpad!.codexEnvironmentId).toBeUndefined();
+    expect(request.launchpad!.codexEnvironmentActionId).toBeUndefined();
+    expect((response as { ok: true; data: CreateInstanceThreadResult }).data.environment).toEqual({
+      source: "none",
+      requested: "none",
+      message: "Started with no environment.",
+    });
+  });
+
+  it("reports the project's environment preset when no environment is named", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => ({
+      ...created(request),
+      codexEnvironmentRuntime: {
+        environmentId: "project",
+        environmentName: "Project",
+        executionTarget: "local" as const,
+        setupStatus: "failed" as const,
+        setupExitCode: 2,
+        setupOutput: "x".repeat(3000) + "tail",
+      },
+      codexEnvironmentStartupFailure: {
+        message: "Codex environment command exited with 2",
+        phase: "setup" as const,
+        worktreeCleanupAvailable: true,
+      },
+    }));
+    const handler = remoteHandler(environmentSnapshot(), materializeDirectoryLaunchpad);
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo" },
+    });
+
+    expect(materializeDirectoryLaunchpad.mock.calls[0][0].launchpad).toMatchObject({
+      codexEnvironmentId: "project",
+      codexEnvironmentActionId: "dev",
+    });
+    const environment = (response as { ok: true; data: CreateInstanceThreadResult }).data.environment!;
+    expect(environment).toMatchObject({
+      source: "project",
+      environmentId: "project",
+      setup: "failed",
+      setupExitCode: 2,
+      message:
+        "Environment Project (project) setup failed (exit 2): Codex environment command exited with 2. The thread was created; see setupOutputTail.",
+    });
+    expect(environment.setupOutputTail).toHaveLength(2000);
+    expect(environment.setupOutputTail!.endsWith("tail")).toBe(true);
+  });
+
+  it("gives a same-project local thread the calling thread's environment", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
+    const snapshot = environmentSnapshot({
+      threads: [{
+        id: "thread-1",
+        source: "codex",
+        title: "Parent",
+        titleSource: "derived",
+        inbox: { inInbox: false },
+        linkedDirectories: [{ id: "/repo", kind: "worktree", label: "Repo", path: "/repo", worktreePath: "/worktrees/parent/repo" }],
+        codexEnvironmentRuntime: {
+          environmentId: "pwragent",
+          environmentName: "PwrAgent",
+          executionTarget: "local",
+          setupStatus: "completed",
+        },
+        updatedAt: 1,
+      }] as NavigationSnapshot["threads"],
+    });
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+        localBackend: (() => ({
+          readPopulation: async () => snapshot,
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_local", projectKey: "dir:/repo" },
+    });
+
+    expect(response).toMatchObject({ ok: true });
+
+    const request = materializeDirectoryLaunchpad.mock.calls[0][0];
+    expect(request.launchpad).toMatchObject({
+      codexEnvironmentId: "pwragent",
+      codexEnvironmentExecutionTarget: "local",
+    });
+    expect(request.launchpad!.codexEnvironmentActionId).toBeUndefined();
+  });
+
+  it("keeps the project's preset for a local thread in another project", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
+    const snapshot = environmentSnapshot({
+      threads: [{
+        id: "thread-1",
+        source: "codex",
+        title: "Parent",
+        titleSource: "derived",
+        inbox: { inInbox: false },
+        linkedDirectories: [{ id: "/other", kind: "local", label: "Other", path: "/other" }],
+        codexEnvironmentRuntime: {
+          environmentId: "pwragent",
+          environmentName: "PwrAgent",
+          executionTarget: "local",
+        },
+        updatedAt: 1,
+      }] as NavigationSnapshot["threads"],
+    });
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+        localBackend: (() => ({
+          readPopulation: async () => snapshot,
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_local", projectKey: "dir:/repo" },
+    });
+
+    expect(response).toMatchObject({ ok: true });
+
+    expect(materializeDirectoryLaunchpad.mock.calls[0][0].launchpad).toMatchObject({
+      codexEnvironmentId: "project",
+      codexEnvironmentActionId: "dev",
+    });
+  });
+});

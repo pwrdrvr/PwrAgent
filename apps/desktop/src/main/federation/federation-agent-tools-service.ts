@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type {
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
   CreateInstanceThreadResult,
   CreateInstanceThreadToolArgs,
+  CreatedThreadEnvironmentReport,
   FederationHealthStatus,
   FederationHostInfo,
   FederationInstanceDescriptor,
@@ -40,8 +42,10 @@ import {
   buildThreadUrl,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
+  THREAD_ENVIRONMENT_NONE,
 } from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
+import { describeCreatedThreadEnvironment } from "../app-server/created-thread-environment";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
@@ -605,7 +609,15 @@ async function createInstanceThread(
     && groupingParent.instanceId !== instance.instanceId
     ? groupingParent.instanceId
     : undefined;
-  const draft = buildLaunchpadDraft({ config, directory, args });
+  const environment = await resolveCreatedThreadEnvironment({
+    runtime,
+    args,
+    context,
+    directory,
+    draft: buildLaunchpadDraft({ config, directory, args }),
+    isLocal: instance.isLocal,
+  });
+  const draft = environment.draft;
   const messageOrigin: AppServerThreadMessageOrigin = resolveMessageOrigin
     ? resolveMessageOrigin(context)
     : {
@@ -636,6 +648,9 @@ async function createInstanceThread(
           }
         : {}),
       ...(input.length > 0 ? { input } : {}),
+      ...(environment.selector
+        ? { codexEnvironmentSelector: environment.selector }
+        : {}),
     },
     { messageOrigin },
   );
@@ -694,8 +709,89 @@ async function createInstanceThread(
       : `Created thread in ${directory.label} on ${instance.label}.`,
     turnStartFailure: response.turnStartFailure,
     codexEnvironmentStartupFailure: response.codexEnvironmentStartupFailure,
+    environment: describeCreatedThreadEnvironment({
+      source: environment.source,
+      requested: args.environment?.trim() || undefined,
+      runtime: response.codexEnvironmentRuntime,
+      failure: response.codexEnvironmentStartupFailure,
+      // The owner always runs setup in the new thread's own workspace.
+      setupRan: true,
+    }),
   };
   return ok(result);
+}
+
+/**
+ * Choose the new thread's environment. A named one is resolved by the
+ * owner, which alone has the project's config; it also goes in the draft's id
+ * field, which an older owner matches as an id. `none` clears the preset. With
+ * neither, a local thread in the caller's own project inherits the caller's
+ * environment, and anything else keeps the project's preset.
+ */
+async function resolveCreatedThreadEnvironment(params: {
+  runtime: DesktopFederationRuntime;
+  args: CreateInstanceThreadToolArgs;
+  context: PwrAgentFederationContext;
+  directory: NavigationDirectoryRow;
+  draft: NavigationLaunchpadDraft;
+  isLocal: boolean;
+}): Promise<{
+  draft: NavigationLaunchpadDraft;
+  selector?: string;
+  source: CreatedThreadEnvironmentReport["source"];
+}> {
+  const { draft } = params;
+  const requested = params.args.environment?.trim();
+  const withEnvironment = (environmentId: string | undefined) => ({
+    ...draft,
+    codexEnvironmentId: environmentId,
+    codexEnvironmentExecutionTarget: environmentId ? "local" as const : undefined,
+    // The preset's auto-started action belongs to the preset's environment.
+    codexEnvironmentActionId: undefined,
+  });
+  if (requested?.toLowerCase() === THREAD_ENVIRONMENT_NONE) {
+    return { draft: withEnvironment(undefined), source: "none" };
+  }
+  if (requested) {
+    return { draft: withEnvironment(requested), selector: requested, source: "requested" };
+  }
+  const inherited = params.isLocal
+    ? await readCallerProjectEnvironmentId(params)
+    : undefined;
+  if (inherited) {
+    return {
+      draft: inherited === draft.codexEnvironmentId ? draft : withEnvironment(inherited),
+      source: "inherited",
+    };
+  }
+  return { draft, source: draft.codexEnvironmentId ? "project" : "none" };
+}
+
+async function readCallerProjectEnvironmentId(params: {
+  runtime: DesktopFederationRuntime;
+  context: PwrAgentFederationContext;
+  directory: NavigationDirectoryRow;
+}): Promise<string | undefined> {
+  const projectPath = params.directory.path?.trim();
+  if (!projectPath) {
+    return undefined;
+  }
+  const caller = await params.runtime.localBackend().getNavigationSelectedDetail?.({
+    protocol: 2,
+    ref: { backend: params.context.backend, threadId: params.context.threadId },
+  }).catch(() => undefined);
+  const thread = caller?.protocol === 2 && !caller.unchanged ? caller.thread : undefined;
+  const runtime = thread?.codexEnvironmentRuntime;
+  const callerProjectPath = thread?.linkedDirectories?.[0]?.path?.trim();
+  if (
+    !runtime?.environmentId
+    || runtime.executionTarget !== "local"
+    || !callerProjectPath
+    || path.resolve(callerProjectPath) !== path.resolve(projectPath)
+  ) {
+    return undefined;
+  }
+  return runtime.environmentId;
 }
 
 async function searchFederationThreads(

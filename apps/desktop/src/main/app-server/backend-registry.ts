@@ -207,6 +207,7 @@ import {
   type CodexEnvironmentStartupFailure,
   type CodexEnvironmentSetupProgressEvent,
   type CodexThreadEnvironmentRuntime,
+  type CreatedThreadEnvironmentReport,
   type CreateScheduledThreadActionRequest,
   type BackendLaunchpadOptions,
   type BackendModelOption,
@@ -458,6 +459,7 @@ import {
   type TaskMonitorRequest,
   type TaskMonitorResponse,
   type TaskMonitorUsageSnapshot,
+  THREAD_ENVIRONMENT_NONE,
 } from "@pwragent/shared";
 import {
   ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR,
@@ -747,8 +749,10 @@ import {
   listCodexEnvironmentOptions,
   pruneCodexEnvironmentActionMap,
   resolveCodexEnvironmentActionId,
+  resolveCodexEnvironmentSelector,
   withCodexEnvironmentOptions,
 } from "./codex-environment-config";
+import { describeCreatedThreadEnvironment } from "./created-thread-environment";
 import {
   applyLocalCodexEnvironmentSelection,
   attachDetachedCommandThreadId,
@@ -1178,6 +1182,8 @@ type BackendClient = {
 type BackendRegistryForkThreadRequest = ForkThreadRequest & {
   importedWorktree?: { repositoryPath: string; worktreePath: string };
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+  /** Run the environment's setup even when the fork is not a new worktree. */
+  rerunCodexEnvironmentSetup?: boolean;
   onPreparedWorkspaceRollback?: (rollback: (() => Promise<void>) | undefined) => void;
   onCodexEnvironmentSetupProgress?: (
     event: CodexEnvironmentSetupProgressEvent,
@@ -18150,6 +18156,11 @@ export class DesktopBackendRegistry {
     prAutoDispatchEnabled?: boolean;
     tokenMiserEnabled?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    /**
+     * Run the environment's setup in the new workspace even when it is not a
+     * new worktree. A named environment has never run there.
+     */
+    rerunCodexEnvironmentSetup?: boolean;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
     this.assertNotBootstrap("startThread");
@@ -18168,6 +18179,7 @@ export class DesktopBackendRegistry {
       tokenMiserEnabled: tokenMiserOverride,
       mcpConnectionIds: requestedMcpConnectionIds,
       mcpProviderServersEnabled,
+      rerunCodexEnvironmentSetup,
       ...request
     } = params;
     // A launchpad's access defaults to Auto for Codex and Claude. A Codex older
@@ -18223,10 +18235,13 @@ export class DesktopBackendRegistry {
     }
     let codexEnvironmentRuntime = request.codexEnvironmentRuntime;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
-    if (backend === "codex" && request.codexEnvironmentRuntime && workMode) {
+    // Every provider runs the environment's setup in its own workspace: the
+    // runtime's commands and captured shell environment are provider-neutral.
+    if (request.codexEnvironmentRuntime && workMode) {
       try {
         codexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
             cwd,
+            forceSetup: rerunCodexEnvironmentSetup,
             sourceRuntime: request.codexEnvironmentRuntime,
             workMode: effectiveWorkMode ?? "local",
           });
@@ -18644,18 +18659,20 @@ export class DesktopBackendRegistry {
 
   private async buildForkedCodexEnvironmentRuntime(params: {
     cwd?: string;
+    /** Run setup in a workspace that is not a new worktree. */
+    forceSetup?: boolean;
     onSetupProgress?: (
       event: Omit<CodexEnvironmentSetupProgressEvent, "directoryKey">,
     ) => void;
     sourceRuntime?: CodexThreadEnvironmentRuntime;
     workMode: LaunchpadWorkMode;
   }): Promise<CodexThreadEnvironmentRuntime | undefined> {
-    const { cwd, onSetupProgress, sourceRuntime, workMode } = params;
+    const { cwd, forceSetup, onSetupProgress, sourceRuntime, workMode } = params;
     if (!sourceRuntime?.environmentId) {
       return undefined;
     }
     if (
-      workMode !== "worktree" ||
+      (workMode !== "worktree" && !forceSetup) ||
       sourceRuntime.executionTarget !== "local" ||
       !cwd?.trim()
     ) {
@@ -18871,6 +18888,7 @@ export class DesktopBackendRegistry {
             : sourceOverlay?.codexEnvironmentRuntime;
         forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
           cwd,
+          forceSetup: request.rerunCodexEnvironmentSetup,
           onSetupProgress: request.onCodexEnvironmentSetupProgress
             ? (event) => {
                 request.onCodexEnvironmentSetupProgress?.({
@@ -20330,6 +20348,9 @@ export class DesktopBackendRegistry {
           executionMode: params.executionMode ?? overlay?.executionMode,
           instructions,
           mcpServers,
+          shellEnvironment: overlay?.codexEnvironmentRuntime?.executionTarget === "local"
+            ? overlay.codexEnvironmentRuntime.shellEnvironment
+            : undefined,
           onSessionClosed: revokeConnections,
         });
         await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,
@@ -26722,7 +26743,7 @@ export class DesktopBackendRegistry {
     if (!draft) {
       throw new Error(`No launchpad found for ${request.directoryKey}`);
     }
-    const launchpad = options?.sourceInstanceId
+    let launchpad = options?.sourceInstanceId
       ? await this.resolveRemoteLaunchpadModelSettings(draft)
       : draft;
     if (
@@ -26730,6 +26751,31 @@ export class DesktopBackendRegistry {
       && (!Number.isFinite(request.scheduledFor) || request.scheduledFor < 0)
     ) {
       throw new Error("Scheduled time must be a finite Unix timestamp.");
+    }
+    const codexEnvironmentOptions = await listCodexEnvironmentOptions(
+      launchpad.directoryPath,
+    );
+    if (request.codexEnvironmentSelector?.trim()) {
+      // An agent names an environment by id or name; only this machine has
+      // the project's config to resolve it. Refuse before any workspace work.
+      const resolution = resolveCodexEnvironmentSelector(
+        request.codexEnvironmentSelector,
+        codexEnvironmentOptions,
+        launchpad.directoryLabel,
+      );
+      if (resolution.kind === "missing") {
+        throw new Error(resolution.message);
+      }
+      const keepsAction = launchpad.codexEnvironmentId === resolution.environment.id;
+      launchpad = {
+        ...launchpad,
+        codexEnvironmentId: resolution.environment.id,
+        codexEnvironmentExecutionTarget:
+          launchpad.codexEnvironmentExecutionTarget ?? "local",
+        codexEnvironmentActionId: keepsAction
+          ? launchpad.codexEnvironmentActionId
+          : undefined,
+      };
     }
 
     const preparedWorkspace =
@@ -26753,9 +26799,6 @@ export class DesktopBackendRegistry {
             worktreePath: workspace.cwd,
           })
         : undefined;
-    const codexEnvironmentOptions = await listCodexEnvironmentOptions(
-      launchpad.directoryPath,
-    );
     const codexEnvironmentSelection = resolveCodexEnvironmentSelection(
       launchpad,
       codexEnvironmentOptions,
@@ -41334,6 +41377,7 @@ export class DesktopBackendRegistry {
       );
     }
 
+    const requestedEnvironment = request.args.environment?.trim() || undefined;
     const callerProjectBoundary = await this.resolveHandoffProjectBoundaryPath({
       cwd: callerCwd,
       linkedDirectory: callerLinkedDirectory,
@@ -41363,8 +41407,10 @@ export class DesktopBackendRegistry {
         (backend === sourceBackend ? sourceOverlay.fastMode : undefined),
       approvalPolicy: request.args.approvalPolicy ?? modeSettings.approvalPolicy,
       sandbox: request.args.sandbox ?? modeSettings.sandbox,
+      // A same-project child inherits the parent's environment, whatever its
+      // provider. A named environment, or none, replaces it.
       codexEnvironmentRuntime:
-        backend === "codex"
+        !requestedEnvironment
         && shouldInheritHandoffCodexEnvironmentRuntime({
           callerCwd,
           callerProjectBoundary,
@@ -41401,6 +41447,35 @@ export class DesktopBackendRegistry {
         : workspaceMode === "project_local"
           ? projectLocalCwd
           : sourceCwd;
+    let environmentSource: CreatedThreadEnvironmentReport["source"] =
+      inheritedSettings.codexEnvironmentRuntime?.environmentId ? "inherited" : "none";
+    if (
+      requestedEnvironment
+      && requestedEnvironment.toLowerCase() !== THREAD_ENVIRONMENT_NONE
+    ) {
+      // Resolve before creating anything, so a typo costs no worktree. The
+      // child's checkout carries the same config as its source.
+      const resolution = cwdForChild?.trim()
+        ? resolveCodexEnvironmentSelector(
+            requestedEnvironment,
+            await listCodexEnvironmentOptions(cwdForChild).catch(() => []),
+            sourceLinkedDirectory?.label || path.basename(cwdForChild),
+          )
+        : {
+            kind: "missing" as const,
+            message: `environment="${requestedEnvironment}" needs a project workspace, and workspaceMode="none" has none. Pass cwd for the project, or omit environment.`,
+          };
+      if (resolution.kind === "missing") {
+        this.failPendingThreadHandoff(handoffId, new Error(resolution.message));
+        return threadOrchestrationFailure("invalid_arguments", resolution.message);
+      }
+      inheritedSettings.codexEnvironmentRuntime = {
+        environmentId: resolution.environment.id,
+        environmentName: resolution.environment.name,
+        executionTarget: "local",
+      };
+      environmentSource = "requested";
+    }
     const childProjectBoundary =
       workspaceMode === "none"
         ? undefined
@@ -41488,6 +41563,7 @@ export class DesktopBackendRegistry {
           approvalPolicy: inheritedSettings.approvalPolicy,
           sandbox: inheritedSettings.sandbox,
           codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
+          rerunCodexEnvironmentSetup: environmentSource === "requested",
         });
         threadId = forked.threadId;
         this.updatePendingThreadHandoff(handoffId, { threadId });
@@ -41517,6 +41593,7 @@ export class DesktopBackendRegistry {
           approvalPolicy: inheritedSettings.approvalPolicy,
           sandbox: inheritedSettings.sandbox,
           codexEnvironmentRuntime: inheritedSettings.codexEnvironmentRuntime,
+          rerunCodexEnvironmentSetup: environmentSource === "requested",
           parentThreadId: groupedParentThreadId,
           parentThreadBackend: groupedParentBackend,
         });
@@ -41588,6 +41665,15 @@ export class DesktopBackendRegistry {
       mode: createdWorkspaceMode,
     });
     this.updatePendingThreadHandoff(handoffId, { workspace });
+    const environment = describeCreatedThreadEnvironment({
+      source: environmentSource,
+      requested: requestedEnvironment,
+      runtime: inheritedSettings.codexEnvironmentRuntime,
+      failure: codexEnvironmentStartupFailure,
+      setupRan:
+        environmentSource === "requested"
+        || createdWorkspaceMode === "new_worktree",
+    });
     const createdAt = request.context.now ?? Date.now();
     const origin = {
       sourceBackend,
@@ -41711,6 +41797,7 @@ export class DesktopBackendRegistry {
         origin,
         workspace,
         messagingAttachment,
+        environment,
         ...(codexEnvironmentStartupFailure
           ? { codexEnvironmentStartupFailure }
           : {}),
