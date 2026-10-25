@@ -1840,7 +1840,10 @@ describe("Claude SDK backend", () => {
       { id: f.root, kind: "local", label: "root", path: f.root },
       { id: other, kind: "worktree", label: "other", path: other, worktreePath: worktree },
     ] });
-    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }], additionalDirectories: [attached, f.root, attached] });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }], attachedDirectories: [
+      { id: attached, kind: "local", label: "attached", path: attached },
+      { id: f.root, kind: "local", label: "root", path: f.root },
+    ] });
     await f.waitForTurn();
     expect(f.queries[0].additionalDirectories).toEqual([attached, worktree].sort());
   });
@@ -1866,7 +1869,8 @@ describe("Claude SDK backend", () => {
     await f.waitForTurn();
     await vi.waitFor(() => expect(backend.listBackgroundTasks(threadId).terminals).toEqual([]));
     const attached = path.join(f.root, "attached");
-    await backend.startTurn({ threadId, input: [{ type: "text", text: "Look there" }], additionalDirectories: [attached] });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Look there" }],
+      attachedDirectories: [{ id: attached, kind: "local", label: "attached", path: attached }] });
     await f.waitForTurn();
     expect(f.run).toHaveBeenCalledTimes(2);
     expect(f.queries[0].additionalDirectories).toBeUndefined();
@@ -2156,10 +2160,18 @@ describe("Claude permission bridge", () => {
 
   it("answers a request to leave plan mode without an approval card", async () => {
     const request = vi.fn();
-    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", request, cancelRequest: async () => {} });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => true, request, cancelRequest: async () => {} });
     const result = await handler("ExitPlanMode", { plan: "1. Do it" }, { signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
     expect(request).not.toHaveBeenCalled();
     expect(result).toMatchObject({ behavior: "deny", message: expect.stringContaining("end your turn") });
+  });
+
+  it("asks the operator before Claude leaves a plan mode it entered on its own", async () => {
+    const request = vi.fn().mockResolvedValue({ decision: "accept" });
+    const handler = createClaudePermissionHandler({ threadId: "thread", turnId: () => "turn", planTurn: () => false, request, cancelRequest: async () => {} });
+    const result = await handler("ExitPlanMode", { plan: "1. Do it" }, { signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
+    expect(request).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ behavior: "allow" });
   });
 
   it("settles and removes a pending approval on cancellation", async () => {

@@ -20331,10 +20331,7 @@ export class DesktopBackendRegistry {
           instructions,
           mcpServers,
           // Directories attached to the thread, so Claude can work in them too.
-          additionalDirectories: (overlay?.extraLinkedDirectories ?? []).flatMap((directory) => {
-            const activePath = directory.kind === "worktree" ? directory.worktreePath ?? directory.path : directory.path;
-            return activePath ? [activePath] : [];
-          }),
+          attachedDirectories: overlay?.extraLinkedDirectories,
           onSessionClosed: revokeConnections,
         });
         await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,

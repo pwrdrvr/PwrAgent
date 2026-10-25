@@ -28,12 +28,17 @@ export function createClaudePermissionHandler(options: {
    * between turns, so the turn is read when the request is made.
    */
   turnId: () => string;
+  /**
+   * Whether the operator asked for this turn to plan. Claude can also enter
+   * plan mode on its own, and then leaving it needs the operator's approval.
+   */
+  planTurn?: () => boolean;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
   cancelRequest: (requestId: string, turnId: string) => Promise<void>;
 }): CanUseTool {
   return async (toolName, input, context) => {
     if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
-    if (toolName === CLAUDE_EXIT_PLAN_TOOL) return { behavior: "deny", message: CLAUDE_PLAN_HANDOFF };
+    if (toolName === CLAUDE_EXIT_PLAN_TOOL && options.planTurn?.()) return { behavior: "deny", message: CLAUDE_PLAN_HANDOFF };
     const requestId = randomUUID();
     const turnId = options.turnId();
     const request: AppServerPendingRequestNotification = toolName === "AskUserQuestion"

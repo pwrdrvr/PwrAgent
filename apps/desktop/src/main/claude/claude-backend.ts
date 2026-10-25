@@ -11,7 +11,7 @@ import type {
   AppServerPendingRequestNotification, AppServerReviewContext,
   AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadPlanEntry,
   AppServerThreadPlanStep, AppServerThreadReplay, AppServerThreadReviewEntry, AppServerThreadSummary,
-  AppServerTurnInputItem, BackendModelOption, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
+  AppServerTurnInputItem, BackendModelOption, LinkedDirectorySummary, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode, CodexMcpServerSummary,
   SteerTurnDelivery,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
@@ -265,8 +265,8 @@ type ClaudeTurnParams = {
   mcpServers?: Options["mcpServers"];
   /** Plan runs this turn in Claude's read-only plan mode. */
   collaborationMode?: AppServerCollaborationModeRequest;
-  /** Directories linked to the thread besides its working directory. */
-  additionalDirectories?: string[];
+  /** Directories attached to the thread after it was created. */
+  attachedDirectories?: readonly LinkedDirectorySummary[];
 };
 
 type ClaudeTurnStart = { backend: "claude"; threadId: string; turnId: string };
@@ -274,13 +274,13 @@ type ClaudeTurnStart = { backend: "claude"; threadId: string; turnId: string };
 const CLAUDE_EFFORTS = new Set<string>(["low", "medium", "high", "xhigh", "max"]);
 
 /** Every directory linked to the thread except its working directory, in a stable order. */
-function claudeAdditionalDirectories(session: ClaudeSession, attached: readonly string[] = []): string[] {
-  const linked = session.thread.linkedDirectories.flatMap((directory) => {
+function claudeAdditionalDirectories(session: ClaudeSession, attached: readonly LinkedDirectorySummary[] = []): string[] {
+  const paths = [...session.thread.linkedDirectories, ...attached].flatMap((directory) => {
     const activePath = directory.kind === "worktree" ? directory.worktreePath ?? directory.path : directory.path;
     return activePath ? [activePath] : [];
   });
   const cwd = path.resolve(session.cwd);
-  return [...new Set([...linked, ...attached].map((directory) => path.resolve(directory)))]
+  return [...new Set(paths.map((directory) => path.resolve(directory)))]
     .filter((directory) => directory !== cwd).sort();
 }
 
@@ -293,7 +293,7 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
     instructions: params.instructions,
     mcpServers: params.mcpServers,
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
-    additionalDirectories: claudeAdditionalDirectories(session, params.additionalDirectories),
+    additionalDirectories: claudeAdditionalDirectories(session, params.attachedDirectories),
   };
 }
 
@@ -608,6 +608,7 @@ export class ClaudeBackend {
         ...(config.additionalDirectories.length ? { additionalDirectories: config.additionalDirectories } : {}),
         canUseTool: createClaudePermissionHandler({
           threadId, turnId: () => current.turn?.turnId ?? current.lastTurnId,
+          planTurn: () => current.config.permissionMode === "plan",
           request: this.options.request,
           cancelRequest: (requestId, turnId) => this.options.cancelRequest(threadId, turnId, requestId),
         }),
