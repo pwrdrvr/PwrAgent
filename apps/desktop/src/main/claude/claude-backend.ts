@@ -53,6 +53,8 @@ export type ClaudeBackendOptions = {
   taskFollowUpGraceMs?: number;
   /** Overrides CLAUDE_INTERRUPT_GRACE_MS. */
   interruptGraceMs?: number;
+  /** Overrides CLAUDE_REWIND_PREVIEW_TIMEOUT_MS. */
+  rewindPreviewTimeoutMs?: number;
   /** Workspace, branch, and pull request for a review card. Never fails a review. */
   resolveReviewContext?: (params: { threadId: string; cwd: string }) => Promise<AppServerReviewContext | undefined>;
 };
@@ -94,6 +96,12 @@ const CLAUDE_TASK_FOLLOW_UP_GRACE_MS = 5_000;
  * locally. The process stays up either way, for the tasks it runs.
  */
 const CLAUDE_INTERRUPT_GRACE_MS = 5_000;
+
+/**
+ * How long the confirmation waits for Claude's file dry run. The confirm
+ * button waits on it, so a CLI that never answers must not hold it forever.
+ */
+const CLAUDE_REWIND_PREVIEW_TIMEOUT_MS = 30_000;
 
 /** The CLI drops queued messages along with the interrupted turn. */
 const CLAUDE_INTERRUPT_CANCEL_QUEUED = "interrupt_cancel_queued_v1";
@@ -371,6 +379,11 @@ export class ClaudeBackend {
   /** Threads a rewind is changing; a message for one waits in the queue. */
   private readonly rewinding = new Set<string>();
   /**
+   * Control queries a rewind runs against a thread's session. A turn waits
+   * for them to close, so two CLI processes never resume one session.
+   */
+  private readonly rewindQueries = new Map<string, Promise<void>>();
+  /**
    * Releases a relaunched session hands to its successor: the turn that
    * relaunched it registered the thread's MCP grants again, sharing them.
    */
@@ -586,6 +599,11 @@ export class ClaudeBackend {
     for (;;) {
       if (this.rewinding.has(params.threadId)) {
         throw new ClaudeTurnActiveError("Claude is rewinding this thread.");
+      }
+      const control = this.rewindQueries.get(params.threadId);
+      if (control) {
+        await control;
+        continue;
       }
       const live = this.sessions.get(params.threadId);
       if (live?.turn || (!live && this.starting.has(params.threadId))) {
@@ -2047,9 +2065,14 @@ export class ClaudeBackend {
     try {
       // An idle session kept for a task's follow-up already runs Claude.
       const live = this.sessions.get(threadId);
+      const dryRun = (control: Query) => claudeWithin(
+        control.rewindFiles(point.promptUuid, { dryRun: true }),
+        this.options.rewindPreviewTimeoutMs ?? CLAUDE_REWIND_PREVIEW_TIMEOUT_MS,
+        "Claude did not answer which files it can restore.",
+      );
       const result = live?.query && !live.closing
-        ? await live.query.rewindFiles(point.promptUuid, { dryRun: true })
-        : await this.withRewindQuery(session, (control) => control.rewindFiles(point.promptUuid, { dryRun: true }));
+        ? await dryRun(live.query)
+        : await this.withRewindQuery(session, dryRun);
       if (!result.canRewind) return { filesUnavailableReason: claudeFilesUnavailableReason(result.error) };
       return { files: { paths: result.filesChanged ?? [], insertions: result.insertions ?? 0, deletions: result.deletions ?? 0 } };
     } catch (error) {
@@ -2071,12 +2094,13 @@ export class ClaudeBackend {
     this.assertRewindable(threadId);
     this.rewinding.add(threadId);
     try {
-      // An idle session stays up a moment for a task's follow-up. Close it so
-      // the next turn resumes at the rewind point.
-      const live = this.sessions.get(threadId);
-      if (live) await this.closeSession(live);
       const session = await this.store.read(threadId);
       const point = await this.rewindPoint(session, target);
+      // An idle session stays up a moment for a task's follow-up. Close it,
+      // once the rewind is known to go ahead, so the next turn resumes at
+      // the rewind point.
+      const live = this.sessions.get(threadId);
+      if (live) await this.closeSession(live);
       const promptEntry = (await this.store.entries(threadId)).find((entry) => entry.id === target.messageId);
       let restoredFiles: string[] | undefined;
       if (params.mode === "conversation-and-files") {
@@ -2158,6 +2182,27 @@ export class ClaudeBackend {
    */
   private async withRewindQuery<T>(session: ClaudeSession, run: (control: Query) => Promise<T>): Promise<T> {
     if (!session.sdkSessionId) throw new Error("Claude has no conversation to rewind yet.");
+    const threadId = session.thread.id;
+    // One control query per thread at a time, and a turn waits for it.
+    for (let running = this.rewindQueries.get(threadId); running; running = this.rewindQueries.get(threadId)) {
+      await running;
+    }
+    const closed = claudeDeferred();
+    this.rewindQueries.set(threadId, closed.promise);
+    try {
+      // A turn that started before this query claimed the thread has its own
+      // process on the session.
+      if (this.sessions.has(threadId) || this.starting.has(threadId)) {
+        throw new Error("Wait for the active Claude turn to finish before rewinding.");
+      }
+      return await this.runRewindQuery(session, run);
+    } finally {
+      if (this.rewindQueries.get(threadId) === closed.promise) this.rewindQueries.delete(threadId);
+      closed.resolve();
+    }
+  }
+
+  private async runRewindQuery<T>(session: ClaudeSession, run: (control: Query) => Promise<T>): Promise<T> {
     const executable = await this.requireInstallation();
     const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
     const input = new ClaudeInputStream();
@@ -2166,7 +2211,7 @@ export class ClaudeBackend {
       options: {
         ...claudeHarnessOptions(executable, env),
         cwd: session.cwd,
-        resume: session.sdkSessionId,
+        resume: session.sdkSessionId!,
         enableFileCheckpointing: true,
         abortController: new AbortController(),
       },
@@ -2323,6 +2368,19 @@ type ClaudeRewindPoint = {
   /** The conversation's last entry: the end of the branch the rewind removes. */
   leafUuid?: string;
 };
+
+/** Settles with `promise`, or rejects with `message` after `ms`. */
+async function claudeWithin<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** Claude's dry run says why, or the prompt predates file checkpointing. */
 function claudeFilesUnavailableReason(detail: string | undefined): string {

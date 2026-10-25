@@ -2840,6 +2840,43 @@ describe("Claude thread rewind", () => {
     }
   });
 
+  it("starts a turn only after a file preview's control query closes", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const answer = Promise.withResolvers<{ canRewind: boolean; filesChanged: string[] }>();
+    const rewindFiles = vi.fn(async () => await answer.promise);
+    const f = await fixture(promptRecorder(prompts), { rewindFiles });
+    Object.assign(f.backendOptions, { getSessionMessages: sessionMessages(prompts) });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
+
+    const preview = f.backend.previewRewind(threadId, { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] });
+    await vi.waitFor(() => expect(rewindFiles).toHaveBeenCalledOnce());
+    const started = f.backend.startTurn({ threadId, input: [{ type: "text", text: "Meanwhile" }] });
+    // Long enough for an unheld turn to reach query(); a held one waits forever.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    // Only the turn and the control query so far: no second process on the session.
+    expect(f.run).toHaveBeenCalledTimes(2);
+
+    answer.resolve({ canRewind: true, filesChanged: [] });
+    await preview;
+    await started;
+    await f.waitForTurn();
+    expect(f.run).toHaveBeenCalledTimes(3);
+    expect(f.close.mock.invocationCallOrder[1]).toBeLessThan(f.run.mock.invocationCallOrder[2]!);
+  });
+
+  it("gives up on a file dry run Claude does not answer", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const rewindFiles = vi.fn(() => new Promise<never>(() => {}));
+    const f = await fixture(promptRecorder(prompts), { rewindFiles });
+    Object.assign(f.backendOptions, { getSessionMessages: sessionMessages(prompts), rewindPreviewTimeoutMs: 20 });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt"]);
+
+    await expect(f.backend.previewRewind(threadId, { messageId: `user:${turnIds[0]}`, turnId: turnIds[0] }))
+      .resolves.toEqual({ filesUnavailableReason: "Claude did not answer which files it can restore." });
+    // The control query's process does not outlive the check.
+    expect(f.close).toHaveBeenCalledTimes(2);
+  });
+
   it("holds a message sent during a rewind for the queue", async () => {
     const prompts: SDKUserMessage[] = [];
     const f = await fixture(promptRecorder(prompts));

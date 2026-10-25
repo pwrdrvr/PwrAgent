@@ -184,8 +184,13 @@ contract and the confirmation.
   with checkpointing, send no prompt, call `Query.rewindFiles`, and close.
   The confirmation's file count comes from the same call with `dryRun`.
   Files go first, so a refused restore leaves the conversation as it was.
+  A turn waits for a control query to close, so two CLI processes never
+  resume one session. The confirmation holds its button for the dry run, so
+  a dry run Claude does not answer in 30 seconds reports the files as
+  unavailable rather than holding it forever.
 - The rewind is refused while a turn starts or runs, or while a background
-  task runs. An idle session kept open for a task's follow-up is closed first.
+  task runs. An idle session kept open for a task's follow-up is closed once
+  the prompt is confirmed rewindable, never for a rewind that is refused.
   A message sent during the rewind waits in the queue, which drains after it.
 - The session metadata records each rewind: the turn it removed, the SDK
   session, and the removed branch's last entry, which is where an undo would
