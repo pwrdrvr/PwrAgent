@@ -9,6 +9,7 @@ import { once } from "node:events";
 import { createServer, connect, type AddressInfo, type Server, type Socket } from "node:net";
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from "node:zlib";
 import { randomBytes } from "node:crypto";
+import { Session } from "node:inspector/promises";
 import type { FederationCapability, FederationProtocolEnvelope, ServiceThread } from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES } from "../federation/federation-services";
 import { FederationServiceForwarder } from "../federation/federation-service-forwarder";
@@ -25,6 +26,7 @@ vi.mock("../log", () => ({ getMainLogger: () => ({ info: vi.fn(), warn: vi.fn(),
 
 const BENCH = process.env.PWRAGENT_SERVICE_TUNNEL_BENCH === "1";
 const FILTER = process.env.PWRAGENT_SERVICE_TUNNEL_BENCH_FILTER ?? "";
+const PROFILE = process.env.PWRAGENT_SERVICE_TUNNEL_BENCH_PROFILE === "1";
 const thread: ServiceThread = { backend: "codex", threadId: "bench-thread" };
 const MiB = 1024 * 1024;
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -155,8 +157,12 @@ async function measure(params: { path: Path; rttMs: number; direction: Direction
   if (params.direction !== "download") stops.push(flood(client, chunk));
   // Warm up past stream open and the first round trips.
   await new Promise<void>((resolve) => setTimeout(resolve, Math.max(300, params.rttMs * 4)));
+  const session = PROFILE ? new Session() : undefined;
+  if (session) { session.connect(); await session.post("Profiler.enable"); await session.post("Profiler.start"); }
   const start = { ...counts, frames: fixture.frames(), cpu: process.cpuUsage(), at: performance.now() };
   await new Promise<void>((resolve) => setTimeout(resolve, params.seconds * 1000));
+  const hot = session ? topSelfTime((await session.post("Profiler.stop")).profile) : undefined;
+  session?.disconnect();
   const cpu = process.cpuUsage(start.cpu);
   const elapsed = (performance.now() - start.at) / 1000;
   const up = counts.up - start.up;
@@ -169,7 +175,25 @@ async function measure(params: { path: Path; rttMs: number; direction: Direction
     cpuMsPerMiB: movedMiB > 0 ? +(((cpu.user + cpu.system) / 1000) / movedMiB).toFixed(2) : null,
     cpuShare: +(((cpu.user + cpu.system) / 1e6) / elapsed).toFixed(3),
     viewerFramesPerMiB: movedMiB > 0 ? +((fixture.frames() - start.frames) / movedMiB).toFixed(1) : null,
+    ...(hot ? { hot } : {}),
   };
+}
+
+type CpuProfile = { nodes: Array<{ id: number; callFrame: { functionName: string; url: string; lineNumber: number } }>; samples?: number[]; timeDeltas?: number[] };
+/** Self time by function, as a share of all samples, for the 20 hottest. */
+function topSelfTime(profile: CpuProfile): string[] {
+  const byId = new Map(profile.nodes.map((node) => [node.id, node]));
+  const totals = new Map<string, number>();
+  let all = 0;
+  (profile.samples ?? []).forEach((id, index) => {
+    const delta = profile.timeDeltas?.[index] ?? 0;
+    const frame = byId.get(id)?.callFrame;
+    const key = frame ? `${frame.functionName || "(anon)"} ${frame.url.split("/").slice(-2).join("/")}:${frame.lineNumber + 1}` : "?";
+    totals.set(key, (totals.get(key) ?? 0) + delta);
+    all += delta;
+  });
+  return [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20)
+    .map(([key, time]) => `${(100 * time / all).toFixed(1)}% ${key}`);
 }
 
 function codecMicrobench(): Record<string, unknown> {
