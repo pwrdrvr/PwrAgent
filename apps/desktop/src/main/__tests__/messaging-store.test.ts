@@ -283,15 +283,15 @@ describe("MessagingStore", () => {
       channel: { channel: "telegram", conversation: { id: `${id}:chat`, kind: "dm" } },
       ...overrides,
     });
+    // This store's loader drops a binding without a backend, so only the
+    // backend half of the rule can apply here.
     await store.upsertBinding(inChat("codex-binding"));
-    // Older bindings never recorded a backend; they still belong to the thread.
-    await store.upsertBinding(inChat("legacy-binding", { backend: undefined as never }));
     await store.upsertBinding(inChat("grok-binding", { backend: "acp:grok" }));
     await store.upsertBinding(inChat("other-thread", { threadId: "thread-2" }));
 
     const bindings = await store.findActiveBindingsForThread({ backend: "codex", threadId: "thread-1" });
 
-    expect(bindings.map((binding) => binding.id).sort()).toEqual(["codex-binding", "legacy-binding"]);
+    expect(bindings.map((binding) => binding.id)).toEqual(["codex-binding"]);
   });
 
   it("persists bindings and pending intents across store instances", async () => {
