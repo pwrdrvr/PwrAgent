@@ -107,6 +107,19 @@ Federation windows cannot open them. Until the CLI is found, the row is one
 line with Learn more and Set up, so operators who never use Sandboxer are not
 shown a setup ladder.
 
+The New thread launchpad advertises Sandboxer with a tile beside PwrGit and
+PwrSnap, using Sandboxer's own site icon (see
+`apps/desktop/src/renderer/src/assets/sandboxer/README.md`). While the CLI is
+missing, the tile shows what Sandboxer is, with Get Sandboxer opening the
+quickstart and the Info and site buttons explaining and linking the service.
+Sign-in, a plan, and offering it to threads are finished in Settings, so those
+states show Set up, which opens Settings → Plugins. Once Sandboxer is signed in
+and offered, the tile is the thread's Use in thread switch; a billing problem
+keeps the switch so a thread can still stop running sandboxes. The tile reads
+status from the connection list, so it never retires live sessions, and it
+reads again when the window regains focus. A remote thread shows no tile:
+its tools run on the owner, whose CLI this window cannot see.
+
 The existing `search_mcp_tools` / `call_mcp_tool` path carries the official
 server's eight tools: create, list, exec, read/write files, host a port, stop,
 and resume. Search results that include a Sandboxer tool also carry

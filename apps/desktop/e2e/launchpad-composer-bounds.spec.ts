@@ -192,7 +192,7 @@ async function pastePng(input: Locator, name: string, color: string): Promise<vo
   }, { color, name });
 }
 
-test("launchpad send controls stay on screen under two connection cards and pasted images", async () => {
+test("launchpad send controls stay on screen under the connection cards and pasted images", async () => {
   const fixture = await createLaunchpadBoundsFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -208,8 +208,10 @@ test("launchpad send controls stay on screen under two connection cards and past
     const composerInput = app.window.getByRole("textbox", { name: "New thread" });
     await expect(composerInput).toBeVisible();
 
+    // PwrGit and PwrSnap, plus Sandboxer, whose tile shows in every local
+    // state: an ad while its CLI is missing, a switch once it is set up.
     const cards = app.window.locator(".mcp-connection");
-    await expect(cards).toHaveCount(2);
+    await expect(cards).toHaveCount(3);
 
     await pastePng(composerInput, "bounds-one.png", "#3478f6");
     await expect(app.window.getByAltText("bounds-one.png")).toBeVisible();

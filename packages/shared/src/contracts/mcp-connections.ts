@@ -1,5 +1,6 @@
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationRemoteTarget } from "./federation";
+import { isAcpBackendId } from "./navigation";
 
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
 export const PWRGIT_MCP_CONNECTION_ID = "pwrgit" as const;
@@ -568,6 +569,15 @@ export function mcpSelectionApplyTiming(
  * nothing keeps. Both the renderer control and the main-process writer read
  * this, so a thread cannot end up holding a flag its backend ignores.
  */
+/**
+ * Whether a thread on this backend loads the gateway connections it selects.
+ * Codex, Claude, and ACP agents all do; the launchpad tiles and the MCP access
+ * panel ask this one question so they cannot disagree.
+ */
+export function backendLoadsMcpConnections(backend: AppServerBackendKind): boolean {
+  return backend === "codex" || backend === "claude" || isAcpBackendId(backend);
+}
+
 export function canIsolateMcpProviderServers(
   backend: AppServerBackendKind,
 ): boolean {
