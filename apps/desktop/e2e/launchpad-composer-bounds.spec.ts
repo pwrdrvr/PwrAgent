@@ -225,6 +225,33 @@ test("launchpad send controls stay on screen under two connection cards and past
     const startButton = app.window.getByRole("button", { name: "Start thread" });
     await expect(startButton).toBeVisible();
 
+    // Measure the layout the operator is left with, not a frame of one
+    // still moving. The composer's height depends on the column's width,
+    // because its controls wrap, so a measurement taken while the launchpad
+    // is still sliding into place is a different scene. The precondition
+    // below failed on the macOS lane at 615px, on the run and the retry. A
+    // Linux run reproduced that number when it measured with the layout's
+    // padding transition still running: the column was 279px instead of
+    // 252px, the controls wrapped into four rows instead of five, and the
+    // composer measured 442px instead of 497px. Settled, the same scene
+    // measures 669px. Infinite animations never finish, so wait only for
+    // finite ones.
+    await app.window.evaluate(async () => {
+      const view = document.querySelector(".thread-view--launchpad");
+      if (!view) return;
+      for (;;) {
+        const moving = view
+          .getAnimations({ subtree: true })
+          .filter((animation) =>
+            animation.playState === "running"
+            && animation.effect?.getComputedTiming().endTime !== Infinity);
+        if (moving.length === 0) return;
+        await Promise.all(
+          moving.map((animation) => animation.finished.catch(() => undefined)),
+        );
+      }
+    });
+
     const measured = await app.window.evaluate(() => {
       const clip = document.querySelector(".thread-view--launchpad");
       const composer = document.querySelector(".thread-view__launchpad-composer");

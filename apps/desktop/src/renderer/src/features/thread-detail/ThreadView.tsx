@@ -4476,8 +4476,15 @@ export function ThreadView(props: ThreadViewProps) {
       }
     >
       {header}
+      {/* Keyed so leaving the empty state mounts a new layout box. Unkeyed,
+          React reused the empty state's <div> and only swapped its class,
+          so `.thread-view__layout`'s padding-right transition (there for
+          pinning and unpinning the rail) slid the gutter from 16px to the
+          pinned rail's width whenever a thread or launchpad replaced the
+          empty state, and the composer rewrapped as the column narrowed
+          under it. */}
       {emptyView ? (
-        <div className="thread-empty-state">
+        <div key="empty" className="thread-empty-state">
           <div className="thread-empty-state__content">
             <p className="eyebrow">Thread detail</p>
             <h2>Select a thread</h2>
@@ -4489,6 +4496,7 @@ export function ThreadView(props: ThreadViewProps) {
         </div>
       ) : (
         <div
+          key="layout"
           className={`thread-view__layout${
             contextRailPinned ? " has-pinned-context-rail" : ""
           }${contextRailResizing ? " is-resizing-context-rail" : ""}`}
