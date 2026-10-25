@@ -202,16 +202,24 @@ function threadTickDelta(before: Map<string, number>, after: Map<string, number>
     .filter(([, delta]) => delta > 0).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([key, delta]) => `${delta} ${key}`);
 }
 
-type CpuProfile = { nodes: Array<{ id: number; callFrame: { functionName: string; url: string; lineNumber: number } }>; samples?: number[]; timeDeltas?: number[] };
+type CpuProfile = { nodes: Array<{ id: number; children?: number[]; callFrame: { functionName: string; url: string; lineNumber: number } }>; samples?: number[]; timeDeltas?: number[] };
 /** Self time by function, as a share of busy (non-idle) samples, for the 25 hottest. */
 function topSelfTime(profile: CpuProfile): string[] {
   const byId = new Map(profile.nodes.map((node) => [node.id, node]));
+  const parent = new Map<number, number>();
+  for (const node of profile.nodes) for (const child of node.children ?? []) parent.set(child, node.id);
+  const label = (id: number | undefined): string => {
+    const frame = id === undefined ? undefined : byId.get(id)?.callFrame;
+    return frame ? `${frame.functionName || "(anon)"} ${frame.url.split("/").slice(-2).join("/")}:${frame.lineNumber + 1}` : "?";
+  };
   const totals = new Map<string, number>();
   let all = 0;
   (profile.samples ?? []).forEach((id, index) => {
     const delta = profile.timeDeltas?.[index] ?? 0;
     const frame = byId.get(id)?.callFrame;
-    const key = frame ? `${frame.functionName || "(anon)"} ${frame.url.split("/").slice(-2).join("/")}:${frame.lineNumber + 1}` : "?";
+    // Native frames read better with their JS caller chain.
+    const native = frame !== undefined && frame.url === "";
+    const key = native ? `${label(id)} <- ${label(parent.get(id))} <- ${label(parent.get(parent.get(id) ?? -1))}` : label(id);
     if (frame?.functionName === "(idle)") return;
     totals.set(key, (totals.get(key) ?? 0) + delta);
     all += delta;
