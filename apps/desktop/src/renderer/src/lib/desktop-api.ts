@@ -433,6 +433,13 @@ import type {
   StopCodexEnvironmentActionRequest,
   StopCodexEnvironmentActionResponse,
   SetCodexThreadEnvironmentRequest,
+  ListCodexEnvironmentFilesRequest,
+  ListCodexEnvironmentFilesResponse,
+  ListCodexEnvironmentProjectsResponse,
+  ReadCodexEnvironmentDocumentRequest,
+  ReadCodexEnvironmentDocumentResponse,
+  SaveCodexEnvironmentDocumentRequest,
+  SaveCodexEnvironmentDocumentResponse,
   SetCodexThreadEnvironmentResponse,
   RestoreWorktreeRequest,
   RestoreWorktreeResponse,
@@ -1180,6 +1187,16 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setCodexThreadEnvironment?: (
     request: SetCodexThreadEnvironmentRequest,
   ) => Promise<SetCodexThreadEnvironmentResponse>;
+  listCodexEnvironmentProjects?: () => Promise<ListCodexEnvironmentProjectsResponse>;
+  listCodexEnvironmentFiles?: (
+    request: ListCodexEnvironmentFilesRequest,
+  ) => Promise<ListCodexEnvironmentFilesResponse>;
+  readCodexEnvironmentDocument?: (
+    request: ReadCodexEnvironmentDocumentRequest,
+  ) => Promise<ReadCodexEnvironmentDocumentResponse>;
+  saveCodexEnvironmentDocument?: (
+    request: SaveCodexEnvironmentDocumentRequest,
+  ) => Promise<SaveCodexEnvironmentDocumentResponse>;
   submitServerRequest?: (
     request: SubmitServerRequestRequest
   ) => Promise<SubmitServerRequestResponse>;

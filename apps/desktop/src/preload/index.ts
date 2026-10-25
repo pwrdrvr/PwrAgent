@@ -418,6 +418,13 @@ import type {
   StopCodexEnvironmentActionRequest,
   StopCodexEnvironmentActionResponse,
   SetCodexThreadEnvironmentRequest,
+  ListCodexEnvironmentFilesRequest,
+  ListCodexEnvironmentFilesResponse,
+  ListCodexEnvironmentProjectsResponse,
+  ReadCodexEnvironmentDocumentRequest,
+  ReadCodexEnvironmentDocumentResponse,
+  SaveCodexEnvironmentDocumentRequest,
+  SaveCodexEnvironmentDocumentResponse,
   SetCodexThreadEnvironmentResponse,
   RestoreWorktreeRequest,
   RestoreWorktreeResponse,
@@ -696,6 +703,10 @@ import {
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
+  CODEX_ENVIRONMENT_EDITOR_LIST_FILES_CHANNEL,
+  CODEX_ENVIRONMENT_EDITOR_LIST_PROJECTS_CHANNEL,
+  CODEX_ENVIRONMENT_EDITOR_READ_CHANNEL,
+  CODEX_ENVIRONMENT_EDITOR_SAVE_CHANNEL,
   AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
@@ -2500,6 +2511,20 @@ const desktopApi = Object.freeze({
       AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
       request,
     ),
+  listCodexEnvironmentProjects: async (): Promise<ListCodexEnvironmentProjectsResponse> =>
+    await ipcRenderer.invoke(CODEX_ENVIRONMENT_EDITOR_LIST_PROJECTS_CHANNEL),
+  listCodexEnvironmentFiles: async (
+    request: ListCodexEnvironmentFilesRequest,
+  ): Promise<ListCodexEnvironmentFilesResponse> =>
+    await ipcRenderer.invoke(CODEX_ENVIRONMENT_EDITOR_LIST_FILES_CHANNEL, request),
+  readCodexEnvironmentDocument: async (
+    request: ReadCodexEnvironmentDocumentRequest,
+  ): Promise<ReadCodexEnvironmentDocumentResponse> =>
+    await ipcRenderer.invoke(CODEX_ENVIRONMENT_EDITOR_READ_CHANNEL, request),
+  saveCodexEnvironmentDocument: async (
+    request: SaveCodexEnvironmentDocumentRequest,
+  ): Promise<SaveCodexEnvironmentDocumentResponse> =>
+    await ipcRenderer.invoke(CODEX_ENVIRONMENT_EDITOR_SAVE_CHANNEL, request),
   submitServerRequest: async (
     request: SubmitServerRequestRequest
   ): Promise<SubmitServerRequestResponse> =>

@@ -112,6 +112,10 @@ function createSnapshot(
         value: true,
         source: "default",
       },
+      passSetupVariablesToAgents: {
+        value: true,
+        source: "default",
+      },
       mcpGatewayEnabled: {
         value: true,
         source: "default",

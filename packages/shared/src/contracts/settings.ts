@@ -821,6 +821,12 @@ export type DesktopGeneralSettingsSnapshot = {
    */
   pinnedThreadsOnTop: DesktopSettingsValue<boolean>;
   /**
+   * Give agents the shell variables an environment's setup script captured
+   * (PATH, NVM_DIR, ...; secrets are filtered out) when a thread or turn
+   * starts. Off still runs setup, and Run actions still use the variables.
+   */
+  passSetupVariablesToAgents: DesktopSettingsValue<boolean>;
+  /**
    * Skip the notice the image lightbox shows before an SVG's own scripts run
    * in its isolated frame. The notice's "Always Run" sets this.
    */
@@ -1588,6 +1594,7 @@ export type DesktopSettingsConfigPatch = {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
     pinnedThreadsOnTop?: boolean;
+    passSetupVariablesToAgents?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;

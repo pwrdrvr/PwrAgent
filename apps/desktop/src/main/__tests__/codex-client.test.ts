@@ -10826,6 +10826,59 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("withholds setup variables from Codex when the profile turns them off", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    let passSetupVariables = false;
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+      passSetupVariablesToAgents: () => passSetupVariables,
+    });
+    const codexEnvironmentRuntime = {
+      environmentId: "pwragent",
+      environmentName: "PwrAgent",
+      executionTarget: "local" as const,
+      shellEnvironment: {
+        PATH: "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        NVM_DIR: "/Users/fixture-user/.nvm",
+      },
+    };
+    const configOf = (method: string) => {
+      const requests = MockTransport.instances[0]?.sentMessages
+        .map((message) => JSON.parse(message) as { method?: string; params?: { config?: Record<string, unknown> } })
+        .filter((payload) => payload.method === method) ?? [];
+      return requests.at(-1)?.params?.config ?? {};
+    };
+    const policyKeys = (config: Record<string, unknown>) =>
+      Object.keys(config).filter((key) => key.startsWith("shell_environment_policy.set."));
+
+    await client.startThread({ cwd: "/Users/fixture-user/pwrdrvr/PwrAgent", codexEnvironmentRuntime });
+    expect(policyKeys(configOf("thread/start"))).toEqual([]);
+
+    await client.forkThread({ threadId: "thread-2", cwd: "/Users/fixture-user/pwrdrvr/PwrAgent", codexEnvironmentRuntime });
+    expect(policyKeys(configOf("thread/fork"))).toEqual([]);
+
+    await client.startTurn({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "hello" }],
+      codexEnvironmentRuntime,
+    });
+    expect(policyKeys(configOf("thread/resume"))).toEqual([]);
+
+    passSetupVariables = true;
+    await client.startTurn({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "again" }],
+      codexEnvironmentRuntime,
+    });
+    expect(policyKeys(configOf("thread/resume"))).toEqual([
+      "shell_environment_policy.set.PATH",
+      "shell_environment_policy.set.NVM_DIR",
+    ]);
+
+    await client.close();
+  });
+
   it("forks a Codex thread from a CAS-provided rollout path without reading it", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

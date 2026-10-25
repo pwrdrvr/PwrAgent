@@ -113,6 +113,7 @@ export type DesktopSettingsConfig = {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
     pinnedThreadsOnTop?: boolean;
+    passSetupVariablesToAgents?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;
@@ -670,6 +671,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "pinned_threads_on_top"],
       patch.general.pinnedThreadsOnTop,
+    );
+  }
+  if (patch.general?.passSetupVariablesToAgents !== undefined) {
+    set(
+      ["general", "pass_setup_variables_to_agents"],
+      patch.general.passSetupVariablesToAgents,
     );
   }
   if (patch.general?.interactiveSvgSkipNotice !== undefined) {
@@ -2083,6 +2090,9 @@ function normalizeDesktopConfig(
         general?.attention_promote_on_turn_end,
       ),
       pinnedThreadsOnTop: readBoolean(general?.pinned_threads_on_top),
+      passSetupVariablesToAgents: readBoolean(
+        general?.pass_setup_variables_to_agents,
+      ),
       interactiveSvgSkipNotice: readBoolean(
         general?.interactive_svg_skip_notice,
       ),
@@ -2552,6 +2562,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     config.general?.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
   const pinnedThreadsOnTop = config.general?.pinnedThreadsOnTop;
+  const passSetupVariablesToAgents = config.general?.passSetupVariablesToAgents;
   const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
   const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
@@ -2576,6 +2587,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     confirmQuitWithInProgressThreads !== undefined ||
     attentionPromoteOnTurnEnd !== undefined ||
     pinnedThreadsOnTop !== undefined ||
+    passSetupVariablesToAgents !== undefined ||
     interactiveSvgSkipNotice !== undefined ||
     interactiveSvgAutoOpen !== undefined ||
     pdfAnalysisEnabled !== undefined ||
@@ -2620,6 +2632,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (pinnedThreadsOnTop !== undefined) {
       pruned.general.pinnedThreadsOnTop = pinnedThreadsOnTop;
+    }
+    if (passSetupVariablesToAgents !== undefined) {
+      pruned.general.passSetupVariablesToAgents = passSetupVariablesToAgents;
     }
     if (interactiveSvgSkipNotice !== undefined) {
       pruned.general.interactiveSvgSkipNotice = interactiveSvgSkipNotice;

@@ -396,6 +396,10 @@ vi.mock("../ipc/thread-todos-ipc", () => ({
   registerThreadTodoIpcHandlers: vi.fn(),
 }));
 
+vi.mock("../ipc/codex-environment-editor-ipc", () => ({
+  registerCodexEnvironmentEditorIpcHandlers: vi.fn(),
+}));
+
 vi.mock("../ipc/operator-requests-ipc", () => ({
   registerOperatorRequestIpcHandlers: vi.fn(),
 }));
