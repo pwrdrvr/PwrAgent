@@ -18,6 +18,8 @@ import { RateLimitRow } from "./RateLimitRow";
 type UsagePaceCardProps = {
   desktopApi?: Pick<DesktopApi, "openUsageActivity" | "readUsageActivity">;
   backends?: BackendSummary[];
+  /** The remote instance a remote thread runs on; its spend is that machine's. */
+  ownerLabel?: string;
 };
 
 /** Chart box, in viewBox units; 100% sits `CAP` below the top edge. */
@@ -28,10 +30,11 @@ const CAP = 6;
 /**
  * The Pricing rail's way into Usage Activity: the account's longest limit,
  * charted from the window's start to its reset with the pace projected
- * forward. The whole card is the button. It reads only this instance, which
- * is exact for the limit (account-wide) and labeled for the spend (local).
+ * forward. The whole card is the button. It reads only the thread's instance,
+ * which is exact for the limit (account-wide) and labeled for the spend: this
+ * machine's, or the named owner's for a remote thread.
  */
-export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends }: UsagePaceCardProps) {
+export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends, ownerLabel }: UsagePaceCardProps) {
   const verdictId = useId();
   const open = desktopApi?.openUsageActivity;
   // Nothing renders without a way to open the window, so nothing is read.
@@ -99,7 +102,13 @@ export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends 
       </span>
       {pace.costMicros !== undefined && pace.windowStart !== undefined ? (
         <span className="usage-pace-card__foot">
-          <span>This machine <b>{usageMoney(pace.costMicros)}</b> API-eq.</span>
+          {/* A long instance label gives way before the amount or the date. */}
+          <span className="usage-pace-card__spend">
+            {ownerLabel
+              ? <span className="usage-pace-card__owner tooltip-target" data-tooltip={ownerLabel}>{ownerLabel}</span>
+              : <span className="usage-pace-card__owner">This machine</span>}
+            <span> <b>{usageMoney(pace.costMicros)}</b> API-eq.</span>
+          </span>
           <span>since {usageWhen(pace.windowStart, now, true)}</span>
         </span>
       ) : null}

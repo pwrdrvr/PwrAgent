@@ -145,9 +145,15 @@ function describeSeries(key: string, reading: UsageLimitReading, points: LimitPo
     const elapsed = before.resetAt !== undefined && before.resetAt <= after.at;
     // A window that elapsed and filled back up past its old level still reset.
     if (!dropped && !(elapsed && after.resetAt !== undefined && after.resetAt > before.resetAt!)) continue;
+    // An early reset that moved the schedule says when the new window began.
+    // Without that, a gap in readings (an idle instance, or one that took no
+    // turns since) would restart the window at the next reading it saw.
+    const began = after.resetAt !== undefined && after.resetAt !== before.resetAt && reading.windowMinutes
+      ? after.resetAt - reading.windowMinutes * 60_000 : undefined;
     resets.push(elapsed
       ? { at: before.resetAt!, kind: "scheduled", after: before.at, before: after.at }
-      : { at: after.at, kind: "unscheduled", after: before.at, before: after.at });
+      : { at: began !== undefined && began > before.at && began <= after.at ? began : after.at,
+        kind: "unscheduled", after: before.at, before: after.at });
   }
   const latest = points.at(-1)!;
   const lastReset = resets.at(-1);

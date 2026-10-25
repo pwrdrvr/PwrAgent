@@ -36927,6 +36927,19 @@ button.pricing-token-miser__folded:focus-visible {
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.usage-pace-card__spend {
+  display: flex;
+  min-width: 0;
+  white-space: pre;
+}
+
+.usage-pace-card__owner {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .usage-pace-card__foot b {
