@@ -80,6 +80,28 @@
   imports to donor source and make installs/native staging mutate shared files.
   A symlink to a repaired helper inherits permissions but is not a complete fix.
 
+### Verification on Sandboxer
+
+- When the thread has the Sandboxer MCP (`create_sandbox` and `exec` tools),
+  do not run these checks on the local machine:
+  - Unit tests: `pnpm test`, focused or full.
+  - Lint: `pnpm lint` or any of its parts, such as `pnpm lint:oxlint`.
+  - Type check: `pnpm typecheck`.
+  - Desktop E2E: `pnpm test:desktop-e2e` or Playwright directly.
+- Run them in a sandbox with the
+  [Sandboxer verification skill](.agents/skills/sandboxer-verification/SKILL.md).
+  This rule applies wherever repository guidance says to run one of them.
+- Sandboxer is Ubuntu x64. It verifies Linux behavior only.
+  macOS-specific and Windows-specific changes still need CI or the PwrSuiteLab
+  skills below.
+- Verify a commit, not a dirty tree. Use one sandbox per thread, started from
+  the `pwragent-base` snapshot. Stop it after each run.
+- Attach the thread's PR and watch it with `notifyOn: ["merged", "closed"]`.
+  PwrAgent releases the thread's sandboxes when its PRs merge or close.
+- Use only the Sandboxer MCP tools. Do not run the `sbx` CLI.
+- Report the sandbox ID, the commit, and each check's exit status.
+- Without the Sandboxer MCP, run the checks locally as this file describes.
+
 ### Desktop test operations
 
 - Use the [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) for live captured sessions.
