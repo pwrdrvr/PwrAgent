@@ -16328,7 +16328,8 @@ a.button {
   justify-content: flex-start;
 }
 
-.settings-confirm-dialog--local-command {
+/* Doubled class: the base dialog rule is declared later in this file. */
+.settings-confirm-dialog.settings-confirm-dialog--local-command {
   width: min(680px, calc(100vw - 48px));
   max-height: calc(100vh - 48px);
   overflow-y: auto;

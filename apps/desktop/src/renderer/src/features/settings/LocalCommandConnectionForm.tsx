@@ -209,8 +209,11 @@ export function LocalCommandFields(props: {
                 autoComplete="off"
                 className="settings-input"
                 disabled={disabled}
-                placeholder={entry.secret && entry.stored ? "Stored encrypted. Type to replace." : "value"}
+                placeholder={entry.secret && entry.stored ? "Stored encrypted" : "value"}
                 spellCheck={false}
+                title={entry.secret && entry.stored
+                  ? "Leave blank to keep the stored value, or type a new one to replace it."
+                  : undefined}
                 type={entry.secret ? "password" : "text"}
                 value={entry.value}
                 onChange={(event) => changeEnv(entry.key, { value: event.target.value })}

@@ -10421,17 +10421,20 @@ describe("SettingsScreen", () => {
 
   it("lists a local command by its command line and edits it without echoing a stored secret", async () => {
     const connection = localCommandConnection({ localProcesses: 2 });
-    const updateMcpConnection = vi.fn(async () => ({ connection }));
+    const mutated = { connectionId: connection.id, connection };
+    const updateMcpConnection = vi.fn(async () => mutated);
 
     render(
       <SettingsScreen
         desktopApi={{
           updateMcpConnection,
-          setMcpConnectionEnabled: vi.fn(async () => ({ connection })),
-          setMcpConnectionSelectForNewThreads: vi.fn(async () => ({ connection })),
+          setMcpConnectionEnabled: vi.fn(async () => mutated),
+          setMcpConnectionSelectForNewThreads: vi.fn(async () => mutated),
           listMcpConnections: vi.fn(async () => ({ connections: [connection] })),
           listMcpConnectionTools: vi.fn(async () => ({
+            connectionId: connection.id,
             tools: ["read_file", "list_directory"],
+            fetchedAt: 1,
           })),
           listCodexMcpServers: vi.fn(async () => ({
             codexHome: "/home/example/.codex",
@@ -10463,7 +10466,7 @@ describe("SettingsScreen", () => {
     expect(within(dialog).queryByLabelText("Remote MCP URL")).not.toBeInTheDocument();
     const secret = within(dialog).getByLabelText("FIXTURE_TOKEN value");
     expect(secret).toHaveValue("");
-    expect(secret).toHaveAttribute("placeholder", "Stored encrypted. Type to replace.");
+    expect(secret).toHaveAttribute("placeholder", "Stored encrypted");
     expect(within(dialog).getByText(/restarts it in the 2 threads/)).toBeInTheDocument();
     fireEvent.change(within(dialog).getByLabelText(/^Arguments/), {
       target: { value: "-y\n@modelcontextprotocol/server-filesystem\n/home/example/Other" },
