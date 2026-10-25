@@ -99,8 +99,11 @@ export async function buildNavigationIndexMessagingBindings(
   if (byThreadId.size === 0) return result;
   for (const thread of threads) {
     if (thread.federation?.ref.target.scope === "remote") continue;
+    // Order by creation, not by the store's updated_at: every status card
+    // render rewrites updated_at, and the chips must not trade places.
     const bindings = byThreadId.get(thread.id)
-      ?.filter((binding) => !binding.backend || binding.backend === thread.source);
+      ?.filter((binding) => !binding.backend || binding.backend === thread.source)
+      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
     if (!bindings?.length) continue;
     result.set(buildThreadIdentityKey(thread.source, thread.id), bindings.map(toBindingSummary));
   }

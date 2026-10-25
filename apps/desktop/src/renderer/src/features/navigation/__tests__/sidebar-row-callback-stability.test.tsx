@@ -566,6 +566,29 @@ describe("sidebar thread row callback stability", () => {
     expect(second.mock.calls[0]?.[1]).toMatchObject({ bindingId: "binding-tg-1" });
   });
 
+  it("offers Unbind in a local row's context menu but not in a peer's", () => {
+    const onUnbindMessagingBinding = vi.fn(async () => undefined);
+    const threads = THREADS.map((entry) =>
+      entry.id === "thread-8" ? { ...entry, messagingBindings: [BINDING] }
+      : entry.id === "thread-9" ? { ...entry, messagingBindings: [BINDING], federation: {
+          ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "thread-9" },
+          instanceLabel: "Peer",
+        } } as NavigationThreadSummary
+      : entry,
+    );
+    render(sidebar({ threads, onUnbindMessagingBinding }));
+
+    fireEvent.contextMenu(row("Thread 8"), { clientX: 10, clientY: 20 });
+    expect(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^Unbind from/ }))
+      .toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+
+    // The peer holds this binding; this machine's runtime cannot revoke it.
+    fireEvent.contextMenu(row("Thread 9"), { clientX: 10, clientY: 20 });
+    expect(within(screen.getByRole("menu")).queryByRole("menuitem", { name: /^Unbind from/ }))
+      .toBeNull();
+  });
+
   it("keeps a pin drag wired to the newest onReorderThreadPins", async () => {
     // `onPointerDownThread` is the handler that starts this drag, and it is
     // the one that had to give up its per-row closure over the directory and

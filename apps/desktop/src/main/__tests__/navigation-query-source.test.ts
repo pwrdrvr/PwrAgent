@@ -197,6 +197,10 @@ describe("owner index source event admission", () => {
       threads: [row("bound"), row("unbound"), row("other-backend", "claude"), remote], directories: [],
     }));
     mocks.messaging.findActiveBindings.mockResolvedValue([
+      // The store lists by updated_at DESC; a status render bumps it. Chips
+      // must stay in creation order rather than trade places.
+      binding("binding-0", "bound", { createdAt: 5, updatedAt: 9,
+        channel: { channel: "slack", conversation: { kind: "channel", id: "c", title: "ops" } } } as Partial<MessagingBindingRecord>),
       binding("binding-1", "bound"),
       // A binding for the same id on another backend belongs to that thread.
       binding("binding-2", "other-backend", { backend: "codex" }),
@@ -211,7 +215,7 @@ describe("owner index source event admission", () => {
       expect(byId.get("bound")?.messagingBindings).toEqual([{
         bindingId: "binding-1", platform: "telegram", conversationKind: "topic",
         conversationTitle: "Grid work", parentTitle: "M5 Group", ancestorTitle: undefined, activeAt: 2,
-      }]);
+      }, expect.objectContaining({ bindingId: "binding-0", platform: "slack", activeAt: 9 })]);
       expect(byId.get("unbound")?.messagingBindings).toBeUndefined();
       expect(byId.get("other-backend")?.messagingBindings).toBeUndefined();
       expect(byId.get("remote-bound")?.messagingBindings).toBeUndefined();
