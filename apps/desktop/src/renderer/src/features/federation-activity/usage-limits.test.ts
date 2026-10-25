@@ -30,6 +30,18 @@ describe("usage limit history", () => {
     expect(projectLimit(series)).toEqual({ kind: "full", at: t0 + 2.5 * HOUR + 93 / 3.5 * HOUR });
   });
 
+  it("starts an early reset's window from its new schedule when no reading saw it happen", () => {
+    // The provider reset the week early at 9:00 and moved the reset to a week
+    // later; this instance's next reading came six hours after.
+    const before = weekly(t0 - 20 * HOUR, 64, t0 + 3 * 24 * HOUR);
+    const after = weekly(t0 + 6 * HOUR, 22, t0 + 7 * 24 * HOUR);
+    const [account] = buildLimitAccounts([{ owner: "Studio", history: [before], current: after }]);
+    const series = sinceResetSeries(account)!;
+    expect(series.resets).toEqual([{ at: t0, kind: "unscheduled", after: t0 - 20 * HOUR, before: t0 + 6 * HOUR }]);
+    expect(seriesStart(series)).toBe(t0);
+    expect(series.pacePerHour).toBeCloseTo(22 / 6);
+  });
+
   it("marks a reset scheduled when the previous window had elapsed", () => {
     const first = weekly(t0 - 2 * HOUR, 88, t0);
     const second = weekly(t0 + HOUR, 2, t0 + 7 * 24 * HOUR);

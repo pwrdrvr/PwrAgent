@@ -14,6 +14,14 @@ describe("scopeDesktopApiToFederationTarget", () => {
     expect(setThreadTokenMiser).toHaveBeenCalledExactlyOnceWith({ threadId: "collision", enabled: null, federationTarget: target });
   });
 
+  it("reads usage activity from the owner whose limits the rail describes", async () => {
+    const readUsageActivity = vi.fn();
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const api = scopeDesktopApiToFederationTarget({ readUsageActivity } as DesktopApi, target)!;
+    await api.readUsageActivity!({ from: 1, to: 2 });
+    expect(readUsageActivity).toHaveBeenCalledExactlyOnceWith({ from: 1, to: 2, federationTarget: target });
+  });
+
   it("routes remote filesystem operations to the owning peer and removes local path helpers", async () => {
     const openApplication = vi.fn(async () => ({ opened: true }));
     const refreshDirectoryGitStatuses = vi.fn(async () => ({
