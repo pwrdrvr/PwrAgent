@@ -134,6 +134,26 @@ Adapter->>Platform: send message / edit / pin
 
 **Key invariant:** the producer never sees the adapter, the channel kind, or any provider name. It receives a `MessagingCapabilityProfile` describing what the destination supports and adapts content to fit. Producers thread through the controller's `this.capabilityProfile`, which the controller reads once at construction from `options.adapter.capabilityProfile`.
 
+Cross-thread work uses explicit message origins, independently of the queue's
+`origin` scheduling category. Queue-start notifications carry a display-only
+`incomingWork` summary built from each grouped contribution and its own sender;
+direct starts (including handoffs) publish `thread/incomingWork`. These summaries
+show at most three contributions with 240-character snippets and 80-character
+thread labels. They never replace admitted input, persisted message provenance,
+or the full expandable desktop correspondence card. Federation forwards them as
+thread-detail events; navigation-only subscribers receive no message snippets.
+
+The receiving binding gets one incoming-work notice per admitted delivery,
+including a steer into existing work. This is an actionable start notice, like
+an automation start, so it remains visible at Working Updates **None**. Ordinary
+user starts add no notice. Sender-side delivery receipts use the existing
+Working Updates dial and coalescing policy; failures and held deliveries remain
+visible so the operator can act. Receipts are identified by their system origin,
+not by matching assistant prose, and never count as final assistant responses.
+Internal Continue-after and PR resumptions retain their existing output policy
+but use their structured provenance for the start label; configured automations
+retain the automation label and delivery behavior.
+
 Automation output actions reuse the same delivery boundary. `agent_context`
 stores the run artifact for the assigned Agent's dynamic inspection tools.
 `source_message` asks the messaging controller to render a short result and

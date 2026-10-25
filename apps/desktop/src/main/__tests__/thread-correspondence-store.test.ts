@@ -169,7 +169,7 @@ describe("PwrAgent correspondence persistence", () => {
     const lines = readFileSync(path.join(directory, files[0]!), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     expect(lines.filter((event) => event.record?.input)).toHaveLength(1);
     const replay = new ThreadCorrespondenceStore(directory).appendToReplay(message.source, emptyReplay);
-    expect(replay.messages[0]?.origin).toEqual({ kind: "pwragent", systemReason: "thread-correspondence" });
+    expect(replay.messages[0]?.origin).toEqual({ kind: "pwragent", systemReason: "thread-correspondence", sourceThread: message.source });
     expect(replay.messages[0]?.text).toContain("**Message to [Recipient]");
     expect(replay.messages[0]?.text).toContain(" · Cancelled");
     expect(replay.messages[0]?.text).toContain("Tail.");

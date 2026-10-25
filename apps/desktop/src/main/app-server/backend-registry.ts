@@ -56,6 +56,7 @@ import {
 } from "../pr-status/forge-reference";
 import { projectThreadDisplay } from "./thread-display";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
+import { buildIncomingWorkSummary } from "./thread-work-notification";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import { rememberBoundedMap } from "../bounded-map";
 import { app } from "electron";
@@ -11809,6 +11810,10 @@ export class DesktopBackendRegistry {
       queueEntryId: event.entry.id,
       queueEntryCreatedAt: event.entry.createdAt,
       origin: event.entry.origin,
+      ...(event.entry.messageOrigin ? { messageOrigin: event.entry.messageOrigin } : {}),
+      ...(event.type === "started" ? {
+        incomingWork: buildIncomingWorkSummary(event.entry, this.getCachedThreadSummary(event.entry)?.title),
+      } : {}),
       automationRunId: event.entry.automationRunId,
       automationName: event.entry.automationName,
     };
@@ -19768,7 +19773,23 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    return await this.startTurnNow(params);
+    const result = await this.startTurnNow(params);
+    const incomingWork = buildIncomingWorkSummary(params, this.getCachedThreadSummary(params)?.title);
+    if (incomingWork) await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/incomingWork",
+        params: {
+          threadId: result.threadId,
+          turnId: result.turnId,
+          deliveryId: `start:${result.turnId}`,
+          incomingWork,
+        },
+      },
+    }).catch((error) => {
+      backendRegistryLog.warn("Could not publish incoming thread work", { error: String(error) });
+    });
+    return result;
   }
 
   private async startTurnNow(params: {
@@ -39918,7 +39939,10 @@ export class DesktopBackendRegistry {
     }
 
     const correspondenceId = `correspondence:${randomUUID()}`;
-    const source = { backend: request.context.backend, threadId: request.context.threadId };
+    const source: { backend: AppServerBackendKind; threadId: string; title?: string } = {
+      backend: request.context.backend,
+      threadId: request.context.threadId,
+    };
     try {
       const settings = {
         ...(request.args.executionMode
@@ -39946,6 +39970,7 @@ export class DesktopBackendRegistry {
         backend: request.context.backend,
         threadId: request.context.threadId,
       });
+      source.title = messageOrigin.sourceThread?.title;
       if (messageOrigin.sourceThread) {
         messageOrigin.sourceThread = { ...messageOrigin.sourceThread, messageId: correspondenceId };
       }
@@ -40014,6 +40039,10 @@ export class DesktopBackendRegistry {
         throw new Error(`Thread not found: ${threadId}`);
       } else {
         if (localThread) {
+          // Publish lifecycle receipts with the resolved title from the outset.
+          if (!request.args.replaceQueueEntryId) this.correspondenceStore.update(source, correspondenceId, {
+            state: "sending", destination: { backend, threadId, title: localThread.title },
+          });
           if (request.args.replaceQueueEntryId) {
             turn = await this.replaceQueuedAgentMessage({
               backend,

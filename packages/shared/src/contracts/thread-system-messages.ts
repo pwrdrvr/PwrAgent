@@ -148,3 +148,9 @@ export function parseThreadCorrespondenceMessage(
     ...(state ? { state } : {}),
   };
 }
+
+/** One display line, bounded by Unicode code points without cutting a surrogate pair. */
+export function threadNotificationSnippet(text: string, limit = 240): string {
+  const points = Array.from(text.replace(/\s+/gu, " ").trim());
+  return points.length <= limit ? points.join("") : `${points.slice(0, limit - 1).join("")}…`;
+}

@@ -658,6 +658,13 @@ export type AppServerThreadMessage = {
   createdAt?: number;
 };
 
+/** Display-only metadata. Full instructions stay in the admitted input and transcript. */
+export type ThreadIncomingWorkSummary = {
+  recipientTitle?: string;
+  messages: { origin: AppServerThreadMessageOrigin; preview: string }[];
+  omittedMessageCount: number;
+};
+
 export type AppServerThreadMessageOriginKind =
   | "agent"
   | "automation"
@@ -2405,12 +2412,23 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/incomingWork";
+      params: {
+        threadId: string;
+        turnId: string;
+        deliveryId: string;
+        incomingWork: ThreadIncomingWorkSummary;
+      };
+    }
+  | {
       method: "thread/turnQueue/updated";
       params: {
         threadId: string;
         queueEntryId: string;
         /** Owner-clock creation time for ordering against navigation snapshots. */
         queueEntryCreatedAt?: number;
+        messageOrigin?: AppServerThreadMessageOrigin;
+        incomingWork?: ThreadIncomingWorkSummary;
         origin: "manual" | "automation" | "messaging" | "scheduled";
         status:
           | "queued"

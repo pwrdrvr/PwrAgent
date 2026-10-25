@@ -1,3 +1,4 @@
+import { automatedWorkStartedLabel, correspondenceNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import type { ReviewRunMode } from "@pwragent/shared";
 import { isThreadLockRefusal } from "@pwragent/shared";
@@ -42,6 +43,7 @@ import {
 import type {
   AgentEvent,
   AppServerTurnInputItem,
+  ThreadIncomingWorkSummary,
   AppServerBackendKind,
   AppServerThreadPlanEntry,
   AppServerThreadReviewEntry,
@@ -1043,6 +1045,7 @@ export class MessagingController {
     Map<string, MessagingSurfaceRef>
   >();
   private readonly workingUpdateCancellationFailures = new Set<string>();
+  private readonly deliveredThreadNoticeKeys = new Set<string>();
   private readonly automationTurnsByTurnKey = new Map<
     string,
     AutomationTurnMessagingContext
@@ -1781,6 +1784,51 @@ export class MessagingController {
       eventTurnId,
       persistentBindings,
     );
+    // Supplemental delivery receipts are status, not final assistant answers.
+    // Their full body and attachments remain available in the desktop transcript.
+    const receipt = correspondenceNotice(event);
+    if (receipt) {
+      for (const binding of bindings) {
+        const turnId = eventTurnId ?? this.getActiveTurn(binding)?.turnId;
+        if (
+          this.isTerminalPrivateResponseTurn(event.backend, threadId, turnId)
+          || this.isPrivateResponseFallbackTurn(event.backend, threadId, turnId)
+          || this.isPrivateReplyCompletionTurn(event.backend, threadId, turnId)
+          || this.isAutomationTurn(event.backend, threadId, turnId)
+        ) continue;
+        const key = `${binding.id}\0${receipt.id}\0${receipt.state}`;
+        if (this.deliveredThreadNoticeKeys.has(key)) continue;
+        rememberBoundedKey(this.deliveredThreadNoticeKeys, key);
+        if (receipt.state === "failed" || receipt.state === "held") {
+          await this.deliver({
+            id: this.newIntentId("thread-delivery"),
+            kind: "message",
+            bindingId: binding.id,
+            createdAt: this.now(),
+            role: "system",
+            parts: [{ type: "text", text: receipt.text, markdown: "plain" }],
+          }, binding);
+          continue;
+        }
+        const mode = resolveMessagingToolUpdateMode(
+          binding,
+          await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
+        );
+        const deliveries = this.toolUpdatePolicy.processActivity({
+          activity: { id: key, kind: "tool", status: "completed", title: receipt.text },
+          bindingId: binding.id,
+          mode,
+          turnId: turnId ?? receipt.id,
+        });
+        for (const delivery of deliveries) await this.deliverToolUpdateDelivery(delivery, binding);
+      }
+      return;
+    }
+    if (event.notification.method === "thread/incomingWork") {
+      const params = event.notification.params as { deliveryId: string; incomingWork: ThreadIncomingWorkSummary };
+      for (const binding of bindings) await this.deliverIncomingWork(binding, params.deliveryId, params.incomingWork);
+      return;
+    }
     // Monitor lifecycle notices are working activity, never parent turn
     // completions. Sharing the active turn also shares its Some allowance.
     const monitorLifecycle = taskMonitorLifecycleActivityForBackendEvent(event);
@@ -1863,12 +1911,21 @@ export class MessagingController {
       return;
     }
     if (turnQueueUpdate) {
+      const incomingWork = turnQueueUpdate.incomingWork ?? (turnQueueUpdate.messageOrigin?.kind === "agent"
+        ? { messages: [{ origin: turnQueueUpdate.messageOrigin, preview: "Full instructions are in the thread." }], omittedMessageCount: 0 }
+        : undefined);
+      if (turnQueueUpdate.status === "started" && incomingWork) {
+        for (const binding of bindings) await this.deliverIncomingWork(binding,
+          turnQueueUpdate.queueEntryId ?? turnQueueUpdate.turnId ?? "incoming-work", incomingWork);
+      }
       if (
         turnQueueUpdate.origin === "automation" &&
+        turnQueueUpdate.messageOrigin?.kind !== "agent" &&
         turnQueueUpdate.status === "started" &&
         turnQueueUpdate.turnId
       ) {
         await this.handleAutomationTurnStarted({
+          messageOrigin: turnQueueUpdate.messageOrigin,
           automationName: turnQueueUpdate.automationName,
           automationRunId: turnQueueUpdate.automationRunId,
           backend: event.backend,
@@ -1880,6 +1937,7 @@ export class MessagingController {
       }
       if (
         turnQueueUpdate.origin === "automation" &&
+        turnQueueUpdate.messageOrigin?.kind !== "agent" &&
         turnQueueUpdate.status === "terminal" &&
         turnQueueUpdate.turnId
       ) {
@@ -16210,6 +16268,7 @@ export class MessagingController {
   }
 
   private async handleAutomationTurnStarted(params: {
+    messageOrigin?: AppServerThreadMessageOrigin;
     automationName?: string;
     automationRunId?: string;
     backend: AppServerBackendKind;
@@ -16236,6 +16295,7 @@ export class MessagingController {
 
     for (const binding of params.bindings) {
       await this.deliverAutomationStartedMessage(binding, {
+        messageOrigin: params.messageOrigin,
         automationName: params.automationName,
         automationRunId: params.automationRunId,
         turnId: params.turnId,
@@ -16866,11 +16926,31 @@ export class MessagingController {
     );
   }
 
+  private async deliverIncomingWork(
+    binding: MessagingBindingRecord,
+    deliveryId: string,
+    summary: ThreadIncomingWorkSummary,
+  ): Promise<void> {
+    const key = `${binding.id}\0incoming\0${deliveryId}`;
+    if (this.deliveredThreadNoticeKeys.has(key)) return;
+    rememberBoundedKey(this.deliveredThreadNoticeKeys, key);
+    const recipientTitle = summary.recipientTitle ?? (await this.resolveBoundThreadSummary(binding))?.title;
+    await this.deliver({
+      id: this.newIntentId("incoming-thread-work"),
+      kind: "message",
+      bindingId: binding.id,
+      createdAt: this.now(),
+      role: "system",
+      parts: [{ type: "text", text: incomingWorkText({ ...summary, recipientTitle }, binding.threadId), markdown: "plain" }],
+    }, binding);
+  }
+
   private async deliverAutomationStartedMessage(
     binding: MessagingBindingRecord,
     params: {
       automationName?: string;
       automationRunId?: string;
+      messageOrigin?: AppServerThreadMessageOrigin;
       turnId: string;
     },
   ): Promise<void> {
@@ -16887,7 +16967,7 @@ export class MessagingController {
 
     const name = params.automationName?.trim();
     const text = [
-      name ? `Automation started: ${name}` : "Automation started.",
+      automatedWorkStartedLabel(params.messageOrigin, name),
       "I'll post the final response when it's done.",
     ].join("\n");
 
@@ -22291,6 +22371,8 @@ function managedConversationUnavailableMessage(
 }
 
 function turnQueueUpdateForBackendEvent(event: AgentEvent): {
+  messageOrigin?: AppServerThreadMessageOrigin;
+  incomingWork?: ThreadIncomingWorkSummary;
   automationName?: string;
   automationRunId?: string;
   errorMessage?: string;
@@ -22305,6 +22387,8 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
     return undefined;
   }
   const params = event.notification.params as {
+    messageOrigin?: AppServerThreadMessageOrigin;
+    incomingWork?: ThreadIncomingWorkSummary;
     automationName?: unknown;
     automationRunId?: unknown;
     errorMessage?: unknown;
@@ -22316,6 +22400,8 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
     turnId?: unknown;
   };
   return {
+    messageOrigin: params.messageOrigin,
+    incomingWork: params.incomingWork,
     automationName:
       typeof params.automationName === "string" ? params.automationName : undefined,
     automationRunId:
