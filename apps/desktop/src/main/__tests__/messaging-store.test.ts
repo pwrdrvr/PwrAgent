@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   MessagingBindingRecord,
   MessagingBrowseSessionRecord,
@@ -236,6 +236,45 @@ afterEach(async () => {
 });
 
 describe("MessagingStore", () => {
+  it("holds a write until a read in progress has finished with the file", async () => {
+    const { store } = await createStore();
+    await store.upsertBinding(buildBinding());
+    // Windows refuses to rename a temp file over a file another handle has
+    // open, so a write must not start while a read still holds the file.
+    const internals = MessagingStore.prototype as unknown as {
+      readData: () => Promise<unknown>;
+      writeData: (data: unknown) => Promise<void>;
+    };
+    const readData = internals.readData;
+    const reading = Promise.withResolvers<void>();
+    let holdNextRead = true;
+    const readSpy = vi.spyOn(internals, "readData").mockImplementation(async function (this: unknown) {
+      if (holdNextRead) {
+        holdNextRead = false;
+        await reading.promise;
+      }
+      return await readData.call(this);
+    });
+    const writeSpy = vi.spyOn(internals, "writeData");
+    try {
+      const read = store.getBinding("binding-1");
+      const write = store.upsertBinding(buildBinding({ id: "binding-2" }));
+      for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+      expect(readSpy).toHaveBeenCalledTimes(1);
+      expect(writeSpy).not.toHaveBeenCalled();
+
+      reading.resolve();
+      await expect(read).resolves.toMatchObject({ id: "binding-1" });
+      await write;
+      expect(writeSpy).toHaveBeenCalledOnce();
+      expect(await store.getBinding("binding-2")).toMatchObject({ id: "binding-2" });
+    } finally {
+      reading.resolve();
+      readSpy.mockRestore();
+      writeSpy.mockRestore();
+    }
+  });
+
   it("persists bindings and pending intents across store instances", async () => {
     const { filePath, store } = await createStore();
     await store.upsertBinding(buildBinding());
