@@ -65733,7 +65733,9 @@ command = "pnpm dev"
 
       expect(fixture.prepareLaunchpadWorkspace).not.toHaveBeenCalled();
       expect(fixture.commandRunner).toHaveBeenCalledWith(expect.objectContaining({
-        cwd: fixture.repoPath,
+        // The project checkout comes from the linked directory, which is
+        // stored forward-slash normalized on every platform.
+        cwd: expectedDir(fixture.repoPath),
         command: "pnpm install",
       }));
       expect(payload.environment).toMatchObject({ source: "requested", setup: "completed" });
