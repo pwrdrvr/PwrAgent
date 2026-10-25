@@ -189,7 +189,7 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "handoff_task":
-      return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend spawning unless the user requests it or needs an unsupported feature. Agent settings inherit from the current turn. Same-project handoffs create grouped subthreads in new worktrees by default. Assigned worktrees remain authoritative for child threads. Children must not edit, build, or run Git in another worktree because a branch is checked out there. When the user names another local project, pass its path as cwd. Also pass cwd when the user links or references a local directory. Never put the target path only in task or context. For an isolated worktree in that project, set workspaceMode=new_worktree. Set branchName only to an existing base ref. Omit cwd only to inherit the current project. Cross-project handoffs are not grouped. Use fork or same_workspace only when the user requests them. Use project_local for the project checkout. workspaceMode=none creates an unscoped scratch workspace. Do not use none as a fallback for work in a named project. Provider overrides need a registered backend and exact model ID. Do not retry while startup is pending. Inspect pendingHandoffs and return threadLink verbatim.";
+      return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend spawning unless the user requests it or needs an unsupported feature. Agent settings inherit from the current turn. Same-project handoffs create grouped subthreads in new worktrees by default. Assigned worktrees remain authoritative for child threads. Children must not edit, build, or run Git in another worktree because a branch is checked out there. When the user names another local project, pass its path as cwd. Also pass cwd when the user links or references a local directory. Never put the target path only in task or context. For an isolated worktree in that project, set workspaceMode=new_worktree. Set branchName only to an existing base ref. Omit cwd only to inherit the current project. Cross-project handoffs are not grouped. Use fork or same_workspace only when the user requests them. Use project_local for the project checkout. workspaceMode=none creates an unscoped scratch workspace. Do not use none as a fallback for work in a named project. Provider overrides need a registered backend and exact model ID. Set environment to an environment id or name from the project's .codex/environments, or environment=none for no environment. Omit it to give a same-project child this thread's environment. Report a failed setup from the result's environment field. Do not retry while startup is pending. Inspect pendingHandoffs and return threadLink verbatim.";
     case "attach_thread_directory":
       return "Attach another Git directory to the current PwrAgent thread. Use this for user-requested cross-project work. Omit backend for the current thread. Use workspaceMode=local for the repository or new_worktree for a managed worktree. Default Access requires confirmation for an untrusted path. This tool does not change the primary cwd. To continue this thread in an existing worktree, use move_thread_workspace with direction=to-project and targetPath. Use detach_thread_directory to remove a temporary link.";
     case "detach_thread_directory":
@@ -340,6 +340,11 @@ function inputSchemaForOperation(
             type: "string",
             description:
               "Existing base ref for workspaceMode=new_worktree, such as `origin/main`. PwrAgent resolves this ref in cwd when you provide cwd. This is not a new branch name. Put branch creation in task.",
+          },
+          environment: {
+            type: "string",
+            description:
+              "Environment id or name from the project's `.codex/environments/*.toml`, or `none`. PwrAgent runs its setup in the child's workspace before the first turn. The child gets its Run commands and captured shell environment, such as PATH. Omit it and a same-project child inherits the parent thread's environment. A cross-project child gets none. An unknown name fails before a child exists and lists the available environments.",
           },
         },
       };
@@ -671,6 +676,9 @@ function normalizeHandoffTaskArgs(
         }
       : {}),
     ...(readTrimmedString(args.cwd) ? { cwd: readTrimmedString(args.cwd) } : {}),
+    ...(readTrimmedString(args.environment)
+      ? { environment: readTrimmedString(args.environment) }
+      : {}),
     ...(readChoice(
       args.messagingAttachment,
       HANDOFF_TASK_MESSAGING_ATTACHMENT_MODES,

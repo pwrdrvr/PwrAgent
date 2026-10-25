@@ -19,7 +19,10 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "./normalized-app-server";
-import type { CodexEnvironmentStartupFailure } from "./agent";
+import type {
+  CodexEnvironmentStartupFailure,
+  CreatedThreadEnvironmentReport,
+} from "./agent";
 import type { BackendModelOption } from "./backend";
 import type { HandoffInstanceThreadToolArgs, HandoffInstanceThreadResult } from "./thread-instance-handoff";
 
@@ -217,6 +220,12 @@ export type CreateInstanceThreadToolArgs = {
    * threads live on different federation instances. Defaults to ungrouped.
    */
   groupingMode?: "none" | "subthread";
+  /**
+   * Environment id or name, resolved by the owning instance, or `none`.
+   * Omitted: a same-project local thread inherits the calling thread's
+   * environment; otherwise the project's preset applies.
+   */
+  environment?: string;
 };
 
 export type CreateInstanceThreadResult = {
@@ -239,6 +248,8 @@ export type CreateInstanceThreadResult = {
     phase: "turn" | "review";
   };
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
+  /** The thread's environment and its setup result. */
+  environment?: CreatedThreadEnvironmentReport;
 };
 
 export const FEDERATION_SEARCH_SCOPES = ["all", "local", "remote"] as const;

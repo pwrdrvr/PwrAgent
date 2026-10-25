@@ -1155,6 +1155,46 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("budgets an agent-created thread that starts with a named environment", async () => {
+    const environmentDir = path.join(tempDir, ".codex", "environments");
+    mkdirSync(environmentDir, { recursive: true });
+    writeFileSync(path.join(environmentDir, "environment.toml"),
+      'version = 1\nname = "Fixture"\n[setup]\nscript = "fixture-setup"\n');
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+      codexEnvironmentHydrationStore: new CodexEnvironmentHydrationStore(stateDb),
+      codexEnvironmentCommandRunner: async () => ({
+        output: "ready", exitCode: 0, durationMs: 1,
+        shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin" },
+      }),
+      threadTitleGenerationService: null,
+    });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        // What handoff_task does for environment="Fixture" in the project checkout.
+        await registry.startThread({
+          backend: "codex",
+          cwd: tempDir,
+          workMode: "local",
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "Fixture",
+            executionTarget: "local",
+          },
+          rerunCodexEnvironmentSetup: true,
+        });
+      });
+      expectSqliteWriteBudget({
+        note: "One agent-created thread with a named environment: thread start bookkeeping, setup hydration and runtime persistence; no per-event writes. ~74 KB per thread: ~7.4 MB/day at 100 agent-created threads/day, 0 MB/day idle.",
+        scenario: "agent-thread-named-environment-start",
+        writes,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("budgets demand-driven directory repair and unchanged refreshes", async () => {
     const cwd = path.join(tempDir, ".codex", "worktrees", "one", "repo");
     const thread: AppServerThreadSummary = {

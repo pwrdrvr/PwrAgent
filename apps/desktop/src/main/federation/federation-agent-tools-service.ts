@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type {
   AppServerThreadMessageOrigin,
   AppServerTurnInputItem,
   CreateInstanceThreadResult,
   CreateInstanceThreadToolArgs,
+  CreatedThreadEnvironmentReport,
   FederationHealthStatus,
   FederationHostInfo,
   FederationInstanceDescriptor,
@@ -25,6 +27,7 @@ import type {
   NavigationLaunchpadConfigResponse,
   NavigationQueryRequest,
   NavigationQueryPage,
+  NavigationSelectedDetailResponse,
   NavigationThreadSummary,
   PwrAgentFederationErrorCode,
   PwrAgentFederationContext,
@@ -40,8 +43,11 @@ import {
   buildThreadUrl,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
+  THREAD_ENVIRONMENT_NONE,
 } from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
+import { listCodexEnvironmentOptions } from "../app-server/codex-environment-config";
+import { describeCreatedThreadEnvironment } from "../app-server/created-thread-environment";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import type { RemoteThreadTargetStore } from "../state/remote-thread-target-store";
@@ -585,6 +591,12 @@ async function createInstanceThread(
   }
   let localInstanceId: FederationInstanceId | undefined;
   let groupingParent: GroupingParent | undefined;
+  // Grouping and environment inheritance both read the caller; read it once.
+  let callerDetail: Promise<NavigationSelectedDetailResponse | undefined> | undefined;
+  const readCallerDetail = () => callerDetail ??= Promise.resolve(
+    runtime.localBackend().getNavigationSelectedDetail?.({ protocol: 2,
+      ref: { backend: context.backend, threadId: context.threadId } }),
+  );
   if (groupingMode === "subthread") {
     localInstanceId = (await runtime.health()).instanceId;
     if (!localInstanceId) {
@@ -593,8 +605,7 @@ async function createInstanceThread(
         "The local federation instance identity is unavailable, so the cross-instance parent relationship cannot be recorded.",
       );
     }
-    const caller = await runtime.localBackend().getNavigationSelectedDetail?.({ protocol: 2,
-      ref: { backend: context.backend, threadId: context.threadId } });
+    const caller = await readCallerDetail();
     if (!caller || caller.protocol !== 2 || caller.unchanged || caller.readiness !== "ready" || caller.identity !== "present"
       || !caller.thread || caller.thread.id !== context.threadId || caller.thread.source !== context.backend) {
       return failure("not_found", "The calling thread's exact parent configuration is unavailable. Retry after its owner is ready.");
@@ -605,7 +616,14 @@ async function createInstanceThread(
     && groupingParent.instanceId !== instance.instanceId
     ? groupingParent.instanceId
     : undefined;
-  const draft = buildLaunchpadDraft({ config, directory, args });
+  const environment = await resolveCreatedThreadEnvironment({
+    args,
+    directory,
+    draft: buildLaunchpadDraft({ config, directory, args }),
+    isLocal: instance.isLocal,
+    readCallerDetail,
+  });
+  const draft = environment.draft;
   const messageOrigin: AppServerThreadMessageOrigin = resolveMessageOrigin
     ? resolveMessageOrigin(context)
     : {
@@ -636,6 +654,9 @@ async function createInstanceThread(
           }
         : {}),
       ...(input.length > 0 ? { input } : {}),
+      ...(environment.selector
+        ? { codexEnvironmentSelector: environment.selector }
+        : {}),
     },
     { messageOrigin },
   );
@@ -694,8 +715,89 @@ async function createInstanceThread(
       : `Created thread in ${directory.label} on ${instance.label}.`,
     turnStartFailure: response.turnStartFailure,
     codexEnvironmentStartupFailure: response.codexEnvironmentStartupFailure,
+    environment: describeCreatedThreadEnvironment({
+      source: environment.source,
+      requested: environment.requested,
+      runtime: response.codexEnvironmentRuntime,
+      failure: response.codexEnvironmentStartupFailure,
+      // The owner always runs setup in the new thread's own workspace.
+      setupRan: true,
+    }),
   };
   return ok(result);
+}
+
+/**
+ * Choose the new thread's environment. A named one is resolved by the
+ * owner, which alone has the project's config; it also goes in the draft's id
+ * field, which an older owner matches as an id. `none` clears the preset. With
+ * neither, a local thread in the caller's own project inherits the caller's
+ * environment, and anything else keeps the project's preset.
+ */
+async function resolveCreatedThreadEnvironment(params: {
+  args: CreateInstanceThreadToolArgs;
+  directory: NavigationDirectoryRow;
+  draft: NavigationLaunchpadDraft;
+  isLocal: boolean;
+  readCallerDetail: () => Promise<NavigationSelectedDetailResponse | undefined>;
+}): Promise<{
+  draft: NavigationLaunchpadDraft;
+  requested?: string;
+  selector?: string;
+  source: CreatedThreadEnvironmentReport["source"];
+}> {
+  const { draft } = params;
+  const requested = params.args.environment?.trim() || undefined;
+  const withEnvironment = (environmentId: string | undefined) => ({
+    ...draft,
+    codexEnvironmentId: environmentId,
+    codexEnvironmentExecutionTarget: environmentId ? "local" as const : undefined,
+    // The preset's auto-started action belongs to the preset's environment.
+    codexEnvironmentActionId: environmentId && environmentId === draft.codexEnvironmentId
+      ? draft.codexEnvironmentActionId
+      : undefined,
+  });
+  if (requested?.toLowerCase() === THREAD_ENVIRONMENT_NONE) {
+    return { draft: withEnvironment(undefined), requested, source: "none" };
+  }
+  if (requested) {
+    return { draft: withEnvironment(requested), requested, selector: requested, source: "requested" };
+  }
+  const inherited = params.isLocal
+    ? await readCallerProjectEnvironmentId(params)
+    : undefined;
+  if (inherited) {
+    return { draft: withEnvironment(inherited), source: "inherited" };
+  }
+  return { draft, source: draft.codexEnvironmentId ? "project" : "none" };
+}
+
+async function readCallerProjectEnvironmentId(params: {
+  directory: NavigationDirectoryRow;
+  readCallerDetail: () => Promise<NavigationSelectedDetailResponse | undefined>;
+}): Promise<string | undefined> {
+  const projectPath = params.directory.path?.trim();
+  if (!projectPath) {
+    return undefined;
+  }
+  const caller = await params.readCallerDetail().catch(() => undefined);
+  const thread = caller?.protocol === 2 && !caller.unchanged ? caller.thread : undefined;
+  const runtime = thread?.codexEnvironmentRuntime;
+  const callerProjectPath = thread?.linkedDirectories?.[0]?.path?.trim();
+  if (
+    !runtime?.environmentId
+    || runtime.executionTarget !== "local"
+    || !callerProjectPath
+    || path.resolve(callerProjectPath) !== path.resolve(projectPath)
+  ) {
+    return undefined;
+  }
+  // The caller's environment may come from config only its own worktree has.
+  // Inheriting an id the project lacks would replace the preset with nothing.
+  const projectOptions = await listCodexEnvironmentOptions(projectPath).catch(() => []);
+  return projectOptions.some((option) => option.id === runtime.environmentId)
+    ? runtime.environmentId
+    : undefined;
 }
 
 async function searchFederationThreads(

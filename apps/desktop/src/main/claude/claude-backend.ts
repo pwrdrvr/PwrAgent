@@ -209,6 +209,9 @@ type ClaudeSessionConfig = {
   instructions?: string;
   mcpServers?: Options["mcpServers"];
   mcpKey: string;
+  /** The thread environment's captured toolchain variables. */
+  shellEnvironment?: Record<string, string>;
+  shellEnvironmentKey: string;
 };
 
 /**
@@ -274,6 +277,8 @@ type ClaudeTurnParams = {
   threadId: string; input: AppServerTurnInputItem[]; model?: string; reasoningEffort?: string;
   executionMode?: ThreadExecutionMode; instructions?: string;
   mcpServers?: Options["mcpServers"];
+  /** Variables the thread environment's setup captured, such as PATH. */
+  shellEnvironment?: Record<string, string>;
 };
 
 type ClaudeTurnStart = { backend: "claude"; threadId: string; turnId: string };
@@ -288,6 +293,10 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
     instructions: params.instructions,
     mcpServers: params.mcpServers,
     mcpKey: JSON.stringify(params.mcpServers ?? {}),
+    shellEnvironment: params.shellEnvironment,
+    shellEnvironmentKey: JSON.stringify(
+      Object.entries(params.shellEnvironment ?? {}).sort(([a], [b]) => a.localeCompare(b)),
+    ),
   };
 }
 
@@ -582,10 +591,15 @@ export class ClaudeBackend {
       this.starting.delete(threadId);
       this.sessions.set(threadId, current);
       await this.beginTurn(current, turn, session, params.input);
-      const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+      const { config } = current;
+      // The environment's toolchain (PATH, NVM_DIR, …) reaches every command
+      // Claude runs, as it does for Codex and ACP threads.
+      const env = claudeEnvironment({
+        ...(await this.options.resolveEnv?.() ?? process.env),
+        ...config.shellEnvironment,
+      });
       controller.signal.throwIfAborted();
       current.titleEnv = env;
-      const { config } = current;
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
         cwd: session.cwd,
@@ -720,10 +734,17 @@ export class ClaudeBackend {
     const query = live.query;
     if (!query) return false;
     const keepTasks = live.tasks.active().length > 0;
-    // The system prompt is fixed when the process starts.
+    // The system prompt and the process environment are fixed when the
+    // process starts.
     if (config.instructions !== live.config.instructions) {
       if (!keepTasks) return false;
       claudeBackendLog.info("Deferring new Claude instructions until the session relaunches", {
+        threadId: live.session.thread.id, taskCount: live.tasks.active().length,
+      });
+    }
+    if (config.shellEnvironmentKey !== live.config.shellEnvironmentKey) {
+      if (!keepTasks) return false;
+      claudeBackendLog.info("Deferring a new Claude environment until the session relaunches", {
         threadId: live.session.thread.id, taskCount: live.tasks.active().length,
       });
     }

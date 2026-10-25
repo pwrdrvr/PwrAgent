@@ -125,6 +125,55 @@ export function withCodexEnvironmentOptions(
   };
 }
 
+export type CodexEnvironmentSelectorResolution =
+  | { kind: "found"; environment: CodexEnvironmentOption }
+  | { kind: "missing"; message: string };
+
+/**
+ * Resolve an agent's environment selector. An exact id wins, then an id or
+ * a name compared without case. A name two environments share is refused,
+ * because picking one would run the wrong setup.
+ */
+export function resolveCodexEnvironmentSelector(
+  selector: string,
+  options: CodexEnvironmentOption[],
+  projectLabel = "this project",
+): CodexEnvironmentSelectorResolution {
+  const wanted = selector.trim();
+  const exact = options.find((option) => option.id === wanted);
+  if (exact) {
+    return { kind: "found", environment: exact };
+  }
+  const folded = wanted.toLowerCase();
+  const byId = options.find((option) => option.id.toLowerCase() === folded);
+  if (byId) {
+    return { kind: "found", environment: byId };
+  }
+  const byName = options.filter(
+    (option) => option.name.trim().toLowerCase() === folded,
+  );
+  if (byName.length === 1) {
+    return { kind: "found", environment: byName[0] };
+  }
+  if (byName.length > 1) {
+    return {
+      kind: "missing",
+      message: `Environment "${wanted}" matches more than one environment: ${describeEnvironmentOptions(byName)}. Pass an id.`,
+    };
+  }
+  const available = options.length > 0
+    ? `Available environments: ${describeEnvironmentOptions(options)}.`
+    : "The project has no .codex/environments/*.toml files.";
+  return {
+    kind: "missing",
+    message: `Environment "${wanted}" is not defined in ${projectLabel}. ${available} Pass environment="none" to start without one.`,
+  };
+}
+
+function describeEnvironmentOptions(options: CodexEnvironmentOption[]): string {
+  return options.map((option) => `${option.name} (${option.id})`).join(", ");
+}
+
 export function pruneCodexEnvironmentActionMap(
   map: Record<string, string> | undefined,
   options: CodexEnvironmentOption[],

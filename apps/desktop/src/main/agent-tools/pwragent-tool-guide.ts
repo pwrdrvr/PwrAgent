@@ -9,6 +9,7 @@ Use list_federation_instances to find a machine.
 Keep the returned instanceId for remote calls.
 Use handoff_task for local child work.
 Use create_instance_thread for work on a selected machine.
+Pass environment to either tool to pick the child's environment by id or name, or none.
 Use manage_thread_dependencies to wait for a prerequisite.
 Use watch_thread_pull_request to wait for CI on an attached PR.
 Add merged and closed to its notifyOn to clean up after the PR lands, such as a Sandboxer sandbox.

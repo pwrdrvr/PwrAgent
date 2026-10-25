@@ -114,7 +114,7 @@ function descriptionForOperation(
     case "list_instance_projects":
       return "List an instance's projects and backends. Get instanceId from list_federation_instances. Use projectKey with create_instance_thread. Projects include label, path, and launchpad status. models lists exact IDs. Match modelOptions.label and pass its id to create_instance_thread or handoff_task. IDs may be aliases. Older responses may omit modelOptions.";
     case "create_instance_thread":
-      return "Create a PwrAgent thread in a project on a selected instance. Get instanceId and projectKey from the list tools. The input becomes the first prompt. Set groupingMode=subthread for delegated child work across instances. Use none for independent intake. Settings inherit from the launchpad and then the instance. Set backend when the user asks for a provider other than the target launchpad's configured provider. Set other overrides only when the user requests them. Read ~/.pwragent/AGENTS.md for operator startup preferences when it exists. Use handoff_task for local delegation that needs workspace or grouping controls. Use this tool for a selected instance or instance-based intake. Startup can take minutes. Do not retry a slow request. Use search_federation_threads to check for the thread. Return threadLink verbatim. Keep instanceId for later remote calls.";
+      return "Create a PwrAgent thread in a project on a selected instance. Get instanceId and projectKey from the list tools. The input becomes the first prompt. Set groupingMode=subthread for delegated child work across instances. Use none for independent intake. Settings inherit from the launchpad and then the instance. Set backend when the user asks for a provider the target launchpad does not use. Set other overrides only when the user requests them. Read ~/.pwragent/AGENTS.md for operator startup preferences when it exists. Use handoff_task for local delegation that needs workspace or grouping controls. Use this tool for a selected instance or instance-based intake. Startup can take minutes. Do not retry a slow request. Use search_federation_threads to check for the thread. Return threadLink verbatim. Keep instanceId for later remote calls.";
     case "list_attention_threads":
       return "List the threads that need the operator's attention on this instance and every connected peer. It is the Attention queue each machine's sidebar shows. Each row says whether a turn is running, the thread is unread, or it is waiting on the operator's input. Use it to answer what needs attention, what is running, or what is waiting. Pass instanceId for one machine. Follow up with get_thread_status or read_thread for detail. Return threadLink verbatim. Keep instanceId for later remote calls.";
     case "search_federation_threads":
@@ -262,6 +262,11 @@ function inputSchemaForOperation(
             enum: INSTANCE_THREAD_GROUPING_MODES,
             description:
               "Use subthread for child work that must remain nested across instances. The default none keeps independent intake separate.",
+          },
+          environment: {
+            type: "string",
+            description:
+              "Environment id or name, or `none`. Omit for this thread's environment or the project preset.",
           },
         },
       };
@@ -524,6 +529,7 @@ function normalizeCreateInstanceThreadArgs(
     "reasoningEffort",
     "executionMode",
     "branchName",
+    "environment",
   ] as const;
   for (const field of optionalStringFields) {
     if (Object.hasOwn(args, field) && !readTrimmedString(args[field])) {
@@ -536,6 +542,7 @@ function normalizeCreateInstanceThreadArgs(
   const reasoningEffort = readTrimmedString(args.reasoningEffort);
   const executionMode = readTrimmedString(args.executionMode);
   const branchName = readTrimmedString(args.branchName);
+  const environment = readTrimmedString(args.environment);
   if (backend && !isAppServerBackendKind(backend)) {
     return undefined;
   }
@@ -562,6 +569,7 @@ function normalizeCreateInstanceThreadArgs(
     ...(workMode ? { workMode } : {}),
     ...(branchName ? { branchName } : {}),
     ...(groupingMode ? { groupingMode } : {}),
+    ...(environment ? { environment } : {}),
   };
 }
 
