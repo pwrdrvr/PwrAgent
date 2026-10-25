@@ -85,6 +85,7 @@ import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
 import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
+import { encodeEnvironmentsRoute } from "./features/settings/environments-route";
 import { checkForManagedCodexUpdates, refreshManagedCodexModelCatalog } from "./features/settings/managed-codex-actions";
 import type { ConfirmSettingsLeave } from "./features/settings/UnsavedSettingsChanges";
 import {
@@ -850,6 +851,9 @@ function DesktopAppShell(props: {
   }, [openSettingsSection]);
   const openPluginSettings = useCallback(() => {
     openSettingsSection("plugins");
+  }, [openSettingsSection]);
+  const handleEditEnvironments = useCallback((workspacePath: string) => {
+    openSettingsSection("environments", encodeEnvironmentsRoute({ project: workspacePath }));
   }, [openSettingsSection]);
   const dismissGithubPrSamlNotice = useCallback(() => {
     dispatchAppNotice({ type: "dismiss-prefix", prefix: "github-pr-saml:" });
@@ -3831,6 +3835,7 @@ function DesktopAppShell(props: {
       }
     },
     workspaceActionsBlocked: navigation.selectedWorkspaceHandoffPending,
+    onEditEnvironments: handleEditEnvironments,
     onHandoffThreadWorkspace: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
       ? handleHandoffThreadWorkspace : undefined,
     onRecreateThreadWorktree: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending

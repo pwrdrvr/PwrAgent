@@ -52,6 +52,8 @@ import {
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { WorktreesSettings } from "./WorktreesSettings";
+import { EnvironmentsSettings } from "./EnvironmentsSettings";
+import { environmentsPageKey, environmentsRouteLabel } from "./environments-route";
 import {
   buildDiscordPatchDelta,
   buildFeishuPatchDelta,
@@ -90,6 +92,7 @@ export type SettingsSection =
   | "applications"
   | "plugins"
   | "worktrees"
+  | "environments"
   | "thread-management"
   | "archived"
   | "troubleshooting"
@@ -109,6 +112,7 @@ const SECTIONS: Array<{ id: SettingsSection; label: string }> = [
   { id: "git", label: "Git" },
   { id: "federation", label: "Federation" },
   { id: "worktrees", label: "Worktrees" },
+  { id: "environments", label: "Environments" },
   { id: "thread-management", label: "Thread Management" },
   { id: "archived", label: "Archived Threads" },
   { id: "experimental", label: "Experimental" },
@@ -182,6 +186,9 @@ function settingsPageKey(route: {
   }
   if (route.section === "messaging") {
     return `messaging:${messagingPlatformFromSub(route.sub) ?? ""}`;
+  }
+  if (route.section === "environments") {
+    return environmentsPageKey(route.sub);
   }
   return route.section;
 }
@@ -257,6 +264,7 @@ const ORDERED_SECTION_IDS: SettingsSection[] = [
   "access-control",
   "git",
   "worktrees",
+  "environments",
   "thread-management",
   "archived",
   "experimental",
@@ -593,9 +601,12 @@ export function SettingsScreen(props: {
   // Crumb label from the same catalog the nav renders. An unknown sub
   // gets no crumb rather than leaking the raw route id into the
   // breadcrumb.
-  const activeSubLabel = route.sub
-    ? navChildren(section).find((child) => child.sub === route.sub)?.label
-    : undefined;
+  // Environments routes name a project and file rather than a nav child.
+  const activeSubLabel = !route.sub
+    ? undefined
+    : section === "environments"
+      ? environmentsRouteLabel(route.sub)
+      : navChildren(section).find((child) => child.sub === route.sub)?.label;
   // Platform-chip clicks in the title-bar strip route to the top-level
   // Messaging Activity overlay (NOT a settings section). The App-level
   // handler swaps mainView for us; no internal state change here.
@@ -655,11 +666,12 @@ export function SettingsScreen(props: {
               groupHoldsRoute
               && (route.sub === child.sub
                 || (route.sub === undefined && child.bareRoute === true));
+            // A section without children (Environments) owns every sub-route.
             const parentActive =
               groupHoldsRoute
               && (item.id === "plugins"
                 ? !children.some(childHoldsRoute)
-                : route.sub === undefined);
+                : !isGroup || route.sub === undefined);
             // A collapsed group hides its aria-current child inside an
             // aria-hidden, inert sublist, so the parent row takes over
             // the marker — the nav must always show where the operator
@@ -1484,6 +1496,23 @@ function SettingsSectionBody(props: {
         profiles={props.profiles}
         snapshot={props.snapshot}
         onSettingsChanged={props.settings.refresh}
+      />
+    );
+  }
+
+  if (props.section === "environments") {
+    return (
+      <EnvironmentsSettings
+        desktopApi={props.desktopApi}
+        passSetupVariablesToAgents={props.snapshot.general.passSetupVariablesToAgents}
+        saving={props.settings.saving}
+        sub={props.sub}
+        onOpenRoute={(sub) => props.onOpenRoute("environments", sub)}
+        onPassSetupVariablesToAgentsChange={async (passSetupVariablesToAgents) => {
+          await props.settings.writeConfig({
+            general: { passSetupVariablesToAgents },
+          });
+        }}
       />
     );
   }

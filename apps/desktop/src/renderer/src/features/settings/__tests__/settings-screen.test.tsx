@@ -1431,6 +1431,63 @@ describe("SettingsScreen", () => {
     expect(screen.queryByText(/PWRDRVR_CODEX_COMMAND/)).not.toBeInTheDocument();
   });
 
+  it("opens an environment from Settings → Environments and names it in the breadcrumb", async () => {
+    const settings = createSettingsState();
+    const desktopApi = {
+      listCodexEnvironmentProjects: vi.fn(async () => ({
+        projects: [{ path: "/fixture/code/demo", label: "demo" }],
+      })),
+      listCodexEnvironmentFiles: vi.fn(async () => ({
+        directoryPath: "/fixture/code/demo",
+        files: [{ fileName: "environment.toml", name: "Node dev", setupPlatforms: [], actionCount: 0 }],
+      })),
+      readCodexEnvironmentDocument: vi.fn(async () => ({
+        status: "ok" as const,
+        revision: "rev-1",
+        sourcePath: "/fixture/code/demo/.codex/environments/environment.toml",
+        document: {
+          name: "Node dev",
+          setup: { mode: "shared" as const, script: "pnpm install", platformScripts: {} },
+          cleanup: { mode: "shared" as const, script: "", platformScripts: {} },
+          actions: [],
+        },
+      })),
+    } as unknown as DesktopApi;
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(
+      within(screen.getByRole("navigation", { name: "Settings sections" }))
+        .getByRole("button", { name: "Environments" }),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: /Pass setup variables to agents/ }));
+    });
+    expect(settings.writeConfig).toHaveBeenCalledWith({
+      general: { passSetupVariablesToAgents: false },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Node dev settings" }));
+    await screen.findByRole("heading", { name: "Node dev", level: 1 });
+    const titlebar = document.querySelector(".settings-titlebar")! as HTMLElement;
+    expect(within(titlebar).getByRole("button", { name: "Environments" })).toBeInTheDocument();
+    expect(titlebar.querySelector(".settings-titlebar__current")).toHaveTextContent("Node dev");
+    // The editor is a page of Environments, so the nav still marks it.
+    expect(
+      within(screen.getByRole("navigation", { name: "Settings sections" }))
+        .getByRole("button", { name: "Environments" }),
+    ).toHaveAttribute("aria-current", "page");
+
+    fireEvent.click(within(titlebar).getByRole("button", { name: "Environments" }));
+    expect(await screen.findByRole("button", { name: "Open Node dev settings" })).toBeInTheDocument();
+  });
+
   it("leaves terminal contrast off by default and writes only the opt-in", async () => {
     const controller: AppearanceController = {
       appearance: {
@@ -9383,6 +9440,7 @@ describe("SettingsScreen", () => {
       "Access Control",
       "Git",
       "Worktrees",
+      "Environments",
       "Thread Management",
       "Archived Threads",
       "Experimental",

@@ -3690,6 +3690,71 @@ describe("Composer", () => {
     expect(runCodexEnvironmentAction).not.toHaveBeenCalled();
   });
 
+  it("offers Edit environments… below the Environment list for the thread's workspace", () => {
+    const onEditEnvironments = vi.fn();
+    const thread = {
+      id: "thread-1",
+      title: "Environment editing",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        environmentName: "PwrAgnt",
+        executionTarget: "local" as const,
+        cwd: "/repo/.worktrees/abc/repo",
+      },
+      codexEnvironmentOptions: [
+        {
+          id: "environment",
+          name: "PwrAgnt",
+          sourcePath: "/repo/.worktrees/abc/repo/.codex/environments/environment.toml",
+          actions: [],
+        },
+      ],
+    };
+    const { rerender } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+        onEditEnvironments={onEditEnvironments}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Environment(?::|$)/ }));
+    const listbox = screen.getByRole("listbox", { name: "Environment" });
+    // A button after the list, not an option, so choosing it never changes
+    // the selection.
+    expect(within(listbox).queryByText("Edit environments…")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit environments…" }));
+
+    expect(onEditEnvironments).toHaveBeenCalledWith("/repo/.worktrees/abc/repo");
+    expect(screen.queryByRole("listbox", { name: "Environment" })).not.toBeInTheDocument();
+
+    // Environments run on the machine that owns the thread, so a remote
+    // execution workspace offers no editor here.
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          ...thread,
+          codexEnvironmentRuntime: { ...thread.codexEnvironmentRuntime, executionTarget: "remote" as const },
+        }}
+        onEditEnvironments={onEditEnvironments}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Environment(?::|$)/ }));
+    expect(screen.queryByRole("button", { name: "Edit environments…" })).not.toBeInTheDocument();
+  });
+
   it("shows an explicit empty state when a selected environment has no commands", () => {
     render(
       <Composer
