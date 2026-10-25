@@ -13610,20 +13610,28 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threads: AppServerThreadSummary[],
   ): Promise<AppServerThreadSummary[]> {
+    if (threads.length === 0) return threads;
+    const readOverlays = this.overlayStore.getThreadListingOverlayStates
+      ?? this.overlayStore.getThreadOverlayStates;
+    const overlaysByThreadId = await readOverlays.call(this.overlayStore, {
+      backend,
+      threadIds: threads.map((thread) => thread.id),
+    });
+    // Threads in one checkout share its environment files; read them once.
+    const optionsByCwd = new Map<string, Promise<CodexEnvironmentOption[]>>();
     return await Promise.all(
       threads.map(async (thread) => {
-        const overlay = await this.overlayStore.getThreadOverlayState({
-          backend,
-          threadId: thread.id,
-        });
         const cwd = resolveThreadWorkspaceCwd(
           thread,
-          overlay?.extraLinkedDirectories ?? [],
+          overlaysByThreadId[thread.id]?.extraLinkedDirectories ?? [],
         );
-        const codexEnvironmentOptions = cwd
-          ? await listCodexEnvironmentOptions(cwd).catch(() => [])
-          : [];
-        return { ...thread, codexEnvironmentOptions };
+        if (!cwd) return { ...thread, codexEnvironmentOptions: [] };
+        let options = optionsByCwd.get(cwd);
+        if (!options) {
+          options = listCodexEnvironmentOptions(cwd).catch(() => []);
+          optionsByCwd.set(cwd, options);
+        }
+        return { ...thread, codexEnvironmentOptions: await options };
       }),
     );
   }

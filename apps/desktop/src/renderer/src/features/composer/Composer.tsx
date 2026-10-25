@@ -14315,10 +14315,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 value={threadEnvironmentValue}
                 options={[
                   { label: "No environment", value: "" },
-                  ...threadCodexEnvironmentPickerOptions.map((environment) => ({
-                    label: environment.name,
-                    value: environment.id,
-                  })),
+                  ...threadCodexEnvironmentPickerOptions.map((environment) =>
+                    threadCodexEnvironmentOptions.includes(environment)
+                      ? { label: environment.name, value: environment.id }
+                      : {
+                          // Main re-reads the workspace to select one, so an
+                          // environment it cannot find stays on the chip only.
+                          description: "Not found in this workspace",
+                          disabled: true,
+                          label: environment.name,
+                          value: environment.id,
+                        },
+                  ),
                 ]}
                 onChange={(value) => {
                   const environment = threadCodexEnvironmentPickerOptions.find(
