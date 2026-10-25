@@ -29,9 +29,11 @@
 // Contrast is the one rule class that is genuinely theme-dependent —
 // roles, names, and focus order are not. A color theme in app.css sets
 // color tokens only, and no component branches on it, so work that
-// cannot see color runs once rather than in every appearance: the
-// ARIA-only composer block sits outside the appearance loop, and the
-// directories block's functional steps run in Tangerine dark only.
+// cannot see color runs once rather than in every appearance. Tangerine
+// dark and light run the full WCAG AA tag set on every surface; the other
+// color themes run only the color rules (`COLOR_RULES`). The ARIA-only
+// composer block sits outside the appearance loop, and the directories
+// block's functional steps run in Tangerine dark only.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
@@ -218,6 +220,12 @@ const WCAG_AA_TAGS = [
   "wcag22aa",
 ];
 
+// The axe rules that read color. A color theme sets color tokens only, so
+// these are the only rules whose result can differ from Tangerine in the
+// same scheme. Measured on Linux CI hardware, a scan limited to them takes
+// ~250ms against ~390ms for the full tag set.
+const COLOR_RULES = ["color-contrast", "link-in-text-block"];
+
 // Selectors waived from the axe scan, with a written reason. The
 // baseline is empty — every previously waived violation has been
 // fixed in the renderer. If a new pre-existing violation surfaces
@@ -332,7 +340,7 @@ async function describeObscurers(
     : "";
 }
 
-async function runAxe(
+async function runAxeScan(
   window: Page,
   surface: string,
   options?: {
@@ -424,6 +432,19 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
   // Behavior checks that ride along with an audit and read no color run in
   // one appearance only. Tangerine dark is the harness default.
   const runsFunctionalChecks = !colorTheme && theme === "dark";
+  // Tangerine dark and light run the full WCAG AA tag set on every surface.
+  // The other color themes run only the color rules there: every other rule
+  // sees the same DOM and geometry as Tangerine in the same scheme. A block
+  // that passes its own `rules` keeps them.
+  const runAxe = (
+    page: Page,
+    surface: string,
+    options?: Parameters<typeof runAxeScan>[2],
+  ) =>
+    runAxeScan(page, surface, {
+      ...(colorTheme ? { rules: COLOR_RULES } : {}),
+      ...options,
+    });
   test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme${colorThemeLabel})`, () => {
     test("smoke fixture surfaces have no violations", async () => {
       const app = await launchAuditApp(appearance);
@@ -1116,7 +1137,7 @@ test.describe("desktop renderer accessibility (ARIA structure, default appearanc
           "aria-activedescendant",
           await activeOption.getAttribute("id") ?? "missing-option-id",
         );
-        await runAxe(app.window, "skills autocomplete", {
+        await runAxeScan(app.window, "skills autocomplete", {
           rules: ["aria-required-children", "aria-required-parent"],
         });
       });
@@ -1134,7 +1155,7 @@ test.describe("desktop renderer accessibility (ARIA structure, default appearanc
         await expect(
           app.window.getByRole("button", { name: "+ Add file…" }),
         ).toBeVisible();
-        await runAxe(
+        await runAxeScan(
           app.window,
           "directory autocomplete with sibling actions",
           {
