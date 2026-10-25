@@ -576,7 +576,8 @@ describe("sidebar thread row callback stability", () => {
         } } as NavigationThreadSummary
       : entry,
     );
-    render(sidebar({ threads, onUnbindMessagingBinding }));
+    // Inbox lists both; Directories files a peer's thread under no local folder.
+    render(sidebar({ browseMode: "inbox", threads, onUnbindMessagingBinding }));
 
     fireEvent.contextMenu(row("Thread 8"), { clientX: 10, clientY: 20 });
     expect(within(screen.getByRole("menu")).getByRole("menuitem", { name: /^Unbind from/ }))
