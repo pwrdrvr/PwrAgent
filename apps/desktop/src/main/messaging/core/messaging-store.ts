@@ -841,13 +841,28 @@ export class MessagingStore {
   private async withData<T>(
     operation: (data: MessagingStoreData) => Promise<T> | T,
   ): Promise<T> {
-    const currentQueue = MessagingStore.queues.get(this.filePath) ?? Promise.resolve();
-    const next = currentQueue.then(async () => {
+    return await this.enqueue(async () => {
       const data = await this.readData();
       const result = await operation(data);
       await this.writeData(data);
       return result;
     });
+  }
+
+  /**
+   * Reads take a place in the file's queue too. A read that only waited for
+   * the queue would still hold the file open when a later write renames its
+   * temp file over it, and Windows refuses to replace an open file (EPERM).
+   */
+  private async withReadData<T>(
+    operation: (data: MessagingStoreData) => Promise<T> | T,
+  ): Promise<T> {
+    return await this.enqueue(async () => await operation(await this.readData()));
+  }
+
+  private async enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const currentQueue = MessagingStore.queues.get(this.filePath) ?? Promise.resolve();
+    const next = currentQueue.then(work);
 
     MessagingStore.queues.set(
       this.filePath,
@@ -857,14 +872,7 @@ export class MessagingStore {
       ),
     );
 
-    return (await next) as T;
-  }
-
-  private async withReadData<T>(
-    operation: (data: MessagingStoreData) => Promise<T> | T,
-  ): Promise<T> {
-    await (MessagingStore.queues.get(this.filePath) ?? Promise.resolve());
-    return await operation(await this.readData());
+    return await next;
   }
 
   private async readData(): Promise<MessagingStoreData> {
