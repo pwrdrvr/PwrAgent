@@ -2523,7 +2523,8 @@ function DesktopAppShell(props: {
   }, [markOperatorItemsSeen, selectedOpenTodos, selectedWaits]);
   // A pending approval in a thread off screen gets a durable card. Hiding
   // it only closes the card; the request stays in its thread and To-dos.
-  const approvalNoticeThreadTitle = useCallback(
+  // One lookup for every surface that names a wait's thread.
+  const waitThreadTitle = useCallback(
     (threadKey: string) => localThreadTitles.get(threadKey) ?? "Untitled thread",
     [localThreadTitles],
   );
@@ -2537,7 +2538,7 @@ function DesktopAppShell(props: {
   const approvalNotices = useApprovalNotices({
     waits: operatorRequests.waits,
     selectedThreadKey,
-    threadTitleForKey: approvalNoticeThreadTitle,
+    threadTitleForKey: waitThreadTitle,
     onReview: reviewApprovalNotice,
   });
   const durableNotices = useMemo(
@@ -2714,7 +2715,7 @@ function DesktopAppShell(props: {
         });
       },
       ...offscreenQuestionAnswers,
-      threadTitleForKey: (threadKey) => localThreadTitles.get(threadKey) ?? "Untitled thread",
+      threadTitleForKey: waitThreadTitle,
       threadProjectForKey: (threadKey) => localThreadProjects.get(threadKey),
     };
   }, [
@@ -2731,6 +2732,7 @@ function DesktopAppShell(props: {
     threadTodoController,
     todoProjectMenu,
     todoHandoffInstances,
+    waitThreadTitle,
   ]);
   // Fetch the boot info once at mount. Stable for the renderer's
   // lifetime — the main process records the decision before this

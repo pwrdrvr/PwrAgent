@@ -91,10 +91,12 @@ export function AppNoticeStack(props: {
                 ? {
                     dismissAll: {
                       label: activeDismissGroup.label,
-                      ...(activeDismissGroup.actionLabel
-                        ? { actionLabel: activeDismissGroup.actionLabel }
-                        : {}),
+                      actionLabel: activeDismissGroup.actionLabel,
                       onDismiss: () => {
+                        if (activeDismissGroup.onDismissAll) {
+                          activeDismissGroup.onDismissAll();
+                          return;
+                        }
                         for (const notice of groupedNotices) {
                           if (notice.onDismiss) {
                             notice.onDismiss();

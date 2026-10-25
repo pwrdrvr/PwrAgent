@@ -28,6 +28,8 @@ export type ApprovalNoticeInput = {
   threadTitleForKey: (threadKey: string) => string;
   onReview: (wait: OperatorWait) => void;
   onHide: (wait: OperatorWait) => void;
+  /** Hides every approval card, including the thread on screen's. */
+  onHideAll: () => void;
 };
 
 /**
@@ -52,6 +54,7 @@ export function buildApprovalNotices(input: ApprovalNoticeInput): AppNoticeToast
         key: "operator-approvals",
         label: "approval notices",
         actionLabel: "Hide all",
+        onDismissAll: input.onHideAll,
       },
       threadLink: {
         backend: wait.backend,
@@ -104,15 +107,29 @@ function approvalNoticeText(
  * window's life; nothing is saved, so a reload shows a pending request again.
  */
 export function useApprovalNotices(
-  input: Omit<ApprovalNoticeInput, "hiddenKeys" | "onHide">,
+  input: Omit<ApprovalNoticeInput, "hiddenKeys" | "onHide" | "onHideAll">,
 ): AppNoticeToastNotice[] {
-  const [hiddenKeys, setHiddenKeys] = useState<ReadonlySet<string>>(() => new Set());
-  const onHide = useCallback((wait: OperatorWait): void => {
-    setHiddenKeys((current) => current.has(wait.key) ? current : new Set([...current, wait.key]));
-  }, []);
   const { waits, selectedThreadKey, threadTitleForKey, onReview } = input;
+  const [hiddenKeys, setHiddenKeys] = useState<ReadonlySet<string>>(() => new Set());
+  // Each hide also drops keys for requests that are gone, so the set holds
+  // only pending requests.
+  const hide = useCallback((keys: readonly string[]): void => {
+    setHiddenKeys((current) => {
+      const pending = new Set(waits.map((wait) => wait.key));
+      const next = new Set([...current, ...keys].filter((key) => pending.has(key)));
+      return next.size === current.size && [...next].every((key) => current.has(key))
+        ? current
+        : next;
+    });
+  }, [waits]);
+  const onHide = useCallback((wait: OperatorWait): void => hide([wait.key]), [hide]);
+  const onHideAll = useCallback((): void => {
+    hide(waits.filter(isApprovalNoticeWait).map((wait) => wait.key));
+  }, [hide, waits]);
   return useMemo(
-    () => buildApprovalNotices({ waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide }),
-    [waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide],
+    () => buildApprovalNotices({
+      waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide, onHideAll,
+    }),
+    [waits, selectedThreadKey, hiddenKeys, threadTitleForKey, onReview, onHide, onHideAll],
   );
 }

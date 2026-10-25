@@ -66,6 +66,7 @@ describe("buildApprovalNotices", () => {
       threadTitleForKey: titleFor,
       onReview: vi.fn(),
       onHide: vi.fn(),
+      onHideAll: vi.fn(),
     });
 
     // Approvals only: the questionnaire needs its card's inputs.
@@ -101,6 +102,7 @@ describe("buildApprovalNotices", () => {
       threadTitleForKey: titleFor,
       onReview: vi.fn(),
       onHide: vi.fn(),
+      onHideAll: vi.fn(),
     });
     expect(notices.map((notice) => notice.threadLink?.threadId)).toEqual(["thread-b"]);
   });
@@ -182,6 +184,22 @@ describe("approval notice cards", () => {
 
     expect(screen.getByText("1 of 3")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Hide all approval notices" }));
+    expect(screen.getByText("Codex login required")).toBeInTheDocument();
+    expect(screen.getByText("1 of 1")).toBeInTheDocument();
+  });
+
+  it("Hide all also hides the approval in the thread on screen", () => {
+    render(
+      <Harness
+        initialWaits={waitsFor([commandApproval, mcpApproval, fileApproval])}
+        otherNotices={[{ id: "other", title: "Codex login required", message: "Sign in again.", autoDismiss: false }]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open thread A" }));
+    expect(screen.getByText("1 of 3")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Hide all approval notices" }));
+    fireEvent.click(screen.getByRole("button", { name: "Leave thread A" }));
     expect(screen.getByText("Codex login required")).toBeInTheDocument();
     expect(screen.getByText("1 of 1")).toBeInTheDocument();
   });

@@ -30,6 +30,11 @@ export type AppNoticeToastNotice = {
     label: string;
     /** The group button's text, when closing hides rather than dismisses. */
     actionLabel?: string;
+    /**
+     * Dismisses the whole group in one call, including members the stack
+     * is not showing. Without it the stack dismisses each shown member.
+     */
+    onDismissAll?: () => void;
   };
   id: string;
   title: string;
