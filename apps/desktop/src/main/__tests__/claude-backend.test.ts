@@ -1721,9 +1721,13 @@ describe("Claude SDK backend", () => {
   });
 
   it("relaunches for new instructions once no task would stop with the process", async () => {
+    const firstGrants = vi.fn();
+    const secondGrants = vi.fn();
+    let releasedAtRelaunch: number | undefined;
     const f = await fixture(async function* (options) {
       yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
       if (options.resume) {
+        releasedAtRelaunch = firstGrants.mock.calls.length;
         yield { type: "assistant", parent_tool_use_id: null, message: { id: "brief", content: [{ type: "text", text: "Brief." }] } } as SDKMessage;
         yield { type: "result", subtype: "success", is_error: false, result: "Brief." } as SDKMessage;
         return;
@@ -1739,15 +1743,22 @@ describe("Claude SDK backend", () => {
     });
     const backend = new ClaudeBackend({ ...f.backendOptions, taskFollowUpGraceMs: 60_000 });
     const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
-    await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }] });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Sleep" }], onSessionClosed: firstGrants });
     await f.waitForTurn();
     await vi.waitFor(() => expect(backend.listBackgroundTasks(threadId).terminals).toEqual([]));
     expect(backend.liveSessionThreadIds()).toEqual([threadId]);
-    await backend.startTurn({ threadId, input: [{ type: "text", text: "Be brief" }], instructions: "Be brief." });
+    await backend.startTurn({ threadId, input: [{ type: "text", text: "Be brief" }], instructions: "Be brief.",
+      onSessionClosed: secondGrants });
     await f.waitForTurn();
     expect(f.run).toHaveBeenCalledTimes(2);
     expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", systemPrompt: { append: "Be brief." } });
     expect(f.events.at(-1)?.notification.method).toBe("turn/completed");
+    // The relaunching turn registered the same thread grants again, so the
+    // old session must not revoke them out from under the new one.
+    expect(releasedAtRelaunch).toBe(0);
+    // Both grants go when the relaunched session closes.
+    await vi.waitFor(() => expect(secondGrants).toHaveBeenCalledOnce());
+    expect(firstGrants).toHaveBeenCalledOnce();
   });
 
   describe("stopping a turn while a background task runs", () => {
@@ -1813,6 +1824,46 @@ describe("Claude SDK backend", () => {
       expect(f.close).not.toHaveBeenCalled();
       expect(f.backend.liveSessionThreadIds()).toEqual([f.threadId]);
       await f.backend.close();
+    });
+
+    it("ends the query at shutdown even when the CLI could keep its tasks", async () => {
+      const f = await stoppable({ capabilities });
+      await f.backend.interruptTurn(f.turn, { keepTasks: false });
+      expect(f.interrupt).not.toHaveBeenCalled();
+      expect(f.close).toHaveBeenCalled();
+      expect(f.events.at(-1)?.notification.method).toBe("turn/cancelled");
+      expect(f.backend.liveSessionThreadIds()).toEqual([]);
+    });
+
+    it("ends the turn at once when the interrupt dropped a prompt Claude had not started", async () => {
+      let queued: SDKUserMessage | undefined;
+      const interrupt = vi.fn(async () => ({ still_queued: [], cancelled: [queued!.uuid!] }));
+      const f = await fixture(async function* (options, prompt) {
+        const input = prompt[Symbol.asyncIterator]();
+        await input.next();
+        yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", capabilities } as SDKMessage;
+        yield { type: "system", subtype: "session_state_changed", state: "running" } as SDKMessage;
+        yield { type: "system", subtype: "task_started", task_id: "task-1", description: "pnpm dev", task_type: "local_bash", is_backgrounded: true } as SDKMessage;
+        yield { type: "assistant", parent_tool_use_id: null, message: { id: "serving", content: [{ type: "text", text: "Serving." }] } } as SDKMessage;
+        yield { type: "result", subtype: "success", is_error: false, result: "Serving." } as SDKMessage;
+        yield { type: "system", subtype: "session_state_changed", state: "idle" } as SDKMessage;
+        queued = (await input.next()).value as SDKUserMessage;
+        await new Promise<void>((resolve) => {
+          options.abortController!.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }, { interrupt });
+      const backend = new ClaudeBackend({ ...f.backendOptions, interruptGraceMs: 60_000 });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "Start the dev server" }] });
+      await f.waitForTurn();
+      const next = await backend.startTurn({ threadId, input: [{ type: "text", text: "Never mind" }] });
+      await vi.waitFor(() => expect(queued).toBeDefined());
+      await backend.interruptTurn(next);
+      expect(interrupt).toHaveBeenCalledWith({ cancelQueued: true });
+      expect(f.events.at(-1)?.notification).toMatchObject({ method: "turn/cancelled", params: { turnId: next.turnId } });
+      expect(f.close).not.toHaveBeenCalled();
+      expect(backend.listBackgroundTasks(threadId).terminals).toHaveLength(1);
+      await backend.close();
     });
 
     it("ends the query when the CLI cannot drop queued messages", async () => {

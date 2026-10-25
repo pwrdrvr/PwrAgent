@@ -112,6 +112,19 @@ function claudeHasModelUsage(modelUsage: SDKResultMessage["modelUsage"] | undefi
     value.inputTokens + value.outputTokens + value.cacheReadInputTokens + value.cacheCreationInputTokens > 0);
 }
 
+/** A promise settled from outside; `settled` says whether it has been. */
+type ClaudeDeferred = { promise: Promise<void>; resolve: () => void; settled: boolean };
+
+function claudeDeferred(): ClaudeDeferred {
+  let settle!: () => void;
+  const deferred: ClaudeDeferred = {
+    promise: new Promise<void>((resolve) => { settle = resolve; }),
+    resolve: () => { deferred.settled = true; settle(); },
+    settled: false,
+  };
+  return deferred;
+}
+
 function claudeWakeSignal(): { promise: Promise<typeof CLAUDE_WAKE>; wake: () => void } {
   let wake!: () => void;
   const promise = new Promise<typeof CLAUDE_WAKE>((resolve) => { wake = () => resolve(CLAUDE_WAKE); });
@@ -169,7 +182,7 @@ type RunningTurn = {
   /** Claude did not answer the interrupt in time; the turn ends without it. */
   abandoned?: boolean;
   /** Settles once the turn has reported its end. */
-  ended: { promise: Promise<void>; resolve: () => void };
+  ended: ClaudeDeferred;
 };
 
 /** What a live session was launched with, compared when a turn reuses it. */
@@ -262,10 +275,8 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
 
 /** A session read before the turn has no baseline yet; the caller sets it. */
 function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
-  let resolve!: () => void;
-  const promise = new Promise<void>((settle) => { resolve = settle; });
   return {
-    ended: { promise, resolve },
+    ended: claudeDeferred(),
     turnId: randomUUID(), startedAt: Date.now(), entries: new Map(), pendingSteers: new Set(),
     completedMessageText: new Map(), pendingReports: new Map(), hasCompletedToolActivity: false, lastResultSeq: 0,
     usageBaseline: session?.modelUsage, needsUsageBaseline: Boolean(session?.sdkSessionId) && !session?.modelUsage,
@@ -304,6 +315,11 @@ export class ClaudeBackend {
   private readonly sessions = new Map<string, LiveSession>();
   /** Threads whose first turn is reading its session, before a query exists. */
   private readonly starting = new Map<string, AbortController>();
+  /**
+   * Releases a relaunched session hands to its successor: the turn that
+   * relaunched it registered the thread's MCP grants again, sharing them.
+   */
+  private readonly carriedReleases = new Map<string, (() => void)[]>();
   private installation: ClaudeInstallation = { authStatus: "unknown", message: CLAUDE_SETUP_INSTRUCTIONS };
   private discovery?: { models: boolean; promise: Promise<void> };
   private modelDiscovery?: Promise<void>;
@@ -493,6 +509,9 @@ export class ClaudeBackend {
     } finally {
       // A live session uses the thread's MCP grants, so it keeps them too.
       if (onSessionClosed) this.releaseWithSession(params.threadId, onSessionClosed);
+      const carried = this.carriedReleases.get(params.threadId);
+      this.carriedReleases.delete(params.threadId);
+      for (const release of carried ?? []) this.releaseWithSession(params.threadId, release);
     }
   }
 
@@ -627,9 +646,13 @@ export class ClaudeBackend {
     const session = await this.store.read(threadId);
     if (session.thread.archivedAt) throw new Error("Restore this Claude thread before sending a message.");
     const content = await claudeInput(params.input);
+    // A message that cannot be sent must not change the session's settings.
+    if (live.turn) throw new ClaudeTurnActiveError("A Claude turn is already active for this thread.");
     if (!live.closing && !await this.reconfigure(live, claudeSessionConfig(params, session))) {
       // Only a new process takes this setting, and this one runs no task.
       claudeBackendLog.info("Relaunching Claude to apply the turn's settings", { threadId });
+      // This turn registered the thread's MCP grants again; the new session uses them.
+      this.carriedReleases.set(threadId, [...this.carriedReleases.get(threadId) ?? [], ...live.onClosed.splice(0)]);
       await this.closeSession(live);
       return undefined;
     }
@@ -641,9 +664,8 @@ export class ClaudeBackend {
     if (live.followUpTimer) clearTimeout(live.followUpTimer);
     live.followUpTimer = undefined;
     // A steer for this turn must follow its prompt into the input stream.
-    let releaseInput!: () => void;
-    const prompted = new Promise<void>((resolve) => { releaseInput = resolve; });
-    live.inputWrites = live.inputWrites.then(() => prompted);
+    const prompted = claudeDeferred();
+    live.inputWrites = live.inputWrites.then(() => prompted.promise);
     try {
       await this.beginTurn(live, turn, session, params.input);
       // The session closed while the turn opened; its prompt was never sent.
@@ -656,10 +678,11 @@ export class ClaudeBackend {
       if (live.turn === turn) live.turn = undefined;
       const failure = claudeExceptionMessage(error, "");
       claudeBackendLog.warn("Claude turn failed to start in a live session", { threadId, turnId: turn.turnId, error: failure });
-      if (turn.started) await this.failTurn(threadId, turn, failure);
+      // A session that closed meanwhile has already ended a started turn.
+      if (turn.started && !turn.ended.settled) await this.failTurn(threadId, turn, failure);
       throw error;
     } finally {
-      releaseInput();
+      prompted.resolve();
     }
     return { backend: "claude", threadId, turnId: turn.turnId };
   }
@@ -749,12 +772,15 @@ export class ClaudeBackend {
     for (const entry of turn.entries.values()) {
       entry.turn = { id: turn.turnId, status: "failed", startedAt: turn.startedAt };
     }
-    await this.store.append(threadId, [...turn.entries.values()]);
-    await this.emit({ method: "turn/failed", params: {
-      threadId, turnId: turn.turnId,
-      turn: { id: turn.turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure } },
-    } });
-    turn.ended.resolve();
+    try {
+      await this.store.append(threadId, [...turn.entries.values()]);
+      await this.emit({ method: "turn/failed", params: {
+        threadId, turnId: turn.turnId,
+        turn: { id: turn.turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure } },
+      } });
+    } finally {
+      turn.ended.resolve();
+    }
   }
 
   private async emit(notification: AgentEvent["notification"]): Promise<void> {
@@ -1110,30 +1136,34 @@ export class ClaudeBackend {
     // A task row outlives its turn only while its task runs.
     const running = new Set([...live.tasks.runningToolUseIds(), ...live.launchedToolUseIds]);
     for (const id of live.toolRows.keys()) if (!running.has(id)) live.toolRows.delete(id);
-    await release?.();
-    const diagnostics = {
-      threadId, turnId, status: cancelled ? "cancelled" : failure ? "failed" : "completed",
-      receivedResult: Boolean(turn.lastResult), ...turn.resultSummary, pendingSteerCount: turn.pendingSteers.size,
-      followUp: turn.followUp === true, runningTaskCount: live.tasks.active().length,
-      assistantMessageCount: [...turn.entries.values()].filter((entry) => entry.type === "message" && entry.role === "assistant").length,
-    };
-    if (failure && !cancelled) claudeBackendLog.warn("Claude turn failed", { ...diagnostics, error: failure, stderr: live.stderr.slice(-320) });
-    else claudeBackendLog.info("Claude turn finished", diagnostics);
-    if (cancelled) {
-      await this.emit({ method: "turn/cancelled", params: { threadId, turnId, turn: {
-        id: turnId, status: "cancelled", startedAt: turn.startedAt,
-      } } });
-    } else if (failure) {
-      await this.emit({ method: "turn/failed", params: { threadId, turnId, turn: {
-        id: turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure },
-      } } });
-    } else {
-      await this.emit({ method: "turn/completed", params: { threadId, turnId, turn: {
-        id: turnId, status: "completed", startedAt: turn.startedAt,
-        output: [...turn.entries.values()].flatMap((entry) => entry.type === "message" && entry.role === "assistant" ? [{ type: "text" as const, text: entry.text }] : []),
-      } } });
+    try {
+      await release?.();
+      const diagnostics = {
+        threadId, turnId, status: cancelled ? "cancelled" : failure ? "failed" : "completed",
+        receivedResult: Boolean(turn.lastResult), ...turn.resultSummary, pendingSteerCount: turn.pendingSteers.size,
+        followUp: turn.followUp === true, runningTaskCount: live.tasks.active().length,
+        assistantMessageCount: [...turn.entries.values()].filter((entry) => entry.type === "message" && entry.role === "assistant").length,
+      };
+      if (failure && !cancelled) claudeBackendLog.warn("Claude turn failed", { ...diagnostics, error: failure, stderr: live.stderr.slice(-320) });
+      else claudeBackendLog.info("Claude turn finished", diagnostics);
+      if (cancelled) {
+        await this.emit({ method: "turn/cancelled", params: { threadId, turnId, turn: {
+          id: turnId, status: "cancelled", startedAt: turn.startedAt,
+        } } });
+      } else if (failure) {
+        await this.emit({ method: "turn/failed", params: { threadId, turnId, turn: {
+          id: turnId, status: "failed", startedAt: turn.startedAt, error: { message: failure },
+        } } });
+      } else {
+        await this.emit({ method: "turn/completed", params: { threadId, turnId, turn: {
+          id: turnId, status: "completed", startedAt: turn.startedAt,
+          output: [...turn.entries.values()].flatMap((entry) => entry.type === "message" && entry.role === "assistant" ? [{ type: "text" as const, text: entry.text }] : []),
+        } } });
+      }
+    } finally {
+      // Stop waits on this, so it settles even when a report fails.
+      turn.ended.resolve();
     }
-    turn.ended.resolve();
   }
 
   /** Re-read metadata so a live rename/mode change cannot be overwritten. */
@@ -1275,6 +1305,10 @@ export class ClaudeBackend {
    */
   liveSessionThreadIds(): string[] {
     return [...this.sessions.keys()];
+  }
+
+  hasLiveSession(threadId: string): boolean {
+    return this.sessions.has(threadId);
   }
 
   /** Retrieve Claude's native title without holding up the active turn. */
@@ -1689,13 +1723,14 @@ export class ClaudeBackend {
     }
   }
 
-  async interruptTurn(params: { threadId: string; turnId: string }): Promise<typeof params> {
+  /** `keepTasks: false` ends the query even when tasks run, as quitting does. */
+  async interruptTurn(params: { threadId: string; turnId: string }, options: { keepTasks?: boolean } = {}): Promise<typeof params> {
     const live = this.sessions.get(params.threadId);
     const turn = live?.turn;
     if (turn && turn.turnId !== params.turnId) throw new Error("The active Claude turn has changed.");
     if (!live || !turn) return params;
     // Without tasks to keep, ending the query is the surest stop.
-    if (!await this.interruptKeepingTasks(live, turn)) await this.closeSession(live);
+    if (options.keepTasks === false || !await this.interruptKeepingTasks(live, turn)) await this.closeSession(live);
     return params;
   }
 
@@ -1708,13 +1743,22 @@ export class ClaudeBackend {
     if (!live.query || live.closing || live.tasks.active().length === 0
       || !live.capabilities?.includes(CLAUDE_INTERRUPT_CANCEL_QUEUED)) return false;
     turn.interrupted = true;
+    let cancelledPrompt = false;
     try {
-      await (live.query as ClaudeInterruptQuery).interrupt({ cancelQueued: true });
+      const receipt = await (live.query as ClaudeInterruptQuery).interrupt({ cancelQueued: true });
+      for (const uuid of receipt?.cancelled ?? []) cancelledPrompt = turn.pendingSteers.delete(uuid) || cancelledPrompt;
     } catch (error) {
       claudeBackendLog.warn("Claude rejected an interrupt; ending its session", {
         threadId: live.session.thread.id, error: error instanceof Error ? error.message : String(error),
       });
       return false;
+    }
+    // Claude had not started on the turn's input, so no result will answer.
+    if (cancelledPrompt && turn.pendingSteers.size === 0 && live.sessionState === "idle" && live.turn === turn) {
+      turn.abandoned = true;
+      live.wake.wake();
+      await turn.ended.promise;
+      return true;
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
     const answered = await Promise.race([

@@ -179,10 +179,15 @@ Stop on a turn keeps the session's tasks when it can. While a task runs and
 the CLI advertises `interrupt_cancel_queued_v1` at init, Stop sends
 `interrupt` with `cancelQueued: true`, which ends Claude's native turn and
 drops steers still queued for it. The desktop turn ends `cancelled` at the
-interrupted result, or after five seconds if Claude sends none; the process
-and its tasks stay up. With no task running, or a CLI without that
+interrupted result, or after five seconds if Claude sends none. When the
+interrupt dropped a message Claude had not started and Claude is idle, no
+result will come, so the turn ends at once. The process and its tasks stay
+up either way. With no task running, or a CLI without that
 capability, Stop closes the query, since a plain interrupt would leave queued
-steers to run after the stop. Quitting closes every session and its tasks.
+steers to run after the stop. Quitting stops turns by closing their queries,
+and closes every session and its tasks. A relaunch hands the old session's
+MCP grants to the new one, because the relaunching turn registered the same
+per-thread grants again.
 
 ## Usage, context, and MCP
 

@@ -10928,7 +10928,8 @@ export class DesktopBackendRegistry {
       }
       try {
         if (turn.backend === "claude") {
-          await this.claudeBackend.interruptTurn(turn);
+          // The app is quitting, so its tasks stop with it.
+          await this.claudeBackend.interruptTurn(turn, { keepTasks: false });
           counts.requested += 1;
           return;
         }
@@ -14907,7 +14908,7 @@ export class DesktopBackendRegistry {
       || this.threadHandoffReservations.has(buildThreadIdentityKey(thread.source, thread.id))
       || this.handoffTurnStarts.has(buildThreadIdentityKey(thread.source, thread.id))
       || (thread.source === "codex" && this.codexBackgroundTerminals.has(thread.id))
-      || (thread.source === "claude" && this.claudeBackend.liveSessionThreadIds().includes(thread.id))
+      || (thread.source === "claude" && this.claudeBackend.hasLiveSession(thread.id))
       || this.threadHasActiveTurn(thread.id, thread.source)
       || this.threadHasBlockingWorkspaceMove(identity)
       || this.threadTurnQueue.getQueuedEntries(identity).length > 0
