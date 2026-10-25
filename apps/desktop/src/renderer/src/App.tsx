@@ -1921,7 +1921,7 @@ function DesktopAppShell(props: {
       ]) => {
         const federationHealth =
           refreshedFederationHealth ?? liveFederationHealth;
-        void copyTextAsCodeBlock(
+        return copyTextAsCodeBlock(
           buildLocalThreadDiagnosticsInfo(
             thread
               ? {
@@ -1943,18 +1943,23 @@ function DesktopAppShell(props: {
           ),
           desktopApi,
         );
+      }).catch((error) => {
+        console.warn("Copying diagnostics info failed.", error);
       });
     },
   );
+  const copySelectedThreadDiagnosticsInfo = useEventCallback((): void => {
+    copyThreadDiagnosticsInfo(navigation.selectedThread);
+  });
 
   useEffect(() => {
     if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
       return;
     }
-    return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
-      copyThreadDiagnosticsInfo(navigation.selectedThread);
-    });
-  }, [copyThreadDiagnosticsInfo, desktopApi, navigation.selectedThread]);
+    return desktopApi.onCopyLocalDiagnosticsInfoRequested(
+      copySelectedThreadDiagnosticsInfo,
+    );
+  }, [copySelectedThreadDiagnosticsInfo, desktopApi]);
   const recentRemoteThreads = useRecentRemoteThreads({
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
@@ -4257,7 +4262,9 @@ function DesktopAppShell(props: {
           onPrefetchGitWorkingState={gitWorkingState.prefetch}
           onDetachPullRequest={detachThreadPullRequest}
           onUnbindMessagingBinding={unbindMessagingBinding}
-          onCopyThreadDiagnostics={copyThreadDiagnosticsInfo}
+          onCopyThreadDiagnostics={
+            desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
+          }
         />
         {/* Sibling of the sidebar, not a child: the seam straddles the
             sidebar's border, which the aside's overflow clip would cut off. */}
