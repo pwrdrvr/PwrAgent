@@ -1906,17 +1906,15 @@ function DesktopAppShell(props: {
     return () => { disposed = true; unsubscribe?.(); };
   }, [acknowledgeThreadSpendAlert, desktopApi, normalAppEnabled, pendingSpendAlertCapacity]);
 
-  useEffect(() => {
-    if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
-      return;
-    }
-    return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
-      const thread = navigation.selectedThread;
-      const metadataPromise = desktopApi.readAppMetadata?.();
+  // Help → Copy Diagnostics Info reports the selected thread; the sidebar's
+  // thread menu reports the thread it was opened on, without selecting it.
+  const copyThreadDiagnosticsInfo = useEventCallback(
+    (thread: NavigationThreadSummary | undefined): void => {
+      const metadataPromise = desktopApi?.readAppMetadata?.();
       if (!metadataPromise) {
         return;
       }
-      const federationHealthPromise = desktopApi.readFederationHealth
+      const federationHealthPromise = desktopApi?.readFederationHealth
         ? desktopApi.readFederationHealth({})
             .then((response) => response.health)
             .catch(() => undefined)
@@ -1927,7 +1925,7 @@ function DesktopAppShell(props: {
       ]) => {
         const federationHealth =
           refreshedFederationHealth ?? liveFederationHealth;
-        void copyTextAsCodeBlock(
+        return copyTextAsCodeBlock(
           buildLocalThreadDiagnosticsInfo(
             thread
               ? {
@@ -1949,9 +1947,23 @@ function DesktopAppShell(props: {
           ),
           desktopApi,
         );
+      }).catch((error) => {
+        console.warn("Copying diagnostics info failed.", error);
       });
-    });
-  }, [desktopApi, liveFederationHealth, navigation.selectedThread]);
+    },
+  );
+  const copySelectedThreadDiagnosticsInfo = useEventCallback((): void => {
+    copyThreadDiagnosticsInfo(navigation.selectedThread);
+  });
+
+  useEffect(() => {
+    if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
+      return;
+    }
+    return desktopApi.onCopyLocalDiagnosticsInfoRequested(
+      copySelectedThreadDiagnosticsInfo,
+    );
+  }, [copySelectedThreadDiagnosticsInfo, desktopApi]);
   const recentRemoteThreads = useRecentRemoteThreads({
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
@@ -4255,6 +4267,9 @@ function DesktopAppShell(props: {
           onPrefetchGitWorkingState={gitWorkingState.prefetch}
           onDetachPullRequest={detachThreadPullRequest}
           onUnbindMessagingBinding={unbindMessagingBinding}
+          onCopyThreadDiagnostics={
+            desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
+          }
         />
         {/* Sibling of the sidebar, not a child: the seam straddles the
             sidebar's border, which the aside's overflow clip would cut off. */}
