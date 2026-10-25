@@ -10,6 +10,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerPendingRequestNotification,
+  BackendSummary,
   MessagingPlatformStatus,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -324,112 +325,181 @@ describe("ThreadView", () => {
     expect(within(question).getByRole("button", { name: "Answer" })).toBeEnabled();
   });
 
-  it("rewinds Grok with the explicit conversation-only UI flow", async () => {
-    const listAcpThreadRewindPoints = vi.fn(async () => ({
-      backend: "acp:grok" as const,
-      threadId: "grok-thread",
-      rewindPoints: [
-        {
-          promptIndex: 0,
-          fileSnapshotCount: 1,
-          hasFileChanges: true,
-          promptPreview: "Write a breakfast poem",
-        },
+  function rewindBackend(
+    kind: "codex" | "acp:grok",
+    label: string,
+    threadRewind: BackendSummary["capabilities"]["threadRewind"] | null = { files: false, undo: false },
+  ): BackendSummary {
+    return {
+      kind,
+      label,
+      available: true,
+      methods: [],
+      capabilities: {
+        listThreads: true,
+        createThread: true,
+        resumeThread: true,
+        renameThread: true,
+        readThread: true,
+        startTurn: true,
+        interruptTurn: true,
+        steerTurn: false,
+        transcriptPagination: false,
+        toolUse: true,
+        approvalRequests: true,
+        multiDirectoryThreads: true,
+        ...(threadRewind ? { threadRewind } : {}),
+      },
+      executionModes: [],
+    };
+  }
+
+  const rewindTranscript: AppServerThreadEntry[] = [
+    {
+      type: "message",
+      id: "prompt-1",
+      role: "user",
+      text: "The queue test fails one run in ten on Windows.",
+      turn: { id: "turn-1" },
+    },
+    {
+      type: "message",
+      id: "reply-1",
+      role: "assistant",
+      text: "The child outlives the lock.",
+      turn: { id: "turn-1" },
+    },
+    {
+      type: "message",
+      id: "prompt-2",
+      role: "user",
+      text: "Try holding the lock until the child exits instead.",
+      turn: { id: "turn-2" },
+    },
+    {
+      type: "message",
+      id: "steer-2",
+      role: "user",
+      text: "Keep the timeout too.",
+      turn: { id: "turn-2" },
+    },
+    {
+      type: "activity",
+      id: "edit-2",
+      summary: "Edited 2 files",
+      details: [
+        { id: "edit-2:a", kind: "write", label: "lock.ts", path: "src/queue/lock.ts" },
+        { id: "edit-2:b", kind: "write", label: "lock.test.ts", path: "src/queue/lock.test.ts" },
       ],
-    }));
-    const rewindAcpThread = vi.fn(async () => ({
-      backend: "acp:grok" as const,
-      threadId: "grok-thread",
-      targetPromptIndex: 0,
+      turn: { id: "turn-2" },
+    },
+    {
+      type: "message",
+      id: "prompt-3",
+      role: "user",
+      text: "Now add a regression test for it.",
+      turn: { id: "turn-3" },
+    },
+  ];
+
+  const rewindThread = (source: "codex" | "acp:grok"): NavigationThreadSummary => ({
+    id: `${source}-thread`,
+    title: "Fix the flaky queue test",
+    titleSource: "explicit",
+    source,
+    executionMode: "default",
+    linkedDirectories: [],
+    inbox: { inInbox: true },
+  });
+
+  it("rewinds a Codex thread from the prompt itself and restores its text", async () => {
+    const rewindThreadApi = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "codex-thread",
+      target: { messageId: "prompt-2", turnId: "turn-2" },
+      mode: "conversation" as const,
       updatedAt: 2000,
     }));
     const onReloadThread = vi.fn(async () => undefined);
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
-        backends={[]}
+        backends={[rewindBackend("codex", "Codex")]}
         clearPendingRequest={() => undefined}
         composerDisabled={false}
-        desktopApi={{ listAcpThreadRewindPoints, rewindAcpThread }}
+        desktopApi={{ rewindThread: rewindThreadApi }}
         loading={false}
         loadingMore={false}
-        messageCount={1}
+        messageCount={4}
         onLoadOlder={async () => undefined}
         onReloadThread={onReloadThread}
         removeOptimisticMessage={(_id) => undefined}
-        selectedThread={{
-          id: "grok-thread",
-          title: "Breakfast",
-          titleSource: "explicit",
-          source: "acp:grok",
-          executionMode: "default",
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-        }}
+        selectedThread={rewindThread("codex")}
         skills={[]}
-        transcriptEntries={[]}
+        transcriptEntries={rewindTranscript}
       />,
     );
 
+    // A steer inside a turn is not a rewind point: Codex rewinds whole turns.
+    expect(
+      screen.getAllByRole("button", { name: "Rewind to before this message" }),
+    ).toHaveLength(3);
+    const prompt = screen
+      .getByText("Try holding the lock until the child exits instead.")
+      .closest(".transcript-list__item") as HTMLElement;
     fireEvent.click(
-      screen.getByRole("button", { name: "Rewind Grok conversation" }),
+      within(prompt).getByRole("button", { name: "Rewind to before this message" }),
     );
-    expect(await screen.findByText("Write a breakfast poem")).toBeInTheDocument();
-    expect(screen.getByText(/Files stay exactly as they are/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Rewind conversation" }));
+    const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    expect(confirm).toHaveTextContent("1 turn after it");
+    expect(confirm).toHaveTextContent(
+      "Codex rewinds the conversation only. The 2 files changed since stay as they are.",
+    );
+    expect(confirm).toHaveTextContent("so this rewind cannot be undone");
+    expect(within(confirm).getByRole("checkbox", { name: /Restore files/ })).toBeDisabled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
 
     await waitFor(() => {
-      expect(rewindAcpThread).toHaveBeenCalledWith({
-        backend: "acp:grok",
-        threadId: "grok-thread",
-        targetPromptIndex: 0,
+      expect(rewindThreadApi).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "codex-thread",
+        target: { messageId: "prompt-2", turnId: "turn-2" },
+        mode: "conversation",
       });
       expect(onReloadThread).toHaveBeenCalledOnce();
     });
+    expect(screen.queryByRole("dialog", { name: "Rewind to before this message?" }))
+      .not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Reply" })).toHaveTextContent(
+        "Try holding the lock until the child exits instead.",
+      );
+    });
   });
 
-  it("keeps the Grok rewind and workflow-budget dialogs keyboard-contained", async () => {
+  it("opens the rewind on the last prompt from the header and keeps it keyboard-contained", async () => {
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
-        backends={[]}
+        backends={[rewindBackend("acp:grok", "Grok Build")]}
         clearPendingRequest={() => undefined}
         composerDisabled={false}
         desktopApi={{
           configureGrokWorkflowBudget: vi.fn(async () => ({
             backend: "acp:grok" as const,
-            threadId: "grok-thread",
+            threadId: "acp:grok-thread",
             policy: { defaultAgentBudget: 128, maxAgentBudget: 1024 },
           })),
-          listAcpThreadRewindPoints: vi.fn(async () => ({
-            backend: "acp:grok" as const,
-            threadId: "grok-thread",
-            rewindPoints: [
-              {
-                promptIndex: 0,
-                fileSnapshotCount: 1,
-                hasFileChanges: true,
-                promptPreview: "Write a breakfast poem",
-              },
-            ],
-          })),
+          rewindThread: vi.fn(),
         }}
         loading={false}
         loadingMore={false}
-        messageCount={1}
+        messageCount={4}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        selectedThread={{
-          id: "grok-thread",
-          title: "Breakfast",
-          titleSource: "explicit",
-          source: "acp:grok",
-          executionMode: "default",
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-        }}
+        selectedThread={rewindThread("acp:grok")}
         skills={[]}
-        transcriptEntries={[]}
+        transcriptEntries={rewindTranscript}
       />,
     );
     const openFrom = (button: HTMLElement) => {
@@ -439,14 +509,18 @@ describe("ThreadView", () => {
       });
     };
 
-    const rewind = screen.getByRole("button", { name: "Rewind Grok conversation" });
+    const rewind = screen.getByRole("button", { name: "Rewind to before the last prompt" });
     openFrom(rewind);
-    const rewindDialog = screen.getByRole("dialog", { name: "Rewind Grok conversation" });
-    await within(rewindDialog).findByText("Write a breakfast poem");
-    expect(rewindDialog.contains(document.activeElement)).toBe(true);
-    expect(tabEscapes(rewindDialog)).toEqual({ forward: [], backward: [] });
+    const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    const lastPrompt = screen
+      .getByText("Now add a regression test for it.")
+      .closest(".transcript-list__item") as HTMLElement;
+    expect(lastPrompt.contains(confirm)).toBe(true);
+    expect(confirm).toHaveTextContent("This message and its reply are removed from the Grok Build conversation.");
+    expect(confirm.contains(document.activeElement)).toBe(true);
+    expect(tabEscapes(confirm)).toEqual({ forward: [], backward: [] });
     pressEscape();
-    expect(rewindDialog).not.toBeInTheDocument();
+    expect(confirm).not.toBeInTheDocument();
     expect(document.activeElement).toBe(rewind);
 
     const budgets = screen.getByRole("button", { name: "Configure Grok workflow budgets" });
@@ -458,6 +532,43 @@ describe("ThreadView", () => {
     pressEscape();
     expect(budgetDialog).not.toBeInTheDocument();
     expect(document.activeElement).toBe(budgets);
+  });
+
+  it("keeps the rewind open with the provider's error and offers none without the capability", async () => {
+    const rewindThreadApi = vi.fn(async () => {
+      throw new Error("Update Codex to rewind threads");
+    });
+    const props = {
+      addOptimisticUserMessage: (_text: string) => "optimistic-1",
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      desktopApi: { rewindThread: rewindThreadApi },
+      loading: false,
+      loadingMore: false,
+      messageCount: 4,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: (_id: string) => undefined,
+      selectedThread: rewindThread("codex"),
+      skills: [],
+      transcriptEntries: rewindTranscript,
+    };
+    const view = render(<ThreadView {...props} backends={[rewindBackend("codex", "Codex")]} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Rewind to before this message" })[0]!);
+    const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    expect(confirm).toHaveTextContent("2 turns after it");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
+    expect(await within(confirm).findByRole("alert")).toHaveTextContent(
+      "Update Codex to rewind threads",
+    );
+
+    view.rerender(
+      <ThreadView {...props} backends={[rewindBackend("codex", "Codex", null)]} />,
+    );
+    expect(screen.queryByRole("button", { name: "Rewind to before this message" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rewind to before the last prompt" }))
+      .not.toBeInTheDocument();
   });
 
   it("reads and updates distinct Grok workflow default and maximum budgets", async () => {

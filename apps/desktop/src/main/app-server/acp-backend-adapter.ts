@@ -6,7 +6,6 @@ import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   findAcpPermissionModeConfigOption,
   type AcpBackendId,
-  type AcpThreadRewindPoint,
   type AgentEvent,
   type AppServerBackendKind,
   type AppServerNotification,
@@ -466,6 +465,9 @@ export function buildAcpCapabilities(
     toolUse: true,
     approvalRequests: true,
     multiDirectoryThreads: true,
+    ...(agentCapabilities?.conversationRewind
+      ? { threadRewind: { files: false, undo: false } }
+      : {}),
   };
 }
 
@@ -1682,24 +1684,16 @@ export class AcpBackendAdapter {
     }
   }
 
-  async listRewindPoints(
-    backend: AcpBackendId,
-    sessionId: string,
-  ): Promise<AcpThreadRewindPoint[]> {
-    const session = this.requireIdleGrokRewindSession(backend, sessionId);
-    const client = await this.getClientForSession(backend, sessionId);
-    if (!client.listRewindPoints) {
-      throw new Error("Installed Grok Build does not support conversation rewind");
-    }
-    await client.ensureSession(session);
-    return await client.listRewindPoints(sessionId);
-  }
-
-  async rewindSession(params: {
+  /**
+   * Rewinds a Grok session to before a transcript user message. Grok counts
+   * its rewind points by prompt, so the message resolves to its ordinal among
+   * the session's user messages, which must be a point Grok still offers.
+   */
+  async rewindSessionBeforeMessage(params: {
     backend: AcpBackendId;
     sessionId: string;
-    targetPromptIndex: number;
-  }): Promise<{ promptText?: string; updatedAt: number }> {
+    messageId: string;
+  }): Promise<{ promptText?: string; targetPromptIndex: number; updatedAt: number }> {
     const session = this.requireIdleGrokRewindSession(
       params.backend,
       params.sessionId,
@@ -1708,14 +1702,26 @@ export class AcpBackendAdapter {
       params.backend,
       params.sessionId,
     );
-    if (!client.rewindSession) {
+    if (!client.listRewindPoints || !client.rewindSession) {
       throw new Error("Installed Grok Build does not support conversation rewind");
     }
     await client.ensureSession(session);
-    return await client.rewindSession({
+    const replay = await this.readReplay(params.backend, params.sessionId);
+    const targetPromptIndex = replay.entries
+      .filter((entry) => entry.type === "message" && entry.role === "user")
+      .findIndex((entry) => entry.id === params.messageId);
+    if (targetPromptIndex < 0) {
+      throw new Error("This prompt is no longer in the Grok conversation");
+    }
+    const points = await client.listRewindPoints(params.sessionId);
+    if (!points.some((point) => point.promptIndex === targetPromptIndex)) {
+      throw new Error("Grok cannot rewind to before this prompt");
+    }
+    const result = await client.rewindSession({
       sessionId: params.sessionId,
-      targetPromptIndex: params.targetPromptIndex,
+      targetPromptIndex,
     });
+    return { ...result, targetPromptIndex };
   }
 
   async steerSession(params: {

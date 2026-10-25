@@ -2752,6 +2752,13 @@ type AcpRewindSession = (params: {
   targetPromptIndex: number;
 }) => Promise<{ promptText?: string; updatedAt: number }>;
 
+type AcpListRewindPoints = (sessionId: string) => Promise<Array<{
+  promptIndex: number;
+  fileSnapshotCount: number;
+  hasFileChanges: boolean;
+  promptPreview: string;
+}>>;
+
 type AcpConfigureWorkflowBudget = (params: {
   sessionId: string;
   defaultAgentBudget?: number;
@@ -2794,6 +2801,7 @@ function createKimiAcpRegistry(options?: {
   steerSession?: AcpSteerSession;
   supportsTurnSteering?: boolean;
   rewindSession?: AcpRewindSession;
+  listRewindPoints?: AcpListRewindPoints;
   configureWorkflowBudget?: AcpConfigureWorkflowBudget;
   offersThoughtLevel?: (sessionId: string, level: string) => boolean;
 }) {
@@ -2817,6 +2825,9 @@ function createKimiAcpRegistry(options?: {
   const rewindSession: AcpRewindSession =
     options?.rewindSession
     ?? vi.fn(async () => ({ promptText: "Breakfast", updatedAt: 3000 }));
+  const listRewindPoints: AcpListRewindPoints =
+    options?.listRewindPoints
+    ?? vi.fn(async () => []);
   const configureWorkflowBudget: AcpConfigureWorkflowBudget =
     options?.configureWorkflowBudget
     ?? vi.fn(async () => ({ defaultAgentBudget: 128, maxAgentBudget: 1024 }));
@@ -2884,6 +2895,7 @@ function createKimiAcpRegistry(options?: {
     steerSession,
     supportsTurnSteering: () => options?.supportsTurnSteering === true,
     rewindSession,
+    listRewindPoints,
     configureWorkflowBudget,
     ...(options?.offersThoughtLevel
       ? { offersThoughtLevel: options.offersThoughtLevel }
@@ -28630,55 +28642,87 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("serializes destructive Grok rewind with the next ACP prompt start", async () => {
+  function grokRewindFixture(options?: {
+    listRewindPoints?: AcpListRewindPoints;
+    rewindSession?: AcpRewindSession;
+  }) {
     const backend = "acp:grok" as AcpBackendId;
+    const sessionId = "grok-session-rewind-lock";
     const sessions: AcpSessionMetadata[] = [{
       backendId: backend,
-      sessionId: "grok-session-rewind-lock",
+      sessionId,
       title: "Breakfast poem",
       createdAt: 1000,
       updatedAt: 2000,
       executionMode: "default",
       status: "idle",
     }];
-    const rewindDeferred = createDeferred<{
-      promptText?: string;
-      updatedAt: number;
-    }>();
-    const events: AgentEvent[] = [];
+    const replay: AppServerThreadReplay = {
+      entries: [
+        { type: "message", id: "prompt-1", role: "user", text: "Write a breakfast poem" },
+        { type: "message", id: "reply-1", role: "assistant", text: "Toast at dawn" },
+        { type: "message", id: "prompt-2", role: "user", text: "Make it rhyme" },
+        { type: "message", id: "reply-2", role: "assistant", text: "Toast, the most" },
+      ],
+      messages: [],
+      pagination: { supportsPagination: false, hasPreviousPage: false },
+      threadStatus: "idle",
+    };
     const installedAgent = {
       ...createKimiAgentRecord(backend),
       registryId: "grok",
       name: "Grok Build",
     };
-    const rewindSession = vi.fn(async () => await rewindDeferred.promise);
-    const { registry, startPrompt } = createKimiAcpRegistry({
+    const listRewindPoints = options?.listRewindPoints ?? vi.fn(async () => [
+      { promptIndex: 0, fileSnapshotCount: 0, hasFileChanges: false, promptPreview: "Write" },
+      { promptIndex: 1, fileSnapshotCount: 0, hasFileChanges: false, promptPreview: "Make" },
+    ]);
+    const harness = createKimiAcpRegistry({
       acpBackendId: backend,
       installedAgent,
       sessions,
+      replay,
+      listRewindPoints,
+      ...(options?.rewindSession ? { rewindSession: options.rewindSession } : {}),
+    });
+    return { ...harness, backend, listRewindPoints, sessionId };
+  }
+
+  it("serializes destructive Grok rewind with the next ACP prompt start", async () => {
+    const rewindDeferred = createDeferred<{
+      promptText?: string;
+      updatedAt: number;
+    }>();
+    const events: AgentEvent[] = [];
+    const rewindSession = vi.fn(async () => await rewindDeferred.promise);
+    const { backend, registry, sessionId, startPrompt } = grokRewindFixture({
       rewindSession,
     });
     registry.onEvent((event) => {
       events.push(event);
     });
 
-    const rewind = registry.rewindAcpThread({
+    const rewind = registry.rewindThread({
       backend,
-      threadId: "grok-session-rewind-lock",
-      targetPromptIndex: 0,
+      threadId: sessionId,
+      target: { messageId: "prompt-2" },
+      mode: "conversation",
     });
     await waitForCondition(() => rewindSession.mock.calls.length === 1);
+    expect(rewindSession).toHaveBeenCalledWith({ sessionId, targetPromptIndex: 1 });
     const start = registry.startTurn({
       backend,
-      threadId: "grok-session-rewind-lock",
+      threadId: sessionId,
       input: [{ type: "text", text: "Write another poem" }],
     });
     await flushAsync();
     expect(startPrompt).not.toHaveBeenCalled();
 
-    rewindDeferred.resolve({ promptText: "Breakfast poem", updatedAt: 3000 });
+    rewindDeferred.resolve({ promptText: "Make it rhyme", updatedAt: 3000 });
     await expect(rewind).resolves.toMatchObject({
-      promptText: "Breakfast poem",
+      mode: "conversation",
+      promptText: "Make it rhyme",
+      target: { messageId: "prompt-2" },
       updatedAt: 3000,
     });
     await expect(start).resolves.toMatchObject({ turnId: "turn-1" });
@@ -28687,12 +28731,53 @@ command = "pnpm dev"
       notification: {
         method: "thread/rewound",
         params: {
-          threadId: "grok-session-rewind-lock",
-          targetPromptIndex: 0,
+          threadId: sessionId,
+          targetPromptIndex: 1,
           updatedAt: 3000,
         },
       },
     });
+
+    await registry.close();
+  });
+
+  it("refuses a Grok rewind to a prompt Grok no longer offers", async () => {
+    const rewindSession = vi.fn(async () => ({ updatedAt: 3000 }));
+    const { backend, registry, sessionId } = grokRewindFixture({
+      listRewindPoints: vi.fn(async () => [
+        { promptIndex: 0, fileSnapshotCount: 0, hasFileChanges: false, promptPreview: "Write" },
+      ]),
+      rewindSession,
+    });
+
+    await expect(registry.rewindThread({
+      backend,
+      threadId: sessionId,
+      target: { messageId: "prompt-2" },
+      mode: "conversation",
+    })).rejects.toThrow("Grok cannot rewind to before this prompt");
+    await expect(registry.rewindThread({
+      backend,
+      threadId: sessionId,
+      target: { messageId: "missing" },
+      mode: "conversation",
+    })).rejects.toThrow("This prompt is no longer in the Grok conversation");
+    expect(rewindSession).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("refuses to restore files for providers that rewind conversation only", async () => {
+    const rewindSession = vi.fn(async () => ({ updatedAt: 3000 }));
+    const { backend, registry, sessionId } = grokRewindFixture({ rewindSession });
+
+    await expect(registry.rewindThread({
+      backend,
+      threadId: sessionId,
+      target: { messageId: "prompt-1" },
+      mode: "conversation-and-files",
+    })).rejects.toThrow("cannot restore files");
+    expect(rewindSession).not.toHaveBeenCalled();
 
     await registry.close();
   });
@@ -53768,6 +53853,80 @@ script = "printf setup"
     expect(codexClient.lastCompactThreadParams).toEqual({
       threadId: "thread-1", model: "gpt-6.1-sol", reasoningEffort: "medium",
     });
+
+    await registry.close();
+  });
+
+  it("rewinds a Codex thread to before the target turn and announces it", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume"] },
+    });
+    const revertThread = vi.fn(async () => undefined);
+    Object.assign(codexClient, { revertThread });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const response = await registry.rewindThread({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { messageId: "user-2", turnId: "turn-2" },
+      mode: "conversation",
+    });
+
+    expect(revertThread).toHaveBeenCalledWith({ threadId: "thread-1", beforeTurnId: "turn-2" });
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { messageId: "user-2", turnId: "turn-2" },
+      mode: "conversation",
+      updatedAt: expect.any(Number),
+    });
+    expect(events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/rewound",
+        params: { threadId: "thread-1", updatedAt: response.updatedAt },
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("refuses a Codex rewind without a target turn or while a turn runs", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume", "turn/start"] },
+    });
+    const revertThread = vi.fn(async () => undefined);
+    Object.assign(codexClient, { revertThread });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+
+    await expect(registry.rewindThread({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { messageId: "user-1" },
+      mode: "conversation",
+    })).rejects.toThrow("no Codex turn");
+    await registry.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Keep going" }],
+    });
+    await expect(registry.rewindThread({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { messageId: "user-1", turnId: "turn-1" },
+      mode: "conversation",
+    })).rejects.toThrow("Wait for the active turn");
+    expect(revertThread).not.toHaveBeenCalled();
 
     await registry.close();
   });

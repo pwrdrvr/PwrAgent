@@ -168,17 +168,36 @@ describe("describeInstalledAcpBackend", () => {
       registryId: "grok",
       name: "Grok",
       version,
-      // Older discovery records persisted the unconditional catalog entry.
+      // Older discovery records persisted the unconditional catalog entry,
+      // from before the catalog had `conversationRewind`.
       capabilities: {
         liveWorkspaceHandoff: false,
         managedReview: true,
         steerTurn: true,
-      },
+      } as AcpInstalledAgentRecord["capabilities"],
     });
     const gemini = describeInstalledAcpBackend(buildInstalledAgent());
 
     expect(grok.capabilities.steerTurn).toBe(false);
     expect(gemini.capabilities.steerTurn).toBe(false);
+  });
+
+  it("advertises conversation-only rewind for Grok, including older records", () => {
+    const grok = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:grok" as AcpBackendId,
+      registryId: "grok",
+      name: "Grok",
+      capabilities: {
+        liveWorkspaceHandoff: false,
+        managedReview: true,
+        steerTurn: false,
+      } as AcpInstalledAgentRecord["capabilities"],
+    });
+    const gemini = describeInstalledAcpBackend(buildInstalledAgent());
+
+    expect(grok.capabilities.threadRewind).toEqual({ files: false, undo: false });
+    expect(gemini.capabilities.threadRewind).toBeUndefined();
   });
 
   it("advertises ACP steering for a manually installed PwrAgent Grok build", () => {

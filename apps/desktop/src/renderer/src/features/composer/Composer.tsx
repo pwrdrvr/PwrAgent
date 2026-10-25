@@ -375,6 +375,18 @@ export type ComposerProps = {
   /** A review this composer submitted was accepted by the backend. */
   onReviewStarted?: (threadKey: string, requestId?: number) => void;
   /**
+   * Puts a prompt back in the composer, as a rewind does with the prompt it
+   * removed. A draft in progress is parked in the recovery journal first.
+   * Each id applies once.
+   */
+  draftRestore?: {
+    id: number;
+    threadId: string;
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    text: string;
+  };
+  /**
    * Focus the input once this composer shows the named thread and can take
    * input. Sent for a mouse click on the thread's sidebar row only; each id
    * focuses once.
@@ -4231,6 +4243,42 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // The helpers are recreated each render; the id guard opens once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.reviewRequest, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
+  const appliedDraftRestoreId = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const restore = props.draftRestore;
+    if (!restore || appliedDraftRestoreId.current === restore.id) {
+      return;
+    }
+    if (
+      restore.threadId !== props.thread?.id
+      || restore.backend !== props.thread?.source
+      || requestOwner(restore.federationTarget ?? readRendererFederationTarget()) !== composerRequestOwner
+    ) {
+      appliedDraftRestoreId.current = restore.id;
+      return;
+    }
+    if (props.disabled) return;
+    appliedDraftRestoreId.current = restore.id;
+    // A draft in progress is parked in the recovery journal, where ArrowUp
+    // brings it back, rather than overwritten by the restored prompt.
+    abandonComposerDraftSnapshot(composerScopeKey);
+    const hydrated = hydrateComposerDraft(
+      restore.text,
+      props.skills,
+      threadLinks,
+      pullRequestLinks,
+    );
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: hydrated.draft,
+      expectedSkillTokensSignature: getComposerSkillTokensSignature(hydrated.skillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    setComposerDraftFromCanonical(restore.text);
+    requestAnimationFrame(() => inputRef.current?.focus());
+    // The helpers are recreated each render; the id guard applies once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.draftRestore, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);

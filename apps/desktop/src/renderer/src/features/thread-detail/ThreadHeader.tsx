@@ -296,7 +296,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           {props.rewind ? (
             <button
               aria-disabled={props.rewind.disabledReason ? true : undefined}
-              aria-label={props.rewind.disabledReason ?? "Rewind Grok conversation"}
+              aria-label={props.rewind.disabledReason ?? "Rewind to before the last prompt"}
               className={`thread-header__rewind-toggle${
                 props.rewind.disabledReason ? " is-disabled" : ""
               }`}
@@ -311,13 +311,13 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               onFocus={(event) =>
                 rewindTooltip.show(
                   event.currentTarget,
-                  props.rewind?.disabledReason ?? "Rewind conversation",
+                  props.rewind?.disabledReason ?? "Rewind to before the last prompt",
                 )
               }
               onMouseEnter={(event) =>
                 rewindTooltip.show(
                   event.currentTarget,
-                  props.rewind?.disabledReason ?? "Rewind conversation",
+                  props.rewind?.disabledReason ?? "Rewind to before the last prompt",
                 )
               }
               onMouseLeave={rewindTooltip.hide}

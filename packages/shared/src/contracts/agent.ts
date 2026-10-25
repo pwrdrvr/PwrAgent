@@ -1,5 +1,4 @@
 import type {
-  AcpBackendId,
   AppServerBackendKind,
   AppServerMcpElicitationResponse,
   AppServerNotification,
@@ -662,30 +661,33 @@ export type AcpThreadRewindPoint = {
   promptPreview: string;
 };
 
-export type ListAcpThreadRewindPointsRequest = {
-  backend: AcpBackendId;
+export type ThreadRewindMode = "conversation" | "conversation-and-files";
+
+/**
+ * The prompt a rewind goes back before. The rewind removes that prompt's turn
+ * and every later turn. `messageId` is the transcript user message; `turnId`
+ * is its turn when the provider reports one.
+ */
+export type ThreadRewindTarget = {
+  messageId: string;
+  turnId?: string;
+};
+
+export type RewindThreadRequest = {
+  backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
+  target: ThreadRewindTarget;
+  mode: ThreadRewindMode;
 };
 
-export type ListAcpThreadRewindPointsResponse = {
-  backend: AcpBackendId;
+export type RewindThreadResponse = {
+  backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  rewindPoints: AcpThreadRewindPoint[];
-};
-
-export type RewindAcpThreadRequest = {
-  backend: AcpBackendId;
-  federationTarget?: FederationTarget;
-  threadId: ThreadIdentifier;
-  targetPromptIndex: number;
-};
-
-export type RewindAcpThreadResponse = {
-  backend: AcpBackendId;
-  threadId: ThreadIdentifier;
-  targetPromptIndex: number;
+  target: ThreadRewindTarget;
+  mode: ThreadRewindMode;
   updatedAt: number;
+  /** The removed prompt's text, when the provider returns it. */
   promptText?: string;
 };
 

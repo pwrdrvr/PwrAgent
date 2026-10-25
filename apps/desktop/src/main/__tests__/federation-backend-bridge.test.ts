@@ -4006,6 +4006,13 @@ describe("federation backend bridge", () => {
         threadId: "thread-1",
         turnId: "compact-1",
       })),
+      rewindThread: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "thread-1",
+        target: { messageId: "user-2", turnId: "turn-2" },
+        mode: "conversation" as const,
+        updatedAt: 1_500,
+      })),
       listMcpConnections: vi.fn(),
       readThreadMcpConnections: vi.fn(),
       setThreadMcpConnections: vi.fn(),
@@ -4150,6 +4157,24 @@ describe("federation backend bridge", () => {
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
       envelope: {
+        id: "rewind-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.rewindThread,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          target: { messageId: "user-2", turnId: "turn-2" },
+          mode: "conversation",
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_005,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
         id: "mcp-inventory-request",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.listThreadMcpServers,
@@ -4261,6 +4286,12 @@ describe("federation backend bridge", () => {
       backend: "codex",
       threadId: "thread-1",
     });
+    expect(backend.rewindThread).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { messageId: "user-2", turnId: "turn-2" },
+      mode: "conversation",
+    });
     expect(backend.listThreadMcpServers).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -4314,6 +4345,11 @@ describe("federation backend bridge", () => {
         kind: "response",
         requestId: "compact-request",
         result: { turnId: "compact-1" },
+      },
+      {
+        kind: "response",
+        requestId: "rewind-request",
+        result: { mode: "conversation", updatedAt: 1_500 },
       },
       {
         kind: "response",
@@ -4434,6 +4470,7 @@ describe("federation backend bridge", () => {
         cancelScheduledThreadAction: vi.fn(),
         sendScheduledThreadActionNow: vi.fn(),
         compactThread: vi.fn(),
+        rewindThread: vi.fn(),
         listMcpConnections: vi.fn(),
       readThreadMcpConnections: vi.fn(),
       setThreadMcpConnections: vi.fn(),

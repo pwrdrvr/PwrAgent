@@ -134,10 +134,8 @@ import { refreshReviewBaseBranch } from "./review-base-branch";
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
   type AcpBackendId,
-  type ListAcpThreadRewindPointsRequest,
-  type ListAcpThreadRewindPointsResponse,
-  type RewindAcpThreadRequest,
-  type RewindAcpThreadResponse,
+  type RewindThreadRequest,
+  type RewindThreadResponse,
   anchorTurnUsageEntries,
   buildPrependPinRank,
   buildThreadMarkdownLink,
@@ -1120,6 +1118,10 @@ type BackendClient = {
     threadId: string;
     turnId: string;
   }): Promise<{ threadId: string; turnId: string }>;
+  revertThread?(params: {
+    threadId: string;
+    beforeTurnId: string;
+  }): Promise<void>;
   compactThread?(params: {
     threadId: string;
     model?: string;
@@ -2407,7 +2409,11 @@ function sanitizeAcpRuntimeForExecutionMode(params: {
     : runtime;
 }
 
-function buildCapabilities(methods: string[], backend: AppServerBackendKind): BackendCapabilities {
+function buildCapabilities(
+  methods: string[],
+  backend: AppServerBackendKind,
+  serverVersion?: string,
+): BackendCapabilities {
   const supported = new Set(methods);
   const assumeCodexAppServerSurface = backend === "codex" && methods.length === 0;
   const reviewCodexSubAgent = supported.has("review/start") || assumeCodexAppServerSurface;
@@ -2453,6 +2459,11 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     toolUse: false,
     approvalRequests: true,
     multiDirectoryThreads: backend === "codex",
+    // Codex reverts conversation history only and discards the removed turns.
+    ...(backend === "codex"
+      && resolveCodexProtocolCompatibility(serverVersion).supportsThreadRevert
+      ? { threadRewind: { files: false, undo: false } }
+      : {}),
   };
 }
 
@@ -22712,45 +22723,47 @@ export class DesktopBackendRegistry {
     }
   }
 
-  async listAcpThreadRewindPoints(
-    request: ListAcpThreadRewindPointsRequest,
-  ): Promise<ListAcpThreadRewindPointsResponse> {
-    const rewindPoints = await this.acpBackend.listRewindPoints(
-      request.backend,
-      request.threadId,
-    );
-    return {
-      backend: request.backend,
-      threadId: request.threadId,
-      rewindPoints,
-    };
-  }
-
-  async rewindAcpThread(
-    request: RewindAcpThreadRequest,
-  ): Promise<RewindAcpThreadResponse> {
-    const result = await this.acpSessionPromptLocks.run(
-      executionModeQueueKey(request.backend, request.threadId),
-      async () => {
-        this.assertIdleAcpThreadMutation({
-          backend: request.backend,
-          threadId: request.threadId,
-          action: "rewinding",
-        });
-        return await this.acpBackend.rewindSession({
-          backend: request.backend,
-          sessionId: request.threadId,
-          targetPromptIndex: request.targetPromptIndex,
-        });
-      },
-    );
+  async rewindThread(
+    request: RewindThreadRequest,
+  ): Promise<RewindThreadResponse> {
+    if (request.mode !== "conversation") {
+      throw new Error("This provider cannot restore files when it rewinds a thread");
+    }
+    let result: { promptText?: string; targetPromptIndex?: number; updatedAt: number };
+    if (isAcpBackendId(request.backend)) {
+      const backend = request.backend;
+      result = await this.acpSessionPromptLocks.run(
+        executionModeQueueKey(backend, request.threadId),
+        async () => {
+          this.assertIdleAcpThreadMutation({
+            backend,
+            threadId: request.threadId,
+            action: "rewinding",
+          });
+          return await this.acpBackend.rewindSessionBeforeMessage({
+            backend,
+            sessionId: request.threadId,
+            messageId: request.target.messageId,
+          });
+        },
+      );
+    } else if (request.backend === "codex") {
+      result = await this.revertCodexThread({
+        threadId: request.threadId,
+        beforeTurnId: request.target.turnId,
+      });
+    } else {
+      throw new Error("Rewind is not available for this provider");
+    }
     await this.emit({
       backend: request.backend,
       notification: {
         method: "thread/rewound",
         params: {
           threadId: request.threadId,
-          targetPromptIndex: request.targetPromptIndex,
+          ...(result.targetPromptIndex !== undefined
+            ? { targetPromptIndex: result.targetPromptIndex }
+            : {}),
           updatedAt: result.updatedAt,
         },
       },
@@ -22758,10 +22771,46 @@ export class DesktopBackendRegistry {
     return {
       backend: request.backend,
       threadId: request.threadId,
-      targetPromptIndex: request.targetPromptIndex,
+      target: request.target,
+      mode: request.mode,
       updatedAt: result.updatedAt,
       ...(result.promptText ? { promptText: result.promptText } : {}),
     };
+  }
+
+  private async revertCodexThread(params: {
+    threadId: string;
+    beforeTurnId?: string;
+  }): Promise<{ updatedAt: number }> {
+    if (!params.beforeTurnId) {
+      throw new Error("This prompt has no Codex turn to rewind to");
+    }
+    if (this.closed) throw new Error("Desktop backend registry is closed");
+    await this.codexInvalidIdRecoveryBarrier;
+    await this.assertThreadNotLocked("codex", params.threadId);
+    if (
+      this.reservedCodexStartThreadIds.has(params.threadId)
+      || this.threadHasActiveTurn(params.threadId, "codex")
+      || this.codexRetryableOperations.has(params.threadId)
+    ) {
+      throw new Error("Wait for the active turn to finish before rewinding");
+    }
+    const beforeTurnId = params.beforeTurnId;
+    // Hold the start reservation so no turn or compaction begins on this
+    // thread while Codex replaces its history.
+    this.reservedCodexStartThreadIds.add(params.threadId);
+    try {
+      await this.withCodexThreadClient(params.threadId, async (client) => {
+        if (!client.revertThread) {
+          throw new Error("Installed Codex does not support thread rewind");
+        }
+        await client.revertThread({ threadId: params.threadId, beforeTurnId });
+      });
+    } finally {
+      this.reservedCodexStartThreadIds.delete(params.threadId);
+      this.maybeDrainCodexInvalidIdRecoveries();
+    }
+    return { updatedAt: Date.now() };
   }
 
   async configureGrokWorkflowBudget(
@@ -30364,7 +30413,7 @@ export class DesktopBackendRegistry {
     const { lastKnownGood, provider } = this.readCodexProvider();
     const available = Boolean(lastKnownGood?.selectedCommand);
     const methods: string[] = [];
-    const capabilities = buildCapabilities(methods, "codex");
+    const capabilities = buildCapabilities(methods, "codex", lastKnownGood?.selectedVersion);
     // Only claim discovery is outstanding when it actually is. A discovery
     // that ran and selected nothing records no `validation.error`, so this
     // default used to describe a completed discovery as incomplete — and the
@@ -30747,7 +30796,15 @@ export class DesktopBackendRegistry {
         unavailableReason || modelRefreshError || "Codex unavailable",
       );
     }
-    const capabilities = buildCapabilities(methods, "codex");
+    // Today's `initialize` carries no `serverInfo` at all; the App Server's
+    // version reaches us inside the `userAgent` it does report. The resolved
+    // executable stands in when this connection never handshook.
+    const serverVersion =
+      successful[0]?.serverInfo?.version
+      ?? codexVersionFromUserAgent(successful[0]?.userAgent)
+      ?? runtimeCommand?.version
+      ?? lastKnownGood?.selectedVersion;
+    const capabilities = buildCapabilities(methods, "codex", serverVersion);
 
     // Runtime metadata still applies after an account transition. Its older
     // account and quota replies must not replace the refreshed account state.
@@ -30783,14 +30840,7 @@ export class DesktopBackendRegistry {
             : undefined,
       rateLimits,
       serverName: successful[0]?.serverInfo?.name,
-      // Today's `initialize` carries no `serverInfo` at all; the App Server's
-      // version reaches us inside the `userAgent` it does report. The resolved
-      // executable stands in when this connection never handshook.
-      serverVersion:
-        successful[0]?.serverInfo?.version
-        ?? codexVersionFromUserAgent(successful[0]?.userAgent)
-        ?? runtimeCommand?.version
-        ?? lastKnownGood?.selectedVersion,
+      serverVersion,
       runtimeBuild: codexRuntimeBuild(
         runtimeCommand?.command ?? lastKnownGood?.selectedCommand,
       ),
