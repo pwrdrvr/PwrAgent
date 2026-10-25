@@ -624,6 +624,21 @@ it("shows Claude limits without requesting or displaying the Codex account pace"
   expect(readUsageActivity).not.toHaveBeenCalled();
 });
 
+it("names a remote thread's owner on the Usage Activity card's spend", async () => {
+  const now = new Date(2026, 9, 25, 15, 8).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: now, rateLimits: [], truncated: false,
+    limitObservation: { observedAt: now, accountKey: "acct", planType: "pro", limits: [{ name: "Weekly limit",
+      windowKey: "secondary" as const, windowMinutes: 10_080, resetAt: now + 6 * 24 * 3_600_000, usedPercent: 22 }] } }));
+  const thread = { id: "thread-1", source: "codex" as const, federation: {
+    ref: { backend: "codex" as const, threadId: "thread-1", target: { scope: "remote" as const, instanceId: "owner" } },
+    instanceLabel: "Studio / default",
+  } } as NonNullable<ComponentProps<typeof PricingPanel>["thread"]>;
+  const view = render(<PricingPanel thread={thread} desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} />);
+  await waitFor(() => expect(view.container.querySelector(".usage-pace-card__foot"))
+    .toHaveTextContent("Studio / default $0.00 API-eq."));
+});
+
 it("keeps the Usage Activity card on ACP threads", () => {
   const { pricing } = buildTokenMiserPricingFixture();
   const thread = { id: "acp-thread", source: "acp:gemini" as const, updatedAt: 1 };

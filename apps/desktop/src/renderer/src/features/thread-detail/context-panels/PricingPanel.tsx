@@ -203,7 +203,7 @@ export const PricingPanel = memo(function PricingPanel(props: PricingPanelProps)
   const { id, source, federation, updatedAt } = props.thread ?? {};
   const familyTarget = federation?.ref.target ?? readRendererFederationTarget();
   const familyOwner = familyTarget?.scope === "remote" ? familyTarget : undefined;
-  const ownerLabel = familyOwner ? federation?.instanceLabel ?? readRendererFederationLabel() ?? "Owner" : undefined;
+  const ownerLabel = familyOwner ? federation?.instanceLabel ?? readRendererFederationLabel() ?? "Remote machine" : undefined;
   const snapshotVersion = federation?.ref.target.scope === "remote" && !federation.capabilities?.includes("event_subscriptions") ? updatedAt : undefined;
   const gateSource = useMemo<PricingGateSource>(() => ({
     desktopApi: props.desktopApi,
