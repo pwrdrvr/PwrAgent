@@ -6,8 +6,10 @@
 #   scripts/sandboxer/verify.sh setup        Node from .nvmrc, pnpm, E2E packages, pnpm install
 #   scripts/sandboxer/verify.sh unit [args]  pnpm test [args]
 #   scripts/sandboxer/verify.sh lint         pnpm lint (the CI Lint job; stops at the first failure)
-#   scripts/sandboxer/verify.sh e2e [args]   Linux desktop E2E under Xvfb + Openbox, as CI runs it
-#   scripts/sandboxer/verify.sh all          setup, lint, unit, e2e; runs every step
+#   scripts/sandboxer/verify.sh e2e [--lanes N] [args]
+#                                            Linux desktop E2E under Xvfb + Openbox, as CI runs it;
+#                                            --lanes splits it into N concurrent shards
+#   scripts/sandboxer/verify.sh all          setup, lint, unit, e2e --lanes 2; runs every step
 #
 # Each step writes .local/sandboxer/<step>.log and appends
 # "<step> exit=<code> secs=<seconds>" to .local/sandboxer/status.
@@ -49,6 +51,48 @@ e2e() {
     bash .github/scripts/run-linux-desktop-e2e.sh "$@"
 }
 
+# Playwright writes test-results/ and .local/ at fixed paths in the checkout,
+# so each lane after the first runs in a sibling worktree at the same commit.
+# Each lane has its own Xvfb display.
+e2e_lanes() {
+  local lanes="$1"
+  shift
+  if ! [[ "$lanes" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--lanes needs a positive number" >&2
+    return 2
+  fi
+  if ((lanes == 1)); then
+    e2e "$@"
+    return
+  fi
+  local head
+  head="$(git rev-parse HEAD)" || return 1
+  local lane dir
+  local pids=()
+  for ((lane = 1; lane <= lanes; lane++)); do
+    dir="$repo_root"
+    if ((lane > 1)); then
+      dir="$repo_root-lane$lane"
+      if [[ ! -d "$dir" ]]; then
+        git worktree add -q --detach "$dir" "$head" || return 1
+      fi
+      git -C "$dir" checkout -q --detach "$head" || return 1
+      (cd "$dir" && pnpm install --frozen-lockfile) \
+        > "$out_dir/e2e-lane$lane-setup.log" 2>&1 || return 1
+    fi
+    (cd "$dir" && e2e --shard="$lane/$lanes" "$@") > "$out_dir/e2e-lane$lane.log" 2>&1 &
+    pids+=("$!")
+  done
+  local failed=0
+  for ((lane = 1; lane <= lanes; lane++)); do
+    wait "${pids[lane - 1]}"
+    local code=$?
+    echo "lane $lane/$lanes exit=$code log=$out_dir/e2e-lane$lane.log"
+    ((code == 0)) || failed=1
+  done
+  return "$failed"
+}
+
 run_step() {
   local step="$1"
   shift
@@ -59,7 +103,16 @@ run_step() {
     setup) setup ;;
     unit) pnpm test "$@" ;;
     lint) pnpm lint ;;
-    e2e) e2e "$@" ;;
+    e2e)
+      if [[ "${1:-}" == "--lanes" ]]; then
+        shift
+        local lanes="${1:-}"
+        [[ $# -gt 0 ]] && shift
+        e2e_lanes "$lanes" "$@"
+      else
+        e2e "$@"
+      fi
+      ;;
   esac > "$log" 2>&1
   local code=$?
   echo "$step exit=$code secs=$(( $(date +%s) - start ))" | tee -a "$out_dir/status"
@@ -78,12 +131,12 @@ case "$step" in
     failed=0
     run_step lint || failed=1
     run_step unit || failed=1
-    run_step e2e || failed=1
+    run_step e2e --lanes 2 || failed=1
     echo "all exit=$failed" | tee -a "$out_dir/status"
     exit "$failed"
     ;;
   *)
-    sed -n '2,15p' "$0" >&2
+    sed -n '2,16p' "$0" >&2
     exit 2
     ;;
 esac
