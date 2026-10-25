@@ -74,6 +74,12 @@ export function ComposerDropdown(props: {
   busy?: boolean;
   compact?: boolean;
   disabled?: boolean;
+  /**
+   * A command drawn under the list, outside the listbox, such as the
+   * Environment chip's "Edit environments…". It is a button, not an option,
+   * so choosing it never changes the value.
+   */
+  footerAction?: { label: string; icon?: ComposerDropdownIcon; onSelect: () => void };
   icon?: ComposerDropdownIcon;
   /**
    * Draw the trigger as the icon alone, in a toggle-sized circle. The label
@@ -351,7 +357,34 @@ export function ComposerDropdown(props: {
       {/* The listbox carries its own name: the trigger's label does not reach
           it through `aria-controls`, and an unnamed one is an axe
           `aria-input-field-name` failure on every dropdown in the app. */}
-      {open ? (
+      {open && props.footerAction ? (
+        <div
+          className={`composer-dropdown__menu composer-dropdown__menu--with-footer${
+            props.menuPlacement === "below" ? " composer-dropdown__menu--below" : ""
+          }`}
+          style={props.menuPlacement === "below" ? belowMenuPosition : undefined}
+        >
+          <div aria-label={props.ariaLabel} id={listboxId} role="listbox">
+            {renderOptions(props.options, listboxId, false)}
+          </div>
+          <div className="composer-dropdown__footer">
+            <button
+              className="composer-dropdown__option composer-dropdown__footer-action"
+              type="button"
+              onClick={() => {
+                hide();
+                closeMenu();
+                props.footerAction?.onSelect();
+              }}
+            >
+              <span aria-hidden="true" className="composer-dropdown__check">
+                {props.footerAction.icon ? <props.footerAction.icon size={12} /> : null}
+              </span>
+              <span className="composer-dropdown__option-label">{props.footerAction.label}</span>
+            </button>
+          </div>
+        </div>
+      ) : open ? (
         <div
           aria-label={props.ariaLabel}
           className={`composer-dropdown__menu${

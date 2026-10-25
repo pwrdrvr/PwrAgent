@@ -2804,6 +2804,7 @@ function createKimiAcpRegistry(options?: {
   listRewindPoints?: AcpListRewindPoints;
   configureWorkflowBudget?: AcpConfigureWorkflowBudget;
   offersThoughtLevel?: (sessionId: string, level: string) => boolean;
+  resolvePassSetupVariablesToAgents?: () => boolean;
 }) {
   const acpBackendId =
     options?.installedAgent?.backendId
@@ -2927,6 +2928,9 @@ function createKimiAcpRegistry(options?: {
     createScratchProjectDirectory:
       options?.createScratchProjectDirectory
       ?? (async () => "/Users/test/.pwragent/projects/acp-scratch"),
+    ...(options?.resolvePassSetupVariablesToAgents
+      ? { resolvePassSetupVariablesToAgents: options.resolvePassSetupVariablesToAgents }
+      : {}),
   });
   return {
     acpBackendId,
@@ -65948,6 +65952,66 @@ command = "pnpm dev"
     }
   });
 
+  it("runs Claude launchpad setup but withholds its variables when the profile turns them off", async () => {
+    const { root, repoPath, worktreePath } = await environmentProject("pwragent-claude-launchpad-env-off-");
+    const commandRunner = vi.fn(async () => ({
+      durationMs: 5,
+      exitCode: 0,
+      output: "installed",
+      shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" },
+    }));
+    const optionsSeen: ClaudeOptions[] = [];
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      codexEnvironmentCommandRunner: commandRunner,
+      overlayStore: createOverlayStoreMock(),
+      pdfToolMcpServer: null,
+      threadTitleGenerationService: null,
+      resolvePassSetupVariablesToAgents: () => false,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+      claudeBackendOptions: claudeFixtureOptions(root, optionsSeen),
+    });
+    try {
+      await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${repoPath}`,
+        launchpad: {
+          directoryKey: `directory:${repoPath}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: repoPath,
+          backend: "claude",
+          executionMode: "default",
+          prompt: "Fix the recorder crash.",
+          workMode: "worktree",
+          codexEnvironmentId: "pwragent",
+          codexEnvironmentExecutionTarget: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(commandRunner).toHaveBeenCalledWith(expect.objectContaining({
+        cwd: worktreePath,
+        command: "pnpm install",
+      }));
+      await vi.waitFor(() => expect(optionsSeen).toHaveLength(1));
+      expect(optionsSeen[0]!.cwd).toBe(worktreePath);
+      // Claude starts with PwrAgent's own environment, not the captured one.
+      expect(optionsSeen[0]!.env?.NVM_DIR).not.toBe("/fixture/nvm");
+      expect(optionsSeen[0]!.env?.PATH).not.toBe("/fixture/node/bin:/usr/bin");
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("starts an ACP launchpad thread's first turn with its environment's shell variables", async () => {
     const { root, repoPath, worktreePath } = await environmentProject("pwragent-acp-launchpad-env-");
     const commandRunner = vi.fn(async () => ({
@@ -65999,6 +66063,64 @@ command = "pnpm dev"
         acpBackendId,
         response.threadId,
         { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" },
+      );
+      expect(startPrompt).toHaveBeenCalled();
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
+  it("runs ACP launchpad setup but starts the session without its variables when the profile turns them off", async () => {
+    const { root, repoPath, worktreePath } = await environmentProject("pwragent-acp-launchpad-env-off-");
+    const commandRunner = vi.fn(async () => ({
+      durationMs: 5,
+      exitCode: 0,
+      output: "installed",
+      shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin", NVM_DIR: "/fixture/nvm" },
+    }));
+    const { acpBackendId, registry, startPrompt } = createKimiAcpRegistry({
+      codexEnvironmentCommandRunner: commandRunner,
+      resolvePassSetupVariablesToAgents: () => false,
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace: vi.fn(async () => ({
+          cwd: worktreePath,
+          repositoryPath: repoPath,
+          workMode: "worktree" as const,
+        })),
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      },
+    });
+    const prepareSessionEnvironment = vi
+      .spyOn(
+        (registry as unknown as { acpBackend: { prepareSessionEnvironment: (...args: unknown[]) => Promise<void> } }).acpBackend,
+        "prepareSessionEnvironment",
+      )
+      .mockResolvedValue(undefined);
+    try {
+      const response = await registry.materializeDirectoryLaunchpad({
+        directoryKey: `directory:${repoPath}`,
+        launchpad: {
+          directoryKey: `directory:${repoPath}`,
+          directoryKind: "directory",
+          directoryLabel: "repo",
+          directoryPath: repoPath,
+          backend: acpBackendId,
+          executionMode: "default",
+          prompt: "Fix the recorder crash.",
+          workMode: "worktree",
+          codexEnvironmentId: "pwragent",
+          codexEnvironmentExecutionTarget: "local",
+          createdAt: 1_000,
+          updatedAt: 2_000,
+        },
+      });
+
+      expect(commandRunner).toHaveBeenCalledWith(expect.objectContaining({ cwd: worktreePath }));
+      expect(prepareSessionEnvironment).toHaveBeenCalledWith(
+        acpBackendId,
+        response.threadId,
+        undefined,
       );
       expect(startPrompt).toHaveBeenCalled();
     } finally {

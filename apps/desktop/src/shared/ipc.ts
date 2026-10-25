@@ -258,6 +258,14 @@ export const AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL =
   "agent:stop-codex-environment-action";
 export const AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL =
   "agent:set-codex-thread-environment";
+export const CODEX_ENVIRONMENT_EDITOR_LIST_PROJECTS_CHANNEL =
+  "codex-environment-editor:list-projects";
+export const CODEX_ENVIRONMENT_EDITOR_LIST_FILES_CHANNEL =
+  "codex-environment-editor:list-files";
+export const CODEX_ENVIRONMENT_EDITOR_READ_CHANNEL =
+  "codex-environment-editor:read";
+export const CODEX_ENVIRONMENT_EDITOR_SAVE_CHANNEL =
+  "codex-environment-editor:save";
 export const AGENT_SUBMIT_SERVER_REQUEST_CHANNEL = "agent:submit-server-request";
 export const AGENT_TRUST_CODEX_PROJECT_CHANNEL = "agent:trust-codex-project";
 export const AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL =

@@ -754,6 +754,7 @@ import {
   withCodexEnvironmentOptions,
 } from "./codex-environment-config";
 import { describeCreatedThreadEnvironment } from "./created-thread-environment";
+import { setupVariablesForAgent } from "./agent-setup-variables";
 import {
   applyLocalCodexEnvironmentSelection,
   attachDetachedCommandThreadId,
@@ -9659,6 +9660,8 @@ export class DesktopBackendRegistry {
     DesktopProviderModelDefaults
   >;
   private readonly resolveHelperModelSettingsFn: () => DesktopHelperModelSettings;
+  /** `general.pass_setup_variables_to_agents`, read at each agent start. */
+  private readonly resolvePassSetupVariablesToAgentsFn: () => boolean;
   private readonly resolveUsageAccountGroupsFn: () => Record<string, string>;
   private readonly resolveProviderThreadModelMigrationsFn: () => Record<
     string,
@@ -9799,6 +9802,7 @@ export class DesktopBackendRegistry {
       DesktopProviderModelDefaults
     >;
     resolveHelperModelSettings?: () => DesktopHelperModelSettings;
+    resolvePassSetupVariablesToAgents?: () => boolean;
     resolveUsageAccountGroups?: () => Record<string, string>;
     resolveProviderThreadModelMigrations?: () => Record<
       string,
@@ -9962,6 +9966,9 @@ export class DesktopBackendRegistry {
     this.resolveHelperModelSettingsFn =
       options?.resolveHelperModelSettings ??
       (() => settingsService?.resolveHelperModelSettings?.() ?? { helpers: {} });
+    this.resolvePassSetupVariablesToAgentsFn =
+      options?.resolvePassSetupVariablesToAgents ??
+      (() => settingsService?.resolvePassSetupVariablesToAgents?.() ?? true);
     this.resolveUsageAccountGroupsFn = options?.resolveUsageAccountGroups
       ?? (() => settingsService?.resolveUsageAccountGroups?.() ?? {});
     this.resolveProviderThreadModelMigrationsFn =
@@ -10169,6 +10176,7 @@ export class DesktopBackendRegistry {
           : undefined,
         clientVersion,
         readHelperModelSettings: () => this.resolveHelperModelSettingsFn(),
+        passSetupVariablesToAgents: () => this.resolvePassSetupVariablesToAgentsFn(),
         resolveUsageAccountKey: () => this.captureUsageAccount("codex"),
         resolvePwrdrvrTokenMiserActivationNonce: () =>
           this.resolveTokenMiserEnabledFn()
@@ -14125,9 +14133,10 @@ export class DesktopBackendRegistry {
     await this.acpBackend.prepareSessionEnvironment(
       params.backend,
       params.threadId,
-      overlay?.codexEnvironmentRuntime?.executionTarget === "local"
-        ? overlay.codexEnvironmentRuntime.shellEnvironment
-        : undefined,
+      setupVariablesForAgent(
+        overlay?.codexEnvironmentRuntime,
+        this.resolvePassSetupVariablesToAgentsFn(),
+      ),
     );
     const client = await this.acpBackend.getClientForSession(
       params.backend,
@@ -20392,9 +20401,10 @@ export class DesktopBackendRegistry {
           mcpServers,
           // Directories attached to the thread, so Claude can work in them too.
           attachedDirectories: overlay?.extraLinkedDirectories,
-          shellEnvironment: overlay?.codexEnvironmentRuntime?.executionTarget === "local"
-            ? overlay.codexEnvironmentRuntime.shellEnvironment
-            : undefined,
+          shellEnvironment: setupVariablesForAgent(
+            overlay?.codexEnvironmentRuntime,
+            this.resolvePassSetupVariablesToAgentsFn(),
+          ),
           onSessionClosed: revokeConnections,
         });
         await this.persistThreadMessageOrigin({ backend: "claude", threadId: params.threadId,

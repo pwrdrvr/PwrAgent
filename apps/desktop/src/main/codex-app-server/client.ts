@@ -148,6 +148,7 @@ import {
   type ThreadDirectoryEnrichment,
   type DirectoryEnrichmentCaller,
 } from "../app-server/thread-directory-enricher";
+import { withAgentSetupVariablePolicy } from "../app-server/agent-setup-variables";
 import {
   isCodexReviewPromptText,
   isPwrAgentInlineReviewPrompt,
@@ -325,6 +326,13 @@ type CodexClientOptions = {
   resolveCommand?: StdioJsonRpcTransportOptions["resolveCommand"];
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   bundledToolsDirectory?: StdioJsonRpcTransportOptions["bundledToolsDirectory"];
+  /**
+   * Whether a thread's agent gets the shell variables its environment's
+   * setup captured. Read at every thread start, fork, resume and turn. When
+   * it answers false, the variables stay out of Codex's config; setup and
+   * Run actions are unaffected.
+   */
+  passSetupVariablesToAgents?: () => boolean;
   directoryResolver?: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
@@ -9983,12 +9991,26 @@ export class CodexAppServerClient {
     };
   }
 
+  /** Drops the captured setup variables when the profile withholds them. */
+  private withAgentEnvironmentPolicy<
+    T extends { codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime },
+  >(params: T): T {
+    const runtime = withAgentSetupVariablePolicy(
+      params.codexEnvironmentRuntime,
+      this.options.passSetupVariablesToAgents?.() ?? true,
+    );
+    return runtime === params.codexEnvironmentRuntime
+      ? params
+      : { ...params, codexEnvironmentRuntime: runtime };
+  }
+
   /**
    * A stock runtime can reuse its acknowledged catalog across owned realtime
    * handoffs. First-turn rollout bookkeeping is separate from catalog proof.
    * Unknown turns, mutations and reset revoke admission; drift needs refresh.
    */
   async prepareFreshNativeVoiceThread(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
     const admitted = this.admittedNativeVoiceThreads.get(params.threadId);
     const fresh = admitted ?? this.freshNativeVoiceThreads.get(params.threadId);
@@ -10040,6 +10062,7 @@ export class CodexAppServerClient {
   }
 
   private async prepareIdleNativeVoiceThread(params: Parameters<typeof buildThreadResumePayloads>[0]): Promise<void> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
     this.freshNativeVoiceThreads.delete(params.threadId);
     this.admittedNativeVoiceThreads.delete(params.threadId);
@@ -10114,6 +10137,7 @@ export class CodexAppServerClient {
     threadSource?: CodexThreadStartParams["threadSource"];
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
   }): Promise<{ threadId: string }> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
 
     const startPayload = buildThreadStartPayload({
@@ -10163,6 +10187,7 @@ export class CodexAppServerClient {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadForkParams["config"];
   }): Promise<{ threadId: string }> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
 
     const result = await requestWithFallbacks({
@@ -10219,6 +10244,7 @@ export class CodexAppServerClient {
     threadId: string;
     turnId: string;
   }> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
     const connection = this.createThreadOperationConnection();
 
@@ -10807,6 +10833,7 @@ export class CodexAppServerClient {
     config?: CodexThreadStartParams["config"];
     dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
     const connection = this.createThreadOperationConnection();
 

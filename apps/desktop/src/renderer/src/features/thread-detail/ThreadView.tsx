@@ -797,6 +797,8 @@ export type ThreadViewProps = {
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
   composerDisabled: boolean;
   workspaceActionsBlocked?: boolean;
+  /** Opens Settings → Environments on a workspace, from the Environment chip. */
+  onEditEnvironments?: (workspacePath: string) => void;
   launchpadConfigurationReady?: boolean;
   launchpadConfigurationError?: string;
   onReloadLaunchpadConfiguration?: () => Promise<void>;
@@ -3904,6 +3906,7 @@ export function ThreadView(props: ThreadViewProps) {
           onFocusRequestHandled: props.onComposerFocusRequestHandled,
           onReviewStarted: handleReviewStarted,
           workspaceActionsBlocked: props.workspaceActionsBlocked,
+          onEditEnvironments: props.onEditEnvironments,
           contextWindow: props.contextWindow,
           onActiveTurnIdChange: props.onActiveTurnIdChange,
           onPendingStatusChange: props.onPendingStatusChange,

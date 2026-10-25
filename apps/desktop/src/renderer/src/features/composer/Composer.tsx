@@ -563,6 +563,10 @@ export type ComposerProps = {
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
   workspaceActionsBlocked?: boolean;
+  /** Opens Settings → Environments on this workspace. Omitted, or for a
+   *  thread whose environment runs on another machine, the Environment menu
+   *  offers no "Edit environments…". */
+  onEditEnvironments?: (workspacePath: string) => void;
   /** Selected-thread Thinking state from useThreadSessionState. Do not rebuild it here. */
   threadBusy?: boolean;
   updatingExecutionMode?: ThreadExecutionMode;
@@ -11123,6 +11127,24 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : hasAttachedPullRequest
         ? "Auto-fix PR — handle new CI failures or merge conflicts"
         : "Auto-fix PR — starts when a PR for this workspace is linked";
+  // Environments are edited on the machine that runs them, so a peer's
+  // thread or a remote execution workspace gets no editor here.
+  const environmentEditPath =
+    !props.onEditEnvironments
+    || filesystemFederationTarget?.scope === "remote"
+    || props.thread?.codexEnvironmentRuntime?.executionTarget === "remote"
+      ? undefined
+      : props.launchpad
+        ? props.launchpad.directoryPath
+        : props.thread?.codexEnvironmentRuntime?.cwd ?? threadWorkspace?.sourcePath;
+  const onEditEnvironments = props.onEditEnvironments;
+  const environmentFooterAction = environmentEditPath && onEditEnvironments
+    ? {
+        label: "Edit environments…",
+        icon: PencilIcon,
+        onSelect: () => onEditEnvironments(environmentEditPath),
+      }
+    : undefined;
   const workspaceOpenPath = props.workspaceActionsBlocked ? undefined : getComposerWorkspaceOpenPath({
     directory: props.directory,
     launchpad: props.launchpad,
@@ -14511,6 +14533,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 }
                 compact
                 disabled={launchpadSubmitting}
+                footerAction={environmentFooterAction}
                 icon={FileCodeIcon}
                 value={props.launchpad.codexEnvironmentId ?? ""}
                 options={[
@@ -14541,6 +14564,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 busy={threadEnvironmentBusy}
                 compact
                 disabled={!props.desktopApi?.setCodexThreadEnvironment}
+                footerAction={environmentFooterAction}
                 icon={FileCodeIcon}
                 value={threadEnvironmentValue}
                 options={[

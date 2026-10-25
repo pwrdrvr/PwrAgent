@@ -12014,6 +12014,362 @@ a.button {
   font-weight: 600;
 }
 
+/* Settings → Environments. Rows, banners and the save bar read the same
+   tokens as `.settings-index__row` and `.settings-panel--warning`. */
+.env-file-list,
+.env-actions,
+.env-unreadable,
+.env-script {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.env-actions {
+  padding: 14px 18px;
+}
+
+.env-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.env-explainer {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.env-explainer b,
+.env-banner__body b,
+.env-savebar__text b {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.env-code {
+  min-height: 116px;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.env-code--short {
+  min-height: 52px;
+}
+
+.env-scripthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.env-tab-badge,
+.env-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.env-chip--err {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.env-action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.env-action {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.env-action.is-editing {
+  align-items: start;
+  border-color: var(--accent-border);
+}
+
+.env-action.is-invalid {
+  border-color: var(--danger-border);
+}
+
+.env-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+}
+
+.env-action__main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.env-action.is-editing .env-action__main {
+  padding-top: 4px;
+}
+
+.env-action__titleline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.env-action__name {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.env-action__cmd {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.env-action__tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.env-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.env-iconbtn:hover,
+.env-iconbtn[aria-expanded="true"] {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.env-iconbtn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.env-menu {
+  position: relative;
+}
+
+.env-menu__list {
+  top: calc(100% + 4px);
+}
+
+.todo-split__item.env-menu__danger {
+  color: var(--danger-text);
+}
+
+.env-action__edit {
+  grid-column: 2 / 4;
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px 14px;
+  padding-top: 6px;
+}
+
+.env-action__edit > label,
+.env-action__label {
+  padding-top: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.env-action__edit > .settings-segmented,
+.env-action__edit > .settings-input--inline,
+.env-action__edit > .env-icon-select {
+  justify-self: start;
+}
+
+.env-action__edit .env-icon-select {
+  width: 180px;
+}
+
+.env-link {
+  color: var(--accent-bright);
+  text-underline-offset: 2px;
+}
+
+/* Settings buttons inherit the 16px root size; these sit among 12–13px
+   rows and fields. */
+.env-file-list .button,
+.env-actions .button,
+.env-script .button,
+.env-banner .button,
+.env-savebar .button {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.env-project-select {
+  max-width: 420px;
+}
+
+.env-action__wide {
+  grid-column: 1 / -1;
+}
+
+.env-action > .env-action__wide {
+  grid-column: 2 / 4;
+}
+
+.env-action__foot {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.env-action__foot .spacer {
+  flex: 1;
+}
+
+.env-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.env-button--small {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.env-button--danger {
+  color: var(--danger-text);
+}
+
+/* A neutral frame; the tone is on the bold lead-in (status tone belongs on
+   labels, not panels). The warn variant uses the accent, which follows each
+   theme's own hue. */
+.env-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.env-banner:not(.env-banner--warn) .env-banner__body > b {
+  color: var(--danger-text);
+}
+
+.env-banner--warn {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.env-banner__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.env-banner__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.env-excerpt {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Stays in view at the bottom of the scrolling pane while edits wait. */
+.env-savebar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 -8px 18px var(--shadow-tint-faint);
+}
+
+.env-savebar__text {
+  flex: 1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.env-savebar__text.is-err {
+  color: var(--danger-text);
+}
+
 /* Card panel — eyebrow + title + optional chip in head, body below. */
 .settings-panel {
   overflow: hidden;
@@ -40769,6 +41125,21 @@ button.composer__subthread-source-parent:hover {
   border-radius: 8px;
   background: var(--bg-panel-elevated);
   box-shadow: var(--shadow-popover);
+}
+
+/* A command under the list (Edit environments…), outside the listbox. */
+.composer-dropdown__footer {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.composer-dropdown__footer .composer-dropdown__footer-action {
+  color: var(--text-secondary);
+}
+
+.composer-dropdown__footer-action .composer-dropdown__check {
+  color: var(--text-muted);
 }
 
 /* Opens downward from a trigger near the top of the window; the component

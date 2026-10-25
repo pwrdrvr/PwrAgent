@@ -954,6 +954,12 @@ export class DesktopSettingsService {
           config.general?.pinnedThreadsOnTop,
           true,
         ),
+        // Default on: agents then run the same toolchain the setup script
+        // selected. The variables are filtered for secrets when captured.
+        passSetupVariablesToAgents: this.resolveConfigBoolean(
+          config.general?.passSetupVariablesToAgents,
+          true,
+        ),
         // Default off for both: an SVG's scripts are untrusted code, so the
         // lightbox shows the static preview and asks before running them
         // until the operator says otherwise.
@@ -1857,6 +1863,11 @@ export class DesktopSettingsService {
 
   readGeneralConfig(): ConfigDomainMap["general"]["settings"] {
     return this.configStore.read("general").settings;
+  }
+
+  /** Whether agents receive the variables an environment's setup captured. */
+  resolvePassSetupVariablesToAgents(): boolean {
+    return this.readGeneralConfig()?.passSetupVariablesToAgents ?? true;
   }
 
   readExperimentalConfig(): ConfigDomainMap["experimental"] {
