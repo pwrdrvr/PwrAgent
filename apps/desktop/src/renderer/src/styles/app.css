@@ -11336,8 +11336,8 @@ a.button {
 /* ----------------------------------------------------------------
    SETTINGS NAV — full-height left column. Mirrors the main app
    screen's `.sidebar` pattern: brand at the top in `__masthead`
-   (with 80px stoplight gutter and drag region), then Exit Settings,
-   GENERAL group label, and the section list.
+   (with 80px stoplight gutter and drag region), then Exit Settings
+   and the section list, headed by category.
    ---------------------------------------------------------------- */
 
 .settings-nav {
@@ -11422,7 +11422,7 @@ a.button {
 
 /* Exit Settings — plain text-style link styled like a quiet nav row.
    No border, no panel background — matches the design's
-   `pa-settings__exit`. Sits above the GENERAL group label. */
+   `pa-settings__exit`. Sits above the first category heading. */
 /* Baseline, not centre, and the arrow is why.
    `←` (U+2190) is in none of the fonts this app asks for by name, nothing here
    declares an `@font-face`, so which font draws it is whatever the OS
@@ -11709,8 +11709,7 @@ a.button {
    first character. The explicit width is load-bearing and must track the
    margin: a form control shrink-to-fits even as a block-level flex box,
    so `width: auto` collapses this row to its label instead of filling
-   the clip. (`.settings-nav__divider` needs no such width — an `<hr>` is
-   a plain flex item and stretches.) */
+   the clip. */
 .settings-nav__subbutton {
   display: flex;
   align-items: center;
@@ -11794,13 +11793,21 @@ a.button {
   text-transform: uppercase;
 }
 
-/* Margins alone set the width — a flex item stretches across the
-   column, so the inset is stated once. */
-.settings-nav__divider {
-  height: 1px;
-  margin: 6px 8px;
-  border: 0;
-  background: var(--border-subtle);
+/* One labeled category of sections (`role="group"`, named by its
+   `.settings-nav__group-label`). It runs the lane's own 2px row gap, so
+   grouping moves no row against its neighbours. A later category adds 4px:
+   with the lane gap and the label's 8px top margin that is 14px of air over
+   its heading, against 2px between rows, so a break reads as a break. The
+   first adds nothing, keeping the first heading 12px below Exit Settings,
+   the rhythm `.settings-nav__new` matches in Automations. */
+.settings-nav__category {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav__category + .settings-nav__category {
+  margin-top: 4px;
 }
 
 .settings-content {

@@ -1653,15 +1653,16 @@ describe("SettingsScreen", () => {
     expect(nav).not.toBeNull();
     expect(lane).not.toBeNull();
 
-    // Every scrolling part, not just the rows: the collapsible sublists and
-    // the divider come out of the same map, and a refactor that hoisted the
-    // sublists out — to stop the scroller clipping them, say — would leave a
-    // rows-only assertion green while group children stopped scrolling with
-    // their parent row.
+    // Every scrolling part, not just the rows: the category groups, their
+    // headings and the collapsible sublists come out of the same map, and a
+    // refactor that hoisted the sublists out — to stop the scroller clipping
+    // them, say — would leave a rows-only assertion green while group
+    // children stopped scrolling with their parent row.
     for (const selector of [
       ".settings-nav__row",
       ".settings-nav__sublist",
-      ".settings-nav__divider",
+      ".settings-nav__category",
+      ".settings-nav__group-label",
     ]) {
       const members = [...container.querySelectorAll(selector)];
       expect(members.length).toBeGreaterThan(0);
@@ -1676,6 +1677,63 @@ describe("SettingsScreen", () => {
       expect(chrome).not.toBeNull();
       expect(chrome?.parentElement).toBe(nav);
     }
+  });
+
+  it("lists every section once, under a category heading that is not a control", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+
+    // Each category is a group named by its heading, in nav order, holding
+    // its section rows in order, none listed twice. A section left out of
+    // every category fails typecheck in SettingsScreen.tsx instead.
+    const categories = within(nav).getAllByRole("group").map((group) => [
+      document.getElementById(group.getAttribute("aria-labelledby") ?? "")
+        ?.textContent,
+      [...group.querySelectorAll(".settings-nav__button")].map(
+        (button) => button.textContent,
+      ),
+    ]);
+    expect(categories).toEqual([
+      ["App", ["General", "Keyboard", "Updates", "Applications", "Profiles"]],
+      ["Agents", ["AI Providers", "Plugins", "Usage & Pricing"]],
+      ["Projects", ["Git", "Worktrees", "Environments"]],
+      ["Threads", ["Thread Management", "Archived Threads"]],
+      ["Remote Access", ["Messaging", "Access Control", "Federation"]],
+      ["Support", ["Experimental", "Troubleshooting", "About"]],
+    ]);
+    expect(within(nav).getByRole("group", { name: "Agents" })).toContainElement(
+      within(nav).getByRole("button", { name: "AI Providers" }),
+    );
+
+    // A heading is plain text: no route, no Tab stop, nothing to activate.
+    const headings = [...nav.querySelectorAll(".settings-nav__group-label")];
+    expect(headings).toHaveLength(6);
+    for (const heading of headings) {
+      expect(heading.tagName).toBe("P");
+      expect(heading).not.toHaveAttribute("tabindex");
+      expect(heading.closest("button, a")).toBeNull();
+    }
+  });
+
+  it("opens a deep-linked section inside its category with the page marker", () => {
+    render(
+      <SettingsScreen
+        initialSection="environments"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const projects = within(
+      screen.getByRole("navigation", { name: "Settings sections" }),
+    ).getByRole("group", { name: "Projects" });
+    expect(
+      within(projects).getByRole("button", { name: "Environments" }),
+    ).toHaveAttribute("aria-current", "page");
   });
 
   it("switches sections and saves settings", async () => {
@@ -9398,7 +9456,7 @@ describe("SettingsScreen", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
-  it("keeps Exit, the General label, and section order in the settings nav", () => {
+  it("keeps Exit, the category headings, and section order in the settings nav", () => {
     // Regression lock for the design contract: Exit Settings lives
     // INSIDE `.settings-nav` (left column), not inside the title-bar
     // strip. Two prior attempts in this branch put it in the strip
@@ -9415,9 +9473,17 @@ describe("SettingsScreen", () => {
     expect(exit.closest(".settings-titlebar")).toBeNull();
     expect(exit).toHaveClass("settings-nav__exit");
 
-    const label = document.querySelector(".settings-nav__group-label");
-    expect(label).not.toBeNull();
-    expect(label?.textContent?.toLowerCase()).toBe("general");
+    const labels = Array.from(
+      document.querySelectorAll(".settings-nav__group-label"),
+    ).map((label) => label.textContent);
+    expect(labels).toEqual([
+      "App",
+      "Agents",
+      "Projects",
+      "Threads",
+      "Remote Access",
+      "Support",
+    ]);
 
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     // Caret toggles sit beside the group labels and sub-items live in
@@ -9431,18 +9497,18 @@ describe("SettingsScreen", () => {
       "Keyboard",
       "Updates",
       "Applications",
-      "Plugins",
       "Profiles",
       "AI Providers",
+      "Plugins",
       "Usage & Pricing",
-      "Messaging",
-      "Federation",
-      "Access Control",
       "Git",
       "Worktrees",
       "Environments",
       "Thread Management",
       "Archived Threads",
+      "Messaging",
+      "Access Control",
+      "Federation",
       "Experimental",
       "Troubleshooting",
       "About",
@@ -9455,11 +9521,11 @@ describe("SettingsScreen", () => {
       nav.querySelectorAll(".settings-nav__caret"),
     ).map((button) => button.getAttribute("aria-label"));
     expect(caretLabels).toEqual([
-      "Expand Plugins",
       "Expand AI Providers",
+      "Expand Plugins",
+      "Expand Git",
       "Expand Messaging",
       "Expand Federation",
-      "Expand Git",
     ]);
     // Collapsed sublists keep their children out of the accessibility
     // tree — MCP Gateway only appears once Plugins expands.
@@ -9472,9 +9538,8 @@ describe("SettingsScreen", () => {
     expect(
       within(nav).getByRole("button", { name: "MCP Gateway" }),
     ).toBeInTheDocument();
-    expect(within(nav).getByRole("separator")).toHaveClass(
-      "settings-nav__divider",
-    );
+    // Category headings replaced the one unlabeled divider.
+    expect(within(nav).queryByRole("separator")).not.toBeInTheDocument();
   });
 
   /**

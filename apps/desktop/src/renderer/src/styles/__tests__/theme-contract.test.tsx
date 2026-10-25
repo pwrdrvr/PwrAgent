@@ -2555,9 +2555,9 @@ describe("Tangerine Terminal theme contract", () => {
     expect(lane).toContain("min-height: 0;");
 
     // Same bleed-then-re-inset move as `.sidebar-list--dense`, and it must
-    // land back on the nav's OWN inset — Exit and the GENERAL label sit
-    // outside the scroller, so a lane that re-insets to anything else moves
-    // every row sideways relative to the chrome above it. Derive both from
+    // land back on the nav's OWN inset — Exit sits outside the scroller,
+    // so a lane that re-insets to anything else moves every row sideways
+    // relative to the chrome above it. Derive both from
     // the nav's padding rather than repeating the number: this rule was
     // written against the pre-#1901 16px nav and went stale the same week
     // that padding moved to the 8px lane.
@@ -2573,6 +2573,11 @@ describe("Tangerine Terminal theme contract", () => {
     const navGap = nav.match(/\n\s*gap:\s*(\d+px);/)?.[1];
     expect(navGap).toBeDefined();
     expect(lane).toContain(`gap: ${navGap};`);
+    // The rows sit one level deeper again, inside a category group, which
+    // restates the same gap so grouping moves no row against its neighbour.
+    expect(extractRuleBody(css, ".settings-nav__category")).toContain(
+      `gap: ${navGap};`,
+    );
 
     // Without a reserved gutter every row would jump sideways the moment a
     // classic scrollbar appeared (Windows and Linux always; macOS under
