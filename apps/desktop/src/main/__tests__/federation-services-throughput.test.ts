@@ -159,7 +159,7 @@ async function measure(params: { path: Path; rttMs: number; direction: Direction
   // Warm up past stream open and the first round trips.
   await new Promise<void>((resolve) => setTimeout(resolve, Math.max(300, params.rttMs * 4)));
   const session = PROFILE ? new Session() : undefined;
-  if (session) { session.connect(); await session.post("Profiler.enable"); await session.post("Profiler.start"); }
+  if (session) { session.connect(); await session.post("Profiler.enable"); await session.post("Profiler.setSamplingInterval", { interval: 100 }); await session.post("Profiler.start"); }
   const threadsBefore = PROFILE ? threadTicks() : undefined;
   const start = { ...counts, frames: fixture.frames(), cpu: process.cpuUsage(), at: performance.now() };
   await new Promise<void>((resolve) => setTimeout(resolve, params.seconds * 1000));
@@ -203,7 +203,7 @@ function threadTickDelta(before: Map<string, number>, after: Map<string, number>
 }
 
 type CpuProfile = { nodes: Array<{ id: number; callFrame: { functionName: string; url: string; lineNumber: number } }>; samples?: number[]; timeDeltas?: number[] };
-/** Self time by function, as a share of all samples, for the 20 hottest. */
+/** Self time by function, as a share of busy (non-idle) samples, for the 25 hottest. */
 function topSelfTime(profile: CpuProfile): string[] {
   const byId = new Map(profile.nodes.map((node) => [node.id, node]));
   const totals = new Map<string, number>();
@@ -212,10 +212,11 @@ function topSelfTime(profile: CpuProfile): string[] {
     const delta = profile.timeDeltas?.[index] ?? 0;
     const frame = byId.get(id)?.callFrame;
     const key = frame ? `${frame.functionName || "(anon)"} ${frame.url.split("/").slice(-2).join("/")}:${frame.lineNumber + 1}` : "?";
+    if (frame?.functionName === "(idle)") return;
     totals.set(key, (totals.get(key) ?? 0) + delta);
     all += delta;
   });
-  return [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20)
+  return [...totals.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25)
     .map(([key, time]) => `${(100 * time / all).toFixed(1)}% ${key}`);
 }
 
