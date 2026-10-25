@@ -96,9 +96,69 @@ export type McpConnectionId = string;
 /** The connections PwrAgent synthesizes rather than stores. */
 export type BuiltInMcpConnectionId = (typeof MCP_CONNECTION_IDS)[number];
 
-export type McpConnectionAuthMode = "oauth" | "local_cli";
+/**
+ * How PwrAgent holds a connection's access. `none` is a local command: there
+ * is nothing to sign in to, and any secrets it needs travel as environment
+ * variables PwrAgent stores encrypted.
+ */
+export type McpConnectionAuthMode = "oauth" | "local_cli" | "none";
 
-export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit" | "sandboxer";
+/** `stdio` is an operator-configured local command (an MCP stdio server). */
+export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit" | "sandboxer" | "stdio";
+
+/** One environment variable a local command server receives. */
+export type McpStdioEnvironmentEntry = {
+  name: string;
+  /**
+   * The plain value. Always absent for a secret: secret values stay in the
+   * main process and are never sent to a window or a federation peer.
+   */
+  value?: string;
+  secret: boolean;
+};
+
+/**
+ * What PwrAgent launches for a local command connection.
+ *
+ * There is no shell anywhere in this: `command` is executed directly with
+ * `args` as its argv, so nothing in either is expanded or reparsed.
+ */
+export type McpStdioLaunch = {
+  /** Absolute path, resolved when the operator tested or saved it. */
+  command: string;
+  args: string[];
+  /** Absent means the operator's home folder. */
+  cwd?: string;
+  env: McpStdioEnvironmentEntry[];
+};
+
+export type McpStdioEnvironmentInput = {
+  name: string;
+  secret: boolean;
+  /**
+   * The value to store. For a secret that already has a stored value,
+   * omitting this keeps the stored one, so an edit never has to read it back.
+   */
+  value?: string;
+};
+
+/** A local command as the Settings form submits it. */
+export type McpStdioLaunchInput = {
+  /** A program name, resolved on the login-shell PATH, or a full path. */
+  command: string;
+  args: string[];
+  cwd?: string;
+  env: McpStdioEnvironmentInput[];
+};
+
+export const MCP_STDIO_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const MCP_STDIO_LIMITS = {
+  args: 128,
+  argLength: 4_096,
+  env: 64,
+  envValueLength: 32_768,
+  commandLength: 4_096,
+} as const;
 
 export type McpConnectionRecord = {
   id: McpConnectionId;
@@ -108,6 +168,12 @@ export type McpConnectionRecord = {
   kind: McpConnectionKind;
   /** Only Sandboxer uses this domain role. remote_agent is not implemented. */
   sandboxerRole?: SandboxerRole;
+  /**
+   * The launch of a `stdio` connection. Absent for every other kind, and also
+   * absent on a federation peer's copy: the command, its folder and its
+   * variables belong to the machine that runs it.
+   */
+  stdio?: McpStdioLaunch;
   enabled: boolean;
   /**
    * Whether a new thread starts with this connection already selected.
@@ -164,11 +230,24 @@ export type McpConnectionStatus = McpConnectionRecord & {
   sandboxerAccount?: SandboxerAccountSummary;
   configured: boolean;
   detail?: string;
+  /**
+   * Live copies of a local command running on the owning machine right now:
+   * one per thread session, plus a Settings test while it runs.
+   */
+  localProcesses?: number;
   /** In-memory live catalog health, independent of stored authorization. */
   discovery?: {
     state: "untested" | "ready" | "failed";
     lastSuccessAt?: number;
-    lastFailure?: { at: number; message: string };
+    lastFailure?: {
+      at: number;
+      message: string;
+      /**
+       * A local command's last stderr, with stored secrets masked. Settings
+       * only: it is stripped from a peer's copy and never sent to an agent.
+       */
+      output?: string;
+    };
   };
 };
 
@@ -177,7 +256,14 @@ export type McpConnectionStatus = McpConnectionRecord & {
  * bills (its email and balance) stays on the machine that holds the login.
  */
 export function mcpConnectionsForPeer(connections: McpConnectionStatus[]): McpConnectionStatus[] {
-  return connections.map(({ sandboxerAccount: _account, ...connection }) => connection);
+  // A local command's executable path, folder and variables describe the
+  // owner's machine; a peer only ever needs the name and the switch.
+  return connections.map(({ sandboxerAccount: _account, stdio: _stdio, ...connection }) => {
+    const failure = connection.discovery?.lastFailure;
+    if (!failure?.output) return connection;
+    const { output: _output, ...lastFailure } = failure;
+    return { ...connection, discovery: { ...connection.discovery!, lastFailure } };
+  });
 }
 
 export type ListMcpConnectionsRequest = {
@@ -188,9 +274,14 @@ export type ListMcpConnectionsResponse = {
   connections: McpConnectionStatus[];
 };
 
+/**
+ * Add a connection. Exactly one of `serverUrl` (a remote server that signs in
+ * with OAuth) or `stdio` (a local command) is given.
+ */
 export type CreateMcpConnectionRequest = {
   displayName: string;
-  serverUrl: string;
+  serverUrl?: string;
+  stdio?: McpStdioLaunchInput;
 };
 
 export type CreateMcpConnectionResponse = {
@@ -590,6 +681,36 @@ export function resolveMcpConnectionSetup(
       : build("parked", "Parked", `Turn on Offer to threads, then turn Sandboxer on in a thread's MCP access. ${billing}`, "warn");
   }
 
+  if (connection.kind === "stdio") {
+    // Nothing to sign in to. The one credential-like failure is a stored
+    // secret that encrypted storage can no longer give back.
+    if (!configured) {
+      return build(
+        "login_required",
+        "Secret missing",
+        connection.detail
+          ?? "PwrAgent could not read a stored secret for this server. Edit it and enter the secret again.",
+        "warn",
+      );
+    }
+    if (!connection.enabled) {
+      return build(
+        "parked",
+        "Parked",
+        "Kept, but no thread can start it until you offer it to threads again.",
+        "warn",
+      );
+    }
+    return build(
+      "ready",
+      "Ready",
+      connection.selectForNewThreads
+        ? "Starts on this computer for each thread that turns it on, and every new thread starts with it on."
+        : "Starts on this computer for each thread that turns it on.",
+      "ok",
+    );
+  }
+
   if (localAvailability === "not_installed") {
     return build(
       "app_not_installed",
@@ -704,12 +825,129 @@ export type UpdateMcpConnectionRequest = {
   connectionId: McpConnectionId;
   displayName?: string;
   serverUrl?: string;
+  /** Replaces a local command's launch. Restarts its running copies. */
+  stdio?: McpStdioLaunchInput;
 };
+
+/**
+ * Start a local command once, read its tools, and stop it, before anything is
+ * saved. `connectionId` lets an edit test with that connection's stored
+ * secrets for any secret the form left blank.
+ */
+export type TestMcpStdioConnectionRequest = {
+  stdio: McpStdioLaunchInput;
+  connectionId?: McpConnectionId;
+};
+
+export type McpStdioTestProblem =
+  /** A field is malformed: a bad variable name, an empty command. */
+  | "invalid"
+  /** The program could not be found on the login-shell PATH or at its path. */
+  | "not_found"
+  /** It exists, but this account may not run it. */
+  | "not_executable"
+  /** A stored secret could not be read back from encrypted storage. */
+  | "secret_unavailable"
+  /** The operating system refused to start it. */
+  | "spawn_failed"
+  /** It started and exited before answering the MCP handshake. */
+  | "exited"
+  /** It kept running but never answered as an MCP server. */
+  | "no_handshake"
+  /** The managed gateway is off, so PwrAgent starts no servers. */
+  | "gateway_off";
+
+export type TestMcpStdioConnectionResponse =
+  | {
+      ok: true;
+      /** The absolute path that ran. Saving stores this. */
+      command: string;
+      serverName?: string;
+      serverVersion?: string;
+      toolCount: number;
+      elapsedMs: number;
+    }
+  | {
+      ok: false;
+      problem: McpStdioTestProblem;
+      /** One sentence naming what to do. */
+      message: string;
+      /** The end of the server's own output, with stored secrets masked. */
+      output?: string;
+      command?: string;
+    };
+
+/**
+ * Split a pasted command line into argv, once, for the operator to review.
+ *
+ * Deliberately not a shell: quotes group and backslashes escape, and nothing
+ * else happens -- no `~`, no `$VAR`, no globbing, no operators. The result is
+ * shown in the form before anything runs, and it is what gets stored, so no
+ * later step reparses a string. Returns undefined for an unterminated quote.
+ */
+export function splitMcpCommandLine(text: string): string[] | undefined {
+  const args: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: "'" | "\"" | undefined;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!;
+    if (quote === "'") {
+      if (character === "'") quote = undefined;
+      else current += character;
+      continue;
+    }
+    if (quote === "\"") {
+      if (character === "\"") {
+        quote = undefined;
+      } else if (character === "\\" && (text[index + 1] === "\"" || text[index + 1] === "\\")) {
+        current += text[index + 1];
+        index += 1;
+      } else {
+        current += character;
+      }
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (started) {
+        args.push(current);
+        current = "";
+        started = false;
+      }
+      continue;
+    }
+    started = true;
+    if (character === "'" || character === "\"") {
+      quote = character;
+    } else if (character === "\\" && /[\s'"\\]/.test(text[index + 1] ?? "")) {
+      // Only before a space, a quote or another backslash, so a pasted
+      // Windows path such as C:\Tools\server.exe keeps its separators.
+      current += text[index + 1];
+      index += 1;
+    } else {
+      current += character;
+    }
+  }
+  if (quote) return undefined;
+  if (started) args.push(current);
+  return args;
+}
+
+/**
+ * One display line for a launch: what a connection row shows and Copy copies.
+ * Quotes only what a POSIX shell would split, so the common case reads clean.
+ * Display only -- PwrAgent never runs this string.
+ */
+export function formatMcpCommandLine(launch: Pick<McpStdioLaunch, "command" | "args">): string {
+  return [launch.command, ...launch.args]
+    .map((part) => /^[\w@%+=:,./-]+$/.test(part) ? part : `'${part.replaceAll("'", "'\\''")}'`)
+    .join(" ");
+}
 
 export type McpConnectionProbeProblem =
   /** The text is not a URL PwrAgent can fetch. */
   | "not_a_url"
-  /** Looks like a command line for a stdio server, which the gateway cannot host. */
+  /** Looks like a command line for a stdio server: add it as a local command. */
   | "looks_like_stdio"
   /** Reachable, but it is not an MCP endpoint. */
   | "not_mcp"

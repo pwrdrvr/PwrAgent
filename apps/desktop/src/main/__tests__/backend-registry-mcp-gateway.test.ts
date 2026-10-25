@@ -857,6 +857,33 @@ select_for_new_threads = true
     expect(events).toHaveLength(2);
   });
 
+  it("stops a thread's sessions for the connections it turned off, and only those", async () => {
+    await registry.close();
+    const closeThreadSessions = vi.fn(async () => undefined);
+    registry = new DesktopBackendRegistry({
+      codexClient: {
+        close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
+        onNotification: () => () => {}, onPendingRequest: () => () => {},
+        readConfiguredMcpServerNames: async () => [], startThread: async () => ({ threadId: "headless-1" }),
+        startTurn,
+      } as never,
+      overlayStore: store, isBootstrapMode: () => false,
+      mcpConnectionService: { registerBridge, requestGatewayToolOperation: operation, closeThreadSessions },
+    });
+
+    await registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: ["one", "two"] });
+    expect(closeThreadSessions).not.toHaveBeenCalled();
+    await registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: ["two"] });
+    expect(closeThreadSessions).toHaveBeenCalledExactlyOnceWith("thread-1", ["one"]);
+
+    // A failed release is logged; the operator's selection still lands.
+    closeThreadSessions.mockRejectedValueOnce(new Error("owner went away"));
+    await expect(registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: [] }))
+      .resolves.toBeDefined();
+    expect(closeThreadSessions).toHaveBeenLastCalledWith("thread-1", ["two"]);
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.mcpConnectionIds ?? []).toEqual([]);
+  });
+
   it.each([
     { change: "toggling the backend's own servers", connectionIds: ["one"], providerServersEnabled: false },
     { change: "re-saving the same connections", connectionIds: ["one", " one "], providerServersEnabled: undefined },

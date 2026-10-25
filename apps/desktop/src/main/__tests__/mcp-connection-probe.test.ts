@@ -29,7 +29,7 @@ describe("probeMcpConnectionUrl", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.problem).toBe("looks_like_stdio");
-    expect(result.message).toContain("configured in the agent itself");
+    expect(result.message).toContain("Add it as a local command instead");
   });
 
   it("rejects text that is not a URL at all", async () => {

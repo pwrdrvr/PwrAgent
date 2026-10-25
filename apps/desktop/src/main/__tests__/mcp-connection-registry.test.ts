@@ -492,3 +492,65 @@ updated_at = 456
       .toThrow("cannot contain fragments");
   });
 });
+
+describe("McpConnectionRegistry local commands", () => {
+  const launch = {
+    command: "/opt/fixture/bin/npx",
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/example/My Projects"],
+    cwd: "/home/example",
+    env: [
+      { name: "FIXTURE_ROOT", secret: false, value: "/home/example" },
+      { name: "FIXTURE_TOKEN", secret: true },
+    ],
+  };
+
+  it("stores argv, folder and variables as TOML arrays, and secret names only", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    const created = registry.createStdio({ displayName: "Project files", launch });
+
+    const text = fs.readFileSync(target, "utf8");
+    expect(text).toContain(`transport = "stdio"`);
+    expect(text).toContain(`command = "/opt/fixture/bin/npx"`);
+    expect(text).toContain(`"/home/example/My Projects"`);
+    expect(text).toContain(`env = ["FIXTURE_ROOT=/home/example"]`);
+    expect(text).toContain(`secret_env = ["FIXTURE_TOKEN"]`);
+    expect(text).not.toMatch(/server_url|auth_mode/);
+
+    const reread = new McpConnectionRegistry({ configPath: target }).get(created.id);
+    expect(reread).toMatchObject({ kind: "stdio", authMode: "none", stdio: launch, enabled: true });
+  });
+
+  it("drops a removed folder and variables on edit, and refuses a URL for a command", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    const created = registry.createStdio({ displayName: "Project files", launch });
+
+    const result = registry.update({
+      connectionId: created.id,
+      launch: { command: launch.command, args: [], env: [] },
+    });
+    expect(result.launchChanged).toBe(true);
+    const text = fs.readFileSync(target, "utf8");
+    expect(text).not.toMatch(/^cwd|^env|^secret_env/m);
+    expect(registry.get(created.id)?.stdio).toEqual({ command: launch.command, args: [], env: [] });
+    expect(() => registry.update({ connectionId: created.id, serverUrl: "https://example.com/mcp" }))
+      .toThrow();
+    expect(registry.update({ connectionId: created.id, displayName: "Renamed" }).launchChanged).toBe(false);
+  });
+
+  it("keeps a row from a newer build that it cannot read, byte for byte, through its own writes", () => {
+    const target = configPath();
+    const future = `[[mcp_connections.connections]]
+id = "future"
+display_name = "From a newer build"
+transport = "websocket"
+endpoint = "wss://example.com/mcp"
+`;
+    fs.writeFileSync(target, future);
+    const registry = new McpConnectionRegistry({ configPath: target });
+    expect(registry.get("future")).toBeUndefined();
+    registry.createStdio({ displayName: "Project files", launch });
+    expect(fs.readFileSync(target, "utf8")).toContain(future.trim());
+  });
+});

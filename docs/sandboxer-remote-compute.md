@@ -54,7 +54,8 @@ and still fail its first create. PwrAgent runs neither command. PwrAgent neither
 reads its credential file nor stores OAuth tokens for it. `SANDBOXER_API_KEY`
 is an inherited fallback for headless/CI use. Status and MCP inherit the same
 limited environment, including Sandboxer's endpoint/org overrides. The URL
-connection form continues to reject stdio commands.
+connection form still rejects command lines, and offers to add them as a local
+command instead; see [mcp-stdio-connections.md](mcp-stdio-connections.md).
 
 Each thread gateway session owns a separate `sbx mcp` process. This matters:
 Sandboxer's omitted `sandboxId` means the last sandbox that process used.

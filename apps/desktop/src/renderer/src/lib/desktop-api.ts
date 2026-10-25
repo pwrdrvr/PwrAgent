@@ -121,6 +121,8 @@ import type {
   CreateMcpConnectionResponse,
   UpdateMcpConnectionRequest,
   ProbeMcpConnectionRequest,
+  TestMcpStdioConnectionRequest,
+  TestMcpStdioConnectionResponse,
   ProbeMcpConnectionResponse,
   ListMcpConnectionToolsRequest,
   ListMcpConnectionToolsResponse,
@@ -638,6 +640,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   probeMcpConnection?: (
     request: ProbeMcpConnectionRequest,
   ) => Promise<ProbeMcpConnectionResponse>;
+  /** Start a local command once, read its tools, and stop it. Saves nothing. */
+  testMcpStdioConnection?: (
+    request: TestMcpStdioConnectionRequest,
+  ) => Promise<TestMcpStdioConnectionResponse>;
   setMcpConnectionEnabled?: (
     request: SetMcpConnectionEnabledRequest,
   ) => Promise<MutateMcpConnectionResponse>;

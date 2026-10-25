@@ -7851,6 +7851,7 @@ export type BackendRegistryMcpConnectionService =
       | "createConnection"
       | "probeConnection"
       | "requestGatewayToolOperation"
+      | "closeThreadSessions"
     >
   >;
 
@@ -24150,7 +24151,8 @@ export class DesktopBackendRegistry {
   async setThreadMcpConnections(
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> {
-    const previousRevision = (await this.overlayStore.getThreadOverlayState(request))?.mcpSelectionRevision;
+    const previousState = await this.overlayStore.getThreadOverlayState(request);
+    const previousRevision = previousState?.mcpSelectionRevision;
     // A backend that cannot suppress its own servers must never be left
     // holding an "off" it will ignore. The flag is sticky and its control is
     // hidden for those backends, so a value stored once — by an older build,
@@ -24170,6 +24172,20 @@ export class DesktopBackendRegistry {
     if (state.mcpSelectionRevision !== previousRevision) {
       this.mcpGatewayTools?.cancel(request.backend, request.threadId);
       this.mcpGatewaySessionApprovals.delete(JSON.stringify([request.backend, request.threadId]));
+      // A connection the thread turned off keeps its grant until the agent
+      // reloads its servers, but a local command started for this thread has
+      // no reason to keep running in the meantime.
+      const kept = new Set(state.mcpConnectionIds ?? []);
+      const released = (previousState?.mcpConnectionIds ?? []).filter((id) => !kept.has(id));
+      if (released.length > 0) {
+        await this.mcpConnectionService?.closeThreadSessions?.(request.threadId, released)
+          .catch((error: unknown) => {
+            backendRegistryLog.warn("connection_mcp_session_release_failed", {
+              error: error instanceof Error ? error.message : String(error),
+              threadId: request.threadId,
+            });
+          });
+      }
     }
     const connectionIds = state.mcpConnectionIds ?? [];
     const providerServersEnabled = state.mcpProviderServersEnabled !== false;
