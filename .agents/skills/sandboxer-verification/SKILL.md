@@ -90,11 +90,15 @@ bundle is usually a few KB:
 ```sh
 mkdir -p .local/sandboxer
 git bundle create ".local/sandboxer/$sha.bundle" origin/main..HEAD
-sbx scp ".local/sandboxer/$sha.bundle" "<sandbox-id>:/home/user/pwragent/$sha.bundle"
+base64 < ".local/sandboxer/$sha.bundle" | tr -d '\n'
 ```
 
-`sbx` is the Sandboxer CLI that runs the MCP. If the local shell cannot run
-it, send the bundle with `write_file` and `encoding: "base64"` (5 MiB limit).
+Pass that output to `write_file` with `encoding: "base64"` and the path
+`/home/user/pwragent/<sha>.bundle`. The limit is 5 MiB. A bundle that large
+means the branch is far ahead of `origin/main`; push it and fetch by SHA
+instead.
+
+Drive Sandboxer only through its MCP tools. Do not use the `sbx` CLI.
 
 In the VM, fetch the commit and give it its own worktree. Never change a
 tree while a check runs in it.
@@ -171,9 +175,10 @@ then passed 5 of 5 alone. One four-lane run had none. Rerun an unexpected failur
 before you treat it as caused by the change.
 
 Playwright writes failure context to `apps/desktop/test-results/` in the
-lane's own worktree. Read one
-file with `read_file`, or copy a directory back with `sbx scp --recursive`
-into a `.local/` directory.
+lane's own worktree. Find the files with `exec` and read the text ones, such
+as `error-context.md`, with `read_file`. Pull a screenshot or trace only when
+the text does not explain the failure: base64 output enters the thread
+context.
 
 Report the sandbox ID, the commit, and each status line. Name every failure.
 
@@ -200,25 +205,22 @@ Report the sandbox ID, the commit, and each status line. Name every failure.
   and stops compute billing. Stop and resume each took about 2 s, and the
   worktrees and `node_modules` survived.
 - Keep the stopped sandbox for the thread's next run while its PR is open.
-- Delete the sandbox when its PR merges or closes. The MCP has no delete
-  tool, so use the CLI: `sbx delete <sandbox-id> --yes`. A deleted sandbox
-  cannot come back; a new one from `pwragent-base` takes seconds.
-- Every stopped sandbox keeps snapshots, and snapshots count against the
-  account's storage allowance. Nothing deletes a sandbox when its PR merges.
-  The thread that learns of the merge deletes its own. To find leftovers,
-  match `sbx list --all` entries named `pwragent-*` to branches whose PR
-  `gh pr view <branch> --json state` reports as `MERGED` or `CLOSED`.
-- Do not delete a sandbox that another thread owns.
+- When the PR merges or closes, the sandbox should be deleted: every stopped
+  sandbox keeps snapshots, and snapshots count against the account's storage
+  allowance. The Sandboxer MCP has no delete tool yet. Until it does, stop the
+  sandbox and report it as ready to delete. Use `delete_sandbox` as soon as
+  the tool list includes it.
+- Do not stop or delete a sandbox that another thread owns.
 
 ## 7. Refresh the base snapshot
 
 Refresh `pwragent-base` when `pnpm-lock.yaml`, `.nvmrc`, the Electron
 version, or `verify.sh setup` changes, or when its clone is far behind
-`origin/main`. Saving under an existing name replaces the snapshot, and new
-sandboxes use the new one.
+`origin/main`.
 
-Create a builder sandbox from `pwragent-base` (or a fresh one with the clone
-above), named `pwragent-base-builder`. In the builder:
+The Sandboxer MCP cannot save a named snapshot yet, so this step needs the
+operator. Prepare a builder sandbox from `pwragent-base` (or a fresh one with
+the clone above), named `pwragent-base-builder`. In the builder:
 
 ```sh
 cd ~/pwragent/repo
@@ -229,14 +231,11 @@ rm -rf .local/sandboxer
 git worktree list
 ```
 
-`git worktree list` must show only `~/pwragent/repo`. Then save and delete
-the builder from the local shell:
+`git worktree list` must show only `~/pwragent/repo`. Then ask the operator
+to save the builder as `pwragent-base` and delete it. Saving under an
+existing name replaces the snapshot; new sandboxes use the new one, and a
+save took 3 s.
 
-```sh
-sbx snapshot <builder-id> pwragent-base
-sbx delete <builder-id> --yes
-```
-
-The save took 3 s. Every new sandbox gets a copy of the base, so never leave
-a worktree, a log, or a credential in it. Sandboxer passes the account's
-`GH_TOKEN` to each sandbox when it starts. The snapshot does not store it.
+Every new sandbox gets a copy of the base, so never leave a worktree, a log,
+or a credential in it. Sandboxer passes the account's `GH_TOKEN` to each
+sandbox when it starts. The snapshot does not store it.
