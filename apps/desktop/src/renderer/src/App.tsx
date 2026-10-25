@@ -4,6 +4,7 @@ import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRen
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
 import { XrayMode } from "./features/navigation/XrayBadge";
+import { ThreadRowDensityContext } from "./features/navigation/thread-row-density";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
 import { formatBackendLabel } from "./lib/backend-label";
@@ -402,12 +403,14 @@ export function App() {
   }
 
   return (
-    <DesktopAppShell
-      appearanceController={appearanceController}
-      bootstrapConfig={bootstrapConfig}
-      desktopApi={desktopApi}
-      settings={settings}
-    />
+    <ThreadRowDensityContext.Provider value={appearanceController.appearance.density}>
+      <DesktopAppShell
+        appearanceController={appearanceController}
+        bootstrapConfig={bootstrapConfig}
+        desktopApi={desktopApi}
+        settings={settings}
+      />
+    </ThreadRowDensityContext.Provider>
   );
 }
 

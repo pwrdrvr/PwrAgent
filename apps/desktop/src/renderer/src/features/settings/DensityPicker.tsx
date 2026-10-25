@@ -5,6 +5,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { ThreadRow } from "../navigation/ThreadRow";
+import { ThreadRowDensityContext } from "../navigation/thread-row-density";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { xrayKeyLabel } from "../../lib/xray-mode";
 
@@ -114,17 +115,19 @@ export function DensityPicker(props: {
               className={`density-picker__preview density-preview density-preview--${choice.value}`}
               inert
             >
-              {threads.map((thread) => (
-                <ThreadRow
-                  key={thread.id}
-                  draftThreadKeys={PREVIEW_DRAFT_KEYS}
-                  includeLinkedDirectories
-                  linkedDirectoryMode="kind"
-                  thread={thread}
-                  onOpenContextMenu={noop}
-                  onSelectThread={noop}
-                />
-              ))}
+              <ThreadRowDensityContext.Provider value={choice.value}>
+                {threads.map((thread) => (
+                  <ThreadRow
+                    key={thread.id}
+                    draftThreadKeys={PREVIEW_DRAFT_KEYS}
+                    includeLinkedDirectories
+                    linkedDirectoryMode="kind"
+                    thread={thread}
+                    onOpenContextMenu={noop}
+                    onSelectThread={noop}
+                  />
+                ))}
+              </ThreadRowDensityContext.Provider>
             </div>
             {props.variant === "wizard" ? (
               <>

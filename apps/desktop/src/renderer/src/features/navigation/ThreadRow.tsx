@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -28,6 +29,7 @@ import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { PrChip } from "../pr-status/PrChip";
 import { PrRollupChip } from "../pr-status/PrRollupChip";
+import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import {
@@ -267,6 +269,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // chips render instantly on app launch and stay in sync without any
   // renderer-side cache.
   const prs = props.thread.prs ?? [];
+  const density = useContext(ThreadRowDensityContext);
   // What this row reports back to the list that owns it, so the list can keep
   // one handler for every row instead of a closure per row. See `ThreadRowRef`.
   const rowIdentity: ThreadRowRef = {
@@ -644,11 +647,10 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             ) : null}
             {pinTooltipController.tooltipNode}
 
-            {/* Minimal density's one PR chip. It renders in every density
-                and CSS shows it only in Minimal outside X-ray, so a density
-                change or an X-ray peek re-renders no row. It sits right of
-                the pin so the hover-only pin button never shifts it. */}
-            {prs.length > 0 ? (
+            {/* Minimal density's one PR chip. CSS hides it while X-ray is
+                held, so a peek re-renders no row. It sits right of the pin
+                so the hover-only pin button never shifts it. */}
+            {density === "minimal" && prs.length > 0 ? (
               <PrRollupChip
                 prs={prs}
                 threadTitle={props.thread.title}
