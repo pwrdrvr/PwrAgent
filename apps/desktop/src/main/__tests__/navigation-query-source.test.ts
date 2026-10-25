@@ -244,6 +244,44 @@ describe("owner index source event admission", () => {
 });
 
 it.each([
+  ["Inbox lens", { kind: "lens", lens: "inbox" }],
+  ["selected thread's exact row", { kind: "exact", identities: [{ backend: "codex", threadId: "bound" }] }],
+] as const)("serves a bound thread's bindings on its %s page row", async (_scenario, query) => {
+  // The sidebar row, selected or not, renders from these pages alone; the
+  // selected-detail read feeds the composer and detail pane, never the row.
+  const thread: NavigationThreadSummary = { id: "bound", source: "codex", title: "Electric grid",
+    titleSource: "explicit", linkedDirectories: [], inbox: { inInbox: true } };
+  const registry = {
+    listThreads: async () => [thread],
+    onEvent: () => () => undefined,
+    canonicalizeNavigationThreadPullRequests: async (threads: NavigationThreadSummary[]) => threads,
+    hydrateThreadGitWorkingStates: async (threads: NavigationThreadSummary[]) => threads,
+    withNavigationSubAgentActivity: (threads: NavigationThreadSummary[]) => threads,
+    getNavigationInputRequestThreadKeys: () => new Set<string>(),
+  } as unknown as DesktopBackendRegistry;
+  const original = mocks.store.readNavigationQueryIndex.getMockImplementation();
+  mocks.store.readNavigationQueryIndex.mockImplementation(({ threads }) => ({ threads, directories: [] }));
+  mocks.messaging.findActiveBindings.mockResolvedValue([{
+    id: "binding-1", threadId: "bound", backend: "codex", authorizedActorIds: [], createdAt: 1, updatedAt: 2,
+    channel: { channel: "telegram", conversation: { kind: "topic", id: "topic", title: "Electric grid" } },
+  } as MessagingBindingRecord]);
+  try {
+    const request = { protocol: 2, consumer: "main-sidebar", query } as NavigationQueryRequest;
+    const page = await new NavigationQueryStore().readPage({
+      request, scopeKey: "renderer-local",
+      loadIndex: () => loadLocalNavigationQueryIndex({ registry, callerReason: "renderer-navigation-query" }),
+    });
+    const row = page.entries.find((entry) => entry.row.id === "bound")?.row;
+    expect(row?.messagingBindings).toEqual([expect.objectContaining({
+      bindingId: "binding-1", platform: "telegram", conversationTitle: "Electric grid",
+    })]);
+  } finally {
+    mocks.store.readNavigationQueryIndex.mockImplementation(original!);
+    mocks.messaging.findActiveBindings.mockResolvedValue([]);
+  }
+});
+
+it.each([
   ["title change", ["thread/name/updated"]],
   ["pin action", ["thread/pin/added"]],
   ["mark seen", ["navigation/thread/seen"]],
