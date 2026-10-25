@@ -701,6 +701,26 @@ describe("PrStatusWatchCoordinator merge/close watches", () => {
     expect(prompt).toContain("gh is signed out");
   });
 
+  it("reads fresh details for a second close after a reopen", async () => {
+    const fetchTerminalDetails = vi.fn(async (target: PrSummary) => ({
+      outcome: "closed" as const,
+      prKey: buildPullRequestStatusKey(target),
+      prUrl: target.url,
+      prNumber: target.number,
+      closedAt: new Date(target.closedAt!).toISOString(),
+    }));
+    const harness = createTerminalHarness({ fetchTerminalDetails });
+    const first = pr({ lifecycleState: "closed", closedAt: Date.parse("2026-10-25T10:00:00Z") });
+    const second = pr({ lifecycleState: "closed", closedAt: Date.parse("2026-10-25T14:00:00Z") });
+
+    await harness.coordinator.resolveTerminalDetails(first);
+    await harness.coordinator.resolveTerminalDetails(first);
+    expect(fetchTerminalDetails).toHaveBeenCalledTimes(1);
+    await expect(harness.coordinator.resolveTerminalDetails(second)).resolves
+      .toMatchObject({ closedAt: "2026-10-25T14:00:00.000Z" });
+    expect(fetchTerminalDetails).toHaveBeenCalledTimes(2);
+  });
+
   it("does not wake while background PR polling is off", async () => {
     await registerTerminalWatch();
     const submitTurnIfIdle: Mock<SubmitTurnIfIdle> = vi.fn(async () => ({

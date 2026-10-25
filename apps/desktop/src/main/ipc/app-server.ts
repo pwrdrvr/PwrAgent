@@ -4209,17 +4209,6 @@ class DesktopAppServerService {
     const terminalEvents = requestedEvents.filter((event) =>
       event === "merged" || event === "closed"
     );
-    if (!headSha && ciEvents.length > 0) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_arguments",
-          message:
-            "The attached pull request does not have a known head SHA yet. Check its status once, then create the watch.",
-        },
-      };
-    }
-
     const prAutomation = await this.getThreadPullRequestAutomationStatus({
       backend: args.backend,
       threadId,
@@ -4247,6 +4236,17 @@ class DesktopAppServerService {
             coveredByAutoFix,
             prAutomation,
           },
+        },
+      };
+    }
+    // A terminal PR is answered above without a head; a CI watch needs one.
+    if (!headSha && ciEvents.length > 0) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "The attached pull request does not have a known head SHA yet. Check its status once, then create the watch.",
         },
       };
     }

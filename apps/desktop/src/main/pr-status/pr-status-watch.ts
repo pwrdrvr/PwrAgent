@@ -155,16 +155,18 @@ export class PrStatusWatchCoordinator {
     const prKey = buildPullRequestStatusKey(pr);
     const outcome = terminalOutcomeOf(pr);
     if (!outcome) return undefined;
-    const cached = this.terminalDetailsCache.get(prKey);
-    if (cached?.outcome === outcome) return cached;
+    // A PR can close, reopen, and close again: the time names the event.
+    const cacheKey = JSON.stringify([prKey, outcome, pr.mergedAt ?? pr.closedAt ?? null]);
+    const cached = this.terminalDetailsCache.get(cacheKey);
+    if (cached) return cached;
     if (!this.options.fetchTerminalDetails) {
       return fallbackTerminalDetails(pr, "No forge lookup is configured.");
     }
     try {
       const details = await this.options.fetchTerminalDetails(pr);
       if (details?.outcome === outcome) {
-        this.terminalDetailsCache.delete(prKey);
-        this.terminalDetailsCache.set(prKey, details);
+        this.terminalDetailsCache.delete(cacheKey);
+        this.terminalDetailsCache.set(cacheKey, details);
         while (this.terminalDetailsCache.size > TERMINAL_DETAILS_CACHE_LIMIT) {
           const oldest = this.terminalDetailsCache.keys().next().value;
           if (oldest === undefined) break;

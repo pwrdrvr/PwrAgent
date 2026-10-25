@@ -145,6 +145,7 @@ export function parseGithubTerminalDetails(
   const headSha = node.headRefOid?.trim() || base.headSha;
   if (merged) {
     const { method, evidence } = classifyGithubMergeMethod(node);
+    const mergedAt = isoTimestamp(node.mergedAt) ?? base.mergedAt;
     return {
       ...base,
       ...(baseBranch ? { baseBranch } : {}),
@@ -153,9 +154,7 @@ export function parseGithubTerminalDetails(
       mergeMethodEvidence: evidence,
       ...(node.mergeCommit?.oid ? { mergeCommitSha: node.mergeCommit.oid } : {}),
       ...(node.mergedBy?.login ? { mergedBy: node.mergedBy.login } : {}),
-      ...(isoTimestamp(node.mergedAt) ?? base.mergedAt
-        ? { mergedAt: isoTimestamp(node.mergedAt) ?? base.mergedAt }
-        : {}),
+      ...(mergedAt ? { mergedAt } : {}),
     };
   }
   const closeEvent = node.timelineItems?.nodes?.at(-1);

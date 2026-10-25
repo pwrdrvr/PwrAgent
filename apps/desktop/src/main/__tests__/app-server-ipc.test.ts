@@ -2980,6 +2980,27 @@ describe("app server ipc", () => {
     expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
   });
 
+  it("answers a merged PR with no recorded head instead of asking for one", async () => {
+    const merged = githubPr({
+      number: 1133,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Merged before any poll",
+      state: "passing",
+      lifecycleState: "merged",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1133",
+    });
+    registerThreadPrStatusWatch.mockClear();
+
+    const response = await requestWatchForAttachedPr(merged, ["success", "failure"]);
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { pullRequestWatch: { currentOutcome: "success", terminal: { outcome: "merged" } } },
+    });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+  });
+
   it("registers a CI watch and a separate merge/close watch for one request", async () => {
     const open = githubPr({
       number: 1132,
