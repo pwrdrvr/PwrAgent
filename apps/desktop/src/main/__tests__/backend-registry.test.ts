@@ -22749,26 +22749,31 @@ command = "pnpm dev:messaging"
       ],
     });
 
-    try {
-      await expect(registry.listThreads({ backend: acpBackendId })).resolves.toEqual([
+    const withEnvironment = expect.objectContaining({
+      id: "kimi-session-1",
+      source: acpBackendId,
+      codexEnvironmentOptions: [
         expect.objectContaining({
-          id: "kimi-session-1",
-          source: acpBackendId,
-          codexEnvironmentOptions: [
+          id: "environment",
+          name: "PwrAgnt",
+          actions: [
             expect.objectContaining({
-              id: "environment",
-              name: "PwrAgnt",
-              actions: [
-                expect.objectContaining({
-                  id: "dev-messaging",
-                  name: "Dev - Messaging",
-                  command: "pnpm dev:messaging",
-                }),
-              ],
+              id: "dev-messaging",
+              name: "Dev - Messaging",
+              command: "pnpm dev:messaging",
             }),
           ],
         }),
+      ],
+    });
+    try {
+      await expect(registry.listThreads({ backend: acpBackendId })).resolves.toEqual([
+        withEnvironment,
       ]);
+      // The all-backends list reads ACP rows on their own path.
+      await expect(registry.listThreads({ forceRefresh: true })).resolves.toEqual(
+        expect.arrayContaining([withEnvironment]),
+      );
     } finally {
       await registry.close();
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
