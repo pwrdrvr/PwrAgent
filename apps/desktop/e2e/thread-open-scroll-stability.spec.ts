@@ -442,32 +442,31 @@ test("jump-to-latest re-enters glue mode so later content stays pinned", async (
   });
 
   try {
-    await app.window
-      .getByRole("button", { name: /Long scroll stability thread/i })
-      .first()
-      .click();
-
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Long scroll stability thread"
-      })
-    ).toBeVisible();
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    await selectLongThread(app.window, transcript);
 
     const list = app.window.locator(".transcript-list__items");
     const jumpToLatest = app.window.getByRole("button", {
       name: "Jump to latest message",
     });
 
+    // Zero distance also describes an empty/loading pane. Wait for real
+    // overflow before asserting that the hydrated transcript is bottom-pinned.
+    await expect
+      .poll(async () => (await readScrollMetrics(list)).maxScrollTop)
+      .toBeGreaterThan(2000);
+
     await expect
       .poll(async () => await distanceFromTranscriptBottom(list))
       .toBeLessThanOrEqual(4);
 
-    // Scroll to the top, then click jump-to-latest to re-enter glue mode.
-    await list.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll", { bubbles: true }));
-    });
+    // A real upward navigation cancels pending bottom-follow frames. A bare
+    // scrollTop assignment can be overwritten by the opening layout's frame.
+    // Page Up also keeps clear of the older-history loading threshold.
+    await list.press("PageUp");
+    await expect
+      .poll(async () => await distanceFromTranscriptBottom(list))
+      .toBeGreaterThan(100);
     await expect(jumpToLatest).toBeVisible();
     await jumpToLatest.click();
 

@@ -5,11 +5,13 @@ export type MessagingToolUpdatePolicyDelivery = {
   activities: MessagingToolActivity[];
   bindingId: string;
   kind: "individual" | "batch";
+  lifecycle?: "window";
   mode: MessagingToolUpdateMode;
   turnId: string;
 };
 
 type PolicyState = {
+  lifecycle?: "window";
   batchDeliveryCount: number;
   bindingId: string;
   individualCount: number;
@@ -86,6 +88,8 @@ export class MessagingToolUpdatePolicy {
 
   processActivity(params: {
     activity: MessagingToolActivity;
+    /** No future turn-terminal event owns this activity; the window clears its state. */
+    lifecycle?: "window";
     bindingId: string;
     mode: MessagingToolUpdateMode;
     turnId: string;
@@ -95,14 +99,17 @@ export class MessagingToolUpdatePolicy {
     }
 
     if (params.mode === "show_all") {
-      const state = this.stateFor(params);
-      if (state.seenActivityIds.has(params.activity.id)) {
+      // Receipt callers already deduplicate their delivery ids; All needs no
+      // retained state when no future terminal event can clear it.
+      const state = params.lifecycle === "window" ? undefined : this.stateFor(params);
+      if (state?.seenActivityIds.has(params.activity.id)) {
         return [];
       }
-      state.seenActivityIds.add(params.activity.id);
+      state?.seenActivityIds.add(params.activity.id);
       return [
         {
           activities: [params.activity],
+          ...(params.lifecycle ? { lifecycle: params.lifecycle } : {}),
           bindingId: params.bindingId,
           kind: "individual",
           mode: params.mode,
@@ -122,9 +129,11 @@ export class MessagingToolUpdatePolicy {
 
     if (!state.noisy && state.individualCount < policy.individualThreshold) {
       state.individualCount += 1;
+      if (state.lifecycle === "window") this.scheduleFlush(state, policy);
       return [
         {
           activities: [params.activity],
+          ...(params.lifecycle ? { lifecycle: params.lifecycle } : {}),
           bindingId: params.bindingId,
           kind: "individual",
           mode: params.mode,
@@ -183,6 +192,7 @@ export class MessagingToolUpdatePolicy {
   }
 
   private stateFor(params: {
+    lifecycle?: "window";
     bindingId: string;
     mode: MessagingToolUpdateMode;
     turnId: string;
@@ -191,6 +201,7 @@ export class MessagingToolUpdatePolicy {
     let state = this.states.get(key);
     if (!state) {
       state = {
+        ...(params.lifecycle ? { lifecycle: params.lifecycle } : {}),
         batchDeliveryCount: 0,
         bindingId: params.bindingId,
         individualCount: 0,
@@ -226,7 +237,8 @@ export class MessagingToolUpdatePolicy {
     // activity for the terminal flush. This keeps long-running ACP/Codex
     // bursts from producing a fresh card or message every window while still
     // honoring Show All's explicit per-event behavior and preserving the full
-    // trace in the desktop transcript.
+    // trace in the desktop transcript. Receipt windows have no terminal event:
+    // the timer clears their state, including windows with only individual updates.
     if (!policy.windowMs || state.timer || state.batchDeliveryCount > 0) {
       return;
     }
@@ -239,7 +251,7 @@ export class MessagingToolUpdatePolicy {
       if (!current) {
         return;
       }
-      const delivery = this.flushState(key, current, { clear: false });
+      const delivery = this.flushState(key, current, { clear: current.lifecycle === "window" });
       if (delivery) {
         this.trackBatchDelivery(Promise.resolve(this.onBatchReady?.(delivery)));
       }
@@ -280,6 +292,7 @@ export class MessagingToolUpdatePolicy {
 
     return {
       activities,
+      ...(state.lifecycle ? { lifecycle: state.lifecycle } : {}),
       bindingId: state.bindingId,
       kind: "batch",
       mode: state.mode,
@@ -288,10 +301,11 @@ export class MessagingToolUpdatePolicy {
   }
 
   private keyFor(params: {
+    lifecycle?: "window";
     bindingId: string;
     mode: MessagingToolUpdateMode;
     turnId: string;
   }): string {
-    return `${params.bindingId}\0${params.turnId}\0${params.mode}`;
+    return `${params.bindingId}\0${params.turnId}\0${params.mode}\0${params.lifecycle ?? "turn"}`;
   }
 }

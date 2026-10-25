@@ -37750,9 +37750,15 @@ command = "pnpm dev"
       threadTitleGenerationService: null,
     });
     const messagingRequests: unknown[] = [];
+    let childBindingAttached = false;
+    const noticesAfterAttachment: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      if (childBindingAttached && event.notification.method === "thread/incomingWork") noticesAfterAttachment.push(event);
+    });
     registry.setMessagingAgentToolService({
       async handlePwrAgentMessagingRequest(request) {
         messagingRequests.push(request);
+        childBindingAttached = true;
         return {
           ok: true,
           data: {
@@ -37850,6 +37856,16 @@ command = "pnpm dev"
     } as AppServerPendingRequestNotification);
 
     expect(response).toMatchObject({ success: true });
+    expect(noticesAfterAttachment).toHaveLength(1);
+    expect(noticesAfterAttachment[0]).toMatchObject({ notification: {
+      method: "thread/incomingWork", params: {
+        threadId: "thread-1", turnId: "turn-1", deliveryId: "start:turn-1",
+        incomingWork: { recipientTitle: "Investigate issue XYZ", messages: [{
+          origin: { kind: "agent", sourceThread: { backend: "codex", threadId: "ordinary-thread", title: "Parent Thread" } },
+          preview: expect.stringContaining("Investigate issue XYZ"),
+        }], omittedMessageCount: 0 },
+      },
+    } });
     const payload = JSON.parse(
       (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
     );
@@ -43495,11 +43511,34 @@ script = "printf setup"
     expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey(backend, "recipient")]?.map((entry) => entry.queueEntryId)).toEqual(["held-one", "held-two"]);
   });
 
+  it("publishes bounded incoming-work metadata for a direct handoff start without altering its prompt", async () => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
+    const prompt = "Full handoff instructions. ".repeat(300) + "TAIL";
+    const origin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", title: "Sender" } };
+    const turn = await registry.startTurn({ backend: "codex", threadId: "recipient", input: [{ type: "text", text: prompt }], messageOrigin: origin });
+    expect(codexClient.startTurnCalls[0]?.input).toEqual([{ type: "text", text: prompt }]);
+    expect(events).toContainEqual(expect.objectContaining({ notification: {
+      method: "thread/incomingWork", params: {
+        threadId: "recipient", turnId: turn.turnId, deliveryId: `start:${turn.turnId}`,
+        incomingWork: { messages: [{ origin, preview: expect.stringMatching(/…$/u) }], omittedMessageCount: 0 },
+      },
+    } }));
+    const notice = events.find((event) => event.notification.method === "thread/incomingWork");
+    expect(JSON.stringify(notice)).not.toContain("TAIL");
+    expect(JSON.stringify(notice).length).toBeLessThan(1000);
+  });
+
   it("groups cross-thread send and steer admissions while a previous steer is dispatching", async () => {
     const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start", "turn/steer", "thread/resume"] } });
     const correspondenceStore = new ThreadCorrespondenceStore();
     const registry = new DesktopBackendRegistry({ codexClient, correspondenceStore, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
     onTestFinished(() => registry.close());
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => { events.push(event); });
     await discoverCodexBackendForTest(registry);
     await registry.publishLocalEvent({ backend: "codex", notification: {
       method: "turn/started", params: { threadId: "recipient", turnId: "active-recipient", turn: { id: "active-recipient" } },
@@ -43542,6 +43581,20 @@ script = "printf setup"
     await waitForCondition(() => steers.mock.calls.length === 2);
     await waitForCondition(() => registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")] === undefined);
     expect(codexClient.startTurnCallCount).toBe(0);
+    const groupedStart = events.find((event) => event.notification.method === "thread/turnQueue/updated"
+      && event.notification.params.queueEntryId === queueEntryId && event.notification.params.status === "started");
+    expect(groupedStart).toBeDefined();
+    const summary = (groupedStart!.notification.params as { incomingWork?: {
+      messages: { origin: { sourceThread: { threadId: string; title: string } }; preview: string }[];
+      omittedMessageCount: number;
+    } }).incomingWork;
+    expect(summary?.messages).toHaveLength(3);
+    expect(summary?.omittedMessageCount).toBe(17);
+    for (const message of summary!.messages) {
+      const index = Number(message.origin.sourceThread.threadId.slice("sender-".length));
+      expect(message.origin.sourceThread.title).toBe(`Sender ${index}`);
+      expect(message.preview).toBe(`Evidence ${index}`);
+    }
     const delivered = steers.mock.calls[1]![0].input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
     expect(delivered).toContain("Sender 7 consolidated evidence");
     expect(delivered).not.toContain("Evidence 7");
@@ -44052,6 +44105,23 @@ script = "printf setup"
     } as AppServerPendingRequestNotification);
 
     expect(response).toMatchObject({ success: true });
+    const receiptEvents = events.filter((event) => event.notification.method === "item/completed"
+      && (event.notification.params.item as { origin?: { systemReason?: string } })?.origin?.systemReason === "thread-correspondence");
+    expect(receiptEvents.length).toBeGreaterThan(0);
+    for (const event of receiptEvents) {
+      expect(((event.notification.params as { item: { text: string } }).item).text).toContain("**Message to [target-thread]");
+      expect(((event.notification.params as { item: { origin: unknown } }).item).origin).toMatchObject({
+        sourceThread: { threadId: "parent-thread", title: "M4 runner-host conversion preflight" },
+      });
+    }
+    expect(events).toContainEqual(expect.objectContaining({ notification: {
+      method: "thread/turnQueue/updated", params: expect.objectContaining({
+        status: "started", incomingWork: {
+          recipientTitle: "target-thread", omittedMessageCount: 0,
+          messages: [{ origin: expect.objectContaining({ sourceThread: expect.objectContaining({ threadId: "parent-thread" }) }), preview: "Please pick up the CI failure." }],
+        },
+      }),
+    } }));
     const payload = JSON.parse(
       (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
     );

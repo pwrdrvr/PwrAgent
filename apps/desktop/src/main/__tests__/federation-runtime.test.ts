@@ -1702,7 +1702,7 @@ describe("DesktopFederationRuntime", () => {
     expect(forwarded).toEqual([]);
   });
 
-  it("forwards only events matching a sparse thread subscription", () => {
+  it.each([false, true])("forwards only events matching a sparse thread subscription (transcript=%s)", (includeTranscript) => {
     const forwarded: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "owner_one" });
     router.registerConnection(createConnection({
@@ -1711,6 +1711,7 @@ describe("DesktopFederationRuntime", () => {
         "thread_navigation",
         "navigation_snapshot_deltas",
         "event_subscriptions",
+        ...(includeTranscript ? ["thread_detail" as const] : []),
       ],
       sendEnvelope: (envelope) => forwarded.push(envelope),
     }));
@@ -1721,7 +1722,7 @@ describe("DesktopFederationRuntime", () => {
       runtime,
       sourceInstanceId: "owner_one",
       subscriberInstanceId: "viewer_one",
-      eventClasses: ["navigation"],
+      eventClasses: includeTranscript ? ["navigation", "transcript"] : ["navigation"],
       threadSelection: {
         kind: "threads",
         threads: [{ backend: "codex", threadId: "thread-1" }],
@@ -1741,6 +1742,15 @@ describe("DesktopFederationRuntime", () => {
         },
       } as AgentEvent);
     }
+    const incomingWork = {
+      recipientTitle: "Recipient", omittedMessageCount: 0,
+      messages: [{ origin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", title: "Sender", instanceId: "owner_one" } }, preview: "Check the evidence." }],
+    };
+    for (const threadId of ["thread-2", "thread-1"]) runtime.forwardLocalBackendEvent({
+      backend: "codex", notification: { method: "thread/incomingWork", params: {
+        threadId, turnId: "turn-1", deliveryId: "handoff-1", incomingWork,
+      } },
+    });
     runtime.forwardLocalBackendEvent({
       backend: "codex",
       notification: {
@@ -1749,13 +1759,19 @@ describe("DesktopFederationRuntime", () => {
       },
     } as AgentEvent);
 
-    expect(forwarded).toHaveLength(2);
+    expect(forwarded).toHaveLength(includeTranscript ? 4 : 2);
     expect(forwarded[0]).toMatchObject({
       params: {
         notification: { params: { threadId: "thread-1" } },
       },
     });
-    expect(forwarded[1]).toMatchObject({
+    const workEvents = forwarded.filter((envelope) =>
+      "params" in envelope && (envelope.params as { notification?: { method?: string } }).notification?.method === "thread/incomingWork");
+    if (includeTranscript) expect(workEvents).toMatchObject([{ params: { notification: {
+      method: "thread/incomingWork", params: { threadId: "thread-1", turnId: "turn-1", deliveryId: "handoff-1", incomingWork },
+    } } }]);
+    else expect(workEvents).toEqual([]);
+    expect(forwarded.at(-1)).toMatchObject({
       params: { notification: { method: "navigation/invalidated", params: { sourceMethod: "pullRequest/status/updated" } } },
     });
   });

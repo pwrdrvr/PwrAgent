@@ -150,7 +150,7 @@ export class ThreadCorrespondenceStore {
         role: "assistant",
         createdAt: record.createdAt,
         ...(record.sourceTurnId ? { turn: { id: record.sourceTurnId } } : {}),
-        origin: { kind: "pwragent", systemReason: "thread-correspondence" },
+        origin: { kind: "pwragent", systemReason: "thread-correspondence", sourceThread: { ...record.source, ...(source.title ? { title: source.title } : {}) } },
         text: `${heading}\n\n${body}`,
         parts: [
           { type: "text", text: `${heading}\n\n${body}` },
