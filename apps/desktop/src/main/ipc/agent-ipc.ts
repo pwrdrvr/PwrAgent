@@ -357,9 +357,9 @@ function coalescedAgentEventLogKey(
   });
 }
 
-/** Codex and Claude report a turn's cumulative diff. */
+/** Any backend that reports a turn's cumulative diff gets its live row. */
 function withRendererActivityEntry(event: AgentEvent): AgentEvent {
-  if ((event.backend !== "codex" && event.backend !== "claude") || event.notification.method !== "turn/diff/updated") {
+  if (event.notification.method !== "turn/diff/updated") {
     return event;
   }
 

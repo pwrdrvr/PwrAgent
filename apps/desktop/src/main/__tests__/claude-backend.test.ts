@@ -2217,6 +2217,49 @@ describe("Claude transcript fidelity", () => {
     expect(group.details.find((detail) => detail.id === "edit-2:output")).toMatchObject({ markdown: "String to replace not found", status: "failed" });
   });
 
+  it("folds repeat edits of one file into one section of the turn's live diff", async () => {
+    let cwd = "";
+    const patch = (from: string, to: string) => ({
+      filePath: path.join(cwd, "a.ts"), oldString: from, newString: to, originalFile: from,
+      structuredPatch: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [`-${from}`, `+${to}`] }],
+      userModified: false, replaceAll: false,
+    });
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("e1", "Edit", { file_path: path.join(cwd, "a.ts"), old_string: "x", new_string: "y" });
+      yield answer("e1", "Updated.", patch("x", "y"));
+      yield call("e2", "Edit", { file_path: path.join(cwd, "a.ts"), old_string: "y", new_string: "z" });
+      yield answer("e2", "Updated.", patch("y", "z"));
+      yield result;
+    });
+    cwd = f.root;
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Edit twice" }] });
+    await f.waitForTurn();
+    const diffs = f.events.filter((event) => event.notification.method === "turn/diff/updated")
+      .map((event) => (event.notification.params as { diff: string }).diff);
+    expect(diffs.at(-1)).toBe([
+      "diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts",
+      "@@ -1,1 +1,1 @@", "-x", "+y", "@@ -1,1 +1,1 @@", "-y", "+z",
+    ].join("\n"));
+  });
+
+  it("keeps an emptied TodoWrite list as a tool row rather than an empty plan", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield call("todo-empty", "TodoWrite", { todos: [] });
+      yield answer("todo-empty", "Todos have been modified successfully.");
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Clear" }] });
+    await f.waitForTurn();
+    expect(f.events.some((event) => event.notification.method === "turn/plan/updated")).toBe(false);
+    const entries = (await f.backend.readThread(threadId)).entries;
+    expect(entries.filter((entry) => entry.type === "plan")).toEqual([]);
+    expect(entries.find((entry) => entry.type === "activity")).toMatchObject({ summary: "TodoWrite" });
+  });
+
   it("shows TodoWrite as the turn's plan instead of a tool row", async () => {
     const f = await fixture(async function* () {
       yield init;
@@ -2267,6 +2310,32 @@ describe("Claude transcript fidelity", () => {
       "Read index.ts", "Searched for TODO in src", "Fetched https://example.com/docs",
     ]);
     expect(group.details.find((detail) => detail.id === "fetch-1")).toMatchObject({ url: "https://example.com/docs" });
+  });
+
+  it("keeps refusals as warning rows and reports denials and notifications without a toast", async () => {
+    const f = await fixture(async function* () {
+      yield init;
+      yield { type: "system", subtype: "model_refusal_fallback", uuid: "refusal-1", trigger: "refusal", direction: "retry",
+        original_model: "claude-opus-5-5", fallback_model: "claude-sonnet-5-5", request_id: null, content: "" } as unknown as SDKMessage;
+      yield { type: "system", subtype: "permission_denied", uuid: "denied-1", tool_name: "Bash", tool_use_id: "t1",
+        decision_reason_type: "classifier", decision_reason: "Deletes files outside the workspace",
+        message: "Permission to use Bash has been denied." } as unknown as SDKMessage;
+      yield { type: "system", subtype: "notification", uuid: "n1", key: "a", text: "Context is nearly full", priority: "high" } as unknown as SDKMessage;
+      yield { type: "system", subtype: "notification", uuid: "n2", key: "b", text: "Tip of the day", priority: "low" } as unknown as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: "reply", content: [{ type: "text", text: "Done" }] } } as SDKMessage;
+      yield result;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Go" }] });
+    await f.waitForTurn();
+    expect(f.events.filter((event) => event.notification.method === "warning").map((event) => (event.notification.params as { message: string }).message)).toEqual([
+      "claude-opus-5-5 declined the request; Claude used claude-sonnet-5-5 instead.",
+      "Claude could not use Bash: Deletes files outside the workspace",
+      "Context is nearly full",
+    ]);
+    expect((await f.backend.readThread(threadId)).entries.find((entry) => entry.type === "activity")).toMatchObject({
+      id: "notice:refusal-1", summary: "Switched to claude-sonnet-5-5", tone: "warning",
+    });
   });
 
   it("records compaction as its own row and a compaction boundary, and reports retries without a toast", async () => {

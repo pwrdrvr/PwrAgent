@@ -1,6 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { claudeFileDiff, claudeTodoSteps, claudeToolDetail } from "../claude/claude-tool-activity";
+import { claudeFileDiff, claudeTodoSteps, claudeToolDetail, claudeTurnDiff } from "../claude/claude-tool-activity";
 
 describe("Claude tool activity", () => {
   it("names a file outside the workspace by its full path in the diff", () => {
@@ -38,5 +38,15 @@ describe("Claude tool activity", () => {
     expect(claudeToolDetail({ id: "1", name: "Read", input: {}, status: "in_progress" })).toBeUndefined();
     expect(claudeToolDetail({ id: "1", name: "Glob", input: { pattern: "**/*.ts" }, status: "completed" }))
       .toEqual({ id: "1", kind: "read", label: "Listed **/*.ts", status: "completed" });
+  });
+
+  it("keeps one section per file in a turn diff, in first-edit order", () => {
+    const a1 = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,1 +1,1 @@\n-1\n+2";
+    const b = "diff --git a/b b/b\n--- /dev/null\n+++ b/b\n@@ -0,0 +1,1 @@\n+new";
+    const a2 = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,1 +1,1 @@\n-2\n+3";
+    expect(claudeTurnDiff([a1, b, a2])).toBe([
+      "diff --git a/a b/a", "--- a/a", "+++ b/a", "@@ -1,1 +1,1 @@", "-1", "+2", "@@ -1,1 +1,1 @@", "-2", "+3",
+      "diff --git a/b b/b", "--- /dev/null", "+++ b/b", "@@ -0,0 +1,1 @@", "+new",
+    ].join("\n"));
   });
 });

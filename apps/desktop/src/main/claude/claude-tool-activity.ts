@@ -112,6 +112,23 @@ export function claudeFileDiff(result: unknown, cwd: string): { diff: string; fi
   return { diff, fileDiff: { kind, diff, additions, removals } };
 }
 
+/**
+ * A turn's edits as one diff with one section per file, the shape of a
+ * cumulative turn diff. Repeat edits of a file append their hunks to its
+ * section, so the live Edited Files row counts files, not edits.
+ */
+export function claudeTurnDiff(diffs: readonly string[]): string {
+  const files = new Map<string, string[]>();
+  for (const diff of diffs) {
+    // claudeFileDiff writes three header lines, then the hunks.
+    const lines = diff.split("\n");
+    const section = files.get(lines[0]);
+    if (section) section.push(...lines.slice(3));
+    else files.set(lines[0], lines);
+  }
+  return [...files.values()].map((lines) => lines.join("\n")).join("\n");
+}
+
 /** The steps of a TodoWrite call, as a plan. */
 export function claudeTodoSteps(input: unknown): AppServerThreadPlanStep[] | undefined {
   const todos = input && typeof input === "object" ? (input as { todos?: unknown }).todos : undefined;

@@ -27,7 +27,7 @@ import {
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
-import { CLAUDE_TODO_TOOL, claudeFileDiff, claudeTodoSteps, claudeToolDetail } from "./claude-tool-activity";
+import { CLAUDE_TODO_TOOL, claudeFileDiff, claudeTodoSteps, claudeToolDetail, claudeTurnDiff } from "./claude-tool-activity";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
   CLAUDE_REPORT_FINDINGS_TOOL, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
@@ -1584,9 +1584,9 @@ export class ClaudeBackend {
           continue;
         }
         // The checklist is the turn's plan, which the transcript and the
-        // live work rail show as one card.
+        // live work rail show as one card. An emptied list keeps a tool row.
         const steps = block.name === CLAUDE_TODO_TOOL ? claudeTodoSteps(block.input) : undefined;
-        if (steps) {
+        if (steps?.length) {
           await this.publishPlan(live, turn, steps);
           continue;
         }
@@ -1661,7 +1661,7 @@ export class ClaudeBackend {
           entry.details = [{ ...entry.details[0], status: entry.status, fileDiff: edit.fileDiff }];
           if (edit.diff) {
             turn.fileDiffs.push(edit.diff);
-            await this.emit({ method: "turn/diff/updated", params: { threadId, turnId, diff: turn.fileDiffs.join("\n") } });
+            await this.emit({ method: "turn/diff/updated", params: { threadId, turnId, diff: claudeTurnDiff(turn.fileDiffs) } });
           }
         } else {
           // Keep the invocation when updating generic tools, too.
@@ -1739,7 +1739,8 @@ export class ClaudeBackend {
         return;
       }
       case "permission_denied":
-        await warn(`Claude could not use ${message.tool_name}: ${message.message}`);
+        // decision_reason is written for people; message is the model's tool result.
+        await warn(`Claude could not use ${message.tool_name}: ${message.decision_reason?.trim() || message.message}`);
         return;
       case "model_refusal_fallback": {
         const text = message.content.trim()
