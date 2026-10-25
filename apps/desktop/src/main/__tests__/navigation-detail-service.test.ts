@@ -31,7 +31,7 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
 vi.mock("../app-server/codex-environment-config", () => ({ listCodexEnvironmentOptions: mocks.listCodexEnvironmentOptions }));
 
 vi.mock("../messaging/messaging-bindings-snapshot", () => ({
-  buildMessagingBindingsByThreadKey: vi.fn(async () => new Map()),
+  buildMessagingBindingsByThreadKey: vi.fn(async () => undefined),
 }));
 
 import { NavigationDetailService } from "../app-server/navigation-detail-service";

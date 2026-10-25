@@ -31,6 +31,7 @@ import {
   buildDefaultAgentScopeLookup,
   buildMessagingDefaultAgentScopeKey,
 } from "./messaging-default-agent.js";
+import { isBindingForThread } from "./messaging-binding-thread-match.js";
 import {
   mergeMessagingBindingChannelMetadata,
   mergeMessagingManagedTopicObservation,
@@ -267,12 +268,7 @@ export class MessagingStore {
   }): Promise<MessagingBindingRecord[]> {
     return await this.withReadData((data) =>
       Object.values(data.bindings)
-        .filter(
-          (binding) =>
-            !binding.revokedAt &&
-            binding.backend === params.backend &&
-            binding.threadId === params.threadId,
-        )
+        .filter((binding) => !binding.revokedAt && isBindingForThread(binding, params))
         .map((binding) => structuredClone(binding)),
     );
   }

@@ -128,6 +128,7 @@ import type {
 } from "../codex-app-server/client";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
+import { isBindingForThread } from "../messaging/core/messaging-binding-thread-match";
 import { ArchiveCleanupTransport } from "./fixtures/archive-cleanup-transport";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
 import { managedCodexRoot } from "../codex-build-channel";
@@ -2520,10 +2521,7 @@ function createMessagingArchiveCleanupStoreMock(options?: {
       threadId: string;
     }) {
       return [...bindings.values()].filter(
-        (binding) =>
-          !binding.revokedAt &&
-          binding.threadId === params.threadId &&
-          (!binding.backend || binding.backend === params.backend),
+        (binding) => !binding.revokedAt && isBindingForThread(binding, params),
       );
     },
     async findActiveBindingsForBackend(params: {
