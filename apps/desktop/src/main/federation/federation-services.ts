@@ -7,8 +7,8 @@ import type {
 import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, isAppServerBackendKind } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import {
-  decodeServiceData, readServiceData, waitServiceReadable, writeServiceData,
-  SERVICE_LEASE_MS, SERVICE_MAX_STREAMS, SERVICE_MAX_PEER_STREAMS,
+  decodeServiceData, readServiceData, waitServiceFlushed, waitServiceReadable, writeServiceData,
+  SERVICE_CHUNK_BYTES, SERVICE_LEASE_MS, SERVICE_MAX_STREAMS, SERVICE_MAX_PEER_STREAMS,
 } from "./federation-service-socket";
 
 export const SERVICE_METHOD_CAPABILITIES = Object.fromEntries(
@@ -18,7 +18,7 @@ export const SERVICE_METHOD_CAPABILITIES = Object.fromEntries(
 type Lease = { leaseId: string; peerId: string; service: ThreadService; expiresAt: number };
 type Stream = {
   streamId: string; lease: Lease; socket: Socket; seq: number; busy: boolean;
-  touchedAt: number; writing: boolean; error?: string;
+  touchedAt: number; writing: boolean; flushed?: Promise<void>; error?: string;
 };
 
 export function serviceThread(value: unknown): ServiceThread {
@@ -199,16 +199,24 @@ export class FederationServices {
       await new Promise<void>((resolve) => setTimeout(resolve, Math.max(1, at - Date.now())));
       this.getLease(peerId, stream.lease.leaseId);
       if (stream.error) throw new Error(stream.error);
-      if (bytes.length || (input.fin && !stream.socket.writableEnded)) {
+      const wrote = bytes.length > 0 || (input.fin && !stream.socket.writableEnded);
+      if (wrote) {
         if (stream.writing) throw new Error("Service write credit exceeded.");
         stream.writing = true;
         // Independent directional credit prevents full-duplex deadlocks: keep
         // draining the opposite direction while a socket write is blocked.
-        void writeServiceData(stream.socket, bytes, input.fin)
+        stream.flushed = writeServiceData(stream.socket, bytes, input.fin)
           .catch(() => { stream.error = "Service socket write failed or stalled."; })
-          .finally(() => { stream.writing = false; });
+          .finally(() => { stream.writing = false; stream.flushed = undefined; });
       }
-      if (input.receive) await waitServiceReadable(stream.socket);
+      // After a full chunk the viewer has more to send, and a poll during an earlier
+      // write is waiting for write credit: both return once the write flushes. A
+      // partial chunk or FIN drained the viewer's buffer: long-poll for the reply.
+      const flushWakes = bytes.length === SERVICE_CHUNK_BYTES || !wrote;
+      if (input.receive) await waitServiceReadable(stream.socket, 50, flushWakes ? stream.flushed : undefined);
+      // Without receive credit there is nothing to read, but a full chunk should
+      // still report its flush so the viewer can send the next one.
+      else if (flushWakes && stream.flushed) await waitServiceFlushed(stream.flushed);
       this.getLease(peerId, stream.lease.leaseId);
       if (stream.error) throw new Error(stream.error);
       const data = input.receive ? readServiceData(stream.socket) : Buffer.alloc(0);
