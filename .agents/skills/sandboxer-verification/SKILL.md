@@ -19,20 +19,31 @@ Node, and Python. The checks here mirror the CI `Lint`, `Test`, and
 the VM. It installs the Node version from `.nvmrc`, the pinned pnpm, and the
 E2E window manager, then runs each check with a log and a status line.
 
-## Measured on a new `large` sandbox (2026-10-25, based on `d8ee319d5`)
+## Measured on a `large` sandbox (2026-10-25)
 
-| Step | Command | Time | Includes |
-| --- | --- | --- | --- |
-| First setup | `verify.sh setup` | 17 s | Node download, apt packages, `pnpm install` |
-| Setup, later worktree | `verify.sh setup` | 2 s | `pnpm install` from the VM's store |
-| Lint job | `verify.sh lint` | 46 s | `pnpm lint`: every CI Lint check, typecheck included |
-| Unit tests | `verify.sh unit` | 132 s | 1,271 files, about 20,000 tests |
-| Linux desktop E2E, one lane | `verify.sh e2e` | 585 s | 278 tests, one Playwright worker |
-| Linux desktop E2E, two lanes | `verify.sh e2e --lanes 2` | about 360 s | the same tests in two concurrent shards |
+`large` is 8 vCPUs and 15 GB. CPU is the mean of 1-second `/proc/stat`
+samples over the step, as a share of all 8 vCPUs.
 
-`large` is 8 vCPUs and 15 GB. Playwright runs one worker per lane. Two lanes
-peaked at a load average of about 4, so `all` uses two lanes. More lanes are
-untested.
+| Step | Command | Time | Mean CPU | p90 CPU |
+| --- | --- | --- | --- | --- |
+| First setup | `verify.sh setup` | 17 s | | |
+| Setup, later worktree | `verify.sh setup` | 2 s | | |
+| Lint job (`pnpm lint`) | `verify.sh lint` | 46 s | | |
+| Unit tests, one run | `verify.sh unit` | 132 to 165 s | 76% | 92% |
+| Unit tests, two shards | `verify.sh unit --shards 2` | 127 s | 95% | 98% |
+| E2E, one lane | `verify.sh e2e` | 585 to 739 s | 20% | 32% |
+| E2E, two lanes | `verify.sh e2e --lanes 2` | 360 to 394 s | 40% | 56% |
+| E2E, four lanes | `verify.sh e2e --lanes 4` | 299 s | 61% | 85% |
+
+`all` uses two unit shards and four E2E lanes.
+
+- Vitest already runs one worker per core. A single run leaves the CPU idle
+  while it starts and finishes. Two shards fill those gaps and use about the
+  same CPU time, so more shards cannot help on 8 vCPUs.
+- Playwright runs one Electron worker per lane, and one lane uses under two
+  cores. Four lanes passed all 272 tests with no retry. Lane 1 holds the
+  66 `a11y.spec.ts` tests and ends last. For its final 75 s it runs alone at
+  about 20% CPU. More lanes would not shorten that lane.
 
 ## 1. Get a sandbox
 
@@ -104,8 +115,8 @@ for i in $(seq 1 55); do grep -q '^all ' .local/sandboxer/status 2>/dev/null && 
 cat .local/sandboxer/status
 ```
 
-`all` runs setup, then lint, unit, and E2E in two lanes, and it continues
-after a failed check. Each check appends `<step> exit=<code> secs=<seconds>` to
+`all` runs setup, then lint, unit in two shards, and E2E in four lanes, and
+it continues after a failed check. Each check appends `<step> exit=<code> secs=<seconds>` to
 `.local/sandboxer/status`, and the final line is `all exit=<0|1>`.
 
 Run one step when that is all the change needs. Arguments pass through:
@@ -113,11 +124,16 @@ Run one step when that is all the change needs. Arguments pass through:
 ```sh
 scripts/sandboxer/verify.sh setup
 scripts/sandboxer/verify.sh lint
+scripts/sandboxer/verify.sh unit --shards 2
 scripts/sandboxer/verify.sh unit apps/desktop/src/main/__tests__/backend-registry.test.ts
 scripts/sandboxer/verify.sh e2e e2e/thread-branch-drift.spec.ts
-scripts/sandboxer/verify.sh e2e --lanes 2
+scripts/sandboxer/verify.sh e2e --lanes 4
 scripts/sandboxer/verify.sh e2e --shard=2/4
 ```
+
+`--shards` must come first after `unit`. The shards share the worktree, and
+each writes `.local/sandboxer/unit-shard<N>.log`; `unit.log` holds one exit
+line per shard.
 
 `--lanes` must come first after `e2e`. Lane 1 runs in the worktree. Each
 later lane runs in a sibling worktree at the same commit, `<worktree>-lane<N>`,
@@ -135,14 +151,14 @@ Run one E2E step at a time in a VM.
 Read logs with bounded output, never whole:
 
 ```sh
-tail -n 30 .local/sandboxer/unit.log
+tail -n 30 .local/sandboxer/unit*.log
 grep -nE '^\s+[0-9]+ (passed|failed|flaky|skipped)|^  [0-9]+\) ' .local/sandboxer/e2e*.log
 ```
 
-Two lanes load the VM more than one lane does. Without a retry, three
+Concurrent lanes load the VM more than one lane does. Without a retry, three
 two-lane runs each had at most one unexpected failure, a different test each
 time: `thread-image-fit.spec.ts:353` and `star-map-activity.spec.ts:11`. Each
-then passed 5 of 5 alone. Rerun an unexpected failure or flaky test by itself
+then passed 5 of 5 alone. One four-lane run had none. Rerun an unexpected failure or flaky test by itself
 before you treat it as caused by the change.
 
 Playwright writes failure context to `apps/desktop/test-results/` in the

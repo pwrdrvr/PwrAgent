@@ -4,12 +4,14 @@
 # .agents/skills/sandboxer-verification/SKILL.md.
 #
 #   scripts/sandboxer/verify.sh setup        Node from .nvmrc, pnpm, E2E packages, pnpm install
-#   scripts/sandboxer/verify.sh unit [args]  pnpm test [args]
+#   scripts/sandboxer/verify.sh unit [--shards N] [args]
+#                                            pnpm test [args]; --shards runs N concurrent shards
 #   scripts/sandboxer/verify.sh lint         pnpm lint (the CI Lint job; stops at the first failure)
 #   scripts/sandboxer/verify.sh e2e [--lanes N] [args]
 #                                            Linux desktop E2E under Xvfb + Openbox, as CI runs it;
 #                                            --lanes splits it into N concurrent shards
-#   scripts/sandboxer/verify.sh all          setup, lint, unit, e2e --lanes 2; runs every step
+#   scripts/sandboxer/verify.sh all          setup, lint, unit --shards 2, e2e --lanes 4;
+#                                            runs every step
 #
 # Each step writes .local/sandboxer/<step>.log and appends
 # "<step> exit=<code> secs=<seconds>" to .local/sandboxer/status.
@@ -51,6 +53,35 @@ e2e() {
   # flaky, and keeps failure screenshots and videos.
   CI="${CI-1}" xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24 -noreset" \
     bash .github/scripts/run-linux-desktop-e2e.sh "$@"
+}
+
+# Vitest shards share the worktree: each run already isolates PWRAGENT_HOME
+# by process ID.
+unit_shards() {
+  local shards="$1"
+  shift
+  if ! [[ "$shards" =~ ^[1-9][0-9]*$ ]]; then
+    echo "--shards needs a positive number" >&2
+    return 2
+  fi
+  if ((shards == 1)); then
+    pnpm test "$@"
+    return
+  fi
+  local shard
+  local pids=()
+  for ((shard = 1; shard <= shards; shard++)); do
+    pnpm test --shard="$shard/$shards" "$@" > "$out_dir/unit-shard$shard.log" 2>&1 &
+    pids+=("$!")
+  done
+  local failed=0
+  for ((shard = 1; shard <= shards; shard++)); do
+    wait "${pids[shard - 1]}"
+    local code=$?
+    echo "shard $shard/$shards exit=$code log=$out_dir/unit-shard$shard.log"
+    ((code == 0)) || failed=1
+  done
+  return "$failed"
 }
 
 # Playwright writes test-results/ and .local/ at fixed paths in the checkout,
@@ -103,7 +134,16 @@ run_step() {
   start="$(date +%s)"
   case "$step" in
     setup) setup ;;
-    unit) pnpm test "$@" ;;
+    unit)
+      if [[ "${1:-}" == "--shards" ]]; then
+        shift
+        local shards="${1:-}"
+        [[ $# -gt 0 ]] && shift
+        unit_shards "$shards" "$@"
+      else
+        pnpm test "$@"
+      fi
+      ;;
     lint) pnpm lint ;;
     e2e)
       if [[ "${1:-}" == "--lanes" ]]; then
@@ -132,13 +172,13 @@ case "$step" in
     run_step setup || exit 1
     failed=0
     run_step lint || failed=1
-    run_step unit || failed=1
-    run_step e2e --lanes 2 || failed=1
+    run_step unit --shards 2 || failed=1
+    run_step e2e --lanes 4 || failed=1
     echo "all exit=$failed" | tee -a "$out_dir/status"
     exit "$failed"
     ;;
   *)
-    sed -n '2,16p' "$0" >&2
+    sed -n '2,18p' "$0" >&2
     exit 2
     ;;
 esac
