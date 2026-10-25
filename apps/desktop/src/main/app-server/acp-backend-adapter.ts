@@ -570,6 +570,24 @@ function acpAgentLaunchIdentity(agent: AcpInstalledAgentRecord): string {
       : undefined,
   });
 }
+function rewindPointShowsPrompt(
+  point: { promptIndex: number; promptPreview: string },
+  promptText: string,
+): boolean {
+  // Grok sent no preview; `listRewindPoints` filled in a placeholder.
+  if (point.promptPreview === `Prompt ${point.promptIndex + 1}`) {
+    return true;
+  }
+  const normalize = (value: string): string =>
+    value.replace(/\s+/g, " ").trim().toLowerCase();
+  const preview = normalize(point.promptPreview)
+    .replace(/(?:\u2026|\.\.\.)$/, "")
+    .trimEnd()
+    .slice(0, 40);
+  const text = normalize(promptText);
+  return text.startsWith(preview) || preview.startsWith(text);
+}
+
 function effectiveAcpAgentCapabilities(
   agent: AcpInstalledAgentRecord,
 ): AcpAgentCapabilities {
@@ -1707,15 +1725,26 @@ export class AcpBackendAdapter {
     }
     await client.ensureSession(session);
     const replay = await this.readReplay(params.backend, params.sessionId);
-    const targetPromptIndex = replay.entries
-      .filter((entry) => entry.type === "message" && entry.role === "user")
-      .findIndex((entry) => entry.id === params.messageId);
-    if (targetPromptIndex < 0) {
+    const userMessages = replay.entries.filter(
+      (entry) => entry.type === "message" && entry.role === "user",
+    );
+    const targetPromptIndex = userMessages.findIndex(
+      (entry) => entry.id === params.messageId,
+    );
+    const target = userMessages[targetPromptIndex];
+    if (!target || target.type !== "message") {
       throw new Error("This prompt is no longer in the Grok conversation");
     }
     const points = await client.listRewindPoints(params.sessionId);
-    if (!points.some((point) => point.promptIndex === targetPromptIndex)) {
+    const point = points.find((candidate) => candidate.promptIndex === targetPromptIndex);
+    if (!point) {
       throw new Error("Grok cannot rewind to before this prompt");
+    }
+    // The rewind cannot be undone. A user message Grok does not count as a
+    // prompt would shift the ordinal onto a later prompt, so the point Grok
+    // offers at that index must show this prompt's text.
+    if (!rewindPointShowsPrompt(point, target.text)) {
+      throw new Error("Grok's rewind points do not match this transcript; reload the thread and try again");
     }
     const result = await client.rewindSession({
       sessionId: params.sessionId,

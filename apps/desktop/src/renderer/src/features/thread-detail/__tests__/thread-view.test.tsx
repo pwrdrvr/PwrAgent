@@ -534,6 +534,53 @@ describe("ThreadView", () => {
     expect(document.activeElement).toBe(budgets);
   });
 
+  it("mounts the last turn's prompt before opening the header rewind on it", async () => {
+    const entries: AppServerThreadEntry[] = [
+      ...rewindTranscript,
+      { type: "message", id: "steer-3", role: "user", text: "Cover Linux too.", turn: { id: "turn-3" } },
+      ...[1, 2, 3].map((index): AppServerThreadEntry => ({
+        type: "message",
+        id: `reply-3-${index}`,
+        role: "assistant",
+        text: `Working on it, step ${index}.`,
+        turn: { id: "turn-3" },
+      })),
+    ];
+    function Harness() {
+      const [limit, setLimit] = useState(3);
+      return (
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[rewindBackend("codex", "Codex")]}
+          clearPendingRequest={() => undefined}
+          composerDisabled={false}
+          desktopApi={{ rewindThread: vi.fn() }}
+          loading={false}
+          loadingMore={false}
+          messageCount={entries.length}
+          onLoadOlder={async () => undefined}
+          onRenderedTranscriptEntryLimitChange={setLimit}
+          removeOptimisticMessage={(_id) => undefined}
+          renderedTranscriptEntryLimit={limit}
+          selectedThread={rewindThread("codex")}
+          skills={[]}
+          transcriptEntries={entries}
+        />
+      );
+    }
+    render(<Harness />);
+    // Only the steer is pinned; the turn's first prompt is outside the window.
+    expect(screen.queryByText("Now add a regression test for it.")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rewind to before the last prompt" }));
+
+    const confirm = await screen.findByRole("dialog", { name: "Rewind to before this message?" });
+    const prompt = screen
+      .getByText("Now add a regression test for it.")
+      .closest(".transcript-list__item") as HTMLElement;
+    expect(prompt.contains(confirm)).toBe(true);
+  });
+
   it("keeps the rewind open with the provider's error and offers none without the capability", async () => {
     const rewindThreadApi = vi.fn(async () => {
       throw new Error("Update Codex to rewind threads");

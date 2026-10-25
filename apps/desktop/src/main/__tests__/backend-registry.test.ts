@@ -28767,6 +28767,29 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("refuses a Grok rewind when Grok's point at that index is another prompt", async () => {
+    const rewindSession = vi.fn(async () => ({ updatedAt: 3000 }));
+    const { backend, registry, sessionId } = grokRewindFixture({
+      // Grok counted one fewer prompt than the transcript shows, so its
+      // index 1 is a later prompt than "Make it rhyme".
+      listRewindPoints: vi.fn(async () => [
+        { promptIndex: 0, fileSnapshotCount: 0, hasFileChanges: false, promptPreview: "Write a breakfast poem" },
+        { promptIndex: 1, fileSnapshotCount: 0, hasFileChanges: false, promptPreview: "Now add a stanza about coffee…" },
+      ]),
+      rewindSession,
+    });
+
+    await expect(registry.rewindThread({
+      backend,
+      threadId: sessionId,
+      target: { messageId: "prompt-2" },
+      mode: "conversation",
+    })).rejects.toThrow("do not match this transcript");
+    expect(rewindSession).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
   it("refuses to restore files for providers that rewind conversation only", async () => {
     const rewindSession = vi.fn(async () => ({ updatedAt: 3000 }));
     const { backend, registry, sessionId } = grokRewindFixture({ rewindSession });
@@ -53871,6 +53894,13 @@ script = "printf setup"
     registry.onEvent((event) => {
       events.push(event);
     });
+    // A reply sent during the revert is queued behind the start reservation.
+    const scheduleThreadDrain = vi.spyOn(
+      (registry as unknown as {
+        threadTurnQueue: { scheduleThreadDrain: (params: { backend: "codex"; threadId: string }) => void };
+      }).threadTurnQueue,
+      "scheduleThreadDrain",
+    );
 
     const response = await registry.rewindThread({
       backend: "codex",
@@ -53880,6 +53910,7 @@ script = "printf setup"
     });
 
     expect(revertThread).toHaveBeenCalledWith({ threadId: "thread-1", beforeTurnId: "turn-2" });
+    expect(scheduleThreadDrain).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1" });
     expect(response).toEqual({
       backend: "codex",
       threadId: "thread-1",

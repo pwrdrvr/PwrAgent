@@ -1578,11 +1578,12 @@ export function ThreadView(props: ThreadViewProps) {
     ? selectedThreadBackend.capabilities.threadRewind
     : undefined;
   const rewindProviderLabel = selectedThreadBackend?.label ?? "The provider";
+  const rewindThreadSource = selectedThread?.source;
   const rewindableMessageIds = useMemo(
-    () => selectedThread && threadRewindSupport
-      ? collectRewindableMessageIds(props.transcriptEntries, selectedThread.source)
+    () => rewindThreadSource && threadRewindSupport
+      ? collectRewindableMessageIds(props.transcriptEntries, rewindThreadSource)
       : undefined,
-    [props.transcriptEntries, selectedThread, threadRewindSupport],
+    [props.transcriptEntries, rewindThreadSource, threadRewindSupport],
   );
   const rewindDisabledReason = props.threadBusy
     ? "Wait for the active turn to finish before rewinding"
@@ -1591,11 +1592,11 @@ export function ThreadView(props: ThreadViewProps) {
   transcriptEntriesRef.current = props.transcriptEntries;
   const openRewindConfirm = useCallback(
     (message: AppServerThreadMessageEntry): void => {
-      if (!selectedThread) return;
+      if (!rewindThreadSource) return;
       const summary = summarizeThreadRewind(
         transcriptEntriesRef.current,
         message.id,
-        selectedThread.source,
+        rewindThreadSource,
       );
       if (!summary) return;
       setRewindConfirm({
@@ -1606,13 +1607,16 @@ export function ThreadView(props: ThreadViewProps) {
         turnId: message.turn?.id,
       });
     },
-    [selectedThread],
+    [rewindThreadSource],
   );
   const openLastPromptRewind = (): void => {
     const entries = props.transcriptEntries;
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index];
       if (entry?.type === "message" && rewindableMessageIds?.has(entry.id)) {
+        // The window pins only the newest user message, which can be a later
+        // steer; the confirmation renders under its prompt, so mount it.
+        expandTranscriptEntryLimit(entries.length - index);
         openRewindConfirm(entry);
         return;
       }

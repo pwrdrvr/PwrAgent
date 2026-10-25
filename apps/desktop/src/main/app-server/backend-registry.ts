@@ -22808,6 +22808,9 @@ export class DesktopBackendRegistry {
       });
     } finally {
       this.reservedCodexStartThreadIds.delete(params.threadId);
+      // The reservation made the thread read as busy, so a reply sent during
+      // the revert was queued. No turn ends to release it; drain here.
+      this.threadTurnQueue.scheduleThreadDrain({ backend: "codex", threadId: params.threadId });
       this.maybeDrainCodexInvalidIdRecoveries();
     }
     return { updatedAt: Date.now() };
