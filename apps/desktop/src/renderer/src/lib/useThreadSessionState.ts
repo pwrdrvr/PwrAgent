@@ -69,6 +69,12 @@ import {
   summarizeLiveActivity,
   withRendererSequence,
 } from "../features/thread-detail/live-transcript-activity";
+import {
+  capAtTurnAnswer,
+  insertRowsAboveTurnAnswers,
+  isTurnAnswer,
+  lateWorkBelongsAboveAnswer,
+} from "../features/thread-detail/turn-answer-placement";
 import { THREAD_HISTORY_PAGE_LIMIT } from "./thread-history-limits";
 import {
   combineTranscriptEntries,
@@ -770,9 +776,15 @@ function mergeTranscriptEntries(
             return false;
           })
         : -1;
+    // A finished turn's work goes above its answer, however late its stamp.
+    // Only a turn with a terminal entry can have an answer to scan for.
+    const placedIndex =
+      optimisticTurnId && terminalTurnIds.has(optimisticTurnId)
+        ? capAtTurnAnswer(merged, optimisticEntry, timedIndex)
+        : timedIndex;
 
-    if (timedIndex !== -1) {
-      merged.splice(timedIndex, 0, optimisticEntry);
+    if (placedIndex !== -1) {
+      merged.splice(placedIndex, 0, optimisticEntry);
       rebuildAppendIndexes();
       continue;
     }
@@ -1061,37 +1073,53 @@ function reconcileRetainedTranscriptTail(
   // it went to the very end, below every later turn, and its turn's total
   // followed it there.
   const turnIdsOnPage = new Set<string>();
+  const answerByTurnId = new Map<string, AppServerThreadEntry>();
   for (const entry of entries) {
-    if (entry.turn?.id) {
-      turnIdsOnPage.add(entry.turn.id);
+    const turnId = entry.turn?.id;
+    if (turnId) {
+      turnIdsOnPage.add(turnId);
+      if (isTurnAnswer(entry, turnId)) {
+        answerByTurnId.set(turnId, entry);
+      }
     }
   }
+  // A finished turn's work, timed or not, goes above that turn's answer.
+  const aboveAnswerByTurn = new Map<string, AppServerThreadEntry[]>();
   const untimedRetainedByTurn = new Map<string, AppServerThreadEntry[]>();
   pendingRetainedEntries = pendingRetainedEntries.filter((entry) => {
     const turnId = entry.turn?.id;
-    if (
-      !turnId
-      || !turnIdsOnPage.has(turnId)
-      || typeof transcriptRefreshOrderTimestamp(entry) === "number"
-    ) {
+    if (!turnId || !turnIdsOnPage.has(turnId)) {
       return true;
     }
-    const rows = untimedRetainedByTurn.get(turnId);
+    const answer = answerByTurnId.get(turnId);
+    const rowsByTurn =
+      answer && lateWorkBelongsAboveAnswer(entry, answer)
+        ? aboveAnswerByTurn
+        : typeof transcriptRefreshOrderTimestamp(entry) !== "number"
+          ? untimedRetainedByTurn
+          : undefined;
+    if (!rowsByTurn) {
+      return true;
+    }
+    const rows = rowsByTurn.get(turnId);
     if (rows) {
       rows.push(entry);
     } else {
-      untimedRetainedByTurn.set(turnId, [entry]);
+      rowsByTurn.set(turnId, [entry]);
     }
     return false;
   });
 
-  // The anchor places those rows at the end of their turns, ahead of each
-  // turn's total, and every total at the end of its turn.
+  // The anchor places the untimed rows at the end of their turns, ahead of
+  // each turn's total, and every total at the end of its turn.
   return anchorTurnUsageEntries(
-    mergeRetainedTranscriptSuffix(
-      entries,
-      trailingInsertionFloor,
-      pendingRetainedEntries,
+    insertRowsAboveTurnAnswers(
+      mergeRetainedTranscriptSuffix(
+        entries,
+        trailingInsertionFloor,
+        pendingRetainedEntries,
+      ),
+      aboveAnswerByTurn,
     ),
     untimedRetainedByTurn,
   );

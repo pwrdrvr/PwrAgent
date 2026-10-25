@@ -481,7 +481,7 @@ function hasConcreteWork(entries: AppServerThreadEntry[]): boolean {
   return entries.some(isConcreteWorkEntry);
 }
 
-function isConcreteWorkEntry(
+export function isConcreteWorkEntry(
   entry: AppServerThreadEntry
 ): entry is AppServerThreadActivityEntry | AppServerThreadPlanEntry {
   return (

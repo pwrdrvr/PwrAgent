@@ -4,6 +4,7 @@ import type {
   AppServerThreadMessage,
 } from "@pwragent/shared";
 import { turnUsageEntryTurnId } from "@pwragent/shared";
+import { isTurnAnswer, lateWorkBelongsAboveAnswer } from "../features/thread-detail/turn-answer-placement";
 import {
   addTranscriptReviewSegmentToIndex,
   createTranscriptReviewHistoryIndex,
@@ -556,6 +557,7 @@ function retainedPlacementTime(entry: AppServerThreadEntry): number | undefined 
 
 function findHistoryInsertionPoint(
   entry: AppServerThreadEntry,
+  turnId: string,
   turnPages: TranscriptHistoryTurnPage[],
 ): TranscriptHistoryInsertionPoint | undefined {
   const entryTime = retainedPlacementTime(entry);
@@ -563,6 +565,18 @@ function findHistoryInsertionPoint(
     | { entryIndex: number; page: TranscriptHistoryPage }
     | undefined;
   let firstTurnTotal: TranscriptHistoryInsertionPoint | undefined;
+  // The first entry stamped later than the row, and the turn's last reply.
+  // `position` orders them across pages.
+  let laterEntry:
+    | (TranscriptHistoryInsertionPoint & { position: number })
+    | undefined;
+  let lastAnswer:
+    | (TranscriptHistoryInsertionPoint & {
+        answer: AppServerThreadEntry;
+        position: number;
+      })
+    | undefined;
+  let position = 0;
 
   for (let pageIndex = turnPages.length - 1; pageIndex >= 0; pageIndex -= 1) {
     const turnPage = turnPages[pageIndex]!;
@@ -577,16 +591,43 @@ function findHistoryInsertionPoint(
         firstTurnTotal ??= { entryIndex, page: turnPage.page };
         continue;
       }
+      position += 1;
       const historyEntryTime = transcriptEntryTime(historyEntry);
       if (
-        typeof entryTime === "number"
+        !laterEntry
+        && typeof entryTime === "number"
         && typeof historyEntryTime === "number"
         && historyEntryTime > entryTime
       ) {
-        return { entryIndex, page: turnPage.page };
+        // With no reply above it, this entry is the row's place.
+        if (!lastAnswer) {
+          return { entryIndex, page: turnPage.page };
+        }
+        laterEntry = { entryIndex, page: turnPage.page, position };
+      }
+      if (isTurnAnswer(historyEntry, turnId)) {
+        lastAnswer = {
+          answer: historyEntry,
+          entryIndex,
+          page: turnPage.page,
+          position,
+        };
       }
       lastTurnEntry = { entryIndex, page: turnPage.page };
     }
+  }
+
+  // A finished turn's work goes above its answer, however late its stamp,
+  // unless an entry stamped later than the row comes first.
+  if (
+    lastAnswer
+    && (!laterEntry || laterEntry.position > lastAnswer.position)
+    && lateWorkBelongsAboveAnswer(entry, lastAnswer.answer)
+  ) {
+    return { entryIndex: lastAnswer.entryIndex, page: lastAnswer.page };
+  }
+  if (laterEntry) {
+    return { entryIndex: laterEntry.entryIndex, page: laterEntry.page };
   }
 
   // A page split inside the turn can carry only the turn's total; the row
@@ -616,7 +657,7 @@ function retainedEntryInsertionPoint(
     return cached.insertionPoint;
   }
 
-  const insertionPoint = findHistoryInsertionPoint(entry, turnPages);
+  const insertionPoint = findHistoryInsertionPoint(entry, turnId, turnPages);
   if (insertionPoint) {
     index.retainedEntryPlacements.set(entry.id, {
       entryTime,

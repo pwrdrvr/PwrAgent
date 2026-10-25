@@ -21,6 +21,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
+import { withRendererSequence } from "../live-transcript-activity";
 import { TranscriptList } from "../TranscriptList";
 
 const compactMarkdownTable = `| Key | Value |
@@ -326,7 +327,7 @@ describe("TranscriptList", () => {
       expect(text.indexOf("Turn usage:", usage + 1)).toBe(-1);
     });
 
-    it("keeps the total below the turn's folded work group", () => {
+    it("keeps a late work row in the turn's work group, above the answer and the total", () => {
       const { container } = render(
         <TranscriptList
           entries={completedTurnEntries}
@@ -337,15 +338,76 @@ describe("TranscriptList", () => {
         />
       );
 
-      // Work after the reply makes the reply interim, so the turn folds into
-      // one group. The total is the turn's last row: below that group, with
-      // no second group split off beneath it.
+      // The late row is the turn's work: it joins the work group above the
+      // answer. Below the answer it would make the answer read as interim and
+      // fold it into the group.
       const group = screen.getByRole("button", { name: /Worked for 2m 29s · 3 tool updates/ });
       expect(group).toBeInTheDocument();
       const text = container.textContent ?? "";
+      const worked = text.indexOf("Worked for 2m 29s");
+      const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
       const usage = text.indexOf("Turn usage: 94,799 uncached in");
-      expect(usage).toBeGreaterThan(text.indexOf("Worked for 2m 29s"));
+      expect(reply).toBeGreaterThan(worked);
+      expect(usage).toBeGreaterThan(reply);
       expect(text.indexOf("More work")).toBe(-1);
+    });
+
+    it("keeps a sequenced late work row above the answer when a later-sequenced diff follows it", () => {
+      // The Edited Files row stays below the answer; the work row must not
+      // land between them just because the renderer saw it before the diff.
+      const editedFiles = withRendererSequence<AppServerThreadActivityEntry>({
+        type: "activity",
+        id: "live-file-change-1",
+        summary: "Changed 1 file",
+        status: "completed",
+        details: [{
+          id: "diff-1",
+          kind: "write",
+          label: "src/a.ts",
+          fileDiff: { kind: "update", diff: "+a", additions: 1, removals: 0 },
+        }],
+        createdAt: turn.completedAt + 500,
+        turn,
+      }, 9);
+      const { container } = render(
+        <TranscriptList
+          entries={[...completedTurnEntries.slice(0, 5), editedFiles]}
+          loading={false}
+          loadingMore={false}
+          pendingActivityEntry={withRendererSequence(
+            { ...lateLiveRow, id: "live-tools-1", summary: "Ran 1 command" },
+            5,
+          )}
+          onLoadOlder={async () => undefined}
+        />
+      );
+
+      const text = container.textContent ?? "";
+      const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
+      expect(reply).toBeGreaterThan(text.indexOf("Worked for 2m 29s"));
+    });
+
+    it("keeps work the renderer saw after an agent's reply below that reply", () => {
+      // A finished turn: only the observed order keeps the row below.
+      const reply = withRendererSequence(completedTurnEntries[4]!, 4);
+      const { container } = render(
+        <TranscriptList
+          entries={[...completedTurnEntries.slice(0, 4), reply]}
+          expandedWorkPhaseGroupIds={["work:turn-1:commentary:complete"]}
+          loading={false}
+          loadingMore={false}
+          pendingActivityEntry={withRendererSequence(
+            { ...lateLiveRow, id: "live-tools-1", summary: "Ran 1 command" },
+            5,
+          )}
+          onLoadOlder={async () => undefined}
+        />
+      );
+
+      const text = container.textContent ?? "";
+      expect(text.indexOf("Ran 1 command")).toBeGreaterThan(
+        text.indexOf("Acknowledged: PR65 is reported merged."),
+      );
     });
   });
 
