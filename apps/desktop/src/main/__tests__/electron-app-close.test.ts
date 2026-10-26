@@ -57,8 +57,11 @@ describe("closeElectronApplication", () => {
     const result = await closing;
 
     expect(evaluate).toHaveBeenCalledTimes(2); // Capture, then the quit request.
+    // The survivor snapshot runs before the cleanup query and any kill.
     expect(execFile.mock.calls[0][0]).toBe("powershell.exe");
-    expect(execFile.mock.calls[0][1]).toContainEqual(expect.stringContaining("ProcessId=120 OR ParentProcessId=120"));
+    expect(execFile.mock.calls[0][1]).toContainEqual(expect.stringContaining("CommandLine"));
+    expect(execFile.mock.calls[1][0]).toBe("powershell.exe");
+    expect(execFile.mock.calls[1][1]).toContainEqual(expect.stringContaining("ProcessId=120 OR ParentProcessId=120"));
     expect(killed).toEqual(reusedPid ? [] : [140]);
     expect(result).toMatchObject({
       quitRequestOutcome: "rejected",
@@ -89,14 +92,15 @@ describe("closeElectronApplication", () => {
       // listener runs, otherwise federation can open a confirmation dialog.
       expect(emit).toHaveBeenCalledTimes(installed ? 1 : 0);
     });
-    const child = {
+    // A launcher is a ChildProcess, so it is also an EventEmitter.
+    const child = Object.assign(new EventEmitter(), {
       exitCode: null as number | null,
       signalCode: null as NodeJS.Signals | null,
       kill: vi.fn(() => {
         child.signalCode = "SIGKILL";
         return true;
       }),
-    };
+    });
     const close = vi.fn(async () => {
       // Model Playwright's context preparation before it calls app.quit().
       // A prior SIGTERM removes the renderer before this work can finish.
