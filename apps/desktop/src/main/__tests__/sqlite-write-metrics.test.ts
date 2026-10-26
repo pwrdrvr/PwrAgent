@@ -1093,6 +1093,45 @@ describe("sqlite write metrics", () => {
     });
   });
 
+  it("holds a thread rewind, and its undo, to one commit each", async () => {
+    // An operator rewinds or undoes by hand, never per turn or per event.
+    // At ~16 KB of WAL per commit, 100 rewinds and undos a day is ~1.6 MB.
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.appendThreadRewind({
+        backend: "claude",
+        threadId: "rewind-thread",
+        rewind: {
+          id: "rewind-1",
+          occurredAt: 1_800_000_000_000,
+          removedTurnCount: 2,
+          restoredFileCount: 2,
+          undoable: true,
+        },
+      });
+      await store.markThreadRewindUndone({
+        backend: "claude",
+        threadId: "rewind-thread",
+        rewindId: "rewind-1",
+        undoneAt: 1_800_000_060_000,
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note: "One operator rewind recorded, then marked undone: one commit each, no per-turn or idle writes. ~16 KB per action: ~1.6 MB/day at 100 rewinds and undos/day, 0 MB/day idle.",
+      scenario: "thread-rewind-and-undo",
+      writes,
+    });
+    expect((await store.getThreadOverlayState({ backend: "claude", threadId: "rewind-thread" }))?.rewindLog)
+      .toEqual([{
+        id: "rewind-1",
+        occurredAt: 1_800_000_000_000,
+        removedTurnCount: 2,
+        restoredFileCount: 2,
+        undoable: false,
+        undoneAt: 1_800_000_060_000,
+      }]);
+  });
+
   it("keeps the transaction variants callable and counted", () => {
     // better-sqlite3 hangs .default/.deferred/.immediate/.exclusive off the
     // callable it returns, and they are not enumerable. The first version of

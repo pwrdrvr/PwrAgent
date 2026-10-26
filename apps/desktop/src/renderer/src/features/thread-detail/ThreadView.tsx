@@ -1368,7 +1368,9 @@ export function ThreadView(props: ThreadViewProps) {
     federationTarget?: FederationTarget;
     text: string;
     imageAttachments: RewoundPrompt["imageAttachments"];
+    kind: "rewound-prompt";
   }>();
+  const [rewindUndoBusyId, setRewindUndoBusyId] = useState<string>();
   const [workflowBudgetDialog, setWorkflowBudgetDialog] =
     useState<WorkflowBudgetDialogState>();
   // Transcript element the in-thread find bar (⌘F) searches + highlights.
@@ -1725,6 +1727,7 @@ export function ThreadView(props: ThreadViewProps) {
           ...(confirm.turnId ? { turnId: confirm.turnId } : {}),
         },
         mode,
+        removedTurnCount: confirm.summary.laterTurnCount + 1,
       });
       setRewindConfirm(undefined);
       const promptText = response.promptText ?? confirm.prompt.text;
@@ -1738,6 +1741,7 @@ export function ThreadView(props: ThreadViewProps) {
           federationTarget,
           text: promptText,
           imageAttachments,
+          kind: "rewound-prompt",
         });
       }
       if (droppedAttachmentCount > 0) {
@@ -1762,6 +1766,47 @@ export function ThreadView(props: ThreadViewProps) {
         : current);
     }
   };
+  // What an undo needs, read when the operator clicks it.
+  const rewindUndoContextRef = useRef({ desktopApi: rewindDesktopApi, thread: selectedThread });
+  rewindUndoContextRef.current = { desktopApi: rewindDesktopApi, thread: selectedThread };
+  const undoRewind = useCallback((rewindId: string): void => {
+    const { desktopApi, thread } = rewindUndoContextRef.current;
+    const undoThreadRewind = desktopApi?.undoThreadRewind;
+    if (!thread || !undoThreadRewind) return;
+    setRewindUndoBusyId(rewindId);
+    void undoThreadRewind({
+      backend: thread.source,
+      federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+      threadId: thread.id,
+      rewindId,
+    }).then(
+      async () => {
+        await onRefreshNavigationAfterRewind?.();
+        await onReloadThreadAfterRewind?.();
+      },
+      (error: unknown) => {
+        onShowRewindNotice?.({
+          id: `rewind-undo:${thread.id}`,
+          title: "Rewind not undone",
+          message: error instanceof Error ? error.message : String(error),
+          tone: "warning",
+        });
+      },
+    ).finally(() => {
+      setRewindUndoBusyId((current) => current === rewindId ? undefined : current);
+    });
+  }, [onRefreshNavigationAfterRewind, onReloadThreadAfterRewind, onShowRewindNotice]);
+  const canUndoRewind = Boolean(threadRewindSupport?.undo && rewindDesktopApi?.undoThreadRewind);
+  const rewindUndo = useMemo(
+    () => canUndoRewind
+      ? {
+          busyId: rewindUndoBusyId,
+          disabledReason: rewindDisabledReason,
+          onUndo: undoRewind,
+        }
+      : undefined,
+    [canUndoRewind, rewindDisabledReason, rewindUndoBusyId, undoRewind],
+  );
   const openWorkflowBudgetDialog = useCallback(async (): Promise<void> => {
     if (!selectedThread || selectedThread.source !== "acp:grok") {
       return;
@@ -4489,6 +4534,8 @@ export function ThreadView(props: ThreadViewProps) {
             selectedThread!.questionnaireActivityLog
           }
           turnFailures={selectedThread!.turnFailureLog}
+          rewinds={selectedThread!.rewindLog}
+          rewindUndo={rewindUndo}
           activeTurnId={props.activeTurnId}
           activeTurnStartedAt={props.activeTurnStartedAt}
           applications={props.applications}

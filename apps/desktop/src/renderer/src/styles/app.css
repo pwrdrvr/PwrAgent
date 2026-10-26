@@ -42894,6 +42894,64 @@ button.composer__subthread-source-parent:hover {
   cursor: not-allowed;
 }
 
+/* One row stands where a rewind removed turns. */
+.transcript-rewind-marker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.transcript-rewind-marker::before,
+.transcript-rewind-marker::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.transcript-rewind-marker__undo {
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.transcript-rewind-marker__undo:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.transcript-rewind-marker__undo:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-rewind-marker__undo:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.composer__rewound-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .workflow-budget-dialog__fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

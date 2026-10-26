@@ -180,6 +180,8 @@ import type {
   PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
+  UndoThreadRewindRequest,
+  UndoThreadRewindResponse,
   StartCodexMcpServerLoginRequest,
   StartCodexMcpServerLoginResponse,
   LatestCodexConfigWarningResponse,
@@ -710,6 +712,7 @@ import {
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
   AGENT_REWIND_THREAD_CHANNEL,
+  AGENT_UNDO_THREAD_REWIND_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -2441,6 +2444,10 @@ const desktopApi = Object.freeze({
     request: RewindThreadRequest,
   ): Promise<RewindThreadResponse> =>
     await ipcRenderer.invoke(AGENT_REWIND_THREAD_CHANNEL, request),
+  undoThreadRewind: async (
+    request: UndoThreadRewindRequest,
+  ): Promise<UndoThreadRewindResponse> =>
+    await ipcRenderer.invoke(AGENT_UNDO_THREAD_REWIND_CHANNEL, request),
   configureGrokWorkflowBudget: async (
     request: ConfigureGrokWorkflowBudgetRequest,
   ): Promise<ConfigureGrokWorkflowBudgetResponse> =>

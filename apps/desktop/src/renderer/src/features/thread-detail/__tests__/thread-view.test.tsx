@@ -461,12 +461,13 @@ describe("ThreadView", () => {
     fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
 
     await waitFor(() => {
-      expect(rewindThreadApi).toHaveBeenCalledWith({
+      expect(rewindThreadApi).toHaveBeenCalledWith(expect.objectContaining({
         backend: "codex",
         threadId: "codex-thread",
         target: { messageId: "prompt-2", turnId: "turn-2" },
         mode: "conversation",
-      });
+        removedTurnCount: 2,
+      }));
       expect(onReloadThread).toHaveBeenCalledOnce();
     });
     expect(screen.queryByRole("dialog", { name: "Rewind to before this message?" }))
@@ -476,6 +477,7 @@ describe("ThreadView", () => {
         "Try holding the lock until the child exits instead.",
       );
     });
+    expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
   });
 
   it("opens the rewind on the last prompt from the header and keeps it keyboard-contained", async () => {
@@ -749,6 +751,96 @@ describe("ThreadView", () => {
     await waitFor(() => expect(rewindThreadApi).toHaveBeenCalledWith(expect.objectContaining({
       backend: "claude", mode: "conversation-and-files",
     })));
+  });
+
+  it("marks a rewind where its turns were, with Undo only while Claude can undo it", async () => {
+    const kept = rewindTranscript.slice(0, 2).map((entry, index) => ({ ...entry, createdAt: 1000 + index }));
+    const rewindLog = [{
+      id: "rewind-1", occurredAt: 3000, removedTurnCount: 2, restoredFileCount: 2, undoable: true,
+    }];
+    const undoThreadRewind = vi.fn(async () => ({
+      backend: "claude" as const, threadId: "claude-thread", rewindId: "rewind-1", updatedAt: 4000,
+    }));
+    const onReloadThread = vi.fn(async () => undefined);
+    const props = {
+      addOptimisticUserMessage: (_text: string) => "optimistic-1",
+      backends: [rewindBackend("claude", "Claude", { files: true, undo: true })],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      desktopApi: { previewThreadRewind: vi.fn(), rewindThread: vi.fn(), undoThreadRewind },
+      loading: false,
+      loadingMore: false,
+      messageCount: 2,
+      onLoadOlder: async () => undefined,
+      onReloadThread,
+      removeOptimisticMessage: (_id: string) => undefined,
+      skills: [],
+    };
+    const { rerender } = render(
+      <ThreadView
+        {...props}
+        selectedThread={{ ...rewindThread("claude"), rewindLog }}
+        transcriptEntries={kept}
+      />,
+    );
+
+    const marker = screen.getByText(/Rewound 2 turns \u00b7 restored 2 files/).closest(".transcript-rewind-marker") as HTMLElement;
+    expect(marker).not.toBeNull();
+    fireEvent.click(within(marker).getByRole("button", { name: "Undo rewind" }));
+    await waitFor(() => {
+      expect(undoThreadRewind).toHaveBeenCalledWith(expect.objectContaining({
+        backend: "claude", threadId: "claude-thread", rewindId: "rewind-1",
+      }));
+      expect(onReloadThread).toHaveBeenCalledOnce();
+    });
+
+    // A message after the marker continued the rewound conversation.
+    rerender(
+      <ThreadView
+        {...props}
+        selectedThread={{ ...rewindThread("claude"), rewindLog }}
+        transcriptEntries={[...kept, {
+          type: "message", id: "prompt-4", role: "user", text: "Use a mutex instead.", createdAt: 5000,
+        }]}
+      />,
+    );
+    expect(screen.getByText(/Rewound 2 turns/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo rewind" })).not.toBeInTheDocument();
+
+    // An undone rewind leaves no marker.
+    rerender(
+      <ThreadView
+        {...props}
+        selectedThread={{ ...rewindThread("claude"), rewindLog: [{ ...rewindLog[0]!, undoneAt: 4000 }] }}
+        transcriptEntries={kept}
+      />,
+    );
+    expect(screen.queryByText(/Rewound 2 turns/)).not.toBeInTheDocument();
+  });
+
+  it("marks a Codex rewind without Undo", () => {
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[rewindBackend("codex", "Codex")]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{ rewindThread: vi.fn(), undoThreadRewind: vi.fn() }}
+        loading={false}
+        loadingMore={false}
+        messageCount={2}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={{
+          ...rewindThread("codex"),
+          rewindLog: [{ id: "rewind-1", occurredAt: 3000, removedTurnCount: 1 }],
+        }}
+        skills={[]}
+        transcriptEntries={rewindTranscript.slice(0, 2)}
+      />,
+    );
+    expect(screen.getByText("Rewound 1 turn")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Undo rewind" })).not.toBeInTheDocument();
   });
 
   it("explains why Claude cannot restore a prompt's files, or rewind it at all", async () => {

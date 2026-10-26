@@ -28,6 +28,7 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadQuestionnaireActivity,
+  ThreadRewindRecord,
   ThreadTurnFailure,
   ThreadSubAgentSummary,
   MarkdownFileViewerContext,
@@ -41,6 +42,13 @@ import {
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
+import {
+  injectRewindMarkers,
+  isRewindMarkerEntry,
+  REWIND_MARKER_ENTRY_PREFIX,
+  undoableRewindId,
+} from "./rewind-marker-entries";
+import { TranscriptRewindMarker } from "./TranscriptRewindMarker";
 import { injectTurnFailures } from "./turn-failure-entries";
 import { capAtTurnAnswer } from "./turn-answer-placement";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -90,6 +98,14 @@ type TranscriptListProps = {
     openMessageId?: string;
     confirmation?: ReactNode;
     onOpen: (message: AppServerThreadMessageEntry) => void;
+  };
+  /** The thread's rewinds, each drawn as a marker where its turns were. */
+  rewinds?: ThreadRewindRecord[];
+  /** Undo for the latest rewind, where its provider kept the removed turns. */
+  rewindUndo?: {
+    busyId?: string;
+    disabledReason?: string;
+    onUndo: (rewindId: string) => void;
   };
   activeTurnId?: string;
   activeTurnStartedAt?: number;
@@ -874,15 +890,18 @@ export function TranscriptList(props: TranscriptListProps) {
     // after that turn's total would leave the total mid-turn, so the rendered
     // list ends with each total back at the end of its turn.
     return anchorTurnUsageEntries(
-      injectTurnFailures(
-        injectQuestionnaireActivities(
-          injectMessagingBindingTransitions(
-            injectPermissionTransitions(entries, props.permissionTransitions),
-            props.messagingBindingTransitions,
+      injectRewindMarkers(
+        injectTurnFailures(
+          injectQuestionnaireActivities(
+            injectMessagingBindingTransitions(
+              injectPermissionTransitions(entries, props.permissionTransitions),
+              props.messagingBindingTransitions,
+            ),
+            props.questionnaireActivities,
           ),
-          props.questionnaireActivities,
+          props.turnFailures,
         ),
-        props.turnFailures,
+        props.rewinds,
       ),
     );
   }, [
@@ -898,7 +917,12 @@ export function TranscriptList(props: TranscriptListProps) {
     props.permissionTransitions,
     props.questionnaireActivities,
     props.turnFailures,
+    props.rewinds,
   ]);
+  const undoableRewind = useMemo(
+    () => props.rewindUndo ? undoableRewindId(transcriptEntries, props.rewinds) : undefined,
+    [props.rewindUndo, props.rewinds, transcriptEntries],
+  );
   // Replies to Codex async questions, keyed by the question they name. The
   // window is a contiguous tail, so a reply to any visible question is here.
   // The string key keeps the map, and every row it reaches, stable until a
@@ -1560,6 +1584,18 @@ export function TranscriptList(props: TranscriptListProps) {
                   onToggle={() => {
                     toggleCommentaryGroup(item.id);
                   }}
+                />
+              ) : isRewindMarkerEntry(item.entry) && item.entry.type === "activity" ? (
+                <TranscriptRewindMarker
+                  label={item.entry.summary}
+                  undo={props.rewindUndo
+                    && item.entry.id === `${REWIND_MARKER_ENTRY_PREFIX}${undoableRewind}`
+                    ? {
+                        busy: props.rewindUndo.busyId === undoableRewind,
+                        disabledReason: props.rewindUndo.disabledReason,
+                        onUndo: () => props.rewindUndo?.onUndo(undoableRewind!),
+                      }
+                    : undefined}
                 />
               ) : item.entry.type === "activity" ? (
                 <TranscriptActivity
