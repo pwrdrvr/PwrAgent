@@ -42,6 +42,9 @@ it.each(scenarios)("bounds cleanup pages for $name", async (scenario) => {
     const stateDb = StateDb.open(fixture.dbPath);
     const db = stateDb.raw;
     try {
+      // Payload projections exist only on legacy rows the one-time card move
+      // has not reached; seed those, as a writer without the capture triggers.
+      db.exec("DROP TRIGGER thread_sub_agents_capture_insert; DROP TRIGGER thread_sub_agents_capture_update;");
       db.transaction(() => {
         const insert = db.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)");
         for (let i = 0; i < 2048; i++) {

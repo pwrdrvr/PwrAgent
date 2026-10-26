@@ -3,11 +3,15 @@
 //
 // Sub-agents are not replay-fixture data. Every producer (task monitors, code
 // review, Codex's own spawnAgent, the title helper) persists a
-// `ThreadSubAgentSummary` through `overlayStore.upsertThreadSubAgent`, which
-// lands in the `threads` table's `payload` JSON — so driving a fixture would
-// mean replaying whichever protocol traffic happens to create one, and would
-// pin the test to that producer rather than to the surface. Writing the
-// overlay row states the end state directly.
+// `ThreadSubAgentSummary` through `overlayStore.upsertThreadSubAgent` into the
+// `thread_sub_agents` table — so driving a fixture would mean replaying
+// whichever protocol traffic happens to create one, and would pin the test to
+// that producer rather than to the surface. Writing the state directly states
+// the end state.
+//
+// The cards go into the overlay row's `payload.subAgents`, the shape older
+// builds wrote. The `thread_sub_agents_capture_*` triggers move them into the
+// table on that write, so this needs no copy of the table's columns.
 //
 // Call AFTER launch (the schema is created on first boot) and reload the
 // window afterwards: the renderer does not re-poll on a direct sqlite

@@ -31,7 +31,7 @@ describe("archive retention persistence", () => {
     });
     expectSqliteWriteBudget({ scenario: "archive-retention-idle-day", note: "24 hourly retention observations and reads after initial discovery: zero commits, 0 MB/day.", writes: idle.writes });
     const deleted = await measureSqliteWrites(async () => { await store.forgetThreadArchiveStates(records); });
-    expectSqliteWriteBudget({ scenario: "archive-retention-delete-batch", note: "One transaction releases 100 overlays after permanent provider deletion.", writes: deleted.writes });
+    expectSqliteWriteBudget({ scenario: "archive-retention-delete-batch", note: "One transaction releases 100 overlays after permanent provider deletion, plus one statement each clearing their sub-agent cards and card counters.", writes: deleted.writes });
     expect(await store.listThreadArchiveStates()).toEqual([]);
   });
 

@@ -826,7 +826,7 @@ describe("sqlite write metrics", () => {
     expectSqliteWriteBudget({
       note:
         "nine finalized Token Miser helper lines persisted during the active "
-        + "turn, plus one batched parent overlay write at completion",
+        + "turn, plus one batched write of their nine gate-card rows at completion",
       scenario: "token-miser-turn-ledger",
       writes,
     });
@@ -1509,9 +1509,9 @@ describe("sqlite write metrics", () => {
         },
       },
     } as AgentEvent);
-    const storedCard = async () => (await store.getThreadOverlayState({
+    const storedCard = async () => (await store.listThreadSubAgents({
       backend: "codex", threadId: "thread-parent",
-    }))?.subAgents?.[0];
+    }))[0];
     try {
       const { writes } = await measureSqliteWrites(async () => {
         for (let index = 1; index <= 20; index += 1) {
@@ -1649,8 +1649,8 @@ describe("sqlite write metrics", () => {
       expect(await storedWorkerLine()).toBeUndefined();
       await registry.close();
       expect(await storedWorkerLine()).toMatchObject({ inputTokens: 1_000, model: "gpt-5.5" });
-      expect((await store.getThreadOverlayState({ backend: "codex", threadId: "thread-parent" }))
-        ?.subAgents?.[0]?.monitorUsage).toBeDefined();
+      const [workerCard] = await store.listThreadSubAgents({ backend: "codex", threadId: "thread-parent" });
+      expect(workerCard?.monitorUsage).toBeDefined();
     });
 
     it("repairs a model-less worker line once when discovery names the model", async () => {
@@ -1879,18 +1879,20 @@ describe("sqlite write metrics", () => {
     });
     const internal = registry as unknown as {
       restoreCodexNativeSubAgentsFromReplay(threadId: string, replay: AppServerThreadReplay): Promise<void>;
-      reconcilePersistedCodexNativeSubAgents(threads: AppServerThreadSummary[], overlays: Record<string, unknown>): Promise<void>;
+      reconcilePersistedCodexNativeSubAgents(threads: AppServerThreadSummary[], nativeCardsByThreadId: Record<string, ThreadSubAgentSummary[]>): Promise<void>;
     };
-    const overlays = await store.getThreadOverlayStates({ backend: "codex", threadIds: [parent.id] });
+    const nativeCards = await store.listThreadSubAgentsByMonitorIdPrefix({
+      backend: "codex", threadIds: [parent.id], monitorIdPrefix: "codex-native:",
+    });
     try {
       const { writes } = await measureSqliteWrites(async () => {
         for (let index = 0; index < 3; index += 1) {
           if (source === "replay") await internal.restoreCodexNativeSubAgentsFromReplay(parent.id, replay);
-          else await internal.reconcilePersistedCodexNativeSubAgents([parent], overlays);
+          else await internal.reconcilePersistedCodexNativeSubAgents([parent], nativeCards);
         }
       });
-      const overlay = await store.getThreadOverlayState({ backend: "codex", threadId: parent.id });
-      expect(overlay?.subAgents?.[0]?.status).toBe(source === "replay" ? "cancelled" : "success");
+      const [card] = await store.listThreadSubAgents({ backend: "codex", threadId: parent.id });
+      expect(card?.status).toBe(source === "replay" ? "cancelled" : "success");
       expectSqliteWriteBudget({
         scenario: `native-subagent-${source}-repair`,
         note: "One persisted worker terminal correction; repeated recovery makes no commits. At 100 repairs/day, approximately 1.6 MB/day, with no idle writes.",

@@ -173,8 +173,8 @@ describe("Token Miser savings scaling", () => {
       invocations: work.invocations,
     }));
     await internals.persistTokenMiserLedgerEntries(work.entries);
-    const overlay = await store.getThreadOverlayState({ backend: "codex", threadId: THREAD_ID });
-    expect(overlay?.subAgents?.map(projectSubAgent)).toMatchSnapshot("persisted sub-agents");
+    const subAgents = await store.listThreadSubAgents({ backend: "codex", threadId: THREAD_ID });
+    expect(subAgents.map(projectSubAgent)).toMatchSnapshot("persisted sub-agents");
 
     internals.liveTokenMiserUsageLines.set(
       THREAD_ID,
@@ -202,8 +202,8 @@ describe("Token Miser savings scaling", () => {
     const readInvocations = vi.spyOn(store, "readThreadToolAccounting");
     await internals.persistTokenMiserLedgerEntries(observed);
     expect(readInvocations).not.toHaveBeenCalled();
-    const overlay = await store.getThreadOverlayState({ backend: "codex", threadId: THREAD_ID });
-    expect(overlay?.subAgents?.map((subAgent) => subAgent.monitorId).sort()).toEqual(
+    const subAgents = await store.listThreadSubAgents({ backend: "codex", threadId: THREAD_ID });
+    expect(subAgents.map((subAgent) => subAgent.monitorId).sort()).toEqual(
       observed.map((entry) => `system:token-miser:${entry.objectId}`).sort(),
     );
   });

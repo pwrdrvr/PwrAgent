@@ -825,11 +825,13 @@ Things to know when extending the audit:
   sub-agents strip only renders when a thread has a non-terminal sub-agent or
   an undismissed failure, and no replay fixture produces one — every producer
   persists a `ThreadSubAgentSummary` through `upsertThreadSubAgent` into the
-  `threads` payload. `e2e/fixtures/sub-agent-state-seeding.ts` writes that row
-  directly (seed after launch, then `window.reload()` — the renderer does not
-  re-poll on a direct sqlite mutation), the same shape the README capture
-  spec's seeders use. A hand-written `threads` row encodes assumptions about
-  the storage key and payload that the app can change underneath it, and a
+  `thread_sub_agents` table. `e2e/fixtures/sub-agent-state-seeding.ts` writes
+  the cards into the `threads` payload the way older builds did, and the
+  capture triggers move them into the table (seed after launch, then
+  `window.reload()` — the renderer does not re-poll on a direct sqlite
+  mutation), the same shape the README capture spec's seeders use. A
+  hand-written `threads` row encodes assumptions about the storage key, the
+  payload and those triggers that the app can change underneath it, and a
   seeder writing a row nothing reads would leave the audit green while it
   scanned an absent surface, so `src/main/__tests__/sub-agent-state-seeding.test.ts`
   pins the round-trip in vitest.

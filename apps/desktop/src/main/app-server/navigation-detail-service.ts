@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+  AppServerBackendKind,
   NavigationQueueProjection,
   NavigationQueueProjectionRequest,
   NavigationLaunchpadConfiguration,
@@ -162,12 +163,24 @@ export class NavigationDetailService {
     if (request.collection) {
       const name = request.collection.name;
       if (!NAVIGATION_DETAIL_COLLECTION_NAMES.includes(name)) throw new NavigationQueryError("navigation_invalid_request", "Unknown selected-detail collection.");
-      const overlay = await getDesktopOverlayStore().getThreadOverlayState({ backend: summary.source, threadId: summary.id });
-      const values = name === "subAgents" && summary.source === "codex"
-        ? this.registry.mergeLiveTokenMiserSubAgents(summary.id, overlay?.subAgents)
-        : name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
-        : overlay?.[name] ?? (name === "worktreeSnapshots" ? summary.worktreeSnapshots : undefined) ?? [];
-      const manifest = { name, revision: revision({ ref: request.ref, name, values }) };
+      const store = getDesktopOverlayStore();
+      let values: unknown[];
+      let manifestRevision: string;
+      if (name === "subAgents") {
+        // Cards live in their own table. The revision comes from its counter
+        // plus the in-memory live state, so paging never hashes every card.
+        const persisted = await store.listThreadSubAgents({ backend: summary.source, threadId: summary.id });
+        values = summary.source === "codex"
+          ? this.registry.mergeLiveTokenMiserSubAgents(summary.id, persisted)
+          : persisted;
+        manifestRevision = (await this.subAgentCollectionManifest(request.ref, summary)).revision;
+      } else {
+        const overlay = await store.getThreadOverlayState({ backend: summary.source, threadId: summary.id });
+        values = name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
+          : overlay?.[name] ?? (name === "worktreeSnapshots" ? summary.worktreeSnapshots : undefined) ?? [];
+        manifestRevision = revision({ ref: request.ref, name, values });
+      }
+      const manifest = { name, revision: manifestRevision };
       const cursor = request.collection.cursor ? decodeQueueCursor(request.collection.cursor) : undefined;
       if (cursor && cursor.revision !== manifest.revision) {
         throw new NavigationQueryError("navigation_cursor_expired", "Selected collection changed while paging; restart this collection.");
@@ -200,13 +213,6 @@ export class NavigationDetailService {
       messagingBindingsByThreadKey,
       queuedExecutionMode: this.registry.getQueuedExecutionModeForThread(request.ref),
     });
-    // Live gate events and selected-detail refreshes must expose the same
-    // helpers, including their parent-turn links, before persistence at turn end.
-    if (projected?.source === "codex") {
-      projected.subAgents = this.registry.mergeLiveTokenMiserSubAgents(
-        projected.id, projected.subAgents,
-      );
-    }
     const canonical = projected
       ? await this.registry.canonicalizeNavigationThreadPullRequests([projected]) : [];
     const hydrated = (await this.registry.hydrateThreadGitWorkingStates(canonical, {
@@ -224,10 +230,13 @@ export class NavigationDetailService {
         identity: "unresolved",
       };
     }
-    const collections = NAVIGATION_DETAIL_COLLECTION_NAMES.map((name) => ({
-      name, count: thread[name]?.length ?? 0,
-      revision: revision({ ref: request.ref, name, values: thread[name] ?? [] }),
-    }));
+    const subAgentCollection = await this.subAgentCollectionManifest(request.ref, summary);
+    const collections = NAVIGATION_DETAIL_COLLECTION_NAMES.map((name) => name === "subAgents"
+      ? { name, ...subAgentCollection }
+      : {
+          name, count: thread[name]?.length ?? 0,
+          revision: revision({ ref: request.ref, name, values: thread[name] ?? [] }),
+        });
     // Checked on every detail read, never stored: one stat while the folder
     // exists. Viewers on other instances get the owner's answer.
     const workspaceMissing = await detectMissingThreadWorkspace(thread, {
@@ -236,7 +245,15 @@ export class NavigationDetailService {
     });
     const configuration = { ...thread, ...(workspaceMissing ? { workspaceMissing } : {}) };
     for (const name of NAVIGATION_DETAIL_COLLECTION_NAMES) delete configuration[name];
-    configuration.activeSubAgents = projectActiveThreadSubAgents(thread.subAgents ?? []);
+    // Live gate events and selected-detail refreshes must expose the same
+    // helpers before persistence at turn end; active cards come from the
+    // partial index, never from the thread's whole card history.
+    const activeCards = await getDesktopOverlayStore().listActiveThreadSubAgents({
+      backend: summary.source, threadId: summary.id,
+    });
+    configuration.activeSubAgents = projectActiveThreadSubAgents(summary.source === "codex"
+      ? this.registry.mergeLiveTokenMiserSubAgents(summary.id, activeCards)
+      : activeCards);
     let workspaceDirectories: NavigationSelectedDetailResponse["workspaceDirectories"];
     if (request.includeWorkspaceConfiguration) {
       if (thread.linkedDirectories.length > 100) {
@@ -277,6 +294,29 @@ export class NavigationDetailService {
       );
     }
     return response;
+  }
+
+  /** Count and revision of the merged card collection, without reading stored cards. */
+  private async subAgentCollectionManifest(
+    ref: NavigationSelectedDetailRequest["ref"],
+    summary: { id: string; source: AppServerBackendKind },
+  ): Promise<{ count: number; revision: string }> {
+    const store = getDesktopOverlayStore();
+    const stored = await store.readThreadSubAgentRevision({ backend: summary.source, threadId: summary.id });
+    if (summary.source !== "codex") {
+      return { count: stored.count, revision: revision({ ref, name: "subAgents", stored }) };
+    }
+    // Live gates add to the count only when not yet persisted.
+    let liveOnly = 0;
+    for (const card of this.registry.listLiveTokenMiserSubAgents(summary.id)) {
+      if (!await store.getThreadSubAgent({ backend: summary.source, threadId: summary.id, monitorId: card.monitorId })) {
+        liveOnly += 1;
+      }
+    }
+    return {
+      count: stored.count + liveOnly,
+      revision: revision({ ref, name: "subAgents", stored, live: this.registry.readLiveSubAgentRevisionSource(summary.id) }),
+    };
   }
 
   readQueueProjection(

@@ -290,7 +290,6 @@ export function materializeNavigationThreads(params: {
       worktreeSnapshots: overlay?.worktreeSnapshots ?? thread.worktreeSnapshots ?? [],
       reactions: overlay?.reactions ?? [],
       lock: overlay?.lock,
-      subAgents: overlay?.subAgents ?? [],
       scheduledStart: overlay?.scheduledStart,
       pinnedRank: overlay?.pinnedRank,
       ...parentThread,

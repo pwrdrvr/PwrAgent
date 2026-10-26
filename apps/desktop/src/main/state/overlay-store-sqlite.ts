@@ -8,6 +8,7 @@ import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-versio
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
+import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
@@ -718,7 +719,9 @@ type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownTh
  * Preserve the legacy per-overlay malformed-entry boundary: keep the valid
  * prefix, then stop that parent's traversal if an entry cannot be read.
  */
-function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | "threadId" | "subAgents">): Set<string> {
+function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | "threadId"> & {
+  subAgents?: readonly ThreadSubAgentSummary[];
+}): Set<string> {
   const keys = new Set<string>();
   try {
     for (const subAgent of overlay.subAgents ?? []) {
@@ -759,7 +762,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
   private readonly directoryLaunchpadListeners = new Set<() => void>();
   private transactionNavigationRead = 0;
-  constructor(private readonly stateDb: StateDb) {}
+  private readonly subAgentTable: ThreadSubAgentTable;
+  constructor(private readonly stateDb: StateDb) {
+    this.subAgentTable = new ThreadSubAgentTable(stateDb.raw, {
+      get: (key) => stateDb.getMeta(key),
+      set: (key, value) => stateDb.setMeta(key, value),
+    });
+  }
 
   /** Read-only stamp prevents a post-mutation query joining pre-mutation work. */
   readNavigationSourceVersion(): string {
@@ -799,30 +808,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       skippedOwnerlessWithOtherRuntimes: 0,
     };
 
+    // Cards still inside legacy payloads must be visible to the repair. Once
+    // the move is done, stay synchronous like the repair always was: startup
+    // begins it during registry construction, before any other write.
+    if (!this.subAgentTable.isMoveComplete()) await this.moveLegacyThreadSubAgents();
     const reconcile = this.stateDb.raw.transaction(() => {
-      const rows = this.stateDb.raw
-        .prepare(
-          `SELECT payload
-           FROM threads
-           WHERE payload LIKE '%"subAgents"%'`,
-        )
-        .all() as Array<{ payload: string }>;
+      // Only unfinished cards can need repair; finished ones, including every
+      // Token Miser gate card, are not in this index.
+      const byThread = new Map<string, ThreadSubAgentSummary[]>();
+      for (const { storageKey, card } of this.subAgentTable.listIncomplete()) {
+        const cards = byThread.get(storageKey);
+        if (cards) cards.push(card);
+        else byThread.set(storageKey, [card]);
+      }
 
-      for (const row of rows) {
-        let overlay: ThreadOverlayState;
-        try {
-          overlay = normalizeThreadOverlayState(
-            JSON.parse(row.payload) as ThreadOverlayState,
-          );
-        } catch {
-          continue;
-        }
-        if (!overlay.subAgents?.length) {
-          continue;
-        }
-
+      for (const [storageKey, incomplete] of byThread) {
         let changed = false;
-        const subAgents = overlay.subAgents.map((subAgent) => {
+        const subAgents = incomplete.map((subAgent) => {
           if (subAgent.completedAt !== undefined) {
             return subAgent;
           }
@@ -898,10 +900,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         }
 
         result.repairedThreads += 1;
-        this.putThread(buildThreadIdentityKey(overlay.backend, overlay.threadId), {
-          ...overlay,
-          subAgents,
-        });
+        this.subAgentTable.upsert(
+          storageKey,
+          subAgents.filter((subAgent, index) => subAgent !== incomplete[index]),
+        );
       }
     });
     reconcile();
@@ -1239,7 +1241,6 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           managedReviewEntries: current?.managedReviewEntries,
           pendingManagedReviewContextEntryIds:
             current?.pendingManagedReviewContextEntryIds,
-          subAgents: current?.subAgents,
           handoffOrigin: current?.handoffOrigin,
           lastSeenAt: params.fetchedAt,
           lastSeenUpdatedAt: thread.updatedAt,
@@ -3843,41 +3844,130 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     subAgent: ThreadSubAgentSummary;
-  }): Promise<ThreadOverlayState> {
-    return await this.upsertThreadSubAgents({
+  }): Promise<void> {
+    await this.upsertThreadSubAgents({
       backend: params.backend,
       threadId: params.threadId,
       subAgents: [params.subAgent],
     });
   }
 
+  /**
+   * Per-card upsert keyed by `monitorId`. Its cost does not depend on how many
+   * cards the thread already has, and it never rewrites the parent overlay.
+   */
   async upsertThreadSubAgents(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     subAgents: ThreadSubAgentSummary[];
-  }): Promise<ThreadOverlayState> {
-    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const replacements = new Map(
-      params.subAgents.map((subAgent) => [subAgent.monitorId, subAgent]),
+  }): Promise<void> {
+    if (params.subAgents.length === 0) return;
+    const storageKey = encodeThreadIdentityKeyForStorage(
+      buildThreadIdentityKey(params.backend, params.threadId),
     );
-    const nextSubAgents = [
-      ...replacements.values(),
-      ...(current.subAgents ?? []).filter(
-        (subAgent) => !replacements.has(subAgent.monitorId),
-      ),
-    ].sort((left, right) => right.createdAt - left.createdAt);
-    const nextState: ThreadOverlayState = {
-      ...current,
-      subAgents: nextSubAgents,
-    };
-    this.putThread(threadKey, nextState);
-    return nextState;
+    // Immediate: the legacy-card check reads before it writes, and upgrading a
+    // read snapshot fails at once (SQLITE_BUSY_SNAPSHOT) if another instance
+    // committed in between.
+    this.stateDb.raw.transaction(() => {
+      this.subAgentTable.moveLegacyCards(storageKey);
+      this.subAgentTable.upsert(storageKey, params.subAgents);
+    }).immediate();
+  }
+
+  async getThreadSubAgent(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    monitorId: string;
+  }): Promise<ThreadSubAgentSummary | undefined> {
+    const storageKey = this.subAgentStorageKey(params);
+    return this.subAgentTable.get(storageKey, params.monitorId);
+  }
+
+  /**
+   * Every card on the thread, newest first. Prefer `getThreadSubAgent` or
+   * `listActiveThreadSubAgents`; this one grows with the thread's history.
+   */
+  async listThreadSubAgents(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    excludeTokenMiser?: boolean;
+  }): Promise<ThreadSubAgentSummary[]> {
+    const storageKey = this.subAgentStorageKey(params);
+    return this.subAgentTable.list(storageKey, { excludeTokenMiser: params.excludeTokenMiser });
+  }
+
+  /** Cards whose `monitorId` starts with `monitorIdPrefix`, keyed by thread id. */
+  async listThreadSubAgentsByMonitorIdPrefix(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: readonly string[];
+    monitorIdPrefix: string;
+  }): Promise<Record<string, ThreadSubAgentSummary[]>> {
+    const keys = [...new Set(params.threadIds)].map((threadId) => ({
+      threadId,
+      storageKey: this.subAgentStorageKey({ backend: params.backend, threadId }),
+    }));
+    const cards = this.subAgentTable.listByMonitorIdPrefix(
+      keys.map((key) => key.storageKey),
+      params.monitorIdPrefix,
+    );
+    const result: Record<string, ThreadSubAgentSummary[]> = {};
+    for (const { threadId, storageKey } of keys) {
+      const found = cards.get(storageKey);
+      if (found) result[threadId] = found;
+    }
+    return result;
+  }
+
+  /** Unfinished cards and failures, from a partial index that gate cards never enter. */
+  async listActiveThreadSubAgents(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<ThreadSubAgentSummary[]> {
+    const storageKey = this.subAgentStorageKey(params);
+    return this.subAgentTable.listAttention(storageKey);
+  }
+
+  /** Changes on every card write, without reading or hashing any card. */
+  async readThreadSubAgentRevision(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<{ revision: number; count: number }> {
+    const storageKey = this.subAgentStorageKey(params);
+    return this.subAgentTable.revision(storageKey);
+  }
+
+  /**
+   * The one-time move of cards out of `threads.payload`, in slices of about
+   * `byteBudget` payload bytes with the event loop free between them. A no-op
+   * once the profile's marker is set, so later launches do no scanning.
+   */
+  async moveLegacyThreadSubAgents(options?: {
+    byteBudget?: number;
+    yieldBetweenSlices?: () => Promise<void>;
+  }): Promise<{ slices: number }> {
+    const byteBudget = options?.byteBudget ?? 4 * 1024 * 1024;
+    const yieldBetweenSlices = options?.yieldBetweenSlices
+      ?? (() => new Promise<void>((resolve) => setImmediate(resolve)));
+    let cursor: number | undefined = 0;
+    let slices = 0;
+    while (cursor !== undefined && !this.subAgentTable.isMoveComplete()) {
+      cursor = this.subAgentTable.moveLegacyCardsSlice(cursor, byteBudget);
+      slices += 1;
+      if (cursor !== undefined) {
+        // Keep the WAL near one slice's size instead of the whole move's.
+        this.stateDb.raw.pragma("wal_checkpoint(PASSIVE)");
+        await yieldBetweenSlices();
+      }
+    }
+    return { slices };
+  }
+
+  private subAgentStorageKey(params: { backend: ThreadOverlayState["backend"]; threadId: string }): string {
+    const storageKey = encodeThreadIdentityKeyForStorage(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    this.subAgentTable.moveLegacyCards(storageKey);
+    return storageKey;
   }
 
   async setThreadReaction(params: {
@@ -5838,14 +5928,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       const requested = ids.slice(offset, offset + 500).map((id) => ({
         id, key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(params.backend, id)),
       }));
-      // Remove only transcript fields. Retain every metadata field (including
-      // workspace snapshots, federation parent identity and native workers).
+      // Remove only transcript fields, plus any legacy card array a row the
+      // one-time move has not reached still holds. Retain every metadata field
+      // (including workspace snapshots and federation parent identity).
       // json_remove parses the source once, rather than one extract per field.
       const rows = this.stateDb.raw.prepare(`
         SELECT json_extract(requested.value, '$.id') AS id,
           json_remove(threads.payload, '$.immutableUsageActivities', '$.managedReviewEntries',
             '$.permissionTransitionLog', '$.messagingBindingTransitionLog',
-            '$.turnFailureLog', '$.questionnaireActivityLog') AS payload
+            '$.turnFailureLog', '$.questionnaireActivityLog', '$.subAgents') AS payload
         FROM json_each(?) AS requested
         LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
       `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
@@ -8590,7 +8681,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .prepare("SELECT payload FROM threads WHERE thread_id = ?")
       .get(storageKey) as { payload: string } | undefined;
     if (!row) return undefined;
-    const overlay = normalizeThreadOverlayState(JSON.parse(row.payload));
+    const parsed = JSON.parse(row.payload) as ThreadOverlayState & { subAgents?: unknown };
+    if (parsed.subAgents !== undefined) {
+      // First touch of a row the one-time move has not reached yet.
+      this.subAgentTable.moveLegacyCards(storageKey);
+      delete parsed.subAgents;
+    }
+    const overlay = normalizeThreadOverlayState(parsed);
     const pending = this.readThreadPrAutoDispatchPending({
       backend: overlay.backend,
       threadId: overlay.threadId,
@@ -8611,18 +8708,36 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (generation !== undefined && this.managedSubAgentThreadKeysCache?.generation === generation) {
       return new Set(this.managedSubAgentThreadKeysCache.keys);
     }
-    // One statement reads parent references and child flags from the same
-    // SQLite snapshot. Persistent triggers cover older/shared-profile writers.
+    // One statement reads card references, legacy payload references and
+    // child flags from the same SQLite snapshot. Persistent triggers cover
+    // older/shared-profile writers.
     const rows = this.stateDb.raw.prepare(
-      "SELECT thread_id, managed_children AS projection, grouped_subthread FROM thread_navigation_relationships",
-    ).all() as Array<{ thread_id: string; projection: string | null; grouped_subthread: number }>;
+      `SELECT thread_id, managed_children AS projection, grouped_subthread, NULL AS backend, NULL AS child
+         FROM thread_navigation_relationships
+       UNION ALL
+       SELECT thread_id, NULL, 0, backend, monitor_thread_id
+         FROM thread_sub_agents INDEXED BY thread_sub_agents_child
+         WHERE monitor_thread_id IS NOT NULL`,
+    ).all() as Array<{
+      thread_id: string;
+      projection: string | null;
+      grouped_subthread: number;
+      backend: string | null;
+      child: string | null;
+    }>;
     const groupedKeys = new Set(rows.filter((row) => row.grouped_subthread === 1).map((row) => row.thread_id));
     const threadKeys = new Set<string>();
     for (const row of rows) {
+      if (row.child !== null) {
+        const key = managedChildKeyFromCard(row.thread_id, row.backend, row.child);
+        if (key) threadKeys.add(key);
+        continue;
+      }
       try {
         if (!row.projection) continue;
+        // A legacy payload array the one-time move has not reached yet.
         const [backend, threadId, subAgents] = JSON.parse(row.projection) as [
-          ThreadOverlayState["backend"], string, ThreadOverlayState["subAgents"],
+          ThreadOverlayState["backend"], string, ThreadSubAgentSummary[] | undefined,
         ];
         for (const key of managedSubAgentChildKeys({ backend, threadId, subAgents })) {
           threadKeys.add(key);
@@ -8699,7 +8814,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (!records.length) return;
     this.stateDb.raw.transaction(() => {
       const remove = this.stateDb.raw.prepare("DELETE FROM threads WHERE thread_id = ?");
-      for (const record of records) remove.run(encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(record.backend, record.threadId)));
+      const storageKeys = records.map((record) => encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(record.backend, record.threadId)));
+      for (const storageKey of storageKeys) remove.run(storageKey);
+      // Explicit, not a trigger: with recursive_triggers on, INSERT OR REPLACE
+      // fires delete triggers, which would erase a live thread's cards.
+      this.subAgentTable.deleteForThreads(storageKeys);
     })();
     this.navigationOverlayCache = undefined;
   }
@@ -8712,9 +8831,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       queuedExecutionMode: _queuedExecutionMode,
       queuedExecutionModeAt: _queuedExecutionModeAt,
       prAutoDispatchPending: _prAutoDispatchPending,
+      // Cards are rows in `thread_sub_agents`, never overlay JSON.
+      subAgents: _subAgents,
       ...persistable
-    } = state;
+    } = state as ThreadOverlayState & { subAgents?: unknown };
     const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
+    // Replacing a row the one-time move has not reached would drop its cards.
+    this.subAgentTable.moveLegacyCards(storageKey);
     const navigationCache = this.navigationOverlayCache;
     const previousThreadChanges = navigationCache ? sqliteThreadChangeVersion(this.stateDb.raw) : undefined;
     this.stateDb.raw
@@ -9180,6 +9303,12 @@ function normalizeThreadAgent(
 function normalizeThreadOverlayState(
   state: ThreadOverlayState,
 ): ThreadOverlayState {
+  // A row the one-time move has not reached may still carry its card array.
+  // Cards are read from `thread_sub_agents`; never hand the array onward.
+  if ((state as { subAgents?: unknown }).subAgents !== undefined) {
+    const { subAgents: _legacyCards, ...withoutCards } = state as ThreadOverlayState & { subAgents?: unknown };
+    state = withoutCards;
+  }
   if (
     state.agent?.instructions === LEGACY_HANDOFF_AGENT_INSTRUCTIONS &&
     state.handoffOrigin &&
@@ -10342,6 +10471,11 @@ export type OverlayStoreLike = Pick<
   | "persistThreadToolHistoryAnalysis"
   | "readRecentThreadToolInvocations"
   | "upsertThreadSubAgent"
+  | "getThreadSubAgent"
+  | "listThreadSubAgents"
+  | "listActiveThreadSubAgents"
+  | "readThreadSubAgentRevision"
+  | "listThreadSubAgentsByMonitorIdPrefix"
   | "setThreadReaction"
   | "setThreadLock"
   | "setThreadArchiveTombstone"

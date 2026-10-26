@@ -97,6 +97,7 @@ import type {
   TaskMonitorResponse,
   ThreadExecutionMode,
   ThreadOverlayState,
+  ThreadSubAgentSummary,
   ThreadToolAccounting,
   ThreadToolInvocationAlert,
   ThreadToolInvocationRecord,
@@ -151,7 +152,11 @@ import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import { GitWorkingStateService } from "../app-server/git-working-state-service";
-import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
+import {
+  mockSubAgentReads,
+  type MockOverlayState,
+  type MockOverlayStore,
+} from "./helpers/mock-sub-agent-store";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
 import { GitWorkspaceHandoffService } from "../app-server/git-workspace-handoff-service";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -547,7 +552,7 @@ function multiProjectThread(params: {
 function createOverlayStoreMock(params?: {
   executionMode?: "default" | "auto" | "full-access";
   launchpadDefaults?: NavigationLaunchpadDefaults;
-  overlays?: Record<string, ThreadOverlayState>;
+  overlays?: Record<string, MockOverlayState>;
   remotePinnedRanks?: string[];
   toolAccounting?: ThreadToolAccounting;
 }) {
@@ -564,7 +569,7 @@ function createOverlayStoreMock(params?: {
         extraLinkedDirectories: [],
       }
     : undefined;
-  const overlays = new Map<string, ThreadOverlayState>(
+  const overlays = new Map<string, MockOverlayState>(
     Object.entries(params?.overlays ?? {})
   );
   const usageLines = new Map<string, ThreadUsageLineRecord>();
@@ -594,6 +599,8 @@ function createOverlayStoreMock(params?: {
   }
 
   return {
+    ...mockSubAgentReads((backend, threadId) =>
+      overlays.get(`${backend}:${threadId}`)),
     listRemoteThreadPins: async () =>
       (params?.remotePinnedRanks ?? []).map((localPinnedRank, index) => ({
         ref: buildFederatedThreadRef({
@@ -895,7 +902,7 @@ function createOverlayStoreMock(params?: {
     }: {
       backend: AppServerBackendKind;
       threadId: string;
-      subAgent: NonNullable<ThreadOverlayState["subAgents"]>[number];
+      subAgent: ThreadSubAgentSummary;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -912,7 +919,7 @@ function createOverlayStoreMock(params?: {
             (entry) => entry.monitorId !== subAgent.monitorId,
           ),
         ].sort((left, right) => right.createdAt - left.createdAt),
-      } as ThreadOverlayState;
+      } as MockOverlayState;
       overlays.set(key, next);
       return next;
     },
@@ -1721,7 +1728,7 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
-  } as unknown as OverlayStoreLike;
+  } as unknown as MockOverlayStore;
 }
 
 const TEST_TASK_MONITOR_MODELS: BackendModelOption[] = [
@@ -27957,17 +27964,10 @@ command = "pnpm dev"
     const overlayStore = createOverlayStoreMock();
     const upsertSubAgentSpy = vi
       .spyOn(overlayStore, "upsertThreadSubAgent")
-      .mockImplementation(async ({ backend, threadId, subAgent }) => {
+      .mockImplementation(async ({ subAgent }) => {
         if (subAgent.status === "success") {
           throw new Error("overlay write failed");
         }
-        return {
-          backend,
-          threadId,
-          executionMode: "default",
-          extraLinkedDirectories: [],
-          subAgents: [subAgent],
-        };
       });
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "thread/name/set"] },
@@ -44104,8 +44104,8 @@ script = "printf setup"
     await waitForCondition(() => helperTurns.length === 1);
     const monitorId = "system:queued-message-titles:codex:recipient";
     const readRow = async () =>
-      (await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "recipient" }))
-        ?.subAgents?.filter((subAgent) => subAgent.monitorId.startsWith("system:queued-message-titles:"));
+      (await overlayStore.listThreadSubAgents({ backend: "codex", threadId: "recipient" }))
+        .filter((subAgent) => subAgent.monitorId.startsWith("system:queued-message-titles:"));
 
     // Three runs: one lands, one is outgrown by an edit, one lands the edit.
     const { writes } = await measureSqliteWrites(async () => {
@@ -55468,12 +55468,12 @@ script = "printf setup"
     await registry.listThreads({ backend: "codex" });
     await registry.listThreads({ backend: "codex", forceRefresh: true });
 
-    const parentOverlay = await overlayStore.getThreadOverlayState({
+    const parentSubAgents = await overlayStore.listThreadSubAgents({
       backend: "codex",
       threadId: "thread-parent",
     });
-    expect(parentOverlay?.subAgents).toHaveLength(1);
-    expect(parentOverlay?.subAgents?.[0]).toMatchObject({
+    expect(parentSubAgents).toHaveLength(1);
+    expect(parentSubAgents[0]).toMatchObject({
       monitorId: `codex-native:${nativeThreadId}`,
       monitorThreadId: nativeThreadId,
       monitorTurnId: "turn-epicurus",
