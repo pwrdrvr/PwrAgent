@@ -4,7 +4,7 @@ import type { ThreadCompactionRecord, ThreadTokenMiserAccounting, ThreadTokenMis
 import { estimateOpenAiCodexCreditUsage, estimateTokenUsageCost } from "./token-usage-pricing";
 import { estimateHistoricalThreadUsageGapLines } from "./thread-pricing-projection";
 import { addUsageLineToSummary, buildPricingSpendByModel, emptyPricingSummary } from "./pricing-spend-by-model";
-import { buildTokenMiserSavingsSummary } from "./token-miser-savings-summary";
+import { buildTokenMiserSavingsSummary, type TokenMiserGateAccountingTotals } from "./token-miser-savings-summary";
 
 function isTerminalSubAgent(subAgent: ThreadSubAgentSummary): boolean {
   return ["success", "failure", "cancelled"].includes(subAgent.status) || subAgent.completedAt !== undefined || subAgent.outcome !== undefined || subAgent.completionSource !== undefined;
@@ -500,10 +500,18 @@ export function estimateCodexCreditsForLine(line: PricingUsageLine):
   return estimate ? { totalCreditMicros: estimate.totalCreditMicros } : undefined;
 }
 
-/** Owner-prepared rail data. Totals include history outside this page. */
+/**
+ * Owner-prepared rail data. Totals include history outside this page.
+ *
+ * `subAgents` is read only by the `sourceItemId` of a line in `pricing`, so an
+ * owner may pass just the cards those lines name. The savings fallback is the
+ * exception: it sums every gate card, so an owner passing fewer cards passes
+ * `tokenMiserGateTotals` for the whole thread with them.
+ */
 export function buildThreadPricingDisplay(params: {
   pricing?: { compactions?: ThreadCompactionRecord[]; lines: ThreadUsageLineRecord[]; summaries: ThreadPricingSummary[]; snapshot?: ThreadPricingSnapshot };
   subAgents?: ThreadSubAgentSummary[];
+  tokenMiserGateTotals?: TokenMiserGateAccountingTotals;
   tokenMiserAccounting?: ThreadTokenMiserAccounting;
   activeTurnId?: string;
   threadReasoningEffort?: string;
@@ -573,7 +581,9 @@ export function buildThreadPricingDisplay(params: {
     }),
     tokenMiserSummary: buildTokenMiserSavingsSummary({
       accounting: params.tokenMiserAccounting,
-      gateAccountings: (params.subAgents ?? []).filter((agent) => agent.monitorId.startsWith(TOKEN_MISER_SOURCE_PREFIX)).map((agent) => agent.tokenMiserAccounting),
+      ...(params.tokenMiserGateTotals
+        ? { gateTotals: params.tokenMiserGateTotals }
+        : { gateAccountings: (params.subAgents ?? []).filter((agent) => agent.monitorId.startsWith(TOKEN_MISER_SOURCE_PREFIX)).map((agent) => agent.tokenMiserAccounting) }),
     }),
     // The savings comparison must start from the same estimate as the headline.
     observedCostMicros: summary?.totalCostMicros ?? 0,

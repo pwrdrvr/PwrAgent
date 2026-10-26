@@ -11,8 +11,11 @@ import {
   type TokenMiserPricingIndex,
 } from "./token-miser-ledger-index";
 import {
+  addTokenMiserGateAccountingTotals,
   findAcpPermissionModeConfigOption,
   DEFAULT_THREAD_ARCHIVE_POLICY,
+  isTokenMiserSubAgent,
+  totalTokenMiserGateAccountings,
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
   classifyDirectory,
   readUuidV7Timestamp,
@@ -60,7 +63,12 @@ import {
   type PullRequestRepositoryRef,
   type PullRequestReferenceIdentity,
 } from "../pr-status/forge-reference";
-import { projectThreadDisplay } from "./thread-display";
+import {
+  projectThreadDisplay,
+  readThreadSubAgentPanel,
+  type ThreadDisplayCards,
+  type ThreadSubAgentPanel,
+} from "./thread-display";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { buildIncomingWorkSummary } from "./thread-work-notification";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
@@ -17087,16 +17095,11 @@ export class DesktopBackendRegistry {
       };
     }
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
-    // Pricing groups gates by their cards, so the display still reads every
-    // card; it no longer parses them as part of the overlay.
-    const persistedSubAgents = await this.overlayStore.listThreadSubAgents({ backend, threadId: request.threadId });
-    const subAgents = backend === "codex"
-      ? this.mergeLiveTokenMiserSubAgents(request.threadId, persistedSubAgents)
-      : persistedSubAgents;
     if (request.display.resource === "transcript") {
-      return projectThreadDisplay(await this.readThreadData(request), request, {
+      const data = await this.readThreadData(request);
+      return projectThreadDisplay(data, request, {
         ...overlay,
-        subAgents,
+        ...await this.readPricingSubAgents({ backend, threadId: request.threadId, pricing: data.pricing }),
         activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
       });
     }
@@ -17117,6 +17120,7 @@ export class DesktopBackendRegistry {
       ...(request.display.resource === "tools" || request.display.resource === "incident" ? { includeAllInvocations: true } : {}),
     });
     const toolAccounting = stored ? await this.withTokenMiserAccounting({ accounting: stored, backend, threadId: request.threadId }) : undefined;
+    const monitorId = request.display.monitorId;
     return projectThreadDisplay({
       backend, threadId: request.threadId, fetchedAt: Date.now(), pricing, toolAccounting,
       replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
@@ -17124,8 +17128,95 @@ export class DesktopBackendRegistry {
       ...overlay,
       // Pricing includes in-memory gates; their parent links and accounting
       // must come from the same live view before grouping and pagination.
-      subAgents,
+      ...await this.readPricingSubAgents({ backend, threadId: request.threadId, pricing }),
+      ...(request.display.resource === "subagents"
+        ? { subAgentPanel: await this.readSubAgentPanel({ backend, request }) }
+        : {}),
+      ...(request.display.resource === "subagent" && monitorId
+        ? { subAgent: (await this.readSubAgentsWithLiveState({ backend, threadId: request.threadId, monitorIds: [monitorId] }))
+          .find((card) => card.monitorId === monitorId) }
+        : {}),
       activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
+    });
+  }
+
+  /** Cards whose stored row live state replaces: unpersisted gates and held native-worker usage. */
+  private liveSubAgentMonitorIds(backend: AppServerBackendKind, threadId: string): string[] {
+    if (backend !== "codex") return [];
+    return [
+      ...this.liveTokenMiserSubAgents.get(threadId)?.keys() ?? [],
+      ...this.liveCodexNativeSubAgentUsage.get(threadId)?.keys() ?? [],
+    ];
+  }
+
+  /** The named stored cards, with every live card and live usage merged in. */
+  private async readSubAgentsWithLiveState(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    monitorIds: readonly string[];
+  }): Promise<ThreadSubAgentSummary[]> {
+    const stored = await this.overlayStore.getThreadSubAgents(params);
+    return params.backend === "codex" ? this.mergeLiveTokenMiserSubAgents(params.threadId, stored) : stored;
+  }
+
+  /**
+   * Pricing's cards: only those its usage lines name, so a thread's thousands
+   * of policy gates with no line are never read. The savings fallback sums
+   * every gate, so it gets the stored totals, with each live gate swapped in
+   * for its stored version.
+   */
+  private async readPricingSubAgents(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    pricing: ThreadPricingLedger | undefined;
+  }): Promise<Pick<ThreadDisplayCards, "pricingSubAgents" | "tokenMiserGateTotals">> {
+    const { backend, threadId } = params;
+    const liveIds = this.liveSubAgentMonitorIds(backend, threadId);
+    const named = new Set(liveIds);
+    for (const line of params.pricing?.lines ?? []) {
+      if (line.sourceItemId) named.add(line.sourceItemId);
+    }
+    const stored = await this.overlayStore.getThreadSubAgents({ backend, threadId, monitorIds: [...named] });
+    const storedTotals = await this.overlayStore.readThreadTokenMiserGateTotals({ backend, threadId });
+    if (backend !== "codex") return { pricingSubAgents: stored, tokenMiserGateTotals: storedTotals };
+    const liveGates = this.listLiveTokenMiserSubAgents(threadId).filter(isTokenMiserSubAgent);
+    const liveGateIds = new Set(liveGates.map((card) => card.monitorId));
+    const replaced = stored.filter((card) => liveGateIds.has(card.monitorId) && isTokenMiserSubAgent(card));
+    return {
+      pricingSubAgents: this.mergeLiveTokenMiserSubAgents(threadId, stored),
+      tokenMiserGateTotals: addTokenMiserGateAccountingTotals(
+        addTokenMiserGateAccountingTotals(
+          storedTotals,
+          totalTokenMiserGateAccountings(liveGates.map((card) => card.tokenMiserAccounting)),
+        ),
+        totalTokenMiserGateAccountings(replaced.map((card) => card.tokenMiserAccounting)),
+        -1,
+      ),
+    };
+  }
+
+  /** The sub-agents panel's page from the card table, with live cards merged into it. */
+  private async readSubAgentPanel(params: {
+    backend: AppServerBackendKind;
+    request: AppServerReadThreadRequest;
+  }): Promise<ThreadSubAgentPanel> {
+    const { backend, request } = params;
+    const threadId = request.threadId;
+    const liveIds = this.liveSubAgentMonitorIds(backend, threadId);
+    return await readThreadSubAgentPanel({
+      demand: request.display!,
+      now: Date.now(),
+      storedRevision: await this.overlayStore.readThreadSubAgentRevision({ backend, threadId }),
+      live: {
+        monitorIds: liveIds,
+        cards: liveIds.length > 0
+          ? await this.readSubAgentsWithLiveState({ backend, threadId, monitorIds: liveIds })
+          : [],
+      },
+      reader: {
+        counts: (read) => this.overlayStore.readThreadSubAgentLensCounts({ backend, threadId, ...read }),
+        page: (read) => this.overlayStore.listThreadSubAgentLensPage({ backend, threadId, ...read }),
+      },
     });
   }
 

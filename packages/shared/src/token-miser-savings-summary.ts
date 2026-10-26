@@ -132,42 +132,142 @@ export const TOKEN_MISER_PENDING_PRICING_CAPTION =
   "Dollar terms appear once the gate's usage line is priced.";
 
 /**
+ * Every Token Miser gate card on a thread, reduced to the figures the savings
+ * summary reads. The card table keeps this per thread, so a summary never has
+ * to read every gate card; `totalTokenMiserGateAccountings` is the same
+ * reduction over cards in hand, and the two must agree.
+ */
+export type TokenMiserGateAccountingTotals = {
+  /** Gate cards, priced or not. */
+  gateCount: number;
+  /** Gate cards that carry `tokenMiserAccounting`. */
+  pricedCount: number;
+  /** Priced gates that recorded a `disposition`, and the two values. */
+  dispositionCount: number;
+  passedThroughCount: number;
+  summarizedCount: number;
+  /** Priced gates that recorded a `decisionSource`, and the helper's share. */
+  decisionSourceCount: number;
+  helperCount: number;
+  /**
+   * The three terms and their difference, summed over the priced gates only.
+   * An unpriced gate adds to `gateCount` and nothing here, which is why the
+   * summary reports `pricedDecisionCount` beside a partial total.
+   */
+  terms: TokenMiserSavingsTerms;
+  /** First-pass parent tokens the priced gates kept out, replays excluded. */
+  avoidedParentTokens: number;
+};
+
+export function emptyTokenMiserGateAccountingTotals(): TokenMiserGateAccountingTotals {
+  return {
+    gateCount: 0,
+    pricedCount: 0,
+    dispositionCount: 0,
+    passedThroughCount: 0,
+    summarizedCount: 0,
+    decisionSourceCount: 0,
+    helperCount: 0,
+    terms: {
+      withoutGateCostMicros: 0,
+      gateCostMicros: 0,
+      revealedCostMicros: 0,
+      savingsMicros: 0,
+    },
+    avoidedParentTokens: 0,
+  };
+}
+
+/** One entry per gate card: its `tokenMiserAccounting`, or `undefined` when it has none. */
+export function totalTokenMiserGateAccountings(
+  gateAccountings: readonly (TokenMiserSubAgentAccounting | undefined)[],
+): TokenMiserGateAccountingTotals {
+  const totals = emptyTokenMiserGateAccountingTotals();
+  totals.gateCount = gateAccountings.length;
+  for (const gate of gateAccountings) {
+    if (gate === undefined) continue;
+    totals.pricedCount += 1;
+    if (gate.disposition !== undefined) totals.dispositionCount += 1;
+    if (gate.disposition === "passed_through") totals.passedThroughCount += 1;
+    if (gate.disposition === "summarized") totals.summarizedCount += 1;
+    if (gate.decisionSource !== undefined) totals.decisionSourceCount += 1;
+    if (gate.decisionSource === "helper") totals.helperCount += 1;
+    totals.terms.withoutGateCostMicros +=
+      gate.baselineParentCostMicros + (gate.cachedBaselineCostMicros ?? 0);
+    totals.terms.gateCostMicros += gate.gateCostMicros;
+    totals.terms.revealedCostMicros +=
+      gate.revealedParentCostMicros + (gate.cachedRevealedCostMicros ?? 0);
+    totals.terms.savingsMicros += gate.savingsMicros;
+    totals.avoidedParentTokens +=
+      gate.baselineParentTokens - gate.revealedParentTokens;
+  }
+  return totals;
+}
+
+/** `base` plus `sign` times `delta`, for swapping stored gates for their live versions. */
+export function addTokenMiserGateAccountingTotals(
+  base: TokenMiserGateAccountingTotals,
+  delta: TokenMiserGateAccountingTotals,
+  sign: 1 | -1 = 1,
+): TokenMiserGateAccountingTotals {
+  return {
+    gateCount: base.gateCount + sign * delta.gateCount,
+    pricedCount: base.pricedCount + sign * delta.pricedCount,
+    dispositionCount: base.dispositionCount + sign * delta.dispositionCount,
+    passedThroughCount: base.passedThroughCount + sign * delta.passedThroughCount,
+    summarizedCount: base.summarizedCount + sign * delta.summarizedCount,
+    decisionSourceCount: base.decisionSourceCount + sign * delta.decisionSourceCount,
+    helperCount: base.helperCount + sign * delta.helperCount,
+    terms: {
+      withoutGateCostMicros:
+        base.terms.withoutGateCostMicros + sign * delta.terms.withoutGateCostMicros,
+      gateCostMicros: base.terms.gateCostMicros + sign * delta.terms.gateCostMicros,
+      revealedCostMicros:
+        base.terms.revealedCostMicros + sign * delta.terms.revealedCostMicros,
+      savingsMicros: base.terms.savingsMicros + sign * delta.terms.savingsMicros,
+    },
+    avoidedParentTokens: base.avoidedParentTokens + sign * delta.avoidedParentTokens,
+  };
+}
+
+/**
  * Build the thread-level summary from whichever source this view has.
  *
  * `accounting` is thread-level and authoritative: the Explorer reads it
  * straight from the main process and the numbers below are the ones that
  * window shows. The Pricing rail only receives it when the thread
  * tool-accounting experiment is on, so the per-gate records it always has are
- * the fallback — the same records the per-turn folds already sum.
+ * the fallback — the same records the per-turn folds already sum. Pass them as
+ * `gateAccountings`, or already reduced as `gateTotals`.
  */
 export function buildTokenMiserSavingsSummary(params: {
   accounting?: ThreadTokenMiserAccounting;
-  gateAccountings: readonly (TokenMiserSubAgentAccounting | undefined)[];
+  gateAccountings?: readonly (TokenMiserSubAgentAccounting | undefined)[];
+  gateTotals?: TokenMiserGateAccountingTotals;
 }): TokenMiserSavingsSummary | undefined {
   const savings = params.accounting?.savings;
-  const priced = params.gateAccountings.filter(
-    (gate): gate is TokenMiserSubAgentAccounting => gate !== undefined,
-  );
+  const gates = params.gateTotals
+    ?? totalTokenMiserGateAccountings(params.gateAccountings ?? []);
   const decisionCount =
-    params.accounting?.interceptionCount ?? params.gateAccountings.length;
+    params.accounting?.interceptionCount ?? gates.gateCount;
   const codeModeCallCount = params.accounting?.codeMode?.callCount;
   if (decisionCount === 0 && !codeModeCallCount) return undefined;
 
   const passThroughCount =
     params.accounting?.passThroughCount
-    ?? countGates(priced, "disposition", "passed_through");
+    ?? countGates(gates.dispositionCount, gates.passedThroughCount);
   // On the thread-accounting path every decision is one or the other, so the
   // complement is exact. Off it, only the gates that actually recorded a
   // disposition can be counted — subtracting a priced-only count from a count
   // of every decision would report unpriced gates as summarized.
   const summarizedCount =
     params.accounting?.passThroughCount === undefined
-      ? countGates(priced, "disposition", "summarized")
+      ? countGates(gates.dispositionCount, gates.summarizedCount)
       : Math.max(0, decisionCount - params.accounting.passThroughCount);
   const helperDecisionCount =
     params.accounting?.helperDecisionCount
-    ?? countGates(priced, "decisionSource", "helper");
-  const avoidedParentTokens = readAvoidedParentTokens(params.accounting, priced);
+    ?? countGates(gates.decisionSourceCount, gates.helperCount);
+  const avoidedParentTokens = readAvoidedParentTokens(params.accounting, gates);
   const terms = savings
     ? {
         withoutGateCostMicros: savings.withoutGateCostMicros,
@@ -175,13 +275,13 @@ export function buildTokenMiserSavingsSummary(params: {
         revealedCostMicros: savings.revealedCostMicros,
         savingsMicros: savings.savingsMicros,
       }
-    : priced.length > 0
-      ? sumGateTerms(priced)
+    : gates.pricedCount > 0
+      ? { ...gates.terms }
       : undefined;
 
   return {
     decisionCount,
-    pricedDecisionCount: savings?.pricedGateCount ?? priced.length,
+    pricedDecisionCount: savings?.pricedGateCount ?? gates.pricedCount,
     ...(codeModeCallCount ? { codeModeCallCount } : {}),
     ...(helperDecisionCount === undefined ? {} : { helperDecisionCount }),
     ...(passThroughCount === undefined ? {} : { passThroughCount }),
@@ -288,36 +388,6 @@ export function buildTokenMiserSavingsSplit(
 }
 
 /**
- * Sum only the gates that priced. An unpriced gate contributes tokens to the
- * counts above and nothing here, which is why `pricedDecisionCount` is
- * reported separately — a partial total must not read as a complete one.
- */
-function sumGateTerms(
-  gates: readonly TokenMiserSubAgentAccounting[],
-): TokenMiserSavingsTerms {
-  return gates.reduce<TokenMiserSavingsTerms>(
-    (terms, gate) => ({
-      withoutGateCostMicros:
-        terms.withoutGateCostMicros
-        + gate.baselineParentCostMicros
-        + (gate.cachedBaselineCostMicros ?? 0),
-      gateCostMicros: terms.gateCostMicros + gate.gateCostMicros,
-      revealedCostMicros:
-        terms.revealedCostMicros
-        + gate.revealedParentCostMicros
-        + (gate.cachedRevealedCostMicros ?? 0),
-      savingsMicros: terms.savingsMicros + gate.savingsMicros,
-    }),
-    {
-      withoutGateCostMicros: 0,
-      gateCostMicros: 0,
-      revealedCostMicros: 0,
-      savingsMicros: 0,
-    },
-  );
-}
-
-/**
  * Tokens the gate kept out of the parent's first pass, replays excluded.
  *
  * The Explorer reports the replay total as its own figure beside this one, so
@@ -326,19 +396,16 @@ function sumGateTerms(
  */
 function readAvoidedParentTokens(
   accounting: ThreadTokenMiserAccounting | undefined,
-  priced: readonly TokenMiserSubAgentAccounting[],
+  gates: TokenMiserGateAccountingTotals,
 ): number | undefined {
   if (accounting) return accounting.estimatedParentTokensSaved;
-  if (priced.length === 0) return undefined;
-  return priced.reduce(
-    (total, gate) =>
-      total + gate.baselineParentTokens - gate.revealedParentTokens,
-    0,
-  );
+  if (gates.pricedCount === 0) return undefined;
+  return gates.avoidedParentTokens;
 }
 
 /**
- * Count one value of an optional per-gate field across the priced gates.
+ * One value's count among the priced gates, given how many of them recorded
+ * the field at all.
  *
  * Two ways to report a fact nobody recorded, both avoided here: a thread whose
  * gates have not priced yet has no gates to count, and older gates carry no
@@ -346,11 +413,6 @@ function readAvoidedParentTokens(
  * that the mix is unknown — "0 passed through" reads as a fact. Absent beats
  * wrong here.
  */
-function countGates<K extends "decisionSource" | "disposition">(
-  priced: readonly TokenMiserSubAgentAccounting[],
-  field: K,
-  value: NonNullable<TokenMiserSubAgentAccounting[K]>,
-): number | undefined {
-  if (!priced.some((gate) => gate[field] !== undefined)) return undefined;
-  return priced.filter((gate) => gate[field] === value).length;
+function countGates(recorded: number, matching: number): number | undefined {
+  return recorded > 0 ? matching : undefined;
 }

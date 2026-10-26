@@ -1,7 +1,8 @@
 import { expect, it } from "vitest";
-import type { AppServerReadThreadResponse, ThreadUsageLineRecord, ThreadSubAgentSummary, AgentEvent } from "@pwragent/shared";
+import { emptyTokenMiserGateAccountingTotals, type AppServerReadThreadRequest, type AppServerReadThreadResponse, type ThreadUsageLineRecord, type ThreadSubAgentSummary, type AgentEvent } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
-import { projectThreadDisplay } from "../app-server/thread-display";
+import { projectThreadDisplay, readThreadSubAgentPanel } from "../app-server/thread-display";
+import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 
@@ -211,23 +212,72 @@ it("selects one authoritative correction and completes stale running turn metada
   expect(projectThreadDisplay(data, { threadId: "fixture", display: { resource: "accounting", turns: [{ id: "turn-0", status: "in_progress" }] } }, { activeTurnId: "turn-0" }).replay.entries).toEqual([]);
 });
 
-it("pages each sub-agent category independently with counts over its complete history", () => {
+/** One `subagents` read as the owner serves it: the panel from `stored` and `live`, then the projection. */
+async function readSubAgentsPage(
+  data: AppServerReadThreadResponse,
+  request: AppServerReadThreadRequest,
+  stored: ThreadSubAgentSummary[],
+  live: ThreadSubAgentSummary[] = [],
+) {
+  const reads = mockSubAgentReads(() => ({ backend: "codex", threadId: "fixture", subAgents: stored }) as never);
+  const thread = { backend: "codex" as const, threadId: "fixture" };
+  const subAgentPanel = await readThreadSubAgentPanel({
+    demand: request.display!, now: data.fetchedAt, storedRevision: stored,
+    live: { monitorIds: live.map((card) => card.monitorId), cards: live },
+    reader: {
+      counts: (read) => reads.readThreadSubAgentLensCounts({ ...thread, ...read }),
+      page: (read) => reads.listThreadSubAgentLensPage({ ...thread, ...read }),
+    },
+  });
+  return projectThreadDisplay(data, request, { subAgentPanel });
+}
+
+it("pages each sub-agent category independently with counts over its complete history", async () => {
   const data = snapshot(1);
   const agents = ["codex-native:", "system:token-miser:", "monitor:"].flatMap((prefix) => Array.from({ length: 23 }, (_, index) => ({
     monitorId: prefix + index, task: "Visible task", status: "running" as const, createdAt: data.fetchedAt - index, updatedAt: data.fetchedAt,
   })));
-  const first = projectThreadDisplay(data, { threadId: "fixture", display: { resource: "subagents", limit: 20 } }, { subAgents: agents });
+  const first = await readSubAgentsPage(data, { threadId: "fixture", display: { resource: "subagents", limit: 20 } }, agents);
   expect(first.display?.subAgentCounts).toEqual({ harness: 23, "token-miser": 23, pwragent: 23 });
   expect(first.display?.subAgentLens).toBe("harness");
   expect(first.display?.subAgents).toHaveLength(20);
   expect(first.display?.subAgents?.every((agent) => agent.monitorId.startsWith("codex-native:"))).toBe(true);
-  const second = projectThreadDisplay(data, { threadId: "fixture", display: { resource: "subagents", cursor: first.display?.nextCursor } }, { subAgents: agents });
+  const second = await readSubAgentsPage(data, { threadId: "fixture", display: { resource: "subagents", cursor: first.display?.nextCursor } }, agents);
   expect(second.display?.subAgents).toHaveLength(3);
   expect(second.display?.nextCursor).toBeUndefined();
-  const tokenMiser = projectThreadDisplay(data, { threadId: "fixture", display: { resource: "subagents", subAgentLens: "token-miser" } }, { subAgents: agents });
+  const tokenMiser = await readSubAgentsPage(data, { threadId: "fixture", display: { resource: "subagents", subAgentLens: "token-miser" } }, agents);
   expect(tokenMiser.display?.subAgents).toHaveLength(20);
   expect(tokenMiser.display?.subAgents?.every((agent) => agent.monitorId.startsWith("system:token-miser:"))).toBe(true);
-  expect(() => projectThreadDisplay(data, { threadId: "fixture", display: { resource: "subagents", subAgentLens: "token-miser", cursor: first.display?.nextCursor } }, { subAgents: agents })).toThrow(/history changed/);
+  await expect(readSubAgentsPage(data, { threadId: "fixture", display: { resource: "subagents", subAgentLens: "token-miser", cursor: first.display?.nextCursor } }, agents)).rejects.toThrow(/history changed/);
+});
+
+it.each([3, 7, 20])("merges live cards into stored pages in order, %i per page", async (limit) => {
+  const data = snapshot(1);
+  const gate = (name: string, createdAt: number, task = "Stored gate"): ThreadSubAgentSummary => ({
+    monitorId: `system:token-miser:${name}`, task, status: "success", createdAt, updatedAt: createdAt,
+  });
+  const stored = Array.from({ length: 30 }, (_, index) => gate(`stored-${String(index).padStart(2, "0")}`, 1_000 + index * 10));
+  const live = [
+    gate("live-newest", 2_000, "Live gate"),
+    gate("live-a", 1_000 + 25 * 10 + 5, "Live gate"),
+    gate("live-b", 1_000 + 4 * 10 - 5, "Live gate"),
+    gate("live-oldest", 0, "Live gate"),
+    // A stored gate whose live state replaces it.
+    { ...stored[12]!, task: "Live gate" },
+  ];
+  const expected = [...stored.filter((card) => card.monitorId !== stored[12]!.monitorId), ...live]
+    .sort((left, right) => right.createdAt - left.createdAt)
+    .map((card) => [card.monitorId, card.task]);
+
+  const seen: Array<[string, string]> = [];
+  let cursor: string | undefined;
+  do {
+    const page = await readSubAgentsPage(data, { threadId: "fixture", display: { resource: "subagents", limit, cursor } }, stored, live);
+    expect(page.display?.subAgentCounts).toEqual({ harness: 0, pwragent: 0, "token-miser": 34 });
+    seen.push(...(page.display?.subAgents ?? []).map((card): [string, string] => [card.monitorId, card.task]));
+    cursor = page.display?.nextCursor;
+  } while (cursor);
+  expect(seen).toEqual(expected);
 });
 
 it("places message-only provider content before its next timeline message", () => {
@@ -267,7 +317,7 @@ it("bounds Pricing reads with thousands of folded gates and keeps all group tota
     summary: { summary: "Hidden decision evidence ".repeat(100), usefulDetails: [] },
   }));
   const request = { threadId: "fixture", display: { resource: "pricing" as const, deferPricingGates: true, limit: 20 } };
-  const first = projectThreadDisplay(data, request, { subAgents });
+  const first = projectThreadDisplay(data, request, { pricingSubAgents: subAgents });
   const page = first.display!.pricingPage!;
   const group = page.rows.find((row) => row.line.usageLineId === parent.usageLineId)!;
   expect(page.rows).toHaveLength(20);
@@ -282,7 +332,7 @@ it("bounds Pricing reads with thousands of folded gates and keeps all group tota
   expect(JSON.stringify(first)).not.toContain("Hidden");
   const select = (filter: "primary" | "small", cursor?: string) => projectThreadDisplay(data, {
     ...request, display: { ...request.display, pricingGateGroup: { usageLineId: parent.usageLineId, filter }, cursor },
-  }, { subAgents });
+  }, { pricingSubAgents: subAgents });
   const primary = select("primary");
   const primaryMore = select("primary", primary.display!.nextCursor);
   expect(primary.display!.pricingPage!.rows).toHaveLength(20);
@@ -300,7 +350,7 @@ it("bounds Pricing reads with thousands of folded gates and keeps all group tota
 
   // Viewers predating deferred groups still receive usable inline cards, but
   // never the raw task/output/decision evidence that inflated the old payload.
-  const inline = projectThreadDisplay(data, { threadId: "fixture", display: { resource: "pricing" } }, { subAgents });
+  const inline = projectThreadDisplay(data, { threadId: "fixture", display: { resource: "pricing" } }, { pricingSubAgents: subAgents });
   expect(inline.display!.pricingPage!.rows.find((row) => row.line.usageLineId === parent.usageLineId)!.gates).toHaveLength(1000);
   expect(JSON.stringify(inline)).not.toContain("Hidden");
 
@@ -309,13 +359,13 @@ it("bounds Pricing reads with thousands of folded gates and keeps all group tota
   // when none crosses the primary-card threshold.
   data.pricing!.lines = gates;
   const smallAgents = subAgents.map((agent) => ({ ...agent, tokenMiserAccounting: { ...agent.tokenMiserAccounting!, savingsMicros: 1000 } }));
-  const orphan = projectThreadDisplay(data, request, { subAgents: smallAgents });
+  const orphan = projectThreadDisplay(data, request, { pricingSubAgents: smallAgents });
   expect(orphan.display!.pricingPage!.rows).toHaveLength(1);
   const anchor = orphan.display!.pricingPage!.rows[0]!;
   expect(anchor).toMatchObject({ orphan: true, gatesDeferred: true, gates: [], gateSummary: { primaryCount: 1000, smallCount: 0, count: 1100 } });
   const expanded = projectThreadDisplay(data, { ...request, display: { ...request.display,
     pricingGateGroup: { usageLineId: anchor.line.usageLineId, filter: "primary" },
-  } }, { subAgents: smallAgents });
+  } }, { pricingSubAgents: smallAgents });
   expect(expanded.display!.pricingPage!.rows).toHaveLength(20);
   expect(expanded.display!.pricingPage!.rows.every((row) => row.nested && !row.orphan)).toBe(true);
 });
@@ -342,7 +392,8 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
     automaticArchiveReservations: new Map(),
     overlayStore: {
       getThreadOverlayState: async () => undefined,
-      listThreadSubAgents: async () => [],
+      getThreadSubAgents: async () => [],
+      readThreadTokenMiserGateTotals: async () => emptyTokenMiserGateAccountingTotals(),
       readThreadPricing: async () => data.pricing,
       readThreadToolAccounting: async () => undefined,
     },
@@ -361,6 +412,8 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
     orphan: false, line: { usageLineId: parent.usageLineId },
     gateSummary: { gateCount: 30, unpricedCount: 0 },
   });
+  // The savings total counts the live gates the stored totals have not seen.
+  expect(first.display!.pricing.tokenMiserSummary).toMatchObject({ decisionCount: 30, pricedDecisionCount: 30 });
   const second = await registry.readThread({ threadId: "fixture", display: { ...display, cursor: first.display!.nextCursor } });
   expect(second.display!.pricingPage!.rows).toHaveLength(5);
   expect(second.display!.nextCursor).toBeUndefined();

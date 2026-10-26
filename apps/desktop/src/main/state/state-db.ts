@@ -19,6 +19,7 @@ import { THREAD_SANDBOX_SCHEMA } from "./thread-sandbox-store.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
 import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
 import {
+  ensureThreadSubAgentPanelSchema,
   ensureThreadSubAgentSchema,
   THREAD_SUB_AGENTS_MOVED_META_KEY,
 } from "./thread-sub-agents";
@@ -2134,6 +2135,10 @@ export class StateDb {
       // Converge a profile whose v79 came from another branch. On a current
       // profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
+      // Additive columns on the card tables, with no version of their own so
+      // no branch can claim it: one immediate transaction the first time,
+      // then two table-info reads per open.
+      ensureThreadSubAgentPanelSchema(db);
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);

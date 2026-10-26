@@ -8170,6 +8170,78 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("reads a pricing page and a sub-agents page at the same cost on a thread with 25 or 2,025 gate cards", async () => {
+    const temp = createTempStateDb("pwragent-display-card-reads-");
+    const db = StateDb.open(temp.dbPath);
+    const overlayStore = new SqliteOverlayStore(db);
+    const registry = new DesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore });
+    onTestFinished(async () => {
+      await registry.close();
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    });
+    const gate = (index: number): ThreadSubAgentSummary => ({
+      agentName: "Token Miser", backend: "codex", completedAt: 1_800_000_000_500 + index,
+      createdAt: 1_800_000_000_000 + index, monitorId: `system:token-miser:gate-${String(index).padStart(6, "0")}`,
+      outcome: "success", parentTurnId: "turn-1", status: "success", task: "Gate commandExecution output",
+      tokenMiserAccounting: {
+        baselineParentCostMicros: 5_000, baselineParentTokens: 40_000, currency: "USD", decisionSource: "helper",
+        disposition: "summarized", gateCostMicros: 300, gateModel: "gpt-5.4-mini", gateTotalTokens: 2_000,
+        originalModel: "gpt-5.5", revealedParentCostMicros: 700, revealedParentTokens: 4_000, savingsMicros: 4_000,
+      },
+      updatedAt: 1_800_000_000_500 + index,
+    });
+    const usage = (threadId: string, overrides: Partial<ThreadUsageLineRecord>): ThreadUsageLineRecord => ({
+      backend: "codex", cachedInputCostMicros: 0, cachedInputTokens: 0, createdAt: 1_800_000_003_000, currency: "USD",
+      inputTokens: 1_000, model: "gpt-5.5", outputCostMicros: 0, outputTokens: 100, priceStatus: "unpriced",
+      priceUnavailableReason: "missing-rate", provider: "openai", reasoningOutputTokens: 0, scope: "turn", source: "live",
+      status: "finalized", threadId, totalCostMicros: 0, totalTokens: 1_100, turnId: "turn-1",
+      uncachedInputCostMicros: 0, uncachedInputTokens: 1_000, usageLineId: `${threadId}:turn-1`, ...overrides,
+    });
+    // Both threads hold the same 25 newest gates, 5 of them priced from a
+    // usage line. The large one also holds 2,000 older policy gates, which
+    // have accounting and no line, as a busy thread's history does.
+    const recent = Array.from({ length: 25 }, (_, index) => gate(2_000 + index));
+    for (const threadId of ["thread-small", "thread-large"]) {
+      await overlayStore.upsertThreadSubAgents({ backend: "codex", threadId,
+        subAgents: threadId === "thread-large" ? [...recent, ...Array.from({ length: 2_000 }, (_, index) => gate(index))] : recent });
+      await overlayStore.upsertThreadUsageLines({ lines: [usage(threadId, {}), ...recent.slice(0, 5).map((card, index) => usage(`${threadId}-gate`, {
+        createdAt: 1_800_000_002_000 + index, parentThreadId: threadId, scope: "monitor", source: "monitor",
+        sourceItemId: card.monitorId, usageLineId: `${threadId}:${card.monitorId}`,
+      }))] });
+    }
+
+    const parsed: number[] = [];
+    const parse = JSON.parse;
+    const spy = vi.spyOn(JSON, "parse").mockImplementation((text: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
+      parsed.push(text.length);
+      return parse(text, reviver);
+    });
+    const read = async (threadId: string) => {
+      parsed.length = 0;
+      const pricing = await registry.readThread({ backend: "codex", threadId, display: { resource: "pricing", deferPricingGates: true } });
+      const panel = await registry.readThread({ backend: "codex", threadId, display: { resource: "subagents", subAgentLens: "token-miser" } });
+      return { bytes: parsed.reduce((total, bytes) => total + bytes, 0), panel: panel.display, pricing: pricing.display };
+    };
+    const small = await read("thread-small");
+    const large = await read("thread-large");
+    spy.mockRestore();
+
+    expect(large.bytes).toBe(small.bytes);
+    expect(large.pricing?.pricingPage?.rows.map((row) => row.gateSummary?.gateCount))
+      .toEqual(small.pricing?.pricingPage?.rows.map((row) => row.gateSummary?.gateCount));
+    expect(small.pricing?.pricingPage?.rows[0]?.gateSummary).toMatchObject({ gateCount: 5 });
+    // The savings total still counts every gate.
+    expect(small.pricing?.pricing.tokenMiserSummary).toMatchObject({ decisionCount: 25, helperDecisionCount: 25 });
+    expect(large.pricing?.pricing.tokenMiserSummary).toMatchObject({
+      decisionCount: 2_025, helperDecisionCount: 2_025, terms: { savingsMicros: 2_025 * 4_000 },
+    });
+    expect([small.panel?.subAgents?.length, large.panel?.subAgents?.length]).toEqual([20, 20]);
+    expect(large.panel?.subAgents?.map((card) => card.monitorId)).toEqual(small.panel?.subAgents?.map((card) => card.monitorId));
+    expect(large.panel?.subAgentCounts).toEqual({ harness: 0, pwragent: 0, "token-miser": 2_025 });
+    expect(large.panel?.nextCursor).toBeDefined();
+  });
+
   it("projects declared local costs and catalog labels without rewriting history or pricing unknown remote models", async () => {
     const id = "/models/bonsai.gguf";
     const local: ThreadUsageLineRecord = {

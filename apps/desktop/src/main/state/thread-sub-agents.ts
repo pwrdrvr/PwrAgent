@@ -2,7 +2,9 @@ import type BetterSqlite3 from "better-sqlite3";
 import {
   buildThreadIdentityKey,
   parseThreadIdentityKey,
+  type SubAgentLens,
   type ThreadSubAgentSummary,
+  type TokenMiserGateAccountingTotals,
 } from "@pwragent/shared";
 
 /**
@@ -119,6 +121,136 @@ AFTER DELETE ON thread_sub_agents WHEN OLD.monitor_thread_id IS NOT NULL BEGIN
   UPDATE thread_navigation_relationship_generation SET generation = generation + 1 WHERE singleton = 1;
 END;
 `;
+
+/**
+ * The sub-agents panel's lens, from the monitor id alone. This is
+ * `subAgentLens` in `@pwragent/shared` (subagent-kind.ts) restated in SQL, so
+ * every writer, including an older build's statements and the capture
+ * triggers, gets it without knowing the column exists. A generated column
+ * reads no card; the index stores it at write time.
+ */
+const LENS_COLUMN = `ALTER TABLE thread_sub_agents ADD COLUMN lens TEXT GENERATED ALWAYS AS (CASE
+  WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
+  WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
+  ELSE 'pwragent' END) VIRTUAL`;
+const LENS_INDEX = `CREATE INDEX IF NOT EXISTS thread_sub_agents_by_lens
+  ON thread_sub_agents(thread_id, lens, created_at DESC, monitor_id)`;
+
+/**
+ * `isThreadSubAgentVisibleInPanel` (subagent-visibility.ts) for a harness
+ * card, in SQL: a finished native worker leaves the panel a day after it last
+ * moved. The one parameter is the oldest activity time still shown.
+ */
+const HARNESS_VISIBLE = `NOT (
+  (status IN ('success', 'failure', 'cancelled')
+    OR json_type(card, '$.completedAt') IS NOT NULL
+    OR json_type(card, '$.outcome') IS NOT NULL
+    OR json_type(card, '$.completionSource') IS NOT NULL)
+  AND coalesce(completed_at, updated_at) < ?)`;
+
+/**
+ * Per-thread sums over the Token Miser gate cards, for the Pricing savings
+ * fallback (`TokenMiserGateAccountingTotals`), so it never reads the cards.
+ * They live on the revision row, which every card write already rewrites, so
+ * keeping them adds no page to a write.
+ */
+const GATE_TOTAL_COLUMNS = [
+  "gate_count", "gate_priced", "gate_disposition", "gate_passed_through", "gate_summarized",
+  "gate_decision_source", "gate_helper", "gate_without_micros", "gate_cost_micros",
+  "gate_revealed_micros", "gate_savings_micros", "gate_avoided_tokens",
+] as const;
+
+/** One card's share of each `GATE_TOTAL_COLUMNS` entry, in order. `row` is a card row alias. */
+function gateShares(row: string): string[] {
+  const accounting = (field: string) => `coalesce(json_extract(${row}.card, '$.tokenMiserAccounting.${field}'), 0)`;
+  const priced = `(json_type(${row}.card, '$.tokenMiserAccounting') = 'object')`;
+  const field = (name: string) => `json_extract(${row}.card, '$.tokenMiserAccounting.${name}')`;
+  const ifPriced = (expression: string) => `CASE WHEN ${priced} THEN ${expression} ELSE 0 END`;
+  return [
+    "1",
+    ifPriced("1"),
+    ifPriced(`(json_type(${row}.card, '$.tokenMiserAccounting.disposition') IS NOT NULL)`),
+    ifPriced(`(${field("disposition")} IS 'passed_through')`),
+    ifPriced(`(${field("disposition")} IS 'summarized')`),
+    ifPriced(`(json_type(${row}.card, '$.tokenMiserAccounting.decisionSource') IS NOT NULL)`),
+    ifPriced(`(${field("decisionSource")} IS 'helper')`),
+    ifPriced(`${accounting("baselineParentCostMicros")} + ${accounting("cachedBaselineCostMicros")}`),
+    ifPriced(accounting("gateCostMicros")),
+    ifPriced(`${accounting("revealedParentCostMicros")} + ${accounting("cachedRevealedCostMicros")}`),
+    ifPriced(accounting("savingsMicros")),
+    ifPriced(`${accounting("baselineParentTokens")} - ${accounting("revealedParentTokens")}`),
+  ];
+}
+
+const IS_GATE = (row: string) => `substr(${row}.monitor_id, 1, 19) = 'system:token-miser:'`;
+
+function addGateShares(row: "NEW" | "OLD"): string {
+  return `INSERT INTO thread_sub_agent_revisions(thread_id, revision, card_count, ${GATE_TOTAL_COLUMNS.join(", ")})
+    SELECT ${row}.thread_id, 0, 0, ${gateShares(row).join(", ")} WHERE ${IS_GATE(row)}
+    ON CONFLICT(thread_id) DO UPDATE SET ${GATE_TOTAL_COLUMNS.map((column) => `${column} = ${column} + excluded.${column}`).join(", ")};`;
+}
+
+function removeGateShares(row: "NEW" | "OLD"): string {
+  const shares = gateShares(row);
+  return `UPDATE thread_sub_agent_revisions SET ${GATE_TOTAL_COLUMNS.map((column, index) => `${column} = ${column} - (${shares[index]})`).join(", ")}
+    WHERE thread_id = ${row}.thread_id AND ${IS_GATE(row)};`;
+}
+
+const GATE_TOTAL_TRIGGERS = `
+CREATE TRIGGER IF NOT EXISTS thread_sub_agent_gate_totals_insert
+AFTER INSERT ON thread_sub_agents WHEN ${IS_GATE("NEW")} BEGIN ${addGateShares("NEW")} END;
+CREATE TRIGGER IF NOT EXISTS thread_sub_agent_gate_totals_update
+AFTER UPDATE ON thread_sub_agents WHEN ${IS_GATE("OLD")} OR ${IS_GATE("NEW")} BEGIN
+  ${removeGateShares("OLD")}
+  ${addGateShares("NEW")}
+END;
+CREATE TRIGGER IF NOT EXISTS thread_sub_agent_gate_totals_delete
+AFTER DELETE ON thread_sub_agents WHEN ${IS_GATE("OLD")} BEGIN ${removeGateShares("OLD")} END;
+`;
+
+/** The same sums, recomputed from the cards; once per thread that predates the columns. */
+const RECOMPUTE_GATE_TOTALS = `UPDATE thread_sub_agent_revisions SET (${GATE_TOTAL_COLUMNS.join(", ")}) = (
+    SELECT ${gateShares("c").map((share, index) => index === 0 ? "count(*)" : `coalesce(sum(${share}), 0)`).join(", ")}
+    FROM thread_sub_agents AS c
+    WHERE c.thread_id = thread_sub_agent_revisions.thread_id
+      AND c.monitor_id >= 'system:token-miser:' AND c.monitor_id < 'system:token-miser;'
+  ), gate_totals_ready = 1
+  WHERE thread_id = ? AND gate_totals_ready = 0`;
+
+function columnNames(db: BetterSqlite3.Database, table: string): Set<string> {
+  return new Set((db.prepare("SELECT name FROM pragma_table_xinfo(?)").all(table) as Array<{ name: string }>)
+    .map((row) => row.name));
+}
+
+/**
+ * The lens column and index and the gate totals, added once. Later opens read
+ * two table infos and write nothing. Adding the columns builds the index over
+ * the card rows' leading columns, which never touches a card body, and marks
+ * every existing thread's totals stale; `ThreadSubAgentTable.gateTotals`
+ * recomputes one thread's on its first read. Rows created afterwards start
+ * fresh, and the triggers keep them current whichever build writes the card.
+ */
+export function ensureThreadSubAgentPanelSchema(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_sub_agents") || !tableExists(db, "thread_sub_agent_revisions")) return;
+  const isCurrent = () => columnNames(db, "thread_sub_agents").has("lens")
+    && columnNames(db, "thread_sub_agent_revisions").has("gate_totals_ready");
+  if (isCurrent()) return;
+  db.transaction(() => {
+    // Another opener may have added them while this connection waited.
+    if (isCurrent()) return;
+    if (!columnNames(db, "thread_sub_agents").has("lens")) db.exec(LENS_COLUMN);
+    db.exec(LENS_INDEX);
+    const revisionColumns = columnNames(db, "thread_sub_agent_revisions");
+    for (const column of GATE_TOTAL_COLUMNS) {
+      if (!revisionColumns.has(column)) {
+        db.exec(`ALTER TABLE thread_sub_agent_revisions ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+      }
+    }
+    db.exec("ALTER TABLE thread_sub_agent_revisions ADD COLUMN gate_totals_ready INTEGER NOT NULL DEFAULT 1");
+    db.exec("UPDATE thread_sub_agent_revisions SET gate_totals_ready = 0");
+    db.exec(GATE_TOTAL_TRIGGERS);
+  }).immediate();
+}
 
 /** Set once every legacy payload array has been moved; later opens skip all scanning. */
 export const THREAD_SUB_AGENTS_MOVED_META_KEY = "thread_sub_agents_moved_v1";
@@ -291,6 +423,92 @@ export class ThreadSubAgentTable {
       : this.db.prepare(`SELECT card FROM thread_sub_agents WHERE thread_id = ?
           ORDER BY created_at DESC, monitor_id`).all(storageKey);
     return parseCards(rows as CardRow[]);
+  }
+
+  /** The named cards that exist, in no particular order. */
+  getMany(storageKey: string, monitorIds: readonly string[]): ThreadSubAgentSummary[] {
+    if (monitorIds.length === 0) return [];
+    return parseCards(this.db.prepare(`SELECT card FROM thread_sub_agents
+      WHERE thread_id = ? AND monitor_id IN (SELECT value FROM json_each(?))`)
+      .all(storageKey, JSON.stringify([...new Set(monitorIds)])) as CardRow[]);
+  }
+
+  /**
+   * Cards per panel lens, as `isThreadSubAgentVisibleInPanel` filters them at
+   * `visibleSince` (the oldest activity a finished native worker may have).
+   * The other two lenses count from the lens index alone; only harness rows
+   * are read, to test their age.
+   */
+  lensCounts(storageKey: string, visibleSince: number, excludeMonitorIds: readonly string[] = []): Record<SubAgentLens, number> {
+    const counts: Record<SubAgentLens, number> = { harness: 0, "token-miser": 0, pwragent: 0 };
+    const excluded = JSON.stringify([...new Set(excludeMonitorIds)]);
+    const rows = this.db.prepare(`SELECT lens, count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
+      WHERE thread_id = ? AND lens IN ('token-miser', 'pwragent')
+        AND monitor_id NOT IN (SELECT value FROM json_each(?))
+      GROUP BY lens`).all(storageKey, excluded) as Array<{ lens: SubAgentLens; count: number }>;
+    for (const row of rows) counts[row.lens] = row.count;
+    counts.harness = (this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
+      WHERE thread_id = ? AND lens = 'harness'
+        AND monitor_id NOT IN (SELECT value FROM json_each(?)) AND ${HARNESS_VISIBLE}`)
+      .get(storageKey, excluded, visibleSince) as { count: number }).count;
+    return counts;
+  }
+
+  /** One page of a lens, newest first, read from the lens index; only the page's cards are parsed. */
+  lensPage(params: {
+    storageKey: string;
+    lens: SubAgentLens;
+    visibleSince: number;
+    excludeMonitorIds?: readonly string[];
+    offset: number;
+    limit: number;
+  }): ThreadSubAgentSummary[] {
+    const excluded = JSON.stringify([...new Set(params.excludeMonitorIds ?? [])]);
+    const rows = params.lens === "harness"
+      ? this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
+          WHERE thread_id = ? AND lens = 'harness'
+            AND monitor_id NOT IN (SELECT value FROM json_each(?)) AND ${HARNESS_VISIBLE}
+          ORDER BY created_at DESC, monitor_id LIMIT ? OFFSET ?`)
+        .all(params.storageKey, excluded, params.visibleSince, params.limit, params.offset)
+      : this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
+          WHERE thread_id = ? AND lens = ?
+            AND monitor_id NOT IN (SELECT value FROM json_each(?))
+          ORDER BY created_at DESC, monitor_id LIMIT ? OFFSET ?`)
+        .all(params.storageKey, params.lens, excluded, params.limit, params.offset);
+    return parseCards(rows as CardRow[]);
+  }
+
+  /**
+   * The thread's stored gate totals. A thread that predates the columns has
+   * its totals summed from its gate cards once, on this first read.
+   */
+  gateTotals(storageKey: string): TokenMiserGateAccountingTotals {
+    const read = () => this.db.prepare(`SELECT ${GATE_TOTAL_COLUMNS.join(", ")}, gate_totals_ready
+      FROM thread_sub_agent_revisions WHERE thread_id = ?`).get(storageKey) as
+      (Record<typeof GATE_TOTAL_COLUMNS[number], number> & { gate_totals_ready: number }) | undefined;
+    let row = read();
+    if (row && row.gate_totals_ready === 0) {
+      row = this.db.transaction(() => {
+        this.db.prepare(RECOMPUTE_GATE_TOTALS).run(storageKey);
+        return read();
+      }).immediate();
+    }
+    return {
+      gateCount: row?.gate_count ?? 0,
+      pricedCount: row?.gate_priced ?? 0,
+      dispositionCount: row?.gate_disposition ?? 0,
+      passedThroughCount: row?.gate_passed_through ?? 0,
+      summarizedCount: row?.gate_summarized ?? 0,
+      decisionSourceCount: row?.gate_decision_source ?? 0,
+      helperCount: row?.gate_helper ?? 0,
+      terms: {
+        withoutGateCostMicros: row?.gate_without_micros ?? 0,
+        gateCostMicros: row?.gate_cost_micros ?? 0,
+        revealedCostMicros: row?.gate_revealed_micros ?? 0,
+        savingsMicros: row?.gate_savings_micros ?? 0,
+      },
+      avoidedParentTokens: row?.gate_avoided_tokens ?? 0,
+    };
   }
 
   /** Cards whose `monitorId` starts with `prefix`, per thread, from the primary-key range. */
