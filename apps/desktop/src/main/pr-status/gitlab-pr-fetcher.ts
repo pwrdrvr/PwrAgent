@@ -277,7 +277,7 @@ export class GitLabPrFetcher {
     const token = await this.readToken(host);
     if (!token) throw new GitLabReadError(401, undefined, `glab has no token for ${host} to upload attachments. Sign in with glab auth login.`);
     const form = new FormData();
-    form.append("file", new Blob([file.data]), file.name);
+    form.append("file", new Blob([new Uint8Array(file.data)]), file.name);
     const timeout = AbortSignal.timeout(120_000);
     const response = await (this.options.fetch ?? fetch)(`https://${host}/api/v4/projects/${encodeURIComponent(projectPath)}/uploads`, {
       method: "POST", body: form, redirect: "error",
