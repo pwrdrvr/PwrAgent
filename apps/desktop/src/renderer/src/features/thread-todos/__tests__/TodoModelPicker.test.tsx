@@ -151,7 +151,7 @@ describe("to-do dispatch model picker", () => {
       ...backend, launchpadOptions: { models: [{ id: "owner-opus", label: "Opus owner", reasoningEfforts: ["high"] }] },
     } : backend);
     const api = {
-      listBackends: vi.fn(async () => ({ backends: ownerBackends })),
+      listBackends: vi.fn(async () => ({ backends: ownerBackends, fetchedAt: 0 })),
       listModelSettingsRecents: vi.fn(async () => ({ recents: [codex] })),
     };
     render(<TodoDispatchProvider api={api} backends={backends} todos={[todo]}>
