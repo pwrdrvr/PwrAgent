@@ -69,7 +69,7 @@ export function buildPwrAgentStarMapToolDefinitions(
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     deferLoading: false,
-    dispatch: async (args): Promise<AgentToolDispatchResult> => {
+    dispatch: async (args, context): Promise<AgentToolDispatchResult> => {
       if (!handler) {
         return agentToolFailure({
           code: "internal_error",
@@ -85,7 +85,7 @@ export function buildPwrAgentStarMapToolDefinitions(
       }
       const response = await handler({
         operation,
-        context: {},
+        context: { caller: { backend: context.backend, threadId: context.threadId } },
         args: parsed.args,
       } as PwrAgentStarMapRequest);
       return starMapResponseToAgentToolResult(response);
@@ -98,7 +98,13 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "open_thread":
-      return "Open/mount a thread in the local graphical UI. Pass instanceId for a peer. Success confirms selection.";
+      return [
+        "Voice manager only: select a thread in the operator's main window and bring PwrAgent to the front.",
+        "Other threads get forbidden, because it takes over the operator's screen.",
+        "Pass instanceId for a peer's thread. Success confirms the selection.",
+        "It gives no terminal or file access. Inspect a thread with read_thread,",
+        "and give the operator its threadLink to open it themselves.",
+      ].join(" ");
     case "read_star_map_view":
       return [
         "Read what the operator sees on the PwrAgent Star Map right now.",

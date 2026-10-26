@@ -104,6 +104,14 @@ window), mounts a peer thread through the existing remote-thread pin API when
 needed, and selects the thread view. It never sends a focus command to the
 peer machine's graphical interface.
 
+Only the Voice manager may call it. Every other thread can discover the tool,
+but a call returns `forbidden` before anything moves, because the window
+raise and the selection change land on the operator mid-task. A coding thread
+once opened an unrelated, unpinned peer thread twice while looking for that
+peer's terminal. Other threads read a thread with `read_thread` and give the
+operator its `threadLink`. The policy fails closed: a call with no caller, or
+with no policy wired, is refused.
+
 Existing Codex manager threads receive added tools through the negotiated
 `dynamicToolsResumeField: "dynamicTools"` catalog-refresh capability. Older
 runtimes keep the tools registered when a thread was created. On those
