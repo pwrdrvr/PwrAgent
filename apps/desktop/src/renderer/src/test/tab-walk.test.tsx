@@ -25,4 +25,10 @@ it("shares ancestor reads within a scan and observes visibility on the next Tab"
   second.style.display = "";
   pressTab();
   expect(second).toHaveFocus();
+
+  // A newly hidden origin still gives the browser its position in the
+  // document. Only the destination needs a visibility check.
+  second.style.display = "none";
+  pressTab();
+  expect(first).toHaveFocus();
 });

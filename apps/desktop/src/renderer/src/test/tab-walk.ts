@@ -64,7 +64,7 @@ export function pressTab({ shift = false }: { shift?: boolean } = {}): KeyboardE
   // computed styles on every Tab makes a trapped dialog pay for all the
   // settings controls behind it, even though focus never reaches them.
   let next: HTMLElement | undefined;
-  if (at !== -1 && active !== null && isStop(active)) {
+  if (at !== -1 && active !== null && active.tabIndex >= 0) {
     const ordered = shift
       ? [...candidates.slice(0, at).reverse(), ...candidates.slice(at).reverse()]
       : [...candidates.slice(at + 1), ...candidates.slice(0, at + 1)];

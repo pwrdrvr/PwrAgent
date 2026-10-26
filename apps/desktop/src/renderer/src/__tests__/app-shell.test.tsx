@@ -140,7 +140,7 @@ async function clickButton(name: string | RegExp): Promise<void> {
     return button;
   });
   await act(async () => {
-    fireEvent.click(button);
+    fireEvent.click(button.isConnected ? button : screen.getByRole("button", { name }));
     await Promise.resolve();
     await Promise.resolve();
     await probe("timer", () => new Promise((resolve) => setTimeout(resolve, 0)));
