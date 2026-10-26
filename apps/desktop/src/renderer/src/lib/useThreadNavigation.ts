@@ -3655,6 +3655,16 @@ export function useThreadNavigation(
   const threadLensesEmpty = ownerIndexPage?.counts.total === 0 && ownerIndexPage.coverage.state !== "checking";
   const shownBrowseMode: BrowseMode = threadLensesEmpty ? "directories" : browseMode;
   const acceptedPagesRef = useRef(new Map<string, unknown>());
+  // Each resource's read when a command or event last patched a directory
+  // row. A page from a read that began no later predates that patch.
+  const directoryPatchReadsRef = useRef(new Map<string, ReadonlyMap<string, { request: unknown; sequence: number }>>());
+  const navigationResourcesRef = useRef(boundedNavigation.resources);
+  navigationResourcesRef.current = boundedNavigation.resources;
+  const noteDirectoryPatch = useCallback((directoryKeys: Iterable<string>): void => {
+    const reads = new Map([...navigationResourcesRef.current].map(([id, resource]) =>
+      [id, { request: resource.state.request, sequence: resource.state.pendingSequence }]));
+    for (const key of directoryKeys) directoryPatchReadsRef.current.set(key, reads);
+  }, []);
   const acceptedDefaultsRef = useRef<unknown>(undefined);
   const acceptedDraftHydrationRef = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
@@ -3673,9 +3683,19 @@ export function useThreadNavigation(
     const loading = enabled && primary.some((resource) => !resource.state.page && !resource.state.error);
     if (changed && pages.size) {
       const changedPages = [...pages].filter(([id, page]) => acceptedPagesRef.current.get(id) !== page);
-      const changedDirectoryKeys = new Set(changedPages.flatMap(([, page]) =>
-        [...page.directories ?? [], ...page.selectionDirectory ? [page.selectionDirectory] : []])
-        .map((directory) => directory.key));
+      // Directories this pass may rebuild: those in a page that landed now,
+      // from a read that began after the directory's last patch. An earlier
+      // read can still land between an unpin and the owner's event.
+      const changedDirectoryKeys = new Set(changedPages.flatMap(([id, page]) => {
+        const state = boundedNavigation.resources.get(id)?.state;
+        if (!state || state.stale) return [];
+        return [...page.directories ?? [], ...page.selectionDirectory ? [page.selectionDirectory] : []]
+          .filter((directory) => {
+            const patched = directoryPatchReadsRef.current.get(directory.key)?.get(id);
+            return !patched || patched.request !== state.request || state.pendingSequence > patched.sequence;
+          })
+          .map((directory) => directory.key);
+      }));
       const retainedKeys = new Set([...pages.values()].flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
       acceptedPagesRef.current = pages;
       acceptedDefaultsRef.current = launchpadConfiguration.value;
@@ -4910,6 +4930,7 @@ export function useThreadNavigation(
           directoryKey: string;
           pinnedRank: string;
         };
+        noteDirectoryPatch([directoryKey]);
         setState((current) => ({
           ...current,
           rows: updateDirectoryPinInLoadedRows(current.rows, {
@@ -4924,6 +4945,7 @@ export function useThreadNavigation(
         const { directoryKey } = event.notification.params as {
           directoryKey: string;
         };
+        noteDirectoryPatch([directoryKey]);
         setState((current) => ({
           ...current,
           rows: updateDirectoryPinInLoadedRows(current.rows, {
@@ -4938,6 +4960,7 @@ export function useThreadNavigation(
         const { pinnedRanks } = event.notification.params as {
           pinnedRanks: Record<string, string>;
         };
+        noteDirectoryPatch(Object.keys(pinnedRanks));
         setState((current) => ({
           ...current,
           rows: updateDirectoryPinsInLoadedRows(current.rows, {
@@ -4952,6 +4975,7 @@ export function useThreadNavigation(
           directoryKey: string;
           collapsed: boolean;
         };
+        noteDirectoryPatch([directoryKey]);
         setState((current) => ({
           ...current,
           rows: updateDirectoryThreadsCollapsedInLoadedRows(
@@ -4996,6 +5020,7 @@ export function useThreadNavigation(
     scheduleRefresh,
     state.rows,
     invalidateNavigation,
+    noteDirectoryPatch,
     setSelectedItemKey,
   ]);
 
@@ -9074,6 +9099,7 @@ export function useThreadNavigation(
 
       const pinnedRank = pinned ? directory.pinnedRank : undefined;
 
+      noteDirectoryPatch([directory.key]);
       setState((current) => ({
         ...current,
         rows: updateDirectoryPinInLoadedRows(current.rows, {
@@ -9087,6 +9113,7 @@ export function useThreadNavigation(
           directoryKey: directory.key,
           pinned,
         });
+        noteDirectoryPatch([result.directoryKey]);
         setState((current) => ({
           ...current,
           rows: updateDirectoryPinInLoadedRows(current.rows, {
@@ -9099,7 +9126,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [refresh, publishThreadActionError, setDirectoryPinRequest],
+    [refresh, publishThreadActionError, setDirectoryPinRequest, noteDirectoryPatch],
   );
 
   const reorderDirectoryPins = useCallback(
@@ -9117,6 +9144,7 @@ export function useThreadNavigation(
       try {
         const result = await reorderDirectoryPinsRequest({ move });
         invalidateNavigation();
+        noteDirectoryPatch(Object.keys(result.pinnedRanks));
         setState((current) => ({
           ...current,
           rows: updateDirectoryPinsInLoadedRows(current.rows, {
@@ -9128,7 +9156,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [refresh, publishThreadActionError, reorderDirectoryPinsRequest, invalidateNavigation],
+    [refresh, publishThreadActionError, reorderDirectoryPinsRequest, invalidateNavigation, noteDirectoryPatch],
   );
 
   const setDirectoryThreadsCollapsed = useCallback(
@@ -9143,6 +9171,7 @@ export function useThreadNavigation(
       const federationTarget = readRendererFederationTarget();
       setUnpinnedExpandedByKey((current) => ({ ...current, [directory.key]: !collapsed }));
 
+      noteDirectoryPatch([directory.key]);
       setState((current) => ({
         ...current,
         rows: updateDirectoryThreadsCollapsedInLoadedRows(
@@ -9161,6 +9190,7 @@ export function useThreadNavigation(
           collapsed,
           ...(federationTarget ? { federationTarget } : {}),
         });
+        noteDirectoryPatch([result.directoryKey]);
         setState((current) => ({
           ...current,
           rows: updateDirectoryThreadsCollapsedInLoadedRows(
@@ -9177,7 +9207,7 @@ export function useThreadNavigation(
         publishThreadActionError("save-collapsed", error);
       }
     },
-    [publishThreadActionError, setDirectoryThreadsCollapsedRequest, setUnpinnedExpandedByKey],
+    [publishThreadActionError, setDirectoryThreadsCollapsedRequest, setUnpinnedExpandedByKey, noteDirectoryPatch],
   );
 
   const updateThreadExecutionMode = useCallback(
