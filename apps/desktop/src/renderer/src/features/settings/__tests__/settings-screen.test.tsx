@@ -1737,6 +1737,13 @@ describe("SettingsScreen", () => {
   });
 
   it("switches sections and saves settings", async () => {
+    // A label targets one control directly. Repeating whole-page role/name
+    // discovery for every switch dominated this navigation-and-save case.
+    const getLabeledSwitch = (name: string) => {
+      const control = screen.getByLabelText(name, { selector: '[role="switch"]' });
+      expect(control).toBeVisible();
+      return control;
+    };
     const settings = createSettingsState();
     const desktopApi = {
       checkForAppUpdates: vi.fn(async () => ({
@@ -1772,9 +1779,7 @@ describe("SettingsScreen", () => {
     // General is on screen — asserted before the two negatives below, which
     // would otherwise also pass against a pane that had not rendered yet.
     expect(
-      screen.getByRole("switch", {
-        name: "Confirm quit when threads or terminals are active",
-      }),
+      getLabeledSwitch("Confirm quit when threads or terminals are active"),
     ).toHaveAttribute("aria-checked", "true");
     // Updates is its own nav row now — General holds no release controls.
     expect(screen.queryByRole("heading", { name: "Updates" })).toBeNull();
@@ -1782,9 +1787,7 @@ describe("SettingsScreen", () => {
       screen.queryByRole("button", { name: "Check for Update" }),
     ).toBeNull();
     fireEvent.click(
-      screen.getByRole("switch", {
-        name: "Confirm quit when threads or terminals are active",
-      }),
+      getLabeledSwitch("Confirm quit when threads or terminals are active"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -1794,14 +1797,10 @@ describe("SettingsScreen", () => {
       });
     });
     expect(
-      screen.getByRole("switch", {
-        name: "Move a thread to the top when its turn finishes",
-      }),
+      getLabeledSwitch("Move a thread to the top when its turn finishes"),
     ).toHaveAttribute("aria-checked", "true");
     fireEvent.click(
-      screen.getByRole("switch", {
-        name: "Move a thread to the top when its turn finishes",
-      }),
+      getLabeledSwitch("Move a thread to the top when its turn finishes"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -1811,14 +1810,10 @@ describe("SettingsScreen", () => {
       });
     });
     expect(
-      screen.getByRole("switch", {
-        name: "Show pinned threads in a group at the top",
-      }),
+      getLabeledSwitch("Show pinned threads in a group at the top"),
     ).toHaveAttribute("aria-checked", "true");
     fireEvent.click(
-      screen.getByRole("switch", {
-        name: "Show pinned threads in a group at the top",
-      }),
+      getLabeledSwitch("Show pinned threads in a group at the top"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -1828,7 +1823,7 @@ describe("SettingsScreen", () => {
       });
     });
     expect(
-      screen.getByRole("switch", { name: "Run SVG scripts without asking" }),
+      getLabeledSwitch("Run SVG scripts without asking"),
     ).toHaveAttribute("aria-checked", "false");
     // Opening interactive runs scripts, so it waits on trust, and says so.
     expect(
@@ -1837,7 +1832,7 @@ describe("SettingsScreen", () => {
       ),
     ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("switch", { name: "Run SVG scripts without asking" }),
+      getLabeledSwitch("Run SVG scripts without asking"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -1847,10 +1842,10 @@ describe("SettingsScreen", () => {
       });
     });
     expect(
-      screen.getByRole("switch", { name: "Use PwrAgent PDF analysis" }),
+      getLabeledSwitch("Use PwrAgent PDF analysis"),
     ).toHaveAttribute("aria-checked", "true");
     fireEvent.click(
-      screen.getByRole("switch", { name: "Use PwrAgent PDF analysis" }),
+      getLabeledSwitch("Use PwrAgent PDF analysis"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -1871,7 +1866,7 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("heading", { name: "CPU and heap monitoring" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Developer Mode" })).toHaveAttribute(
+    expect(getLabeledSwitch("Developer Mode")).toHaveAttribute(
       "aria-checked",
       "false",
     );
@@ -1879,7 +1874,7 @@ describe("SettingsScreen", () => {
       screen.getByRole("button", { name: "Start Capture (Immediate)" }),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("switch", { name: "Developer Mode" }));
+    fireEvent.click(getLabeledSwitch("Developer Mode"));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
@@ -1906,14 +1901,14 @@ describe("SettingsScreen", () => {
     ).not.toBeDisabled();
     expect(screen.getByRole("radio", { name: /Slowburn/ })).not.toBeDisabled();
     expect(
-      screen.getByRole("switch", { name: "Smart heap snapshots" }),
+      getLabeledSwitch("Smart heap snapshots"),
     ).toHaveAttribute("aria-checked", "false");
     expect(screen.getByRole("radio", { name: /2 snapshots/ })).toHaveAttribute(
       "aria-checked",
       "true",
     );
     expect(screen.getByRole("radio", { name: /3 snapshots/ })).toBeDisabled();
-    fireEvent.click(screen.getByRole("switch", { name: "Smart heap snapshots" }));
+    fireEvent.click(getLabeledSwitch("Smart heap snapshots"));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
@@ -1924,9 +1919,9 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(sections).getByRole("button", { name: "General" }));
     expect(
-      screen.getByRole("switch", { name: "Desktop notifications" }),
+      getLabeledSwitch("Desktop notifications"),
     ).toHaveAttribute("aria-checked", "false");
-    fireEvent.click(screen.getByRole("switch", { name: "Desktop notifications" }));
+    fireEvent.click(getLabeledSwitch("Desktop notifications"));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
@@ -2030,9 +2025,7 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
 
     // The Git setting defaults on when the config does not opt out.
-    const backgroundPrPollingSwitch = screen.getByRole("switch", {
-      name: "Enable background pull request status",
-    });
+    const backgroundPrPollingSwitch = getLabeledSwitch("Enable background pull request status");
     expect(backgroundPrPollingSwitch).toHaveAttribute("aria-checked", "true");
     fireEvent.click(backgroundPrPollingSwitch);
     await waitFor(() => {
@@ -2047,7 +2040,7 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("heading", { name: "Usage & pricing" }),
     ).toBeInTheDocument();
-    const monitorSuggestions = screen.getByRole("switch", { name: "Monitor job suggestions" });
+    const monitorSuggestions = getLabeledSwitch("Monitor job suggestions");
     expect(monitorSuggestions).toHaveAttribute("aria-checked", "true");
     fireEvent.click(monitorSuggestions);
     await waitFor(() => {
@@ -2059,7 +2052,7 @@ describe("SettingsScreen", () => {
       screen.getByRole("heading", { name: "Alerts" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("switch", { name: "Repeated large tool outputs" }),
+      getLabeledSwitch("Repeated large tool outputs"),
     ).toHaveAttribute("aria-checked", "true");
     expect(
       screen.getByText(/This trigger does not use the calls-per-turn setting/),
@@ -2088,7 +2081,7 @@ describe("SettingsScreen", () => {
       });
     });
     fireEvent.click(
-      screen.getByRole("switch", { name: "Total thread spend" }),
+      getLabeledSwitch("Total thread spend"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -2129,7 +2122,7 @@ describe("SettingsScreen", () => {
       });
     });
     fireEvent.click(
-      screen.getByRole("switch", { name: "Repeated large tool outputs" }),
+      getLabeledSwitch("Repeated large tool outputs"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -2141,9 +2134,7 @@ describe("SettingsScreen", () => {
       });
     });
     fireEvent.click(
-      screen.getByRole("switch", {
-        name: "Show thread pricing",
-      }),
+      getLabeledSwitch("Show thread pricing"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -2158,9 +2149,7 @@ describe("SettingsScreen", () => {
     ).not.toBeDisabled();
 
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
-    const tokenMiserSwitch = screen.getByRole("switch", {
-      name: "Make Token Miser available",
-    });
+    const tokenMiserSwitch = getLabeledSwitch("Make Token Miser available");
     expect(tokenMiserSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(tokenMiserSwitch);
     await waitFor(() => {
@@ -2180,7 +2169,7 @@ describe("SettingsScreen", () => {
         "Send focused-diff hunks to Codex to decide which are safe to hide. Disabled by default — every diff renders in full and no structured-generation request fires.",
       ),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("switch", { name: "Enable diff condensation" }));
+    fireEvent.click(getLabeledSwitch("Enable diff condensation"));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { diffCondensation: { enabled: true } },
@@ -2188,9 +2177,7 @@ describe("SettingsScreen", () => {
     });
 
     fireEvent.click(
-      screen.getByRole("switch", {
-        name: "Enable live transcript event filtering",
-      }),
+      getLabeledSwitch("Enable live transcript event filtering"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -2199,16 +2186,14 @@ describe("SettingsScreen", () => {
     });
 
     expect(
-      screen.getByRole("switch", { name: "Display tool call tracking" }),
+      getLabeledSwitch("Display tool call tracking"),
     ).not.toBeDisabled();
     expect(
       screen.queryByRole("heading", { name: "Thread pricing" }),
     ).not.toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole("switch", {
-        name: "Enable Codex skill questions",
-      }),
+      getLabeledSwitch("Enable Codex skill questions"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -2319,7 +2304,7 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
     expect(screen.getAllByText("unset").length).toBeGreaterThanOrEqual(1);
     fireEvent.click(
-      screen.getByRole("switch", { name: "Streaming Responses (Advanced)" }),
+      getLabeledSwitch("Streaming Responses (Advanced)"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -2346,7 +2331,7 @@ describe("SettingsScreen", () => {
       ),
     ).toBeInTheDocument();
     fireEvent.click(
-      screen.getByRole("switch", { name: "Live Working Updates card" }),
+      getLabeledSwitch("Live Working Updates card"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -2360,7 +2345,7 @@ describe("SettingsScreen", () => {
     // Slack's streaming toggle carries its own label (no "(Advanced)"
     // suffix) and writes a Slack-scoped delta.
     fireEvent.click(
-      screen.getByRole("switch", { name: "Streaming responses" }),
+      getLabeledSwitch("Streaming responses"),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -2383,7 +2368,7 @@ describe("SettingsScreen", () => {
         screen.getByRole("button", { name: `Open ${label} settings` }),
       );
       fireEvent.click(
-        screen.getByRole("switch", { name: "Streaming Responses (Advanced)" }),
+        getLabeledSwitch("Streaming Responses (Advanced)"),
       );
       await waitFor(() => {
         expect(settings.writeConfig).toHaveBeenCalledWith({
