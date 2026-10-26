@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
 import type { AppServerBackendKind } from "@pwragent/shared";
 
 /**
@@ -30,4 +30,20 @@ export function providerChipNeeded(
 export function useProviderChipNeeded(backend: AppServerBackendKind | undefined): boolean {
   const providers = useContext(ThreadProvidersContext);
   return backend === undefined || providerChipNeeded(providers, backend);
+}
+
+/**
+ * Keeps one array identity while the provider list's contents stay the same,
+ * so a refreshed page does not re-render every chip that reads the context.
+ */
+export function useStableThreadProviders(
+  providers: readonly AppServerBackendKind[] | undefined,
+): readonly AppServerBackendKind[] | undefined {
+  const key = providers?.join("\n");
+  return useMemo(
+    () => key === undefined
+      ? undefined
+      : key.split("\n").filter(Boolean) as AppServerBackendKind[],
+    [key],
+  );
 }
