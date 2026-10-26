@@ -8245,6 +8245,10 @@ export class MessagingController {
         federated: federationTargetForBinding(binding) !== undefined,
         threadId: binding.threadId,
       });
+      // A failed item lookup leaves turn/completed to try the turn again.
+      if (turnKey && itemId) {
+        this.finalAssistantImageTurns.delete(turnKey);
+      }
       return [];
     }
   }

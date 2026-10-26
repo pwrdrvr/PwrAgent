@@ -90,6 +90,7 @@ import type {
 import { MessagingFederatedThreadTargetError } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildMessageContent } from "../codex-app-server/client";
+import { getMainLogger } from "../log";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
@@ -134,6 +135,12 @@ export type DesktopMessagingFederationBridge = {
     rpcOptions?: { deadlineAt?: number },
   ): Promise<NavigationSnapshot>;
 };
+
+const bridgeLog = getMainLogger("pwragent:messaging-backend-bridge");
+
+type AssistantImageRequest = Parameters<
+  NonNullable<MessagingBackendBridge["resolveAssistantMessageImages"]>
+>[0];
 
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   private readonly assistantImageResolutions = new Map<
@@ -711,15 +718,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return undefined;
   }
 
-  async resolveAssistantMessageImages(request: {
-    backend: AppServerBackendKind;
-    federationTarget?: FederationTarget;
-    item?: Record<string, unknown>;
-    itemId?: string;
-    text: string;
-    threadId: string;
-    turnId?: string;
-  }): Promise<MessagingImagePart[]> {
+  async resolveAssistantMessageImages(request: AssistantImageRequest): Promise<MessagingImagePart[]> {
     const target = request.federationTarget;
     const key = [
       target && isRemoteFederationTarget(target) ? target.instanceId : "",
@@ -752,15 +751,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return await resolution;
   }
 
-  private async resolveAssistantMessageImagesOnce(request: {
-    backend: AppServerBackendKind;
-    federationTarget?: FederationTarget;
-    item?: Record<string, unknown>;
-    itemId?: string;
-    text: string;
-    threadId: string;
-    turnId?: string;
-  }): Promise<MessagingImagePart[]> {
+  private async resolveAssistantMessageImagesOnce(request: AssistantImageRequest): Promise<MessagingImagePart[]> {
     const target = request.federationTarget;
     if (target && isRemoteFederationTarget(target)) {
       const remote = this.remoteBackend(target);
@@ -800,14 +791,9 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
    * tool screenshots to its final reply, which the event stream cannot show.
    * Without that read, the completed item from the event is the message.
    */
-  private async readFinishedTurnAssistantMessage(request: {
-    backend: AppServerBackendKind;
-    item?: Record<string, unknown>;
-    itemId?: string;
-    text: string;
-    threadId: string;
-    turnId?: string;
-  }): Promise<AppServerThreadMessage> {
+  private async readFinishedTurnAssistantMessage(
+    request: AssistantImageRequest,
+  ): Promise<AppServerThreadMessage> {
     let replay: AppServerThreadReplay | undefined;
     if (request.turnId) {
       try {
@@ -816,8 +802,15 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
           threadId: request.threadId,
           turnId: request.turnId,
         });
-      } catch {
-        // The completed item below still carries the reply's own images.
+      } catch (error) {
+        // The completed item below still carries the reply's own images, but
+        // not the turn's tool screenshots.
+        bridgeLog.warn("messaging reply turn read failed", {
+          backend: request.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: request.threadId,
+          turnId: request.turnId,
+        });
       }
     }
     const fromTurn = replay
@@ -866,13 +859,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
    * lookup would find neither the thread nor the files.
    */
   private async resolveRemoteAssistantMessageImages(
-    request: {
-      backend: AppServerBackendKind;
-      itemId?: string;
-      text: string;
-      threadId: string;
-      turnId?: string;
-    },
+    request: AssistantImageRequest,
     target: FederationRemoteTarget,
     remote: FederationBackendOperations,
   ): Promise<MessagingImagePart[]> {

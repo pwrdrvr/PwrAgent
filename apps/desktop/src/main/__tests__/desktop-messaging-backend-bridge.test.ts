@@ -1277,6 +1277,41 @@ describe("DesktopMessagingBackendBridge", () => {
     ]);
   });
 
+  it.each([
+    { label: "fails", readThreadTurnReplay: vi.fn(async () => { throw new Error("items list unavailable"); }) },
+    { label: "is unsupported", readThreadTurnReplay: vi.fn(async () => undefined) },
+  ])("resolves the reply from its completed item when the turn read $label", async ({ readThreadTurnReplay }) => {
+    const readThread = vi.fn();
+    const bridge = new DesktopMessagingBackendBridge({
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+      readThread,
+      readThreadTurnReplay,
+    } as unknown as DesktopBackendRegistry);
+
+    await expect(bridge.resolveAssistantMessageImages({
+      backend: "codex",
+      item: {
+        id: "assistant-image-only",
+        type: "agentMessage",
+        text: "",
+        content: [{ type: "output_image", image_url: "https://example.com/item.png", alt: "Item image" }],
+      },
+      itemId: "assistant-image-only",
+      text: "",
+      threadId: "thread-1",
+      turnId: "turn-current",
+    })).resolves.toEqual([
+      expect.objectContaining({
+        type: "image",
+        url: "https://example.com/item.png",
+        alt: "Item image",
+      }),
+    ]);
+    expect(readThreadTurnReplay).toHaveBeenCalledTimes(1);
+    // The fallback never reaches for a transcript page.
+    expect(readThread).not.toHaveBeenCalled();
+  });
+
   it("fetches a peer-owned thread's assistant images from the owning peer", async () => {
     const ownerImageUrl = toTranscriptImageProtocolUrl(
       "file:///owner/profiles/work/state/thread-images/codex/thread-1/markdown-a.png",

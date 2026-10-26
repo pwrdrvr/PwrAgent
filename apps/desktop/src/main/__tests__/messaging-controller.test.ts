@@ -17684,6 +17684,52 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("resolves again at turn/completed when the final item's lookup failed", async () => {
+    const resolveAssistantMessageImages = vi.fn()
+      .mockRejectedValueOnce(new Error("materialize failed"))
+      .mockResolvedValueOnce([{
+        type: "image",
+        url: "data:image/png;base64,AQID",
+        alt: "Retried image",
+      }]);
+    const harness = await createHarness({ resolveAssistantMessageImages });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-message-1",
+            type: "agentMessage",
+            phase: "final",
+            text: "Done.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(resolveAssistantMessageImages).toHaveBeenCalledTimes(2);
+    expect(harness.delivered.flatMap((intent) =>
+      intent.kind === "message" ? intent.parts.filter((part) => part.type === "image") : [],
+    )).toEqual([expect.objectContaining({ alt: "Retried image" })]);
+  });
+
   it("delivers resolved assistant images once when terminal resolution wins the race", async () => {
     let releaseItemResolution: (() => void) | undefined;
     let markItemResolutionStarted: (() => void) | undefined;
