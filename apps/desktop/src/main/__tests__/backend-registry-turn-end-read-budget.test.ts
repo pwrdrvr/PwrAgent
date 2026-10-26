@@ -303,6 +303,84 @@ describe("turn end read budget", () => {
     expect(overlayParses).toMatchInlineSnapshot(`8`);
   }, 60_000);
 
+  function countPricingEmits(registry: DesktopBackendRegistry): Map<string, number> {
+    const emits = new Map<string, number>();
+    registry.onEvent((event) => {
+      if (event.notification.method === "thread/pricing/updated") {
+        const threadId = event.notification.params.threadId;
+        emits.set(threadId, (emits.get(threadId) ?? 0) + 1);
+      }
+    });
+    return emits;
+  }
+
+  it("still publishes the pricing it wrote when the gate persist fails", async () => {
+    const stateDb = openInMemoryStateDb();
+    cleanups.push(() => stateDb.close());
+    const { internals, registry, store } = await setupThread({ historicalTurns: 3, stateDb });
+    const emits = countPricingEmits(registry);
+    let completedEvents = 0;
+    registry.onEvent((event) => {
+      if (event.notification.method === "turn/completed") {
+        completedEvents += 1;
+      }
+    });
+    vi.spyOn(
+      registry as unknown as { flushPendingTokenMiserLedger(...args: unknown[]): Promise<boolean> },
+      "flushPendingTokenMiserLedger",
+    ).mockRejectedValue(new Error("gate persist failed"));
+
+    await expect(endTurn(internals)).rejects.toThrow("gate persist failed");
+
+    // The final usage line and its end time were written before the failure.
+    expect(emits.get(THREAD_ID)).toBe(1);
+    expect(completedEvents).toBe(0);
+    const pricing = await store.readThreadPricing({ backend: "codex", threadId: THREAD_ID });
+    const finalLine = pricing.lines.find((line) =>
+      line.turnId === FINAL_TURN_ID && line.parentThreadId === undefined);
+    expect(finalLine?.completedAt).toBeDefined();
+  });
+
+  it("publishes another thread's usage from the same flush on its own", async () => {
+    const stateDb = openInMemoryStateDb();
+    cleanups.push(() => stateDb.close());
+    const { internals, registry, store } = await setupThread({ historicalTurns: 3, stateDb });
+    const otherThreadId = "thread-other";
+    await internals.emit({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: otherThreadId,
+          turnId: "turn-other",
+          turn: { id: "turn-other", status: "inProgress" },
+        },
+      } as AgentEvent["notification"],
+    });
+    await internals.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: otherThreadId,
+          turnId: "turn-other",
+          model: PARENT_MODEL,
+          tokenUsage: {
+            last: { inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 20, totalTokens: 1_020 },
+            total: { inputTokens: 1_000, cachedInputTokens: 0, outputTokens: 20, totalTokens: 1_020 },
+          },
+        },
+      } as AgentEvent["notification"],
+    });
+    const emits = countPricingEmits(registry);
+
+    await endTurn(internals);
+
+    expect(Object.fromEntries(emits)).toEqual({ [otherThreadId]: 1, [THREAD_ID]: 1 });
+    const other = await store.readThreadPricing({ backend: "codex", threadId: otherThreadId });
+    expect(other.lines.map((line) => line.turnId)).toEqual(["turn-other"]);
+  });
+
   it("holds one turn end with new gates to its write budget", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-turn-end-writes-");

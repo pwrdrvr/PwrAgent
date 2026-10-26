@@ -3797,6 +3797,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         sourceItemIds,
       ) as ThreadUsageLineRow[];
     const lines = lineRows.map(threadUsageLineFromRow);
+    // The whole-ledger read reprices unpriced rows by a rule that depends on
+    // every unpriced row of the thread. Take its copy of these rows, so a
+    // gate card prices exactly as the thread's savings total does.
+    if (lines.some((line) => line.priceStatus !== "priced")) {
+      const matched = new Set(lines.map((line) => line.usageLineId));
+      const ledger = await this.readThreadPricing({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      return ledger.lines.filter((line) => matched.has(line.usageLineId));
+    }
     const usageTurnIds = [...new Set(lines.flatMap((line) =>
       line.usageTurnId ? [line.usageTurnId] : []))];
     if (usageTurnIds.length > 0) {
@@ -3825,15 +3836,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         ) as UsageTurnMetadataRow[];
       applyUsageTurnMetadata(lines, turnRows);
     }
-    // The whole-ledger read persists the repricing it finds; this read only
-    // borrows it, and leaves the write to the next ledger read.
-    return lines.map((line) => {
-      if (line.priceStatus === "priced") {
-        return line;
-      }
-      const repaired = repriceTokenUsageLine(line);
-      return repaired.priceStatus === "priced" ? repaired : line;
-    });
+    return lines;
   }
 
   async upsertThreadSubAgent(params: {

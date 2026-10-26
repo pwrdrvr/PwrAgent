@@ -216,6 +216,37 @@ describe("SqliteOverlayStore Token Miser gate pricing lines", () => {
     const matchable = new Set(["gate-a-line", "parent-by-usage-turn", "parent-by-turn"]);
     expect(gateLines).toEqual(ledger.filter((line) => matchable.has(line.usageLineId)));
   });
+
+  it("prices an unpriced gate row the same way the whole-ledger read does", async () => {
+    await store.upsertThreadUsageLines({
+      lines: [
+        buildUsageLine({
+          cachedInputCostMicros: undefined,
+          createdAt: PRICING_CATALOG_TIME + 20,
+          model: "unlisted-model",
+          outputCostMicros: undefined,
+          priceStatus: "unpriced",
+          pricingRateId: undefined,
+          sourceItemId: "system:token-miser:gate-u",
+          totalCostMicros: undefined,
+          turnId: "gate-turn-u",
+          uncachedInputCostMicros: undefined,
+          usageLineId: "gate-u-line",
+        }),
+      ],
+    });
+    const ledgerReads = vi.spyOn(store, "readThreadPricing");
+    const gateLines = await store.readTokenMiserGatePricingLines({
+      backend: "codex",
+      sourceItemIds: ["system:token-miser:gate-u"],
+      threadId: THREAD_ID,
+      turnIds: ["gate-turn-u"],
+    });
+    expect(ledgerReads).toHaveBeenCalledTimes(1);
+    const ledger = (await read()).lines;
+    expect(gateLines).toEqual(ledger.filter((line) => line.usageLineId === "gate-u-line"));
+    expect(gateLines.map((line) => line.priceStatus)).toEqual(["unpriced"]);
+  });
 });
 
 function buildUsageLine(
