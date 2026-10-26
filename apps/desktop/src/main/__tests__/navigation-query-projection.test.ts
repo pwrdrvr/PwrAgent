@@ -126,6 +126,23 @@ describe("navigation query projection", () => {
     expect(attention.entries[0]?.row).toMatchObject({ threadStatus: "idle", hasBackgroundTasks: true });
   });
 
+  // A Codex terminal never wakes the agent, so it marks the row without
+  // making the thread active or holding it in Attention.
+  it("projects a running agent command without counting the thread as active", () => {
+    const source = snapshot([
+      thread("dev-server", { threadStatus: "idle", hasAgentCommands: true }),
+      thread("finished", { threadStatus: "idle" }),
+    ]);
+    const attention = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "attention" }) });
+    expect(attention.counts.active).toBe(0);
+    expect(attention.entries.map(({ row }) => row.id)).toEqual([]);
+    const inbox = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "inbox" }) });
+    expect(inbox.entries.find(({ row }) => row.id === "dev-server")?.row).toMatchObject({
+      threadStatus: "idle", hasAgentCommands: true,
+    });
+    expect(inbox.entries.find(({ row }) => row.id === "finished")?.row).not.toHaveProperty("hasAgentCommands");
+  });
+
   it.each(["active", "unread"])("shows an Attention child whose parent is outside the lens (%s)", (signal) => {
     const child = thread("child", {
       parentThreadId: "parent", parentThreadBackend: "codex",

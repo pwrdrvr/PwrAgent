@@ -270,6 +270,7 @@ function projectNavigationRow(params: {
     ...(thread.threadStatus ? { threadStatus: thread.threadStatus } : {}),
     ...(thread.hasActiveSubAgent ? { hasActiveSubAgent: true } : {}),
     ...(thread.hasBackgroundTasks ? { hasBackgroundTasks: true } : {}),
+    ...(thread.hasAgentCommands ? { hasAgentCommands: true } : {}),
     inbox: thread.inbox,
     ...(thread.projectKey ? { projectKey: thread.projectKey } : {}),
     linkedDirectories: linkedDirectories.items ?? [],

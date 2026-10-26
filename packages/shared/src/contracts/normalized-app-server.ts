@@ -2491,8 +2491,9 @@ export type AppServerNotification =
   | {
       /**
        * The full set of commands and sub-agents a backend reports running for
-       * the thread. Replaces the previous set. Claude only; Codex terminals
-       * are read on demand.
+       * the thread. Replaces the previous set. Claude publishes its task set.
+       * Codex has no such event, so the desktop registry publishes a Codex
+       * thread's background terminals whenever their membership changes.
        */
       method: "thread/backgroundTasks/updated";
       params: {
