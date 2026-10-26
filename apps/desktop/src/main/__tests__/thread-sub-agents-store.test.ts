@@ -623,6 +623,17 @@ describe("thread sub-agent table", () => {
       expect(large.perPage.reduce((total, bytes) => total + bytes, 0)).toBe(stored);
     });
 
+    it("ends the collection at a card that does not parse rather than leave a viewer without a cursor", async () => {
+      const { stateDb, store } = openStore();
+      setDesktopOverlayStoreForTests(store);
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-bad", subAgents: [card(1), card(2), card(3)] });
+      stateDb.raw.prepare("UPDATE thread_sub_agents SET card = 'not json' WHERE monitor_id = ?").run(card(1).monitorId);
+
+      const pages = await pageCollection(ownerService("thread-bad").service, "thread-bad");
+
+      expect(pages.map((page) => page.map((entry) => entry.monitorId))).toEqual([[card(3).monitorId, card(2).monitorId]]);
+    });
+
     it("pages live gates and live usage into the stored cards in table order", async () => {
       const { store } = openStore();
       setDesktopOverlayStoreForTests(store);

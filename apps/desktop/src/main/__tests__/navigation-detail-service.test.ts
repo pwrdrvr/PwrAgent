@@ -38,6 +38,8 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
         .slice(params.offset, params.offset + params.limit),
     getThreadSubAgent: async ({ monitorId }: { monitorId: string }) =>
       mocks.cards.find((card) => card.monitorId === monitorId),
+    getThreadSubAgents: async ({ monitorIds }: { monitorIds: readonly string[] }) =>
+      mocks.cards.filter((card) => monitorIds.includes(card.monitorId)),
     listActiveThreadSubAgents: async () => mocks.cards.filter((card) =>
       card.completedAt === undefined || card.status === "failed" || card.status === "failure"),
     readThreadSubAgentRevision: async () => {

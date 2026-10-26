@@ -343,20 +343,20 @@ export class NavigationDetailService {
     summary: { id: string; source: AppServerBackendKind },
   ): Promise<{ count: number; revision: string }> {
     const store = getDesktopOverlayStore();
-    const stored = await store.readThreadSubAgentRevision({ backend: summary.source, threadId: summary.id });
+    const thread = { backend: summary.source, threadId: summary.id };
+    const stored = await store.readThreadSubAgentRevision(thread);
+    // The order is part of the revision: a cursor issued while Codex
+    // collections were ordered by `updatedAt` must not page this order.
     if (summary.source !== "codex") {
-      return { count: stored.count, revision: revision({ ref, name: "subAgents", stored }) };
+      return { count: stored.count, revision: revision({ ref, name: "subAgents", order: "created", stored }) };
     }
     // Live gates add to the count only when not yet persisted.
-    let liveOnly = 0;
-    for (const card of this.registry.listLiveTokenMiserSubAgents(summary.id)) {
-      if (!await store.getThreadSubAgent({ backend: summary.source, threadId: summary.id, monitorId: card.monitorId })) {
-        liveOnly += 1;
-      }
-    }
+    const liveIds = this.registry.listLiveTokenMiserSubAgents(summary.id).map((card) => card.monitorId);
+    const persisted = await store.getThreadSubAgents({ ...thread, monitorIds: liveIds });
     return {
-      count: stored.count + liveOnly,
-      revision: revision({ ref, name: "subAgents", stored, live: this.registry.readLiveSubAgentRevisionSource(summary.id) }),
+      count: stored.count + liveIds.length - persisted.length,
+      revision: revision({ ref, name: "subAgents", order: "created", stored,
+        live: this.registry.readLiveSubAgentRevisionSource(summary.id) }),
     };
   }
 
