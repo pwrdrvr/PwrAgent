@@ -141,6 +141,13 @@ const RENDERER_DOM_TS_TESTS = [
   "apps/desktop/src/renderer/src/test/outbound-fetch-guard.test.ts",
 ];
 
+// Renderer `.test.tsx` files that need no DOM, the converse of the list above.
+// theme-contract only reads app.css as text. It keeps its `.tsx` name because
+// repository guidance cites that path.
+const RENDERER_NODE_TSX_TESTS = [
+  "apps/desktop/src/renderer/src/styles/__tests__/theme-contract.test.tsx",
+];
+
 export default defineConfig({
   test: {
     projects: [
@@ -232,6 +239,7 @@ export default defineConfig({
             "apps/desktop/src/renderer/src/**/*.test.tsx",
             ...RENDERER_DOM_TS_TESTS,
           ],
+          exclude: [...configDefaults.exclude, ...RENDERER_NODE_TSX_TESTS],
           // The renderer reaches the network through IPC, so it has no `fetch`
           // call site today — but `lint:boundaries` reads imports and cannot
           // see a `globalThis.fetch`, and jsdom inherits a live one from Node,
@@ -252,7 +260,10 @@ export default defineConfig({
           testTimeout: TEST_TIMEOUT_MS,
           environment: "node",
           env: DISPOSABLE_DESKTOP_ENV,
-          include: ["apps/desktop/src/renderer/src/**/*.test.ts"],
+          include: [
+            "apps/desktop/src/renderer/src/**/*.test.ts",
+            ...RENDERER_NODE_TSX_TESTS,
+          ],
           exclude: [...configDefaults.exclude, ...RENDERER_DOM_TS_TESTS],
           setupFiles: ["apps/desktop/src/test-setup/outbound-fetch-guard.ts"],
         }
