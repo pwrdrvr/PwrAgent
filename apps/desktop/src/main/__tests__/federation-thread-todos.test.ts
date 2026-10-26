@@ -68,6 +68,14 @@ describe("federated To-do ownership", () => {
     expect(local.updateReview).not.toHaveBeenCalled();
   });
 
+  it("forwards dispatch picks to the card's owner without changing the viewer's local state", async () => {
+    const { service, local, remoteOperations } = setup();
+    const modelSettings = { backend: "claude" as const, model: "opus", reasoningEffort: "high" };
+    await service.request("runAction", { id: "remote-todo:peer:same-card", modelSettings });
+    expect(remoteOperations.runAction).toHaveBeenCalledWith({ id: "same-card", modelSettings });
+    expect(local.runAction).not.toHaveBeenCalled();
+  });
+
   it.each(["addressed", "dismissed", "open", "handled"] as const)("routes review status %s and its evidence to the original owner", async (status) => {
     const { service, local, remoteOperations } = setup();
     const request = { id: review.id, ...(status !== "handled" ? { itemId: "finding" } : {}), status,

@@ -697,7 +697,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
-    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true });
+    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true, modelSettings: { backend: "codex" } });
   });
 
   it("drops the question once the last open step is checked", () => {
