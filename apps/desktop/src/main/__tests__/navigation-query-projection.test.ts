@@ -106,6 +106,22 @@ describe("navigation query projection", () => {
     expect(page.counts.backends).toBeUndefined();
   });
 
+  it("names the providers of every owner thread on the whole-map star-map page", () => {
+    const index = snapshot([thread("one"), thread("two", { source: "claude" })]);
+    const map = projectNavigationQuery({
+      index,
+      request: request({ kind: "star-map", filters: { pr: "include" } }),
+    });
+    // Counted over every owner thread, not the filter's matches.
+    expect(map.counts.backends).toEqual(["claude", "codex"]);
+
+    const project = projectNavigationQuery({
+      index,
+      request: request({ kind: "star-map", projectKey: "directory:/repo", filters: {} }),
+    });
+    expect(project.counts.backends).toBeUndefined();
+  });
+
   it.each([
     ["PwrSuiteLab", "pws"], ["PwrAgent", "PA"], ["PwrSnap", "ps"], ["trading-system", "TS"],
   ])("finds owner threads and directory-index projects by initials: %s / %s", (name, text) => {
