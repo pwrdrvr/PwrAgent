@@ -29,7 +29,6 @@ import {
 } from "@pwragent/shared";
 import {
   ArrowUpIcon,
-  BanIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -59,6 +58,7 @@ import type {
   ThreadTodoRunOptions,
 } from "./thread-todos-view";
 import {
+  SettledFindingLabel,
   fixReviewFindingsPrompt,
   orderReviewItems,
   useTrackedReview,
@@ -357,6 +357,8 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
           >
             {shown.map((item) => {
               const isSelected = item.status === "open" && selected.has(item.id);
+              // The card labels each finding by its own outcome.
+              const settled = item.status === "open" ? undefined : item.status;
               return (
                 <li
                   key={item.id}
@@ -367,8 +369,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
                   <ReviewTodoFindingLabel item={item} ranked={ranked} />
                   <span className="review-todo__state">
                     {isSelected ? "Selected" : null}
-                    {item.status === "addressed" ? <><CheckIcon size={11} />Addressed</> : null}
-                    {item.status === "dismissed" ? <><BanIcon size={11} />Did not address</> : null}
+                    {settled ? <SettledFindingLabel status={settled} size={11} /> : null}
                   </span>
                   <span className="review-todo__chips">
                     {item.status === "open" ? (
@@ -398,7 +399,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
                           className="review-todo__chip"
                           aria-label={`Decline finding: ${item.title}`}
                           disabled={busy}
-                          onClick={() => void tracking.update({ itemId: item.id, status: "dismissed" })}
+                          onClick={() => void tracking.update({ itemId: item.id, status: "declined" })}
                         >
                           Decline
                         </button>

@@ -1091,7 +1091,7 @@
     "rowsChanged": 3,
     "statements": 3
   },
-  "thread-review-reported-outcomes": {"commits": 1, "note": "One re-report settling two of three findings, then 99 identical re-reports. One commit for the whole report; repeats and skipped findings write nothing. ~8 KB per report: ~0.8 MB/day at 100 reports/day, 0 MB/day idle.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "thread-review-reported-outcomes": {"commits": 1, "note": "One re-report settling three findings (fixed, no_change_needed, skipped), then 99 identical re-reports. One commit for the whole report; repeats write nothing. ~8 KB per report: ~0.8 MB/day at 100 reports/day, 0 MB/day idle.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "thread-review-tracking-start": {"commits": 1, "note": "One profile tracking boundary; 100 service starts and reads. No repeated initialization or idle commits.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "thread-sandbox-cleanup-two": {
     "commits": 2,

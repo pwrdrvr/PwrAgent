@@ -1,7 +1,11 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
 import {
+  CLAUDE_REPORT_FINDINGS_TOOL,
+  claudeReportFindingsHooks,
   claudeReviewOutput,
+  claudeSkippedFindingsGuidance,
   isClaudeOutcomeReport,
   matchClaudeFindingOutcomes,
   parseClaudeFindingsReport,
@@ -198,5 +202,53 @@ describe("Claude ReportFindings outcomes", () => {
   it("drops an unknown outcome", () => {
     const report = parseClaudeFindingsReport({ findings: [{ ...reported.findings[0], outcome: "deferred" }] })!;
     expect(isClaudeOutcomeReport(report)).toBe(false);
+  });
+
+  describe("skipped findings", () => {
+    const withOutcomes = (...outcomes: Array<string | undefined>) => parseClaudeFindingsReport({
+      findings: outcomes.map((outcome, index) => ({
+        ...reported.findings[index % 2], line: index + 1, ...(outcome ? { outcome } : {}),
+      })),
+    })!;
+
+    it("says nothing when no finding is skipped", () => {
+      expect(claudeSkippedFindingsGuidance(withOutcomes("fixed", "no_change_needed"))).toBeUndefined();
+      expect(claudeSkippedFindingsGuidance(withOutcomes(undefined, undefined))).toBeUndefined();
+    });
+
+    it("says skipped findings were declined and how to defer one or document why", () => {
+      const guidance = claudeSkippedFindingsGuidance(withOutcomes("fixed", "skipped"))!;
+      expect(guidance).toContain("It recorded this `skipped` finding as declined, with no reason:");
+      expect(guidance).toContain("- src/migrate.ts:2 The migration parses every payload without a guard.");
+      expect(guidance).not.toContain("Access change stamps every launchpad");
+      for (const word of ["update_review_item", "declined", "deferred", "todoId", "add_todo", "list_reviews"]) {
+        expect(guidance).toContain(word);
+      }
+    });
+
+    it("lists ten skipped findings and counts the rest", () => {
+      const guidance = claudeSkippedFindingsGuidance(withOutcomes(...Array.from({ length: 12 }, () => "skipped")))!;
+      expect(guidance).toContain("these 12 `skipped` findings as declined");
+      expect(guidance.split("\n").filter((line) => line.startsWith("- src/"))).toHaveLength(10);
+      expect(guidance).toContain("- and 2 more");
+    });
+
+    it("adds the guidance to a ReportFindings result through a PostToolUse hook", async () => {
+      const hooks = claudeReportFindingsHooks();
+      expect(hooks.PostToolUse).toHaveLength(1);
+      const [matcher] = hooks.PostToolUse!;
+      expect(matcher!.matcher).toBe(CLAUDE_REPORT_FINDINGS_TOOL);
+      const run = (tool_name: string, tool_input: unknown) => matcher!.hooks[0]!({
+        hook_event_name: "PostToolUse", tool_name, tool_input, tool_response: "2 findings reported.", tool_use_id: "toolu_1",
+        session_id: "session", transcript_path: "/fixture/transcript.jsonl", cwd,
+      } as HookInput, "toolu_1", { signal: new AbortController().signal });
+      const skipped = { findings: [{ ...reported.findings[1], outcome: "skipped" }] };
+      expect(await run(CLAUDE_REPORT_FINDINGS_TOOL, skipped)).toEqual({ hookSpecificOutput: {
+        hookEventName: "PostToolUse", additionalContext: claudeSkippedFindingsGuidance(parseClaudeFindingsReport(skipped)!),
+      } });
+      expect(await run(CLAUDE_REPORT_FINDINGS_TOOL, { findings: [{ ...reported.findings[1], outcome: "fixed" }] })).toEqual({});
+      expect(await run(CLAUDE_REPORT_FINDINGS_TOOL, "not a report")).toEqual({});
+      expect(await run("Bash", skipped)).toEqual({});
+    });
   });
 });

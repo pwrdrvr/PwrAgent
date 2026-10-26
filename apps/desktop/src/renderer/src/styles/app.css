@@ -49659,8 +49659,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   color: var(--text-muted);
 }
 
-/* Addressed reads as a done step; declined is final too, but nothing was
-   done, so it stays unstruck. */
+/* Addressed reads as a done step. Declined is final too, but nothing was
+   done, and a deferred finding is still to do, so both stay unstruck. */
 .review-todo__finding[data-status="addressed"] .review-todo__finding-title {
   text-decoration: line-through;
 }
@@ -49726,8 +49726,32 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 }
 
 .review-status__state[data-status="dismissed"],
-.review-finding-state[data-status="dismissed"] {
+.review-finding-state[data-status="dismissed"],
+.review-finding-state[data-status="declined"],
+.review-finding-state[data-status="deferred"] {
   color: var(--text-secondary);
+}
+
+/* The to-do card a deferred finding waits on, by its title. */
+.review-status__todo {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.review-status__todo svg {
+  flex: none;
+}
+
+.review-status__todo-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .review-status__note {
