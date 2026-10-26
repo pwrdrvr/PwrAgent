@@ -13169,7 +13169,10 @@ describe("CodexAppServerClient", () => {
     });
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     expect(await client.readMcpApprovalUserMessages({ threadId: "source", turnId: "current", signal: new AbortController().signal }))
-      .toEqual(["Never write to production.", "Update the staging configuration."]);
+      .toEqual([
+        { id: "earlier", turnId: "earlier", firstInTurn: true, text: "Never write to production." },
+        { id: "current", turnId: "current", firstInTurn: true, text: "Update the staging configuration." },
+      ]);
     await client.close();
   });
 
@@ -13190,6 +13193,46 @@ describe("CodexAppServerClient", () => {
       const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
       expect(await client.readMcpApprovalUserMessages({ threadId: "source", turnId: "current", signal: new AbortController().signal })).toBeUndefined();
       await client.close();
+    },
+  );
+
+  it.each(["before-abort", "after-abort", "response-only"])(
+    "cancels while helper turn/start is pending (identity arrives %s)", async (identityTiming) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      MockTransport.threadStartResult = { thread: { id: "approval-helper" }, instructionSources: [] };
+      MockTransport.threadMcpServerStatusResult = { data: [], nextCursor: null };
+      MockTransport.turnStartResult = undefined;
+      const controller = new AbortController();
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      const pending = client.generateStructuredObject({
+        helper: "mcp_approval_reviews", disableExecution: true, signal: controller.signal,
+        prompt: "Review this invocation.", schema: { type: "object" }, isMatch: () => false,
+        timeoutMs: 5_000, turnTimeoutMs: 45_000,
+      });
+      const transport = await waitForLatestTransportRequest("turn/start");
+      const start = transport.sentMessages.map((message) => JSON.parse(message)).find((message) => message.method === "turn/start");
+      const started = { jsonrpc: "2.0", method: "turn/started", params: {
+        threadId: "approval-helper", turn: { id: "approval-turn", status: "inProgress", items: [] },
+      } };
+      try {
+        if (identityTiming === "before-abort") transport.emitInbound(started);
+        controller.abort(new Error("startup cancelled"));
+        expect(await pending).toMatchObject({ status: "failed", reason: "startup cancelled" });
+        if (identityTiming === "after-abort") transport.emitInbound(started);
+        if (identityTiming !== "response-only") {
+          await waitForLatestTransportRequest("turn/interrupt");
+          expect(transport.sentMessages.map((message) => JSON.parse(message)))
+            .toContainEqual(expect.objectContaining({ method: "turn/interrupt", params: { threadId: "approval-helper", turnId: "approval-turn" } }));
+        }
+      } finally {
+        // Drain the delayed startup response even if an assertion fails.
+        transport.emitInbound({ jsonrpc: "2.0", id: start.id, result: { turn: { id: "approval-turn" } } });
+        await waitForLatestTransportRequest("thread/unsubscribe");
+        await client.close();
+      }
+      const requests = transport.sentMessages.map((message) => JSON.parse(message));
+      expect(requests.filter((message) => message.method === "turn/interrupt")).toHaveLength(1);
+      expect(requests.filter((message) => message.method === "thread/unsubscribe")).toHaveLength(1);
     },
   );
 
