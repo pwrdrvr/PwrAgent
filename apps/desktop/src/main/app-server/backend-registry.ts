@@ -21864,7 +21864,12 @@ export class DesktopBackendRegistry {
       const identity = buildThreadIdentityKey(event.backend, notification.params.threadId);
       const admitted = this.mcpGatewayHumanMessages.get(identity) ?? new Map<string, string>();
       admitted.set(notification.params.item.id, pending.text.trim());
-      while (admitted.size > 512) admitted.delete(admitted.keys().next().value!);
+      let admittedBytes = [...admitted.values()].reduce((total, value) => total + Buffer.byteLength(value), 0);
+      while (admitted.size > 512 || admittedBytes > 32_000) {
+        const oldest = admitted.keys().next().value!;
+        admittedBytes -= Buffer.byteLength(admitted.get(oldest)!);
+        admitted.delete(oldest);
+      }
       this.mcpGatewayHumanMessages.delete(identity);
       this.mcpGatewayHumanMessages.set(identity, admitted);
       while (this.mcpGatewayHumanMessages.size > 128) this.mcpGatewayHumanMessages.delete(this.mcpGatewayHumanMessages.keys().next().value!);
