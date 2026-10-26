@@ -711,24 +711,69 @@ describe("highlight_star_map_threads and set_star_map_view", () => {
 });
 
 describe("open_thread", () => {
-  it("is discoverable, mutates the UI, validates its target and delegates without a Star Map", async () => {
-    const openThread = vi.fn(async () => ({ ok: true as const, data: { focus: { view: "thread" as const } } }));
-    const definition = buildPwrAgentStarMapToolDefinitions(createStarMapAgentToolsHandler({ openThread }))
+  const manager = { backend: "codex", threadId: "voice-manager", transport: "codex_dynamic_tool" } as AgentToolCallContext;
+  const codingThread = { backend: "codex", threadId: "coding-thread", transport: "codex_dynamic_tool" } as AgentToolCallContext;
+  const mayOpenThread = (caller: { backend: string; threadId: string }) =>
+    caller.backend === "codex" && caller.threadId === "voice-manager";
+  const openedFocus = async () => ({ ok: true as const, data: { focus: { view: "thread" as const } } });
+
+  function openThreadDefinition(deps: StarMapAgentToolsDeps) {
+    return buildPwrAgentStarMapToolDefinitions(createStarMapAgentToolsHandler(deps))
       .find((tool) => tool.name === "open_thread")!;
+  }
+
+  it("is discoverable, mutates the UI, validates its target and delegates without a Star Map", async () => {
+    const openThread = vi.fn(openedFocus);
+    const definition = openThreadDefinition({ openThread, mayOpenThread });
     expect(definition.annotations?.readOnlyHint).toBe(false);
-    const context = {} as AgentToolCallContext;
     for (const args of [{}, { backend: "unknown", threadId: "t" }, { backend: "codex", threadId: " " },
       { backend: "codex", threadId: "t", instanceId: 1 }, { backend: "codex", threadId: "t", extra: true }]) {
-      expect((await definition.dispatch(args, context)).ok).toBe(false);
+      expect((await definition.dispatch(args, manager)).ok).toBe(false);
     }
     expect(openThread).not.toHaveBeenCalled();
-    expect((await definition.dispatch({ backend: "codex", threadId: "t", instanceId: "peer" }, context)).ok).toBe(true);
+    expect((await definition.dispatch({ backend: "codex", threadId: "t", instanceId: "peer" }, manager)).ok).toBe(true);
     expect(openThread).toHaveBeenCalledWith({ backend: "codex", threadId: "t", instanceId: "peer" });
   });
 
+  // A coding thread looking for a peer's terminal called open_thread on an
+  // unrelated, unpinned peer thread twice, and each call raised the window
+  // and replaced the operator's selection mid-task.
+  it("refuses a thread other than the Voice manager without touching the operator's window", async () => {
+    const openThread = vi.fn(openedFocus);
+    const result = await openThreadDefinition({ openThread, mayOpenThread })
+      .dispatch({ backend: "codex", threadId: "t", instanceId: "peer" }, codingThread);
+    expect(result).toMatchObject({ ok: false, code: "forbidden" });
+    expect(result.ok ? "" : result.message).toMatch(/read_thread/);
+    expect(result.ok ? "" : result.message).toMatch(/threadLink/);
+    expect(openThread).not.toHaveBeenCalled();
+  });
+
+  it("refuses every caller when no policy says who may move the operator's window", async () => {
+    const openThread = vi.fn(openedFocus);
+    expect(await openThreadDefinition({ openThread }).dispatch({ backend: "codex", threadId: "t" }, manager))
+      .toMatchObject({ ok: false, code: "forbidden" });
+    expect(await createStarMapAgentToolsHandler({ openThread, mayOpenThread })({
+      operation: "open_thread", context: {}, args: { backend: "codex", threadId: "t" },
+    })).toMatchObject({ ok: false, error: { code: "forbidden" } });
+    expect(openThread).not.toHaveBeenCalled();
+  });
+
+  it("tells agents it focuses the user's window on request and is no way to read a thread", () => {
+    const { description } = openThreadDefinition({});
+    expect(description).toMatch(/only when the user asks/);
+    expect(description).toMatch(/replaces the thread the user is working in/);
+    expect(description).toMatch(/does not read a thread or make one available to you/);
+    expect(description).toMatch(/read_thread/);
+    expect(description).toMatch(/Voice manager only/);
+    expect(description).not.toMatch(/mount/i);
+  });
+
   it("does not pretend that a missing graphical handler opened a thread", async () => {
-    expect(await createStarMapAgentToolsHandler()({ operation: "open_thread", context: {}, args: { backend: "codex", threadId: "t" } }))
-      .toMatchObject({ ok: false, error: { code: "ui_not_available" } });
+    expect(await createStarMapAgentToolsHandler({ mayOpenThread })({
+      operation: "open_thread",
+      context: { caller: { backend: "codex", threadId: "voice-manager" } },
+      args: { backend: "codex", threadId: "t" },
+    })).toMatchObject({ ok: false, error: { code: "ui_not_available" } });
   });
 });
 

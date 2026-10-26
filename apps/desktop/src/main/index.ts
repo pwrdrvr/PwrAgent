@@ -23,6 +23,7 @@ import type {
 } from "@pwragent/shared";
 import { createStarMapAgentToolsHandler } from "./star-map/star-map-agent-tools-service";
 import { createOpenThreadInUi } from "./native-voice/open-thread-in-ui";
+import { isVoiceManagerThread } from "./native-voice/voice-manager-thread";
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
 import { createFederatedThreadInspectionHandler } from "./federation/federated-thread-inspection-service";
 import { createFederatedThreadMutationHandler } from "./federation/federated-thread-mutation-service";
@@ -1566,6 +1567,9 @@ export function bootstrapApp(): void {
         openThread: createOpenThreadInUi({
           localInstanceId: async () => (await getDesktopFederationRuntime().health()).instanceId,
         }),
+        // It raises the window and replaces the operator's selection; only
+        // the Voice manager acts on the operator's spoken request to open one.
+        mayOpenThread: (caller) => caller.backend === "codex" && isVoiceManagerThread(caller.threadId),
       }),
     );
     // Injected rather than owned by the registry: the federation runtime

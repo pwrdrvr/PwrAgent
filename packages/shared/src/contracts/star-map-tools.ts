@@ -37,6 +37,7 @@ export const PWRAGENT_STAR_MAP_ERROR_CODES = [
   "focus_not_published",
   "ui_not_available",
   "navigation_timeout",
+  "forbidden",
   "not_found",
   "unsupported_operation",
   "internal_error",
@@ -446,6 +447,11 @@ export type PwrAgentStarMapDataByOperation = {
 
 export type PwrAgentStarMapContext = {
   now?: number;
+  /** The thread whose Agent turn made the call. */
+  caller?: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+  };
 };
 
 export type PwrAgentStarMapRequest<
