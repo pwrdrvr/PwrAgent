@@ -92,6 +92,10 @@ it.each(["local", "remote", "mounted"] as const)("retains expanded pins after cr
     threads = [...threads, row(21)];
     view.rerender(<Window selected={threads[0]!.ref} />);
     await waitFor(() => expect(navigation.presentationReady).toBe(true));
+    // Returning to Directories restores the retained pin page as stale and
+    // re-reads it. A stale page already counts as presentable, and the
+    // re-read can queue behind other reads, so wait for the re-read itself.
+    await waitFor(() => expect(navigation.resources.get(pinsId)).toMatchObject({ loading: false, state: { stale: false } }));
     expect(pinIds()).toEqual(threads.map((thread) => thread.id));
     expect(view.queryByRole("button", { name: "Load more pinned threads" })).toBeNull();
 
