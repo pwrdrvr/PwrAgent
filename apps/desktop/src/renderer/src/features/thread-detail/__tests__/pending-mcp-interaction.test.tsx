@@ -53,8 +53,30 @@ describe("PendingMcpInteraction", () => {
     expect(screen.queryByRole("button", { name: "Always allow" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
     expect(onSubmit).toHaveBeenLastCalledWith(state, "accept");
-    fireEvent.click(screen.getByRole("button", { name: "Allow this conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow this tool for this conversation" }));
     expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", "session");
+  });
+
+  it("offers distinct tool and server conversation grants for a gateway request", () => {
+    const onSubmit = vi.fn();
+    const state = createMcpElicitationState({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "mcp-gateway:server",
+        serverName: "Sandboxer", mode: "form", message: "Allow the agent to call exec on Sandboxer?",
+        requestedSchema: { type: "object", properties: {} },
+        _meta: { pwragent_approval_kind: "mcp_tool_call", persist: ["session", "server-session"] },
+      },
+    })!;
+    const { rerender } = render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+    fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept");
+    fireEvent.click(screen.getByRole("button", { name: "Allow this tool for this conversation" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", "session");
+    fireEvent.click(screen.getByRole("button", { name: "Allow Sandboxer for this conversation" }));
+    expect(onSubmit).toHaveBeenLastCalledWith(state, "accept", "server-session");
+    rerender(<PendingMcpInteraction busy state={state} onChange={vi.fn()} onSubmit={onSubmit} />);
+    expect(screen.getByRole("button", { name: "Allow Sandboxer for this conversation" })).toBeDisabled();
   });
 
   it.each([

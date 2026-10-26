@@ -53,6 +53,13 @@ export function gatewayToolRevision(identity: string, generation: number, tool: 
   return createHash("sha256").update(JSON.stringify([identity, generation, tool])).digest("hex");
 }
 
+/** Bind connection-wide consent to the owner's exact tools and authorization. */
+export function gatewayCatalogRevision(tools: McpGatewayTool[]): string {
+  const revisions = tools.map((tool) => [tool.toolName, tool.schemaRevision] as const)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return createHash("sha256").update(JSON.stringify(revisions)).digest("hex");
+}
+
 export function validateGatewayArguments(tool: Tool, args: Record<string, unknown>): void {
   try {
     // Never share an AJV $id cache across servers or schema revisions.

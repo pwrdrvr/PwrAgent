@@ -31,6 +31,7 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   const persistModes = readMcpApprovalPersistence(props.state);
   const sessionApproval = persistModes.includes("session");
   const gatewayApproval = props.state._meta?.pwragent_approval_kind === "mcp_tool_call";
+  const serverApproval = gatewayApproval && persistModes.includes("server-session");
   const connectorName = readStringMeta(props.state._meta, "connector_name");
   const subtitle = readStringMeta(props.state._meta, "subtitle");
   const highRisk = readStringMeta(props.state._meta, "riskLevel") === "high";
@@ -39,8 +40,10 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
   const url = props.state.url;
   const primaryLabel = url
     ? "Open in browser"
+    : serverApproval
+      ? `Allow ${props.state.serverName} for this conversation`
     : sessionApproval
-      ? "Allow this conversation"
+      ? gatewayApproval ? "Allow this tool for this conversation" : "Allow this conversation"
       // Not "Send": E2E specs find the composer's Send button page-wide.
       : purpose === "form" ? "Submit" : "Allow";
 
@@ -159,6 +162,18 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
             Always allow
           </button>
         ) : null}
+        {serverApproval && sessionApproval ? (
+          <button
+            className="button button--ghost"
+            disabled={props.busy || !canAccept}
+            type="button"
+            onClick={() => {
+              void props.onSubmit(props.state, "accept", "session");
+            }}
+          >
+            Allow this tool for this conversation
+          </button>
+        ) : null}
         <div className="transcript-mcp__actions-end">
           <button
             className="button button--ghost"
@@ -191,6 +206,8 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
                 // Open the address exactly as it was shown.
                 openExternalUrl(url.fullUrl);
                 void props.onSubmit(props.state, "accept");
+              } else if (serverApproval) {
+                void props.onSubmit(props.state, "accept", "server-session");
               } else if (sessionApproval) {
                 void props.onSubmit(props.state, "accept", "session");
               } else {

@@ -28,10 +28,16 @@ its runtime mode selector when present, otherwise its session execution mode.
 Selection, actor permissions, connection authorization and schema validation
 still apply to every call. No permission is cached for the generic wrapper.
 
-Default and Auto access request once-only confirmation showing the original
-connection, tool and complete arguments. Codex's App Server does not expose an
+Default and Auto access follow the connection's tool-approval policy. The
+built-in Sandboxer defaults to allowing tools: enabling and selecting remote
+compute authorizes sandbox commands, file writes and lifecycle operations.
+Other connections default to the server's annotation-based policy, which runs
+read-only tools without confirmation. An explicit `prompt` policy also asks
+for reads; an explicit `approve` policy allows every tool on that connection.
+When required, confirmation shows the original connection, tool and complete
+arguments. Codex's App Server does not expose an
 API for submitting host-owned dynamic calls to its Auto reviewer. Auto gateway
-calls require human confirmation; PwrAgent does not use a model to choose MCP
+calls that need approval require human confirmation; PwrAgent does not use a model to choose MCP
 consent or its persistence scope.
 Headless calls without Full Access or an automation MCP grant decline because
 they cannot obtain it.
@@ -45,10 +51,18 @@ For an identified MCP tool approval with an empty form, the desktop offers
 the persistence scopes advertised in `_meta.persist`. **Allow this conversation**
 returns `_meta: { persist: "session" }`; **Always allow** returns
 `_meta: { persist: "always" }`. Browser origin approvals use the same advertised
-scopes. The server owns the grant's scope and storage; PwrAgent does not cache
-an allowance for every tool on that server. Questions and login requests do not
-receive persistent grants. Gateway invocation confirmations do not advertise
-persistence and remain governed by the policy above.
+scopes. For upstream approvals, the server owns the grant's scope and storage.
+Questions and login requests do not receive persistent grants.
+
+Gateway confirmations offer a once-only grant, a tool conversation grant
+(`session`), and a connection conversation grant (`server-session`). The last
+scope is host-owned and is never forwarded to an upstream server. It permits
+all tools in that connection's current catalog with any arguments, for this
+backend and thread only. Consent is recorded in memory after the owner accepts
+the invocation. It ends on shutdown, selection revocation, or a changed catalog
+revision, which includes every tool's schema and authorization revision. Tool
+listing order does not affect consent. Ordinary upstream MCP elicitation still
+requires its own response.
 
 ### Automation MCP grants
 

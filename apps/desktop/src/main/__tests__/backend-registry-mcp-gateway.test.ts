@@ -33,7 +33,7 @@ describe("backend MCP gateway dispatch", () => {
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
     acpBackend: AcpBackendAdapter;
-    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal): Promise<McpGatewayApproval>;
+    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations?: McpGatewayTool["definition"]["annotations"], catalogRevision?: string): Promise<McpGatewayApproval>;
     headlessAutomationTurns: Map<string, {
       agentThreadId: string;
       backend: "codex";
@@ -107,8 +107,8 @@ describe("backend MCP gateway dispatch", () => {
     return event;
   }
 
-  async function approveAndInvoke(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal) {
-    const response = await internals.approveGatewayInvocation(invocation, context, signal);
+  async function approveAndInvoke(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, catalogRevision?: string) {
+    const response = await internals.approveGatewayInvocation(invocation, context, signal, undefined, catalogRevision);
     // These approval-policy tests simulate a successful owner invocation.
     // The broker-backed regressions exercise the actual validation boundary.
     if (typeof response === "object") await response.onInvoked();
@@ -270,22 +270,22 @@ select_for_new_threads = true
     return { broker, readArgs, callTool, changeSchema: (type: string) => { idType = type; } };
   }
 
-  function acceptFirstConversationApproval() {
+  function acceptFirstConversationApproval(persist = "session") {
     const events: AgentEvent[] = [];
     registry.onEvent(async (event) => {
       if (event.notification.method !== "mcpServer/elicitation/request") return;
       events.push(event);
       await registry.submitServerRequest({
         backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(event.notification.params.requestId),
-        response: { action: events.length === 1 ? "accept" : "decline", content: {}, _meta: { persist: "session" } },
+        response: { action: events.length === 1 ? "accept" : "decline", content: {}, _meta: { persist } },
       });
     });
     return events;
   }
 
-  it("revokes a broker-backed grant after another profile instance deselects and reselects", async () => {
+  it.each(["session", "server-session"])("revokes a broker-backed %s grant after another profile instance deselects and reselects", async (persist) => {
     const f = await brokerFixture();
-    const events = acceptFirstConversationApproval();
+    const events = acceptFirstConversationApproval(persist);
     const first = await f.readArgs();
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", first))).success).toBe(true);
     const peerDb = StateDb.open(path.join(directory, "state.db"));
@@ -344,7 +344,7 @@ select_for_new_threads = true
     { newerPrompt: false, restoreBeforeResponse: false },
     { newerPrompt: true, restoreBeforeResponse: false },
     { newerPrompt: true, restoreBeforeResponse: true },
-  ])("does not remember obsolete broker consent (newer prompt: $newerPrompt, restored before response: $restoreBeforeResponse)", async ({ newerPrompt, restoreBeforeResponse }) => {
+  ].flatMap((scenario) => ["session", "server-session"].map((persist) => ({ ...scenario, persist }))))("does not remember obsolete broker $persist consent (newer prompt: $newerPrompt, restored before response: $restoreBeforeResponse)", async ({ newerPrompt, restoreBeforeResponse, persist }) => {
     const f = await brokerFixture();
     const first = await f.readArgs();
     const pending = approval();
@@ -367,7 +367,7 @@ select_for_new_threads = true
     if (restoreBeforeResponse) f.changeSchema("string");
     await registry.submitServerRequest({
       backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: String(oldEvent.notification.params.requestId),
-      response: { action: "accept", content: {}, _meta: { persist: "session" } },
+      response: { action: "accept", content: {}, _meta: { persist } },
     });
     expect((await oldCall).success).toBe(restoreBeforeResponse);
     f.changeSchema("string");
@@ -744,6 +744,30 @@ select_for_new_threads = true
     expect(events).toHaveLength(prompts);
   });
 
+  it.each(["default", "auto"] as const)("runs the opted-in Sandboxer's full workflow without approval in %s", async (executionMode) => {
+    await registry.close();
+    const connections = new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") });
+    connections.setEnabled("builtin:sandboxer", true);
+    const names = ["list_sandboxes", "create_sandbox", "write_file", "exec", "stop_sandbox", "resume_sandbox"];
+    operation.mockImplementation(async (params) => params.operation === "gateway/tools/list"
+      ? names.map((name) => ({
+          connectionId: "builtin:sandboxer", serverName: "Sandboxer", toolName: name, schemaRevision: name,
+          definition: { name, inputSchema: { type: "object" }, annotations: { readOnlyHint: name === "list_sandboxes", destructiveHint: ["exec", "write_file"].includes(name), openWorldHint: true } },
+        }))
+      : { content: [{ type: "text", text: "sandbox result" }] });
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["builtin:sandboxer"] });
+    createRegistry({ registerBridge, requestGatewayToolOperation: operation, listConnections: async () => connections.list() } as never);
+    internals.activeCodexTurnModes.set("thread-1:turn-1", executionMode);
+    const unexpected = declineUnexpectedApproval();
+    for (const toolName of names) {
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", {
+        connectionId: "builtin:sandboxer", toolName, schemaRevision: toolName, arguments: {},
+      }, `sandbox-${toolName}`))).success).toBe(true);
+    }
+    expect(unexpected).toEqual([]);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(names.length);
+  });
+
   it("requires source-specific approval and deduplicates the same dynamic call", async () => {
     const pending = approval();
     const call = internals.handleServerRequest("codex", request("call_mcp_tool", args));
@@ -753,7 +777,7 @@ select_for_new_threads = true
     // The card draws the message as its title and the arguments as rows.
     expect(event.notification.params).toMatchObject({
       serverName: "Fixture", mode: "form",
-      message: "Allow the Fixture MCP server to run tool \"lookup\"?",
+      message: "Allow the agent to call \"lookup\" on Fixture?",
       _meta: { tool_params_display: [{ name: "id", value: "fixture" }] },
     });
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
@@ -778,7 +802,7 @@ select_for_new_threads = true
       response: buildMcpElicitationResponse(state, "accept", modes.includes("session") ? "session" : undefined),
     });
     expect((await call).success).toBe(true);
-    expect(modes).toEqual(["session"]);
+    expect(modes).toEqual(["session", "server-session"]);
 
     const unexpected = declineUnexpectedApproval();
     internals.activeTurnKeys.add("codex:thread-1:turn-2");
@@ -787,6 +811,58 @@ select_for_new_threads = true
     expect(unexpected).toEqual([]);
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(2);
   });
+
+  it("uses a server conversation grant for a different tool with different arguments", async () => {
+    const tools = ["lookup", "write_file"].map((name) => ({
+      connectionId: "one", serverName: "Fixture", toolName: name, schemaRevision: name,
+      definition: { name, inputSchema: { type: "object" as const }, annotations: { destructiveHint: true } },
+    }));
+    operation.mockImplementation(async (params) => params.operation === "gateway/tools/list" ? tools : { content: [] });
+    const events: AgentEvent[] = [];
+    registry.onEvent(async (event) => {
+      if (event.notification.method !== "mcpServer/elicitation/request") return;
+      events.push(event);
+      const state = createMcpElicitationState(event.notification as AppServerMcpElicitationRequestNotification)!;
+      await registry.submitServerRequest({ backend: "codex", threadId: "thread-1", turnId: "turn-1", requestId: state.requestId,
+        response: buildMcpElicitationResponse(state, "accept", "server-session") });
+    });
+    for (const tool of tools) {
+      expect((await internals.handleServerRequest("codex", request("call_mcp_tool", {
+        connectionId: tool.connectionId, toolName: tool.toolName, schemaRevision: tool.schemaRevision,
+        arguments: { path: "/tmp/fixture", content: tool.toolName },
+      }, `server-${tool.toolName}`))).success).toBe(true);
+    }
+    expect(events).toHaveLength(1);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(2);
+  });
+
+  it.each(["other-tool", "other-connection", "other-thread", "other-backend", "changed-catalog", "changed-selection"])(
+    "scopes server consent by conversation, connection and catalog: %s",
+    async (scenario) => {
+      const events: AgentEvent[] = [];
+      registry.onEvent(async (event) => {
+        if (event.notification.method !== "mcpServer/elicitation/request") return;
+        events.push(event);
+        await registry.submitServerRequest({ backend: event.backend, threadId: event.notification.params.threadId,
+          turnId: event.notification.params.turnId ?? undefined, requestId: String(event.notification.params.requestId),
+          response: { action: "accept", content: {}, _meta: { persist: "server-session" } } });
+      });
+      const context: AgentToolCallContext = { backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool" };
+      const invocation = { ...args, serverName: "Fixture" };
+      expect(await approveAndInvoke(invocation, context, new AbortController().signal, "catalog-1")).toBe(true);
+      if (scenario === "changed-selection") {
+        await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+        await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["one"] });
+      }
+      expect(await approveAndInvoke({ ...invocation, toolName: "write_file",
+        ...(scenario === "other-connection" ? { connectionId: "two" } : {}),
+      }, { ...context,
+        ...(scenario === "other-thread" ? { threadId: "thread-2" } : {}),
+        ...(scenario === "other-backend" ? { backend: "acp:fixture" as const } : {}),
+      }, new AbortController().signal, scenario === "changed-catalog" ? "catalog-2" : "catalog-1")).toBe(true);
+      expect(events).toHaveLength(scenario === "other-tool" ? 1 : 2);
+    },
+  );
 
   it.each(["same-tool", "other-tool", "other-connection", "other-thread", "other-backend", "changed-schema"])(
     "scopes conversation approval to its backend, thread, connection, tool and revision: %s",
@@ -973,6 +1049,7 @@ select_for_new_threads = true
     { executionMode: "default" as const, persist: null },
     { executionMode: "full-access" as const, persist: null },
     { executionMode: "default" as const, persist: "session" },
+    { executionMode: "default" as const, persist: "server-session" },
   ])("adds no SQLite writes for discovery and repeated invocation in $executionMode with $persist approval", async ({ executionMode, persist }) => {
     await store.setThreadExecutionMode({ backend: "codex", threadId: "thread-1", executionMode });
     if (!isSqliteWriteMetricsEnabled()) attachSqliteWriteMetrics({ db: db.raw, dbPath: db.raw.name });

@@ -10450,7 +10450,7 @@ export class DesktopBackendRegistry {
           }
           return (await this.readThreadMcpConnections(context)).connectionIds;
         },
-        approve: (invocation, context, signal, annotations) => this.approveGatewayInvocation(invocation, context, signal, annotations),
+        approve: (invocation, context, signal, annotations, catalogRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision),
       });
     }
     if (this.tokenMiserStore) {
@@ -39278,6 +39278,7 @@ export class DesktopBackendRegistry {
     context: AgentToolCallContext,
     signal: AbortSignal,
     annotations?: McpGatewayTool["definition"]["annotations"],
+    catalogRevision?: string,
   ): Promise<McpGatewayApproval> {
     signal.throwIfAborted();
     const requestId = `mcp-gateway:${randomUUID()}`;
@@ -39296,6 +39297,16 @@ export class DesktopBackendRegistry {
       this.mcpGatewaySessionApprovals.set(sessionKey, approvals);
     }
     const consent = current;
+    const serverKey = JSON.stringify([invocation.connectionId, invocation.serverName]);
+    let serverConsent = approvals.get(serverKey);
+    if (catalogRevision && (!serverConsent || serverConsent.schemaRevision !== catalogRevision
+      || serverConsent.selectionRevision !== selectionRevision)) {
+      serverConsent = { schemaRevision: catalogRevision, selectionRevision, approved: false };
+      approvals.set(serverKey, serverConsent);
+    }
+    // A connection grant is offered only for a catalog read from the owner,
+    // never a revision supplied in the agent's tool arguments.
+    const connectionConsent = catalogRevision ? serverConsent : undefined;
     const notification: AppServerPendingRequestNotification = {
       method: "mcpServer/elicitation/request",
       params: {
@@ -39304,14 +39315,14 @@ export class DesktopBackendRegistry {
         requestId,
         serverName: invocation.serverName,
         mode: "form",
-        // One line, as Codex phrases its own MCP approvals: the card draws the
-        // message as its title. serverName is the connection's display name.
-        message: `Allow the ${invocation.serverName} MCP server to run tool "${invocation.toolName}"?`,
+        message: `Allow the agent to call "${invocation.toolName}" on ${invocation.serverName}?`,
         requestedSchema: { type: "object", properties: {} },
         _meta: {
           pwragent_approval_kind: "mcp_tool_call",
-          persist: ["session"],
-          subtitle: "Allow this conversation approves this tool with any arguments. The approval ends when PwrAgent restarts, MCP access changes, or the tool changes.",
+          persist: connectionConsent ? ["session", "server-session"] : ["session"],
+          subtitle: connectionConsent
+            ? `Allow this tool or all ${invocation.serverName} tools in this conversation, with any arguments. Approval ends when PwrAgent restarts, MCP access changes, or the approved tools change.`
+            : "Allow this tool in this conversation, with any arguments. Approval ends when PwrAgent restarts, MCP access changes, or the tool changes.",
           // The same rows Codex sends, so desktop and messaging draw and
           // redact the arguments one way.
           tool_params_display: Object.entries(invocation.arguments).map(([name, value]) => ({
@@ -39366,7 +39377,7 @@ export class DesktopBackendRegistry {
       });
       return true;
     }
-    if (consent.approved) return true;
+    if (consent.approved || connectionConsent?.approved) return true;
     const key = buildPendingRequestKey({ ...context, requestId });
     return await new Promise<McpGatewayApproval>((resolve, reject) => {
       const finish = (approved: McpGatewayApproval, error?: unknown): void => {
@@ -39386,7 +39397,11 @@ export class DesktopBackendRegistry {
         resolve: (response) => {
           if (signal.aborted) { aborted(); return; }
           const approved = Boolean(response && "action" in response && response.action === "accept");
-          if (approved && "_meta" in response && readRecord(response._meta)?.persist === "session") {
+          const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
+          const rememberedConsent = persist === "session" ? consent
+            : persist === "server-session" ? connectionConsent : undefined;
+          const rememberedKey = persist === "server-session" ? serverKey : sourceKey;
+          if (approved && rememberedConsent) {
             finish({ onInvoked: async () => {
               // A late response is provisional until the owner accepts its
               // exact schema/auth revision. Peer-instance edits also revoke it.
@@ -39395,8 +39410,8 @@ export class DesktopBackendRegistry {
                 const latest = await this.overlayStore.getThreadOverlayState(context);
                 if (!signal.aborted && !this.closed
                   && latest?.mcpSelectionRevision === selectionRevision
-                  && this.mcpGatewaySessionApprovals.get(sessionKey)?.get(sourceKey) === consent) {
-                  consent.approved = true;
+                  && this.mcpGatewaySessionApprovals.get(sessionKey)?.get(rememberedKey) === rememberedConsent) {
+                  rememberedConsent.approved = true;
                 }
               } catch (error) {
                 backendRegistryLog.warn("could not record MCP conversation approval", { error: String(error) });
