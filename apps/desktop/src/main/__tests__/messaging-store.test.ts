@@ -284,11 +284,13 @@ describe("MessagingStore", () => {
       writeData: (data: unknown) => Promise<void>;
     };
     const writeData = internals.writeData;
+    const writeHeld = Promise.withResolvers<void>();
     const writing = Promise.withResolvers<void>();
     let holdNextWrite = true;
     const writeSpy = vi.spyOn(internals, "writeData").mockImplementation(async function (this: unknown, data: unknown) {
       if (holdNextWrite) {
         holdNextWrite = false;
+        writeHeld.resolve();
         await writing.promise;
       }
       await writeData.call(this, data);
@@ -300,6 +302,7 @@ describe("MessagingStore", () => {
         idle = true;
       });
       const second = store.upsertBinding(buildBinding({ id: "binding-2" }));
+      await writeHeld.promise;
       for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
       expect(writeSpy).toHaveBeenCalledTimes(1);
       expect(idle).toBe(false);

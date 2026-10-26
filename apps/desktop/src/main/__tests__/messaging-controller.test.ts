@@ -10826,25 +10826,42 @@ describe("MessagingController", () => {
     }
   });
 
-  it("holds teardown until a receipt window's delivery record has been written", async () => {
+  it.each(["adapter delivery", "store write"] as const)("holds teardown until a receipt window's delivery has been recorded (held at %s)", async (holdAt) => {
     vi.useFakeTimers();
-    const harness = await createHarness({ toolUpdateDefaultMode: "show_less" });
-    // Hold the store write that follows the adapter delivery. On Windows CI,
-    // afterEach removed the store directory while this write's temp-file
-    // rename was still pending, and the rename failed with ENOENT.
+    // On Windows CI, afterEach removed the store directory while the store
+    // write that follows a flush-timer delivery was still pending, and its
+    // temp-file rename failed with ENOENT. Hold the delivery at either step:
+    // before the adapter returns (no store write queued yet, so only the
+    // controller knows about it) and inside the store's write.
+    let armed = false;
+    const held = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const hold = async (step: typeof holdAt): Promise<void> => {
+      if (!armed || step !== holdAt) return;
+      armed = false;
+      held.resolve();
+      await release.promise;
+    };
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_less",
+      deliver: async (intent) => {
+        delivered.push(intent);
+        await hold("adapter delivery");
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: "presented",
+          surface: { channel: "telegram", id: `surface:${intent.id}` },
+        };
+      },
+    });
     const internals = MessagingStore.prototype as unknown as {
       writeData: (data: unknown) => Promise<void>;
     };
     const writeData = internals.writeData;
-    const writing = Promise.withResolvers<void>();
-    let holdNextWrite = false;
-    let heldWrites = 0;
     const writeSpy = vi.spyOn(internals, "writeData").mockImplementation(async function (this: unknown, data: unknown) {
-      if (holdNextWrite) {
-        holdNextWrite = false;
-        heldWrites += 1;
-        await writing.promise;
-      }
+      await hold("store write");
       await writeData.call(this, data);
     });
     try {
@@ -10855,7 +10872,6 @@ describe("MessagingController", () => {
       await harness.controller.handleBackendEvent({ backend: "codex", notification: {
         method: "turn/completed", params: { threadId: "thread-1", turnId: "source-turn", turn: { id: "source-turn", status: "completed", output: [] } },
       } });
-      harness.delivered.length = 0;
       await harness.controller.handleBackendEvent({ backend: "codex", notification: {
         method: "item/completed", params: { threadId: "thread-1", turnId: "source-turn", item: {
           id: "delayed-receipt", type: "agentMessage",
@@ -10863,13 +10879,14 @@ describe("MessagingController", () => {
           text: "**Message to [Recipient](pwragent://thread/recipient?backend=codex)** · Receiving thread started work\n\nDelayed receipt",
         } },
       } });
-      holdNextWrite = true;
+      delivered.length = 0;
+      armed = true;
       await vi.advanceTimersByTimeAsync(60_001);
-      await vi.waitFor(() => expect(harness.delivered.filter((intent) => intent.kind === "message")).toHaveLength(1));
-      await vi.waitFor(() => expect(heldWrites).toBe(1));
-      const intentId = harness.delivered.find((intent) => intent.kind === "message")!.id;
+      await held.promise;
+      // The test body has seen the message, so it would return here.
+      const message = delivered.find((intent) => intent.kind === "message");
+      expect(JSON.stringify(message)).toContain("Delayed receipt");
 
-      // What the test body does before afterEach: it has seen the message.
       harness.controller.dispose();
       vi.useRealTimers();
       let settled = false;
@@ -10879,12 +10896,12 @@ describe("MessagingController", () => {
       for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
       expect(settled).toBe(false);
 
-      writing.resolve();
+      release.resolve();
       await teardown;
       const snapshot = await harness.store.readSnapshot();
-      expect(Object.values(snapshot.deliveries).map((delivery) => delivery.intentId)).toContain(intentId);
+      expect(Object.values(snapshot.deliveries).map((delivery) => delivery.intentId)).toContain(message!.id);
     } finally {
-      writing.resolve();
+      release.resolve();
       harness.controller.dispose();
       vi.useRealTimers();
       writeSpy.mockRestore();
