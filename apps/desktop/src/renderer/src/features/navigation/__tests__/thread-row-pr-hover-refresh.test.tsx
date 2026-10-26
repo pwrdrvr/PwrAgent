@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DesktopAppearanceDensity, NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { usePullRequestRefresh } from "../../pr-status/usePullRequestRefresh";
 import { ThreadRow } from "../ThreadRow";
 import { ThreadRowDensityContext } from "../thread-row-density";
@@ -47,7 +48,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe.each<DesktopAppearanceDensity>(["minimal", "mission-control"])("%s PR hover refresh", (density) => {
+describe.each<DesktopAppearanceDensity>(["minimal", "compact", "mission-control"])("%s PR hover refresh", (density) => {
   // Minimal's visible chip is outside the ordinary chip flow. Target that
   // chip explicitly: hovering the hidden flow would conceal the regression.
   const chipSelector = density === "minimal"
@@ -58,13 +59,18 @@ describe.each<DesktopAppearanceDensity>(["minimal", "mission-control"])("%s PR h
     vi.useFakeTimers();
     const initialPrs = multiple ? [openPr, olderPr] : [openPr];
     const refreshedPrs = multiple ? [mergedPr, olderPr] : [mergedPr];
-    const refreshThreadPullRequests = vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId: "thread-pr-hover",
-      provider: "github.com",
-      ghAvailable: true,
-      prs: refreshedPrs,
-    }));
+    let completeRefresh!: () => void;
+    const responseReady = new Promise<void>((resolve) => { completeRefresh = resolve; });
+    const refreshThreadPullRequests = vi.fn(async () => {
+      await responseReady;
+      return {
+        backend: "codex" as const,
+        threadId: "thread-pr-hover",
+        provider: "github.com",
+        ghAvailable: true,
+        prs: refreshedPrs,
+      };
+    });
     const desktopApi = { refreshThreadPullRequests } satisfies DesktopApi;
     const onRefreshNavigation = vi.fn();
     function Harness() {
@@ -102,11 +108,24 @@ describe.each<DesktopAppearanceDensity>(["minimal", "mission-control"])("%s PR h
       branch: "fix/pr-hover",
       directoryPaths: ["/repo"],
     });
+    if (multiple && density === "minimal") {
+      const list = screen.getByRole("group", { name: "Pull requests for PR hover refresh" });
+      const row = list.querySelector(".pr-rollup-popover__row")!;
+      // Cross the portal boundary while the request is still pending, so
+      // the nested detail card is already open when fresh status arrives.
+      fireEvent.mouseOut(chip, { relatedTarget: row });
+      fireEvent.mouseOver(row, { relatedTarget: chip });
+      await act(async () => { vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS); });
+    }
+    expect(screen.getByRole("tooltip")).toHaveTextContent("checks passing");
+    expect(onRefreshNavigation).not.toHaveBeenCalled();
+    await act(async () => { completeRefresh(); });
+
     expect(onRefreshNavigation).toHaveBeenCalledOnce();
+    expect(refreshThreadPullRequests).toHaveBeenCalledOnce();
     expect(container.querySelector(chipSelector)).toHaveClass("pr-chip--merged");
-    if (!multiple || density === "mission-control") {
-      expect(screen.getByRole("tooltip")).toHaveTextContent("merged");
-    } else {
+    expect(screen.getByRole("tooltip")).toHaveTextContent("merged");
+    if (multiple && density === "minimal") {
       expect(screen.getByRole("group", { name: "Pull requests for PR hover refresh" }))
         .toHaveTextContent("all merged");
     }
