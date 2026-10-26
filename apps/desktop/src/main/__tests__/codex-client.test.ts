@@ -13386,6 +13386,42 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("includes earlier user constraints and current intent in MCP approval evidence", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const item = (turnId: string, text: string) => ({ turnId, item: { type: "userMessage", id: turnId,
+      content: [{ type: "text", text }] } });
+    MockTransport.threadItemsListResultByRequest.set("source::", {
+      data: [item("earlier", "Never write to production.")], nextCursor: "next", backwardsCursor: null,
+    });
+    MockTransport.threadItemsListResultByRequest.set("source::next", {
+      data: [item("current", "Update the staging configuration.")], nextCursor: null, backwardsCursor: null,
+    });
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    expect(await client.readMcpApprovalUserMessages({ threadId: "source", turnId: "current", signal: new AbortController().signal }))
+      .toEqual(["Never write to production.", "Update the staging configuration."]);
+    await client.close();
+  });
+
+  it.each(["missing-current", "oversized", "legacy", "attachment", "repeated-cursor", "page-limit"])(
+    "refuses incomplete MCP approval context: %s", async (scenario) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const item = { type: "userMessage", id: "user", content: scenario === "attachment"
+        ? [{ type: "image", url: "fixture.png" }] : [{ type: "text", text: scenario === "oversized" ? "x".repeat(32_001) : "Update staging." }] };
+      const data = scenario === "legacy" ? [item] : [{ turnId: scenario === "missing-current" ? "old" : "current", item }];
+      MockTransport.threadItemsListResultByRequest.set("source::", {
+        data, nextCursor: scenario === "repeated-cursor" || scenario === "page-limit" ? "page-1" : null, backwardsCursor: null,
+      });
+      for (let index = 1; index <= 32; index += 1) {
+        MockTransport.threadItemsListResultByRequest.set(`source::page-${index}`, {
+          data, nextCursor: scenario === "repeated-cursor" ? "page-1" : `page-${index + 1}`, backwardsCursor: null,
+        });
+      }
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      expect(await client.readMcpApprovalUserMessages({ threadId: "source", turnId: "current", signal: new AbortController().signal })).toBeUndefined();
+      await client.close();
+    },
+  );
+
   it("interrupts only the cancelled structured helper turn and unsubscribes it", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadStartResult = { thread: { id: "approval-helper" }, instructionSources: [] };

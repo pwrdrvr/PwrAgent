@@ -44,8 +44,8 @@ existing structured helper (`thread/start` with `ephemeral: true`, then
 in Settings → AI Providers → Helper models → MCP approval reviews. It runs in
 the helper scratch directory with execution, delegation, hooks, plugins and
 configured MCP servers disabled. It receives only the exact owner-listed tool
-definition, source identity, arguments, and user messages read through the
-source turn's App Server protocol. Arguments and server descriptions cannot
+definition, source identity, arguments, and complete user-message history read through the
+source thread's App Server protocol. Arguments and server descriptions cannot
 supply user authorization.
 
 Approval requires low or medium risk, scoped user intent and a verbatim user
@@ -54,8 +54,10 @@ results, timeouts, missing helper support and uncertain decisions require human
 confirmation. Explicit reviewer denial rejects the call. The transcript shows
 PwrAgent review activity and its outcome; an unavailable reviewer never appears
 as an approval. Cancellation interrupts the helper turn and cannot authorize
-the invocation. Current-turn context intentionally excludes earlier turns;
-when earlier authorization is needed the operator can grant explicit consent.
+the invocation. Context reads require the current turn's user message and the
+complete user history within 32 KB, 32 item pages and 10 seconds. Incomplete,
+repeated-cursor or legacy pages, and non-text user inputs, require confirmation
+rather than dropping earlier constraints or unreadable attachments.
 
 Reviews approve one exact invocation only. They never manufacture `session`,
 `server-session` or `always` grants. An explicit connection `prompt` policy

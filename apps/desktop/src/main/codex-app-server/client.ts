@@ -9981,6 +9981,49 @@ export class CodexAppServerClient {
    * so its messages carry the same parts: a turn's tool screenshots attach to
    * its final reply. Reads only that turn's items, never a transcript page.
    */
+  /** Complete, bounded user evidence for host approvals; partial history cannot authorize. */
+  async readMcpApprovalUserMessages(params: {
+    threadId: string;
+    turnId: string;
+    signal: AbortSignal;
+  }): Promise<string[] | undefined> {
+    await this.ensureInitialized();
+    const messages: string[] = [];
+    const cursors = new Set<string>();
+    const deadline = Date.now() + 10_000;
+    let cursor: string | undefined;
+    let currentTurnSeen = false;
+    let bytes = 0;
+    for (let pageNumber = 0; pageNumber < 32; pageNumber += 1) {
+      params.signal.throwIfAborted();
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return undefined;
+      const page = await requestCodexThreadItemsPage({
+        client: this.connection,
+        payload: { threadId: params.threadId, limit: 100, sortDirection: "asc", ...(cursor ? { cursor } : {}) },
+        timeoutMs: Math.min(remaining, 5_000),
+      });
+      params.signal.throwIfAborted();
+      if (!Array.isArray(page.data)) return undefined;
+      for (const entry of page.data) {
+        // A legacy page without its containing turn cannot attest current intent.
+        if (!entry.item || typeof entry.turnId !== "string") return undefined;
+        if (entry.item.type !== "userMessage") continue;
+        if (entry.item.content.some((part) => part.type !== "text")) return undefined;
+        const text = entry.item.content.map((part) => part.type === "text" ? part.text : "").join("\n");
+        bytes += Buffer.byteLength(text);
+        if (bytes > 32_000) return undefined;
+        if (text.trim()) messages.push(text);
+        if (entry.turnId === params.turnId && text.trim()) currentTurnSeen = true;
+      }
+      if (!page.nextCursor) return currentTurnSeen && messages.length ? messages : undefined;
+      if (cursors.has(page.nextCursor)) return undefined;
+      cursors.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+    return undefined;
+  }
+
   async readThreadTurn(params: {
     threadId: string;
     turnId: string;
