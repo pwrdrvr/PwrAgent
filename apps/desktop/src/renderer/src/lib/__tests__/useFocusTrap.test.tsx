@@ -1,9 +1,9 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useFocusTrap } from "../useFocusTrap";
-import { pressTab } from "../../test/tab-walk";
+import { pressTab, tabEscapes } from "../../test/tab-walk";
 
 let opener: HTMLButtonElement;
 
@@ -61,6 +61,27 @@ describe("useFocusTrap", () => {
     button("Last").focus();
     expect(pressTab().defaultPrevented).toBe(true);
     expect(focusedLabel()).toBe("First");
+  });
+
+  it("reads shared ancestor styles once per Tab scan", () => {
+    render(<Dialog open />);
+    const dialog = screen.getByRole("dialog");
+    const last = button("Last");
+    last.focus();
+    const styles = vi.spyOn(window, "getComputedStyle");
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect(focusedLabel()).toBe("First");
+    expect(styles.mock.calls.filter(([element]) => element === dialog)).toHaveLength(1);
+  });
+
+  it("checks every stop and both wrap boundaries without repeating focus cycles", () => {
+    render(<Dialog open />);
+    const dialog = screen.getByRole("dialog");
+    const visited: string[] = [];
+    const recordFocus = () => visited.push(focusedLabel() ?? "");
+    dialog.addEventListener("focusin", recordFocus);
+    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+    expect(visited).toEqual(["Middle", "Last", "First", "Last", "Middle", "First"]);
   });
 
   it("wraps Shift+Tab from the first control to the last", () => {

@@ -17,18 +17,23 @@ const TABBABLE =
   "a[href],area[href],button,input,select,textarea,summary,iframe,object,embed,"
   + "[contenteditable],[tabindex]";
 
-function isTabStop(el: HTMLElement): boolean {
+function isTabStop(el: HTMLElement, styles: Map<HTMLElement, CSSStyleDeclaration>): boolean {
   if (el.tabIndex < 0 || el.hidden) return false;
   if (el.hasAttribute("disabled") || el.closest("[inert]") !== null) return false;
   for (let node: HTMLElement | null = el; node !== null; node = node.parentElement) {
-    const style = getComputedStyle(node);
+    let style = styles.get(node);
+    if (style === undefined) {
+      style = getComputedStyle(node);
+      styles.set(node, style);
+    }
     if (style.display === "none" || style.visibility === "hidden") return false;
   }
   return true;
 }
 
 export function documentTabStops(): HTMLElement[] {
-  return [...document.querySelectorAll<HTMLElement>(TABBABLE)].filter(isTabStop);
+  const styles = new Map<HTMLElement, CSSStyleDeclaration>();
+  return [...document.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => isTabStop(el, styles));
 }
 
 function keydown(key: string, shiftKey: boolean): KeyboardEvent {
@@ -48,6 +53,10 @@ function keydown(key: string, shiftKey: boolean): KeyboardEvent {
 export function pressTab({ shift = false }: { shift?: boolean } = {}): KeyboardEvent {
   const event = keydown("Tab", shift);
   if (event.defaultPrevented) return event;
+  // The active stop and its successor share ancestors. Cache only within
+  // this keypress, after handlers have made any synchronous visibility edits.
+  const styles = new Map<HTMLElement, CSSStyleDeclaration>();
+  const isCurrentStop = (el: HTMLElement) => isTabStop(el, styles);
   const candidates = [...document.querySelectorAll<HTMLElement>(TABBABLE)];
   const active = document.activeElement as HTMLElement | null;
   const at = active === null ? -1 : candidates.indexOf(active);
@@ -55,13 +64,13 @@ export function pressTab({ shift = false }: { shift?: boolean } = {}): KeyboardE
   // computed styles on every Tab makes a trapped dialog pay for all the
   // settings controls behind it, even though focus never reaches them.
   let next: HTMLElement | undefined;
-  if (at !== -1 && active !== null && isTabStop(active)) {
+  if (at !== -1 && active !== null && isCurrentStop(active)) {
     const ordered = shift
       ? [...candidates.slice(0, at).reverse(), ...candidates.slice(at).reverse()]
       : [...candidates.slice(at + 1), ...candidates.slice(0, at + 1)];
-    next = ordered.find(isTabStop);
+    next = ordered.find(isCurrentStop);
   } else if (active === null || active === document.body) {
-    next = (shift ? candidates.reverse() : candidates).find(isTabStop);
+    next = (shift ? candidates.reverse() : candidates).find(isCurrentStop);
   } else if (shift) {
     // Focus on something that is not a stop (a tabIndex={-1} container):
     // Chromium continues from its position in the document. Its descendants
@@ -71,12 +80,12 @@ export function pressTab({ shift = false }: { shift?: boolean } = {}): KeyboardE
         Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_PRECEDING)
         && !stop.contains(active))
       .reverse()
-      .find(isTabStop) ?? candidates.reverse().find(isTabStop);
+      .find(isCurrentStop) ?? candidates.reverse().find(isCurrentStop);
   } else {
     next = candidates.find((stop) =>
       Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING)
-      && isTabStop(stop))
-      ?? candidates.find(isTabStop);
+      && isCurrentStop(stop))
+      ?? candidates.find(isCurrentStop);
   }
   if (next === undefined) return event;
   act(() => {
@@ -104,12 +113,16 @@ export function pressKey(key: string): KeyboardEvent {
  */
 export function walkTab(
   count = 60,
-  { shift = false }: { shift?: boolean } = {},
+  { shift = false, stopAtCycle = false }: { shift?: boolean; stopAtCycle?: boolean } = {},
 ): Element[] {
   const visited: Element[] = [];
+  const seen = stopAtCycle ? new Set([document.activeElement ?? document.body]) : undefined;
   for (let i = 0; i < count; i++) {
     pressTab({ shift });
-    visited.push(document.activeElement ?? document.body);
+    const active = document.activeElement ?? document.body;
+    visited.push(active);
+    if (seen?.has(active)) break;
+    seen?.add(active);
   }
   return visited;
 }
@@ -146,9 +159,10 @@ function describeStop(el: Element): string {
 }
 
 /**
- * Walks `count` Tabs forward from the current focus, then `count` back, with
+ * Walks a complete focus cycle in each direction, up to `count` Tabs, with
  * sentinels around the page, and names every stop outside `dialog` that focus
- * reached. A trapped dialog answers `{ forward: [], backward: [] }`.
+ * reached. Repeating an already visited cycle adds no coverage. A trapped
+ * dialog answers `{ forward: [], backward: [] }`.
  */
 export function tabEscapes(
   dialog: Element,
@@ -158,8 +172,8 @@ export function tabEscapes(
   try {
     const outside = (visited: Element[]) =>
       visited.filter((el) => !dialog.contains(el)).map(describeStop);
-    const forward = outside(walkTab(count));
-    const backward = outside(walkTab(count, { shift: true }));
+    const forward = outside(walkTab(count, { stopAtCycle: true }));
+    const backward = outside(walkTab(count, { shift: true, stopAtCycle: true }));
     return { forward, backward };
   } finally {
     sentinels.remove();

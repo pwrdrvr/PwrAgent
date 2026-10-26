@@ -1,3 +1,4 @@
+import { probe } from "../../test-setup/phase-probes";
 import { createHash } from "node:crypto";
 import {
   mkdir,
@@ -112,18 +113,18 @@ describe("federation turn input attachments", () => {
   });
 
   it("round-trips multi-chunk bytes into receiver-owned verified paths", async () => {
-    await createTestRoot();
+    await probe("setup", () => createTestRoot());
     const sourcePath = path.join(turnInputAttachmentRoot(), "source.bin");
     const data = Buffer.alloc(FEDERATION_BLOB_CHUNK_BYTES + 3, 0x5a);
-    await mkdir(path.dirname(sourcePath), { recursive: true });
-    await writeFile(sourcePath, data);
+    await probe("mkdir", () => mkdir(path.dirname(sourcePath), { recursive: true }));
+    await probe("write-source", () => writeFile(sourcePath, data));
     const envelopes: FederationBlobChunkEnvelope[] = [];
-    const prepared = await prepareOutgoingFederationTurnInput({
+    const prepared = await probe("prepare-upload", () => prepareOutgoingFederationTurnInput({
       input: [{ type: "localFile", name: "source.bin", path: sourcePath }],
       localInstanceId: "source_one",
       targetInstanceId: "owner_one",
       sendEnvelope: collectBlobChunks(envelopes),
-    });
+    }));
     const receiverRoot = path.join(path.dirname(turnInputAttachmentRoot()), "received");
     const receiver = new FederationTurnInputAttachmentReceiver({
       resolveRoot: () => receiverRoot,
@@ -131,10 +132,10 @@ describe("federation turn input attachments", () => {
     const resolved = receiver.resolveInput(prepared, "source_one");
 
     for (const envelope of envelopes) {
-      await receiver.receive(envelope, "source_one");
+      await probe("receive-chunk", () => receiver.receive(envelope, "source_one"));
     }
 
-    const input = await resolved;
+    const input = await probe("resolve-input", () => resolved);
     expect(input).toHaveLength(1);
     expect(input[0]).toMatchObject({
       type: "localFile",
@@ -142,7 +143,8 @@ describe("federation turn input attachments", () => {
       path: expect.stringMatching(/received/u),
     });
     const receivedPath = input[0]?.type === "localFile" ? input[0].path : "";
-    await expect(readFile(receivedPath)).resolves.toEqual(data);
+    const received = await probe("read-received", () => readFile(receivedPath));
+    probe("assert-bytes", () => expect(received.equals(data)).toBe(true));
     expect(envelopes).toHaveLength(2);
     expect(envelopes[0]?.data).toHaveLength(FEDERATION_BLOB_CHUNK_BYTES);
     expect(envelopes[1]?.data).toHaveLength(3);

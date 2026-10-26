@@ -37,6 +37,14 @@ samples over the step, as a share of all 8 vCPUs.
 
 `all` uses two unit shards and four E2E lanes.
 
+These are observations, not a time budget. On 2026-10-26, a fresh `large`
+VM took 336 s for two shards at `ee6923d1d` (12 failed tests), and 380 s
+at the October 25 documentation commit `0b487a206` (24 failed tests), on
+that same VM with no overlapping checks. CPU steal averaged 4.7% and 4.0%.
+The older revision also missing 127 s means suite growth alone does not
+explain that gap. Preserve the revision, exit statuses, `/proc/stat` deltas,
+and CPU pressure when comparing runs; `avg300` includes earlier activity.
+
 - Vitest already runs one worker per core. A single run leaves the CPU idle
   while it starts and finishes. Two shards fill those gaps and use about the
   same CPU time, so more shards cannot help on 8 vCPUs.

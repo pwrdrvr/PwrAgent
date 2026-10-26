@@ -163,7 +163,13 @@ it("enforces the aggregate retained range budget while keeping the accepted base
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
   queries.setDemand(new Map([["directory-index", request()]]));
   await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory-index")?.loading).toBe(false));
-  for (let index = 0; index < 34; index += 1) await queries.loadMore("directory-index");
+  // One click continues for up to eight pages. Stop on the first rejected
+  // range rather than serializing the same 8 MiB baseline on 30 more retries.
+  for (let index = 0; index < 34; index += 1) {
+    await queries.loadMore("directory-index");
+    if (queries.getSnapshot().resources.get("directory-index")!.state.error) break;
+  }
+  expect(read).toHaveBeenCalledTimes(35);
   const state = queries.getSnapshot().resources.get("directory-index")!.state;
   expect(state.page?.directories).toHaveLength(34);
   expect(state.stale).toBe(true);
