@@ -529,7 +529,7 @@ describe("messaging final-reply images at a bound turn end", () => {
 const OWNER_INSTANCE_ID = "owner_one";
 const GATEWAY_INSTANCE_ID = "gateway_one";
 const OWNER_TARGET: FederationRemoteTarget = { scope: "remote", instanceId: OWNER_INSTANCE_ID };
-const TURN_ASSISTANT_REPLY = "turn_assistant_reply" as FederationCapability;
+const TURN_ASSISTANT_REPLY: FederationCapability = "turn_assistant_reply";
 const READ_THREAD = "backend.readThread";
 const READ_TURN_REPLY = "backend.readTurnAssistantReply";
 const READ_IMAGE = "backend.readTranscriptImage";
@@ -871,6 +871,60 @@ describe("messaging final-reply images at a bound turn end on a peer-owned threa
     } finally {
       await thread.ownerRegistry.close();
     }
+  });
+});
+
+describe("an owner's turn reply read for a peer", () => {
+  function ownerRegistry(replay: AppServerThreadReplay | undefined) {
+    return {
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+      readThread: vi.fn(async () => ({
+        backend: "acp" as const,
+        fetchedAt: 1,
+        threadId: THREAD_ID,
+        replay: finalTurnReplay(),
+      })),
+      readThreadTurnReplay: vi.fn(async () => replay),
+    };
+  }
+
+  it("finds a backend's reply in the last page when it cannot read one turn", async () => {
+    const registry = ownerRegistry(undefined);
+    const response = await readTurnAssistantReplyForPeer(registry as never, {
+      backend: "acp" as never,
+      itemId: "assistant-final",
+      text: "Final screenshot.",
+      threadId: THREAD_ID,
+      turnId: FINAL_TURN_ID,
+    });
+    expect(registry.readThread).toHaveBeenCalledWith(expect.objectContaining({
+      includeAccounting: false,
+      limit: 20,
+      viewOnly: true,
+    }));
+    expect(response.message).toEqual(expect.objectContaining({
+      id: "assistant-final",
+      parts: expect.arrayContaining([
+        expect.objectContaining({ type: "image", url: "https://example.com/final.png" }),
+      ]),
+    }));
+  });
+
+  it("never reads images from the peer's text", async () => {
+    const imagePath = writePng(path.join(workDir, "owner-private"), "secret.png");
+    const registry = ownerRegistry(extractThreadReplayFromReadResult(
+      { thread: { id: THREAD_ID, turns: [{ id: FINAL_TURN_ID, items: [userItem(), finalAnswer("All done.")] }] } },
+      { threadId: THREAD_ID },
+    ));
+    const response = await readTurnAssistantReplyForPeer(registry as never, {
+      backend: "codex",
+      text: `![secret](${imagePath})`,
+      threadId: THREAD_ID,
+      turnId: FINAL_TURN_ID,
+    });
+    expect(response).toEqual({ message: null });
+    expect(registry.readThread).not.toHaveBeenCalled();
+    expect(registry.getThreadTranscriptImageRoots).not.toHaveBeenCalled();
   });
 });
 

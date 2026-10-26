@@ -4557,6 +4557,10 @@ describe("advertised capabilities", () => {
   it("advertises queue pausing, which viewers need before they offer a pause", () => {
     expect(DEFAULT_CAPABILITIES).toContain("turn_queue_pause");
   });
+
+  it("advertises turn reply reads, which messaging gateways need before they skip the page", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("turn_assistant_reply");
+  });
 });
 
 describe("Cloudflare listener reachability", () => {

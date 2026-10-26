@@ -1894,6 +1894,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   thread_mcp_connections: "Thread MCP connections",
   turn_queue_reorder: "reorder queued messages",
   turn_queue_pause: "pause queued messages",
+  turn_assistant_reply: "read a turn's reply images",
 };
 
 function formatFederationCapabilities(

@@ -63,6 +63,12 @@ export const FEDERATION_CAPABILITIES = [
    * A viewer offers no pause without it.
    */
   "turn_queue_pause",
+  /**
+   * The owner answers `backend.readTurnAssistantReply` with one finished
+   * turn's reply, its images materialized. A messaging gateway without it
+   * reads a transcript page at every bound turn end.
+   */
+  "turn_assistant_reply",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

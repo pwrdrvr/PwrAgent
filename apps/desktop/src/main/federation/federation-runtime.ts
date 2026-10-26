@@ -295,7 +295,10 @@ import {
   rewriteFederatedTranscriptImageUrlsForRenderer,
   toFederatedTranscriptImageProtocolUrl,
 } from "../transcript-image-protocol";
-import { readThreadForPeer } from "./federation-owner-thread-reads";
+import {
+  readThreadForPeer,
+  readTurnAssistantReplyForPeer,
+} from "./federation-owner-thread-reads";
 import { getMainLogger } from "../log";
 import {
   discoverDesktopApplications,
@@ -620,6 +623,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "navigation_directory_set_events",
   "turn_queue_reorder",
   "turn_queue_pause",
+  "turn_assistant_reply",
   "thread_mcp_connections",
   "thread_todos",
   "operator_questions",
@@ -6878,6 +6882,9 @@ function localBackendOperations(): FederationBackendOperations {
       request: AppServerReadThreadRequest,
     ): Promise<AppServerReadThreadResponse> {
       return await readThreadForPeer(getDesktopBackendRegistry(), request);
+    },
+    async readTurnAssistantReply(request) {
+      return await readTurnAssistantReplyForPeer(getDesktopBackendRegistry(), request);
     },
     async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
       return await getDesktopBackendRegistry().readUsageActivity(request);

@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
+import type { AppServerThreadMessage } from "@pwragent/shared";
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
@@ -269,6 +270,28 @@ export type FederatedTranscriptImageResponse = {
   mimeType: string;
 };
 
+/**
+ * `backend.readTurnAssistantReply`: the reply one finished turn wrote, for a
+ * messaging gateway posting it. The owner reads that turn alone.
+ */
+export type FederationReadTurnAssistantReplyRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  turnId: string;
+  itemId?: string;
+  /**
+   * The reply text the gateway is posting. It picks the message when no item
+   * id is known. The owner only matches it against its own turn and never
+   * reads images from it.
+   */
+  text: string;
+};
+
+export type FederationReadTurnAssistantReplyResponse = {
+  /** Owner-local images are `pwragent-image://` URLs the owner serves. */
+  message: AppServerThreadMessage | null;
+};
+
 export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
   delivery?: "new_turn";
@@ -517,6 +540,7 @@ export const FEDERATION_BACKEND_METHODS = {
   resolveThread: "backend.resolveThread",
   resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",
   readThread: "backend.readThread",
+  readTurnAssistantReply: "backend.readTurnAssistantReply",
   readUsageActivity: "backend.readUsageActivity",
   readThreadFamilyPricing: "backend.readThreadFamilyPricing",
   analyzeUsageActivity: "backend.analyzeUsageActivity",
@@ -661,6 +685,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.readTurnAssistantReply]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readForge]: "thread_detail",
   /* Reads the thread's own transcript history; same data class as reading it. */
   [FEDERATION_BACKEND_METHODS.readUsageActivity]: "thread_detail",
@@ -873,6 +898,13 @@ export type FederationBackendOperations = {
   readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse>;
+  /**
+   * Optional on owner adapters: an owner without it does not advertise
+   * `turn_assistant_reply`, and a gateway reads a transcript page instead.
+   */
+  readTurnAssistantReply?(
+    request: FederationReadTurnAssistantReplyRequest,
+  ): Promise<FederationReadTurnAssistantReplyResponse>;
   readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse>;
   readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse>;
   analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse>;
@@ -1416,6 +1448,15 @@ export function registerFederationBackendHandlers(params: {
       return projectFederationThreadRead(conditionalThreadRead({ ...response, replay }, request.knownRevision));
     },
   );
+  if (params.backend.readTurnAssistantReply) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.readTurnAssistantReply,
+      async (envelope) =>
+        await params.backend.readTurnAssistantReply!(
+          envelope.params as FederationReadTurnAssistantReplyRequest,
+        ),
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.readTranscriptImage,
     async (envelope) =>
@@ -2419,6 +2460,31 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     finally {
       if (this.pendingThreadReads.get(key) === read) this.pendingThreadReads.delete(key);
     }
+  }
+
+  async readTurnAssistantReply(
+    request: FederationReadTurnAssistantReplyRequest,
+  ): Promise<FederationReadTurnAssistantReplyResponse> {
+    const response = await this.rpc.request<FederationReadTurnAssistantReplyResponse>({
+      method: FEDERATION_BACKEND_METHODS.readTurnAssistantReply,
+      params: request,
+    });
+    if (!response.message) {
+      return { message: null };
+    }
+    // The same transform a thread read gets, so the reply's images route
+    // through the owner exactly as they would from a transcript page.
+    const transformed = await this.transformReadThreadResponse({
+      backend: request.backend,
+      fetchedAt: Date.now(),
+      threadId: request.threadId,
+      replay: {
+        entries: [],
+        messages: [response.message],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    });
+    return { message: transformed.replay.messages[0] ?? null };
   }
 
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
