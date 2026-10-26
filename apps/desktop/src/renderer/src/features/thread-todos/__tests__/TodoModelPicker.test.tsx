@@ -58,7 +58,7 @@ describe("to-do dispatch model picker", () => {
     expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).className).toContain("is-changed");
     rerender(tree(base, false));
     rerender(tree(base));
-    fireEvent.click(screen.getByRole("button", { name: "Start thread", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     expect(onRun).toHaveBeenCalledWith(base, { modelSettings: codex });
     fireEvent.click(screen.getByRole("button", { name: "↺ This thread's settings" }));
     expect(screen.queryByText("Picked for this card")).toBeNull();
@@ -132,10 +132,10 @@ describe("to-do dispatch model picker", () => {
 
   it("freezes a failed attempt for Retry even if another dispatch changes memory", () => {
     const { rerender, tree, onRun } = setup();
-    fireEvent.click(screen.getByRole("button", { name: "Start thread", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     const failed = { ...base, error: "Unavailable", dispatchDefaults: { thread, lastDispatch: codex } };
     rerender(tree(failed));
-    fireEvent.click(screen.getByRole("button", { name: "Retry", exact: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRun).toHaveBeenLastCalledWith(failed, { modelSettings: thread });
     expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).getAttribute("data-tooltip")).toContain("peer’s defaults");
   });

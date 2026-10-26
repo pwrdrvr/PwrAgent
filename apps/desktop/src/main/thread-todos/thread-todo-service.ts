@@ -634,7 +634,7 @@ export class ThreadTodoService {
         });
         return this.finish(id, { result: merged.summary });
       }
-      const started = startOnInstance && options.startOnInstanceId
+      const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> = startOnInstance && options.startOnInstanceId
         ? await startOnInstance({
             instanceId: options.startOnInstanceId,
             sourceBackend: todo.backend,
@@ -652,7 +652,7 @@ export class ThreadTodoService {
             modelSettings: options.modelSettings
               ?? this.store.getThreadModelSettings(todo.backend, todo.threadId),
           });
-      if ("dispatchSettings" in started && started.dispatchSettings) {
+      if (started.dispatchSettings) {
         this.store.rememberDispatch(todo.backend, todo.threadId,
           started.dispatchSettings.settings, started.dispatchSettings.source);
       }

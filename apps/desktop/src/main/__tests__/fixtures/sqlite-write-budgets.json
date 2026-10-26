@@ -1332,6 +1332,7 @@
     "rowsChanged": 28,
     "statements": 28
   },
+  "todo-dispatch-model-preference": {"commits": 1, "note": "One changed dispatch: preference and recent in one commit; default start and 100 identical preference writes cost zero. About 0.0165 MB/changed dispatch, 1.65 MB/day at 100 dispatches/day, zero idle writes.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "tool-output-history-analysis": {
     "commits": 1,
     "note": "replace 25 deterministic history findings plus coverage metadata in one explicit analysis transaction",
