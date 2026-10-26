@@ -18,6 +18,7 @@ import {
   resolvePrChipPresentation,
 } from "./pr-chip-state";
 import { PrStatusCard } from "./PrStatusCard";
+import { prNumberLabel } from "./pr-rollup";
 
 type PrChipProps = {
   pr: PrSummary;
@@ -65,9 +66,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     className: "pr-status-card",
   });
   const updateTooltip = tooltipController.update;
-  const label = props.showRepoPrefix
-    ? `${pr.org}/${pr.repo}#${pr.number}`
-    : `#${pr.number}`;
+  const label = prNumberLabel(pr, props.showRepoPrefix);
   const presentation = resolvePrChipPresentation(pr, {
     withStatusPills: props.withStatusPills,
   });

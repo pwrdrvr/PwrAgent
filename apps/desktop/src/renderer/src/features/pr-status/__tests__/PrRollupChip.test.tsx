@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
-import { PrRollupChip } from "../PrRollupChip";
+import { placeRowCard, PrRollupChip } from "../PrRollupChip";
 
 afterEach(() => {
   cleanup();
@@ -67,6 +67,37 @@ describe("PrRollupChip", () => {
     expect(chip).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("names the only open PR and counts the finished ones", () => {
+    const closed = pr(13, { lifecycleState: "closed", state: "closed" });
+    const { container } = renderRollup([merged, failing, closed]);
+    const chip = container.querySelector("[data-pr-rollup]")!;
+    expect(chip.querySelector(".pr-chip__lead")).toHaveTextContent("#11");
+    expect(chip.querySelector(".pr-chip__more")).toHaveTextContent("+2");
+    expect(chip).toHaveClass("pr-chip--failing");
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      "3 pull requests, #11 open, ready for review · checks failing",
+    );
+  });
+
+  it("keeps the draft bar under the lead PR", () => {
+    const draft = pr(14, { reviewState: "draft" });
+    const { container } = renderRollup([draft, merged]);
+    expect(container.querySelector(".pr-chip__lead .pr-chip__draft-bar")).not.toBeNull();
+  });
+
+  it("uses the lead PR's repository prefix when it needs one", () => {
+    render(
+      <PrRollupChip
+        prs={[failing, merged]}
+        repoPrefixedUrls={failing.url}
+        threadTitle="Orbit refactor"
+        onOpen={vi.fn()}
+      />,
+    );
+    expect(document.querySelector(".pr-chip__lead")).toHaveTextContent("acme/orbit#11");
+  });
+
   it("opens a list of every PR, least ready first, without selecting the row", () => {
     const { container, onOpen, onRowClick } = renderRollup([passing, merged, failing]);
     const chip = container.querySelector<HTMLElement>("[data-pr-rollup]")!;
@@ -117,6 +148,54 @@ describe("PrRollupChip", () => {
     expect(rows[0]).toHaveAccessibleName(
       "Open acme/orbit#11, Change 11 (ready for review · checks failing · 4 behind main) in browser",
     );
+  });
+
+  it("shows a row's PR card beside the list on hover, and swaps it between rows", () => {
+    vi.useFakeTimers();
+    const { container } = renderRollup([passing, merged, failing]);
+    fireEvent.click(container.querySelector<HTMLElement>("[data-pr-rollup]")!);
+    const list = screen.getByRole("group");
+    const rows = within(list).getAllByRole("button");
+
+    // The first card waits out the tooltip delay.
+    fireEvent.mouseEnter(rows[0]!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    const card = screen.getByRole("tooltip");
+    expect(card).toHaveClass("pr-status-card");
+    expect(card).toHaveTextContent("Change 11");
+    expect(card).toHaveTextContent("acme/orbit#11");
+    expect(rows[0]).toHaveAttribute("aria-describedby", card.id);
+
+    // Another row swaps the card at once.
+    fireEvent.mouseEnter(rows[2]!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#12");
+    expect(rows[0]).not.toHaveAttribute("aria-describedby");
+
+    fireEvent.mouseLeave(list);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("shows a focused row's card at once, with the branch drift for its PR", () => {
+    const { container } = render(
+      <PrRollupChip
+        prs={[passing, failing]}
+        repoPrefixedUrls=""
+        threadTitle="Orbit refactor"
+        branchDrift={{ url: failing.url, baseBranch: "main", behind: 4, ahead: 2 }}
+        onOpen={vi.fn()}
+      />,
+    );
+    fireEvent.keyDown(container.querySelector<HTMLElement>("[data-pr-rollup]")!, { key: "Enter" });
+    const rows = within(screen.getByRole("group")).getAllByRole("button");
+    fireEvent.focus(rows[0]!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Behind main4 commits");
+    fireEvent.blur(rows[0]!);
+    fireEvent.focus(rows[1]!);
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent("Local branch");
+
+    fireEvent.keyDown(rows[1]!, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("peeks on hover and closes after the pointer leaves both chip and list", () => {
@@ -177,5 +256,38 @@ describe("PrRollupChip", () => {
     // Shift+Tab stops on the chip itself.
     expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
     expect(chip).toHaveFocus();
+  });
+});
+
+describe("placeRowCard", () => {
+  // A 340px list at the sidebar's left edge, rows from y=120.
+  const list = { top: 100, right: 356, bottom: 260, left: 16 };
+  const card = { rowTop: 160, width: 272, height: 300 };
+
+  it("sits right of the list, level with the row", () => {
+    expect(placeRowCard({ ...card, list, viewport: { width: 1200, height: 900 } }))
+      .toEqual({ top: 160, left: 362 });
+  });
+
+  it("flips left of the list when the window has no room on the right", () => {
+    const rightList = { top: 100, right: 1180, bottom: 260, left: 840 };
+    expect(placeRowCard({ ...card, list: rightList, viewport: { width: 1200, height: 900 } }))
+      .toEqual({ top: 160, left: 562 });
+  });
+
+  it("keeps the card on screen when the row is near the bottom", () => {
+    expect(placeRowCard({ ...card, rowTop: 800, list, viewport: { width: 1200, height: 900 } }).top)
+      .toBe(592);
+  });
+
+  it("goes below, then above, the list before overlapping it in a narrow window", () => {
+    expect(placeRowCard({ ...card, list, viewport: { width: 600, height: 900 } }))
+      .toEqual({ top: 266, left: 16 });
+    const lowList = { top: 500, right: 356, bottom: 700, left: 16 };
+    expect(placeRowCard({ ...card, rowTop: 560, list: lowList, viewport: { width: 600, height: 900 } }))
+      .toEqual({ top: 194, left: 16 });
+    // No room anywhere: beside the row, clamped on screen.
+    expect(placeRowCard({ ...card, list, viewport: { width: 600, height: 400 } }))
+      .toEqual({ top: 92, left: 8 });
   });
 });

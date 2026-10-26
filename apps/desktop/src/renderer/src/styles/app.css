@@ -7698,6 +7698,25 @@ a.button {
   line-height: normal;
 }
 
+/* The rollup chip's one open PR (`#12 +3`). The lead holds the dot, number
+   and draft bar, so the bar centers under the PR it marks. It is centered in
+   the pill, so the bar's centerline anchor below is unchanged. */
+.pr-chip__lead {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The finished PRs behind the lead: muted, so the number stays the
+   strongest text, and pulled toward it so the two read as one label. */
+.pr-chip__more {
+  margin-left: -2px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  line-height: normal;
+}
+
 /* A PR chip inside rendered markdown is part of the message's copyable prose.
    Select it atomically so Chromium includes the full chip in the range;
    ThreadMarkdown serializes it as a full PR URL for cross-project hydration.

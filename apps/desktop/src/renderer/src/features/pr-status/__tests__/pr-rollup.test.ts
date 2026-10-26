@@ -112,6 +112,19 @@ describe("resolvePrRollup", () => {
   });
 });
 
+describe("resolvePrRollup lead", () => {
+  it("names the only open PR however many have finished", () => {
+    expect(resolvePrRollup([merged, running])!.lead).toBe(running);
+    expect(resolvePrRollup([merged, closed, draft, pr(13, { lifecycleState: "merged" })])!.lead)
+      .toBe(draft);
+  });
+
+  it("has no lead with several open PRs or none", () => {
+    expect(resolvePrRollup([ready, running, merged])!.lead).toBeUndefined();
+    expect(resolvePrRollup([merged, closed])!.lead).toBeUndefined();
+  });
+});
+
 describe("prRollupLabel", () => {
   it("names one PR by number and counts several", () => {
     expect(prRollupLabel([ready])).toBe("#5");
