@@ -4,6 +4,8 @@ import type { AgentEvent, NavigationQueryPage, NavigationRow, NavigationSelected
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
+import { useHoverStableSnapshot } from "../../features/navigation/useHoverStableSnapshot";
+import type { PointerEvent } from "react";
 
 const counts = { total: 1000, active: 40, unread: 90, review: 50 };
 const row = (id: string): NavigationRow => ({ id, source: "codex", title: id, titleSource: "fallback", ref: { backend: "codex", threadId: id },
@@ -59,12 +61,81 @@ it("retains unchanged row projections while still publishing changed titles", as
 
   expect(result.current.threads).toBe(threads);
   expect(result.current.directories).toBe(directories);
+  expect(result.current.pagesAwaitingRows).toEqual([]);
 
   title = "Updated title";
   await act(async () => { await result.current.pagedNavigation.refresh(); });
 
   expect(result.current.threads).not.toBe(threads);
   expect(result.current.threads.find((thread) => thread.id === "thread-1")?.title).toBe(title);
+  unmount();
+});
+
+it("publishes identical accepted pages and freezes hover again after a revealed pin", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  let pinnedRank: string | undefined;
+  let removeLast = false;
+  f.read.mockImplementation(async (request, consumer) => {
+    const page = await originalRead(request, consumer);
+    return { ...page, entries: page.entries
+      .filter((entry) => !removeLast || entry.row.id !== "thread-9")
+      .map((entry) => entry.row.id === "thread-1"
+        ? { ...entry, row: { ...entry.row, pinnedRank } } : entry) };
+  });
+  const setThreadPin = vi.fn<NonNullable<DesktopApi["setThreadPin"]>>(async (request) => {
+    pinnedRank = "1024";
+    return { backend: "codex", threadId: request.threadId, pinnedRank };
+  });
+  const api = { ...f.api, setThreadPin };
+  const { result, unmount } = renderHook(() => {
+    const navigation = useThreadNavigation(api);
+    const hover = useHoverStableSnapshot({
+      scope: navigation.browseMode,
+      outstandingReads: [
+        ...[...navigation.pagedNavigation.resources.values()]
+          .filter((resource) => resource.state.stale && !resource.state.error)
+          .map((resource) => resource.id),
+        ...navigation.pagesAwaitingRows,
+      ],
+      value: navigation.threads,
+    });
+    return { navigation, hover };
+  });
+  await waitFor(() => expect(result.current.navigation.selectedThreadConfigurationReady).toBe(true));
+  const hoveredRow = document.createElement("div");
+  hoveredRow.setAttribute("data-hover-stable-row", "");
+  act(() => result.current.hover.onPointerOver({
+    pointerType: "mouse", target: hoveredRow,
+  } as unknown as PointerEvent<HTMLDivElement>));
+
+  await act(async () => {
+    await result.current.hover.reveal(() => result.current.navigation.setThreadPin(
+      result.current.navigation.threads.find((thread) => thread.id === "thread-1")!, true,
+    ));
+    await result.current.navigation.pagedNavigation.refresh();
+  });
+  expect(setThreadPin).toHaveBeenCalledOnce();
+  expect(result.current.hover.value.find((thread) => thread.id === "thread-1")?.pinnedRank).toBe("1024");
+
+  const threads = result.current.navigation.threads;
+  const directories = result.current.navigation.directories;
+  const pages = [...result.current.navigation.pagedNavigation.resources.values()].map((resource) => resource.state.page);
+  // Immediate read start/completion batch together: row identities and both
+  // loading flags stay unchanged, but the newly accepted pages must publish.
+  await act(async () => { await result.current.navigation.pagedNavigation.refresh(); });
+  expect(result.current.navigation.loading).toBe(false);
+  expect(result.current.navigation.refreshing).toBe(false);
+  expect([...result.current.navigation.pagedNavigation.resources.values()].some((resource, index) => resource.state.page !== pages[index])).toBe(true);
+  expect(result.current.navigation.threads).toBe(threads);
+  expect(result.current.navigation.directories).toBe(directories);
+  expect(result.current.navigation.pagesAwaitingRows).toEqual([]);
+
+  removeLast = true;
+  await act(async () => { await result.current.navigation.pagedNavigation.refresh(); });
+  expect(result.current.navigation.threads.some((thread) => thread.id === "thread-9")).toBe(false);
+  expect(result.current.hover.value).toBe(threads);
+  expect(result.current.hover.value.some((thread) => thread.id === "thread-9")).toBe(true);
   unmount();
 });
 
