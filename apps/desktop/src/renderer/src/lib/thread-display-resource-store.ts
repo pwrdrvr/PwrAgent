@@ -1,4 +1,5 @@
 import type { AppServerReadThreadRequest, ThreadDisplayData } from "@pwragent/shared";
+import { THREAD_DISPLAY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 
 export type DisplayResourceState = { data?: ThreadDisplayData; loading?: boolean; error?: string };
@@ -13,6 +14,15 @@ function appendPage(previous: ThreadDisplayData, page: ThreadDisplayData): Threa
   };
 }
 
+function loadedRows(data: ThreadDisplayData): number {
+  return data.pricingPage?.rows.length ?? data.toolsPage?.invocations.length ?? data.subAgents?.length ?? 0;
+}
+
+export type ThreadDisplayResourceOptions = {
+  /** The owner accepts a refresh of every loaded row in one page. */
+  bulkReads?: boolean;
+};
+
 /** One mounted resource owns pagination, the conditional baseline and its in-flight read.
  * Sibling panels share this owner. No timers or events retain an unmounted resource.
  */
@@ -23,11 +33,15 @@ export class ThreadDisplayResourceStore {
   private timer?: ReturnType<typeof setTimeout>;
   private dirty = false;
   private lastStarted = -Infinity;
-  private pages = 0;
+  private rows = 0;
   private firstPage?: ThreadDisplayData;
   private firstRevision?: string;
 
-  constructor(private readonly api: DesktopApi, private readonly request: AppServerReadThreadRequest) {}
+  constructor(
+    private readonly api: DesktopApi,
+    private readonly request: AppServerReadThreadRequest,
+    private readonly options: ThreadDisplayResourceOptions = {},
+  ) {}
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -83,14 +97,20 @@ export class ThreadDisplayResourceStore {
     this.pending = Promise.resolve().then(async () => {
       const previous = this.state.data;
       let data = more ? previous : undefined;
-      let pages = more ? this.pages : 0;
       let firstPage = this.firstPage;
       let firstRevision = this.firstRevision;
-      const pageCount = more ? 1 : this.pages || 1;
-      for (let index = 0; index < pageCount; index += 1) {
+      // A refresh re-reads every loaded row. Each read rebuilds the owner's
+      // whole thread display, so a bulk owner gets them in one page.
+      const pageLimit = this.request.display!.limit ?? 20;
+      const target = more ? 0 : this.rows;
+      for (let index = 0; ; index += 1) {
         if (!this.listeners.size) return;
+        const rowsBefore = data ? loadedRows(data) : 0;
+        const remaining = target - rowsBefore;
+        const limit = !more && this.options.bulkReads && remaining > pageLimit
+          ? Math.min(THREAD_DISPLAY_MAX_PAGE_ROWS, remaining) : pageLimit;
         const response = await this.api.readThread!({ ...this.request,
-          display: { ...this.request.display!, cursor: data?.nextCursor },
+          display: { ...this.request.display!, cursor: data?.nextCursor, ...(limit !== pageLimit ? { limit } : {}) },
           ...(!more && index === 0 ? { knownRevision: this.firstRevision ?? "" } : {}),
         });
         if (!more && index === 0 && response.unchanged) {
@@ -102,7 +122,7 @@ export class ThreadDisplayResourceStore {
         }
         if (!response.display) throw new Error("Thread owner did not return the requested display resource.");
         if (!more && index === 0) {
-          // Older owners and local IPC may return full pages. A matching
+          // Older owners may return full pages. A matching
           // collection revision AND first-page presentation retain later pages.
           if (previous && firstPage && response.display.revision === firstPage.revision
             && JSON.stringify(response.display) === JSON.stringify(firstPage)) {
@@ -117,11 +137,11 @@ export class ThreadDisplayResourceStore {
         if (new TextEncoder().encode(JSON.stringify(data)).byteLength > MAX_RETAINED_BYTES) {
           throw new Error("Thread display history exceeds its retained size budget.");
         }
-        pages += 1;
-        if (!data.nextCursor) break;
+        // A page that adds no rows cannot advance the refresh.
+        if (more || !data.nextCursor || loadedRows(data) >= target || loadedRows(data) === rowsBefore) break;
       }
       if (data) {
-        this.pages = pages; this.firstPage = firstPage; this.firstRevision = firstRevision;
+        this.rows = loadedRows(data); this.firstPage = firstPage; this.firstRevision = firstRevision;
         this.publish({ data });
       }
     }).catch((error: unknown) => {
@@ -134,12 +154,12 @@ export class ThreadDisplayResourceStore {
 const stores = new WeakMap<DesktopApi, Map<string, { store: ThreadDisplayResourceStore; users: number }>>();
 
 /** The map retains mounted demand only; closing the last consumer releases its pages. */
-export function acquireThreadDisplayResource(api: DesktopApi, request: AppServerReadThreadRequest) {
+export function acquireThreadDisplayResource(api: DesktopApi, request: AppServerReadThreadRequest, options: ThreadDisplayResourceOptions = {}) {
   let resources = stores.get(api);
   if (!resources) { resources = new Map(); stores.set(api, resources); }
-  const key = JSON.stringify(request);
+  const key = JSON.stringify([request, options.bulkReads === true]);
   let entry = resources.get(key);
-  if (!entry) { entry = { store: new ThreadDisplayResourceStore(api, request), users: 0 }; resources.set(key, entry); }
+  if (!entry) { entry = { store: new ThreadDisplayResourceStore(api, request, options), users: 0 }; resources.set(key, entry); }
   entry.users += 1;
   return { store: entry.store, release: () => {
     if (--entry.users === 0) {

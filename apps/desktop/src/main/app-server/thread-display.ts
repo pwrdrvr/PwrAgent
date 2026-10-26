@@ -15,6 +15,8 @@ import {
   type AppServerThreadMessageEntry,
   type NavigationThreadSummary,
   type ThreadUsageLineRecord,
+  THREAD_DISPLAY_MAX_ACCOUNTING_TURNS,
+  THREAD_DISPLAY_MAX_PAGE_ROWS,
 } from "@pwragent/shared";
 
 /** One owner projection for local IPC and federation; no provider data is needed on the viewer. */
@@ -53,7 +55,8 @@ export function projectThreadDisplay(
     offset = Number(cursorOffset);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid thread display cursor.");
   }
-  const limit = Math.min(50, Math.max(1, Math.floor(demand.limit ?? 20)));
+  // A viewer refresh re-reads all its loaded rows in one page.
+  const limit = Math.min(THREAD_DISPLAY_MAX_PAGE_ROWS, Math.max(1, Math.floor(demand.limit ?? 20)));
   if (!Number.isFinite(limit)) throw new Error("Invalid thread display page size.");
   const pricing = buildThreadPricingDisplay({
     pricing: response.pricing,
@@ -93,7 +96,7 @@ export function projectThreadDisplay(
     entries: transcriptEntries, lines: response.pricing?.lines, activeTurnId: thread?.activeTurnId,
   })) : [];
   if (demand.resource === "accounting") {
-    if ((demand.turns?.length ?? 0) > 256) throw new Error("Too many display turns in one request.");
+    if ((demand.turns?.length ?? 0) > THREAD_DISPLAY_MAX_ACCOUNTING_TURNS) throw new Error("Too many display turns in one request.");
     const turns = new Map(demand.turns?.map((turn) => [turn.id, turn]));
     const lines = new Map<string, ThreadUsageLineRecord>();
     for (const line of response.pricing?.lines ?? []) {
