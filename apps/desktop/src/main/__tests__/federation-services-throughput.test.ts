@@ -24,6 +24,7 @@ import {
   FederationGatewayWebSocketServer, connectFederationClient, federationTransportCodecForTest,
 } from "../federation/federation-transport";
 import { FederationStore } from "../federation/federation-store";
+import { encodeFederationFramePayload } from "../federation/federation-frame-codec";
 import { generateFederationIdentityKeyPair } from "../federation/federation-identity";
 import { generateNoiseStaticKeyPair, NoiseIKHandshake } from "../federation/federation-noise";
 import { createFederationEnrollmentInvite } from "../federation/federation-enrollment";
@@ -322,6 +323,14 @@ function codecMicrobench(): Record<string, unknown> {
     cell("binaryFrameDecode", () => { federationTransportCodecForTest.decodeEnvelope(binary); });
     cell("binaryBrotliQ1Compress", () => { brotliCompressSync(binary, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 1 } }); });
     cell("binaryBrotliDecompress", () => { brotliDecompressSync(binaryCompressed); });
+    // What the transport pays for one 64 KiB data frame with brotli on, probe included.
+    const large = kind === "random" ? randomBytes(64 * 1024) : textChunk(64 * 1024);
+    const frame = federationTransportCodecForTest.encodeEnvelope(serviceData("owner", "viewer", { streamId: "s", seq: 1, data: large }));
+    // Four times the bytes per run, so a quarter of the runs.
+    const before = process.cpuUsage();
+    for (let i = 0; i < iterations / 4; i += 1) encodeFederationFramePayload({ json: frame, compressionEnabled: true });
+    const used = process.cpuUsage(before);
+    result[`${kind}.transportCompress64KiB`] = +(((used.user + used.system) / 1000) / (iterations * chunkBytes / MiB)).toFixed(3);
     result[`${kind}.binaryOverheadBytes`] = binary.length - data.length;
     result[`${kind}.binaryBrotliRatio`] = +(binaryCompressed.length / binary.length).toFixed(3);
   }
