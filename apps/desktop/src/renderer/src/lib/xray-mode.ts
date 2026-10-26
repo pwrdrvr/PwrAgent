@@ -2,14 +2,14 @@ import { useEffect, useSyncExternalStore } from "react";
 
 /**
  * X-ray: in the Compact and Minimal densities, holding the platform's command
- * key (⌘ on macOS, Ctrl elsewhere) shows every thread-row chip, as Mission
- * Control does, until the key is released. A double press pins X-ray on, and
- * so does the pin in the X-ray badge; the same pin, or another double press,
- * turns it off. Modeled on IntelliJ's X-Ray mode.
+ * key (⌘ on macOS, Ctrl elsewhere) lifts one thread row into a card showing
+ * every chip, as Mission Control does, until the key is released. Which row
+ * lifts, and how, is features/navigation/xray-spy-card.ts. A double press
+ * pins X-ray on, and so does the pin in the X-ray badge; the same pin, or
+ * another double press, turns it off. Modeled on IntelliJ's X-Ray mode.
  *
- * The state is one attribute, `<html data-xray>`, which the density rules in
- * app.css read. Rows therefore do not re-render on a peek, and a peek costs
- * one style recalculation.
+ * The state is one attribute, `<html data-xray>`, plus the lifted row's own
+ * attributes. Rows therefore do not re-render on a peek.
  *
  * The key is held for shortcuts too, so a peek waits `XRAY_HOLD_MS` and is
  * called off by any other key or by a pointer press before it starts. A press

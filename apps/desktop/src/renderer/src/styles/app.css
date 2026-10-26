@@ -1414,17 +1414,18 @@
    `.chip` directly and aren't affected by this rule.
 
    Every density rule has two halves. The `:root` half applies the operator's
-   density to the live list, except while X-ray is held (`data-xray`, see
-   lib/xray-mode.ts) and except inside a `.density-preview`, which shows its
-   own density whatever the app's is. The `.density-preview--*` half is that
+   density to the live list, except inside the row X-ray has lifted
+   (`[data-xray-target]`, see features/navigation/xray-spy-card.ts) and
+   inside a `.density-preview`, which shows its own density whatever the
+   app's is. The `.density-preview--*` half is that
    preview: the Settings and onboarding density pickers render real thread
    rows, so their previews cannot drift from the list. */
-:root[data-density="compact"]:not([data-xray]) .thread-row__chips:not(.density-preview *) .thread-row__chip:not(.thread-row__chip--persistent),
+:root[data-density="compact"] .thread-row__chips:not(:is(.density-preview, [data-xray-target]) *) .thread-row__chip:not(.thread-row__chip--persistent),
 .density-preview--compact .thread-row__chips .thread-row__chip:not(.thread-row__chip--persistent) {
   display: none;
 }
 
-:root[data-density="compact"]:not([data-xray]) .thread-row__chips:not(.density-preview *),
+:root[data-density="compact"] .thread-row__chips:not(:is(.density-preview, [data-xray-target]) *),
 .density-preview--compact .thread-row__chips {
   /* Tighter inter-chip gap when only reactions + PRs remain visible. */
   gap: 4px;
@@ -1455,8 +1456,8 @@
    Pinned group header are `.thread-row` buttons too (for the title
    type), with their own 4px left inset and 8px gap. Without the
    exclusion these rules moved their caret 8px right in Compact and
-   Minimal, and X-ray, which drops the rules, moved it back. */
-:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *):not(.directory-row__summary),
+   Minimal. */
+:root[data-density="compact"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary),
 .density-preview--compact .thread-row:not(.directory-row__summary) {
   --thread-row-header-gap: 4px;
   --thread-row-action-gap: 2px;
@@ -1464,7 +1465,7 @@
   padding-left: 12px;
 }
 
-:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *):not(.directory-row__summary):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)),
+:root[data-density="compact"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)),
 .density-preview--compact .thread-row:not(.directory-row__summary):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)) {
   gap: 0;
 }
@@ -1478,8 +1479,8 @@
    least ready PR's state. Reactions move to the title line too
    (`.thread-row__title-reactions`); there are rarely more than two, and the
    title ellipsizes to make room. An unsent draft becomes the Draft chip's
-   pencil before the title (`.thread-row__title-draft`). Holding the X-ray
-   key brings the full Mission Control rows back; the title-line copies hide
+   pencil before the title (`.thread-row__title-draft`). The row X-ray lifts
+   gets its full Mission Control chips back; its title-line copies hide
    again because the chips they stand for are back in the flow. */
 .thread-row__pr-rollup,
 .thread-row__title-reactions,
@@ -1487,7 +1488,7 @@
   display: none;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row__title-draft:not(.density-preview *),
+:root[data-density="minimal"] .thread-row__title-draft:not(:is(.density-preview, [data-xray-target]) *),
 .density-preview--minimal .thread-row__title-draft {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1497,7 +1498,7 @@
   pointer-events: auto;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row__pr-rollup:not(.density-preview *),
+:root[data-density="minimal"] .thread-row__pr-rollup:not(:is(.density-preview, [data-xray-target]) *),
 .density-preview--minimal .thread-row__pr-rollup {
   display: inline-flex;
   align-items: center;
@@ -1505,7 +1506,7 @@
   pointer-events: auto;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row__title-reactions:not(.density-preview *),
+:root[data-density="minimal"] .thread-row__title-reactions:not(:is(.density-preview, [data-xray-target]) *),
 .density-preview--minimal .thread-row__title-reactions {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1523,13 +1524,13 @@
   height: 20px;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row__chips:not(.density-preview *) > :not(.thread-row__chip--essential),
+:root[data-density="minimal"] .thread-row__chips:not(:is(.density-preview, [data-xray-target]) *) > :not(.thread-row__chip--essential),
 .density-preview--minimal .thread-row__chips > :not(.thread-row__chip--essential) {
   display: none;
 }
 
 /* Same title-line spacing and header exclusion as Compact; see there. */
-:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *):not(.directory-row__summary),
+:root[data-density="minimal"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary),
 .density-preview--minimal .thread-row:not(.directory-row__summary) {
   --thread-row-header-gap: 4px;
   --thread-row-action-gap: 2px;
@@ -1537,7 +1538,7 @@
   padding-left: 12px;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *):not(.directory-row__summary):not(:has(.thread-row__chip--essential)),
+:root[data-density="minimal"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary):not(:has(.thread-row__chip--essential)),
 .density-preview--minimal .thread-row:not(.directory-row__summary):not(:has(.thread-row__chip--essential)) {
   gap: 0;
 }
@@ -1612,6 +1613,40 @@
 .xray-badge__pin.is-pinned {
   background: var(--accent-soft);
   color: var(--accent-bright);
+}
+
+/* The X-ray spy card (features/navigation/xray-spy-card.ts): the one row
+   X-ray lifts. Its shell holds the row's own height, so no other row moves,
+   and the row comes out of flow at the same left edge to grow over its
+   neighbours with every chip showing. `--xray-lift` slides it up just far
+   enough to clear the foot of the lane and the badge. Above the sticky
+   directory headers (5). */
+.thread-row-shell[data-xray-target] {
+  height: var(--xray-shell-height, auto);
+}
+
+.thread-row-shell[data-xray-target] > .thread-row {
+  position: absolute;
+  top: calc(-1 * var(--xray-lift, 0px));
+  right: 0;
+  left: 0;
+  z-index: 6;
+  /* The density rules' inset and title-line gaps, which the card escapes
+     with them: the title must not move when the card lifts. X-ray runs
+     only in those densities. */
+  --thread-row-header-gap: 4px;
+  --thread-row-action-gap: 2px;
+  padding-left: 12px;
+  border-color: var(--accent-border);
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 8px 20px var(--shadow-tint-soft);
+}
+
+.thread-row-shell[data-xray-target] > .thread-row.is-selected {
+  background: var(--bg-row-active);
+  box-shadow:
+    inset 2px 0 0 0 var(--accent),
+    0 8px 20px var(--shadow-tint-soft);
 }
 
 /* The rollup's list of PRs: a portal on <body>, at the PR status card's
