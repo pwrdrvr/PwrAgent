@@ -483,7 +483,7 @@ export function createThreadTodoRunners(params: {
             }
             // The access mode carries over. The model does not: it was
             // checked against this machine's catalog, and the peer has its
-            // own, so the peer applies its defaults unless the card names one.
+            // own, so the peer applies its defaults.
             const source = await registry.readThreadHandoffSettings({
               backend: sourceBackend,
               threadId: sourceThreadId,
@@ -528,10 +528,6 @@ export function createThreadTodoRunners(params: {
                 instanceId,
                 projectKey: counterpart.key,
                 input: action.prompt,
-                ...(action.model ? { model: action.model } : {}),
-                ...(action.reasoningEffort
-                  ? { reasoningEffort: action.reasoningEffort }
-                  : {}),
                 executionMode: action.executionMode ?? source.executionMode,
                 ...(action.workMode ? { workMode: action.workMode } : {}),
                 groupingMode: crossProject ? "none" : "subthread",

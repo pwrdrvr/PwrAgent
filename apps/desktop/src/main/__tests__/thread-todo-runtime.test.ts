@@ -117,9 +117,9 @@ describe("thread to-do Start thread", () => {
     }));
   });
 
-  it("sends a peer the source thread's access but only the card's own model", async () => {
+  it("sends a peer the source thread's access and leaves model selection to its defaults", async () => {
     // The peer's catalog is its own: a model id from this machine may not
-    // exist there, so the peer applies its defaults unless the card names one.
+    // exist there, so even an agent suggestion stays on this machine.
     const source = FULL_ACCESS_SOL;
     const registry = {
       readThreadHandoffSettings: vi.fn(async () => source),
@@ -158,7 +158,7 @@ describe("thread to-do Start thread", () => {
       sourceThreadId: "source-thread",
       project: { key: "local-repo", label: "repo", path: "/local/repo" },
       crossProject: false,
-      action: { type: "start_thread", prompt: "Go" },
+      action: { type: "start_thread", prompt: "Go", model: "gpt-6.1-sol", reasoningEffort: "high" },
     });
 
     const created = federation.mock.calls
