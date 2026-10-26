@@ -131,6 +131,17 @@ describe("to-do dispatch model picker", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it("names the provider default when a start-capable backend offers no model list", async () => {
+    const backend = { ...backends[0]!, launchpadOptions: {} };
+    const todo = { ...base, dispatchDefaults: { thread: { backend: "claude" as const } } };
+    render(<TodoDispatchProvider backends={[backend]} todos={[todo]}>
+      <ThreadTodoCard todo={todo} running={false} onRun={vi.fn()} onResolve={vi.fn()}
+        onStartReview={vi.fn()} onSetItemChecked={vi.fn()} />
+    </TodoDispatchProvider>);
+    await openPicker();
+    expect(screen.getByRole("menuitem", { name: "To-do model: Default model" }).hasAttribute("disabled")).toBe(true);
+  });
+
   it("uses one owner catalog for a remote card's chip and provenance", async () => {
     const federationTarget = { scope: "remote" as const, instanceId: "owner" };
     const todo = { ...base, federationTarget, dispatchDefaults: {

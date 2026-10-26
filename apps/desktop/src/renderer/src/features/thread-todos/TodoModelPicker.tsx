@@ -106,8 +106,9 @@ export function TodoModelPicker(props: PickerProps) {
                 const next = providers.find((entry) => entry.kind === value);
                 if (next) props.onPick(customTodoDispatchSettings(next));
               }} />
-            <ComposerDropdown ariaLabel="To-do model" triggerRole="menuitem" menuPlacement="below"
-              options={models.map((entry) => ({ value: entry.id, label: entry.label ?? entry.id }))}
+            <ComposerDropdown ariaLabel="To-do model" triggerRole="menuitem" menuPlacement="below" disabled={models.length === 0}
+              options={models.length ? models.map((entry) => ({ value: entry.id, label: entry.label ?? entry.id }))
+                : [{ value: "", label: "Default model" }]}
               value={selection.settings.model ?? ""} onChange={(value) => {
                 if (backend) props.onPick(customTodoDispatchSettings(backend, value));
               }} />
