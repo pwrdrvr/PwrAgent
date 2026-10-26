@@ -8609,6 +8609,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "listRemoteThreadPins"
     | "listThreadCompactions"
     | "recordThreadCompaction"
+    | "readTokenMiserGatePricingLines"
     | "reconcileOrphanedThreadSubAgents"
     | "markThreadToolInvocationsNoisy"
     | "setThreadSpendAlertPending"
@@ -8706,6 +8707,11 @@ class ActiveTurnKeySet extends Set<string> {
     };
   }
 }
+
+/** A pricing publish a flush held back for its caller to send. */
+type DeferredThreadPricing = {
+  activeTurnIds: string[];
+};
 
 type PendingLiveThreadUsageLine = {
   backend: AppServerBackendKind;
@@ -32316,15 +32322,25 @@ export class DesktopBackendRegistry {
     this.pendingLiveThreadUsageTimer.unref?.();
   }
 
-  private flushLiveThreadUsageLines(): Promise<void> {
+  /**
+   * Write buffered usage lines, then publish pricing for each thread they
+   * touched. `deferPricingFor` holds back that one thread's publish and
+   * returns what it would have carried, so a turn end can publish once after
+   * its later writes.
+   */
+  private flushLiveThreadUsageLines(
+    options: { deferPricingFor?: { backend: AppServerBackendKind; threadId: string } } = {},
+  ): Promise<DeferredThreadPricing | undefined> {
     const flushed = this.liveThreadUsageFlushChain.then(() =>
-      this.writePendingLiveThreadUsageLines(),
+      this.writePendingLiveThreadUsageLines(options),
     );
-    this.liveThreadUsageFlushChain = flushed.catch(() => undefined);
+    this.liveThreadUsageFlushChain = flushed.then(() => undefined, () => undefined);
     return flushed;
   }
 
-  private async writePendingLiveThreadUsageLines(): Promise<void> {
+  private async writePendingLiveThreadUsageLines(
+    options: { deferPricingFor?: { backend: AppServerBackendKind; threadId: string } } = {},
+  ): Promise<DeferredThreadPricing | undefined> {
     if (this.pendingLiveThreadUsageTimer) {
       clearTimeout(this.pendingLiveThreadUsageTimer);
       this.pendingLiveThreadUsageTimer = undefined;
@@ -32333,7 +32349,7 @@ export class DesktopBackendRegistry {
       this.pendingLiveThreadUsageLines.size === 0
       || typeof this.overlayStore.upsertThreadUsageLines !== "function"
     ) {
-      return;
+      return undefined;
     }
 
     const pending = [...this.pendingLiveThreadUsageLines.values()];
@@ -32353,7 +32369,7 @@ export class DesktopBackendRegistry {
           .slice(0, 10)
           .map((entry) => entry.line.usageLineId),
       });
-      return;
+      return undefined;
     }
 
     const pricingTargets = new Map<
@@ -32377,7 +32393,17 @@ export class DesktopBackendRegistry {
       }
       pricingTargets.set(key, target);
     }
+    const deferred = options.deferPricingFor;
+    let deferredPricing: DeferredThreadPricing | undefined;
     for (const target of pricingTargets.values()) {
+      if (
+        deferred
+        && target.backend === deferred.backend
+        && target.threadId === deferred.threadId
+      ) {
+        deferredPricing = { activeTurnIds: [...target.activeTurnIds] };
+        continue;
+      }
       try {
         // The notification embeds a fresh store read, so observers can never
         // receive pricing for a usage line that has not committed yet.
@@ -32396,6 +32422,7 @@ export class DesktopBackendRegistry {
         });
       }
     }
+    return deferredPricing;
   }
 
   private requeueFailedLiveThreadUsageLine(
@@ -38037,19 +38064,29 @@ export class DesktopBackendRegistry {
   }
 
   private async flushPendingTokenMiserLedger(params: {
+    publishPricing?: boolean;
     threadId: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
     await this.tokenMiserLedgerReconciliation;
     const metadata = Array.from(this.pendingTokenMiserInterceptions.values())
       .filter((entry) =>
         entry.threadId === params.threadId,
       );
-    await this.persistTokenMiserLedgerEntries(metadata);
+    const changed = await this.persistTokenMiserLedgerEntries(metadata, {
+      publishPricing: params.publishPricing,
+    });
+    return changed.includes(params.threadId);
   }
 
+  /**
+   * Persist gate cards and their usage lines. Returns the threads whose
+   * pricing changed. With `publishPricing: false` the caller publishes it,
+   * which lets a turn end send one pricing update for all of its writes.
+   */
   private async persistTokenMiserLedgerEntries(
     metadata: readonly TokenMiserObjectMetadata[],
-  ): Promise<void> {
+    options: { publishPricing?: boolean } = {},
+  ): Promise<string[]> {
     // Finalized helper usage joins the same one-second bulk-write window as
     // parent usage. Drain that window before terminal reconciliation so the
     // stable helper line is found instead of inserted a second time.
@@ -38061,17 +38098,28 @@ export class DesktopBackendRegistry {
       byThread.set(entry.threadId, entries);
     }
 
+    const pricingChanged: string[] = [];
     for (const [threadId, entries] of byThread) {
       const overlay = await this.overlayStore.getThreadOverlayState({
         backend: "codex",
         threadId,
       });
-      const pricing = typeof this.overlayStore.readThreadPricing === "function"
-        ? await this.overlayStore.readThreadPricing({
-            backend: "codex",
-            threadId,
-          })
-        : undefined;
+      // Only the gates' own lines and their turns' parent lines can price
+      // them; a long thread's other lines are not read.
+      const pricingLines =
+        typeof this.overlayStore.readTokenMiserGatePricingLines === "function"
+          ? await this.overlayStore.readTokenMiserGatePricingLines({
+              backend: "codex",
+              sourceItemIds: entries.map(tokenMiserMonitorId),
+              threadId,
+              turnIds: [...new Set(entries.map((entry) => entry.turnId))],
+            })
+          : typeof this.overlayStore.readThreadPricing === "function"
+            ? (await this.overlayStore.readThreadPricing({
+                backend: "codex",
+                threadId,
+              })).lines
+            : undefined;
       // Only gates that predate observed replay tracking read invocations.
       const toolAccounting =
         entries.some((entry) => entry.replayTrackingVersion !== 2)
@@ -38086,13 +38134,15 @@ export class DesktopBackendRegistry {
         overlay?.subAgents?.map((subAgent) => [subAgent.monitorId, subAgent])
           ?? [],
       );
+      // A gate's stored line names the gate as its source item, so the
+      // narrow read finds any line a gate could otherwise insert twice.
       const knownUsageLineIds = new Set(
-        pricing?.lines.map((line) => line.usageLineId) ?? [],
+        pricingLines?.map((line) => line.usageLineId) ?? [],
       );
       const subAgents: ThreadSubAgentSummary[] = [];
       const usageLines: ThreadUsageLineRecord[] = [];
       const indexes: TokenMiserLedgerIndexes = {
-        pricing: indexTokenMiserPricingLines(pricing?.lines ?? []),
+        pricing: indexTokenMiserPricingLines(pricingLines ?? []),
         replays: indexTokenMiserCachedReplays(toolAccounting?.invocations ?? []),
       };
 
@@ -38180,12 +38230,16 @@ export class DesktopBackendRegistry {
         });
       }
       if (usageLines.length > 0 || clearedLive) {
-        await this.emitThreadPricingUpdated({
-          backend: "codex",
-          threadId,
-        });
+        pricingChanged.push(threadId);
+        if (options.publishPricing !== false) {
+          await this.emitThreadPricingUpdated({
+            backend: "codex",
+            threadId,
+          });
+        }
       }
     }
+    return pricingChanged;
   }
 
   private async resolveTitleHelperRuntime(params: {
@@ -47048,9 +47102,19 @@ export class DesktopBackendRegistry {
           });
         }
       }
-      await this.flushLiveThreadUsageLines();
-      // A worker's turn end is where its card takes the usage held live.
-      await this.persistLiveCodexNativeSubAgentUsage(event.notification.params.threadId);
+      // The final usage line, the turn's end time, and the turn's Token Miser
+      // gates each change this thread's pricing. Publish once after all
+      // three, still before the terminal event reaches any listener: every
+      // publish re-reads the whole ledger, and a long thread has thousands
+      // of lines. Other threads in the flush publish as usual.
+      const terminalPricingThread = {
+        backend: event.backend,
+        threadId: event.notification.params.threadId,
+      };
+      const flushedPricing = await this.flushLiveThreadUsageLines({
+        deferPricingFor: terminalPricingThread,
+      });
+      let terminalPricingChanged = flushedPricing !== undefined;
       const notification = event.notification as {
         params: {
           threadId: string;
@@ -47061,29 +47125,48 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = completedTurnId;
-      // The final token snapshot can precede this notification, with no later
-      // usage event to carry the end time into the pricing row.
-      if (turnId && this.overlayStore.completeThreadUsageTurn) {
-        const accountKey = await this.usageAccountForTurn(event.backend, notification.params.threadId, turnId);
-        const limits = this.turnLimitObservation(event.backend);
-        const completed = await this.overlayStore.completeThreadUsageTurn({
-          backend: event.backend,
-          threadId: notification.params.threadId,
-          turnId,
-          completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
-          limitObservation: accountKey && limits?.accountKey === accountKey ? limits : undefined,
-        });
-        if (completed) {
-          await this.emitThreadPricingUpdated({
+      try {
+        // A worker's turn end is where its card takes the usage held live.
+        await this.persistLiveCodexNativeSubAgentUsage(event.notification.params.threadId);
+        // The final token snapshot can precede this notification, with no
+        // later usage event to carry the end time into the pricing row.
+        if (turnId && this.overlayStore.completeThreadUsageTurn) {
+          const accountKey = await this.usageAccountForTurn(event.backend, notification.params.threadId, turnId);
+          const limits = this.turnLimitObservation(event.backend);
+          const completed = await this.overlayStore.completeThreadUsageTurn({
             backend: event.backend,
             threadId: notification.params.threadId,
+            turnId,
+            completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
+            limitObservation: accountKey && limits?.accountKey === accountKey ? limits : undefined,
           });
+          terminalPricingChanged ||= completed;
         }
-      }
-      if (event.backend === "codex") {
-        await this.flushPendingTokenMiserLedger({
-          threadId: notification.params.threadId,
-        });
+        if (event.backend === "codex") {
+          const gatesChangedPricing = await this.flushPendingTokenMiserLedger({
+            publishPricing: false,
+            threadId: notification.params.threadId,
+          });
+          terminalPricingChanged ||= gatesChangedPricing;
+        }
+      } finally {
+        // A failed later step must not withhold the pricing already written.
+        if (terminalPricingChanged) {
+          try {
+            await this.emitThreadPricingUpdated({
+              ...(flushedPricing?.activeTurnIds.length
+                ? { activeTurnIds: flushedPricing.activeTurnIds }
+                : {}),
+              ...terminalPricingThread,
+            });
+          } catch (error) {
+            backendRegistryLog.warn("turn end pricing update failed", {
+              backend: event.backend,
+              error: error instanceof Error ? error.message : String(error),
+              threadId: notification.params.threadId,
+            });
+          }
+        }
       }
       if (turnId) {
         this.pdfAttachmentStore.releaseTurn({

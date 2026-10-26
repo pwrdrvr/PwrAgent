@@ -640,6 +640,48 @@ describe("AutomationStore", () => {
     expect(store.findActiveRunForAutomation("automation-1")).toBeUndefined();
   });
 
+  it("finds each backend turn's run in one lookup with the per-turn rule", () => {
+    for (const id of ["automation-a", "automation-b"]) {
+      store.createAutomation({
+        id,
+        backend: "codex",
+        threadId: `thread-${id}`,
+        name: id,
+        taskPrompt: "Check mail",
+        schedule: { kind: "interval", every: 5, unit: "minutes" },
+        now: 1_000,
+      });
+    }
+    const startRun = (runId: string, automationId: string, backendTurnId: string, at: number) => {
+      store.createRun({ id: runId, automationId, trigger: "scheduled", now: at });
+      store.markRunStarted({ runId, backendTurnId, now: at });
+    };
+    // turn-a: an older running run beats a newer completed one.
+    startRun("run-a-running", "automation-a", "turn-a", 2_000);
+    startRun("run-a-completed", "automation-a", "turn-a", 3_000);
+    store.markRunTerminal({ runId: "run-a-completed", status: "completed", now: 4_000 });
+    // turn-b: with nothing running, the newest run wins.
+    startRun("run-b-old", "automation-b", "turn-b", 5_000);
+    store.markRunTerminal({ runId: "run-b-old", status: "completed", now: 5_500 });
+    startRun("run-b-new", "automation-b", "turn-b", 6_000);
+    store.markRunTerminal({ runId: "run-b-new", status: "failed", now: 6_500 });
+
+    const turnIds = ["turn-a", "turn-b", "turn-none"];
+    const runs = store.findRunsByBackendTurnIds({ backend: "codex", backendTurnIds: turnIds });
+
+    expect(Object.fromEntries([...runs].map(([turnId, run]) => [turnId, run.id]))).toEqual({
+      "turn-a": "run-a-running",
+      "turn-b": "run-b-new",
+    });
+    for (const backendTurnId of turnIds) {
+      const perTurn =
+        store.findRunningRunByBackendTurnId({ backend: "codex", backendTurnId })
+        ?? store.findRunByBackendTurnId({ backend: "codex", backendTurnId });
+      expect(runs.get(backendTurnId)).toEqual(perTurn);
+    }
+    expect(store.findRunsByBackendTurnIds({ backend: "claude", backendTurnIds: turnIds }).size).toBe(0);
+  });
+
   it("countRecentInboundRuns counts inbound runs in the window, excluding skipped", () => {
     // The shared store keeps only runHistoryLimit (3) runs, so keep to 3.
     store.createAutomation({

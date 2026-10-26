@@ -167,6 +167,7 @@ describe("Token Miser savings scaling", () => {
       lines: work.persistedLines,
       summaries: [],
     });
+    vi.spyOn(store, "readTokenMiserGatePricingLines").mockResolvedValue(work.persistedLines);
     vi.spyOn(store, "readThreadToolAccounting").mockImplementation(async (params) => ({
       ...await (SqliteOverlayStore.prototype.readThreadToolAccounting.call(store, params)),
       invocations: work.invocations,
@@ -197,6 +198,7 @@ describe("Token Miser savings scaling", () => {
       lines: work.persistedLines,
       summaries: [],
     });
+    vi.spyOn(store, "readTokenMiserGatePricingLines").mockResolvedValue(work.persistedLines);
     const readInvocations = vi.spyOn(store, "readThreadToolAccounting");
     await internals.persistTokenMiserLedgerEntries(observed);
     expect(readInvocations).not.toHaveBeenCalled();
@@ -254,11 +256,12 @@ describe("Token Miser savings scaling", () => {
       const counter = new ReadCounter();
       const lines = counter.wrap("pricing", work.persistedLines);
       const invocations = counter.wrap("invocations", work.invocations);
-      // Count the persist path's own ledger read. The pricing publish after
-      // the write re-reads and emits the whole ledger once, which is O(P)
-      // regardless of how gates are priced.
+      // Count the persist path's own ledger read, here given every line to
+      // bound the indexing itself. The pricing publish after the write
+      // re-reads and emits the whole ledger once, which is O(P) regardless
+      // of how gates are priced.
+      vi.spyOn(store, "readTokenMiserGatePricingLines").mockResolvedValueOnce(lines);
       vi.spyOn(store, "readThreadPricing")
-        .mockResolvedValueOnce({ lines, summaries: [] })
         .mockResolvedValue({ lines: work.persistedLines, summaries: [] });
       vi.spyOn(store, "readThreadToolAccounting").mockImplementation(async (params) => ({
         ...await (SqliteOverlayStore.prototype.readThreadToolAccounting.call(store, params)),
