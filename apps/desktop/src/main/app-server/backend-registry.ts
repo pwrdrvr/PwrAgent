@@ -39378,7 +39378,10 @@ export class DesktopBackendRegistry {
             message: messages[route.id] ?? "PwrAgent tool calls must originate from an active turn on the owning thread.",
           });
         }
-        const category = messagingDynamicToolCategoryForCatalog(route.id);
+        // The static guide requires a live turn but no instance-management permission.
+        const isStaticToolGuide = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
+          && hostToolCall.tool === "read_tool_guide";
+        const category = isStaticToolGuide ? undefined : messagingDynamicToolCategoryForCatalog(route.id);
         const denied = category && this.dynamicToolPermissionDenied(backend, category, hostToolCall);
         if (denied) {
           return toDynamicToolResponse({

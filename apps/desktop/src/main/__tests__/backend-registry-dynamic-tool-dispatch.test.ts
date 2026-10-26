@@ -9,6 +9,7 @@ import type {
 import type { DynamicToolCallResponse, DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
+import { PWRAGENT_TOOL_GUIDE } from "../agent-tools/pwragent-tool-guide";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
@@ -104,6 +105,30 @@ describe("Codex catalog dynamic tool dispatch", () => {
       }
     }
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("allows the static guide without instance-management permission while requiring a live turn", async () => {
+    const checkDynamicToolPermission = vi.fn(() => ({ allowed: false, permission: "tools.instance_management" }));
+    registry.setMessagingAgentToolService({ handlePwrAgentMessagingRequest: vi.fn(), checkDynamicToolPermission });
+
+    const guide = await internals.performServerRequest("codex", request("pwragent", "read_tool_guide"));
+    expect(guide.success).toBe(true);
+    expect(JSON.parse((guide.contentItems[0] as { text: string }).text)).toEqual({ guide: PWRAGENT_TOOL_GUIDE });
+    expect(checkDynamicToolPermission).not.toHaveBeenCalled();
+
+    const management = await internals.performServerRequest("codex", request("pwragent", "manage_pwragent"));
+    expect(management.success).toBe(false);
+    expect(JSON.stringify(management)).toContain("tools.instance_management");
+    expect(checkDynamicToolPermission).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      category: "app_management", tool: "manage_pwragent",
+    }));
+
+    checkDynamicToolPermission.mockClear();
+    internals.activeTurnKeys.clear();
+    const inactiveGuide = await internals.performServerRequest("codex", request("pwragent", "read_tool_guide"));
+    expect(inactiveGuide.success).toBe(false);
+    expect(JSON.parse((inactiveGuide.contentItems[0] as { text: string }).text).code).toBe("forbidden");
+    expect(checkDynamicToolPermission).not.toHaveBeenCalled();
   });
 
   it.each<[MessagingDynamicToolCategory, string]>([
