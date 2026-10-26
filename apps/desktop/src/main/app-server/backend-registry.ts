@@ -1,7 +1,7 @@
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
-import { buildForgeToolDefinitions, type ForgePrRepositoryResolver, type ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
+import type { ForgePrRepositoryResolver, ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
@@ -16,6 +16,7 @@ import {
   addTokenMiserGateAccountingTotals,
   findAcpPermissionModeConfigOption,
   DEFAULT_FORGE_AGENT_TOOL_POLICY,
+  PWRAGENT_TOOL_NAMESPACE,
   DEFAULT_THREAD_ARCHIVE_POLICY,
   FORGE_AGENT_TOOL_GROUP_LABELS,
   isTokenMiserSubAgent,
@@ -538,10 +539,8 @@ import { OwnerContentSearch } from "../thread-search/owner-content-search";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import {
-  buildAutomationInspectionDynamicToolErrorResponse,
   handleAutomationInspectionDynamicToolCall,
   isAutomationInspectionDynamicToolCall,
-  readAutomationInspectionDynamicToolCall,
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-codex-tools";
 import {
@@ -555,17 +554,13 @@ import {
   readTaskMonitorDynamicToolCall,
 } from "./task-monitor-codex-tools";
 import {
-  buildPwrAgentAppDynamicToolErrorResponse,
   handlePwrAgentAppDynamicToolCall,
   isPwrAgentAppDynamicToolCall,
-  readPwrAgentAppDynamicToolCall,
 } from "../agent-tools/pwragent-app-codex-tools";
 import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
 import {
-  buildPwrAgentThreadDynamicToolErrorResponse,
   handlePwrAgentThreadDynamicToolCall,
   isPwrAgentThreadDynamicToolCall,
-  readPwrAgentThreadDynamicToolCall,
 } from "../agent-tools/pwragent-thread-codex-tools";
 import {
   PwrAgentFederatedThreadInspectionError,
@@ -575,43 +570,22 @@ import {
   type PwrAgentThreadInspectionHandler,
 } from "../agent-tools/pwragent-thread-agent-tools";
 import {
-  buildPwrAgentMessagingDynamicToolErrorResponse,
   handlePwrAgentMessagingDynamicToolCall,
   isPwrAgentMessagingDynamicToolCall,
-  readPwrAgentMessagingDynamicToolCall,
 } from "../agent-tools/pwragent-messaging-codex-tools";
 import {
   buildPwrAgentMessagingPdfToolRouter,
   type PwrAgentMessagingHandler,
 } from "../agent-tools/pwragent-messaging-agent-tools";
 import {
-  buildPwrAgentThreadOrchestrationDynamicToolErrorResponse,
-  handlePwrAgentThreadOrchestrationDynamicToolCall,
-  isPwrAgentThreadOrchestrationDynamicToolCall,
-  readPwrAgentThreadOrchestrationDynamicToolCall,
-} from "../agent-tools/pwragent-thread-orchestration-codex-tools";
-import {
   PwrAgentFederatedThreadMessageError,
   type PwrAgentFederatedThreadControlHandler,
   type PwrAgentFederatedThreadMessageHandler,
   type PwrAgentThreadOrchestrationHandler,
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
-import {
-  buildPwrAgentFederationDynamicToolErrorResponse,
-  handlePwrAgentFederationDynamicToolCall,
-  isPwrAgentFederationDynamicToolCall,
-  readPwrAgentFederationDynamicToolCall,
-} from "../agent-tools/pwragent-federation-codex-tools";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
-import {
-  buildPwrAgentStarMapDynamicToolErrorResponse,
-  handlePwrAgentStarMapDynamicToolCall,
-  isPwrAgentStarMapDynamicToolCall,
-  readPwrAgentStarMapDynamicToolCall,
-} from "../agent-tools/pwragent-star-map-codex-tools";
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
 import {
-  buildPwrAgentThreadTodoToolRouter,
   type PwrAgentThreadTodoHandler,
 } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
@@ -628,8 +602,6 @@ import {
   readAgentDynamicToolCall,
   toDynamicToolResponse,
 } from "../agent-tools/agent-tool-router";
-import { buildPwrAgentMcpConnectionToolRouter } from "../agent-tools/pwragent-mcp-connection-agent-tools";
-import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
 import {
   buildPwrAgentToolSearchDefinition,
@@ -9567,7 +9539,6 @@ export class DesktopBackendRegistry {
 
   private forgePrToolHandler?: ForgePrToolHandler;
   private forgePrRepositoryResolver?: ForgePrRepositoryResolver;
-  private forgeDispatchRouter?: AgentToolRouter;
   private forgeToolPolicyResolver?: () => ForgeAgentToolPolicy;
   /** Conversation grants for forge writes, keyed by thread, then tool and repository. Memory only. */
   private readonly forgeToolSessionApprovals = new Map<string, Map<string, string>>();
@@ -39269,16 +39240,6 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    const toolGuideRouter = new AgentToolRouter([buildPwrAgentToolGuideDefinition()]);
-    if (hostToolCall && toolGuideRouter.acceptsDynamicToolCall(hostToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
-        return toDynamicToolResponse({
-          ok: false, code: "forbidden",
-          message: "Tool guide calls require an active turn on the owning thread.",
-        });
-      }
-      return await toolGuideRouter.handleDynamicToolCall({ backend, call: hostToolCall });
-    }
     // Keep dispatch available after disabling the experiment: older runtimes
     // can retain the previously advertised schema until a new thread starts.
     const toolSearchRouter = new AgentToolRouter([buildPwrAgentToolSearchDefinition([])]);
@@ -39306,48 +39267,6 @@ export class DesktopBackendRegistry {
       return await new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools, enabled ? this.tokenMiserStore : undefined))
         .handleDynamicToolCall({ backend, call: hostToolCall });
     }
-    // Every forge tool name, advertised or not: a call the policy has since
-    // removed gets the policy's refusal rather than "no handler". The gated
-    // handlers read the policy per call, so one router serves every call.
-    const forgeRouter = this.forgeDispatchRouter ??= new AgentToolRouter(buildForgeToolDefinitions({
-      forgeReadHandler: this.gatedForgeReadHandler,
-      forgePrToolHandler: this.gatedForgePrToolHandler,
-    }));
-    if (hostToolCall && forgeRouter.acceptsDynamicToolCall(hostToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
-        return toDynamicToolResponse({ ok: false, code: "forbidden", message: "Forge tool calls must originate from an active turn on the same thread." });
-      }
-      const forgeDenied = this.dynamicToolPermissionDenied(backend, "forge", hostToolCall);
-      if (forgeDenied) {
-        return toDynamicToolResponse({ ok: false, code: "forbidden", message: `The messaging user who started this turn lacks permission for this tool (${forgeDenied}).` });
-      }
-      backendRegistryLog.info("handling forge dynamic tool call", {
-        backend,
-        callId: hostToolCall.callId,
-        threadId: hostToolCall.threadId,
-        tool: hostToolCall.tool,
-        turnId: hostToolCall.turnId,
-      });
-      return await forgeRouter.handleDynamicToolCall({ backend, call: hostToolCall, signal });
-    }
-    const mcpConnectionRouter = buildPwrAgentMcpConnectionToolRouter(
-      async (connectionRequest) =>
-        await this.handleAgentMcpConnectionRequest(connectionRequest),
-    );
-    if (hostToolCall && mcpConnectionRouter.acceptsDynamicToolCall(hostToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
-        return toDynamicToolResponse({
-          ok: false,
-          code: "forbidden",
-          message: "MCP connection tool calls must originate from an active turn on the owning thread.",
-        });
-      }
-      return await mcpConnectionRouter.handleDynamicToolCall({
-        backend,
-        call: hostToolCall,
-      });
-    }
-
     const tokenMiserRouter = new AgentToolRouter(
       buildTokenMiserToolDefinitions(this.tokenMiserStore, this.tokenMiserService?.focused),
     );
@@ -39379,341 +39298,109 @@ export class DesktopBackendRegistry {
       });
     }
 
-    const dynamicToolCall = readAutomationInspectionDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (
-      dynamicToolCall &&
-      isAutomationInspectionDynamicToolCall(dynamicToolCall)
-    ) {
-      if (!this.isLiveDynamicToolCall(backend, dynamicToolCall)) {
-        backendRegistryLog.warn("rejecting automation inspection dynamic tool call", {
+    if (hostToolCall) {
+      // Use the same definitions as advertisement, including compatibility
+      // facades with advertise:false. Resolve all monitor roles for progress
+      // and completion calls from monitor threads.
+      const catalogs = resolveAgentToolCatalogs({
+        appManagementHandler: this.appManagementHandler,
+        automationInspectionHandler: this.automationInspectionHandler,
+        federationHandler: this.federationHandler,
+        mcpGatewayTools: this.mcpGatewayTools,
+        mcpConnectionHandler: async (connectionRequest) =>
+          await this.handleAgentMcpConnectionRequest(connectionRequest),
+        messagingHandler: this.messagingHandler,
+        taskMonitorHandler: async (monitorRequest) =>
+          await this.handleAgentTaskMonitorRequest(monitorRequest),
+        threadInspectionHandler: this.threadInspectionHandler,
+        forgeReadHandler: this.gatedForgeReadHandler,
+        forgePrToolHandler: this.gatedForgePrToolHandler,
+        // Deliberately omit forgeToolPolicy: stale definitions must reach
+        // the per-call policy gate even after a tool is hidden in Settings.
+        threadOrchestrationHandler: this.threadOrchestrationHandler,
+        tokenMiserStore: this.tokenMiserStore,
+        tokenMiserFocused: this.tokenMiserService?.focused,
+        starMapHandler: this.starMapHandler,
+        threadTodoHandler: this.threadTodoHandler,
+      }, { taskMonitorRole: "all" });
+      const catalog = catalogs.find(({ router }) => router.acceptsDynamicToolCall(hostToolCall));
+      // These adapters retain the historical namespace normalization and
+      // unsupported-operation responses for persisted legacy definitions.
+      const legacyRoutes = hostToolCall.namespace !== PWRAGENT_TOOL_NAMESPACE ? [
+        {
+          id: "automation_inspection" as const,
+          accepts: isAutomationInspectionDynamicToolCall,
+          dispatch: async () => await handleAutomationInspectionDynamicToolCall({
+            backend, call: hostToolCall, handler: this.automationInspectionHandler,
+          }),
+        },
+        {
+          id: "thread_inspection" as const,
+          accepts: isPwrAgentThreadDynamicToolCall,
+          dispatch: async () => await handlePwrAgentThreadDynamicToolCall({
+            backend, call: hostToolCall, handler: this.threadInspectionHandler,
+          }),
+        },
+        {
+          id: "app_management" as const,
+          accepts: isPwrAgentAppDynamicToolCall,
+          dispatch: async () => await handlePwrAgentAppDynamicToolCall({
+            backend, call: hostToolCall, handler: this.appManagementHandler,
+          }),
+        },
+        {
+          id: "messaging_context" as const,
+          accepts: isPwrAgentMessagingDynamicToolCall,
+          dispatch: async () => await handlePwrAgentMessagingDynamicToolCall({
+            backend, call: hostToolCall, handler: this.messagingHandler,
+          }),
+        },
+      ] : [];
+      const route = catalog ? {
+        id: catalog.id,
+        dispatch: async () => await catalog.router.handleDynamicToolCall({ backend, call: hostToolCall, signal }),
+      } : legacyRoutes.find(({ accepts }) => accepts(hostToolCall));
+      if (route) {
+        if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
+          const messages: Partial<Record<AgentToolCatalogId, string>> = {
+            automation_inspection: "Automation inspection tool calls must originate from an active turn on the same thread.",
+            thread_inspection: "Thread inspection tool calls must originate from an active turn on the same thread.",
+            app_management: "App management tool calls must originate from an active turn on the same thread.",
+            thread_orchestration: "Thread handoff tool calls must originate from an active turn on the same thread.",
+            messaging_context: "Messaging context tool calls must originate from an active turn on the same thread.",
+            forge: "Forge tool calls must originate from an active turn on the same thread.",
+            federation: "Federation tool calls must originate from an active turn on the same thread.",
+            star_map: "Star map tool calls must originate from an active turn on the same thread.",
+          };
+          return toDynamicToolResponse({
+            ok: false,
+            code: "forbidden",
+            message: messages[route.id] ?? "PwrAgent tool calls must originate from an active turn on the owning thread.",
+          });
+        }
+        // The static guide requires a live turn but no instance-management permission.
+        const isStaticToolGuide = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
+          && hostToolCall.tool === "read_tool_guide";
+        const category = isStaticToolGuide ? undefined : messagingDynamicToolCategoryForCatalog(route.id);
+        const denied = category && this.dynamicToolPermissionDenied(backend, category, hostToolCall);
+        if (denied) {
+          return toDynamicToolResponse({
+            ok: false,
+            code: "forbidden",
+            message: `The messaging user who started this turn lacks permission for this tool (${denied}).`,
+          });
+        }
+        backendRegistryLog.info("handling catalog dynamic tool call", {
           backend,
-          callId: dynamicToolCall.callId,
-          namespace: dynamicToolCall.namespace,
-          threadId: dynamicToolCall.threadId,
-          tool: dynamicToolCall.tool,
-          turnId: dynamicToolCall.turnId,
+          catalogId: route.id,
+          callId: hostToolCall.callId,
+          namespace: hostToolCall.namespace,
+          threadId: hostToolCall.threadId,
+          tool: hostToolCall.tool,
+          turnId: hostToolCall.turnId,
         });
-        return buildAutomationInspectionDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Automation inspection tool calls must originate from an active turn on the same thread.",
-        });
+        return await route.dispatch();
       }
-      const automationDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "automation_inspection",
-        dynamicToolCall,
-      );
-      if (automationDenied) {
-        return buildAutomationInspectionDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${automationDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling automation inspection dynamic tool call", {
-        backend,
-        callId: dynamicToolCall.callId,
-        namespace: dynamicToolCall.namespace,
-        threadId: dynamicToolCall.threadId,
-        tool: dynamicToolCall.tool,
-        turnId: dynamicToolCall.turnId,
-      });
-      return await handleAutomationInspectionDynamicToolCall({
-        backend,
-        call: dynamicToolCall,
-        handler: this.automationInspectionHandler,
-      });
-    }
-    const threadToolCall = readPwrAgentThreadDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (threadToolCall && isPwrAgentThreadDynamicToolCall(threadToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, threadToolCall)) {
-        backendRegistryLog.warn("rejecting thread inspection dynamic tool call", {
-          backend,
-          callId: threadToolCall.callId,
-          namespace: threadToolCall.namespace,
-          threadId: threadToolCall.threadId,
-          tool: threadToolCall.tool,
-          turnId: threadToolCall.turnId,
-        });
-        return buildPwrAgentThreadDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Thread inspection tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      const threadInspectionDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "thread_inspection",
-        threadToolCall,
-      );
-      if (threadInspectionDenied) {
-        return buildPwrAgentThreadDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${threadInspectionDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling thread inspection dynamic tool call", {
-        backend,
-        callId: threadToolCall.callId,
-        namespace: threadToolCall.namespace,
-        threadId: threadToolCall.threadId,
-        tool: threadToolCall.tool,
-        turnId: threadToolCall.turnId,
-      });
-      return await handlePwrAgentThreadDynamicToolCall({
-        backend,
-        call: threadToolCall,
-        handler: this.threadInspectionHandler,
-      });
-    }
-    const appToolCall = readPwrAgentAppDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (appToolCall && isPwrAgentAppDynamicToolCall(appToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, appToolCall)) {
-        backendRegistryLog.warn("rejecting app management dynamic tool call", {
-          backend,
-          callId: appToolCall.callId,
-          namespace: appToolCall.namespace,
-          threadId: appToolCall.threadId,
-          tool: appToolCall.tool,
-          turnId: appToolCall.turnId,
-        });
-        return buildPwrAgentAppDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "App management tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      const appManagementDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "app_management",
-        appToolCall,
-      );
-      if (appManagementDenied) {
-        return buildPwrAgentAppDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${appManagementDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling app management dynamic tool call", {
-        backend,
-        callId: appToolCall.callId,
-        namespace: appToolCall.namespace,
-        threadId: appToolCall.threadId,
-        tool: appToolCall.tool,
-        turnId: appToolCall.turnId,
-      });
-      return await handlePwrAgentAppDynamicToolCall({
-        backend,
-        call: appToolCall,
-        handler: this.appManagementHandler,
-      });
-    }
-
-    const threadOrchestrationToolCall =
-      readPwrAgentThreadOrchestrationDynamicToolCall({
-        method: request.method,
-        params: request.params,
-      });
-    if (
-      threadOrchestrationToolCall &&
-      isPwrAgentThreadOrchestrationDynamicToolCall(threadOrchestrationToolCall)
-    ) {
-      if (!this.isLiveDynamicToolCall(backend, threadOrchestrationToolCall)) {
-        backendRegistryLog.warn("rejecting thread orchestration dynamic tool call", {
-          backend,
-          callId: threadOrchestrationToolCall.callId,
-          namespace: threadOrchestrationToolCall.namespace,
-          threadId: threadOrchestrationToolCall.threadId,
-          tool: threadOrchestrationToolCall.tool,
-          turnId: threadOrchestrationToolCall.turnId,
-        });
-        return buildPwrAgentThreadOrchestrationDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Thread handoff tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      const orchestrationDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "thread_orchestration",
-        threadOrchestrationToolCall,
-      );
-      if (orchestrationDenied) {
-        return buildPwrAgentThreadOrchestrationDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${orchestrationDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling thread orchestration dynamic tool call", {
-        backend,
-        callId: threadOrchestrationToolCall.callId,
-        namespace: threadOrchestrationToolCall.namespace,
-        threadId: threadOrchestrationToolCall.threadId,
-        tool: threadOrchestrationToolCall.tool,
-        turnId: threadOrchestrationToolCall.turnId,
-      });
-      return await handlePwrAgentThreadOrchestrationDynamicToolCall({
-        backend,
-        call: threadOrchestrationToolCall,
-        handler: this.threadOrchestrationHandler,
-      });
-    }
-
-    const starMapToolCall = readPwrAgentStarMapDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (starMapToolCall && isPwrAgentStarMapDynamicToolCall(starMapToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, starMapToolCall)) {
-        backendRegistryLog.warn("rejecting star map dynamic tool call", {
-          backend,
-          callId: starMapToolCall.callId,
-          namespace: starMapToolCall.namespace,
-          threadId: starMapToolCall.threadId,
-          tool: starMapToolCall.tool,
-          turnId: starMapToolCall.turnId,
-        });
-        return buildPwrAgentStarMapDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Star map tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      const starMapDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "star_map",
-        starMapToolCall,
-      );
-      if (starMapDenied) {
-        return buildPwrAgentStarMapDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${starMapDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling star map dynamic tool call", {
-        backend,
-        callId: starMapToolCall.callId,
-        namespace: starMapToolCall.namespace,
-        threadId: starMapToolCall.threadId,
-        tool: starMapToolCall.tool,
-        turnId: starMapToolCall.turnId,
-      });
-      return await handlePwrAgentStarMapDynamicToolCall({
-        backend,
-        call: starMapToolCall,
-        handler: this.starMapHandler,
-      });
-    }
-
-    const threadTodoRouter = buildPwrAgentThreadTodoToolRouter(
-      this.threadTodoHandler,
-    );
-    if (hostToolCall && threadTodoRouter.acceptsDynamicToolCall(hostToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
-        return toDynamicToolResponse({
-          ok: false,
-          code: "forbidden",
-          message:
-            "To-do tool calls must originate from an active turn on the owning thread.",
-        });
-      }
-      return await threadTodoRouter.handleDynamicToolCall({
-        backend,
-        call: hostToolCall,
-      });
-    }
-
-    const federationToolCall = readPwrAgentFederationDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (federationToolCall && isPwrAgentFederationDynamicToolCall(federationToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, federationToolCall)) {
-        backendRegistryLog.warn("rejecting federation dynamic tool call", {
-          backend,
-          callId: federationToolCall.callId,
-          namespace: federationToolCall.namespace,
-          threadId: federationToolCall.threadId,
-          tool: federationToolCall.tool,
-          turnId: federationToolCall.turnId,
-        });
-        return buildPwrAgentFederationDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Federation tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      backendRegistryLog.info("handling federation dynamic tool call", {
-        backend,
-        callId: federationToolCall.callId,
-        namespace: federationToolCall.namespace,
-        threadId: federationToolCall.threadId,
-        tool: federationToolCall.tool,
-        turnId: federationToolCall.turnId,
-      });
-      return await handlePwrAgentFederationDynamicToolCall({
-        backend,
-        call: federationToolCall,
-        handler: this.federationHandler,
-      });
-    }
-
-    const messagingToolCall = readPwrAgentMessagingDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (
-      messagingToolCall &&
-      isPwrAgentMessagingDynamicToolCall(messagingToolCall)
-    ) {
-      if (!this.isLiveDynamicToolCall(backend, messagingToolCall)) {
-        backendRegistryLog.warn("rejecting messaging context dynamic tool call", {
-          backend,
-          callId: messagingToolCall.callId,
-          namespace: messagingToolCall.namespace,
-          threadId: messagingToolCall.threadId,
-          tool: messagingToolCall.tool,
-          turnId: messagingToolCall.turnId,
-        });
-        return buildPwrAgentMessagingDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Messaging context tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      const messagingContextDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "messaging_context",
-        messagingToolCall,
-      );
-      if (messagingContextDenied) {
-        return buildPwrAgentMessagingDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${messagingContextDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling messaging context dynamic tool call", {
-        backend,
-        callId: messagingToolCall.callId,
-        namespace: messagingToolCall.namespace,
-        threadId: messagingToolCall.threadId,
-        tool: messagingToolCall.tool,
-        turnId: messagingToolCall.turnId,
-      });
-      return await handlePwrAgentMessagingDynamicToolCall({
-        backend,
-        call: messagingToolCall,
-        handler: this.messagingHandler,
-      });
     }
 
     const taskMonitorToolCall = readTaskMonitorDynamicToolCall({
