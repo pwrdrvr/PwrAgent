@@ -10,6 +10,22 @@ const connected: CloudflareSetupStatus = {
   connectorRunning: false, clients: [],
 };
 
+// Much of the form renders before the first status read lands: the hostname
+// field, the listener notices, and the Create button. A test that finds one of
+// those and then acts can run before the component has applied its status,
+// which fails only when the suite is busy. Wait for that read to be applied.
+async function statusApplied(call: { mock: { calls: unknown[][]; results: { value: unknown }[] } }) {
+  const isStatusRead = ([request]: unknown[]) => (request as CloudflareSetupRequest | undefined)?.action === "status";
+  await waitFor(() => expect(call.mock.calls.some(isStatusRead)).toBe(true));
+  const read = call.mock.results[call.mock.calls.findIndex(isStatusRead)]?.value;
+  await act(async () => {
+    await Promise.resolve(read).catch(() => undefined);
+    // Run the component's own continuation of the read inside act, however
+    // many promise steps it takes, so its state updates commit here.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 describe("Cloudflare setup flow", () => {
   it("shows a working external tunnel and toggles gateway access without offering to stop its service", async () => {
     let enabled = true;
@@ -94,6 +110,7 @@ describe("Cloudflare setup flow", () => {
     const write = vi.fn(async () => { events.push("bind"); return true; });
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" listenHost="0.0.0.0" mode="client" onWriteConfig={write} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     await screen.findByLabelText("Cloudflare public hostname");
     fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
@@ -105,6 +122,7 @@ describe("Cloudflare setup flow", () => {
     const call = vi.fn(async (_request: CloudflareSetupRequest) => connected);
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => false} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     await screen.findByLabelText("Cloudflare public hostname");
     fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
@@ -147,6 +165,7 @@ describe("Cloudflare setup flow", () => {
     });
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     await screen.findByLabelText("Cloudflare public hostname");
     // Select mTLS so its plan notice — and the reference links inside it — render.
     fireEvent.click(screen.getByRole("radio", { name: /Client certificate/ }));
@@ -166,6 +185,7 @@ describe("Cloudflare setup flow", () => {
     const call = vi.fn(async (request: CloudflareSetupRequest) => { events.push(request); return connected; });
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     await screen.findByLabelText("Cloudflare public hostname");
     expect(screen.getByRole("radio", { name: /Service token/ })).toBeChecked();
     fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
@@ -196,6 +216,7 @@ describe("Cloudflare setup flow", () => {
     const write = vi.fn(async () => true);
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={write} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     const account = await screen.findByLabelText("Cloudflare account ID");
     // Nothing typed yet: no draft to save, and no nagging about what is missing.
     expect(screen.getAllByRole("button", { name: "Save draft" })[0]).toBeDisabled();
@@ -248,6 +269,7 @@ describe("Cloudflare setup flow", () => {
     const call = vi.fn(async (request: CloudflareSetupRequest) => { events.push(request); return connected; });
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     await screen.findByLabelText("Cloudflare public hostname");
     fireEvent.click(screen.getByRole("radio", { name: /Sign in with an identity/ }));
     expect(screen.getByText(/Cloudflare marks Beta/)).toBeInTheDocument();
@@ -383,6 +405,7 @@ describe("Cloudflare setup flow", () => {
     });
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     await screen.findByLabelText("Cloudflare public hostname");
     fireEvent.click(screen.getByRole("radio", { name: /Sign in with an identity/ }));
     fireEvent.change(screen.getByLabelText("People who can sign in"), { target: { value: "operator@example.com" } });
@@ -469,8 +492,10 @@ describe("Cloudflare setup flow", () => {
   it("does not offer to move a tunnel onto a listener it cannot reach", async () => {
     const published: CloudflareSetupStatus = { ...connected, hostname: "federation.example.com", listenPort: 47830,
       tunnelId: "tunnel", phase: "Published", gate: "service-token" };
-    render(<CloudflareSetup api={{ configureFederationCloudflare: vi.fn(async () => published) } as DesktopApi}
+    const call = vi.fn(async () => published);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenHost="192.168.1.10" listenPort="47831" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     await screen.findByText("Cloudflare cannot reach a listener on 192.168.1.10.");
     expect(screen.getByRole("button", { name: "Move tunnel to port 47831" })).toBeDisabled();
   });
@@ -493,6 +518,7 @@ describe("Cloudflare setup flow", () => {
     });
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     await screen.findByLabelText("Cloudflare public hostname");
     fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
@@ -509,6 +535,7 @@ describe("Cloudflare setup flow", () => {
       : { ...connected, connected: false });
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" onWriteConfig={async () => true} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     fireEvent.change(await screen.findByLabelText("Cloudflare account ID"), { target: { value: "a".repeat(32) } });
     // Save draft appears in steps 2 and 4; the one clicked answers.
     fireEvent.click(within(stage("Protected endpoint")).getByRole("button", { name: "Save draft" }));
@@ -524,6 +551,7 @@ describe("Cloudflare setup flow", () => {
     });
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" listenHost="0.0.0.0" mode="client" onWriteConfig={async (patch) => { writes.push(patch); return true; }} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     await screen.findByLabelText("Cloudflare public hostname");
     fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
@@ -546,6 +574,7 @@ describe("Cloudflare setup flow", () => {
     });
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" listenHost="0.0.0.0" mode="client" onWriteConfig={async (patch) => { writes.push(patch); return true; }} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     await screen.findByLabelText("Cloudflare public hostname");
     fireEvent.change(screen.getByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
     fireEvent.click(screen.getByRole("button", { name: "Create protected endpoint" }));
@@ -710,8 +739,10 @@ describe("Cloudflare listener address", () => {
   it("offers loopback in step 4 when peers on the network can connect directly", async () => {
     const write = vi.fn(async () => true);
     const changed = vi.fn(async () => {});
-    render(<CloudflareSetup api={{ configureFederationCloudflare: vi.fn(async () => connected) } as DesktopApi}
+    const call = vi.fn(async () => connected);
+    render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" listenHost="0.0.0.0" mode="gateway" onWriteConfig={write} onSettingsChanged={changed} />);
+    await statusApplied(call);
     fireEvent.change(await screen.findByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
     const notice = screen.getByText("Peers on your network can also connect directly.").closest(".cloudflare-setup__notice") as HTMLElement;
     // Beside the sentence that names the listener, not above the whole setup.
@@ -730,6 +761,7 @@ describe("Cloudflare listener address", () => {
     const write = vi.fn(async () => true);
     render(<CloudflareSetup api={{ configureFederationCloudflare: call } as DesktopApi}
       listenPort="47830" listenHost="192.168.1.10" mode="gateway" onWriteConfig={write} onSettingsChanged={async () => {}} />);
+    await statusApplied(call);
     fireEvent.change(await screen.findByLabelText("Cloudflare public hostname"), { target: { value: "federation.example.com" } });
     expect(screen.getByText("Cloudflare cannot reach a listener on 192.168.1.10.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create protected endpoint" })).toBeDisabled();
