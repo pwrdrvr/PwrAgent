@@ -148,7 +148,9 @@ describe("DesktopBackendRegistry replay integration", () => {
         threadId: "sender",
         executionMode: "default",
         extraLinkedDirectories: [],
-        immutableUsageActivities: [{
+      }),
+      readThreadUsageActivities: async () => ({
+        sender: [{
           type: "activity",
           id: "live-turn-usage-turn-t",
           summary: "Turn usage: 26,512 uncached in",

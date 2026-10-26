@@ -14,7 +14,7 @@ afterEach(() => { vi.restoreAllMocks(); db.close(); if (tempDir) removeTempState
 function seed(id: string, model = "fixture-model", target = db.raw, backend = "codex") {
   target.prepare("INSERT OR REPLACE INTO threads(thread_id, payload) VALUES (?, ?)")
     .run(`${encodeURIComponent(backend)}:${id}`, JSON.stringify({ backend, threadId: id, model,
-      immutableUsageActivities: [{ text: "contrived history ".repeat(1000) }],
+      managedReviewEntries: [{ text: "contrived history ".repeat(1000) }],
     }));
 }
 

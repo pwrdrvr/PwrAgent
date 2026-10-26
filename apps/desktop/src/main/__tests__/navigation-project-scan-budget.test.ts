@@ -18,7 +18,7 @@ it.each([1, 5, 15])("bounds physical SQLite scans across %i project refreshes", 
     for (let i = 0; i < 100; i++) {
       db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run(`codex:parent-${i}`, JSON.stringify({
         backend: "codex", threadId: `parent-${i}`, subAgents: [{ monitorThreadId: `child-${i}` }],
-        immutableUsageActivities: [{ text: "history ".repeat(2000) }],
+        managedReviewEntries: [{ text: "history ".repeat(2000) }],
       }));
     }
     for (let i = 0; i < 50; i++) await store.addRemoteThreadPin({

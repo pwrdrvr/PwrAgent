@@ -1,9 +1,11 @@
 import {
   CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
   isThreadSubAgentVisibleInPanel,
+  MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
   subAgentLens,
   totalTokenMiserGateAccountings,
   type AppServerBackendKind,
+  type AppServerThreadActivityEntry,
   type SubAgentLens,
   type ThreadOverlayState,
   type ThreadSubAgentSummary,
@@ -13,11 +15,13 @@ import { TOKEN_MISER_MONITOR_ID_PREFIX } from "../../state/thread-sub-agents";
 
 /**
  * The overlay record a mock store keeps. The real store holds sub-agent cards
- * in `thread_sub_agents`; mocks keep them on the record so a test can seed
- * and assert them in one place. Production code never sees this field.
+ * in `thread_sub_agents` and usage activities in `thread_usage_activities`;
+ * mocks keep both on the record so a test can seed and assert them in one
+ * place. Production code never sees these fields.
  */
 export type MockOverlayState = ThreadOverlayState & {
   subAgents?: ThreadSubAgentSummary[];
+  immutableUsageActivities?: AppServerThreadActivityEntry[];
 };
 
 /** A mock store whose overlay reads expose the cards kept on the record. */
@@ -147,5 +151,32 @@ export function mockSubAgentReads(read: ReadOverlay) {
       }
       return { count: current.length, revision };
     },
+  };
+}
+
+/**
+ * The store's usage-activity reads over a mock's overlay records, with the
+ * same window as `ThreadUsageActivityTable`: the newest 100, oldest first.
+ */
+export function mockUsageActivityReads(read: ReadOverlay) {
+  const retained = (backend: AppServerBackendKind, threadId: string) =>
+    (read(backend, threadId)?.immutableUsageActivities ?? []).slice(-MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES);
+  return {
+    readThreadUsageActivities: async (params: {
+      backend: AppServerBackendKind;
+      threadIds: string[];
+    }) => {
+      const result: Record<string, AppServerThreadActivityEntry[]> = {};
+      for (const threadId of new Set(params.threadIds)) {
+        const activities = retained(params.backend, threadId);
+        if (activities.length > 0) result[threadId] = activities;
+      }
+      return result;
+    },
+    readThreadUsageActivityForTurn: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      turnId: string;
+    }) => retained(params.backend, params.threadId).find((activity) => activity.turn?.id === params.turnId),
   };
 }

@@ -3015,7 +3015,7 @@ describe("CodexAppServerClient", () => {
     db.raw.transaction(() => {
       for (const id of ids) db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run(`codex:${id}`, JSON.stringify({
         backend: "codex", threadId: id, model: "fixture-model", extraLinkedDirectories: [],
-        immutableUsageActivities: [{ text: "contrived history ".repeat(1_000) }],
+        managedReviewEntries: [{ text: "contrived history ".repeat(1_000) }],
       }));
     })();
     const transport = MockTransport.instances.at(-1)!;

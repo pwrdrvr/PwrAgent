@@ -26,11 +26,15 @@ import {
   THREAD_SUB_AGENTS_MOVED_META_KEY,
 } from "./thread-sub-agents";
 import {
+  ensureThreadUsageActivitySchema,
+  THREAD_USAGE_ACTIVITIES_MOVED_META_KEY,
+} from "./thread-usage-activities";
+import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 79;
+export const CURRENT_STATE_DB_USER_VERSION = 80;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -2134,9 +2138,25 @@ export class StateDb {
           db.pragma("user_version = 79");
         }).immediate();
       }
-      // Converge a profile whose v79 came from another branch. On a current
-      // profile every statement is IF NOT EXISTS and writes nothing.
+      if ((db.pragma("user_version", { simple: true }) as number) < 80) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 80) return;
+          // Schema and capture triggers only, as v79 did for cards. Existing
+          // usage activities move out of `threads.payload` lazily and in a
+          // sliced background pass, never here.
+          ensureThreadUsageActivitySchema(db);
+          if (tableExists(db, "threads")) {
+            db.prepare(
+              "INSERT OR IGNORE INTO meta(key, value) SELECT ?, '1' WHERE NOT EXISTS (SELECT 1 FROM threads)",
+            ).run(THREAD_USAGE_ACTIVITIES_MOVED_META_KEY);
+          }
+          db.pragma("user_version = 80");
+        }).immediate();
+      }
+      // Converge a profile whose v79 or v80 came from another branch. On a
+      // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
+      ensureThreadUsageActivitySchema(db);
       // Additive columns on the card tables, with no version of their own so
       // no branch can claim it: one immediate transaction the first time,
       // then two table-info reads per open.

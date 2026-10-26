@@ -13,7 +13,7 @@ it.each([10, 120, 1_000])("bounds PR candidate eligibility reads for %i history-
   db.raw.transaction(() => {
     for (const thread of threads) db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run(
       `codex:${thread.threadId}`, JSON.stringify({ ...thread, prAutoDispatchEnabled: true,
-        immutableUsageActivities: [{ text: "contrived history ".repeat(2_000) }],
+        managedReviewEntries: [{ text: "contrived history ".repeat(2_000) }],
       }),
     );
   })();

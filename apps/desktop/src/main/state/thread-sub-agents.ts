@@ -6,6 +6,7 @@ import {
   type ThreadSubAgentSummary,
   type TokenMiserGateAccountingTotals,
 } from "@pwragent/shared";
+import { LegacyPayloadArrayMove } from "./legacy-payload-array-move";
 
 /**
  * Durable sub-agent and Token Miser gate cards, one row per card.
@@ -410,65 +411,28 @@ export const TOKEN_MISER_MONITOR_ID_PREFIX = "system:token-miser:";
 const TOKEN_MISER_MONITOR_ID_END = monitorIdPrefixEnd(TOKEN_MISER_MONITOR_ID_PREFIX);
 
 export class ThreadSubAgentTable {
-  private moved: boolean | undefined;
+  private readonly move: LegacyPayloadArrayMove;
 
   constructor(
     private readonly db: BetterSqlite3.Database,
-    private readonly meta: { get(key: string): string | undefined; set(key: string, value: string): void },
-  ) {}
+    meta: { get(key: string): string | undefined; set(key: string, value: string): void },
+  ) {
+    this.move = new LegacyPayloadArrayMove(db, meta, "subAgents", THREAD_SUB_AGENTS_MOVED_META_KEY);
+  }
 
   /** True once no legacy payload array can remain, apart from an older writer's (which the triggers capture). */
   isMoveComplete(): boolean {
-    this.moved ??= this.meta.get(THREAD_SUB_AGENTS_MOVED_META_KEY) === "1";
-    return this.moved;
+    return this.move.isComplete();
   }
 
-  /**
-   * Move one thread's legacy array, if it still has one. A no-op payload
-   * update fires the capture trigger, so this, the background sweep, and an
-   * older writer all take the same path.
-   */
+  /** Move one thread's legacy array, if it still has one. */
   moveLegacyCards(storageKey: string): void {
-    if (this.isMoveComplete()) return;
-    // Read first, so a row with nothing to move costs no write lock or commit.
-    const legacy = this.db.prepare(`SELECT 1 FROM threads WHERE thread_id = ?
-      AND CASE WHEN json_valid(payload) THEN json_type(payload, '$.subAgents') = 'array' ELSE 0 END`).get(storageKey);
-    if (!legacy) return;
-    this.db.prepare("UPDATE threads SET payload = payload WHERE thread_id = ?").run(storageKey);
+    this.move.moveRow(storageKey);
   }
 
-  /**
-   * One bounded slice of the one-time move, in one immediate transaction: the
-   * next threads by rowid until about `byteBudget` payload bytes (always at
-   * least one row). `octet_length` reads the stored size without loading the
-   * payload. Returns the cursor for the next slice, or `undefined` once every
-   * row has been visited and the marker is set.
-   */
+  /** One bounded slice of the one-time move; see `LegacyPayloadArrayMove.moveSlice`. */
   moveLegacyCardsSlice(afterRowid: number, byteBudget: number): number | undefined {
-    if (this.isMoveComplete()) return undefined;
-    return this.db.transaction(() => {
-      const candidates = this.db.prepare(`SELECT rowid AS id, thread_id, octet_length(payload) AS bytes
-        FROM threads WHERE rowid > ? ORDER BY rowid LIMIT 500`).all(afterRowid) as Array<{
-        id: number; thread_id: string; bytes: number;
-      }>;
-      if (candidates.length === 0) {
-        this.meta.set(THREAD_SUB_AGENTS_MOVED_META_KEY, "1");
-        this.moved = true;
-        return undefined;
-      }
-      const move = this.db.prepare(`UPDATE threads SET payload = payload WHERE thread_id = ?
-        AND instr(payload, '"subAgents"') > 0
-        AND CASE WHEN json_valid(payload) THEN json_type(payload, '$.subAgents') = 'array' ELSE 0 END`);
-      let bytes = 0;
-      let last = afterRowid;
-      for (const row of candidates) {
-        if (last !== afterRowid && bytes + row.bytes > byteBudget) break;
-        move.run(row.thread_id);
-        bytes += row.bytes;
-        last = row.id;
-      }
-      return last;
-    }).immediate();
+    return this.move.moveSlice(afterRowid, byteBudget);
   }
 
   /** Per-card upsert. An unchanged card writes nothing; the parent row is never touched. */
