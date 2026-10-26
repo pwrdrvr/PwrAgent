@@ -1006,7 +1006,7 @@ describe("Sidebar commands under a resting pointer", () => {
     expect(threadTitles()).toEqual(["Charlie thread", "Bravo thread"]);
   });
 
-  it("pins a selection from its menu without the pointer leaving", async () => {
+  it("unpins a selection from its menu without the pointer leaving", async () => {
     const pins: Array<ReturnType<typeof deferred>> = [];
     const onSetThreadPin = vi.fn(() => {
       const pin = deferred();
@@ -1014,48 +1014,33 @@ describe("Sidebar commands under a resting pointer", () => {
       return pin.promise;
     });
     const repo = { ...directory, threadKeys: ["codex:alpha", "codex:bravo", "codex:charlie"] };
-    const view = render(renderSidebar({
+    const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
+    const pinnedBravo = { ...bravo, pinnedRank: "2048" };
+    const renderRepo = (threads: NavigationThreadSummary[]) => renderSidebar({
       browseMode: "directories",
       directories: [repo],
       selectedItemKey: "codex:charlie",
-      threads: [alpha, bravo, charlie],
+      threads,
       onSetThreadPin,
-    }));
-    expect(threadTitles()).toEqual(["Charlie thread", "Alpha thread", "Bravo thread"]);
+    });
+    const view = render(renderRepo([pinnedAlpha, pinnedBravo, charlie]));
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread", "Charlie thread"]);
     fireEvent.pointerOver(threadRow("Alpha thread"), { pointerType: "mouse" });
     fireEvent.click(screen.getByRole("button", { name: /^Alpha thread/ }));
     fireEvent.click(screen.getByRole("button", { name: /^Bravo thread/ }), { metaKey: true });
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Bravo thread/ }));
     await chooseFromMenuOverRows(
-      screen.getByRole("menuitem", { name: "Pin 2 Threads" }),
+      screen.getByRole("menuitem", { name: "Unpin 2 Threads" }),
       () => threadRow("Charlie thread"),
     );
-
-    const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
-    const pinnedBravo = { ...bravo, pinnedRank: "2048" };
-    view.rerender(renderSidebar({
-      browseMode: "directories",
-      directories: [repo],
-      selectedItemKey: "codex:charlie",
-      threads: [pinnedAlpha, bravo, charlie],
-      onSetThreadPin,
-    }));
-    await act(async () => {
-      pins[0]!.resolve();
-    });
-    view.rerender(renderSidebar({
-      browseMode: "directories",
-      directories: [repo],
-      selectedItemKey: "codex:charlie",
-      threads: [pinnedAlpha, pinnedBravo, charlie],
-      onSetThreadPin,
-    }));
-    await act(async () => {
-      pins[1]!.resolve();
-    });
-
     expect(onSetThreadPin).toHaveBeenCalledTimes(2);
-    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread", "Charlie thread"]);
+
+    view.rerender(renderRepo([alpha, bravo, charlie]));
+    await act(async () => {
+      for (const pin of pins) pin.resolve();
+    });
+
+    expect(threadTitles()).toEqual(["Charlie thread", "Alpha thread", "Bravo thread"]);
   });
 
   it("waits for the rows to carry a landed read before freezing a directory unpin", async () => {
