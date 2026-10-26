@@ -26345,22 +26345,35 @@ command = "pnpm dev"
       expect(registry.withNavigationSubAgentActivity([row])[0]).not.toHaveProperty("hasAgentCommands");
     });
 
-    it("keeps a command from the active turn that the list omits", async () => {
+    it.each([
+      // Codex reports the thread idle just before turn/completed.
+      ["its turn has not ended", { turnStarted: true, status: "idle" }],
+      // A main-process reload can miss turn/started for a turn still running.
+      ["Codex reports the thread active", { turnStarted: false, status: "active" }],
+    ])("keeps a command the list omits while %s", async (_case, { turnStarted, status }) => {
       const listBackgroundTerminals = vi.fn()
         .mockResolvedValueOnce({ supported: true, terminals: [] })
         // A runtime without the list after the turn proves nothing either way.
         .mockResolvedValue({ supported: false, terminals: [] });
       const { codexClient, registry } = setup(listBackgroundTerminals);
 
-      await codexClient.emit({ method: "turn/started", params: {
-        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1" },
-      } });
+      if (turnStarted) {
+        await codexClient.emit({ method: "turn/started", params: {
+          threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1" },
+        } });
+      }
       await codexClient.emit({ method: "item/started", params: {
         threadId: "thread-1", turnId: "turn-1",
         item: { id: "command-1", type: "commandExecution", status: "inProgress", command: "pnpm dev" },
       } });
+      await codexClient.emit({ method: "thread/status/changed", params: {
+        threadId: "thread-1", status: { type: status },
+      } });
       // The session may not exist yet while its turn runs.
       await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+      await codexClient.emit({ method: "thread/status/changed", params: {
+        threadId: "thread-1", status: { type: "idle" },
+      } });
       await codexClient.emit({ method: "turn/completed", params: {
         threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
       } });
