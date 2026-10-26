@@ -46,8 +46,9 @@ it("retains unchanged row projections while still publishing changed titles", as
   let title: string | undefined;
   f.read.mockImplementation(async (request, consumer) => {
     const page = await originalRead(request, consumer);
-    return title ? { ...page, entries: page.entries.map((entry) => entry.row.id === "thread-1"
-      ? { ...entry, row: { ...entry.row, title } } : entry) } : page;
+    const updatedTitle = title;
+    return updatedTitle ? { ...page, entries: page.entries.map((entry) => entry.row.id === "thread-1"
+      ? { ...entry, row: { ...entry.row, title: updatedTitle } } : entry) } : page;
   });
   const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
   await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
