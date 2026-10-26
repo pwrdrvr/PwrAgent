@@ -13157,6 +13157,29 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("interrupts only the cancelled structured helper turn and unsubscribes it", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = { thread: { id: "approval-helper" }, instructionSources: [] };
+    MockTransport.threadMcpServerStatusResult = { data: [], nextCursor: null };
+    MockTransport.turnStartResult = { turn: { id: "approval-turn" } };
+    const controller = new AbortController();
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    const pending = client.generateStructuredObject({
+      helper: "mcp_approval_reviews", disableExecution: true, signal: controller.signal,
+      prompt: "Review this invocation.", schema: { type: "object", properties: { decision: { type: "string" } } },
+      isMatch: (record) => typeof record.decision === "string", timeoutMs: 5_000,
+    });
+    const transport = await waitForLatestTransportRequest("turn/start");
+    controller.abort(new Error("approval cancelled"));
+    expect(await pending).toMatchObject({ status: "failed", reason: "approval cancelled" });
+    const requests = transport.sentMessages.map((message) => JSON.parse(message));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "turn/interrupt",
+      params: { threadId: "approval-helper", turnId: "approval-turn" } }));
+    expect(requests).toContainEqual(expect.objectContaining({ method: "thread/unsubscribe",
+      params: { threadId: "approval-helper" } }));
+    await client.close();
+  });
+
   it("returns a structured helper failure as soon as Codex reports it", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadStartResult = {

@@ -615,6 +615,7 @@ import {
 } from "../agent-tools/pwragent-tool-search";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
+import { MCP_GATEWAY_REVIEW_SYSTEM, MCP_GATEWAY_REVIEW_SCHEMA, mcpGatewayReviewPrompt, parseMcpGatewayReview } from "../mcp-connections/mcp-gateway-auto-review";
 import { McpGatewayToolService, type McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
 import { gatewayToolRequiresApproval, type McpGatewayInvocation, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import {
@@ -1007,6 +1008,7 @@ type BackendClient = {
     schema: Record<string, unknown>;
     system?: string;
     disableExecution?: boolean;
+    signal?: AbortSignal;
     isMatch: (record: Record<string, unknown>) => boolean;
     timeoutMs?: number;
     /** Model answering budget, separate from the protocol round-trips. */
@@ -9058,6 +9060,7 @@ export class DesktopBackendRegistry {
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
   // Process-local conversation grants. A source's revision also includes the
   // broker's authorization generation, so reauthorization needs fresh consent.
+  private readonly mcpGatewayApprovalWaiters = new Map<string, () => void>();
   private readonly mcpGatewaySessionApprovals = new Map<string, Map<string, McpGatewayConversationConsent>>();
   private readonly fileChangeApprovalContexts = new Map<
     string,
@@ -10673,7 +10676,7 @@ export class DesktopBackendRegistry {
           }
           return (await this.readThreadMcpConnections(context)).connectionIds;
         },
-        approve: (invocation, context, signal, annotations, catalogRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision),
+        approve: (invocation, context, signal, annotations, catalogRevision, definition) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision, definition),
       });
     }
     if (this.tokenMiserStore) {
@@ -28256,6 +28259,7 @@ export class DesktopBackendRegistry {
     }
     this.mcpGatewayTools?.cancel();
     this.mcpGatewaySessionApprovals.clear();
+    this.mcpGatewayApprovalWaiters.clear();
     for (const run of this.headlessAutomationTurns.values()) {
       for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     }
@@ -39700,6 +39704,7 @@ export class DesktopBackendRegistry {
     signal: AbortSignal,
     annotations?: McpGatewayTool["definition"]["annotations"],
     catalogRevision?: string,
+    definition?: McpGatewayTool["definition"],
   ): Promise<McpGatewayApproval> {
     signal.throwIfAborted();
     const requestId = `mcp-gateway:${randomUUID()}`;
@@ -39777,8 +39782,6 @@ export class DesktopBackendRegistry {
       });
       return true;
     }
-    // Codex auto_review has no client API for reviewing host-owned dynamic
-    // calls. Keep scoped confirmation until that integration is available.
     if (automation) return false;
     signal.throwIfAborted();
     // The connection's Tool approval setting, read now so the next call
@@ -39799,10 +39802,22 @@ export class DesktopBackendRegistry {
       return true;
     }
     if (consent.approved || connectionConsent?.approved) return true;
+    if (toolApproval === "auto" && definition && context.backend === "codex"
+      && this.activeCodexTurnModes.get(buildActiveTurnModeKey(context.threadId, context.turnId ?? "")) === "auto") {
+      const reviewed = await this.reviewMcpGatewayInvocation(invocation, definition, context, signal);
+      signal.throwIfAborted();
+      if (reviewed !== undefined) return reviewed;
+    }
+    // Another call may have established consent while this review was running.
+    if (consent.approved || connectionConsent?.approved) return true;
     const key = buildPendingRequestKey({ ...context, requestId });
     return await new Promise<McpGatewayApproval>((resolve, reject) => {
+      let settled = false;
       const finish = (approved: McpGatewayApproval, error?: unknown): void => {
+        if (settled) return;
+        settled = true;
         signal.removeEventListener("abort", aborted);
+        this.mcpGatewayApprovalWaiters.delete(key);
         this.pendingServerRequests.delete(key);
         if (error) reject(error);
         else resolve(approved);
@@ -39816,6 +39831,7 @@ export class DesktopBackendRegistry {
       this.pendingServerRequests.set(key, {
         backend: context.backend, notification,
         resolve: (response) => {
+          if (settled) return;
           if (signal.aborted) { aborted(); return; }
           const approved = Boolean(response && "action" in response && response.action === "accept");
           const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
@@ -39833,6 +39849,7 @@ export class DesktopBackendRegistry {
                   && latest?.mcpSelectionRevision === selectionRevision
                   && this.mcpGatewaySessionApprovals.get(sessionKey)?.get(rememberedKey) === rememberedConsent) {
                   rememberedConsent.approved = true;
+                  for (const release of this.mcpGatewayApprovalWaiters.values()) release();
                 }
               } catch (error) {
                 backendRegistryLog.warn("could not record MCP conversation approval", { error: String(error) });
@@ -39843,6 +39860,15 @@ export class DesktopBackendRegistry {
           finish(approved);
         },
         reject: (error) => finish(false, error),
+      });
+      this.mcpGatewayApprovalWaiters.set(key, () => {
+        const latest = this.mcpGatewaySessionApprovals.get(sessionKey);
+        if (signal.aborted || this.closed || latest?.get(sourceKey) !== consent) return;
+        if (!consent.approved && !(connectionConsent?.approved && latest?.get(serverKey) === connectionConsent)) return;
+        finish(true);
+        void this.emit({ backend: context.backend, notification: {
+          method: "serverRequest/resolved", params: { threadId: context.threadId, turnId: context.turnId, requestId },
+        } }).catch(() => undefined);
       });
       signal.addEventListener("abort", aborted, { once: true });
       if (signal.aborted) { aborted(); return; }
@@ -39888,6 +39914,67 @@ export class DesktopBackendRegistry {
       // An unavailable policy or registration keeps the normal prompt.
     }
     return undefined;
+  }
+
+  private async reviewMcpGatewayInvocation(
+    invocation: McpGatewayInvocation,
+    definition: McpGatewayTool["definition"],
+    context: AgentToolCallContext,
+    signal: AbortSignal,
+  ): Promise<boolean | undefined> {
+    if (!context.turnId || !this.codexClient.generateStructuredObject
+      || !this.isLiveDynamicToolCall(context.backend, context)) return undefined;
+    const id = `pwragent-mcp-review:${randomUUID()}`;
+    let started = false;
+    const publish = async (text: string, status: string, detail?: string): Promise<void> => {
+      await this.emit({ backend: context.backend, notification: {
+        method: status === "in_progress" ? "item/started" : "item/completed",
+        params: { threadId: context.threadId, turnId: context.turnId, item: {
+          id, type: "autoApprovalReview", text,
+          data: { status, detail: `${invocation.serverName}/${invocation.toolName}${detail ? `\n\n${detail}` : ""}` },
+        } },
+      } });
+    };
+    try {
+      // Protocol-only, source-thread scoped context. Never accept user intent
+      // from the calling model's arguments or another instance's transcript.
+      const replay = await this.withCodexThreadClient(context.threadId, async (client) =>
+        client.readThreadTurn ? await client.readThreadTurn({ threadId: context.threadId, turnId: context.turnId! }) : undefined);
+      signal.throwIfAborted();
+      const messages = replay?.messages.filter((message) => message.role === "user").map((message) => message.text) ?? [];
+      // Missing/oversized context falls back to the operator; truncation must
+      // not discard a constraint and manufacture authorization.
+      if (!messages.length || messages.some((text) => !text.trim())
+        || Buffer.byteLength(JSON.stringify(messages)) > 32_000
+        || Buffer.byteLength(JSON.stringify(definition)) > 24_000) return undefined;
+      started = true;
+      await publish("PwrAgent MCP review: Reviewing", "in_progress");
+      const result = await this.codexClient.generateStructuredObject({
+        helper: "mcp_approval_reviews",
+        system: MCP_GATEWAY_REVIEW_SYSTEM,
+        prompt: mcpGatewayReviewPrompt(invocation, definition, messages),
+        schema: MCP_GATEWAY_REVIEW_SCHEMA,
+        disableExecution: true,
+        signal,
+        isMatch: (record) => Boolean(parseMcpGatewayReview(record, messages)),
+        timeoutMs: 10_000,
+        turnTimeoutMs: 45_000,
+      });
+      signal.throwIfAborted();
+      if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("The calling turn ended during MCP review.");
+      const decision = result.status === "ok" ? parseMcpGatewayReview(result.object, messages) : undefined;
+      await publish(`PwrAgent MCP review: ${decision?.decision === "approve" ? "Approved"
+        : decision?.decision === "deny" ? "Denied" : "Needs confirmation"}`,
+      decision?.decision === "approve" ? "completed" : "failed",
+      decision?.rationale ?? "Review unavailable; operator confirmation required.");
+      return decision?.decision === "approve" ? true : decision?.decision === "deny" ? false : undefined;
+    } catch (error) {
+      if (started) await publish(signal.aborted ? "PwrAgent MCP review: Cancelled" : "PwrAgent MCP review: Needs confirmation",
+        signal.aborted ? "cancelled" : "failed").catch(() => undefined);
+      signal.throwIfAborted();
+      backendRegistryLog.warn("MCP gateway automatic review unavailable", { error: String(error), threadId: context.threadId });
+      return undefined;
+    }
   }
 
   // A lookup that fails reads as the default, which still asks for anything

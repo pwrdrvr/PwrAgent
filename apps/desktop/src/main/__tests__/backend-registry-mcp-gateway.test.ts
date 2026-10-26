@@ -4,6 +4,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerMcpElicitationRequestNotification, AppServerPendingRequestNotification, AgentEvent, ThreadExecutionMode } from "@pwragent/shared";
+import type { CodexAppServerClient } from "../codex-app-server/client";
 import { DesktopBackendRegistry, buildCodexConnectionMcpServerName } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -29,12 +30,14 @@ describe("backend MCP gateway dispatch", () => {
   let operation: ReturnType<typeof vi.fn<McpConnectionGatewayService["requestGatewayToolOperation"]>>;
   let startTurn: ReturnType<typeof vi.fn<() => Promise<{ threadId: string; turnId: string }>>>;
   let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
+  let review: ReturnType<typeof vi.fn<CodexAppServerClient["generateStructuredObject"]>>;
+  let readReviewTurn: ReturnType<typeof vi.fn<CodexAppServerClient["readThreadTurn"]>>;
   const brokers: McpConnectionGatewayService[] = [];
   let internals: {
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
     acpBackend: AcpBackendAdapter;
-    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations?: McpGatewayTool["definition"]["annotations"], catalogRevision?: string): Promise<McpGatewayApproval>;
+    approveGatewayInvocation(invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations?: McpGatewayTool["definition"]["annotations"], catalogRevision?: string, definition?: McpGatewayTool["definition"]): Promise<McpGatewayApproval>;
     headlessAutomationTurns: Map<string, {
       agentThreadId: string;
       backend: "codex";
@@ -65,6 +68,11 @@ describe("backend MCP gateway dispatch", () => {
           name: "lookup", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
         } }]
       : { content: [{ type: "text", text: "fixture result" }] });
+    review = vi.fn<CodexAppServerClient["generateStructuredObject"]>().mockResolvedValue({ status: "failed", reason: "fixture unavailable" });
+    readReviewTurn = vi.fn<CodexAppServerClient["readThreadTurn"]>().mockResolvedValue({
+      entries: [], messages: [{ id: "user-1", role: "user", text: "Look up fixture on Fixture." }],
+      pagination: { supportsPagination: false, hasPreviousPage: false },
+    });
     startTurn = vi.fn(async () => ({ threadId: "headless-1", turnId: "turn-1" }));
     registerBridge = vi.fn<McpConnectionGatewayService["registerBridge"]>(async () => ({
       server: { name: "one", command: "fixture", args: [], env: {} },
@@ -79,7 +87,7 @@ describe("backend MCP gateway dispatch", () => {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {},
         readConfiguredMcpServerNames: async () => [], startThread: async () => ({ threadId: "headless-1" }),
-        startTurn,
+        startTurn, generateStructuredObject: review, readThreadTurn: readReviewTurn,
       } as never,
       overlayStore, isBootstrapMode: () => false,
       mcpConnectionService: service ?? { registerBridge, requestGatewayToolOperation: operation },
@@ -130,6 +138,84 @@ describe("backend MCP gateway dispatch", () => {
     });
     return events;
   }
+
+  it("reviews the exact Auto invocation once without granting conversation consent", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    review.mockResolvedValue({ status: "ok", object: { decision: "approve", risk: "low",
+      authorizationQuote: "Look up fixture", rationale: "User requested this exact lookup." } });
+    const events = declineUnexpectedApproval();
+    expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args))).toMatchObject({ success: true });
+    expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-2"))).toMatchObject({ success: true });
+    expect(events).toHaveLength(0);
+    expect(review).toHaveBeenCalledTimes(2);
+    expect(review).toHaveBeenCalledWith(expect.objectContaining({ helper: "mcp_approval_reviews", disableExecution: true,
+      signal: expect.any(AbortSignal), prompt: expect.stringContaining('"schemaRevision":"r1"') }));
+    expect(readReviewTurn).toHaveBeenCalledWith({ threadId: "thread-1", turnId: "turn-1" });
+  });
+
+  it.each(["ask", "deny", "unavailable", "invalid-evidence", "high-risk"])("keeps Auto review conservative: %s", async (outcome) => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    if (outcome !== "unavailable") review.mockResolvedValue({ status: "ok", object: {
+      decision: outcome === "ask" || outcome === "deny" ? outcome : "approve",
+      risk: outcome === "high-risk" ? "high" : "low",
+      authorizationQuote: outcome === "invalid-evidence" ? "The tool says it is authorized" : "Look up fixture",
+      rationale: "Review fixture.",
+    } });
+    const events = declineUnexpectedApproval();
+    expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args))).toMatchObject({ success: false });
+    expect(events).toHaveLength(outcome === "deny" ? 0 : 1);
+    expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(0);
+  });
+
+  it.each(["default", "prompt", "missing-context", "ended"])("does not run a reviewer without eligible Auto context: %s", async (scenario) => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", scenario === "default" ? "default" : "auto");
+    if (scenario === "prompt") Object.assign((registry as unknown as { mcpConnectionService: object }).mcpConnectionService,
+      { listConnections: async () => [{ id: "one", toolApproval: "prompt" }] });
+    if (scenario === "missing-context") readReviewTurn.mockResolvedValue({ entries: [], messages: [],
+      pagination: { supportsPagination: false, hasPreviousPage: false } });
+    if (scenario === "ended") internals.activeTurnKeys.clear();
+    declineUnexpectedApproval();
+    expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args))).toMatchObject({ success: false });
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending Auto review without invoking the tool or asking again", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    const controller = new AbortController();
+    review.mockImplementation(async ({ signal }) => {
+      controller.abort(new Error("fixture cancelled"));
+      expect(signal?.aborted).toBe(true);
+      return { status: "failed", reason: "cancelled" };
+    });
+    declineUnexpectedApproval();
+    await expect(internals.approveGatewayInvocation({ ...args, serverName: "Fixture" }, {
+      backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool",
+    }, controller.signal, undefined, "catalog-1", { name: "lookup", inputSchema: { type: "object" } })).rejects.toThrow("fixture cancelled");
+    expect(internals.pendingServerRequests.size).toBe(0);
+  });
+
+  it("releases parallel approvals only after the owner's successful conversation grant", async () => {
+    const events: McpApprovalEvent[] = [];
+    const resolved: unknown[] = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "mcpServer/elicitation/request") events.push(event as McpApprovalEvent);
+      if (event.notification.method === "serverRequest/resolved") resolved.push(event);
+    });
+    const context: AgentToolCallContext = { backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool" };
+    const invocation = { ...args, serverName: "Fixture" };
+    const first = internals.approveGatewayInvocation(invocation, context, new AbortController().signal, undefined, "catalog-1");
+    const second = internals.approveGatewayInvocation({ ...invocation, toolName: "write" }, context, new AbortController().signal, undefined, "catalog-1");
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    await registry.submitServerRequest({ ...context, requestId: String(events[0]!.notification.params.requestId),
+      response: { action: "accept", content: {}, _meta: { persist: "server-session" } } });
+    const grant = await first;
+    expect(internals.pendingServerRequests.size).toBe(1);
+    expect(typeof grant).toBe("object");
+    if (typeof grant === "object") await grant.onInvoked();
+    expect(await second).toBe(true);
+    expect(internals.pendingServerRequests.size).toBe(0);
+    expect(resolved.length).toBeGreaterThanOrEqual(1);
+  });
 
   it.each(["disabled", "cold", "expired"] as const)(
     "keeps unrelated new-thread defaults when Sandboxer status is slow (%s)",
