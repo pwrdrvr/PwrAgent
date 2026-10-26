@@ -21,7 +21,11 @@ afterEach(() => {
 });
 
 it.each(["local", "remote"])("renders 15 complete project clouds and three independent card pages for %s", async (owner) => {
-  window.localStorage.setItem("pwragent.starMap.viewPreferences", JSON.stringify({ layout: "orbit" }));
+  // Project identity is in the cloud labels. This pagination fixture keeps
+  // card metadata off; the real card-field rendering has its own tests.
+  window.localStorage.setItem("pwragent.starMap.viewPreferences", JSON.stringify({
+    layout: "orbit", cardFields: { primaryDirectory: false },
+  }));
   // Project 0 outruns one click's block, so a second click continues an
   // already-continued range. Every other project fits in one.
   const threads: NavigationThreadSummary[] = probe("setup", () => Array.from({ length: 15 }, (_, project) =>

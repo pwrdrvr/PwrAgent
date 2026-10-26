@@ -6620,7 +6620,7 @@ describe("App", () => {
       }
       return response;
     };
-    await renderApp();
+    await act(async () => { render(<App />); });
     await screen.findByRole("heading", { level: 2, name: "First thread" });
     const row = screen.getByRole("button", { name: rapid ? "First thread" : "Double-click thread" });
     const card = row.closest(".thread-row")!;
@@ -6849,7 +6849,7 @@ describe("App", () => {
       }
       return response;
     };
-    await renderApp();
+    await act(async () => { render(<App />); });
 
     await screen.findByRole("heading", {
       level: 2,
@@ -7190,7 +7190,7 @@ describe("App", () => {
       }),
     });
 
-    await renderApp();
+    await act(async () => { render(<App />); });
 
     await screen.findByRole("heading", {
       level: 2,
