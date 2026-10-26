@@ -175,9 +175,14 @@ export function managedChildKeyFromCard(
   return buildThreadIdentityKey(childBackend, childId);
 }
 
+/** The exclusive upper bound of the ids that start with `prefix`, for a primary-key range. */
+function monitorIdPrefixEnd(prefix: string): string {
+  return prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+}
+
 /** The range of monitor ids reserved for Token Miser gate cards. */
 export const TOKEN_MISER_MONITOR_ID_PREFIX = "system:token-miser:";
-const TOKEN_MISER_MONITOR_ID_END = "system:token-miser;";
+const TOKEN_MISER_MONITOR_ID_END = monitorIdPrefixEnd(TOKEN_MISER_MONITOR_ID_PREFIX);
 
 export class ThreadSubAgentTable {
   private moved: boolean | undefined;
@@ -290,7 +295,7 @@ export class ThreadSubAgentTable {
 
   /** Cards whose `monitorId` starts with `prefix`, per thread, from the primary-key range. */
   listByMonitorIdPrefix(storageKeys: readonly string[], prefix: string): Map<string, ThreadSubAgentSummary[]> {
-    const end = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+    const end = monitorIdPrefixEnd(prefix);
     const statement = this.db.prepare(`SELECT card FROM thread_sub_agents
       WHERE thread_id = ? AND monitor_id >= ? AND monitor_id < ?
       ORDER BY created_at DESC, monitor_id`);

@@ -8612,6 +8612,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "recordThreadCompaction"
     | "readTokenMiserGatePricingLines"
     | "reconcileOrphanedThreadSubAgents"
+    | "moveLegacyThreadSubAgents"
     | "markThreadToolInvocationsNoisy"
     | "setThreadSpendAlertPending"
     | "persistThreadToolInvocationBoundary"
@@ -10824,6 +10825,8 @@ export class DesktopBackendRegistry {
     }
     const liveRuntimeInstanceIds = this.liveProfileRuntimeInstanceIds();
     if (!liveRuntimeInstanceIds) {
+      // The repair needs the live owners, but the one-time card move does not.
+      await this.overlayStore.moveLegacyThreadSubAgents?.();
       return;
     }
     const result = await reconcile.call(this.overlayStore, {
@@ -32888,18 +32891,19 @@ export class DesktopBackendRegistry {
     const monitorId = reviewSubAgentId(params.turnId);
     // The keyed card first; otherwise a review card that names this child
     // turn. Gate cards are never review cards, so they are not read.
-    const existing = await this.overlayStore.getThreadSubAgent({
+    const keyed = await this.overlayStore.getThreadSubAgent({
       backend: params.backend,
       threadId: params.parentThreadId,
       monitorId,
-    }) ?? (await this.overlayStore.listThreadSubAgents({
+    });
+    const existing = keyed ?? (await this.overlayStore.listThreadSubAgents({
       backend: params.backend,
       threadId: params.parentThreadId,
       excludeTokenMiser: true,
     })).find(
       (subAgent) =>
-        subAgent.monitorThreadId === params.reviewThreadId &&
-        subAgent.monitorTurnId === params.turnId,
+        subAgent.monitorThreadId === params.reviewThreadId
+        && subAgent.monitorTurnId === params.turnId,
     );
     if (!existing) {
       return false;

@@ -173,7 +173,7 @@ export class NavigationDetailService {
         values = summary.source === "codex"
           ? this.registry.mergeLiveTokenMiserSubAgents(summary.id, persisted)
           : persisted;
-        manifestRevision = await this.subAgentCollectionRevision(request.ref, summary);
+        manifestRevision = (await this.subAgentCollectionManifest(request.ref, summary)).revision;
       } else {
         const overlay = await store.getThreadOverlayState({ backend: summary.source, threadId: summary.id });
         values = name === "codexNativeSubAgents" ? summary.codexNativeSubAgents ?? []
@@ -294,13 +294,6 @@ export class NavigationDetailService {
       );
     }
     return response;
-  }
-
-  private async subAgentCollectionRevision(
-    ref: NavigationSelectedDetailRequest["ref"],
-    summary: { id: string; source: AppServerBackendKind },
-  ): Promise<string> {
-    return (await this.subAgentCollectionManifest(ref, summary)).revision;
   }
 
   /** Count and revision of the merged card collection, without reading stored cards. */

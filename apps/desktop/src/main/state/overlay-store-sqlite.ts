@@ -817,7 +817,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       // Token Miser gate card, are not in this index.
       const byThread = new Map<string, ThreadSubAgentSummary[]>();
       for (const { storageKey, card } of this.subAgentTable.listIncomplete()) {
-        byThread.set(storageKey, [...(byThread.get(storageKey) ?? []), card]);
+        const cards = byThread.get(storageKey);
+        if (cards) cards.push(card);
+        else byThread.set(storageKey, [card]);
       }
 
       for (const [storageKey, incomplete] of byThread) {
@@ -3863,10 +3865,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const storageKey = encodeThreadIdentityKeyForStorage(
       buildThreadIdentityKey(params.backend, params.threadId),
     );
+    // Immediate: the legacy-card check reads before it writes, and upgrading a
+    // read snapshot fails at once (SQLITE_BUSY_SNAPSHOT) if another instance
+    // committed in between.
     this.stateDb.raw.transaction(() => {
       this.subAgentTable.moveLegacyCards(storageKey);
       this.subAgentTable.upsert(storageKey, params.subAgents);
-    })();
+    }).immediate();
   }
 
   async getThreadSubAgent(params: {
