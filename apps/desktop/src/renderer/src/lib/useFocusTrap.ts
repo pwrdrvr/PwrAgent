@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
+import { isElementVisible as visible } from "./dom-visibility";
 
 /**
  * Everything tabbable, in DOM order. `tabindex="-1"` is filtered out below
@@ -28,28 +29,7 @@ const OPEN_POPUP_TRIGGER =
  * excluded it. `opacity` is left out on purpose: a control faded to 0
  * mid-transition is still a real control.
  */
-type VisibilityStyles = Map<HTMLElement, CSSStyleDeclaration>;
-
-function visible(el: HTMLElement, styles: VisibilityStyles): boolean {
-  if (typeof el.checkVisibility === "function") {
-    return el.checkVisibility({ visibilityProperty: true });
-  }
-  for (
-    let node: HTMLElement | null = el;
-    node !== null;
-    node = node.parentElement
-  ) {
-    let style = styles.get(node);
-    if (style === undefined) {
-      style = getComputedStyle(node);
-      styles.set(node, style);
-    }
-    if (style.display === "none" || style.visibility === "hidden") return false;
-  }
-  return true;
-}
-
-function isStop(el: HTMLElement, styles: VisibilityStyles): boolean {
+function isStop(el: HTMLElement, styles: Map<HTMLElement, CSSStyleDeclaration>): boolean {
   if (el.hasAttribute("disabled") || el.getAttribute("aria-hidden") === "true") {
     return false;
   }
@@ -87,35 +67,40 @@ function scrollsByKeyboard(el: HTMLElement): boolean {
 }
 
 /**
- * The dialog's Tab stops, in document order.
+ * The dialog's first and last Tab stops. The browser owns intermediate
+ * stops; finding the cycle's edges does not need every control's cascade.
  *
  * `scrollers: false` is for initial focus, which belongs on a control even
  * when a scroller comes first.
  */
-function tabbable(
+function tabEdges(
   root: HTMLElement | null,
   { scrollers = true }: { scrollers?: boolean } = {},
 ): HTMLElement[] {
   if (root === null) return [];
-  // Sibling controls share ancestors. Read each ancestor's cascade once per
-  // scan, and discard it before the next Tab so dynamic visibility stays live.
-  const styles: VisibilityStyles = new Map();
+  // Sibling controls share ancestors. Resolve each ancestor's cascade once
+  // during this scan, then discard it so the next Tab sees current styles.
+  const styles = new Map<HTMLElement, CSSStyleDeclaration>();
   if (!scrollers) {
-    return [...root.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => isStop(el, styles));
+    const first = [...root.querySelectorAll<HTMLElement>(TABBABLE)].find((el) => isStop(el, styles));
+    return first ? [first] : [];
   }
   const all = [...root.querySelectorAll<HTMLElement>("*")];
-  const stops = new Set(all.filter((el) => el.matches(TABBABLE) && isStop(el, styles)));
-  // Innermost first, as Chromium decides it: a scroller holding a stop, even
-  // another scroller, is not a stop itself.
-  const holders = [...stops];
-  for (let i = all.length - 1; i >= 0; i--) {
-    const el = all[i]!;
-    if (stops.has(el) || !scrollsByKeyboard(el) || !visible(el, styles)) continue;
-    if (holders.some((stop) => el.contains(stop))) continue;
-    stops.add(el);
-    holders.push(el);
-  }
-  return all.filter((el) => stops.has(el));
+  const stops = new Map<HTMLElement, boolean>();
+  const isTabStop = (el: HTMLElement): boolean => {
+    const cached = stops.get(el);
+    if (cached !== undefined) return cached;
+    // A scroller holding any other stop, including an inner scroller, is
+    // not itself a stop in Chromium. Only overflow candidates need that scan.
+    const stop = el.matches(TABBABLE) && isStop(el, styles)
+      || scrollsByKeyboard(el) && visible(el, styles)
+        && ![...el.querySelectorAll<HTMLElement>("*")].some(isTabStop);
+    stops.set(el, stop);
+    return stop;
+  };
+  const first = all.find(isTabStop);
+  if (!first) return [];
+  return [first, all.reverse().find(isTabStop)!];
 }
 
 type Trap = { containerRef: RefObject<HTMLElement | null> };
@@ -259,7 +244,7 @@ export function useFocusTrap({
     const container = containerRef.current;
     const target =
       initialFocusRef?.current
-      ?? tabbable(container, { scrollers: false })[0];
+      ?? tabEdges(container, { scrollers: false })[0];
     // A dialog with nothing tabbable still needs focus, or the first Tab
     // escapes it. Its container carries tabIndex={-1} for that case.
     (target ?? container)?.focus();
@@ -290,7 +275,7 @@ export function useFocusTrap({
       const root = containerRef.current;
       if (root === null) return;
       if (ownTabOrder && root.contains(document.activeElement)) return;
-      const list = tabbable(root);
+      const list = tabEdges(root);
       if (list.length === 0) {
         // Nothing to cycle through: hold focus on the container itself.
         event.preventDefault();

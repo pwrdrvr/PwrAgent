@@ -1,4 +1,5 @@
 import { act } from "@testing-library/react";
+import { isElementVisible, withVisibilityReadScope } from "../lib/dom-visibility";
 
 /**
  * Tab and Escape as the operator presses them, for jsdom.
@@ -20,15 +21,7 @@ const TABBABLE =
 function isTabStop(el: HTMLElement, styles: Map<HTMLElement, CSSStyleDeclaration>): boolean {
   if (el.tabIndex < 0 || el.hidden) return false;
   if (el.hasAttribute("disabled") || el.closest("[inert]") !== null) return false;
-  for (let node: HTMLElement | null = el; node !== null; node = node.parentElement) {
-    let style = styles.get(node);
-    if (style === undefined) {
-      style = getComputedStyle(node);
-      styles.set(node, style);
-    }
-    if (style.display === "none" || style.visibility === "hidden") return false;
-  }
-  return true;
+  return isElementVisible(el, styles);
 }
 
 export function documentTabStops(): HTMLElement[] {
@@ -53,39 +46,40 @@ function keydown(key: string, shiftKey: boolean): KeyboardEvent {
 export function pressTab({ shift = false }: { shift?: boolean } = {}): KeyboardEvent {
   const event = keydown("Tab", shift);
   if (event.defaultPrevented) return event;
-  // The active stop and its successor share ancestors. Cache only within
-  // this keypress, after handlers have made any synchronous visibility edits.
+  // Cache only within this keypress, after key handlers have committed
+  // visibility changes. The next stop does not need a whole-page selector scan.
   const styles = new Map<HTMLElement, CSSStyleDeclaration>();
-  const isCurrentStop = (el: HTMLElement) => isTabStop(el, styles);
-  const candidates = [...document.querySelectorAll<HTMLElement>(TABBABLE)];
+  const root = document.body;
   const active = document.activeElement as HTMLElement | null;
-  const at = active === null ? -1 : candidates.indexOf(active);
-  // Only the next stop needs a visibility check. Walking the entire page's
-  // computed styles on every Tab makes a trapped dialog pay for all the
-  // settings controls behind it, even though focus never reaches them.
-  let next: HTMLElement | undefined;
-  if (at !== -1 && active !== null && isCurrentStop(active)) {
-    const ordered = shift
-      ? [...candidates.slice(0, at).reverse(), ...candidates.slice(at).reverse()]
-      : [...candidates.slice(at + 1), ...candidates.slice(0, at + 1)];
-    next = ordered.find(isCurrentStop);
-  } else if (active === null || active === document.body) {
-    next = (shift ? candidates.reverse() : candidates).find(isCurrentStop);
-  } else if (shift) {
-    // Focus on something that is not a stop (a tabIndex={-1} container):
-    // Chromium continues from its position in the document. Its descendants
-    // follow it, and its ancestors do not precede it.
-    next = candidates
-      .filter((stop) =>
-        Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_PRECEDING)
-        && !stop.contains(active))
-      .reverse()
-      .find(isCurrentStop) ?? candidates.reverse().find(isCurrentStop);
-  } else {
-    next = candidates.find((stop) =>
-      Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING)
-      && isCurrentStop(stop))
-      ?? candidates.find(isCurrentStop);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  walker.currentNode = active && root.contains(active) ? active : root;
+  let wrapping = false;
+  const accepts = (node: Node): node is HTMLElement => {
+    const el = node as HTMLElement;
+    // A negative-tabindex container gives an origin, but its ancestors are
+    // not earlier stops when walking backwards from that origin.
+    return !(shift && !wrapping && active && active.tabIndex < 0 && el.contains(active))
+      && el.matches(TABBABLE) && isTabStop(el, styles);
+  };
+  const seek = (): HTMLElement | undefined => {
+    for (let node = shift ? walker.previousNode() : walker.nextNode(); node;
+      node = shift ? walker.previousNode() : walker.nextNode()) {
+      if (accepts(node)) return node;
+    }
+    return undefined;
+  };
+  let next = seek();
+  if (!next) {
+    wrapping = true;
+    if (shift) {
+      let last: Element = root;
+      while (last.lastElementChild) last = last.lastElementChild;
+      walker.currentNode = last;
+      next = accepts(last) ? last : seek();
+    } else {
+      walker.currentNode = root;
+      next = accepts(root) ? root : seek();
+    }
   }
   if (next === undefined) return event;
   act(() => {
@@ -115,16 +109,18 @@ export function walkTab(
   count = 60,
   { shift = false, stopAtCycle = false }: { shift?: boolean; stopAtCycle?: boolean } = {},
 ): Element[] {
-  const visited: Element[] = [];
-  const seen = stopAtCycle ? new Set([document.activeElement ?? document.body]) : undefined;
-  for (let i = 0; i < count; i++) {
-    pressTab({ shift });
-    const active = document.activeElement ?? document.body;
-    visited.push(active);
-    if (seen?.has(active)) break;
-    seen?.add(active);
-  }
-  return visited;
+  return withVisibilityReadScope(() => {
+    const visited: Element[] = [];
+    const seen = stopAtCycle ? new Set([document.activeElement ?? document.body]) : undefined;
+    for (let i = 0; i < count; i++) {
+      pressTab({ shift });
+      const active = document.activeElement ?? document.body;
+      visited.push(active);
+      if (seen?.has(active)) break;
+      seen?.add(active);
+    }
+    return visited;
+  });
 }
 
 /**
@@ -159,21 +155,22 @@ function describeStop(el: Element): string {
 }
 
 /**
- * Walks a complete focus cycle in each direction, up to `count` Tabs, with
- * sentinels around the page, and names every stop outside `dialog` that focus
- * reached. Repeating an already visited cycle adds no coverage. A trapped
- * dialog answers `{ forward: [], backward: [] }`.
+ * Walks `count` Tabs in each direction with sentinels around the page, and
+ * names every stop outside `dialog` that focus reached. A trapped dialog
+ * answers `{ forward: [], backward: [] }`. A cycle-only check can opt into
+ * stopping when focus first returns to a visited control.
  */
 export function tabEscapes(
   dialog: Element,
   count = 60,
+  { stopAtCycle = false }: { stopAtCycle?: boolean } = {},
 ): { forward: string[]; backward: string[] } {
   const sentinels = addTabSentinels();
   try {
     const outside = (visited: Element[]) =>
       visited.filter((el) => !dialog.contains(el)).map(describeStop);
-    const forward = outside(walkTab(count, { stopAtCycle: true }));
-    const backward = outside(walkTab(count, { shift: true, stopAtCycle: true }));
+    const forward = outside(walkTab(count, { stopAtCycle }));
+    const backward = outside(walkTab(count, { shift: true, stopAtCycle }));
     return { forward, backward };
   } finally {
     sentinels.remove();

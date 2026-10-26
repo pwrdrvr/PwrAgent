@@ -18,10 +18,30 @@ export class ServiceLinkGate {
   bytes = 0;
   private held = false;
   private readonly queue: Array<() => void> = [];
+  private readonly arrivals = new Set<() => void>();
 
   /** Frames of any kind waiting in the queue. */
   get pending(): number { return this.queue.length; }
   hold(): void { this.held = true; }
+  /** Wait for actual held frames; the test owns cancellation, not a polling clock. */
+  async waitForBytes(bytes: number, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    if (this.bytes >= bytes) return;
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        this.arrivals.delete(arrived);
+        signal.removeEventListener("abort", aborted);
+      };
+      const arrived = () => {
+        if (this.bytes < bytes) return;
+        cleanup();
+        resolve();
+      };
+      const aborted = () => { cleanup(); reject(signal.reason); };
+      this.arrivals.add(arrived);
+      signal.addEventListener("abort", aborted, { once: true });
+    });
+  }
   /** Deliver everything queued, as one round trip would, and keep holding. */
   flush(): void {
     this.bytes = 0;
@@ -34,6 +54,7 @@ export class ServiceLinkGate {
     if (!this.held || (!data && !this.queue.length)) { deliver(); return; }
     if (data) this.bytes += envelope.data.byteLength;
     this.queue.push(deliver);
+    if (data) for (const arrived of this.arrivals) arrived();
   }
 }
 

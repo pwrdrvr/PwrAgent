@@ -552,13 +552,17 @@ it("draws the director panel's tooltips above the panel", async () => {
     render(<><DirectorVoiceButton api={f.api} /><DirectorVoicePanel api={f.api} /></>);
     await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
     await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+    expect(directorPanel()).toHaveClass("director-voice-panel");
     const panelLayer = Number(getComputedStyle(directorPanel()!).zIndex);
     expect(panelLayer).toBeGreaterThan(0);
     for (const name of ["Director voice", "Mute microphone", "Copy transcript", "End director voice", "Resize director voice"]) {
-      fireEvent.mouseEnter(screen.getByRole("button", { name }));
+      const control = screen.getByRole("button", { name });
+      fireEvent.mouseEnter(control);
       const tooltip = await screen.findByRole("tooltip");
+      expect(tooltip).toHaveClass(name === "Director voice" ? "director-voice-card" : "director-voice-panel__tooltip");
+      expect(tooltip.parentElement).toBe(document.body);
       expect(Number(getComputedStyle(tooltip).zIndex), name).toBeGreaterThan(panelLayer);
-      fireEvent.mouseLeave(screen.getByRole("button", { name }));
+      fireEvent.mouseLeave(control);
       await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
     }
   } finally {

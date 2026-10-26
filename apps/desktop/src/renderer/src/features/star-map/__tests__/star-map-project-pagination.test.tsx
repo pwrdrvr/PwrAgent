@@ -21,7 +21,11 @@ afterEach(() => {
 });
 
 it.each(["local", "remote"])("renders 15 complete project clouds and three independent card pages for %s", async (owner) => {
-  window.localStorage.setItem("pwragent.starMap.viewPreferences", JSON.stringify({ layout: "orbit" }));
+  // Project identity is in the cloud labels. This pagination fixture keeps
+  // card metadata off; the real card-field rendering has its own tests.
+  window.localStorage.setItem("pwragent.starMap.viewPreferences", JSON.stringify({
+    layout: "orbit", cardFields: { primaryDirectory: false },
+  }));
   // Project 0 outruns one click's block, so a second click continues an
   // already-continued range. Every other project fits in one.
   const threads: NavigationThreadSummary[] = probe("setup", () => Array.from({ length: 15 }, (_, project) =>
@@ -51,15 +55,22 @@ it.each(["local", "remote"])("renders 15 complete project clouds and three indep
     } })),
     onAgentEvent: vi.fn(() => () => undefined),
   } as unknown as DesktopApi;
-  const view = render(<StarMapScreen desktopApi={api} sessionKeys={{}} localInstanceLabel="Local"
-    onOpenLocalThread={() => undefined} onFocusLocalInstance={() => undefined} />);
+  let view!: ReturnType<typeof render>;
+  await act(async () => {
+    view = render(<StarMapScreen desktopApi={api} sessionKeys={{}} localInstanceLabel="Local"
+      onOpenLocalThread={() => undefined} onFocusLocalInstance={() => undefined} />);
+  });
   await waitFor(() => expect(view.container.querySelectorAll(".star-map__cluster-label")).toHaveLength(15));
   await waitFor(() => expect(view.container.querySelectorAll('button[aria-label^="Load more project-"]')).toHaveLength(15));
   expect(read.mock.calls.filter(([request]) => request.query.kind === "star-map" && request.query.projectKey).length).toBe(15);
   const before = read.mock.calls.length;
-  fireEvent.click(view.container.querySelector('button[aria-label="Load more project-0 threads"]')!);
+  await act(async () => {
+    fireEvent.click(view.container.querySelector('button[aria-label="Load more project-0 threads"]')!);
+  });
   await waitFor(() => expect(view.container.querySelectorAll('[data-thread-key$="p0-c109"]')).toHaveLength(1));
-  fireEvent.click(view.container.querySelector('button[aria-label="Load more project-0 threads"]')!);
+  await act(async () => {
+    fireEvent.click(view.container.querySelector('button[aria-label="Load more project-0 threads"]')!);
+  });
   await waitFor(() => expect(view.container.querySelectorAll('[data-thread-key$="p0-c122"]')).toHaveLength(1));
   expect(view.container.querySelector('button[aria-label="Load more project-0 threads"]')).toBeNull();
   expect(view.container.querySelectorAll('[data-thread-key$="p0-c0"]')).toHaveLength(1);
