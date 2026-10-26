@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   CODEX_MODEL_PROVIDER_LIMIT,
   RESERVED_CODEX_MODEL_PROVIDER_IDS,
   isValidCodexModelProviderId,
+  suggestCodexModelProviderId,
   validateCodexModelProviders,
+  type CodexModelProviderImportCandidate,
+  type CodexModelProviderImportScan,
   type CodexModelProviderRate,
   type CodexModelProviderSettings,
   type CodexModelProviderTestResult,
@@ -32,6 +35,8 @@ type ProviderDraft = {
   discoverModels: boolean;
   local: boolean;
   rates: Record<string, RateDraft>;
+  /** The Codex config provider this draft was prefilled from. */
+  imported?: CodexModelProviderImportCandidate;
 };
 
 const EMPTY_RATE: RateDraft = { input: "", output: "", cached: "" };
@@ -46,10 +51,15 @@ const EMPTY_RATE: RateDraft = { input: "", output: "", cached: "" };
  *
  * The editor is an explicit-save form: Codex reconnects when a provider's
  * endpoint changes, so a half-typed URL must not be written on blur.
+ *
+ * On open, the section also lists the providers that Codex config files
+ * already define. Import prefills the add form; it copies no key.
  */
 export function CodexModelProvidersSettings(props: {
   desktopApi?: DesktopApi;
   providers: DesktopCodexModelProvider[];
+  /** Changes when the Codex homes change, so the import list is read again. */
+  codexHomesKey?: string;
   saving: boolean;
   onSave: (providers: CodexModelProviderSettings[]) => Promise<boolean>;
   onRefresh: () => Promise<void>;
@@ -58,6 +68,24 @@ export function CodexModelProvidersSettings(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [test, setTest] = useState<{ running: boolean; result?: CodexModelProviderTestResult; error?: string }>();
+  const [imports, setImports] = useState<CodexModelProviderImportScan>();
+  const scanImports = props.desktopApi?.scanCodexModelProviderImports;
+  useEffect(() => {
+    if (!scanImports) return;
+    let current = true;
+    scanImports().then(
+      (scan) => {
+        if (current) setImports(scan);
+      },
+      () => {
+        // Importing is an offer. Without the list, the form still works.
+        if (current) setImports(undefined);
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [scanImports, props.codexHomesKey]);
   const editing = draft
     ? props.providers.find((provider) => provider.id === draft.existingId)
     : undefined;
@@ -168,6 +196,10 @@ export function CodexModelProvidersSettings(props: {
 
   const disabled = props.saving || busy;
   const atLimit = props.providers.length >= CODEX_MODEL_PROVIDER_LIMIT;
+  // An endpoint that is already a provider has nothing left to import.
+  const importable = imports?.candidates.filter((candidate) =>
+    !props.providers.some((provider) => provider.baseUrl === candidate.baseUrl)) ?? [];
+  const skipped = imports?.skipped ?? [];
 
   return (
     <SettingsSection
@@ -214,6 +246,54 @@ export function CodexModelProvidersSettings(props: {
           </div>
         ) : null}
       </div>
+      {!draft && (importable.length || skipped.length) ? (
+        <div
+          aria-label="Providers in Codex config files"
+          className="settings-paths codex-provider-imports"
+          role="group"
+        >
+          <p className="codex-provider-imports__title">In Codex config files</p>
+          {importable.map((candidate) => (
+            <SettingsPathRow
+              key={candidate.baseUrl}
+              title={candidate.name}
+              meta={candidate.sources.map((source) => source.label).join(", ")}
+              path={candidate.baseUrl}
+              chips={importChips(candidate)}
+              selected={false}
+              extraAction={
+                <button
+                  aria-label={`Import ${candidate.name}`}
+                  className="button button--secondary"
+                  disabled={disabled || atLimit}
+                  title={candidate.sources.map((source) => source.configPath).join("\n")}
+                  type="button"
+                  onClick={() => {
+                    setDraft(draftFromImport(candidate, new Set(props.providers.map((provider) => provider.id))));
+                    setError(undefined);
+                    setTest(undefined);
+                  }}
+                >
+                  Import
+                </button>
+              }
+            />
+          ))}
+          {skipped.length ? (
+            <ul aria-label="Not importable" className="codex-provider-imports__skipped">
+              {skipped.map((skip) => (
+                <li key={`${skip.sourceId ?? ""}\n${skip.reason}`}>
+                  <strong>{skip.name ?? skip.sourceId ?? skip.sources[0]?.configPath}</strong>
+                  {" · "}
+                  {skip.sources.map((source) => source.label).join(", ")}
+                  {": "}
+                  {skip.reason}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
       {draft ? (
         <ProviderEditor
           draft={draft}
@@ -257,7 +337,9 @@ function ProviderEditor(props: {
     ? draft.removeKey
       ? "The stored key is removed when you save."
       : "A key is stored. Leave blank to keep it."
-    : "Stored in the system keychain. Codex receives it in its environment; commands a model runs do not.";
+    : draft.imported?.needsApiKey
+      ? `Codex ${draft.imported.apiKeyEnv ? `read it from $${draft.imported.apiKeyEnv}` : "sent a key"}. Keys are not copied from files, so paste it here. It is stored in the system keychain.`
+      : "Stored in the system keychain. Codex receives it in its environment; commands a model runs do not.";
 
   return (
     <div
@@ -265,6 +347,14 @@ function ProviderEditor(props: {
       className="settings-fields codex-provider-editor"
       role="group"
     >
+      {draft.imported ? (
+        <p className="settings-field__help">
+          {[
+            `Imported from ${draft.imported.sources.map((source) => source.configPath).join(", ")}.`,
+            ...draft.imported.notes,
+          ].join(" ")}
+        </p>
+      ) : null}
       <SettingsField
         label="Name"
         sub="Shown in model pickers, as in Refuseless · GLM 5.3."
@@ -579,6 +669,45 @@ function providerChips(provider: DesktopCodexModelProvider): SettingsPathRowChip
       ? { key: "price", label: `${provider.rates.length} rate${provider.rates.length === 1 ? "" : "s"}`, tone: "muted" }
       : { key: "price", label: "unpriced", tone: "warn", title: "Usage is recorded without a cost until rates are entered" });
   return chips;
+}
+
+function importChips(candidate: CodexModelProviderImportCandidate): SettingsPathRowChip[] {
+  const chips: SettingsPathRowChip[] = [];
+  if (candidate.models.length) {
+    chips.push({
+      key: "models",
+      label: candidate.models.length === 1 ? "1 model" : `${candidate.models.length} models`,
+      tone: "muted",
+      title: candidate.models.join("\n"),
+    });
+  }
+  if (candidate.local) chips.push({ key: "local", label: "local", tone: "muted" });
+  if (candidate.needsApiKey) {
+    chips.push({
+      key: "key",
+      label: "needs key",
+      tone: "warn",
+      title: "Keys are not copied from files. Paste it in the form.",
+    });
+  }
+  return chips;
+}
+
+function draftFromImport(
+  candidate: CodexModelProviderImportCandidate,
+  takenIds: ReadonlySet<string>,
+): ProviderDraft {
+  return {
+    ...emptyDraft(),
+    name: candidate.name,
+    // The Codex key, such as `bonsai`, reads better than a slug of the name.
+    id: suggestCodexModelProviderId(candidate.sourceId, takenIds),
+    idEdited: true,
+    baseUrl: candidate.baseUrl,
+    models: candidate.models.join("\n"),
+    local: candidate.local,
+    imported: candidate,
+  };
 }
 
 function emptyDraft(): ProviderDraft {

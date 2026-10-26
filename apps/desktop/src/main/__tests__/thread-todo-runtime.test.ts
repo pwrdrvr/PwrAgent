@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HandoffSourceSettings } from "../app-server/backend-registry";
-import type { ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
+import type { CreateInstanceThreadResult, ListInstanceProjectsResult, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
+import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
 import {
   createThreadTodoRunners,
   setThreadTodoProject,
@@ -130,6 +132,7 @@ describe("thread to-do Start thread", () => {
             ok: true as const,
             data: {
               instanceLabel: "Studio",
+              complete: true,
               projects: [{ key: "peer-repo", label: "repo", path: "/peer/repo", kind: "directory" }],
             },
           }
@@ -163,6 +166,85 @@ describe("thread to-do Start thread", () => {
     expect(created?.args).toMatchObject({ executionMode: "full-access" });
     expect(created?.args).not.toHaveProperty("model");
     expect(created?.args).not.toHaveProperty("reasoningEffort");
+  });
+});
+
+describe("thread to-do Start thread on project pagination", () => {
+  const project = { key: "local-repo", label: "repo", path: "/local/repo" };
+  const peerProject = { key: "peer-repo", label: "repo", path: "/peer/repo", kind: "directory" as const, hasLaunchpad: true };
+
+  function setup(readPage: (cursor?: string) => Partial<ListInstanceProjectsResult>) {
+    const { registry } = fakeRegistry(FULL_ACCESS_SOL);
+    const federation = vi.fn<PwrAgentFederationHandler>(async (request) => {
+      if (request.operation === "list_instance_projects") {
+        // Enforce the owner's contract; the former permissive mock hid limit: 500.
+        expect(request.args.limit).toBeGreaterThan(0);
+        expect(request.args.limit).toBeLessThanOrEqual(NAVIGATION_QUERY_MAX_PAGE_ROWS);
+        return { ok: true, data: {
+          instanceId: "peer", instanceLabel: "Studio", isLocal: false,
+          projects: [], complete: true, ...readPage(request.args.cursor),
+        } as ListInstanceProjectsResult };
+      }
+      if (request.operation !== "create_instance_thread") throw new Error("Unexpected operation");
+      return { ok: true, data: {
+        backend: "codex", threadId: "peer-thread", isLocal: false, instanceId: "peer", instanceLabel: "Studio",
+      } as CreateInstanceThreadResult };
+    });
+    const runners = createThreadTodoRunners({ registry: registry as unknown as ThreadTodoRunnerRegistry, federation });
+    const run = () => runners.startThreadOnInstance!({
+      instanceId: "peer", sourceBackend: "codex", sourceThreadId: "source-thread", project,
+      crossProject: false, action: { type: "start_thread", prompt: "Go" },
+    });
+    return { run, federation };
+  }
+
+  it("finds the destination beyond 500 projects using bounded cursor pages", async () => {
+    const projects = [
+      ...Array.from({ length: 600 }, (_, index) => ({ ...peerProject, key: `other-${index}`, label: `other-${index}`, path: `/peer/other-${index}` })),
+      peerProject,
+    ];
+    const { run, federation } = setup((cursor) => {
+      const offset = Number(cursor ?? 0);
+      const end = offset + NAVIGATION_QUERY_MAX_PAGE_ROWS;
+      return { projects: projects.slice(offset, end), complete: end >= projects.length,
+        ...(end < projects.length ? { nextCursor: String(end) } : {}) };
+    });
+    await expect(run()).resolves.toMatchObject({ threadId: "peer-thread" });
+    expect(federation.mock.calls.filter(([request]) => request.operation === "list_instance_projects")).toHaveLength(7);
+    expect(federation).toHaveBeenLastCalledWith(expect.objectContaining({
+      operation: "create_instance_thread", args: expect.objectContaining({ projectKey: peerProject.key }),
+    }));
+  });
+
+  it("reads empty filtered pages and preserves label priority across pages", async () => {
+    const { run, federation } = setup((cursor) => cursor === "last"
+      ? { projects: [peerProject] }
+      : cursor === "empty"
+        ? { projects: [], complete: false, nextCursor: "last" }
+        : { projects: [{ ...peerProject, key: "fallback", label: "Other label" }], complete: false, nextCursor: "empty" });
+    await run();
+    expect(federation).toHaveBeenLastCalledWith(expect.objectContaining({
+      operation: "create_instance_thread", args: expect.objectContaining({ projectKey: peerProject.key }),
+    }));
+  });
+
+  it.each([
+    { complete: false },
+    { complete: false, nextCursor: "stuck" },
+    { complete: true, nextCursor: "contradiction" },
+  ])("refuses an incomplete or non-advancing listing: %j", async (page) => {
+    const { run, federation } = setup(() => ({ projects: [peerProject], ...page }));
+    await expect(run()).rejects.toThrow(/project.*(complete|advance)/i);
+    expect(federation.mock.calls.some(([request]) => request.operation === "create_instance_thread")).toBe(false);
+  });
+
+  it("propagates a later page failure without starting from partial results", async () => {
+    const { run, federation } = setup((cursor) => {
+      if (cursor) throw new Error("peer disconnected");
+      return { projects: [peerProject], complete: false, nextCursor: "next" };
+    });
+    await expect(run()).rejects.toThrow("peer disconnected");
+    expect(federation.mock.calls.some(([request]) => request.operation === "create_instance_thread")).toBe(false);
   });
 });
 

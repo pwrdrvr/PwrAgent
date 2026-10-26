@@ -4013,6 +4013,18 @@ describe("federation backend bridge", () => {
         mode: "conversation" as const,
         updatedAt: 1_500,
       })),
+      previewThreadRewind: vi.fn(async () => ({
+        backend: "claude" as const,
+        threadId: "claude-1",
+        target: { messageId: "user:turn-2", turnId: "turn-2" },
+        files: { paths: ["src/a.ts"], insertions: 3, deletions: 1 },
+      })),
+      undoThreadRewind: vi.fn(async () => ({
+        backend: "claude" as const,
+        threadId: "claude-1",
+        rewindId: "rewind-1",
+        updatedAt: 1_600,
+      })),
       listMcpConnections: vi.fn(),
       readThreadMcpConnections: vi.fn(),
       setThreadMcpConnections: vi.fn(),
@@ -4175,6 +4187,36 @@ describe("federation backend bridge", () => {
     await router.routeEnvelope({
       sourcePeerId: "gateway_one",
       envelope: {
+        id: "rewind-preview-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.previewThreadRewind,
+        params: {
+          backend: "claude",
+          threadId: "claude-1",
+          target: { messageId: "user:turn-2", turnId: "turn-2" },
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_006,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "rewind-undo-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.undoThreadRewind,
+        params: { backend: "claude", threadId: "claude-1", rewindId: "rewind-1" },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_007,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
         id: "mcp-inventory-request",
         kind: "request",
         method: FEDERATION_BACKEND_METHODS.listThreadMcpServers,
@@ -4292,6 +4334,11 @@ describe("federation backend bridge", () => {
       target: { messageId: "user-2", turnId: "turn-2" },
       mode: "conversation",
     });
+    expect(backend.undoThreadRewind).toHaveBeenCalledWith({
+      backend: "claude",
+      threadId: "claude-1",
+      rewindId: "rewind-1",
+    });
     expect(backend.listThreadMcpServers).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-1",
@@ -4350,6 +4397,16 @@ describe("federation backend bridge", () => {
         kind: "response",
         requestId: "rewind-request",
         result: { mode: "conversation", updatedAt: 1_500 },
+      },
+      {
+        kind: "response",
+        requestId: "rewind-preview-request",
+        result: { files: { paths: ["src/a.ts"], insertions: 3, deletions: 1 } },
+      },
+      {
+        kind: "response",
+        requestId: "rewind-undo-request",
+        result: { rewindId: "rewind-1", updatedAt: 1_600 },
       },
       {
         kind: "response",
@@ -4471,6 +4528,8 @@ describe("federation backend bridge", () => {
         sendScheduledThreadActionNow: vi.fn(),
         compactThread: vi.fn(),
         rewindThread: vi.fn(),
+        previewThreadRewind: vi.fn(),
+        undoThreadRewind: vi.fn(),
         listMcpConnections: vi.fn(),
       readThreadMcpConnections: vi.fn(),
       setThreadMcpConnections: vi.fn(),

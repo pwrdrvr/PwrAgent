@@ -176,8 +176,12 @@ import type {
   SetThreadMcpConnectionsResponse,
   RemoveCodexMcpServerRequest,
   RemoveCodexMcpServerResponse,
+  PreviewThreadRewindRequest,
+  PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
+  UndoThreadRewindRequest,
+  UndoThreadRewindResponse,
   StartCodexMcpServerLoginRequest,
   StartCodexMcpServerLoginResponse,
   LatestCodexConfigWarningResponse,
@@ -562,6 +566,7 @@ import type {
   SetCodexModelProviderApiKeyResponse,
   TestCodexModelProviderRequest,
   CodexModelProviderTestResult,
+  CodexModelProviderImportScan,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
   RecordComposerDraftHistoryResponse,
@@ -705,7 +710,9 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
   AGENT_REWIND_THREAD_CHANNEL,
+  AGENT_UNDO_THREAD_REWIND_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -1041,6 +1048,7 @@ import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL,
   SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL,
+  SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
@@ -1872,6 +1880,8 @@ const desktopApi = Object.freeze({
     request: TestCodexModelProviderRequest,
   ): Promise<CodexModelProviderTestResult> =>
     await ipcRenderer.invoke(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL, request),
+  scanCodexModelProviderImports: async (): Promise<CodexModelProviderImportScan> =>
+    await ipcRenderer.invoke(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL),
   createCodexAuthProfile: async (
     request: CreateDesktopCodexAuthProfileRequest,
   ): Promise<CreateDesktopCodexAuthProfileResponse> =>
@@ -2426,10 +2436,18 @@ const desktopApi = Object.freeze({
     request: SteerTurnRequest
   ): Promise<SteerTurnResponse> =>
     await ipcRenderer.invoke(AGENT_STEER_TURN_CHANNEL, request),
+  previewThreadRewind: async (
+    request: PreviewThreadRewindRequest,
+  ): Promise<PreviewThreadRewindResponse> =>
+    await ipcRenderer.invoke(AGENT_PREVIEW_THREAD_REWIND_CHANNEL, request),
   rewindThread: async (
     request: RewindThreadRequest,
   ): Promise<RewindThreadResponse> =>
     await ipcRenderer.invoke(AGENT_REWIND_THREAD_CHANNEL, request),
+  undoThreadRewind: async (
+    request: UndoThreadRewindRequest,
+  ): Promise<UndoThreadRewindResponse> =>
+    await ipcRenderer.invoke(AGENT_UNDO_THREAD_REWIND_CHANNEL, request),
   configureGrokWorkflowBudget: async (
     request: ConfigureGrokWorkflowBudgetRequest,
   ): Promise<ConfigureGrokWorkflowBudgetResponse> =>

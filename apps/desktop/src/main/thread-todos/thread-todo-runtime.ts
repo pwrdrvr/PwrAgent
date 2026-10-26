@@ -10,7 +10,7 @@ import type {
   ThreadTodoProject,
   ThreadTodosChangedEvent,
 } from "@pwragent/shared";
-import { DEFAULT_THREAD_TODO_MERGE_METHOD } from "@pwragent/shared";
+import { DEFAULT_THREAD_TODO_MERGE_METHOD, NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
@@ -473,14 +473,30 @@ export function createThreadTodoRunners(params: {
               backend: sourceBackend,
               threadId: sourceThreadId,
             };
-            const listed = await federation({
-              operation: "list_instance_projects",
-              context,
-              args: { instanceId, limit: 500 },
-            });
-            if (!listed.ok) throw new Error(listed.error.message);
-            const projects = listed.data as ListInstanceProjectsResult;
-            const counterpart = findPeerThreadTodoProject(project, projects.projects);
+            // Match against the complete list, including label matches that
+            // take precedence over a folder-name fallback on an earlier page.
+            const candidates: ListInstanceProjectsResult["projects"] = [];
+            const cursors = new Set<string>();
+            let cursor: string | undefined;
+            let projects: ListInstanceProjectsResult;
+            do {
+              const listed = await federation({
+                operation: "list_instance_projects",
+                context,
+                args: { instanceId, limit: NAVIGATION_QUERY_MAX_PAGE_ROWS, ...(cursor ? { cursor } : {}) },
+              });
+              if (!listed.ok) throw new Error(listed.error.message);
+              projects = listed.data as ListInstanceProjectsResult;
+              if (typeof projects.complete !== "boolean" || projects.complete === Boolean(projects.nextCursor)) {
+                throw new Error("The peer project listing is not complete and cannot be continued.");
+              }
+              candidates.push(...projects.projects);
+              if (projects.complete) break;
+              cursor = projects.nextCursor!;
+              if (cursors.has(cursor)) throw new Error("The peer project listing cursor did not advance.");
+              cursors.add(cursor);
+            } while (cursor);
+            const counterpart = findPeerThreadTodoProject(project, candidates);
             if (!counterpart) {
               throw new Error(`${projects.instanceLabel} has no project named ${project.label}.`);
             }

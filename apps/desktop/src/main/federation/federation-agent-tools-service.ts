@@ -43,10 +43,12 @@ import {
   buildThreadUrl,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
+  NAVIGATION_QUERY_MAX_PAGE_ROWS,
   resolveModelOptionReference,
   THREAD_ENVIRONMENT_NONE,
 } from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
+import { normalizePwrAgentFederationRequest } from "../agent-tools/pwragent-federation-agent-tools";
 import { listCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { describeCreatedThreadEnvironment } from "../app-server/created-thread-environment";
 import { getMainLogger } from "../log";
@@ -150,6 +152,9 @@ export function createFederationAgentToolsHandler(
   const cursors = new Map<string, InstanceListCursorEntry>();
   return async (request) => {
     try {
+      const normalized = normalizePwrAgentFederationRequest(request);
+      if (!normalized.ok) return normalized;
+      request = normalized.request;
       if (request.operation === "advertise_service") return ok(await runtime().threadServices().advertise(request.context, request.args));
       if (request.operation === "list_services") return ok({ services: await runtime().threadServices().list(request.context) });
       if (request.operation === "remove_service") {
@@ -402,7 +407,7 @@ async function listInstanceProjects(
   const [page, backends] = await Promise.all([
     readInstanceNavigation(runtime, instance, {
       protocol: 2, inventory: "owner", consumer: "agent-tool", query: { kind: "directory-index" },
-      pageSize: args.limit ?? 100, cursor: args.cursor,
+      pageSize: args.limit ?? NAVIGATION_QUERY_MAX_PAGE_ROWS, cursor: args.cursor,
     }),
     listInstanceBackends(backendFor(runtime, instance)),
   ]);

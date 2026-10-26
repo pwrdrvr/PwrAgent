@@ -28,6 +28,7 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadQuestionnaireActivity,
+  ThreadRewindRecord,
   ThreadTurnFailure,
   ThreadSubAgentSummary,
   MarkdownFileViewerContext,
@@ -41,6 +42,13 @@ import {
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
+import {
+  injectRewindMarkers,
+  isRewindMarkerEntry,
+  REWIND_MARKER_ENTRY_PREFIX,
+  undoableRewindId,
+} from "./rewind-marker-entries";
+import { TranscriptRewindMarker } from "./TranscriptRewindMarker";
 import { injectTurnFailures } from "./turn-failure-entries";
 import { capAtTurnAnswer } from "./turn-answer-placement";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -90,6 +98,14 @@ type TranscriptListProps = {
     openMessageId?: string;
     confirmation?: ReactNode;
     onOpen: (message: AppServerThreadMessageEntry) => void;
+  };
+  /** The thread's rewinds, each drawn as a marker where its turns were. */
+  rewinds?: ThreadRewindRecord[];
+  /** Undo for the latest rewind, where its provider kept the removed turns. */
+  rewindUndo?: {
+    busyId?: string;
+    disabledReason?: string;
+    onUndo: (rewindId: string) => void;
   };
   activeTurnId?: string;
   activeTurnStartedAt?: number;
@@ -669,6 +685,15 @@ function ApprovalDiffDisclosures(props: {
   );
 }
 
+/**
+ * The element to scroll to or measure for a `.transcript-list__item`. The
+ * item is `display: contents` and has no box, so Chromium ignores
+ * scrollIntoView on it and its rect is empty. The entry it holds has one.
+ */
+export function transcriptItemBox(item: Element): Element {
+  return item.firstElementChild ?? item;
+}
+
 export function TranscriptList(props: TranscriptListProps) {
   const pendingAssistantPreview = usePendingMarkdownPreview(props.threadId, props.pendingAssistantMessage);
   const skills = props.skills ?? EMPTY_SKILLS;
@@ -680,7 +705,9 @@ export function TranscriptList(props: TranscriptListProps) {
   const bottomFollowFrameRef = useRef<number | undefined>(undefined);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
   const savedViewportsRef = useRef(new Map<string, TranscriptViewport>());
-  const appliedReglueRequestKeyRef = useRef(0);
+  // A remount can restore a reading position after an earlier send. Only a
+  // request issued while this transcript is mounted should override it.
+  const appliedReglueRequestKeyRef = useRef(props.reglueRequestKey);
   const olderPageRequestPendingRef = useRef(false);
   const olderPageRequestGenerationRef = useRef(0);
   const lastUnderflowHistoryRequestRef = useRef<string | undefined>(undefined);
@@ -863,15 +890,18 @@ export function TranscriptList(props: TranscriptListProps) {
     // after that turn's total would leave the total mid-turn, so the rendered
     // list ends with each total back at the end of its turn.
     return anchorTurnUsageEntries(
-      injectTurnFailures(
-        injectQuestionnaireActivities(
-          injectMessagingBindingTransitions(
-            injectPermissionTransitions(entries, props.permissionTransitions),
-            props.messagingBindingTransitions,
+      injectRewindMarkers(
+        injectTurnFailures(
+          injectQuestionnaireActivities(
+            injectMessagingBindingTransitions(
+              injectPermissionTransitions(entries, props.permissionTransitions),
+              props.messagingBindingTransitions,
+            ),
+            props.questionnaireActivities,
           ),
-          props.questionnaireActivities,
+          props.turnFailures,
         ),
-        props.turnFailures,
+        props.rewinds,
       ),
     );
   }, [
@@ -887,7 +917,12 @@ export function TranscriptList(props: TranscriptListProps) {
     props.permissionTransitions,
     props.questionnaireActivities,
     props.turnFailures,
+    props.rewinds,
   ]);
+  const undoableRewind = useMemo(
+    () => props.rewindUndo ? undoableRewindId(transcriptEntries, props.rewinds) : undefined,
+    [props.rewindUndo, props.rewinds, transcriptEntries],
+  );
   // Replies to Codex async questions, keyed by the question they name. The
   // window is a contiguous tail, so a reply to any visible question is here.
   // The string key keeps the map, and every row it reaches, stable until a
@@ -1210,7 +1245,7 @@ export function TranscriptList(props: TranscriptListProps) {
       handledLinkedMessageRequestRef.current = requestKey;
       linkedMessageHistoryRequestRef.current = undefined;
       disableBottomGlue();
-      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      transcriptItemBox(target).scrollIntoView({ behavior: "smooth", block: "center" });
       setHighlightedMessageId(messageId);
       onLinkedMessageHandled?.();
       return;
@@ -1549,6 +1584,18 @@ export function TranscriptList(props: TranscriptListProps) {
                   onToggle={() => {
                     toggleCommentaryGroup(item.id);
                   }}
+                />
+              ) : isRewindMarkerEntry(item.entry) && item.entry.type === "activity" ? (
+                <TranscriptRewindMarker
+                  label={item.entry.summary}
+                  undo={props.rewindUndo
+                    && item.entry.id === `${REWIND_MARKER_ENTRY_PREFIX}${undoableRewind}`
+                    ? {
+                        busy: props.rewindUndo.busyId === undoableRewind,
+                        disabledReason: props.rewindUndo.disabledReason,
+                        onUndo: () => props.rewindUndo?.onUndo(undoableRewind!),
+                      }
+                    : undefined}
                 />
               ) : item.entry.type === "activity" ? (
                 <TranscriptActivity

@@ -1,10 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  getSessionInfo, query, type AccountInfo, type Options, type Query, type SDKMessage, type SDKResultMessage, type SDKUserMessage,
-  type SlashCommand,
+  getSessionInfo, getSessionMessages, query, type AccountInfo, type Options, type Query, type SDKMessage,
+  type SDKResultMessage, type SDKUserMessage, type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AgentEvent, AppServerAvailableCommandSummary, AppServerBackgroundTask, AppServerCollaborationModeRequest,
@@ -12,7 +12,7 @@ import type {
   AppServerThreadActivityEntry, AppServerThreadEntry, AppServerThreadMessageEntry, AppServerThreadMessagePart, AppServerThreadPlanEntry,
   AppServerThreadPlanStep, AppServerThreadReplay, AppServerThreadReviewEntry, AppServerThreadSummary,
   AppServerTurnInputItem, BackendModelOption, LinkedDirectorySummary, BackendRateLimitSummary, BackendSummary, ThreadExecutionMode,
-  CodexMcpServerSummary, SteerTurnDelivery, UsageLimitObservation,
+  CodexMcpServerSummary, PreviewThreadRewindResponse, SteerTurnDelivery, ThreadRewindMode, ThreadRewindTarget, UsageLimitObservation,
 } from "@pwragent/shared";
 import { getMainLogger } from "../log";
 import { resolveActiveProfilePath } from "../profile";
@@ -27,6 +27,7 @@ import {
   mergeClaudeStreamRateLimits, nextClaudeRateLimitReset,
 } from "./claude-usage";
 import { claudeCommandActivity, groupClaudeActivities } from "./claude-activity";
+import { backUpRewindFiles, recordRewoundFiles, restoreRewindFiles } from "./claude-rewind-backup";
 import { ClaudeSessionStore, type ClaudeSession } from "./claude-session-store";
 import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./claude-tasks";
 import { CLAUDE_TODO_TOOL, claudeFileDiff, claudeTodoSteps, claudeToolDetail, claudeTurnDiff } from "./claude-tool-activity";
@@ -41,6 +42,7 @@ export type ClaudeBackendOptions = {
   store?: ClaudeSessionStore;
   query?: typeof query;
   getSessionInfo?: typeof getSessionInfo;
+  getSessionMessages?: typeof getSessionMessages;
   inspectInstallation?: typeof inspectClaudeInstallation;
   discoverModels?: typeof discoverClaudeModels;
   readCommands?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<SlashCommand[]>;
@@ -52,6 +54,8 @@ export type ClaudeBackendOptions = {
   taskFollowUpGraceMs?: number;
   /** Overrides CLAUDE_INTERRUPT_GRACE_MS. */
   interruptGraceMs?: number;
+  /** Overrides CLAUDE_REWIND_PREVIEW_TIMEOUT_MS. */
+  rewindPreviewTimeoutMs?: number;
   /** Workspace, branch, and pull request for a review card. Never fails a review. */
   resolveReviewContext?: (params: { threadId: string; cwd: string }) => Promise<AppServerReviewContext | undefined>;
 };
@@ -93,6 +97,12 @@ const CLAUDE_TASK_FOLLOW_UP_GRACE_MS = 5_000;
  * locally. The process stays up either way, for the tasks it runs.
  */
 const CLAUDE_INTERRUPT_GRACE_MS = 5_000;
+
+/**
+ * How long the confirmation waits for Claude's file dry run. The confirm
+ * button waits on it, so a CLI that never answers must not hold it forever.
+ */
+const CLAUDE_REWIND_PREVIEW_TIMEOUT_MS = 30_000;
 
 /** The CLI drops queued messages along with the interrupted turn. */
 const CLAUDE_INTERRUPT_CANCEL_QUEUED = "interrupt_cancel_queued_v1";
@@ -320,6 +330,11 @@ function claudeSessionConfig(params: ClaudeTurnParams, session: ClaudeSession): 
   };
 }
 
+/** A turn's id is a v4 UUID, and doubles as its prompt's SDK UUID. */
+function claudePromptUuid(turn: RunningTurn): NonNullable<SDKUserMessage["uuid"]> {
+  return turn.turnId as NonNullable<SDKUserMessage["uuid"]>;
+}
+
 /** A session read before the turn has no baseline yet; the caller sets it. */
 function claudeTurn(session?: ClaudeSession, followUp = false): RunningTurn {
   return {
@@ -362,6 +377,13 @@ export class ClaudeBackend {
   private readonly sessions = new Map<string, LiveSession>();
   /** Threads whose first turn is reading its session, before a query exists. */
   private readonly starting = new Map<string, AbortController>();
+  /** Threads a rewind is changing; a message for one waits in the queue. */
+  private readonly rewinding = new Set<string>();
+  /**
+   * Control queries a rewind runs against a thread's session. A turn waits
+   * for them to close, so two CLI processes never resume one session.
+   */
+  private readonly rewindQueries = new Map<string, Promise<void>>();
   /**
    * Releases a relaunched session hands to its successor: the turn that
    * relaunched it registered the thread's MCP grants again, sharing them.
@@ -428,7 +450,7 @@ export class ClaudeBackend {
       unavailableReason: available ? undefined : this.installation.message,
       methods: [],
       capabilities: {
-        listThreads: true, createThread: true, resumeThread: true, renameThread: true,
+        listThreads: true, createThread: true, forkThread: true, resumeThread: true, renameThread: true,
         readThread: true, startTurn: true, interruptTurn: true, steerTurn: true,
         interruptSteerTurn: true,
         archiveThread: true, restoreThread: true, archiveWorktree: false,
@@ -437,6 +459,8 @@ export class ClaudeBackend {
         // Claude runs no reviews itself, but this owner accepts a run mode
         // for a Claude thread whose review runs on another provider.
         reviewRunMode: true,
+        // File checkpoints restore what Edit, Write, and NotebookEdit changed.
+        threadRewind: { files: true, undo: true },
       },
       executionModes: [
         { mode: "default", label: "Default", available: true, isDefault: true },
@@ -481,6 +505,46 @@ export class ClaudeBackend {
         workspaceHandoff: { available: false, unavailableReason: "Start a new Claude thread in the target workspace." },
       },
     });
+    return { threadId: id };
+  }
+
+  /**
+   * A new thread that continues another's conversation. It copies the
+   * source's history, and its first message resumes the source's Claude
+   * session with `forkSession`, in the fork's own workspace.
+   */
+  async forkThread(params: {
+    sourceThreadId: string; cwd: string; model?: string; executionMode: ThreadExecutionMode;
+    linkedDirectories?: AppServerThreadSummary["linkedDirectories"];
+  }): Promise<{ threadId: string }> {
+    await this.requireInstallation();
+    // A running turn's entries are unfinished, and would stay so in the fork.
+    const live = this.sessions.get(params.sourceThreadId);
+    if (live?.turn || (!live && this.starting.has(params.sourceThreadId))) {
+      throw new Error("Wait for the active Claude turn to finish before forking.");
+    }
+    const source = await this.store.read(params.sourceThreadId);
+    // A fork that has not sent a message yet still continues its source's session.
+    const forkFromSdkSessionId = source.sdkSessionId ?? source.forkFromSdkSessionId;
+    if (!forkFromSdkSessionId) throw new Error("This Claude thread has no conversation to fork yet.");
+    const id = randomUUID();
+    const now = Date.now();
+    await this.store.save({
+      cwd: params.cwd,
+      thread: {
+        id, source: "claude", title: `${source.thread.title} (fork)`, titleSource: "derived",
+        createdAt: now, updatedAt: now, model: params.model ?? source.thread.model, executionMode: params.executionMode,
+        linkedDirectories: params.linkedDirectories ?? [{ id: params.cwd, kind: "local", label: path.basename(params.cwd), path: params.cwd }],
+        workspaceHandoff: { available: false, unavailableReason: "Start a new Claude thread in the target workspace." },
+      },
+      forkFromSdkSessionId,
+      // A pending rewind point is where the source's conversation continues.
+      ...(source.resumeSessionAt ? { resumeSessionAt: source.resumeSessionAt } : {}),
+      ...(source.contextWindow ? { contextWindow: source.contextWindow } : {}),
+      // The fork keeps the source's name; it never asks Claude for another.
+      titleGenerationAttempted: true,
+    });
+    await this.store.append(id, await this.store.entries(params.sourceThreadId));
     return { threadId: id };
   }
 
@@ -574,6 +638,14 @@ export class ClaudeBackend {
 
   private async startTurnInSession(params: ClaudeTurnParams): Promise<ClaudeTurnStart> {
     for (;;) {
+      if (this.rewinding.has(params.threadId)) {
+        throw new ClaudeTurnActiveError("Claude is rewinding this thread.");
+      }
+      const control = this.rewindQueries.get(params.threadId);
+      if (control) {
+        await control;
+        continue;
+      }
       const live = this.sessions.get(params.threadId);
       if (live?.turn || (!live && this.starting.has(params.threadId))) {
         throw new ClaudeTurnActiveError("A Claude turn is already active for this thread.");
@@ -620,10 +692,23 @@ export class ClaudeBackend {
       });
       controller.signal.throwIfAborted();
       current.titleEnv = env;
+      // The thread id names its first SDK session. A rewind past the first
+      // prompt leaves the thread with no session to resume, and that id is
+      // taken, so the next session gets its own.
+      const freshSdkSessionId = session.rewinds?.length ? randomUUID() : threadId;
       const sdkOptions: Options = {
         ...claudeHarnessOptions(executable, env),
         cwd: session.cwd,
-        ...(session.sdkSessionId ? { resume: session.sdkSessionId } : { sessionId: threadId }),
+        ...(session.sdkSessionId ?? session.forkFromSdkSessionId
+          ? {
+            resume: session.sdkSessionId ?? session.forkFromSdkSessionId,
+            ...(session.resumeSessionAt ? { resumeSessionAt: session.resumeSessionAt } : {}),
+            // A fork continues the source's conversation in a session of its own.
+            ...(session.sdkSessionId ? {} : { forkSession: true }),
+          }
+          : { sessionId: freshSdkSessionId }),
+        // Checkpoints each prompt's files, so a rewind can restore them.
+        enableFileCheckpointing: true,
         systemPrompt: { type: "preset", preset: "claude_code", ...(config.instructions ? { append: config.instructions } : {}) },
         persistSession: true,
         ...(session.thread.titleSource === "explicit" ? { title: session.thread.title } : {}),
@@ -657,7 +742,10 @@ export class ClaudeBackend {
       const input = current.input;
       async function* prompt(): AsyncIterable<SDKUserMessage> {
         await promptReady;
-        yield { type: "user", session_id: session.sdkSessionId ?? threadId, parent_tool_use_id: null, message: { role: "user", content } };
+        // The turn id doubles as the prompt's UUID, which a rewind targets.
+        yield { type: "user", uuid: claudePromptUuid(turn), parent_tool_use_id: null,
+          session_id: session.sdkSessionId ?? session.forkFromSdkSessionId ?? freshSdkSessionId,
+          message: { role: "user", content } };
         yield* input;
       }
       current.query = (this.options.query ?? query)({ prompt: prompt(), options: sdkOptions });
@@ -665,13 +753,14 @@ export class ClaudeBackend {
       // session totals before releasing the prompt, so this turn cannot race
       // its own baseline. If unavailable, the first result seeds the next turn.
       try {
-        if (session.sdkSessionId && !session.modelUsage) {
+        // A fork's totals start from its source's, so it reads them too.
+        if ((session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage) {
           const usage = await claudeTelemetry(() => current.query!.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true }));
           if (usage?.session?.model_usage) session.modelUsage = usage.session.model_usage;
         }
       } finally { releasePrompt(); }
       turn.usageBaseline = session.modelUsage;
-      turn.needsUsageBaseline = Boolean(session.sdkSessionId) && !session.modelUsage;
+      turn.needsUsageBaseline = Boolean(session.sdkSessionId ?? session.forkFromSdkSessionId) && !session.modelUsage;
       current.done = this.consume(current);
       // consume owns every error after launch, including terminal notification.
       void current.done.catch(() => {});
@@ -731,7 +820,8 @@ export class ClaudeBackend {
       await this.beginTurn(live, turn, session, params.input);
       // The session closed while the turn opened; its prompt was never sent.
       if (live.closing) throw new Error("Claude stopped before the message was sent.");
-      const uuid = randomUUID();
+      // The turn id doubles as the prompt's UUID, which a rewind targets.
+      const uuid = claudePromptUuid(turn);
       turn.pendingSteers.add(uuid);
       live.input.push({ type: "user", uuid, priority: "next", parent_tool_use_id: null, message: { role: "user", content } });
     } catch (error) {
@@ -938,9 +1028,19 @@ export class ClaudeBackend {
           live.initialized = true;
           if (firstInit || session.sdkSessionId !== message.session_id) {
             session.sdkSessionId = message.session_id;
+            // The query resumed at a rewind's point; later resumes follow
+            // the branch it now writes.
+            session.resumeSessionAt = undefined;
+            session.forkFromSdkSessionId = undefined;
             const current = await this.store.read(threadId);
             current.sdkSessionId = message.session_id;
+            delete current.resumeSessionAt;
+            delete current.forkFromSdkSessionId;
             await this.store.save(current);
+            // A new turn ends every rewind's undo; drop the files kept for one.
+            if (current.rewinds?.some((rewind) => rewind.fileBackup)) {
+              void rm(this.store.rewindBackupDirectory(threadId), { recursive: true, force: true }).catch(() => {});
+            }
           }
           // The native control request returns Claude's stored/in-flight title
           // while inference continues. Waiting for result leaves long first
@@ -2001,6 +2101,273 @@ export class ClaudeBackend {
   }
 
   /** `keepTasks: false` ends the query even when tasks run, as quitting does. */
+  /**
+   * What rewinding to before a prompt would restore, without changing
+   * anything. The file dry run needs a query: Claude's checkpoints belong to
+   * its session, not to this process.
+   */
+  async previewRewind(threadId: string, target: ThreadRewindTarget): Promise<
+    Pick<PreviewThreadRewindResponse, "files" | "filesUnavailableReason" | "unavailableReason">
+  > {
+    let session: ClaudeSession;
+    let point: ClaudeRewindPoint;
+    try {
+      this.assertRewindable(threadId);
+      session = await this.store.read(threadId);
+      point = await this.rewindPoint(session, target);
+    } catch (error) {
+      return { unavailableReason: error instanceof Error ? error.message : String(error) };
+    }
+    try {
+      // An idle session kept for a task's follow-up already runs Claude.
+      const live = this.sessions.get(threadId);
+      const dryRun = (control: Query) => claudeWithin(
+        control.rewindFiles(point.promptUuid, { dryRun: true }),
+        this.options.rewindPreviewTimeoutMs ?? CLAUDE_REWIND_PREVIEW_TIMEOUT_MS,
+        "Claude did not answer which files it can restore.",
+      );
+      const result = live?.query && !live.closing
+        ? await dryRun(live.query)
+        : await this.withRewindQuery(session, dryRun);
+      if (!result.canRewind) return { filesUnavailableReason: claudeFilesUnavailableReason(result.error) };
+      return { files: { paths: result.filesChanged ?? [], insertions: result.insertions ?? 0, deletions: result.deletions ?? 0 } };
+    } catch (error) {
+      claudeBackendLog.warn("Could not preview a Claude file rewind", { threadId, error });
+      return { filesUnavailableReason: claudeFilesUnavailableReason(error instanceof Error ? error.message : undefined) };
+    }
+  }
+
+  /**
+   * Rewind the thread to before a prompt: that prompt's turn and every later
+   * one leave the conversation, and with files, Claude restores what its
+   * edit tools changed since. Claude keeps the removed turns in its session
+   * file as another branch; the record names where it ends, so the rewind
+   * can be undone until the next turn starts.
+   */
+  async rewindThread(params: {
+    threadId: string; target: ThreadRewindTarget; mode: ThreadRewindMode; rewindId?: string;
+  }): Promise<{
+    promptText?: string; restoredFileCount?: number; undoable: boolean; updatedAt: number;
+  }> {
+    const { threadId, target, rewindId } = params;
+    this.assertRewindable(threadId);
+    this.rewinding.add(threadId);
+    try {
+      const session = await this.store.read(threadId);
+      const point = await this.rewindPoint(session, target);
+      // An idle session stays up a moment for a task's follow-up. Close it,
+      // once the rewind is known to go ahead, so the next turn resumes at
+      // the rewind point.
+      const live = this.sessions.get(threadId);
+      if (live) await this.closeSession(live);
+      const promptEntry = (await this.store.entries(threadId)).find((entry) => entry.id === target.messageId);
+      let restoredFiles: string[] | undefined;
+      let fileBackup = false;
+      if (params.mode === "conversation-and-files") {
+        // Files first: a refusal leaves the conversation as it was.
+        const backup = rewindId ? this.store.rewindBackupDirectory(threadId, rewindId) : undefined;
+        let result: Awaited<ReturnType<Query["rewindFiles"]>>;
+        try {
+          result = await this.withRewindQuery(session, async (control) => {
+            // Keep what the rewind is about to overwrite, so it can be undone.
+            if (backup) {
+              const dryRun = await control.rewindFiles(point.promptUuid, { dryRun: true });
+              fileBackup = dryRun.canRewind
+                && await backUpRewindFiles(backup, (dryRun.filesChanged ?? []).map((file) => path.resolve(session.cwd, file)));
+            }
+            return await control.rewindFiles(point.promptUuid);
+          });
+          if (!result.canRewind) throw new Error(claudeFilesUnavailableReason(result.error));
+        } catch (error) {
+          if (backup) await rm(backup, { recursive: true, force: true });
+          throw error;
+        }
+        restoredFiles = result.filesChanged ?? [];
+        if (backup && fileBackup) {
+          fileBackup = await recordRewoundFiles(backup, restoredFiles.map((file) => path.resolve(session.cwd, file)))
+            .catch(() => false);
+          if (!fileBackup) await rm(backup, { recursive: true, force: true });
+        }
+      }
+      const current = await this.store.read(threadId);
+      const fromSdkSessionId = current.sdkSessionId!;
+      const before = {
+        ...(current.resumeSessionAt ? { resumeSessionAt: current.resumeSessionAt } : {}),
+        ...(current.modelUsage ? { modelUsage: current.modelUsage } : {}),
+        ...(current.contextWindow ? { contextWindow: current.contextWindow } : {}),
+      };
+      const undoable = Boolean(rewindId) && (params.mode === "conversation" || fileBackup);
+      if (point.keptUuid) {
+        current.resumeSessionAt = point.keptUuid;
+      } else {
+        // Nothing before the first prompt to resume at: the next turn starts
+        // a new session, and the old one keeps the removed turns.
+        delete current.sdkSessionId;
+        delete current.resumeSessionAt;
+      }
+      // Totals and occupancy describe the removed turns.
+      delete current.modelUsage;
+      delete current.contextWindow;
+      current.thread.updatedAt = Date.now();
+      const truncationId = await this.store.truncate(threadId, target.messageId);
+      current.rewinds = [...current.rewinds ?? [], {
+        ...(rewindId ? { id: rewindId } : {}),
+        at: current.thread.updatedAt, beforeTurnId: target.turnId ?? point.promptUuid, sdkSessionId: fromSdkSessionId,
+        ...(point.leafUuid ? { removedLeafUuid: point.leafUuid } : {}),
+        ...(restoredFiles ? { restoredFiles } : {}),
+        ...(undoable ? {
+          truncationId,
+          after: {
+            ...(current.sdkSessionId ? { sdkSessionId: current.sdkSessionId } : {}),
+            ...(current.resumeSessionAt ? { resumeSessionAt: current.resumeSessionAt } : {}),
+          },
+          before,
+          ...(fileBackup ? { fileBackup: true } : {}),
+        } : {}),
+      }];
+      await this.store.save(current);
+      return {
+        ...(promptEntry?.type === "message" ? { promptText: promptEntry.text } : {}),
+        ...(restoredFiles ? { restoredFileCount: restoredFiles.length } : {}),
+        undoable,
+        updatedAt: current.thread.updatedAt,
+      };
+    } finally {
+      this.rewinding.delete(threadId);
+    }
+  }
+
+  /**
+   * Undo the thread's latest rewind: the conversation resumes on the branch
+   * Claude kept, the removed entries return, and the restored files go back
+   * to what they were. Claude continues the kept branch only until a new
+   * turn starts on the rewound one.
+   */
+  async undoRewind(params: { threadId: string; rewindId: string }): Promise<{ updatedAt: number }> {
+    const { threadId, rewindId } = params;
+    this.assertRewindable(threadId);
+    this.rewinding.add(threadId);
+    try {
+      const session = await this.store.read(threadId);
+      const record = session.rewinds?.filter((rewind) => rewind.undoneAt === undefined).at(-1);
+      const unavailable = "This rewind can no longer be undone.";
+      if (!record || record.id !== rewindId || !record.after || !record.truncationId) {
+        throw new Error(unavailable);
+      }
+      if (
+        session.sdkSessionId !== record.after.sdkSessionId
+        || session.resumeSessionAt !== record.after.resumeSessionAt
+        || !await this.store.canUndoTruncation(threadId, record.truncationId)
+      ) {
+        throw new Error(`${unavailable} Claude has continued the conversation since.`);
+      }
+      const live = this.sessions.get(threadId);
+      if (live) await this.closeSession(live);
+      const backup = this.store.rewindBackupDirectory(threadId, rewindId);
+      if (record.fileBackup) await restoreRewindFiles(backup);
+      await this.store.undoTruncation(threadId, record.truncationId);
+      const current = await this.store.read(threadId);
+      current.sdkSessionId = record.sdkSessionId;
+      // Resume at the removed branch's end, the conversation as it was.
+      if (record.removedLeafUuid) current.resumeSessionAt = record.removedLeafUuid;
+      else delete current.resumeSessionAt;
+      if (record.before?.modelUsage) current.modelUsage = record.before.modelUsage;
+      if (record.before?.contextWindow) current.contextWindow = record.before.contextWindow;
+      current.thread.updatedAt = Date.now();
+      current.rewinds = current.rewinds?.map((rewind) =>
+        rewind.id === rewindId ? { ...rewind, undoneAt: current.thread.updatedAt } : rewind);
+      await this.store.save(current);
+      await rm(backup, { recursive: true, force: true });
+      return { updatedAt: current.thread.updatedAt };
+    } finally {
+      this.rewinding.delete(threadId);
+    }
+  }
+
+  private assertRewindable(threadId: string): void {
+    if (this.rewinding.has(threadId)) throw new Error("Claude is already rewinding this thread.");
+    const live = this.sessions.get(threadId);
+    if (live?.turn || (!live && this.starting.has(threadId))) {
+      throw new Error("Wait for the active Claude turn to finish before rewinding.");
+    }
+    if (live && live.tasks.active().length > 0) throw new Error("Stop Claude's background tasks before rewinding.");
+  }
+
+  /**
+   * Where Claude's conversation holds the prompt. A prompt's SDK UUID is its
+   * turn id (`user:<turnId>`); a prompt sent before PwrAgent supplied one, or
+   * one Claude compacted away, is not in the conversation it would resume.
+   */
+  private async rewindPoint(session: ClaudeSession, target: ThreadRewindTarget): Promise<ClaudeRewindPoint> {
+    if (!session.sdkSessionId) throw new Error("Claude has no conversation to rewind yet.");
+    const promptUuid = target.messageId.startsWith("user:") ? target.messageId.slice("user:".length) : undefined;
+    const messages = (await (this.options.getSessionMessages ?? getSessionMessages)(session.sdkSessionId, { dir: session.cwd }))
+      .filter((message) => message.parent_tool_use_id === null);
+    const index = promptUuid ? messages.findIndex((message) => message.uuid === promptUuid && message.type === "user") : -1;
+    // A pending rewind already dropped the entries after its point.
+    const resumeIndex = session.resumeSessionAt
+      ? messages.findIndex((message) => message.uuid === session.resumeSessionAt)
+      : messages.length;
+    if (!promptUuid || index < 0 || (resumeIndex >= 0 && index > resumeIndex)) {
+      throw new Error("Claude's conversation does not have this prompt, so it cannot rewind to before it. "
+        + "Prompts sent before rewind support, or before Claude compacted the conversation, cannot be rewound.");
+    }
+    return {
+      promptUuid,
+      keptUuid: messages[index - 1]?.uuid,
+      // A pending rewind already ends the conversation at its point.
+      leafUuid: session.resumeSessionAt ?? messages.at(-1)?.uuid,
+    };
+  }
+
+  /**
+   * Run control requests against the thread's Claude session. No prompt is
+   * sent, so the query writes nothing to the conversation.
+   */
+  private async withRewindQuery<T>(session: ClaudeSession, run: (control: Query) => Promise<T>): Promise<T> {
+    if (!session.sdkSessionId) throw new Error("Claude has no conversation to rewind yet.");
+    const threadId = session.thread.id;
+    // One control query per thread at a time, and a turn waits for it.
+    for (let running = this.rewindQueries.get(threadId); running; running = this.rewindQueries.get(threadId)) {
+      await running;
+    }
+    const closed = claudeDeferred();
+    this.rewindQueries.set(threadId, closed.promise);
+    try {
+      // A turn that started before this query claimed the thread has its own
+      // process on the session.
+      if (this.sessions.has(threadId) || this.starting.has(threadId)) {
+        throw new Error("Wait for the active Claude turn to finish before rewinding.");
+      }
+      return await this.runRewindQuery(session, run);
+    } finally {
+      if (this.rewindQueries.get(threadId) === closed.promise) this.rewindQueries.delete(threadId);
+      closed.resolve();
+    }
+  }
+
+  private async runRewindQuery<T>(session: ClaudeSession, run: (control: Query) => Promise<T>): Promise<T> {
+    const executable = await this.requireInstallation();
+    const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+    const input = new ClaudeInputStream();
+    const control = (this.options.query ?? query)({
+      prompt: input,
+      options: {
+        ...claudeHarnessOptions(executable, env),
+        cwd: session.cwd,
+        resume: session.sdkSessionId!,
+        enableFileCheckpointing: true,
+        abortController: new AbortController(),
+      },
+    });
+    try {
+      return await run(control);
+    } finally {
+      input.close();
+      control.close();
+    }
+  }
+
   async interruptTurn(params: { threadId: string; turnId: string }, options: { keepTasks?: boolean } = {}): Promise<typeof params> {
     const live = this.sessions.get(params.threadId);
     const turn = live?.turn;
@@ -2135,6 +2502,34 @@ export class ClaudeBackend {
     for (const controller of this.starting.values()) controller.abort();
     await Promise.all([...this.sessions.values()].map((live) => this.closeSession(live)));
   }
+}
+
+type ClaudeRewindPoint = {
+  /** The prompt's SDK UUID: its checkpoint, and the first entry removed. */
+  promptUuid: string;
+  /** The entry just before the prompt, where the next query resumes. */
+  keptUuid?: string;
+  /** The conversation's last entry: the end of the branch the rewind removes. */
+  leafUuid?: string;
+};
+
+/** Settles with `promise`, or rejects with `message` after `ms`. */
+async function claudeWithin<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Claude's dry run says why, or the prompt predates file checkpointing. */
+function claudeFilesUnavailableReason(detail: string | undefined): string {
+  return detail?.trim()
+    || "Claude has no file checkpoint for this prompt. Prompts sent before PwrAgent enabled checkpoints cannot restore files.";
 }
 
 /** The item event for a Claude tool row. */

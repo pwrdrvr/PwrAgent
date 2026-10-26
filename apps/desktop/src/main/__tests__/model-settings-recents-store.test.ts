@@ -4,13 +4,14 @@ import {
   listModelSettingsRecents,
   recordModelSettingsRecent,
 } from "../state/model-settings-recents-store.js";
-import { StateDb } from "../state/state-db.js";
+import type { StateDb } from "../state/state-db.js";
+import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 describe("model settings recents store", () => {
   let stateDb: StateDb;
 
   beforeEach(() => {
-    stateDb = StateDb.open(":memory:", {
+    stateDb = openInMemoryStateDb({
       profileName: "dev",
     });
   });

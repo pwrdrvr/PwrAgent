@@ -4,6 +4,10 @@ import { CodexAppServerClient } from "../codex-app-server/client";
 import { validateGlabCommand } from "../settings/glab-discovery";
 import { validateCodexModelProviders } from "@pwragent/shared";
 import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
+import {
+  codexConfigHomesFromProfiles,
+  scanCodexModelProviderImports,
+} from "../settings/codex-model-provider-import";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
@@ -51,6 +55,7 @@ import type {
   SetCodexModelProviderApiKeyResponse,
   TestCodexModelProviderRequest,
   CodexModelProviderTestResult,
+  CodexModelProviderImportScan,
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
@@ -84,6 +89,7 @@ import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL,
   SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL,
+  SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
@@ -1884,6 +1890,17 @@ export function registerSettingsIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL,
+    async (): Promise<CodexModelProviderImportScan> =>
+      // Main picks the Codex homes. The request names no path, so a
+      // renderer cannot use this to read an arbitrary file.
+      await scanCodexModelProviderImports(
+        codexConfigHomesFromProfiles(getService(service).readCodexProfiles()),
+      ),
+  );
+
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.handle(
     SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
@@ -2414,6 +2431,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_CLEAR_SECRET_CHANNEL);
   ipcMain.removeHandler(SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL);

@@ -1,8 +1,7 @@
 import { sandboxerStub } from "./helpers/sandboxer-stub";
 import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type {
   AgentEvent,
@@ -44,6 +43,7 @@ import {
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb } from "./sqlite-test-utils";
 import { partitionFederationCollection } from "../federation/federation-collection-reads";
 
 // Keep real subprocesses by default. Only the repeated idle observations below
@@ -79,9 +79,10 @@ const ALERTING_TOOL_OUTPUT_POLICY = {
 
 beforeEach(() => {
   process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-write-metrics-"));
+  const fixture = createTempStateDb("pwragent-write-metrics-");
+  tempDir = fixture.tempDir;
   // A write budget records WAL growth, which only a real file has.
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = StateDb.open(fixture.dbPath);
   store = new SqliteOverlayStore(stateDb);
   // The collector is process-wide and this file asserts on exact counts, so
   // each test starts from zero. Ordinary test files do not do this — the
@@ -1090,6 +1091,45 @@ describe("sqlite write metrics", () => {
       scenario: "completed-questionnaire-transcript",
       writes,
     });
+  });
+
+  it("holds a thread rewind, and its undo, to one commit each", async () => {
+    // An operator rewinds or undoes by hand, never per turn or per event.
+    // At ~16 KB of WAL per commit, 100 rewinds and undos a day is ~1.6 MB.
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.appendThreadRewind({
+        backend: "claude",
+        threadId: "rewind-thread",
+        rewind: {
+          id: "rewind-1",
+          occurredAt: 1_800_000_000_000,
+          removedTurnCount: 2,
+          restoredFileCount: 2,
+          undoable: true,
+        },
+      });
+      await store.markThreadRewindUndone({
+        backend: "claude",
+        threadId: "rewind-thread",
+        rewindId: "rewind-1",
+        undoneAt: 1_800_000_060_000,
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note: "One operator rewind recorded, then marked undone: one commit each, no per-turn or idle writes. ~16 KB per action: ~1.6 MB/day at 100 rewinds and undos/day, 0 MB/day idle.",
+      scenario: "thread-rewind-and-undo",
+      writes,
+    });
+    expect((await store.getThreadOverlayState({ backend: "claude", threadId: "rewind-thread" }))?.rewindLog)
+      .toEqual([{
+        id: "rewind-1",
+        occurredAt: 1_800_000_000_000,
+        removedTurnCount: 2,
+        restoredFileCount: 2,
+        undoable: false,
+        undoneAt: 1_800_000_060_000,
+      }]);
   });
 
   it("keeps the transaction variants callable and counted", () => {

@@ -12,11 +12,70 @@ export type ClaudeSession = {
   cwd: string;
   /** Set only after the SDK confirms initialization; used by query({ resume }). */
   sdkSessionId?: string;
+  /**
+   * A fork's source session. Its first query resumes there with
+   * `forkSession`, and the session Claude creates becomes `sdkSessionId`.
+   */
+  forkFromSdkSessionId?: string;
   /** At most one native title request, including failed requests, across restarts. */
   titleGenerationAttempted?: boolean;
   modelUsage?: ClaudeUsageTotals;
   contextWindow?: { usedTokens: number; modelContextWindow: number };
+  /**
+   * The SDK entry the next query resumes at, set by a rewind. Claude drops
+   * every later entry from the conversation it continues, and keeps them in
+   * the session file as another branch. Cleared once a query resumes there.
+   */
+  resumeSessionAt?: string;
+  /** Each rewind, oldest first. */
+  rewinds?: ClaudeRewindRecord[];
 };
+
+export type ClaudeRewindRecord = {
+  /** The rewind's id in the thread's rewind log. Absent before undo. */
+  id?: string;
+  at: number;
+  /** The desktop turn the rewind removed, with every later turn. */
+  beforeTurnId: string;
+  /** The SDK session that holds the removed turns. */
+  sdkSessionId: string;
+  /** The last entry of the removed branch, where an undo would resume. */
+  removedLeafUuid?: string;
+  restoredFiles?: string[];
+  /** The history line that dropped the removed turns. */
+  truncationId?: string;
+  /**
+   * What the rewind left the session at. Until the next turn changes it,
+   * the rewind can be undone.
+   */
+  after?: { sdkSessionId?: string; resumeSessionAt?: string };
+  /** What the rewind cleared, which an undo puts back. */
+  before?: { resumeSessionAt?: string; modelUsage?: ClaudeUsageTotals; contextWindow?: ClaudeSession["contextWindow"] };
+  /** The restored files' earlier contents, kept for an undo. */
+  fileBackup?: boolean;
+  undoneAt?: number;
+};
+
+/**
+ * A history line that drops an entry and every entry recorded after it. The
+ * history stays append-only, so a rewind survives a restart without
+ * rewriting the file.
+ */
+type ClaudeTruncationRecord = {
+  type: "pwragent_truncation";
+  id: string;
+  beforeEntryId: string;
+  createdAt: number;
+};
+
+/** A history line that puts back what a truncation dropped. */
+type ClaudeTruncationUndoRecord = {
+  type: "pwragent_truncation_undo";
+  truncationId: string;
+  createdAt: number;
+};
+
+type ClaudeHistoryLine = AppServerThreadEntry | ClaudeTruncationRecord | ClaudeTruncationUndoRecord;
 
 export type ClaudeRateLimitsRecord = {
   limits: BackendRateLimitSummary[];
@@ -143,23 +202,91 @@ export class ClaudeSessionStore {
     await appendFile(this.file(id, "jsonl"), entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n", { mode: 0o600 });
   }
 
-  async entries(id: string): Promise<AppServerThreadEntry[]> {
-    try {
-      const text = await readFile(this.file(id, "jsonl"), "utf8");
-      // Revisions of a tool entry append rather than rewriting history.
-      const entries = new Map<string, AppServerThreadEntry>();
-      for (const line of text.split("\n").filter(Boolean)) {
-        // appendFile is not atomic: a crash can leave a torn final line.
-        // Skip it rather than make the whole transcript unreadable.
-        let entry: AppServerThreadEntry;
-        try { entry = JSON.parse(line) as AppServerThreadEntry; }
-        catch { continue; }
-        entries.set(entry.id, entry);
+  /** Drop `beforeEntryId` and every entry recorded after it; returns the truncation's id. */
+  async truncate(id: string, beforeEntryId: string): Promise<string> {
+    const record: ClaudeTruncationRecord = {
+      type: "pwragent_truncation", id: `truncation:${randomUUID()}`, beforeEntryId, createdAt: Date.now(),
+    };
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    await appendFile(this.file(id, "jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 });
+    return record.id;
+  }
+
+  /**
+   * Whether `truncationId` can still be undone: it is in effect, and no
+   * entry was recorded after it. A later entry belongs to the conversation
+   * the truncation left, which an undo would interleave with the old one.
+   */
+  async canUndoTruncation(id: string, truncationId: string): Promise<boolean> {
+    let found = false;
+    const undone = new Set<string>();
+    for (const line of await this.lines(id)) {
+      if (line.type === "pwragent_truncation_undo") {
+        undone.add(line.truncationId);
+      } else if (line.type === "pwragent_truncation") {
+        if (line.id === truncationId) found = true;
+      } else if (found) {
+        return false;
       }
-      return [...entries.values()];
+    }
+    return found && !undone.has(truncationId);
+  }
+
+  /** Put back the entries `truncationId` dropped. */
+  async undoTruncation(id: string, truncationId: string): Promise<void> {
+    const record: ClaudeTruncationUndoRecord = {
+      type: "pwragent_truncation_undo", truncationId, createdAt: Date.now(),
+    };
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    await appendFile(this.file(id, "jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 });
+  }
+
+  /**
+   * A directory for the files a rewind restored, as they were before it.
+   * PwrAgent owns it, beside the thread's history.
+   */
+  rewindBackupDirectory(id: string, rewindId?: string): string {
+    if (rewindId !== undefined && !/^[0-9a-f-]{36}$/i.test(rewindId)) throw new Error("Invalid rewind id.");
+    const directory = path.join(path.dirname(this.file(id, "json")), "rewind-backups", id);
+    return rewindId === undefined ? directory : path.join(directory, rewindId);
+  }
+
+  private async lines(id: string): Promise<ClaudeHistoryLine[]> {
+    let text: string;
+    try {
+      text = await readFile(this.file(id, "jsonl"), "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
+    return text.split("\n").filter(Boolean).flatMap((line) => {
+      // appendFile is not atomic: a crash can leave a torn final line.
+      // Skip it rather than make the whole transcript unreadable.
+      try { return [JSON.parse(line) as ClaudeHistoryLine]; }
+      catch { return []; }
+    });
+  }
+
+  async entries(id: string): Promise<AppServerThreadEntry[]> {
+    const lines = await this.lines(id);
+    const undone = new Set(lines.flatMap((line) =>
+      line.type === "pwragent_truncation_undo" ? [line.truncationId] : []));
+    // Revisions of a tool entry append rather than rewriting history.
+    const entries = new Map<string, AppServerThreadEntry>();
+    for (const entry of lines) {
+      if (entry.type === "pwragent_truncation_undo") continue;
+      if (entry.type === "pwragent_truncation") {
+        if (undone.has(entry.id)) continue;
+        // Map keys keep the order entries were first recorded in.
+        let removing = false;
+        for (const key of entries.keys()) {
+          if (key === entry.beforeEntryId) removing = true;
+          if (removing) entries.delete(key);
+        }
+        continue;
+      }
+      entries.set(entry.id, entry);
+    }
+    return [...entries.values()];
   }
 }

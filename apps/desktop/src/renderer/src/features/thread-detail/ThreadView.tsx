@@ -154,9 +154,9 @@ import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptError } from "./TranscriptError";
-import { TranscriptList } from "./TranscriptList";
+import { TranscriptList, transcriptItemBox } from "./TranscriptList";
 import { TranscriptMessage } from "./TranscriptMessage";
-import { ThreadRewindConfirm } from "./ThreadRewindConfirm";
+import { ThreadRewindConfirm, type ThreadRewindPreview } from "./ThreadRewindConfirm";
 import {
   collectRewindableMessageIds,
   rewoundPrompt,
@@ -1120,6 +1120,7 @@ type RewindConfirmState = {
   busy: boolean;
   error?: string;
   messageId: string;
+  preview?: ThreadRewindPreview;
   prompt: RewoundPrompt;
   summary: ThreadRewindSummary;
   turnId?: string;
@@ -1186,11 +1187,7 @@ function scrollRenderedTranscriptToTurn(
     return false;
   }
 
-  // The `.transcript-list__item` wrapper is `display: contents` (no box),
-  // so scrolling IT is a no-op and its rect is empty. Scroll a real child
-  // element into view instead — the same approach the find bar uses.
-  const anchor = target.querySelector("*") ?? target;
-  anchor.scrollIntoView({ block: "center", behavior: "smooth" });
+  transcriptItemBox(target).scrollIntoView({ block: "center", behavior: "smooth" });
   return true;
 }
 
@@ -1371,7 +1368,9 @@ export function ThreadView(props: ThreadViewProps) {
     federationTarget?: FederationTarget;
     text: string;
     imageAttachments: RewoundPrompt["imageAttachments"];
+    kind: "rewound-prompt" | "rewound-prompt-undone";
   }>();
+  const [rewindUndoBusyId, setRewindUndoBusyId] = useState<string>();
   const [workflowBudgetDialog, setWorkflowBudgetDialog] =
     useState<WorkflowBudgetDialogState>();
   // Transcript element the in-thread find bar (⌘F) searches + highlights.
@@ -1640,6 +1639,13 @@ export function ThreadView(props: ThreadViewProps) {
     : undefined;
   const transcriptEntriesRef = useRef(props.transcriptEntries);
   transcriptEntriesRef.current = props.transcriptEntries;
+  // What the confirmation's file dry run needs, read when it opens.
+  const rewindPreviewContextRef = useRef({
+    desktopApi: rewindDesktopApi, support: threadRewindSupport, thread: selectedThread,
+  });
+  rewindPreviewContextRef.current = {
+    desktopApi: rewindDesktopApi, support: threadRewindSupport, thread: selectedThread,
+  };
   const openRewindConfirm = useCallback(
     (message: AppServerThreadMessageEntry): void => {
       if (!rewindThreadSource) return;
@@ -1649,12 +1655,39 @@ export function ThreadView(props: ThreadViewProps) {
         rewindThreadSource,
       );
       if (!summary) return;
+      const { desktopApi, support, thread } = rewindPreviewContextRef.current;
+      const previewThreadRewind = desktopApi?.previewThreadRewind;
+      const preview = support?.files && previewThreadRewind && thread;
       setRewindConfirm({
         busy: false,
         messageId: message.id,
+        ...(preview ? { preview: { status: "loading" as const } } : {}),
         prompt: rewoundPrompt(message),
         summary,
         turnId: message.turn?.id,
+      });
+      if (!preview) return;
+      void previewThreadRewind({
+        backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+        threadId: thread.id,
+        target: { messageId: message.id, ...(message.turn?.id ? { turnId: message.turn.id } : {}) },
+      }).then(
+        (response): ThreadRewindPreview => ({
+          status: "ready",
+          ...(response.files ? { files: response.files } : {}),
+          ...(response.filesUnavailableReason ? { filesUnavailableReason: response.filesUnavailableReason } : {}),
+          ...(response.unavailableReason ? { unavailableReason: response.unavailableReason } : {}),
+        }),
+        (error: unknown): ThreadRewindPreview => ({
+          status: "ready",
+          filesUnavailableReason: error instanceof Error ? error.message : String(error),
+        }),
+      ).then((ready) => {
+        // The operator may have closed it or opened another prompt meanwhile.
+        setRewindConfirm((current) => current?.messageId === message.id && current.preview?.status === "loading"
+          ? { ...current, preview: ready }
+          : current);
       });
     },
     [rewindThreadSource],
@@ -1694,6 +1727,7 @@ export function ThreadView(props: ThreadViewProps) {
           ...(confirm.turnId ? { turnId: confirm.turnId } : {}),
         },
         mode,
+        removedTurnCount: confirm.summary.laterTurnCount + 1,
       });
       setRewindConfirm(undefined);
       const promptText = response.promptText ?? confirm.prompt.text;
@@ -1707,6 +1741,7 @@ export function ThreadView(props: ThreadViewProps) {
           federationTarget,
           text: promptText,
           imageAttachments,
+          kind: "rewound-prompt",
         });
       }
       if (droppedAttachmentCount > 0) {
@@ -1731,6 +1766,59 @@ export function ThreadView(props: ThreadViewProps) {
         : current);
     }
   };
+  // What an undo needs, read when the operator clicks it.
+  const rewindUndoContextRef = useRef({ desktopApi: rewindDesktopApi, thread: selectedThread });
+  rewindUndoContextRef.current = { desktopApi: rewindDesktopApi, thread: selectedThread };
+  const undoRewind = useCallback((rewindId: string): void => {
+    const { desktopApi, thread } = rewindUndoContextRef.current;
+    const undoThreadRewind = desktopApi?.undoThreadRewind;
+    if (!thread || !undoThreadRewind) return;
+    const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
+    setRewindUndoBusyId(rewindId);
+    void (async () => {
+      try {
+        await undoThreadRewind({ backend: thread.source, federationTarget, threadId: thread.id, rewindId });
+      } catch (error) {
+        onShowRewindNotice?.({
+          id: `rewind-undo:${thread.id}`,
+          title: "Rewind not undone",
+          message: error instanceof Error ? error.message : String(error),
+          tone: "warning",
+        });
+        return;
+      } finally {
+        setRewindUndoBusyId((current) => current === rewindId ? undefined : current);
+      }
+      // The prompt is back in the transcript, so the composer's copy goes.
+      rewoundPromptRestoreId.current += 1;
+      setRewoundPromptRestore({
+        id: rewoundPromptRestoreId.current,
+        threadId: thread.id,
+        backend: thread.source,
+        federationTarget,
+        text: "",
+        imageAttachments: [],
+        kind: "rewound-prompt-undone",
+      });
+      try {
+        await onRefreshNavigationAfterRewind?.();
+        await onReloadThreadAfterRewind?.();
+      } catch {
+        // The thread/rewound event refreshes the thread as well.
+      }
+    })();
+  }, [onRefreshNavigationAfterRewind, onReloadThreadAfterRewind, onShowRewindNotice]);
+  const canUndoRewind = Boolean(threadRewindSupport?.undo && rewindDesktopApi?.undoThreadRewind);
+  const rewindUndo = useMemo(
+    () => canUndoRewind
+      ? {
+          busyId: rewindUndoBusyId,
+          disabledReason: rewindDisabledReason,
+          onUndo: undoRewind,
+        }
+      : undefined,
+    [canUndoRewind, rewindDisabledReason, rewindUndoBusyId, undoRewind],
+  );
   const openWorkflowBudgetDialog = useCallback(async (): Promise<void> => {
     if (!selectedThread || selectedThread.source !== "acp:grok") {
       return;
@@ -4436,6 +4524,7 @@ export function ThreadView(props: ThreadViewProps) {
                       key={rewindConfirm.messageId}
                       busy={rewindConfirm.busy}
                       error={rewindConfirm.error}
+                      preview={rewindConfirm.preview}
                       providerLabel={rewindProviderLabel}
                       summary={rewindConfirm.summary}
                       support={threadRewindSupport}
@@ -4457,6 +4546,8 @@ export function ThreadView(props: ThreadViewProps) {
             selectedThread!.questionnaireActivityLog
           }
           turnFailures={selectedThread!.turnFailureLog}
+          rewinds={selectedThread!.rewindLog}
+          rewindUndo={rewindUndo}
           activeTurnId={props.activeTurnId}
           activeTurnStartedAt={props.activeTurnStartedAt}
           applications={props.applications}

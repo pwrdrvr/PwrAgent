@@ -2710,7 +2710,10 @@ Implementation notes remain in a readable bubble.`;
       await waitFor(() => {
         expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
       });
-      expect(card.closest("[data-entry-id]")).toHaveAttribute("data-entry-id", "call-question");
+      const item = card.closest("[data-entry-id]");
+      expect(item).toHaveAttribute("data-entry-id", "call-question");
+      // Not the `display: contents` list item, which has no box to scroll to.
+      expect(scrollIntoView.mock.contexts).toEqual([item?.firstElementChild]);
       expect(onLinkedMessageHandled).toHaveBeenCalledTimes(1);
     });
   });
@@ -4094,6 +4097,34 @@ Implementation notes remain in a readable bubble.`;
     expect(
       screen.queryByRole("button", { name: "Jump to latest message" })
     ).not.toBeInTheDocument();
+  });
+
+  it.each(["claude", "codex"])("does not replay an old send request when restoring a %s transcript", (backend) => {
+    const entries: AppServerThreadEntry[] = [
+      { type: "message", id: "prompt", role: "user", text: "A previous prompt" },
+      { type: "message", id: "answer", role: "assistant", text: "A completed answer" },
+    ];
+    const onViewportChange = vi.fn();
+    const props = {
+      entries,
+      loading: false,
+      loadingMore: false,
+      onLoadOlder: async () => undefined,
+      onViewportChange,
+      pagination: { supportsPagination: backend === "codex", hasPreviousPage: false },
+      reglueRequestKey: 1,
+      threadId: `${backend}:thread-1`,
+    };
+    const view = render(<TranscriptList {...props} />);
+    scrollAwayWithScrollbar(screen.getByRole("list"), 72);
+    view.unmount();
+    const restoredViewport = onViewportChange.mock.calls.at(-1)?.[0];
+    expect(restoredViewport).toMatchObject({ scrollTop: 72, isGluedToBottom: false });
+
+    const restored = render(<TranscriptList {...props} restoredViewport={restoredViewport} />);
+    expect(screen.getByRole("list").scrollTop).toBe(72);
+    restored.rerender(<TranscriptList {...props} restoredViewport={restoredViewport} reglueRequestKey={2} />);
+    expect(screen.getByRole("list").scrollTop).toBe(scrollHeight);
   });
 
   it("restores the previous viewport when switching back to a cached thread", () => {
@@ -5868,10 +5899,11 @@ Implementation notes remain in a readable bubble.`;
         block: "center",
       });
     });
-    expect(screen.getByRole("listitem")).toHaveAttribute(
-      "data-linked-message",
-      "true",
-    );
+    const item = screen.getByRole("listitem");
+    expect(item).toHaveAttribute("data-linked-message", "true");
+    // The list item is `display: contents` and has no box, so Chromium does
+    // not scroll to it. The message it holds is what scrolls into view.
+    expect(scrollIntoView.mock.contexts).toEqual([item.firstElementChild]);
     expect(onLinkedMessageHandled).toHaveBeenCalledTimes(1);
   });
 

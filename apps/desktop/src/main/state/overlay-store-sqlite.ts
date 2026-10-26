@@ -61,6 +61,7 @@ import type {
   StarMapWorkspaceState,
   ThreadQuestionnaireActivity,
   SubAgentLens,
+  ThreadRewindRecord,
   ThreadSubAgentSummary,
   TokenMiserGateAccountingTotals,
   ThreadTurnFailure,
@@ -83,6 +84,7 @@ import {
   MAX_MANAGED_REVIEW_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES,
+  MAX_REWIND_LOG_ENTRIES,
   MAX_TURN_FAILURE_LOG_ENTRIES,
   NAVIGATION_QUERY_MAX_RESULT_BYTES,
   buildPullRequestStatusKey,
@@ -1260,6 +1262,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             current?.messagingBindingTransitionLog,
           turnFailureLog: current?.turnFailureLog,
           questionnaireActivityLog: current?.questionnaireActivityLog,
+          rewindLog: current?.rewindLog,
         });
       }
     }
@@ -5985,7 +5988,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         SELECT json_extract(requested.value, '$.id') AS id,
           json_remove(threads.payload, '$.immutableUsageActivities', '$.managedReviewEntries',
             '$.permissionTransitionLog', '$.messagingBindingTransitionLog',
-            '$.turnFailureLog', '$.questionnaireActivityLog', '$.subAgents') AS payload
+            '$.turnFailureLog', '$.questionnaireActivityLog', '$.rewindLog', '$.subAgents') AS payload
         FROM json_each(?) AS requested
         LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
       `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
@@ -6247,6 +6250,51 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const nextState: ThreadOverlayState = {
       ...current,
       questionnaireActivityLog: trimmed,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async appendThreadRewind(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    rewind: ThreadRewindRecord;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const nextLog = [...(current.rewindLog ?? []), params.rewind];
+    const nextState: ThreadOverlayState = {
+      ...current,
+      rewindLog: nextLog.length > MAX_REWIND_LOG_ENTRIES
+        ? nextLog.slice(nextLog.length - MAX_REWIND_LOG_ENTRIES)
+        : nextLog,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  /** The marker of an undone rewind no longer shows. */
+  async markThreadRewindUndone(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    rewindId: string;
+    undoneAt: number;
+  }): Promise<ThreadOverlayState | undefined> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey);
+    if (!current?.rewindLog?.some((entry) => entry.id === params.rewindId)) {
+      return current;
+    }
+    const nextState: ThreadOverlayState = {
+      ...current,
+      rewindLog: current.rewindLog.map((entry) => entry.id === params.rewindId
+        ? { ...entry, undoable: false, undoneAt: params.undoneAt }
+        : entry),
     };
     this.putThread(threadKey, nextState);
     return nextState;
@@ -10670,6 +10718,8 @@ export type OverlayStoreLike = Pick<
   | "appendTurnFailure"
   | "setTurnFailureCodexInvalidIdRecovery"
   | "appendQuestionnaireActivity"
+  | "appendThreadRewind"
+  | "markThreadRewindUndone"
   | "getLaunchpadDefaults"
   | "setLaunchpadDefaults"
   | "getNavigationBrowseMode"

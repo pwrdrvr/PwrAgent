@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
+import type { AppServerThreadMessage } from "@pwragent/shared";
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
@@ -55,8 +56,12 @@ import type {
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  PreviewThreadRewindRequest,
+  PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
+  UndoThreadRewindRequest,
+  UndoThreadRewindResponse,
   ControlActiveTurnRequest,
   ControlActiveTurnResponse,
   CreateScheduledThreadActionRequest,
@@ -269,6 +274,28 @@ export type FederatedTranscriptImageResponse = {
   mimeType: string;
 };
 
+/**
+ * `backend.readTurnAssistantReply`: the reply one finished turn wrote, for a
+ * messaging gateway posting it. The owner reads that turn alone.
+ */
+export type FederationReadTurnAssistantReplyRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  turnId: string;
+  itemId?: string;
+  /**
+   * The reply text the gateway is posting. It picks the message when no item
+   * id is known. The owner only matches it against its own turn and never
+   * reads images from it.
+   */
+  text: string;
+};
+
+export type FederationReadTurnAssistantReplyResponse = {
+  /** Owner-local images are `pwragent-image://` URLs the owner serves. */
+  message: AppServerThreadMessage | null;
+};
+
 export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
   delivery?: "new_turn";
@@ -347,6 +374,34 @@ async function resolveFederationTurnInput(
 }
 
 /** Durable v1 cannot verify owner-local references or rewrite hashed inputs. */
+/**
+ * A missing turn id would list the whole thread's items, which is what this
+ * request exists to avoid, so a malformed request is refused outright.
+ */
+function parseTurnAssistantReplyRequest(
+  params: unknown,
+): FederationReadTurnAssistantReplyRequest {
+  const request = params as Partial<FederationReadTurnAssistantReplyRequest> | undefined;
+  if (
+    !request
+    || typeof request.backend !== "string"
+    || !isAppServerBackendKind(request.backend)
+    || typeof request.threadId !== "string" || !request.threadId
+    || typeof request.turnId !== "string" || !request.turnId
+    || (request.itemId !== undefined && typeof request.itemId !== "string")
+    || typeof request.text !== "string"
+  ) {
+    throw new Error("Invalid turn reply request.");
+  }
+  return {
+    backend: request.backend,
+    threadId: request.threadId,
+    turnId: request.turnId,
+    ...(request.itemId ? { itemId: request.itemId } : {}),
+    text: request.text,
+  };
+}
+
 function assertDurableFederationTurnInput(input: unknown): void {
   if (!Array.isArray(input)) throw new DurableTurnRequestError("request_invalid");
   for (const item of input) {
@@ -386,6 +441,7 @@ function localizeRefreshThreadGitWorkingStateRequest(
 ): RefreshOwnedThreadGitWorkingStateRequest {
   if (
     typeof request?.backend !== "string"
+    || typeof request.backend !== "string"
     || !isAppServerBackendKind(request.backend)
     || typeof request.threadId !== "string"
     || !request.threadId.trim()
@@ -517,6 +573,7 @@ export const FEDERATION_BACKEND_METHODS = {
   resolveThread: "backend.resolveThread",
   resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",
   readThread: "backend.readThread",
+  readTurnAssistantReply: "backend.readTurnAssistantReply",
   readUsageActivity: "backend.readUsageActivity",
   readThreadFamilyPricing: "backend.readThreadFamilyPricing",
   analyzeUsageActivity: "backend.analyzeUsageActivity",
@@ -565,6 +622,8 @@ export const FEDERATION_BACKEND_METHODS = {
   sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
   rewindThread: "backend.rewindThread",
+  previewThreadRewind: "backend.previewThreadRewind",
+  undoThreadRewind: "backend.undoThreadRewind",
   listMcpConnections: "backend.listMcpConnections",
   readThreadMcpConnections: "backend.readThreadMcpConnections",
   setThreadMcpConnections: "backend.setThreadMcpConnections",
@@ -661,6 +720,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.readTurnAssistantReply]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readForge]: "thread_detail",
   /* Reads the thread's own transcript history; same data class as reading it. */
   [FEDERATION_BACKEND_METHODS.readUsageActivity]: "thread_detail",
@@ -716,6 +776,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.rewindThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.previewThreadRewind]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.undoThreadRewind]: "turn_control",
   [FEDERATION_BACKEND_METHODS.listMcpConnections]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readThreadMcpConnections]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.setThreadMcpConnections]: "turn_control",
@@ -873,6 +935,13 @@ export type FederationBackendOperations = {
   readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse>;
+  /**
+   * Optional on owner adapters: an owner without it does not advertise
+   * `turn_assistant_reply`, and a gateway reads a transcript page instead.
+   */
+  readTurnAssistantReply?(
+    request: FederationReadTurnAssistantReplyRequest,
+  ): Promise<FederationReadTurnAssistantReplyResponse>;
   readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse>;
   readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse>;
   analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse>;
@@ -975,6 +1044,8 @@ export type FederationBackendOperations = {
   ): Promise<ScheduledThreadActionMutationResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   rewindThread(request: RewindThreadRequest): Promise<RewindThreadResponse>;
+  previewThreadRewind(request: PreviewThreadRewindRequest): Promise<PreviewThreadRewindResponse>;
+  undoThreadRewind(request: UndoThreadRewindRequest): Promise<UndoThreadRewindResponse>;
   listMcpConnections(): Promise<ListMcpConnectionsResponse>;
   readThreadMcpConnections(
     request: ReadThreadMcpConnectionsRequest,
@@ -1416,6 +1487,15 @@ export function registerFederationBackendHandlers(params: {
       return projectFederationThreadRead(conditionalThreadRead({ ...response, replay }, request.knownRevision));
     },
   );
+  if (params.backend.readTurnAssistantReply) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.readTurnAssistantReply,
+      async (envelope) =>
+        await params.backend.readTurnAssistantReply!(
+          parseTurnAssistantReplyRequest(envelope.params),
+        ),
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.readTranscriptImage,
     async (envelope) =>
@@ -1753,6 +1833,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.rewindThread(
         envelope.params as RewindThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.previewThreadRewind,
+    async (envelope) =>
+      await params.backend.previewThreadRewind(
+        envelope.params as PreviewThreadRewindRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.undoThreadRewind,
+    async (envelope) =>
+      await params.backend.undoThreadRewind(
+        envelope.params as UndoThreadRewindRequest,
       ),
   );
   params.router.registerHandler(
@@ -2421,6 +2515,31 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     }
   }
 
+  async readTurnAssistantReply(
+    request: FederationReadTurnAssistantReplyRequest,
+  ): Promise<FederationReadTurnAssistantReplyResponse> {
+    const response = await this.rpc.request<FederationReadTurnAssistantReplyResponse>({
+      method: FEDERATION_BACKEND_METHODS.readTurnAssistantReply,
+      params: request,
+    });
+    if (!response.message) {
+      return { message: null };
+    }
+    // The same transform a thread read gets, so the reply's images route
+    // through the owner exactly as they would from a transcript page.
+    const transformed = await this.transformReadThreadResponse({
+      backend: request.backend,
+      fetchedAt: Date.now(),
+      threadId: request.threadId,
+      replay: {
+        entries: [],
+        messages: [response.message],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    });
+    return { message: transformed.replay.messages[0] ?? null };
+  }
+
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
     return await this.rpc.request<ReadUsageActivityResponse>({ method: FEDERATION_BACKEND_METHODS.readUsageActivity, params: request });
   }
@@ -2850,6 +2969,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<RewindThreadResponse> {
     return await this.rpc.request<RewindThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.rewindThread,
+      params: request,
+    });
+  }
+
+  async previewThreadRewind(
+    request: PreviewThreadRewindRequest,
+  ): Promise<PreviewThreadRewindResponse> {
+    return await this.rpc.request<PreviewThreadRewindResponse>({
+      method: FEDERATION_BACKEND_METHODS.previewThreadRewind,
+      params: request,
+    });
+  }
+
+  async undoThreadRewind(
+    request: UndoThreadRewindRequest,
+  ): Promise<UndoThreadRewindResponse> {
+    return await this.rpc.request<UndoThreadRewindResponse>({
+      method: FEDERATION_BACKEND_METHODS.undoThreadRewind,
       params: request,
     });
   }

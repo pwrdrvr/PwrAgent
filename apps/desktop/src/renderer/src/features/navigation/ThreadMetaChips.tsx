@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted, operatorTodoItemKey } from "@pwragent/shared";
 import {
@@ -124,6 +124,21 @@ export function ThreadMetaChips({
     ? waitsContext?.waitsByThreadKey.get(itemThreadKey) ?? NO_WAITS
     : NO_WAITS;
   const leadWait = leadingOperatorWait(waits);
+  // Questions rank after every blocking wait, so a question lead means the
+  // thread waits only on questions, and the lead is the newest.
+  const openQuestion = leadWait?.kind === "question" ? waitsContext?.openWait : undefined;
+  const waitTooltipText = (): string => openQuestion
+    ? `${formatWaitTooltip(waits)}\nClick to show the latest question`
+    : formatWaitTooltip(waits);
+  // The row would open the thread at its bottom; the chip opens the
+  // question's card.
+  const openLeadQuestion = (event: SyntheticEvent): void => {
+    if (!openQuestion || !leadWait) return;
+    event.preventDefault();
+    event.stopPropagation();
+    waitTooltip.hide();
+    openQuestion(leadWait);
+  };
   // Continue After registrations on this thread. The chip opens the dialog
   // wherever one can open, and is a plain status marker elsewhere.
   const dependency = useThreadDependencyIndicator(thread);
@@ -363,14 +378,21 @@ export function ThreadMetaChips({
       {leadWait ? (
         <span
           aria-label={`${operatorWaitLabel(leadWait)}: ${leadWait.title}`}
-          role="img"
+          role={openQuestion ? "button" : "img"}
+          tabIndex={openQuestion ? 0 : undefined}
           className={`thread-row__chip thread-row__chip--essential ${
             isBlockingWait(leadWait) ? "thread-row__chip--approval" : "thread-row__chip--question"
           }`}
           data-thread-wait={leadWait.kind}
-          onMouseEnter={(event) =>
-            waitTooltip.show(event.currentTarget, formatWaitTooltip(waits))
-          }
+          onBlur={openQuestion ? waitTooltip.hide : undefined}
+          onClick={openQuestion ? openLeadQuestion : undefined}
+          onFocus={openQuestion
+            ? (event) => waitTooltip.show(event.currentTarget, waitTooltipText())
+            : undefined}
+          onKeyDown={openQuestion ? (event) => {
+            if (event.key === "Enter" || event.key === " ") openLeadQuestion(event);
+          } : undefined}
+          onMouseEnter={(event) => waitTooltip.show(event.currentTarget, waitTooltipText())}
           onMouseLeave={waitTooltip.hide}
         >
           {operatorWaitLabel(leadWait)}

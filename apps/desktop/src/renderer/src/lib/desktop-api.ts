@@ -455,8 +455,12 @@ import type {
   QueueThreadExecutionModeResponse,
   ReloadCodexMcpConfigRequest,
   ReloadCodexMcpConfigResponse,
+  PreviewThreadRewindRequest,
+  PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
+  UndoThreadRewindRequest,
+  UndoThreadRewindResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -565,6 +569,7 @@ import type {
   SetCodexModelProviderApiKeyResponse,
   TestCodexModelProviderRequest,
   CodexModelProviderTestResult,
+  CodexModelProviderImportScan,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
   RecordComposerDraftHistoryResponse,
@@ -1147,9 +1152,15 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: StopSubAgentRequest,
   ) => Promise<StopSubAgentResponse>;
   steerTurn?: (request: SteerTurnRequest) => Promise<SteerTurnResponse>;
+  previewThreadRewind?: (
+    request: PreviewThreadRewindRequest,
+  ) => Promise<PreviewThreadRewindResponse>;
   rewindThread?: (
     request: RewindThreadRequest,
   ) => Promise<RewindThreadResponse>;
+  undoThreadRewind?: (
+    request: UndoThreadRewindRequest,
+  ) => Promise<UndoThreadRewindResponse>;
   configureGrokWorkflowBudget?: (
     request: ConfigureGrokWorkflowBudgetRequest,
   ) => Promise<ConfigureGrokWorkflowBudgetResponse>;
@@ -1291,6 +1302,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   testCodexModelProvider?: (
     request: TestCodexModelProviderRequest
   ) => Promise<CodexModelProviderTestResult>;
+  /** Providers the Codex config files Settings lists already define. */
+  scanCodexModelProviderImports?: () => Promise<CodexModelProviderImportScan>;
   createCodexAuthProfile?: (
     request: CreateDesktopCodexAuthProfileRequest,
   ) => Promise<CreateDesktopCodexAuthProfileResponse>;

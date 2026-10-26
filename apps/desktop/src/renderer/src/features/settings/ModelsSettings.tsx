@@ -718,6 +718,10 @@ export function ModelsSettings(props: {
         {codexSection}
         {props.onSaveCodexModelProviders ? (
           <CodexModelProvidersSettings
+            codexHomesKey={[
+              codex.profiles.effectiveCodexHome,
+              ...codex.profiles.profiles.map((profile) => profile.codexHome),
+            ].join("\n")}
             desktopApi={props.desktopApi}
             providers={props.snapshot.models.codex.providers ?? []}
             saving={props.saving}

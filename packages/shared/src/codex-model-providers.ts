@@ -69,6 +69,50 @@ export type CodexModelProviderTestResult = {
   latencyMs?: number;
 };
 
+/** A Codex `config.toml` that an import candidate or skip came from. */
+export type CodexModelProviderImportSource = {
+  /** The Codex auth profile's display name, or `Codex home`. */
+  label: string;
+  configPath: string;
+};
+
+/**
+ * A `model_providers` table in a Codex config file that Settings can turn
+ * into a provider. It carries no key material: a file's key, token or
+ * headers are never read into it.
+ */
+export type CodexModelProviderImportCandidate = {
+  /** The table's key in `model_providers`, such as `bonsai`. */
+  sourceId: string;
+  name: string;
+  baseUrl: string;
+  /** The `model` a profile sets for this provider, when any does. */
+  models: string[];
+  /** The base URL is loopback, so the server runs on this machine. */
+  local: boolean;
+  /** The file sends a key, so the form asks for one. */
+  needsApiKey: boolean;
+  /** The `env_key` variable the file names. A name, never its value. */
+  apiKeyEnv?: string;
+  /** Settings the import leaves behind, such as custom HTTP headers. */
+  notes: string[];
+  sources: CodexModelProviderImportSource[];
+};
+
+/** A provider, or a whole file, that cannot be imported, and why. */
+export type CodexModelProviderImportSkip = {
+  /** Absent when the whole file could not be read. */
+  sourceId?: string;
+  name?: string;
+  reason: string;
+  sources: CodexModelProviderImportSource[];
+};
+
+export type CodexModelProviderImportScan = {
+  candidates: CodexModelProviderImportCandidate[];
+  skipped: CodexModelProviderImportSkip[];
+};
+
 export const CODEX_MODEL_PROVIDER_LIMIT = 16;
 export const CODEX_MODEL_PROVIDER_MODEL_LIMIT = 64;
 
@@ -96,6 +140,47 @@ const MAX_RATE_PER_MILLION = 10_000;
 
 export function isValidCodexModelProviderId(value: string): boolean {
   return PROVIDER_ID.test(value) && !RESERVED_CODEX_MODEL_PROVIDER_IDS.has(value);
+}
+
+/**
+ * A valid provider id built from `base`, such as a Codex `model_providers`
+ * key, that is not reserved and not in `taken`. A clash gets a `-2`, `-3`, …
+ * suffix. Returns `provider` when `base` has no usable letters.
+ */
+export function suggestCodexModelProviderId(base: string, taken: ReadonlySet<string>): string {
+  const stem = base
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/gu, "-")
+    .replace(/^[^a-z]+/u, "")
+    .replace(/-+$/u, "")
+    .slice(0, 32)
+    .replace(/-+$/u, "") || "provider";
+  const free = (id: string) => isValidCodexModelProviderId(id) && !taken.has(id);
+  if (free(stem)) return stem;
+  for (let suffix = 2; ; suffix += 1) {
+    const tail = `-${suffix}`;
+    const id = `${stem.slice(0, 32 - tail.length).replace(/-+$/u, "")}${tail}`;
+    if (free(id)) return id;
+  }
+}
+
+/**
+ * Whether a base URL names this machine: `localhost`, a `*.localhost` name,
+ * `127.0.0.0/8` or `::1`. Such a server costs nothing per token.
+ */
+export function isLoopbackCodexBaseUrl(baseUrl: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  const host = hostname.replace(/^\[(.*)\]$/u, "$1");
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  // `::1`, and `::ffff:127.x.y.z`, which URL writes as `::ffff:7fxx:yyyy`.
+  if (host === "::1" || /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/u.test(host)) return true;
+  const ipv4 = /^(\d{1,3})\.\d{1,3}\.\d{1,3}\.\d{1,3}$/u.exec(host);
+  return ipv4?.[1] === "127";
 }
 
 export function formatCodexProviderModelId(providerId: string, model: string): string {
@@ -128,10 +213,18 @@ export function codexModelProviderApiKeyEnv(providerId: string): string {
   return `PWRAGENT_CODEX_PROVIDER_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
 }
 
+/** A trimmed upstream model id a provider may list. */
+export function isValidCodexProviderModelId(model: string): boolean {
+  return Boolean(model)
+    && model.length <= MAX_MODEL_ID_LENGTH
+    && !/[\0\r\n]/.test(model)
+    && !model.startsWith("@");
+}
+
 function validateModelId(value: unknown, field: string): string {
   if (typeof value !== "string") throw new Error(`${field} must be a string.`);
   const model = value.trim();
-  if (!model || model.length > MAX_MODEL_ID_LENGTH || /[\0\r\n]/.test(model) || model.startsWith("@")) {
+  if (!isValidCodexProviderModelId(model)) {
     throw new Error(`${field} must be a nonempty model id that does not start with @.`);
   }
   return model;

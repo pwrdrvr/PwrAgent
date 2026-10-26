@@ -127,7 +127,8 @@ relaunch while background tasks run.
 
 The adapter records metadata and append-only replay entries beneath the
 active profile's `state/claude/` directory. It does not inspect Claude-owned
-history files or store transcripts in SQLite. Normal desktop overlays continue
+history files or store transcripts in SQLite; rewind reads Claude's
+conversation only through the SDK's session API. Normal desktop overlays continue
 to use the existing registry persistence paths. Checked-in SQLite budgets
 measure three commits (49,440 WAL bytes) for thread creation and one commit
 (16,480 WAL bytes) for an operator permission change. One hundred duplicate
@@ -135,8 +136,19 @@ mode selections add no commits. At 100 new threads and 100 permission changes
 per day, the measured projection is `(400 / 86400) commits/s × 16480 bytes ×
 86400 seconds`, or approximately 6.6 MB/day. This adds no timer-based writes.
 Archive changes metadata and
-retains the workspace. Native fork, workspace handoff, and transcript
-pagination are not advertised.
+retains the workspace. Workspace handoff and transcript pagination are not
+advertised.
+
+**Fork** goes through the registry's shared fork path, which prepares the
+workspace (same directory, new worktree, or scratch), sets the parent, and
+records the fork origin. The new thread copies the source's history and
+records the source's SDK session. Its first message resumes that session with
+`forkSession: true` from the fork's own working directory. The CLI resumes a
+session started in another directory and gives the fork a new session, which
+the thread adopts at `init`. Before that prompt, the fork reads its starting
+usage totals, as an older session without a baseline does, so the copied
+history is not billed as new work. A source with no conversation yet cannot
+be forked.
 
 Queue uses PwrAgent's shared FIFO and resumes the SDK session after the active
 turn finishes. Steer sends an additional native user message through the same
@@ -152,6 +164,73 @@ when it keeps the process. Request IDs deduplicate retries; attachment
 parts and message origins survive replay. A steer with an agent origin writes
 one SQLite commit (~12 KB, or ~1.24 MB/day at 100 steers/day); a duplicate
 request adds no write, and there are no idle writes.
+
+## Rewind
+
+A Claude thread can rewind to before any prompt that starts a turn: that
+turn and every later one leave the conversation, and the prompt returns to
+the composer. With Restore files, Claude also puts back the files its Edit,
+Write, and NotebookEdit tools changed since. Shell commands' changes are not
+restored. See [thread-rewind.md](thread-rewind.md) for the provider-neutral
+contract and the confirmation.
+
+- Every query sets `enableFileCheckpointing`, so the CLI checkpoints files at
+  each prompt.
+- Each prompt is sent with the desktop turn's id as its SDK `uuid`, including
+  the first prompt of a session. The prompt's transcript entry is
+  `user:<turnId>`, so the turn-to-prompt mapping needs no extra storage.
+  Prompts sent before this have provider-assigned UUIDs, and Claude compaction
+  can drop a prompt from the conversation it resumes. Neither can be rewound;
+  the confirmation says so.
+- The adapter finds the prompt with the SDK's `getSessionMessages`, the same
+  session API it uses for titles; it does not read Claude's files itself. The
+  entry just before the prompt is the point the next query resumes at
+  (`resume` with `resumeSessionAt`). Claude writes the next turn as a new
+  branch of the same session file, so prompt UUIDs and file checkpoints stay
+  valid for later rewinds. `forkSession` was not used: it gives every
+  forked entry a new UUID, which would orphan both.
+- Rewinding the first prompt leaves nothing to resume at. The next turn starts
+  a new SDK session with its own id; the thread id already named the first.
+- Files restore through a control-only query: `resume` the thread's session
+  with checkpointing, send no prompt, call `Query.rewindFiles`, and close.
+  The confirmation's file count comes from the same call with `dryRun`.
+  Files go first, so a refused restore leaves the conversation as it was.
+  A turn waits for a control query to close, so two CLI processes never
+  resume one session. The confirmation holds its button for the dry run, so
+  a dry run Claude does not answer in 30 seconds reports the files as
+  unavailable rather than holding it forever.
+- The rewind is refused while a turn starts or runs, or while a background
+  task runs. An idle session kept open for a task's follow-up is closed once
+  the prompt is confirmed rewindable, never for a rewind that is refused.
+  A message sent during the rewind waits in the queue, which drains after it.
+- The session metadata records each rewind: the turn it removed, the SDK
+  session, and the removed branch's last entry, which is where an undo
+  resumes. The append-only history gains a truncation line that drops the
+  removed entries on every read, so the rewind survives a restart.
+
+### Undo
+
+Claude keeps the removed turns as a branch of its session, so the latest
+rewind can be undone until the next turn starts (`ClaudeBackend.undoRewind`).
+
+- The record keeps what the rewind left the session at (`after`) and what it
+  cleared (`before`: the earlier resume point, usage totals, and context
+  occupancy). Undo is refused once the session no longer matches `after`,
+  which the next turn's `init` changes, or once an entry follows the
+  truncation line in the history.
+- Undo points the next query back at the removed branch's last entry
+  (`resumeSessionAt`), restores what the rewind cleared, and appends a
+  `pwragent_truncation_undo` line, so reads keep the removed entries again.
+- `rewindFiles` restores checkpoints but cannot go forward again. Before a
+  file rewind, the adapter asks Claude for a dry run and copies the files it
+  names into `state/claude/rewind-backups/<thread>/<rewind>/`, PwrAgent's own
+  storage, up to 50 MB. After the restore it records a hash of each file.
+  Undo writes the copies back, and deletes the files the rewind brought back
+  that did not exist before. It refuses, changing nothing, when a file
+  changed after the rewind. A file rewind whose copies could not be kept
+  cannot be undone.
+- A turn's first `init` removes the thread's backups: no rewind before it can
+  be undone any more.
 
 ## Background tasks and sub-agents
 

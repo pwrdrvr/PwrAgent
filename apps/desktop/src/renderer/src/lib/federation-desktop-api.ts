@@ -17,6 +17,10 @@ export function scopeDesktopApiToFederationTarget(
   const openMarkdownFileViewer = desktopApi.openMarkdownFileViewer;
   const refreshDirectoryGitStatuses = desktopApi.refreshDirectoryGitStatuses;
   const readPwrSnapConnectionStatus = desktopApi.readPwrSnapConnectionStatus;
+  const listMcpConnections = desktopApi.listMcpConnections;
+  const readThreadMcpConnections = desktopApi.readThreadMcpConnections;
+  const setThreadMcpConnections = desktopApi.setThreadMcpConnections;
+  const describeThreadMcpConnections = desktopApi.describeThreadMcpConnections;
   const listWorktreeUnpublishedCommits =
     desktopApi.listWorktreeUnpublishedCommits;
   const getWorktreeUnpublishedCommitDiff =
@@ -44,6 +48,20 @@ export function scopeDesktopApiToFederationTarget(
       : undefined,
     readPwrSnapConnectionStatus: readPwrSnapConnectionStatus
       ? async () => await readPwrSnapConnectionStatus({ federationTarget })
+      : undefined,
+    // Inventory and the saved selection must describe the same owner, even
+    // when a caller relies on this scoped API rather than passing a target.
+    listMcpConnections: listMcpConnections
+      ? async (request) => await listMcpConnections({ ...request, federationTarget })
+      : undefined,
+    readThreadMcpConnections: readThreadMcpConnections
+      ? async (request) => await readThreadMcpConnections({ ...request, federationTarget })
+      : undefined,
+    setThreadMcpConnections: setThreadMcpConnections
+      ? async (request) => await setThreadMcpConnections({ ...request, federationTarget })
+      : undefined,
+    describeThreadMcpConnections: describeThreadMcpConnections
+      ? async (request) => await describeThreadMcpConnections({ ...request, federationTarget })
       : undefined,
     listWorktreeUnpublishedCommits: listWorktreeUnpublishedCommits
       ? async (request) => await listWorktreeUnpublishedCommits({

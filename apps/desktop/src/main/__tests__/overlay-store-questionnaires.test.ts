@@ -1,17 +1,18 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: SqliteOverlayStore;
 let tempDir: string;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-questionnaire-test-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  const fixture = createTempStateDb("pwragent-questionnaire-test-");
+  tempDir = fixture.tempDir;
+  stateDb = StateDb.open(fixture.dbPath);
   store = new SqliteOverlayStore(stateDb);
 });
 

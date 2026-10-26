@@ -152,8 +152,12 @@ import { refreshReviewBaseBranch } from "./review-base-branch";
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
   type AcpBackendId,
+  type PreviewThreadRewindRequest,
+  type PreviewThreadRewindResponse,
   type RewindThreadRequest,
   type RewindThreadResponse,
+  type UndoThreadRewindRequest,
+  type UndoThreadRewindResponse,
   anchorTurnUsageEntries,
   buildPrependPinRank,
   buildThreadMarkdownLink,
@@ -9150,7 +9154,11 @@ export class DesktopBackendRegistry {
    * revert (its thread/reverted, normalized to thread/rewound). The registry
    * announces only a revert Codex did not, so windows reload once.
    */
-  private readonly codexRevertsInFlight = new Map<string, { announced: boolean }>();
+  /**
+   * Codex threads this registry is reverting, and whether Codex has reported
+   * the revert. The registry announces each revert itself.
+   */
+  private readonly codexRevertsInFlight = new Map<string, { reported: boolean }>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new ActiveTurnKeySet();
   private readonly threadHandoffReservations = new Set<string>();
@@ -10461,7 +10469,7 @@ export class DesktopBackendRegistry {
           }
           return (await this.readThreadMcpConnections(context)).connectionIds;
         },
-        approve: (invocation, context, signal, annotations) => this.approveGatewayInvocation(invocation, context, signal, annotations),
+        approve: (invocation, context, signal, annotations, catalogRevision) => this.approveGatewayInvocation(invocation, context, signal, annotations, catalogRevision),
       });
     }
     if (this.tokenMiserStore) {
@@ -19177,8 +19185,8 @@ export class DesktopBackendRegistry {
   ): Promise<ForkThreadResponse> {
     this.assertNotBootstrap("forkThread");
     const backend = request.backend ?? "codex";
-    if (backend !== "codex") {
-      throw new Error("Thread forking is currently supported only by the Codex backend.");
+    if (backend !== "codex" && backend !== "claude") {
+      throw new Error("Thread forking is supported by the Codex and Claude backends.");
     }
 
     const executionMode = request.executionMode ?? "default";
@@ -19232,92 +19240,112 @@ export class DesktopBackendRegistry {
             worktreePath: request.importedWorktree?.worktreePath ?? cwd,
           })
         : buildLocalLinkedDirectory(cwd);
-    const client = this.getClient(backend, executionMode);
-    if (!client.forkThread) {
-      await preparedWorkspace.rollback?.();
-      request.onPreparedWorkspaceRollback?.(undefined);
-      throw new Error("Selected backend does not support thread/fork.");
-    }
-    const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
-    const pdfMcpRegistration =
-      sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
-        ? await this.registerPdfMcpClient({})
-        : undefined;
-    const pdfMcpConfig = sourceHasPdfMcpToolCatalog
-      ? pdfMcpRegistration
-        ? buildCodexPdfMcpConfig(pdfMcpRegistration)
-        : buildCodexPdfMcpDisabledConfig()
-      : undefined;
-    const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
-      sourceOverlay?.tokenMiserEnabled,
-    );
-    if (tokenMiserEnabled) {
-      await this.prepareTokenMiserRuntime();
-    }
-    const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
-      client,
-      enabled: tokenMiserEnabled,
-    });
-    const codexThreadConfig = mergeCodexThreadConfigs(
-      pdfMcpConfig,
-      tokenMiserConfig,
-    );
-
     let result: { threadId: string };
+    let pdfMcpRegistration: AgentToolMcpRegistration | undefined;
     let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
-    try {
+    if (backend === "claude") {
+      // Claude copies the history and forks its session at the first message.
       try {
-        const sourceRuntime = directoryKind === "workspace"
-          ? undefined
-          : Object.hasOwn(request, "codexEnvironmentRuntime")
-            ? request.codexEnvironmentRuntime
-            : sourceOverlay?.codexEnvironmentRuntime;
-        forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
-          cwd,
-          forceSetup: request.rerunCodexEnvironmentSetup,
-          onSetupProgress: request.onCodexEnvironmentSetupProgress
-            ? (event) => {
-                request.onCodexEnvironmentSetupProgress?.({
-                  directoryKey:
-                    request.codexEnvironmentSetupProgressKey ??
-                    `fork:${backend}:${request.sourceThreadId}`,
-                  ...event,
-                });
-              }
-            : undefined,
-          sourceRuntime,
-          workMode: preparedWorkspace.workMode,
+        result = await this.claudeBackend.forkThread({
+          sourceThreadId: request.sourceThreadId,
+          cwd: cwd!,
+          model: modelSettings.model,
+          executionMode,
+          linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+            linkedDirectories.map(normalizeLinkedDirectoryKind),
+          ),
         });
       } catch (error) {
-        if (!(error instanceof CodexEnvironmentStartupError)) {
-          throw error;
-        }
-        forkedCodexEnvironmentRuntime = error.runtime;
-        codexEnvironmentStartupFailure = {
-          message: error.message,
-          phase: error.phase,
-          worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
-        };
+        await preparedWorkspace.rollback?.();
+        request.onPreparedWorkspaceRollback?.(undefined);
+        throw error;
       }
-      result = await client.forkThread({
-        threadId: request.sourceThreadId,
-        ...(request.sourceThreadPath?.trim()
-          ? { path: request.sourceThreadPath.trim() }
-          : {}),
-        cwd,
-        ...modelSettings,
-        approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
-        approvalsReviewer: modeSettings.approvalsReviewer,
-        sandbox: request.sandbox ?? modeSettings.sandbox,
-        codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
-        ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
+    } else {
+      const client = this.getClient(backend, executionMode);
+      if (!client.forkThread) {
+        await preparedWorkspace.rollback?.();
+        request.onPreparedWorkspaceRollback?.(undefined);
+        throw new Error("Selected backend does not support thread/fork.");
+      }
+      const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
+      pdfMcpRegistration =
+        sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
+          ? await this.registerPdfMcpClient({})
+          : undefined;
+      const pdfMcpConfig = sourceHasPdfMcpToolCatalog
+        ? pdfMcpRegistration
+          ? buildCodexPdfMcpConfig(pdfMcpRegistration)
+          : buildCodexPdfMcpDisabledConfig()
+        : undefined;
+      const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+        sourceOverlay?.tokenMiserEnabled,
+      );
+      if (tokenMiserEnabled) {
+        await this.prepareTokenMiserRuntime();
+      }
+      const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
+        client,
+        enabled: tokenMiserEnabled,
       });
-      pdfMcpRegistration?.bindThread(result.threadId);
-    } catch (error) {
-      await preparedWorkspace.rollback?.();
-      request.onPreparedWorkspaceRollback?.(undefined);
-      throw error;
+      const codexThreadConfig = mergeCodexThreadConfigs(
+        pdfMcpConfig,
+        tokenMiserConfig,
+      );
+
+      try {
+        try {
+          const sourceRuntime = directoryKind === "workspace"
+            ? undefined
+            : Object.hasOwn(request, "codexEnvironmentRuntime")
+              ? request.codexEnvironmentRuntime
+              : sourceOverlay?.codexEnvironmentRuntime;
+          forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
+            cwd,
+            forceSetup: request.rerunCodexEnvironmentSetup,
+            onSetupProgress: request.onCodexEnvironmentSetupProgress
+              ? (event) => {
+                  request.onCodexEnvironmentSetupProgress?.({
+                    directoryKey:
+                      request.codexEnvironmentSetupProgressKey ??
+                      `fork:${backend}:${request.sourceThreadId}`,
+                    ...event,
+                  });
+                }
+              : undefined,
+            sourceRuntime,
+            workMode: preparedWorkspace.workMode,
+          });
+        } catch (error) {
+          if (!(error instanceof CodexEnvironmentStartupError)) {
+            throw error;
+          }
+          forkedCodexEnvironmentRuntime = error.runtime;
+          codexEnvironmentStartupFailure = {
+            message: error.message,
+            phase: error.phase,
+            worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
+          };
+        }
+        result = await client.forkThread({
+          threadId: request.sourceThreadId,
+          ...(request.sourceThreadPath?.trim()
+            ? { path: request.sourceThreadPath.trim() }
+            : {}),
+          cwd,
+          ...modelSettings,
+          approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+          approvalsReviewer: modeSettings.approvalsReviewer,
+          sandbox: request.sandbox ?? modeSettings.sandbox,
+          codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
+          ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
+        });
+        pdfMcpRegistration?.bindThread(result.threadId);
+      } catch (error) {
+        await preparedWorkspace.rollback?.();
+        request.onPreparedWorkspaceRollback?.(undefined);
+        throw error;
+      }
     }
     let gitBranch: string | undefined;
     try {
@@ -19369,7 +19397,7 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode,
       });
-      if (sourceOverlay?.tokenMiserEnabled !== undefined) {
+      if (backend === "codex" && sourceOverlay?.tokenMiserEnabled !== undefined) {
         await this.overlayStore.setThreadTokenMiser({
           backend,
           threadId: result.threadId,
@@ -23442,19 +23470,52 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * What a rewind to before one prompt would put back. Only Claude restores
+   * files, so only Claude reads anything from its provider here.
+   */
+  async previewThreadRewind(
+    request: PreviewThreadRewindRequest,
+  ): Promise<PreviewThreadRewindResponse> {
+    const preview = request.backend === "claude"
+      ? await this.claudeBackend.previewRewind(request.threadId, request.target)
+      : {};
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      target: request.target,
+      ...preview,
+    };
+  }
+
   async rewindThread(
     request: RewindThreadRequest,
   ): Promise<RewindThreadResponse> {
-    if (request.mode !== "conversation") {
+    if (request.mode !== "conversation" && request.backend !== "claude") {
       throw new Error("This provider cannot restore files when it rewinds a thread");
     }
+    const rewindId = randomUUID();
     let result: {
-      announced?: boolean;
       promptText?: string;
+      restoredFileCount?: number;
       targetPromptIndex?: number;
+      undoable?: boolean;
       updatedAt: number;
     };
-    if (isAcpBackendId(request.backend)) {
+    if (request.backend === "claude") {
+      await this.assertThreadNotLocked("claude", request.threadId);
+      try {
+        result = await this.claudeBackend.rewindThread({
+          threadId: request.threadId,
+          target: request.target,
+          mode: request.mode,
+          rewindId,
+        });
+      } finally {
+        // A reply sent during the rewind waited in the queue.
+        this.threadTurnQueue.scheduleThreadDrain({ backend: "claude", threadId: request.threadId });
+      }
+    } else if (isAcpBackendId(request.backend)) {
       const backend = request.backend;
       result = await this.acpSessionPromptLocks.run(
         executionModeQueueKey(backend, request.threadId),
@@ -23479,7 +23540,31 @@ export class DesktopBackendRegistry {
     } else {
       throw new Error("Rewind is not available for this provider");
     }
-    if (!result.announced) await this.emit({
+    try {
+      await this.overlayStore.appendThreadRewind({
+        backend: request.backend,
+        threadId: request.threadId,
+        rewind: {
+          id: rewindId,
+          occurredAt: result.updatedAt,
+          ...(request.removedTurnCount !== undefined
+            ? { removedTurnCount: request.removedTurnCount }
+            : {}),
+          ...(result.restoredFileCount !== undefined
+            ? { restoredFileCount: result.restoredFileCount }
+            : {}),
+          ...(result.undoable ? { undoable: true } : {}),
+        },
+      });
+    } catch (error) {
+      // The provider has rewound; a missing marker must not report failure.
+      backendRegistryLog.warn("failed to record thread rewind", {
+        backend: request.backend,
+        threadId: request.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    await this.emit({
       backend: request.backend,
       notification: {
         method: "thread/rewound",
@@ -23498,14 +23583,72 @@ export class DesktopBackendRegistry {
       target: request.target,
       mode: request.mode,
       updatedAt: result.updatedAt,
+      rewindId,
       ...(result.promptText ? { promptText: result.promptText } : {}),
+      ...(result.restoredFileCount !== undefined ? { restoredFileCount: result.restoredFileCount } : {}),
+    };
+  }
+
+  /**
+   * Puts back what a rewind removed. Only Claude keeps the removed turns, and
+   * only until the thread's next turn starts.
+   */
+  async undoThreadRewind(
+    request: UndoThreadRewindRequest,
+  ): Promise<UndoThreadRewindResponse> {
+    if (request.backend !== "claude") {
+      throw new Error("This provider cannot undo a rewind");
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "claude",
+      threadId: request.threadId,
+    });
+    const record = overlay?.rewindLog?.find((entry) => entry.id === request.rewindId);
+    if (!record?.undoable || record.undoneAt !== undefined) {
+      throw new Error("This rewind can no longer be undone");
+    }
+    await this.assertThreadNotLocked("claude", request.threadId);
+    let updatedAt: number;
+    try {
+      ({ updatedAt } = await this.claudeBackend.undoRewind({
+        threadId: request.threadId,
+        rewindId: request.rewindId,
+      }));
+    } finally {
+      this.threadTurnQueue.scheduleThreadDrain({ backend: "claude", threadId: request.threadId });
+    }
+    try {
+      await this.overlayStore.markThreadRewindUndone({
+        backend: "claude",
+        threadId: request.threadId,
+        rewindId: request.rewindId,
+        undoneAt: updatedAt,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("failed to record undone thread rewind", {
+        threadId: request.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    await this.emit({
+      backend: "claude",
+      notification: {
+        method: "thread/rewound",
+        params: { threadId: request.threadId, updatedAt },
+      },
+    });
+    return {
+      backend: "claude",
+      threadId: request.threadId,
+      rewindId: request.rewindId,
+      updatedAt,
     };
   }
 
   private async revertCodexThread(params: {
     threadId: string;
     beforeTurnId?: string;
-  }): Promise<{ announced: boolean; updatedAt: number }> {
+  }): Promise<{ updatedAt: number }> {
     if (!params.beforeTurnId) {
       throw new Error("This prompt has no Codex turn to rewind to");
     }
@@ -23523,7 +23666,7 @@ export class DesktopBackendRegistry {
     // Hold the start reservation so no turn or compaction begins on this
     // thread while Codex replaces its history.
     this.reservedCodexStartThreadIds.add(params.threadId);
-    const revert = { announced: false };
+    const revert = { reported: false };
     this.codexRevertsInFlight.set(params.threadId, revert);
     try {
       await this.withCodexThreadClient(params.threadId, async (client) => {
@@ -23532,6 +23675,16 @@ export class DesktopBackendRegistry {
         }
         await client.revertThread({ threadId: params.threadId, beforeTurnId });
       });
+    } catch (error) {
+      // Codex changed the history before the request failed; readers still
+      // need to reload it.
+      if (revert.reported) {
+        await this.emit({
+          backend: "codex",
+          notification: { method: "thread/rewound", params: { threadId: params.threadId, updatedAt: Date.now() } },
+        });
+      }
+      throw error;
     } finally {
       this.codexRevertsInFlight.delete(params.threadId);
       this.reservedCodexStartThreadIds.delete(params.threadId);
@@ -23540,7 +23693,7 @@ export class DesktopBackendRegistry {
       this.threadTurnQueue.scheduleThreadDrain({ backend: "codex", threadId: params.threadId });
       this.maybeDrainCodexInvalidIdRecoveries();
     }
-    return { announced: revert.announced, updatedAt: Date.now() };
+    return { updatedAt: Date.now() };
   }
 
   async configureGrokWorkflowBudget(
@@ -29301,9 +29454,14 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        // The registry announces its own revert once the rewind is recorded,
+        // so the marker arrives with the event.
         if (backend === "codex" && notification.method === "thread/rewound") {
           const revert = this.codexRevertsInFlight.get(notification.params.threadId);
-          if (revert) revert.announced = true;
+          if (revert) {
+            revert.reported = true;
+            return;
+          }
         }
         // Match the client's running-turn ownership before the first await;
         // exit can arrive while lifecycle delivery is still in progress.
@@ -39443,6 +39601,7 @@ export class DesktopBackendRegistry {
     context: AgentToolCallContext,
     signal: AbortSignal,
     annotations?: McpGatewayTool["definition"]["annotations"],
+    catalogRevision?: string,
   ): Promise<McpGatewayApproval> {
     signal.throwIfAborted();
     const requestId = `mcp-gateway:${randomUUID()}`;
@@ -39461,6 +39620,16 @@ export class DesktopBackendRegistry {
       this.mcpGatewaySessionApprovals.set(sessionKey, approvals);
     }
     const consent = current;
+    const serverKey = JSON.stringify([invocation.connectionId, invocation.serverName]);
+    let serverConsent = approvals.get(serverKey);
+    if (catalogRevision && (!serverConsent || serverConsent.schemaRevision !== catalogRevision
+      || serverConsent.selectionRevision !== selectionRevision)) {
+      serverConsent = { schemaRevision: catalogRevision, selectionRevision, approved: false };
+      approvals.set(serverKey, serverConsent);
+    }
+    // A connection grant is offered only for a catalog read from the owner,
+    // never a revision supplied in the agent's tool arguments.
+    const connectionConsent = catalogRevision ? serverConsent : undefined;
     const notification: AppServerPendingRequestNotification = {
       method: "mcpServer/elicitation/request",
       params: {
@@ -39469,14 +39638,14 @@ export class DesktopBackendRegistry {
         requestId,
         serverName: invocation.serverName,
         mode: "form",
-        // One line, as Codex phrases its own MCP approvals: the card draws the
-        // message as its title. serverName is the connection's display name.
-        message: `Allow the ${invocation.serverName} MCP server to run tool "${invocation.toolName}"?`,
+        message: `Allow the agent to call "${invocation.toolName}" on ${invocation.serverName}?`,
         requestedSchema: { type: "object", properties: {} },
         _meta: {
           pwragent_approval_kind: "mcp_tool_call",
-          persist: ["session"],
-          subtitle: "Allow this conversation approves this tool with any arguments. The approval ends when PwrAgent restarts, MCP access changes, or the tool changes.",
+          persist: connectionConsent ? ["session", "server-session"] : ["session"],
+          subtitle: connectionConsent
+            ? `Allow this tool or all ${invocation.serverName} tools in this conversation, with any arguments. Approval ends when PwrAgent restarts, MCP access changes, or the approved tools change.`
+            : "Allow this tool in this conversation, with any arguments. Approval ends when PwrAgent restarts, MCP access changes, or the tool changes.",
           // The same rows Codex sends, so desktop and messaging draw and
           // redact the arguments one way.
           tool_params_display: Object.entries(invocation.arguments).map(([name, value]) => ({
@@ -39531,7 +39700,7 @@ export class DesktopBackendRegistry {
       });
       return true;
     }
-    if (consent.approved) return true;
+    if (consent.approved || connectionConsent?.approved) return true;
     const key = buildPendingRequestKey({ ...context, requestId });
     return await new Promise<McpGatewayApproval>((resolve, reject) => {
       const finish = (approved: McpGatewayApproval, error?: unknown): void => {
@@ -39551,7 +39720,11 @@ export class DesktopBackendRegistry {
         resolve: (response) => {
           if (signal.aborted) { aborted(); return; }
           const approved = Boolean(response && "action" in response && response.action === "accept");
-          if (approved && "_meta" in response && readRecord(response._meta)?.persist === "session") {
+          const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
+          const rememberedConsent = persist === "session" ? consent
+            : persist === "server-session" ? connectionConsent : undefined;
+          const rememberedKey = persist === "server-session" ? serverKey : sourceKey;
+          if (approved && rememberedConsent) {
             finish({ onInvoked: async () => {
               // A late response is provisional until the owner accepts its
               // exact schema/auth revision. Peer-instance edits also revoke it.
@@ -39560,8 +39733,8 @@ export class DesktopBackendRegistry {
                 const latest = await this.overlayStore.getThreadOverlayState(context);
                 if (!signal.aborted && !this.closed
                   && latest?.mcpSelectionRevision === selectionRevision
-                  && this.mcpGatewaySessionApprovals.get(sessionKey)?.get(sourceKey) === consent) {
-                  consent.approved = true;
+                  && this.mcpGatewaySessionApprovals.get(sessionKey)?.get(rememberedKey) === rememberedConsent) {
+                  rememberedConsent.approved = true;
                 }
               } catch (error) {
                 backendRegistryLog.warn("could not record MCP conversation approval", { error: String(error) });

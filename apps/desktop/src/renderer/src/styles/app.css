@@ -16278,6 +16278,38 @@ a.button {
   color: var(--text-muted);
 }
 
+/* Settings -> Codex -> Model providers: what Codex config files define. */
+.settings-section__body > .codex-provider-imports {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.codex-provider-imports__title {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.codex-provider-imports__skipped {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  list-style: none;
+}
+
+.codex-provider-imports__skipped strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
 .settings-pathrow__action {
   flex: 0 0 auto;
 }
@@ -42802,6 +42834,21 @@ button.composer__subthread-source-parent:hover {
   line-height: 1.45;
 }
 
+.thread-rewind-confirm__files small.thread-rewind-confirm__file-list {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.thread-rewind-confirm__file-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .thread-rewind-confirm p.thread-rewind-confirm__warning,
 .thread-rewind-confirm p.thread-rewind-confirm__error {
   color: var(--danger-text);
@@ -42845,6 +42892,64 @@ button.composer__subthread-source-parent:hover {
 .thread-rewind-confirm__actions button:disabled {
   opacity: 0.52;
   cursor: not-allowed;
+}
+
+/* One row stands where a rewind removed turns. */
+.transcript-rewind-marker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.transcript-rewind-marker::before,
+.transcript-rewind-marker::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.transcript-rewind-marker__undo {
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.transcript-rewind-marker__undo:hover:not([aria-disabled="true"]) {
+  text-decoration: underline;
+}
+
+.transcript-rewind-marker__undo:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-rewind-marker__undo[aria-disabled="true"] {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.composer__rewound-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .workflow-budget-dialog__fields {

@@ -1,9 +1,9 @@
 import Database from "better-sqlite3";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
+import { rmSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
+import { createTempStateDb, openInMemoryStateDb } from "./sqlite-test-utils";
 
 let tempDir: string;
 
@@ -89,7 +89,7 @@ function countCommitsDuring(run: () => void): number {
 }
 
 beforeEach(() => {
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-state-db-creation-"));
+  tempDir = createTempStateDb("pwragent-state-db-creation-").tempDir;
 });
 
 afterEach(() => {
@@ -117,7 +117,7 @@ describe("StateDb.open — database creation", () => {
   });
 
   it("still applies every migration while creating inside that transaction", () => {
-    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    const stateDb = openInMemoryStateDb();
 
     try {
       expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(

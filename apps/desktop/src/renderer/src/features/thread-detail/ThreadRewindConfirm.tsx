@@ -1,11 +1,29 @@
 import { useId, useRef, useState } from "react";
-import type { ThreadRewindMode, ThreadRewindSupport } from "@pwragent/shared";
+import type {
+  PreviewThreadRewindResponse,
+  ThreadRewindMode,
+  ThreadRewindSupport,
+} from "@pwragent/shared";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { ThreadRewindSummary } from "./thread-rewind";
+
+/**
+ * A provider that restores files previews which ones before the operator
+ * confirms; `loading` until that dry run answers.
+ */
+export type ThreadRewindPreview =
+  | { status: "loading" }
+  | ({ status: "ready" } & Pick<
+      PreviewThreadRewindResponse,
+      "files" | "filesUnavailableReason" | "unavailableReason"
+    >);
+
+const LISTED_FILE_LIMIT = 4;
 
 type ThreadRewindConfirmProps = {
   busy: boolean;
   error?: string;
+  preview?: ThreadRewindPreview;
   providerLabel: string;
   summary: ThreadRewindSummary;
   support: ThreadRewindSupport;
@@ -20,7 +38,7 @@ type ThreadRewindConfirmProps = {
 export function ThreadRewindConfirm(props: ThreadRewindConfirmProps) {
   const titleId = useId();
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const [restoreFiles, setRestoreFiles] = useState(props.support.files);
+  const [restoreFiles, setRestoreFiles] = useState(true);
   const dialogRef = useModalDialog({
     initialFocus: cancelRef,
     onClose: () => {
@@ -29,8 +47,24 @@ export function ThreadRewindConfirm(props: ThreadRewindConfirmProps) {
   });
   const later = props.summary.laterTurnCount;
   const files = props.summary.changedFileCount;
+  const ready = props.preview?.status === "ready" ? props.preview : undefined;
+  const restorable = props.support.files && !ready?.unavailableReason ? ready?.files : undefined;
+  const canRestoreFiles = Boolean(restorable && restorable.paths.length > 0);
   const filesNote = props.support.files
-    ? undefined
+    ? props.preview?.status === "loading"
+      ? `Checking which files ${props.providerLabel} can restore...`
+      : ready?.filesUnavailableReason
+        ?? (restorable
+          ? restorable.paths.length === 0
+            ? `${props.providerLabel} has changed no files since this prompt.`
+            : `Restores ${restorable.paths.length} ${
+                restorable.paths.length === 1 ? "file" : "files"
+              } ${props.providerLabel} changed since this prompt (+${restorable.insertions} \u2212${
+                restorable.deletions
+              }). Changes made by shell commands are not restored.`
+          : ready?.unavailableReason
+            ? undefined
+            : `PwrAgent could not check which files ${props.providerLabel} can restore.`)
     : files === undefined
       ? `${props.providerLabel} rewinds the conversation only. Files changed since stay as they are.`
       : files === 0
@@ -39,7 +73,8 @@ export function ThreadRewindConfirm(props: ThreadRewindConfirmProps) {
             files === 1 ? "file" : "files"
           } changed since stay as they are.`;
   const mode: ThreadRewindMode =
-    props.support.files && restoreFiles ? "conversation-and-files" : "conversation";
+    canRestoreFiles && restoreFiles ? "conversation-and-files" : "conversation";
+  const blocked = Boolean(ready?.unavailableReason) || props.preview?.status === "loading";
 
   return (
     <div
@@ -68,24 +103,38 @@ export function ThreadRewindConfirm(props: ThreadRewindConfirmProps) {
       <label className="composer__checkbox thread-rewind-confirm__files">
         <input
           checked={mode === "conversation-and-files"}
-          disabled={!props.support.files || props.busy}
+          disabled={!canRestoreFiles || props.busy}
           type="checkbox"
           onChange={(event) => setRestoreFiles(event.currentTarget.checked)}
         />
         <span>
           Restore files
           {filesNote ? <small>{filesNote}</small> : null}
+          {canRestoreFiles && restorable ? (
+            <small className="thread-rewind-confirm__file-list">
+              {restorable.paths.slice(0, LISTED_FILE_LIMIT).map((filePath) => (
+                <span key={filePath}>{filePath}</span>
+              ))}
+              {restorable.paths.length > LISTED_FILE_LIMIT ? (
+                <span>and {restorable.paths.length - LISTED_FILE_LIMIT} more</span>
+              ) : null}
+            </small>
+          ) : null}
         </span>
       </label>
-      {props.support.undo ? null : (
+      {props.support.undo ? (
+        <p>
+          {props.providerLabel} keeps the removed turns, so you can undo this
+          rewind until you send the next message.
+        </p>
+      ) : (
         <p className="thread-rewind-confirm__warning">
-          {props.providerLabel} does not keep the removed turns, so this rewind
-          cannot be undone.
+          This rewind cannot be undone.
         </p>
       )}
-      {props.error ? (
+      {props.error ?? ready?.unavailableReason ? (
         <p className="thread-rewind-confirm__error" role="alert">
-          {props.error}
+          {props.error ?? ready?.unavailableReason}
         </p>
       ) : null}
       <div className="thread-rewind-confirm__actions">
@@ -99,7 +148,7 @@ export function ThreadRewindConfirm(props: ThreadRewindConfirmProps) {
         </button>
         <button
           className="thread-rewind-confirm__confirm"
-          disabled={props.busy}
+          disabled={props.busy || blocked}
           type="button"
           onClick={() => props.onConfirm(mode)}
         >

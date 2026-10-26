@@ -2721,8 +2721,8 @@ function ManagedMcpConnectionRow(props: {
                   onChange={props.onToolApprovalChange}
                 />
                 <span className="settings-mcp-row__policy-hint" id={toolApprovalHintId}>
-                  {sandboxer && toolApproval === "prompt"
-                    ? "Creating or resuming a sandbox starts billing, so this defaults to asking."
+                  {sandboxer && toolApproval === "approve"
+                    ? "Selecting Sandboxer in a conversation allows its sandbox tools, including commands and file writes. Creating or resuming starts billing."
                     : TOOL_APPROVAL_OPTIONS.find((option) => option.value === toolApproval)?.description}
                   {" "}Full Access threads never ask.
                 </span>

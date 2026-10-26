@@ -59,8 +59,12 @@ import {
   type QueueThreadExecutionModeResponse,
   type RetainThreadBranchDriftRequest,
   type RetainThreadBranchDriftResponse,
+  type PreviewThreadRewindRequest,
+  type PreviewThreadRewindResponse,
   type RewindThreadRequest,
   type RewindThreadResponse,
+  type UndoThreadRewindRequest,
+  type UndoThreadRewindResponse,
   type ReloadCodexMcpConfigRequest,
   type ReloadCodexMcpConfigResponse,
   type ReloadCodexMcpServersResponse,
@@ -142,7 +146,9 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
   AGENT_REWIND_THREAD_CHANNEL,
+  AGENT_UNDO_THREAD_REWIND_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -1110,6 +1116,25 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_PREVIEW_THREAD_REWIND_CHANNEL);
+  ipcMain.handle(
+    AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
+    async (
+      _event,
+      request: PreviewThreadRewindRequest,
+    ): Promise<PreviewThreadRewindResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .previewThreadRewind(stripFederationTarget(request));
+      }
+      return await registry.previewThreadRewind(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_REWIND_THREAD_CHANNEL);
   ipcMain.handle(
     AGENT_REWIND_THREAD_CHANNEL,
@@ -1132,6 +1157,34 @@ export function registerAgentIpcHandlers(): void {
           backend: request.backend,
           threadId: request.threadId,
           mode: request.mode,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_UNDO_THREAD_REWIND_CHANNEL);
+  ipcMain.handle(
+    AGENT_UNDO_THREAD_REWIND_CHANNEL,
+    async (
+      _event,
+      request: UndoThreadRewindRequest,
+    ): Promise<UndoThreadRewindResponse> => {
+      try {
+        if (
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        ) {
+          return await getDesktopFederationRuntime()
+            .remoteBackend(request.federationTarget)
+            .undoThreadRewind(stripFederationTarget(request));
+        }
+        return await registry.undoThreadRewind(request);
+      } catch (error) {
+        appServerLog.error("undoThreadRewind failed", {
+          backend: request.backend,
+          threadId: request.threadId,
           error: error instanceof Error ? error.message : String(error),
         });
         throw error;
@@ -1540,7 +1593,9 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
+  ipcMain.removeHandler(AGENT_PREVIEW_THREAD_REWIND_CHANNEL);
   ipcMain.removeHandler(AGENT_REWIND_THREAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_UNDO_THREAD_REWIND_CHANNEL);
   ipcMain.removeHandler(AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL);

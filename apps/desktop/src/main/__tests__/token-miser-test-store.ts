@@ -1,17 +1,15 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach } from "vitest";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { TokenMiserStore, type TokenMiserStoreOptions } from "../token-miser/token-miser-store";
 
 const databases: StateDb[] = [];
 const databasePaths = new Map<string, string>();
-let databaseDirectory: string | undefined;
+const databaseDirectories: string[] = [];
 afterEach(() => {
   for (const db of databases.splice(0)) db.close();
-  if (databaseDirectory) rmSync(databaseDirectory, { recursive: true, force: true });
-  databaseDirectory = undefined;
+  for (const directory of databaseDirectories.splice(0)) removeTempStateDbDir(directory);
   databasePaths.clear();
 });
 
@@ -21,11 +19,12 @@ export class TestTokenMiserStore extends TokenMiserStore {
   constructor(root: string, options: Omit<TokenMiserStoreOptions, "stateDb"> = {}) {
     // Nested suite hooks can remove caller directories before our hook runs.
     // Own the database directory so Windows always sees close before deletion.
-    databaseDirectory ??= mkdtempSync(path.join(os.tmpdir(), "pwragent-miser-test-db-"));
     const key = path.resolve(root);
     let dbPath = databasePaths.get(key);
     if (!dbPath) {
-      dbPath = path.join(databaseDirectory, `${databasePaths.size}.sqlite`);
+      const fixture = createTempStateDb("pwragent-miser-test-db-");
+      databaseDirectories.push(fixture.tempDir);
+      dbPath = fixture.dbPath;
       databasePaths.set(key, dbPath);
     }
     const stateDb = StateDb.open(dbPath);

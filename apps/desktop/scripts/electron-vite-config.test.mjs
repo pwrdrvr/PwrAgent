@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfigFromFile } from "electron-vite";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const desktopRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -18,6 +18,8 @@ const workspaceMessagingPackages = dependencies.filter(
     name === "@pwragent/messaging-interface"
     || name.startsWith("@pwragent/messaging-provider-"),
 );
+
+afterEach(() => vi.unstubAllEnvs());
 
 async function loadDesktopConfig(command) {
   const result = await loadConfigFromFile(
@@ -64,7 +66,7 @@ describe("electron-vite dependency policy", () => {
   it("keeps runtime and optional native dependencies external", async () => {
     const config = await loadDesktopConfig("build");
     const excluded = config.main.build.externalizeDeps.exclude;
-    const explicitExternal = config.main.build.rollupOptions.external;
+    const explicitExternal = config.main.build.rolldownOptions.external;
     const nativeRuntimeDependencies = [
       "@napi-rs/canvas",
       "better-sqlite3",
@@ -92,5 +94,33 @@ describe("electron-vite dependency policy", () => {
     expect(config.preload.build.externalizeDeps.exclude).toEqual([
       "@pwragent/shared",
     ]);
+  });
+
+  it.each(["main", "preload", "renderer"])(
+    "selects only %s for an isolated production build",
+    async (target) => {
+      vi.stubEnv("PWRAGENT_BUILD_TARGET", target);
+      const config = await loadDesktopConfig("build");
+
+      expect(Object.keys(config)).toEqual([target]);
+      expect(config[target].build.sourcemap).toBe("hidden");
+      expect(config[target].build.minify).toBe("oxc");
+    },
+  );
+
+  it("ignores build target selection in development", async () => {
+    vi.stubEnv("PWRAGENT_BUILD_TARGET", "main");
+
+    expect(Object.keys(await loadDesktopConfig("serve"))).toEqual([
+      "main", "preload", "renderer",
+    ]);
+  });
+
+  it("rejects an invalid target instead of silently skipping the build", async () => {
+    vi.stubEnv("PWRAGENT_BUILD_TARGET", "typo");
+
+    await expect(loadDesktopConfig("build")).rejects.toThrow(
+      "Invalid PWRAGENT_BUILD_TARGET: typo",
+    );
   });
 });

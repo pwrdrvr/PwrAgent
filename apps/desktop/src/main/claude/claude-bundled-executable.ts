@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 
-const require = createRequire(import.meta.url);
+const requireClaudeSdk = createRequire(import.meta.url);
 
 /** Resolve only the native binary installed with our pinned SDK dependency. */
 export async function resolveBundledClaudeExecutable(options: {
@@ -25,7 +25,7 @@ export async function resolveBundledClaudeExecutable(options: {
   try {
     const resolveModule = options.resolveModule ?? ((name: string) => {
       // Resolve relative to the SDK so pnpm's isolated dependency tree works too.
-      return createRequire(require.resolve("@anthropic-ai/claude-agent-sdk")).resolve(name);
+      return createRequire(requireClaudeSdk.resolve("@anthropic-ai/claude-agent-sdk")).resolve(name);
     });
     const resolved = resolveModule(specifier);
     // Native executables cannot run inside ASAR. Packaging explicitly unpacks
