@@ -313,7 +313,7 @@ export function assertElectronCloseCompleted(summary: ElectronShutdownSummary): 
     || summary.forceExitOutcome === "timed-out"
   ) {
     throw new Error(
-      "Electron close timed out; the owning test had an open launcher pipe after app quit.",
+      "Electron close timed out in the owning test; inspect close-deadline evidence for launcher and stream state.",
     );
   }
 }

@@ -237,7 +237,7 @@ describe("Electron shutdown policy", () => {
       removeHomeRoot: async () => {
         order.push("remove-home-root");
       },
-    })).rejects.toThrow("launcher pipe");
+    })).rejects.toThrow("Electron close timed out in the owning test");
     expect(order).toEqual(["profile-process-cleanup", "remove-home-root"]);
   });
 });

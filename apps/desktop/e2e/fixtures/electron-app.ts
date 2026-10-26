@@ -55,6 +55,7 @@ import {
   type ElectronShutdownSummary,
 } from "./electron-shutdown-policy";
 import { removeTempRoot } from "./temp-root-cleanup";
+import { captureElectronCloseEvidence, observeElectronLauncher } from "./electron-close-evidence";
 import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
@@ -438,6 +439,7 @@ export async function launchElectronApp(
   // onboarding-wizard check inside `finishElectronLaunch`, which throws by
   // design.
   try {
+    observeElectronLauncher(electronApp.process());
     // Onboarding may quit before teardown. Preserve Windows ownership while
     // the main-process RPC is alive; cmd.exe's exit alone does not close pipes
     // inherited by Electron descendants.
@@ -1213,6 +1215,7 @@ export async function closeElectronApplication(
       options,
     );
   }
+  observeElectronLauncher(child);
   await captureElectronMainProcess(electronApp);
   const mainProcess = electronMainProcesses.get(electronApp);
   const quitStartedAt = Date.now();
@@ -1243,10 +1246,18 @@ export async function closeElectronApplication(
       closePromise.catch(() => undefined);
       return closePromise;
     },
-    waitForGracefulClose: async (closePromise) => await waitForClose(
-      closePromise,
-      ELECTRON_CLOSE_TIMEOUT_MS,
-    ),
+    waitForGracefulClose: async (closePromise) => {
+      const outcome = await waitForClose(closePromise, ELECTRON_CLOSE_TIMEOUT_MS);
+      if (outcome !== "closed") {
+        captureElectronCloseEvidence({
+          child,
+          diagnosticsFile: options.diagnosticsFile ?? process.env[E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV],
+          launchId: options.launchId,
+          reason: outcome,
+        });
+      }
+      return outcome;
+    },
     forceKillTree: async () => {
       await killProcessTree(child, mainProcess, quitStartedAt);
     },
