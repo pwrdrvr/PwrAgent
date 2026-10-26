@@ -4369,12 +4369,12 @@ function readFormattedTokenCount(
  * lets thread-list discovery repair both the card and its parent pricing row.
  */
 function buildPersistedCodexNativeUsageBackfill(params: {
+  activities?: readonly AppServerThreadActivityEntry[];
   fastMode?: boolean;
   model?: string;
-  overlay?: ThreadOverlayState;
   serviceTier?: string;
 }): PersistedCodexNativeUsageBackfill | undefined {
-  const activities = (params.overlay?.immutableUsageActivities ?? []).filter(
+  const activities = (params.activities ?? []).filter(
     (activity) =>
       activity.status === "completed"
       && (
@@ -5585,7 +5585,8 @@ function claudeTurnTimes(replay: AppServerThreadReplay): Map<string, ClaudeTurnT
 }
 
 function resolveLiveThreadUsageTiming(params: {
-  overlay?: ThreadOverlayState;
+  /** The thread's persisted usage activity for `turnId`, if any. */
+  activity?: AppServerThreadActivityEntry;
   reportedStartedAt?: number;
   turnId?: string;
 }): {
@@ -5597,9 +5598,9 @@ function resolveLiveThreadUsageTiming(params: {
     return {};
   }
 
-  const activity = params.overlay?.immutableUsageActivities?.find(
-    (entry) => entry.turn?.id === params.turnId,
-  );
+  const activity = params.activity?.turn?.id === params.turnId
+    ? params.activity
+    : undefined;
   const turn = activity?.turn;
   // Only a UUIDv7 id carries its own start time. Other backends (Claude's ids
   // are UUIDv4) report the start on turn/started instead.
@@ -8659,6 +8660,10 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "readTokenMiserGatePricingLines"
     | "reconcileOrphanedThreadSubAgents"
     | "moveLegacyThreadSubAgents"
+    | "moveLegacyThreadUsageActivities"
+    | "readThreadUsageActivities"
+    | "readThreadUsageActivityForTurn"
+    | "readThreadUsageSettings"
     | "markThreadToolInvocationsNoisy"
     | "setThreadSpendAlertPending"
     | "persistThreadToolInvocationBoundary"
@@ -10865,6 +10870,16 @@ export class DesktopBackendRegistry {
     this.subAgentStartupReconciliation =
       this.reconcileOrphanedThreadSubAgentsAtStartup().catch((error) => {
         backendRegistryLog.warn("sub-agent-startup-reconciliation-failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    // The one-time move of usage activities out of overlay rows, after the
+    // card repair. Sliced, and a no-op once the profile's marker is set.
+    // Nothing waits for it: a row it has not reached moves on first touch.
+    void this.subAgentStartupReconciliation
+      .then(() => this.overlayStore.moveLegacyThreadUsageActivities?.())
+      .catch((error: unknown) => {
+        backendRegistryLog.warn("usage-activity-move-failed", {
           message: error instanceof Error ? error.message : String(error),
         });
       });
@@ -14095,7 +14110,7 @@ export class DesktopBackendRegistry {
                 replay,
                 entries: overlay?.managedReviewEntries,
               }),
-          activities: overlay?.immutableUsageActivities?.filter(
+          activities: (await this.readThreadUsageActivities(backend, [request.threadId]))[request.threadId]?.filter(
             (activity) => usageActivityScope(activity) === "monitor",
           ),
         })
@@ -17444,7 +17459,7 @@ export class DesktopBackendRegistry {
     const replayWithImmutableUsage = shouldAppendTranscriptOverlays
       ? mergeTurnAnchoredUsageActivities({
           replay: replayWithManagedReviews,
-          activities: overlay?.immutableUsageActivities,
+          activities: (await this.readThreadUsageActivities(backend, [request.threadId]))[request.threadId],
         })
       : replayWithManagedReviews;
     const messageIds = [
@@ -30586,21 +30601,15 @@ export class DesktopBackendRegistry {
         ]),
       ],
     });
-    if (this.overlayStore.getThreadListingOverlayStates && nativeSubAgentThreads.length > 0) {
-      // Discovery repairs worker cards and parent pricing from durable child
-      // turn usage. Only these native workers need history-bearing overlays;
-      // ordinary rows keep the compact listing projection.
-      const nativeIds = new Set(nativeSubAgentThreads.map((thread) => thread.id));
-      const usageThreadIds = [...new Set(threadsWithPending.flatMap((thread) =>
-        (thread.codexNativeSubAgents ?? []).map((worker) => worker.threadId),
-      ))].filter((id) => nativeIds.has(id)
-        && overlaysByThreadId[id]?.handoffOrigin?.groupingMode !== "subthread");
-      if (usageThreadIds.length > 0) {
-        Object.assign(overlaysByThreadId, await this.overlayStore.getThreadOverlayStates({
-          backend: "codex", threadIds: usageThreadIds,
-        }));
-      }
-    }
+    // Discovery repairs worker cards and parent pricing from durable child
+    // turn usage. Only these native workers' usage activities are read;
+    // every row keeps the compact listing projection.
+    const nativeIds = new Set(nativeSubAgentThreads.map((thread) => thread.id));
+    const usageThreadIds = [...new Set(threadsWithPending.flatMap((thread) =>
+      (thread.codexNativeSubAgents ?? []).map((worker) => worker.threadId),
+    ))].filter((id) => nativeIds.has(id)
+      && overlaysByThreadId[id]?.handoffOrigin?.groupingMode !== "subthread");
+    const usageActivitiesByThreadId = await this.readThreadUsageActivities("codex", usageThreadIds);
     // Native-worker cards only: a primary-key range per parent that never
     // reads the parent's Token Miser gate history.
     const nativeCardsByThreadId = await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
@@ -30613,6 +30622,7 @@ export class DesktopBackendRegistry {
       nativeThreads: nativeSubAgentThreads,
       overlaysByThreadId,
       parentThreads: threadsWithPending,
+      usageActivitiesByThreadId,
     });
     await this.reconcilePersistedCodexNativeSubAgents(threadsWithPending, nativeCardsByThreadId);
     const visibleThreads = threadsWithPending.filter(
@@ -30873,10 +30883,15 @@ export class DesktopBackendRegistry {
         },
       });
     }
-    const overlays = await this.overlayStore.getThreadOverlayStates({
-      backend: "codex",
+    // The reconcile reads listing metadata only (a worker's handoff origin);
+    // usage activities are read from their own table below.
+    const overlayRequest = {
+      backend: "codex" as const,
       threadIds: [threadId, ...nativeThreads.map((thread) => thread.id)],
-    });
+    };
+    const overlays = this.overlayStore.getThreadListingOverlayStates
+      ? await this.overlayStore.getThreadListingOverlayStates(overlayRequest)
+      : await this.overlayStore.getThreadOverlayStates(overlayRequest);
     await this.reconcileDiscoveredCodexNativeSubAgents({
       nativeCardsByThreadId: await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
         backend: "codex",
@@ -30886,6 +30901,10 @@ export class DesktopBackendRegistry {
       nativeThreads,
       overlaysByThreadId: overlays,
       parentThreads: grouped,
+      usageActivitiesByThreadId: await this.readThreadUsageActivities(
+        "codex",
+        nativeThreads.map((thread) => thread.id),
+      ),
     });
   }
 
@@ -30894,6 +30913,7 @@ export class DesktopBackendRegistry {
     nativeThreads: AppServerThreadSummary[];
     overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
     parentThreads: AppServerThreadSummary[];
+    usageActivitiesByThreadId: Record<string, AppServerThreadActivityEntry[]>;
   }): Promise<void> {
     if (params.nativeThreads.length === 0) {
       return;
@@ -30968,8 +30988,9 @@ export class DesktopBackendRegistry {
           nativeThread.serviceTier
           ?? existing?.monitorUsage?.serviceTier
           ?? parent.serviceTier;
+        const childUsageActivities = params.usageActivitiesByThreadId[nativeThread.id];
         const hasPersistedTurnUsage = Boolean(
-          childOverlay?.immutableUsageActivities?.some(
+          childUsageActivities?.some(
             (activity) =>
               activity.status === "completed"
               && (
@@ -30988,9 +31009,9 @@ export class DesktopBackendRegistry {
           serviceTier ??= parentPricingSettings?.serviceTier;
         }
         const persistedUsageBackfill = buildPersistedCodexNativeUsageBackfill({
+          activities: childUsageActivities,
           fastMode: preferredFastMode,
           model: preferredModel,
-          overlay: childOverlay,
           serviceTier,
         });
         // A running worker's usage can be live in memory, off its card and
@@ -32621,6 +32642,15 @@ export class DesktopBackendRegistry {
     await Promise.all(pending);
   }
 
+  /** Usage activities live in their own table, not the overlay row. */
+  private async readThreadUsageActivities(
+    backend: AppServerBackendKind,
+    threadIds: readonly string[],
+  ): Promise<Record<string, AppServerThreadActivityEntry[]>> {
+    if (threadIds.length === 0 || !this.overlayStore.readThreadUsageActivities) return {};
+    return await this.overlayStore.readThreadUsageActivities({ backend, threadIds: [...threadIds] });
+  }
+
   private async recordLiveThreadUsage(
     event: AgentEvent,
     work?: LiveThreadUsageEmitWork,
@@ -32751,10 +32781,14 @@ export class DesktopBackendRegistry {
       });
     }
 
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: event.backend,
-      threadId,
-    });
+    // Six scalars and this turn's usage row, never the whole overlay: this
+    // runs on every token-usage event.
+    const overlay = this.overlayStore.readThreadUsageSettings
+      ? await this.overlayStore.readThreadUsageSettings({ backend: event.backend, threadId })
+      : await this.overlayStore.getThreadOverlayState({ backend: event.backend, threadId });
+    const turnUsageActivity = turnId && this.overlayStore.readThreadUsageActivityForTurn
+      ? await this.overlayStore.readThreadUsageActivityForTurn({ backend: event.backend, threadId, turnId })
+      : undefined;
     const tokenUsage = notification.params.tokenUsage;
     const model =
       (typeof notification.params.model === "string" && notification.params.model.trim()
@@ -32777,7 +32811,7 @@ export class DesktopBackendRegistry {
       ]) ??
       overlay?.reasoningEffort;
     const resolvedUsageTiming = resolveLiveThreadUsageTiming({
-      overlay,
+      activity: turnUsageActivity,
       reportedStartedAt: turnId
         ? this.usageTurnStartTimes.get(JSON.stringify([event.backend, threadId, turnId]))
         : undefined,
@@ -33056,7 +33090,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     inheritedTokenUsage?: TaskMonitorTokenUsageBreakdown;
     model?: string;
-    overlay?: ThreadOverlayState;
+    overlay?: Pick<ThreadOverlayState, "forkSourceThreadId" | "forkBaselineCaptured">;
     serviceTier?: string;
     threadId: string;
     turnId?: string;

@@ -8,7 +8,6 @@ import type {
   AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerThreadActivityDetail,
-  AppServerThreadActivityEntry,
   AppServerThreadImagePart,
   AppServerReviewContext,
   AppServerThreadReviewEntry,
@@ -3152,12 +3151,6 @@ export type ThreadOverlayState = {
    * request matches this key.
    */
   prsRefreshKey?: string;
-  /**
-   * PwrAgent-authored finalized token usage rows. These are immutable
-   * transcript activities because provider hydration can later report a
-   * narrower per-request usage payload for the same completed turn.
-   */
-  immutableUsageActivities?: AppServerThreadActivityEntry[];
   /**
    * PwrAgent-managed review markers and successful result artifacts. These
    * supplement the parent provider transcript because managed review child

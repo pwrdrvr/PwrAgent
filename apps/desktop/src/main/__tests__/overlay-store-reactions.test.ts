@@ -281,12 +281,12 @@ describe("SqliteOverlayStore — thread reactions", () => {
       threads: [buildThreadSummary({ updatedAt: 1500 })],
     });
 
-    const overlay = await store.getThreadOverlayState({
+    const { "thread-1": activities } = await store.readThreadUsageActivities({
       backend: "codex",
-      threadId: "thread-1",
+      threadIds: ["thread-1"],
     });
-    expect(overlay?.immutableUsageActivities).toHaveLength(1);
-    expect(overlay?.immutableUsageActivities?.[0]?.summary).toBe(
+    expect(activities).toHaveLength(1);
+    expect(activities?.[0]?.summary).toBe(
       "Turn usage: 100 uncached in · 200 cached · 30 out",
     );
   });
@@ -313,12 +313,12 @@ describe("SqliteOverlayStore — thread reactions", () => {
     });
 
     expect(persisted.persisted).toBe(true);
-    const overlay = await store.getThreadOverlayState({
+    const { "thread-1": activities } = await store.readThreadUsageActivities({
       backend: "codex",
-      threadId: "thread-1",
+      threadIds: ["thread-1"],
     });
-    expect(overlay?.immutableUsageActivities).toHaveLength(1);
-    expect(overlay?.immutableUsageActivities?.[0]?.summary).toBe(
+    expect(activities).toHaveLength(1);
+    expect(activities?.[0]?.summary).toBe(
       "Monitor usage: 100 uncached in · 200 cached · 30 out",
     );
   });

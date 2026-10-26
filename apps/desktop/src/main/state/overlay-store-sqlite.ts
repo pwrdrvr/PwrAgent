@@ -9,10 +9,12 @@ import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } fr
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
+import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
+  AppServerThreadActivityEntry,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
   AutomationThreadSummary,
@@ -80,7 +82,6 @@ import {
   DEFAULT_PULL_REQUEST_PROVIDER,
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
-  MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
   MAX_MANAGED_REVIEW_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
   MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES,
@@ -769,11 +770,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   private readonly directoryLaunchpadListeners = new Set<() => void>();
   private transactionNavigationRead = 0;
   private readonly subAgentTable: ThreadSubAgentTable;
+  private readonly usageActivityTable: ThreadUsageActivityTable;
+  /**
+   * The newest PR lookup time per thread key whose unchanged result was not
+   * written (see `setThreadPullRequests`). Reads and the stale-observation
+   * check treat it as the stored `prsFetchedAt`, as if it had been written.
+   */
+  private readonly unwrittenPrsFetchedAt = new Map<string, number>();
   constructor(private readonly stateDb: StateDb) {
-    this.subAgentTable = new ThreadSubAgentTable(stateDb.raw, {
-      get: (key) => stateDb.getMeta(key),
-      set: (key, value) => stateDb.setMeta(key, value),
-    });
+    const meta = {
+      get: (key: string) => stateDb.getMeta(key),
+      set: (key: string, value: string) => stateDb.setMeta(key, value),
+    };
+    this.subAgentTable = new ThreadSubAgentTable(stateDb.raw, meta);
+    this.usageActivityTable = new ThreadUsageActivityTable(stateDb.raw, meta);
   }
 
   /** Read-only stamp prevents a post-mutation query joining pre-mutation work. */
@@ -1243,7 +1253,6 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           codexEnvironmentRuntime:
             current?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime,
           retainedBranchDriftPairs: current?.retainedBranchDriftPairs,
-          immutableUsageActivities: current?.immutableUsageActivities,
           managedReviewEntries: current?.managedReviewEntries,
           pendingManagedReviewContextEntryIds:
             current?.pendingManagedReviewContextEntryIds,
@@ -1267,12 +1276,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }
     }
 
+    // One narrowed read for every check and summary below. A write re-reads
+    // the full row, and then its own summary overlay.
+    const summaryOverlays = this.readNavigationSummaryOverlays(
+      threads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+    );
+    const rewrite = (threadKey: string, change: (current: ThreadOverlayState) => ThreadOverlayState) => {
+      const current = this.getThread(threadKey);
+      if (!current) return;
+      this.putThread(threadKey, change(current));
+      summaryOverlays.set(threadKey, this.readNavigationSummaryOverlays([threadKey]).get(threadKey));
+    };
+
     for (const thread of persistReconciliation ? threads : []) {
       if (!isAcpBackendId(thread.source) || !thread.executionMode) {
         continue;
       }
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const current = this.getThread(threadKey);
+      const current = summaryOverlays.get(threadKey);
       if (
         current
         && shouldApplyAcpExecutionModeSnapshot(current, thread)
@@ -1281,11 +1302,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           || current.executionModeUpdatedAt !== thread.updatedAt
         )
       ) {
-        this.putThread(threadKey, {
-          ...current,
+        rewrite(threadKey, (stored) => ({
+          ...stored,
           executionMode: thread.executionMode,
           executionModeUpdatedAt: thread.updatedAt,
-        });
+        }));
       }
     }
 
@@ -1298,23 +1319,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         continue;
       }
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const current = this.getThread(threadKey);
+      const current = summaryOverlays.get(threadKey);
       if (current?.agent && current.agent.name !== threadTitle) {
-        this.putThread(threadKey, {
-          ...current,
+        rewrite(threadKey, (stored) => stored.agent ? {
+          ...stored,
           agent: {
-            ...current.agent,
+            ...stored.agent,
             name: threadTitle,
             updatedAt: params.fetchedAt,
           },
-        });
+        } : stored);
       }
     }
 
     const overlayByThreadKey = Object.fromEntries(
       threads.map((thread) => {
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-        const overlay = this.getThread(threadKey);
+        const overlay = summaryOverlays.get(threadKey);
         const queue = params.queuedExecutionModesByThreadKey?.[threadKey];
         if (queue) {
           // Merge the in-memory queue onto the persisted overlay so
@@ -1400,6 +1421,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return { ...snapshot, unchanged };
   }
 
+  /**
+   * Overlays for navigation summaries, by identity key, in one statement per
+   * 500 keys. Drops the fields no summary reads (review bodies, detached PR
+   * bookkeeping, and any legacy array a one-time move has not reached), so
+   * their bytes never cross into JavaScript. Never a read-modify-write
+   * source: writing one back would erase those fields.
+   */
+  private readNavigationSummaryOverlays(
+    threadKeys: readonly string[],
+  ): Map<string, ThreadOverlayState | undefined> {
+    const result = new Map<string, ThreadOverlayState | undefined>();
+    const keys = [...new Set(threadKeys)];
+    for (let offset = 0; offset < keys.length; offset += 500) {
+      const batch = keys.slice(offset, offset + 500);
+      const rows = this.stateDb.raw.prepare(`
+        SELECT json_remove(threads.payload, '$.managedReviewEntries', '$.pendingManagedReviewContextEntryIds',
+          '$.detachedPrs', '$.immutableUsageActivities', '$.subAgents') AS payload
+        FROM json_each(?) AS requested
+        LEFT JOIN threads ON threads.thread_id = requested.value
+        ORDER BY requested.key
+      `).all(JSON.stringify(batch.map(encodeThreadIdentityKeyForStorage))) as Array<{ payload: string | null }>;
+      const overlays = this.withPrAutoDispatchPending(rows.map((row) => row.payload === null
+        ? undefined
+        : normalizeThreadOverlayState(JSON.parse(row.payload) as ThreadOverlayState)));
+      batch.forEach((threadKey, index) => {
+        result.set(threadKey, this.codexEnvironmentLiveOutput.apply(threadKey, overlays[index]));
+      });
+    }
+    return result;
+  }
+
   /** Project one explicit identity without enumerating navigation membership,
    * directories, launchpads, queues, or constructing a snapshot/hash. Backend
    * metadata is a covering index read, including for legacy oversized rows.
@@ -1457,16 +1509,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey);
     const seenAt = params.seenAt ?? Date.now();
+    const lastSeenUpdatedAt = params.seenUpdatedAt ?? current?.lastSeenUpdatedAt;
 
-    this.putThread(threadKey, {
-      ...(current ?? {}),
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: current?.executionMode ?? "default",
-      lastSeenAt: seenAt,
-      lastSeenUpdatedAt: params.seenUpdatedAt ?? current?.lastSeenUpdatedAt,
-      extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
-    });
+    // Unread is the watermark alone. `lastSeenAt` only dates activity for
+    // archive retention, so re-marking an unchanged watermark refreshes it at
+    // most once per stamp interval.
+    if (
+      !current
+      || current.lastSeenUpdatedAt !== lastSeenUpdatedAt
+      || !isStampFresh(current.lastSeenAt, seenAt)
+    ) {
+      this.putThread(threadKey, {
+        ...(current ?? {}),
+        backend: params.backend,
+        threadId: params.threadId,
+        executionMode: current?.executionMode ?? "default",
+        lastSeenAt: seenAt,
+        lastSeenUpdatedAt,
+        extraLinkedDirectories: current?.extraLinkedDirectories ?? [],
+      });
+    }
 
     return {
       backend: params.backend,
@@ -1579,7 +1641,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threadId: string;
   }): Promise<ThreadOverlayState | undefined> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    return this.getThread(threadKey);
+    return this.withUnwrittenPrsFetchedAt(threadKey, this.getThread(threadKey));
+  }
+
+  private withUnwrittenPrsFetchedAt(
+    threadKey: string,
+    overlay: ThreadOverlayState | undefined,
+  ): ThreadOverlayState | undefined {
+    const unwritten = this.unwrittenPrsFetchedAt.get(threadKey);
+    return overlay && unwritten !== undefined && unwritten > (overlay.prsFetchedAt ?? -Infinity)
+      ? { ...overlay, prsFetchedAt: unwritten }
+      : overlay;
   }
 
   /**
@@ -1612,40 +1684,126 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  /**
+   * Append one finalized usage activity to the thread's `thread_usage_activities`
+   * rows. One small row, never the overlay row: the thread's overlay row is
+   * written only when it does not exist yet, as the array's first entry used to
+   * create it.
+   */
   async persistThreadUsageActivity(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
-    activity: NonNullable<ThreadOverlayState["immutableUsageActivities"]>[number];
-  }): Promise<{ overlay: ThreadOverlayState; persisted: boolean }> {
-    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
+    activity: AppServerThreadActivityEntry;
+  }): Promise<{ persisted: boolean }> {
     if (
       !params.activity.id.startsWith("live-turn-usage-") &&
       !params.activity.summary.startsWith("Turn usage:") &&
       !params.activity.summary.startsWith("Monitor usage:")
     ) {
-      return { overlay: current, persisted: false };
+      return { persisted: false };
     }
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
+    // The array's retained ids decided duplicates; move it before deciding.
+    this.usageActivityTable.moveLegacyActivities(storageKey);
+    const persisted = this.stateDb.raw.transaction(() => {
+      const stored = this.usageActivityTable.append(storageKey, params.activity);
+      if (stored && !this.stateDb.raw.prepare("SELECT 1 FROM threads WHERE thread_id = ?").get(storageKey)) {
+        this.putThread(threadKey, {
+          backend: params.backend,
+          threadId: params.threadId,
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        });
+      }
+      return stored;
+    })();
+    return { persisted };
+  }
 
-    const existingActivities = current.immutableUsageActivities ?? [];
-    if (existingActivities.some((activity) => activity.id === params.activity.id)) {
-      return { overlay: current, persisted: false };
-    }
+  /**
+   * The newest `MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES` usage activities per
+   * thread, oldest first. Threads with none are absent.
+   */
+  async readThreadUsageActivities(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: string[];
+  }): Promise<Record<string, AppServerThreadActivityEntry[]>> {
+    const ids = [...new Set(params.threadIds)];
+    const keyById = new Map(ids.map((id) => [
+      id,
+      encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(params.backend, id)),
+    ]));
+    for (const key of keyById.values()) this.usageActivityTable.moveLegacyActivities(key);
+    const byKey = this.usageActivityTable.list([...keyById.values()]);
+    return Object.fromEntries(ids.flatMap((id) => {
+      const activities = byKey.get(keyById.get(id)!);
+      return activities ? [[id, activities]] : [];
+    }));
+  }
 
-    const nextState: ThreadOverlayState = {
-      ...current,
-      immutableUsageActivities: [
-        ...existingActivities,
-        params.activity,
-      ].slice(-MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES),
+  /** The thread's first retained usage activity for one turn, from the turn index. */
+  async readThreadUsageActivityForTurn(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    turnId: string;
+  }): Promise<AppServerThreadActivityEntry | undefined> {
+    const storageKey = encodeThreadIdentityKeyForStorage(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    this.usageActivityTable.moveLegacyActivities(storageKey);
+    return this.usageActivityTable.getForTurn(storageKey, params.turnId);
+  }
+
+  /**
+   * The overlay fields live token-usage pricing reads, projected in SQLite.
+   * `thread/tokenUsage/updated` arrives several times per turn; it must not
+   * parse and materialize the whole overlay row to read these.
+   */
+  async readThreadUsageSettings(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<ThreadUsageSettings | undefined> {
+    const row = this.stateDb.raw.prepare(`SELECT
+        json_extract(payload, '$.model') AS model,
+        json_extract(payload, '$.reasoningEffort') AS reasoning_effort,
+        json_extract(payload, '$.serviceTier') AS service_tier,
+        json_type(payload, '$.fastMode') AS fast_mode,
+        json_extract(payload, '$.forkSourceThreadId') AS fork_source_thread_id,
+        json_type(payload, '$.forkBaselineCaptured') AS fork_baseline_captured
+      FROM threads WHERE thread_id = ?`).get(encodeThreadIdentityKeyForStorage(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    )) as {
+      model: unknown; reasoning_effort: unknown; service_tier: unknown; fast_mode: string | null;
+      fork_source_thread_id: unknown; fork_baseline_captured: string | null;
+    } | undefined;
+    if (!row) return undefined;
+    const text = (value: unknown) => typeof value === "string" ? value : undefined;
+    const flag = (type: string | null) => type === "true" ? true : type === "false" ? false : undefined;
+    return {
+      model: text(row.model),
+      reasoningEffort: text(row.reasoning_effort),
+      serviceTier: text(row.service_tier),
+      fastMode: flag(row.fast_mode),
+      forkSourceThreadId: text(row.fork_source_thread_id),
+      forkBaselineCaptured: flag(row.fork_baseline_captured),
     };
-    this.putThread(threadKey, nextState);
-    return { overlay: nextState, persisted: true };
+  }
+
+  /**
+   * The one-time move of usage activities out of `threads.payload`, in
+   * slices of about `byteBudget` payload bytes with the event loop free
+   * between them. A no-op once the profile's marker is set.
+   */
+  async moveLegacyThreadUsageActivities(options?: {
+    byteBudget?: number;
+    yieldBetweenSlices?: () => Promise<void>;
+  }): Promise<{ slices: number }> {
+    return await this.runLegacyPayloadMove(
+      () => this.usageActivityTable.isMoveComplete(),
+      (cursor, byteBudget) => this.usageActivityTable.moveLegacyActivitiesSlice(cursor, byteBudget),
+      options,
+    );
   }
 
   async upsertManagedReviewEntry(params: {
@@ -3997,13 +4155,25 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     byteBudget?: number;
     yieldBetweenSlices?: () => Promise<void>;
   }): Promise<{ slices: number }> {
+    return await this.runLegacyPayloadMove(
+      () => this.subAgentTable.isMoveComplete(),
+      (cursor, byteBudget) => this.subAgentTable.moveLegacyCardsSlice(cursor, byteBudget),
+      options,
+    );
+  }
+
+  private async runLegacyPayloadMove(
+    isComplete: () => boolean,
+    moveSlice: (cursor: number, byteBudget: number) => number | undefined,
+    options?: { byteBudget?: number; yieldBetweenSlices?: () => Promise<void> },
+  ): Promise<{ slices: number }> {
     const byteBudget = options?.byteBudget ?? 4 * 1024 * 1024;
     const yieldBetweenSlices = options?.yieldBetweenSlices
       ?? (() => new Promise<void>((resolve) => setImmediate(resolve)));
     let cursor: number | undefined = 0;
     let slices = 0;
-    while (cursor !== undefined && !this.subAgentTable.isMoveComplete()) {
-      cursor = this.subAgentTable.moveLegacyCardsSlice(cursor, byteBudget);
+    while (cursor !== undefined && !isComplete()) {
+      cursor = moveSlice(cursor, byteBudget);
       slices += 1;
       if (cursor !== undefined) {
         // Keep the WAL near one slice's size instead of the whole move's.
@@ -5678,18 +5848,22 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     refreshKey?: string;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
+    const stored = this.getThread(threadKey);
+    const current = stored ?? {
       backend: params.backend,
       threadId: params.threadId,
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
     const fetchedAt = params.fetchedAt ?? Date.now();
+    // An unchanged lookup that was not written still counts as the newest
+    // observation, so a slower, older lookup cannot overwrite its result.
+    const observed = this.withUnwrittenPrsFetchedAt(threadKey, current) ?? current;
     if (
-      current.prsFetchedAt !== undefined
-      && current.prsFetchedAt > fetchedAt
+      observed.prsFetchedAt !== undefined
+      && observed.prsFetchedAt > fetchedAt
     ) {
-      return current;
+      return observed;
     }
     const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys);
     const detachedPrs = mergePrSummariesByStatusKey(
@@ -5710,7 +5884,22 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       prsFetchedAt: fetchedAt,
       prsRefreshKey: params.refreshKey,
     };
+    // A lookup that found what is stored refreshes only its stamp, at most
+    // once per stamp interval. Until then this process keeps the exact time in
+    // memory; the stored stamp only seeds the lookup registry after a restart.
+    if (
+      stored
+      && stored.prsRefreshKey === nextState.prsRefreshKey
+      && isStampFresh(stored.prsFetchedAt, fetchedAt)
+      && sameJson(stored.prs, nextState.prs)
+      && sameJson(stored.detachedPrKeys, nextState.detachedPrKeys)
+      && sameJson(stored.detachedPrs, nextState.detachedPrs)
+    ) {
+      this.unwrittenPrsFetchedAt.set(threadKey, fetchedAt);
+      return nextState;
+    }
     this.putThread(threadKey, nextState);
+    this.unwrittenPrsFetchedAt.delete(threadKey);
     return nextState;
   }
 
@@ -5973,6 +6162,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   async getThreadListingOverlayStates(params: {
     backend: ThreadOverlayState["backend"];
     threadIds: string[];
+    /** Attach pending PR auto-dispatch claims, as the full read does. */
+    withPrAutoDispatchPending?: boolean;
   }): Promise<Record<string, ThreadOverlayState | undefined>> {
     const ids = [...new Set(params.threadIds)];
     const entries: Array<[string, ThreadOverlayState | undefined]> = [];
@@ -5992,11 +6183,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         FROM json_each(?) AS requested
         LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
       `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
-      for (const row of rows) {
-        entries.push([row.id, row.payload === null ? undefined : this.withCodexEnvironmentLiveOutput(
-          normalizeThreadOverlayState(JSON.parse(row.payload)),
-        )]);
-      }
+      const overlays = rows.map((row) => row.payload === null ? undefined : this.withCodexEnvironmentLiveOutput(
+        normalizeThreadOverlayState(JSON.parse(row.payload)),
+      ));
+      const withPending = params.withPrAutoDispatchPending ? this.withPrAutoDispatchPending(overlays) : overlays;
+      rows.forEach((row, index) => entries.push([row.id, withPending[index]]));
     }
     return Object.fromEntries(entries);
   }
@@ -6020,38 +6211,45 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         FROM json_each(?) AS requested
         LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
       `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
-      const overlays = rows.map((row) => ({
-        id: row.id,
-        overlay: row.payload === null ? undefined : this.withCodexEnvironmentLiveOutput(
+      const overlays = this.withPrAutoDispatchPending(rows.map((row) =>
+        row.payload === null ? undefined : this.withCodexEnvironmentLiveOutput(
           normalizeThreadOverlayState(JSON.parse(row.payload)),
-        ),
-      }));
-      // Read pending claims using the decoded identity, as getThread does.
-      // Do not json_extract the full overlay in SQLite: histories can be large
-      // and the JavaScript consumer already needs to parse that payload once.
-      const identities = overlays.flatMap(({ overlay }) => overlay
-        ? [{ backend: overlay.backend, threadId: overlay.threadId }] : []);
-      const pendingRows = identities.length === 0 ? [] : this.stateDb.raw.prepare(`
-        SELECT json_extract(requested.value, '$.backend') AS backend,
-          json_extract(requested.value, '$.threadId') AS thread_id, claims.payload
-        FROM json_each(?) AS requested
-        LEFT JOIN pr_auto_dispatch_claims AS claims
-          ON claims.backend = json_extract(requested.value, '$.backend')
-          AND claims.thread_id = json_extract(requested.value, '$.threadId')
-          AND claims.status = 'pending'
-      `).all(JSON.stringify(identities)) as Array<{
-        backend: ThreadOverlayState["backend"]; thread_id: string; payload: string | null;
-      }>;
-      const pendingByKey = new Map(pendingRows.map((row) => [
-        buildThreadIdentityKey(row.backend, row.thread_id),
-        row.payload ? parsePrAutoDispatchPendingRecord(row.payload) : undefined,
-      ]));
-      for (const { id, overlay } of overlays) {
-        const pending = overlay && pendingByKey.get(buildThreadIdentityKey(overlay.backend, overlay.threadId));
-        entries.push([id, overlay && pending ? { ...overlay, prAutoDispatchPending: pending.pending } : overlay]);
-      }
+        )));
+      rows.forEach((row, index) => entries.push([row.id, overlays[index]]));
     }
     return Object.fromEntries(entries);
+  }
+
+  /**
+   * Attach pending PR auto-dispatch claims, as `getThread` does, in one
+   * statement for the batch. Reads claims by the decoded identity; never
+   * json_extracts the overlay payloads.
+   */
+  private withPrAutoDispatchPending(
+    overlays: ReadonlyArray<ThreadOverlayState | undefined>,
+  ): Array<ThreadOverlayState | undefined> {
+    const identities = overlays.flatMap((overlay) => overlay
+      ? [{ backend: overlay.backend, threadId: overlay.threadId }] : []);
+    if (identities.length === 0) return [...overlays];
+    const pendingRows = this.stateDb.raw.prepare(`
+      SELECT json_extract(requested.value, '$.backend') AS backend,
+        json_extract(requested.value, '$.threadId') AS thread_id, claims.payload
+      FROM json_each(?) AS requested
+      LEFT JOIN pr_auto_dispatch_claims AS claims
+        ON claims.backend = json_extract(requested.value, '$.backend')
+        AND claims.thread_id = json_extract(requested.value, '$.threadId')
+        AND claims.status = 'pending'
+    `).all(JSON.stringify(identities)) as Array<{
+      backend: ThreadOverlayState["backend"]; thread_id: string; payload: string | null;
+    }>;
+    const pendingByKey = new Map(pendingRows.map((row) => [
+      buildThreadIdentityKey(row.backend, row.thread_id),
+      row.payload ? parsePrAutoDispatchPendingRecord(row.payload) : undefined,
+    ]));
+    return overlays.map((overlay) => {
+      const pending = overlay && pendingByKey.get(buildThreadIdentityKey(overlay.backend, overlay.threadId));
+      return overlay && pending ? { ...overlay, prAutoDispatchPending: pending.pending } : overlay;
+    });
   }
 
   async upsertWorktreeSnapshot(params: {
@@ -6087,7 +6285,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     updatedAt?: number;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
+    const stored = this.getThread(threadKey);
+    const current = stored ?? {
       backend: params.backend,
       threadId: params.threadId,
       extraLinkedDirectories: [],
@@ -6097,6 +6296,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       executionMode: params.executionMode,
       executionModeUpdatedAt: params.updatedAt ?? Date.now(),
     };
+    // Every turn start re-asserts the mode. Only an ACP thread reads the
+    // timestamp (to rank the overlay against a provider snapshot), so an
+    // unchanged mode elsewhere writes nothing.
+    if (
+      stored
+      && stored.executionMode === nextState.executionMode
+      && (
+        !isAcpBackendId(params.backend)
+        || stored.executionModeUpdatedAt === nextState.executionModeUpdatedAt
+      )
+    ) {
+      return stored;
+    }
     this.putThread(threadKey, nextState);
     return nextState;
   }
@@ -6311,7 +6523,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     modelSettingsManuallyUpdatedAt?: number;
   }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
+    const stored = this.getThread(threadKey);
+    const current = stored ?? {
       backend: params.backend,
       threadId: params.threadId,
       executionMode: "default" as const,
@@ -6339,6 +6552,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       serviceTier: params.serviceTier,
       fastMode: params.fastMode,
     };
+    // Every turn start re-asserts the thread's settings; unchanged ones
+    // write nothing. Compared whole, so a field added above is covered.
+    if (stored && sameJson(stored, nextState)) {
+      return stored;
+    }
     this.putThread(threadKey, nextState);
     return nextState;
   }
@@ -8842,11 +9060,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .prepare("SELECT payload FROM threads WHERE thread_id = ?")
       .get(storageKey) as { payload: string } | undefined;
     if (!row) return undefined;
-    const parsed = JSON.parse(row.payload) as ThreadOverlayState & { subAgents?: unknown };
+    const parsed = JSON.parse(row.payload) as ThreadOverlayState & LegacyOverlayArrays;
+    // First touch of a row a one-time move has not reached yet.
     if (parsed.subAgents !== undefined) {
-      // First touch of a row the one-time move has not reached yet.
       this.subAgentTable.moveLegacyCards(storageKey);
       delete parsed.subAgents;
+    }
+    if (parsed.immutableUsageActivities !== undefined) {
+      this.usageActivityTable.moveLegacyActivities(storageKey);
+      delete parsed.immutableUsageActivities;
     }
     const overlay = normalizeThreadOverlayState(parsed);
     const pending = this.readThreadPrAutoDispatchPending({
@@ -8980,6 +9202,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       // Explicit, not a trigger: with recursive_triggers on, INSERT OR REPLACE
       // fires delete triggers, which would erase a live thread's cards.
       this.subAgentTable.deleteForThreads(storageKeys);
+      this.usageActivityTable.deleteForThreads(storageKeys);
     })();
     this.navigationOverlayCache = undefined;
   }
@@ -8992,13 +9215,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       queuedExecutionMode: _queuedExecutionMode,
       queuedExecutionModeAt: _queuedExecutionModeAt,
       prAutoDispatchPending: _prAutoDispatchPending,
-      // Cards are rows in `thread_sub_agents`, never overlay JSON.
+      // Cards and usage activities are rows in their own tables, never
+      // overlay JSON.
       subAgents: _subAgents,
+      immutableUsageActivities: _immutableUsageActivities,
       ...persistable
-    } = state as ThreadOverlayState & { subAgents?: unknown };
+    } = state as ThreadOverlayState & LegacyOverlayArrays;
     const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
-    // Replacing a row the one-time move has not reached would drop its cards.
+    // Replacing a row a one-time move has not reached would drop its array.
     this.subAgentTable.moveLegacyCards(storageKey);
+    this.usageActivityTable.moveLegacyActivities(storageKey);
     const navigationCache = this.navigationOverlayCache;
     const previousThreadChanges = navigationCache ? sqliteThreadChangeVersion(this.stateDb.raw) : undefined;
     this.stateDb.raw
@@ -9461,14 +9687,43 @@ function normalizeThreadAgent(
   };
 }
 
+/** What `readThreadUsageSettings` reads; absent fields are undefined. */
+export type ThreadUsageSettings = Pick<
+  ThreadOverlayState,
+  "model" | "reasoningEffort" | "serviceTier" | "fastMode" | "forkSourceThreadId" | "forkBaselineCaptured"
+>;
+
+/**
+ * How long a stored stamp (`lastSeenAt`, `prsFetchedAt`) may lag a re-assertion
+ * of an unchanged value before it is rewritten. Each rewrite copies the whole
+ * overlay row, and neither stamp is read at a finer grain than minutes.
+ */
+const UNCHANGED_STAMP_REFRESH_MS = 5 * 60_000;
+
+function isStampFresh(stored: number | undefined, next: number): boolean {
+  return stored !== undefined && next - stored < UNCHANGED_STAMP_REFRESH_MS;
+}
+
+/** Structural equality for JSON-shaped overlay values; `undefined` equals `undefined` only. */
+function sameJson(left: unknown, right: unknown): boolean {
+  return left === right || JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** Arrays that moved out of `threads.payload` into their own tables. */
+type LegacyOverlayArrays = {
+  subAgents?: unknown;
+  immutableUsageActivities?: unknown;
+};
+
 function normalizeThreadOverlayState(
   state: ThreadOverlayState,
 ): ThreadOverlayState {
-  // A row the one-time move has not reached may still carry its card array.
-  // Cards are read from `thread_sub_agents`; never hand the array onward.
-  if ((state as { subAgents?: unknown }).subAgents !== undefined) {
-    const { subAgents: _legacyCards, ...withoutCards } = state as ThreadOverlayState & { subAgents?: unknown };
-    state = withoutCards;
+  // A row a one-time move has not reached may still carry its card or usage
+  // array. Both are read from their own tables; never hand an array onward.
+  const legacy = state as ThreadOverlayState & LegacyOverlayArrays;
+  if (legacy.subAgents !== undefined || legacy.immutableUsageActivities !== undefined) {
+    const { subAgents: _legacyCards, immutableUsageActivities: _legacyUsage, ...withoutArrays } = legacy;
+    state = withoutArrays;
   }
   if (
     state.agent?.instructions === LEGACY_HANDOFF_AGENT_INSTRUCTIONS &&

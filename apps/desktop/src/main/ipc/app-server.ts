@@ -797,10 +797,17 @@ async function hydrateRetainedThreadOverlayData(
         ]
       > => [
         backend,
-        await overlayStore.getThreadOverlayStates({
-          backend,
-          threadIds: [...threadIds],
-        }),
+        // Listing metadata only: retention reads no transcript field.
+        overlayStore.getThreadListingOverlayStates
+          ? await overlayStore.getThreadListingOverlayStates({
+              backend,
+              threadIds: [...threadIds],
+              withPrAutoDispatchPending: true,
+            })
+          : await overlayStore.getThreadOverlayStates({
+              backend,
+              threadIds: [...threadIds],
+            }),
       ],
     ),
   );

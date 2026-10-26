@@ -50,7 +50,7 @@ describe("thread listing overlay reads", () => {
           parentThreadId: "parent", parentThreadBackend: "acp:grok", parentThreadInstanceId: "peer",
           worktreeSnapshots: [{ id: "snapshot", worktreePath: "/contrived/worktree" }],
           handoffOrigin: { groupingMode: "subthread" }, subAgents: [], pinnedRank: "a",
-          immutableUsageActivities: [{ text: history }], managedReviewEntries: [{ text: history }],
+          managedReviewEntries: [{ text: history }],
           permissionTransitionLog: [{ note: history }], messagingBindingTransitionLog: [{ note: history }],
           turnFailureLog: [{ message: history }], questionnaireActivityLog: [{ text: history }],
         };
@@ -58,7 +58,7 @@ describe("thread listing overlay reads", () => {
           .run(JSON.stringify(payload), `codex:${id}`);
       }
     })();
-    const { immutableUsageActivities: _usage, managedReviewEntries: _reviews,
+    const { managedReviewEntries: _reviews,
       permissionTransitionLog: _permissions, messagingBindingTransitionLog: _bindings,
       turnFailureLog: _failures, questionnaireActivityLog: _questions, ...metadata } =
       (await store.getThreadOverlayState({ backend: "codex", threadId: "0" }))!;
@@ -71,7 +71,7 @@ describe("thread listing overlay reads", () => {
       expect(rows["0"]).toMatchObject({ model: "fixture-model", parentThreadBackend: "acp:grok",
         parentThreadInstanceId: "peer", worktreeSnapshots: [{ id: "snapshot" }], pinnedRank: "a" });
       expect(rows["0"]).toEqual(metadata);
-      expect(rows["0"]?.immutableUsageActivities).toBeUndefined();
+      expect(rows["0"]?.managedReviewEntries).toBeUndefined();
       expect(rows.missing).toBeUndefined();
       rows["0"]!.extraLinkedDirectories.push({ id: "mutation", label: "mutation", kind: "local", path: "/contrived/mutation" });
     }

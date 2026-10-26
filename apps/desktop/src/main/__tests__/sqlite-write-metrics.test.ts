@@ -2884,8 +2884,8 @@ describe("sqlite write metrics", () => {
   it("waits for earlier live usage before crossing a terminal durability boundary", async () => {
     const overlayLookupStarted = createDeferred();
     const releaseOverlayLookup = createDeferred();
-    const readOverlay = store.getThreadOverlayState.bind(store);
-    vi.spyOn(store, "getThreadOverlayState").mockImplementationOnce(
+    const readOverlay = store.readThreadUsageSettings.bind(store);
+    vi.spyOn(store, "readThreadUsageSettings").mockImplementationOnce(
       async (params) => {
         overlayLookupStarted.resolve();
         await releaseOverlayLookup.promise;
@@ -2945,9 +2945,9 @@ describe("sqlite write metrics", () => {
   it("persists pre-close live usage after a delayed lookup and ignores new usage", async () => {
     const overlayLookupStarted = createDeferred();
     const releaseOverlayLookup = createDeferred();
-    const readOverlay = store.getThreadOverlayState.bind(store);
+    const readOverlay = store.readThreadUsageSettings.bind(store);
     const overlayLookup = vi
-      .spyOn(store, "getThreadOverlayState")
+      .spyOn(store, "readThreadUsageSettings")
       .mockImplementationOnce(async (params) => {
         overlayLookupStarted.resolve();
         await releaseOverlayLookup.promise;
@@ -3007,7 +3007,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("releases the terminal barrier when earlier live usage derivation fails", async () => {
-    vi.spyOn(store, "getThreadOverlayState").mockRejectedValueOnce(
+    vi.spyOn(store, "readThreadUsageSettings").mockRejectedValueOnce(
       new Error("overlay unavailable"),
     );
     const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");

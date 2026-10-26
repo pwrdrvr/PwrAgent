@@ -154,6 +154,7 @@ import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snaps
 import { GitWorkingStateService } from "../app-server/git-working-state-service";
 import {
   mockSubAgentReads,
+  mockUsageActivityReads,
   type MockOverlayState,
   type MockOverlayStore,
 } from "./helpers/mock-sub-agent-store";
@@ -601,6 +602,8 @@ function createOverlayStoreMock(params?: {
   return {
     ...mockSubAgentReads((backend, threadId) =>
       overlays.get(`${backend}:${threadId}`)),
+    ...mockUsageActivityReads((backend, threadId) =>
+      overlays.get(`${backend}:${threadId}`)),
     listRemoteThreadPins: async () =>
       (params?.remotePinnedRanks ?? []).map((localPinnedRank, index) => ({
         ref: buildFederatedThreadRef({
@@ -801,7 +804,7 @@ function createOverlayStoreMock(params?: {
     }: {
       backend: AppServerBackendKind;
       threadId: string;
-      activity: NonNullable<ThreadOverlayState["immutableUsageActivities"]>[number];
+      activity: AppServerThreadActivityEntry;
     }) => {
       const key = `${backend}:${threadId}`;
       const current = overlays.get(key) ?? {
@@ -815,19 +818,18 @@ function createOverlayStoreMock(params?: {
         !activity.summary.startsWith("Turn usage:") &&
         !activity.summary.startsWith("Monitor usage:")
       ) {
-        return { overlay: current, persisted: false };
+        return { persisted: false };
       }
 
       const existingActivities = current.immutableUsageActivities ?? [];
       if (existingActivities.some((entry) => entry.id === activity.id)) {
-        return { overlay: current, persisted: false };
+        return { persisted: false };
       }
-      const next = {
+      overlays.set(key, {
         ...current,
         immutableUsageActivities: [...existingActivities, activity],
-      } as ThreadOverlayState;
-      overlays.set(key, next);
-      return { overlay: next, persisted: true };
+      });
+      return { persisted: true };
     },
     upsertManagedReviewEntry: async ({
       backend,
@@ -55975,6 +55977,7 @@ script = "printf setup"
       "upsertThreadUsageLine",
     );
     const fullOverlayReads = vi.spyOn(overlayStore, "getThreadOverlayStates");
+    const usageActivityReads = vi.spyOn(overlayStore as SqliteOverlayStore, "readThreadUsageActivities");
     registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
@@ -56035,9 +56038,10 @@ script = "printf setup"
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
     expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
     if (storeKind === "sqlite") {
-      // Each listing may load the discovered worker's durable usage. Ordinary
-      // parent overlays must retain the compact projection on both passes.
-      expect(fullOverlayReads.mock.calls).toEqual([
+      // Each listing loads the discovered worker's durable usage rows. No
+      // overlay, parent or worker, is read in full on either pass.
+      expect(fullOverlayReads).not.toHaveBeenCalled();
+      expect(usageActivityReads.mock.calls).toEqual([
         [{ backend: "codex", threadIds: [nativeThreadId] }],
         [{ backend: "codex", threadIds: [nativeThreadId] }],
       ]);
