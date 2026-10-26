@@ -56,7 +56,7 @@ export const MAX_PDF_TEXT_SEARCH_QUERY_CHARACTERS = 200;
 
 const PDF_PAGE_DATA_URL_PREFIX = "data:image/png;base64,";
 
-const require = createRequire(import.meta.url);
+const requirePdfRenderer = createRequire(import.meta.url);
 
 /**
  * PDFs describe a page in points, not pixels. Render into the selected
@@ -328,7 +328,7 @@ async function loadPdfDocument(data: Uint8Array) {
   // Keep that work deferred until a PDF operation actually needs the runtime.
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const wasmUrl = pathToFileURL(
-    `${path.dirname(require.resolve("pdfjs-dist/wasm/openjpeg.wasm"))}${path.sep}`,
+    `${path.dirname(requirePdfRenderer.resolve("pdfjs-dist/wasm/openjpeg.wasm"))}${path.sep}`,
   ).href;
   return pdfjs.getDocument({
     data: new Uint8Array(data),

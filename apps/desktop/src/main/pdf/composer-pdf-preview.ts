@@ -17,7 +17,7 @@ export type ComposerPdfPreview = {
   width: number;
 };
 
-const require = createRequire(import.meta.url);
+const requirePdfPreview = createRequire(import.meta.url);
 
 /**
  * Render page one for the Composer only. This module intentionally does not
@@ -31,7 +31,7 @@ export async function renderComposerPdfPreview(params: {
   // Keep that work deferred until a PDF operation actually needs the runtime.
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const wasmUrl = pathToFileURL(
-    `${path.dirname(require.resolve("pdfjs-dist/wasm/openjpeg.wasm"))}${path.sep}`,
+    `${path.dirname(requirePdfPreview.resolve("pdfjs-dist/wasm/openjpeg.wasm"))}${path.sep}`,
   ).href;
   const loadingTask = pdfjs.getDocument({
     data: new Uint8Array(params.data),
