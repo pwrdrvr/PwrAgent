@@ -26361,11 +26361,11 @@ command = "pnpm dev"
       await codexClient.emit({ method: "item/completed", params: {
         threadId: "thread-1", turnId: "turn-1", item: { ...mcpCall, status: "completed" },
       } });
-      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+      await vi.waitFor(() => expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0));
     });
 
     it.each([
-      // Accepting the turn registers it before Codex reports the thread active.
+      // A turn this registry started and has not seen end.
       ["its turn is active", { startTurn: true }],
       // A main-process reload can miss the start of a turn that is still running.
       ["Codex reports the thread active", { startTurn: false }],

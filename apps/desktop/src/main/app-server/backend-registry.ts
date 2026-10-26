@@ -2009,6 +2009,9 @@ function normalizePositivePullRequestNumber(value: unknown): number | undefined 
   return value;
 }
 
+/** A started Codex tool item; `itemType` is lowercased with separators removed. */
+type LiveCodexToolItem = { turnId: string; itemType: string };
+
 type PendingServerRequest = {
   backend: AppServerBackendKind;
   notification: AppServerPendingRequestNotification;
@@ -9156,10 +9159,7 @@ export class DesktopBackendRegistry {
    */
   private readonly backendActiveCodexThreadIds = new Set<string>();
   /** Started Codex tool items can keep running after their parent turn ends. */
-  private readonly liveCodexToolItemsByThread = new Map<
-    string,
-    Map<string, { turnId: string; itemType: string }>
-  >();
+  private readonly liveCodexToolItemsByThread = new Map<string, Map<string, LiveCodexToolItem>>();
   private readonly codexBackgroundTerminals = new Map<string, CodexBackgroundTerminal[]>();
   /**
    * Latest revision per thread with a list read in flight. An entry lives
@@ -47083,8 +47083,7 @@ export class DesktopBackendRegistry {
       if (item?.status !== "inProgress" && item?.status !== "in_progress") return;
       const turnId = readOptionalString(readRecord(notification.params), ["turnId", "turn_id"]);
       if (!turnId) return;
-      const items = this.liveCodexToolItemsByThread.get(threadId)
-        ?? new Map<string, { turnId: string; itemType: string }>();
+      const items = this.liveCodexToolItemsByThread.get(threadId) ?? new Map<string, LiveCodexToolItem>();
       items.set(itemId, { turnId, itemType });
       this.liveCodexToolItemsByThread.set(threadId, items);
       return;
