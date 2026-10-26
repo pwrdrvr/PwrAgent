@@ -732,12 +732,27 @@ jobs:
         timeout-minutes: 5
         run: git lfs pull
 
+      - name: Locate the guest cache root
+        # One directory on the guest that only this repository uses. The
+        # install step keeps its pnpm store, Corepack home, and Electron
+        # caches here, and the out/ cache step keeps desktop-out/ beside them.
+        shell: bash
+        timeout-minutes: 1
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        # The guest keeps its disk between jobs, so the store and caches live
+        # outside the workspace, where checkout's clean cannot delete them. A
+        # warm store skips the ~50 s restore of the 750 MB dependency cache. A
+        # cold or expired (14-day) store restores and installs as default mode
+        # does, then moves onto the guest. Pinned to the head of
+        # pwrdrvr/configure-nodejs#14, which adds persistent-store-dir.
+        uses: pwrdrvr/configure-nodejs@2f9dc4bd6650829af1748bfd061ed0784c68d8bc # PR #14 head
         timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
 
       - name: Clear leftover Electron state from previous jobs
         # This runner is a persistent Tart guest, not a fresh VM per job, so a
@@ -757,6 +772,17 @@ jobs:
         timeout-minutes: 5
         run: bash ./scripts/ci/macos-e2e-pre-run-cleanup.sh
 
+      - name: Build or restore apps/desktop/out
+        # A guest usually runs two lanes of one commit, and a re-run repeats
+        # all four, so the electron-vite build is kept on the guest, keyed on
+        # the Git tree SHA plus a build-environment guard. A miss builds and
+        # saves; the test step's test:e2e:prebuilt then refuses an out/ that
+        # was not stamped for this tree. Local `pnpm test:desktop-e2e` still
+        # builds first.
+        shell: bash
+        timeout-minutes: 10
+        run: node scripts/ci/desktop-out-cache.mjs prepare
+
       - name: Run desktop replay-backed Electron tests
         # Tart's AppleParavirtGPU can reset under Electron load. The early
         # PWRAGENT_E2E_DISABLE_GPU gate selects software rendering before
@@ -771,7 +797,7 @@ jobs:
           # strategy comment.
           PWTEST_SHARD_WEIGHTS: "9:12:12:14"
         run: >-
-          pnpm --filter @pwragent/desktop test:e2e
+          pnpm --filter @pwragent/desktop test:e2e:prebuilt
           --shard=${{ matrix.lane }}/4
 
       - name: Upload macOS Playwright artifacts
