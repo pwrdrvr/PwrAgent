@@ -16,7 +16,7 @@ function population() {
 it("does not build unused directory descriptors for project card pages", () => {
   const { directory, thread, label } = population();
   const page = navigationQueryFixture({ protocol: 2, consumer: "star-map", pageSize: 10,
-    query: { kind: "star-map", projectKey: directory.key } }, { directories: [directory], threads: [thread] });
+    query: { kind: "star-map", projectKey: directory.key, filters: {} } }, { directories: [directory], threads: [thread] });
 
   expect(page.entries.map((entry) => entry.row.id)).toEqual([thread.id]);
   expect(page.counts.total).toBe(1);

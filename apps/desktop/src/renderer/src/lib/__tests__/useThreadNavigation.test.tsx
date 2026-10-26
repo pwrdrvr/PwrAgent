@@ -11955,7 +11955,7 @@ describe("useThreadNavigation", () => {
 
   it("applies pull request update notification payloads before unchanged refreshes", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => { vi.useRealTimers(); });
     const listeners = new Set<(event: AgentEvent) => void>();
     const initialPr: PrSummary = {
       provider: "github.com",
@@ -12050,7 +12050,7 @@ describe("useThreadNavigation", () => {
 
   it("fans out pull request status updates to every visible matching PR key", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => { vi.useRealTimers(); });
     const listeners = new Set<(event: AgentEvent) => void>();
     const initialPr: PrSummary = {
       provider: "github.com",
