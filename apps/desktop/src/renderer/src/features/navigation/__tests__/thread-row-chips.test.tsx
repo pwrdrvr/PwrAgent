@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
+  PrSummary,
 } from "@pwragent/shared";
 import { ThreadRow } from "../ThreadRow";
 import { createThreadRowPointerDragPreview } from "../thread-row-drag-preview";
@@ -986,6 +987,101 @@ describe("ThreadRow chip flow", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows the branch's base drift on the card of the PR on that branch only", () => {
+    const pr = (number: number, headRefName: string): PrSummary => ({
+      provider: "github.com",
+      number,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: `Change ${number}`,
+      state: "pending",
+      lifecycleState: "open",
+      headRefName,
+      url: `https://github.com/pwrdrvr/PwrAgent/pull/${number}`,
+    });
+    renderRow({
+      thread: {
+        ...baseThread,
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        prs: [pr(201, "feat/chips"), pr(202, "feat/other")],
+        gitWorkingState: {
+          dirtyFiles: 0,
+          dirtyAdditions: 0,
+          dirtyDeletions: 0,
+          untrackedFiles: 0,
+          unpushedCommits: 0,
+          baseBranch: "main",
+          baseBehindCommitCount: 4,
+          baseAheadCommitCount: 2,
+          isBehindBase: true,
+        },
+      },
+    });
+
+    const localBranch = (): Element | undefined =>
+      [...screen.getByRole("tooltip").querySelectorAll(".pr-status-card__section")]
+        .find((section) => section.textContent?.startsWith("Local branch"));
+
+    const onBranch = screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#201/ });
+    fireEvent.focus(onBranch);
+    expect(localBranch()).toHaveTextContent("Behind main4 commitsAhead of main2 commits");
+    fireEvent.blur(onBranch);
+
+    fireEvent.focus(screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#202/ }));
+    expect(localBranch()).toBeUndefined();
+  });
+
+  it("keeps base drift off a same-named branch's PR in another repository", () => {
+    const gitWorkingState = {
+      dirtyFiles: 0,
+      dirtyAdditions: 0,
+      dirtyDeletions: 0,
+      untrackedFiles: 0,
+      unpushedCommits: 0,
+      baseBranch: "origin/main",
+      baseBehindCommitCount: 4,
+      baseAheadCommitCount: 2,
+    };
+    const pr = (org: string, number: number, extra: Partial<PrSummary> = {}): PrSummary => ({
+      provider: "github.com",
+      number,
+      org,
+      repo: "PwrAgent",
+      state: "pending",
+      lifecycleState: "open",
+      headRefName: "feat/chips",
+      baseRefName: "main",
+      url: `https://github.com/${org}/PwrAgent/pull/${number}`,
+      ...extra,
+    });
+    renderRow({
+      thread: {
+        ...baseThread,
+        // The thread works in a fork.
+        gitOriginUrl: "https://github.com/contributor/PwrAgent.git",
+        gitWorkingState,
+        prs: [
+          pr("elsewhere", 301),
+          pr("pwrdrvr", 302, {
+            sourceRepository: { provider: "github.com", org: "contributor", repo: "PwrAgent" },
+          }),
+        ],
+      },
+    });
+    const hasLocalBranch = (): boolean =>
+      [...screen.getByRole("tooltip").querySelectorAll(".pr-status-card__section-title")]
+        .some((title) => title.textContent === "Local branch");
+
+    const otherRepo = screen.getByRole("button", { name: /Open elsewhere\/PwrAgent#301/ });
+    fireEvent.focus(otherRepo);
+    expect(hasLocalBranch()).toBe(false);
+    fireEvent.blur(otherRepo);
+
+    // The upstream PR the fork's branch contributes to does get it.
+    fireEvent.focus(screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#302/ }));
+    expect(hasLocalBranch()).toBe(true);
   });
 
   it("marks Agent threads and explains their messaging role", () => {
