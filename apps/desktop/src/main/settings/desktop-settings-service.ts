@@ -1,9 +1,12 @@
 import {
+  DEFAULT_FORGE_AGENT_TOOL_POLICY,
   DEFAULT_THREAD_TODO_MERGE_METHOD,
+  FORGE_AGENT_TOOL_GROUPS,
   codexModelProviderApiKeyEnv,
   isValidCodexModelProviderId,
   normalizeThreadArchivePolicy,
   type CodexModelProviderSettings,
+  type ForgeAgentToolPolicy,
 } from "@pwragent/shared";
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
@@ -1717,6 +1720,7 @@ export class DesktopSettingsService {
         defaultMergeMethod: this.resolveDefaultMergeMethodValue(
           config.git?.defaultMergeMethod,
         ),
+        agentTools: this.resolveForgeAgentToolSettings(config.git?.agentTools),
       },
       worktrees: {
         ...this.resolveWorktrees(config.worktrees?.storage),
@@ -2167,6 +2171,42 @@ export class DesktopSettingsService {
       this.readExperimentalConfig().managedReview,
       false,
     ).value;
+  }
+
+  /**
+   * The operator's policy for PwrAgent's own forge tools, read from config on
+   * every call so a Settings change applies to the next tool call.
+   */
+  resolveForgeAgentToolPolicy(): ForgeAgentToolPolicy {
+    const settings = this.resolveForgeAgentToolSettings(
+      this.configStore.read("git")?.agentTools,
+    );
+    return {
+      enabled: settings.enabled.value,
+      access: Object.fromEntries(
+        FORGE_AGENT_TOOL_GROUPS.map((group) => [group, settings.access[group].value]),
+      ) as ForgeAgentToolPolicy["access"],
+    };
+  }
+
+  private resolveForgeAgentToolSettings(
+    config: { enabled?: boolean; access?: Partial<ForgeAgentToolPolicy["access"]> } | undefined,
+  ): DesktopSettingsSnapshot["git"]["agentTools"] {
+    return {
+      enabled: this.resolveConfigBoolean(
+        config?.enabled,
+        DEFAULT_FORGE_AGENT_TOOL_POLICY.enabled,
+      ),
+      access: Object.fromEntries(
+        FORGE_AGENT_TOOL_GROUPS.map((group) => {
+          const configValue = config?.access?.[group];
+          return [group, {
+            value: configValue ?? DEFAULT_FORGE_AGENT_TOOL_POLICY.access[group],
+            source: configValue === undefined ? "default" : "config",
+          }];
+        }),
+      ) as DesktopSettingsSnapshot["git"]["agentTools"]["access"],
+    };
   }
 
   /** What a to-do card's merge button does when its project has no pick. */

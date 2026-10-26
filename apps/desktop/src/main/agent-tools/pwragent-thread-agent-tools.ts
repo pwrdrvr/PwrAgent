@@ -95,11 +95,11 @@ export class PwrAgentFederatedThreadInspectionError extends Error {
 
 export function buildPwrAgentThreadToolRouter(
   handler: PwrAgentThreadInspectionHandler | undefined,
-  options: { namespace?: string; unsupportedMessage?: string; additionalDefinitions?: AgentToolDefinition[] } = {},
+  options: { namespace?: string; unsupportedMessage?: string } = {},
 ): AgentToolRouter {
-  return new AgentToolRouter([...buildPwrAgentThreadToolDefinitions(handler, {
+  return new AgentToolRouter(buildPwrAgentThreadToolDefinitions(handler, {
     namespace: options.namespace,
-  }), ...(options.additionalDefinitions ?? [])], {
+  }), {
     unsupportedMessage:
       options.unsupportedMessage ?? "Unsupported PwrAgent thread tool.",
   });

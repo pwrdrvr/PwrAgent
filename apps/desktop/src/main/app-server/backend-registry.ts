@@ -1,7 +1,9 @@
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
-import { ForgeReadError, validateForgeReadArgs, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
+import { buildForgeToolDefinitions, type ForgePrRepositoryResolver, type ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
+import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
@@ -13,7 +15,9 @@ import {
 import {
   addTokenMiserGateAccountingTotals,
   findAcpPermissionModeConfigOption,
+  DEFAULT_FORGE_AGENT_TOOL_POLICY,
   DEFAULT_THREAD_ARCHIVE_POLICY,
+  FORGE_AGENT_TOOL_GROUP_LABELS,
   isTokenMiserSubAgent,
   totalTokenMiserGateAccountings,
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
@@ -21,6 +25,9 @@ import {
   readUuidV7Timestamp,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
+  type ForgeAgentToolAccess,
+  type ForgeAgentToolGroup,
+  type ForgeAgentToolPolicy,
   type McpConnectionToolApproval,
 } from "@pwragent/shared";
 import type {
@@ -9558,8 +9565,180 @@ export class DesktopBackendRegistry {
     this.forgeReadHandler = routed;
   }
 
+  private forgePrToolHandler?: ForgePrToolHandler;
+  private forgePrRepositoryResolver?: ForgePrRepositoryResolver;
+  private forgeDispatchRouter?: AgentToolRouter;
+  private forgeToolPolicyResolver?: () => ForgeAgentToolPolicy;
+  /** Conversation grants for forge writes, keyed by thread, then tool and repository. Memory only. */
+  private readonly forgeToolSessionApprovals = new Map<string, Map<string, string>>();
+
+  /** `resolveRepository` names the repository on an approval card and fails a bad target before asking. */
+  setForgePrToolHandler(handler: ForgePrToolHandler, resolveRepository?: ForgePrRepositoryResolver): void {
+    this.forgePrToolHandler = handler;
+    this.forgePrRepositoryResolver = resolveRepository;
+  }
+
+  setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
+    this.forgeToolPolicyResolver = resolve;
+  }
+
+  private resolveForgeToolPolicy(): ForgeAgentToolPolicy {
+    try {
+      return this.forgeToolPolicyResolver?.() ?? DEFAULT_FORGE_AGENT_TOOL_POLICY;
+    } catch (error) {
+      // An unreadable policy must not widen access: treat the family as off.
+      backendRegistryLog.warn("could not read forge tool policy", { error: String(error) });
+      return { ...DEFAULT_FORGE_AGENT_TOOL_POLICY, enabled: false };
+    }
+  }
+
+  /** Refuses a call the operator's policy removed, even from a turn holding an older schema. */
+  private assertForgeToolAllowed(group: ForgeAgentToolGroup, tool: string): ForgeAgentToolAccess {
+    const policy = this.resolveForgeToolPolicy();
+    if (!policy.enabled) {
+      throw new ForgeReadError("tools_disabled", `Forge tools are off in Settings → Git → Agent forge tools, so ${tool} is unavailable. Ask the operator to turn them on; do not work around the setting with the gh or glab CLI.`);
+    }
+    const access = policy.access[group];
+    if (access === "off") {
+      throw new ForgeReadError("tools_disabled", `${FORGE_AGENT_TOOL_GROUP_LABELS[group]} is Off in Settings → Git → Agent forge tools, so ${tool} is unavailable. Ask the operator to change the setting; do not work around it with the gh or glab CLI.`);
+    }
+    return access;
+  }
+
+  private readonly gatedForgeReadHandler: ForgeReadHandler = async (operation, args, context) => {
+    this.assertForgeToolAllowed("read", operation);
+    if (!this.forgeReadHandler) throw new ForgeReadError("unavailable", "Forge read tools are unavailable on this instance.");
+    return await this.forgeReadHandler(operation, args, context);
+  };
+
+  private readonly gatedForgePrToolHandler: ForgePrToolHandler = async (operation, args, context) => {
+    const group = forgePrToolGroup(operation, args);
+    const access = this.assertForgeToolAllowed(group, operation);
+    let target = args;
+    if (group !== "read") {
+      const repository = this.forgePrRepositoryResolver ? await this.forgePrRepositoryResolver(args, context) : args.repository;
+      await this.approveForgeToolWrite(operation, args, context, group, access, repository);
+      // Act exactly where the card said, even if the thread's remotes change while it waits.
+      if (repository) target = { ...args, repository };
+    }
+    if (!this.forgePrToolHandler) throw new ForgeReadError("unavailable", "Forge tools are unavailable on this instance.");
+    const result = await this.forgePrToolHandler(operation, target, context);
+    if (operation === "create_pull_request") return await this.attachCreatedPullRequest(result, context);
+    return result;
+  };
+
+  /** Link a PR the agent just opened, so its chip and status appear without a branch lookup. */
+  private async attachCreatedPullRequest(result: unknown, context: AgentToolCallContext): Promise<unknown> {
+    const url = readRecord(result)?.url;
+    if (typeof url !== "string") return result;
+    try {
+      const attached = await this.handleAttachThreadPullRequestInspectionRequest({ backend: context.backend, threadId: context.threadId, url });
+      return { ...readRecord(result), attachedToThread: attached.ok };
+    } catch (error) {
+      backendRegistryLog.warn("could not attach created pull request", { threadId: context.threadId, error: String(error) });
+      return { ...readRecord(result), attachedToThread: false };
+    }
+  }
+
+  /**
+   * The operator's consent for one GitHub write. `allow` runs; `auto` runs in
+   * a Full Access turn; otherwise the shipped MCP approval card asks.
+   * Automations cannot answer, so they are refused with the setting to change.
+   */
+  private async approveForgeToolWrite(
+    operation: ForgePrToolOperation,
+    args: ForgePrToolArgs,
+    context: AgentToolCallContext,
+    group: ForgeAgentToolGroup,
+    access: ForgeAgentToolAccess,
+    repository?: ForgeRepository,
+  ): Promise<void> {
+    if (access === "allow") return;
+    const signal = context.signal ?? new AbortController().signal;
+    signal.throwIfAborted();
+    const label = FORGE_AGENT_TOOL_GROUP_LABELS[group];
+    const requestId = `forge-tool:${randomUUID()}`;
+    const forge = repository?.provider === "gitlab" ? "GitLab" : "GitHub";
+    // Comment-sized changes may be granted for the conversation; opening,
+    // editing, approving and merging are always one call at a time.
+    const sessionGrant = group === "comments" || group === "issues";
+    const notification: AppServerPendingRequestNotification = {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: context.threadId,
+        turnId: context.turnId ?? "",
+        requestId,
+        serverName: forge,
+        mode: "form",
+        message: forgeToolApprovalMessage(operation, args, repository?.provider ?? "github"),
+        requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          pwragent_approval_kind: "mcp_tool_call",
+          ...(sessionGrant ? { persist: ["session"] } : {}),
+          ...(repository ? { connector_name: `${repository.owner}/${repository.repo}` } : {}),
+          ...(group === "approve_merge" ? { riskLevel: "high" } : {}),
+          subtitle: `${label} is set to ${access === "auto" ? "Auto" : "Ask"} in Settings → Git → Agent forge tools.${sessionGrant ? " A conversation grant lasts until PwrAgent restarts or the setting changes." : " This allows this call only."}`,
+          tool_params_display: forgeToolParamsDisplay(args),
+        },
+      },
+    };
+    const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
+    if (access === "auto" && await this.isMcpGatewayFullAccess(context, automation?.executionMode)) {
+      signal.throwIfAborted();
+      return;
+    }
+    if (automation) {
+      throw new ForgeReadError("approval_required", `${label} is set to ${access === "auto" ? "Auto" : "Ask"} in Settings → Git → Agent forge tools, and an automation cannot answer an approval. The operator can set it to Allow.`);
+    }
+    if (!context.turnId) {
+      throw new ForgeReadError("approval_required", `${label} needs the operator's approval, which requires an active turn.`);
+    }
+    const sessionKey = JSON.stringify([context.backend, context.threadId]);
+    // A grant covers one tool in one repository, never every repository the
+    // thread links, and ends when that group's access level changes.
+    const grantTarget = `${operation}\u0000${repository ? repositoryKey(repository) : ""}`;
+    const grantKey = `${group}:${access}`;
+    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return;
+    const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, requestId });
+    const approved = await new Promise<"once" | "session" | false>((resolve, reject) => {
+      const finish = (value: "once" | "session" | false, error?: unknown): void => {
+        signal.removeEventListener("abort", aborted);
+        this.pendingServerRequests.delete(key);
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const aborted = (): void => {
+        finish(false, signal.reason);
+        void this.emit({ backend: context.backend, notification: {
+          method: "serverRequest/resolved", params: { threadId: context.threadId, turnId: context.turnId, requestId },
+        } }).catch(() => undefined);
+      };
+      this.pendingServerRequests.set(key, {
+        backend: context.backend, notification,
+        resolve: (response) => {
+          if (signal.aborted) { aborted(); return; }
+          const accepted = Boolean(response && "action" in response && response.action === "accept");
+          const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
+          finish(accepted ? (sessionGrant && persist === "session" ? "session" : "once") : false);
+        },
+        reject: (error) => finish(false, error),
+      });
+      signal.addEventListener("abort", aborted, { once: true });
+      if (signal.aborted) { aborted(); return; }
+      void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
+    });
+    if (!approved) throw new ForgeReadError("declined", `The operator declined ${operation}. Do not retry it or use the gh or glab CLI instead; ask what they want changed.`);
+    if (approved === "session") {
+      const grants = this.forgeToolSessionApprovals.get(sessionKey) ?? new Map<string, string>();
+      grants.set(grantTarget, grantKey);
+      this.forgeToolSessionApprovals.set(sessionKey, grants);
+    }
+  }
+
   async readForgeForPeer(request: ForgeReadRequest, signal?: AbortSignal): Promise<unknown> {
     validateForgeReadArgs(request.operation, request.args);
+    // This instance's operator decides whether its threads' forge data is read, from here or a peer.
+    this.assertForgeToolAllowed("read", request.operation);
     if (!isAppServerBackendKind(request.backend) || !request.threadId || request.args.instanceId) throw new ForgeReadError("invalid_arguments", "Federated forge reads require a local thread target.");
     if (!this.localForgeReadHandler) throw new ForgeReadError("unavailable", "Forge read tools are unavailable on this owner.");
     return this.localForgeReadHandler(request.operation, { ...request.args, backend: request.backend, threadId: request.threadId }, { backend: request.backend, threadId: request.threadId, transport: "mcp", signal });
@@ -10520,7 +10699,9 @@ export class DesktopBackendRegistry {
                 taskMonitorHandler: async (request) =>
                   await this.handleAgentTaskMonitorRequest(request),
                 threadInspectionHandler: this.threadInspectionHandler,
-                forgeReadHandler: this.forgeReadHandler,
+                forgeReadHandler: this.gatedForgeReadHandler,
+                forgePrToolHandler: this.gatedForgePrToolHandler,
+                forgeToolPolicy: this.resolveForgeToolPolicy(),
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
                 tokenMiserStore: this.tokenMiserStore,
                 tokenMiserFocused: this.tokenMiserService?.focused,
@@ -18741,7 +18922,9 @@ export class DesktopBackendRegistry {
       taskMonitorHandler: async (request) =>
         await this.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
-      forgeReadHandler: this.forgeReadHandler,
+      forgeReadHandler: this.gatedForgeReadHandler,
+      forgePrToolHandler: this.gatedForgePrToolHandler,
+      forgeToolPolicy: this.resolveForgeToolPolicy(),
       threadOrchestrationHandler: this.threadOrchestrationHandler,
       // Gated on the setting, not merely on the store existing: the store is
       // constructed for any live Codex client, so passing it unconditionally
@@ -28478,7 +28661,9 @@ export class DesktopBackendRegistry {
         taskMonitorHandler: async (request) =>
           await this.handleAgentTaskMonitorRequest(request),
         threadInspectionHandler: this.threadInspectionHandler,
-        forgeReadHandler: this.forgeReadHandler,
+        forgeReadHandler: this.gatedForgeReadHandler,
+        forgePrToolHandler: this.gatedForgePrToolHandler,
+        forgeToolPolicy: this.resolveForgeToolPolicy(),
         threadOrchestrationHandler: this.threadOrchestrationHandler,
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
@@ -39121,6 +39306,30 @@ export class DesktopBackendRegistry {
       return await new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools, enabled ? this.tokenMiserStore : undefined))
         .handleDynamicToolCall({ backend, call: hostToolCall });
     }
+    // Every forge tool name, advertised or not: a call the policy has since
+    // removed gets the policy's refusal rather than "no handler". The gated
+    // handlers read the policy per call, so one router serves every call.
+    const forgeRouter = this.forgeDispatchRouter ??= new AgentToolRouter(buildForgeToolDefinitions({
+      forgeReadHandler: this.gatedForgeReadHandler,
+      forgePrToolHandler: this.gatedForgePrToolHandler,
+    }));
+    if (hostToolCall && forgeRouter.acceptsDynamicToolCall(hostToolCall)) {
+      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
+        return toDynamicToolResponse({ ok: false, code: "forbidden", message: "Forge tool calls must originate from an active turn on the same thread." });
+      }
+      const forgeDenied = this.dynamicToolPermissionDenied(backend, "forge", hostToolCall);
+      if (forgeDenied) {
+        return toDynamicToolResponse({ ok: false, code: "forbidden", message: `The messaging user who started this turn lacks permission for this tool (${forgeDenied}).` });
+      }
+      backendRegistryLog.info("handling forge dynamic tool call", {
+        backend,
+        callId: hostToolCall.callId,
+        threadId: hostToolCall.threadId,
+        tool: hostToolCall.tool,
+        turnId: hostToolCall.turnId,
+      });
+      return await forgeRouter.handleDynamicToolCall({ backend, call: hostToolCall, signal });
+    }
     const mcpConnectionRouter = buildPwrAgentMcpConnectionToolRouter(
       async (connectionRequest) =>
         await this.handleAgentMcpConnectionRequest(connectionRequest),
@@ -49135,6 +49344,50 @@ function queuedTurnDisplayText(input: AppServerTurnInputItem[]): string {
   return text.length > 200 ? `${text.slice(0, 200)}\u2026` : text;
 }
 
+/** The card's title, in the provider's own words: GitLab says merge request and !number. */
+function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePrToolArgs, provider: ForgeRepository["provider"]): string {
+  const gitlab = provider === "gitlab";
+  const forge = gitlab ? "GitLab" : "GitHub";
+  const request = gitlab ? "merge request" : "pull request";
+  const pr = args.number ? ` ${gitlab ? "!" : "#"}${args.number}` : "";
+  const issue = args.number ? ` #${args.number}` : "";
+  const commentTarget = gitlab && args.kind === "pr" ? pr : issue;
+  switch (operation) {
+    case "create_pull_request": return `Allow the agent to open a ${request} on ${forge}?`;
+    case "update_pull_request": return `Allow the agent to edit ${request}${pr} on ${forge}?`;
+    case "merge_pull_request": return `Allow the agent to merge ${request}${pr} on ${forge}?`;
+    case "submit_pull_request_review": {
+      const verb = args.event === "APPROVE" ? "approve" : args.event === "REQUEST_CHANGES" ? "request changes on" : "review";
+      return `Allow the agent to ${verb} ${request}${pr} on ${forge}?`;
+    }
+    case "reply_to_review_comment": return `Allow the agent to reply to a review comment on${pr || ` ${forge}`}?`;
+    case "resolve_review_thread": return `Allow the agent to ${args.resolved ? "resolve" : "reopen"} a review thread on ${forge}?`;
+    case "add_issue_comment": return `Allow the agent to comment on${commentTarget || ` ${forge}`}?`;
+    case "create_issue": return `Allow the agent to open an issue on ${forge}?`;
+    case "update_issue": return `Allow the agent to edit issue${issue} on ${forge}?`;
+    default: return `Allow the agent to run ${operation} on ${forge}?`;
+  }
+}
+
+/** The card's argument rows: bodies cut to a preview, attachments by file name. */
+function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string }> {
+  const rows: Array<{ name: string; value: string }> = [];
+  for (const [name, value] of Object.entries(args)) {
+    if (value === undefined || name === "repository") continue;
+    if (name === "body" || name === "commitMessage") {
+      const textValue = String(value);
+      rows.push({ name, value: textValue.length > 240 ? `${textValue.slice(0, 240)}… (${textValue.length.toLocaleString("en-US")} characters)` : textValue });
+    } else if (name === "attachments" && Array.isArray(value)) {
+      rows.push({ name, value: value.map((item) => String((item as { path?: unknown }).path ?? "").split("/").pop()).join(", ") });
+    } else if (name === "comments" && Array.isArray(value)) {
+      rows.push({ name, value: `${value.length} inline comment${value.length === 1 ? "" : "s"}` });
+    } else {
+      rows.push({ name, value: typeof value === "string" ? value : JSON.stringify(value) });
+    }
+  }
+  return rows;
+}
+
 function messagingDynamicToolCategoryForCatalog(
   catalogId: AgentToolCatalogId | undefined,
 ): MessagingDynamicToolCategory | undefined {
@@ -49142,6 +49395,7 @@ function messagingDynamicToolCategoryForCatalog(
     case "automation_inspection":
     case "app_management":
     case "thread_inspection":
+    case "forge":
     case "thread_orchestration":
     case "messaging_context":
     case "star_map":

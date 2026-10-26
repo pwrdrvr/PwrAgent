@@ -13,6 +13,7 @@ export * from "./contracts/codex-environment-editor";
 export * from "./contracts/durable-turn-requests";
 export * from "./durable-turn-request";
 export * from "./contracts/agent-tools";
+export * from "./contracts/forge-agent-tools";
 export * from "./contracts/app-tools";
 export * from "./contracts/automations";
 export * from "./contracts/automation-tools";

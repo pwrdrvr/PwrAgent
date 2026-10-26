@@ -42,7 +42,7 @@ describe("first-party forge catalog and invocation", () => {
   it("normal MCP and native calls reach a real cache adapter, including a cached handle after disabling", async () => {
     const h = serviceFixture();
     const handler = (operation: Parameters<ForgeReadService["execute"]>[0], args: Parameters<ForgeReadService["execute"]>[1]) => h.service.execute(operation, args, h.scope);
-    const catalog = resolveAgentToolCatalogs({ forgeReadHandler: handler }).find((c) => c.id === "thread_inspection")!;
+    const catalog = resolveAgentToolCatalogs({ forgeReadHandler: handler }).find((c) => c.id === "forge")!;
     expect(catalog.router.buildMcpTools().some((t) => t.name === "get_forge_status")).toBe(true);
     const result = await catalog.router.handleMcpToolCall({ backend: "acp:fixture", threadId: "t", tool: "get_forge_status", args: {} });
     expect(result.isError).not.toBe(true);

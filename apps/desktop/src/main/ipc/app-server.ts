@@ -1,7 +1,11 @@
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
-import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
+import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
+import { ForgePrToolService, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
+import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
+import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
@@ -4011,10 +4015,20 @@ class DesktopAppServerService {
   }
 
   private forgeCiClient?: ForgeCiClient;
+  private githubPrToolClient?: GithubPrToolClient;
+  private gitlabPrToolClient?: GitlabPrToolClient;
 
-  async readForgeForTool(operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext): Promise<unknown> {
-    const backend = args.backend ?? context.backend;
-    const threadId = args.threadId ?? context.threadId;
+  private getForgeCiClient(): ForgeCiClient {
+    this.forgeCiClient ??= new ForgeCiClient({
+      gitlab: this.getPrFetcher().gitlab,
+      enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
+      takeToken: () => this.takePrPollingToken("Agent CI read"),
+    });
+    return this.forgeCiClient;
+  }
+
+  /** The repositories, PRs and branch a forge tool may act on for one local thread. */
+  private async resolveForgeThreadScope(backend: string, threadId: string) {
     if (!isAppServerBackendKind(backend)) throw new ForgeReadError("invalid_arguments", "Unknown PwrAgent backend.");
     const active = await this.listThreads({ backend });
     const thread = active.threads.find((t) => t.id === threadId)
@@ -4024,7 +4038,42 @@ class DesktopAppServerService {
     const directories = resolveThreadPullRequestDirectoryPaths({ linkedDirectories: [...(thread.linkedDirectories ?? []), ...(overlay?.extraLinkedDirectories ?? [])] });
     if (directories.length > 20) throw new ForgeReadError("scope_too_large", "Forge reads support up to 20 linked directories per thread.");
     const remotes = (await Promise.all(directories.map((cwd) => readForgeRepositoryRemotes(cwd)))).flat();
-    const attached = overlay?.prs ?? [];
+    return { backend, thread, overlay, directories, remotes, attached: overlay?.prs ?? [], branch: thread.observedGitBranch ?? thread.gitBranch };
+  }
+
+  /** The calling thread's repositories, PRs, branch and directories. */
+  private async forgePrToolScope(context: AgentToolCallContext): Promise<ForgePrToolScope> {
+    const scope = await this.resolveForgeThreadScope(context.backend, context.threadId);
+    return {
+      remotes: scope.remotes, attached: scope.attached, branch: scope.branch, directories: scope.directories,
+      privateRoots: getDesktopBackendRegistry().getLocalFilePrivateStorageRoots(),
+    };
+  }
+
+  private forgePrToolService(): ForgePrToolService {
+    this.githubPrToolClient ??= new GithubPrToolClient({ ci: this.getForgeCiClient() });
+    this.gitlabPrToolClient ??= new GitlabPrToolClient({ gitlab: this.getPrFetcher().gitlab });
+    return new ForgePrToolService({
+      enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
+      clients: { github: this.githubPrToolClient, gitlab: this.gitlabPrToolClient },
+      defaultMergeMethod: () => getDesktopSettingsService().resolveDefaultMergeMethod(),
+    });
+  }
+
+  /** The GitHub or GitLab repository a call would act in, so an approval prompt can name it. */
+  async resolveForgePrRepositoryForAgent(args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgeRepository> {
+    return this.forgePrToolService().resolveRepository(args, await this.forgePrToolScope(context));
+  }
+
+  /** Pull request and issue tools act only in the calling thread's own repositories. */
+  async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
+    const result = await this.forgePrToolService().execute(operation, args, await this.forgePrToolScope(context), context.signal);
+    return { ...(result as Record<string, unknown>), backend: context.backend, threadId: context.threadId };
+  }
+
+  async readForgeForTool(operation: ForgeReadOperation, args: ForgeReadArgs, context: AgentToolCallContext): Promise<unknown> {
+    const { backend, thread, overlay, directories, remotes, attached } = await this.resolveForgeThreadScope(args.backend ?? context.backend, args.threadId ?? context.threadId);
+    const threadId = thread.id;
     // Snapshot reads must not call rememberPrStatuses: it publishes transitions.
     const observations = new Map<string, { pr: PrSummary; fetchedAt: number }>();
     const persisted = this.prStatusRegistryLoaded ? [] : Object.values(await this.getOverlayStore().readPrStatusCache());
@@ -4033,9 +4082,8 @@ class DesktopAppServerService {
       if (!observations.has(key) || observations.get(key)!.fetchedAt < entry.fetchedAt) observations.set(key, { pr: entry.pr, fetchedAt: entry.fetchedAt });
     }
     const enabled = (provider: "github" | "gitlab") => getDesktopSettingsService().isForgeEnabled(provider);
-    this.forgeCiClient ??= new ForgeCiClient({ gitlab: this.getPrFetcher().gitlab, enabled, takeToken: () => this.takePrPollingToken("Agent CI read") });
     const service = new ForgeReadService({
-      enabled, ci: this.forgeCiClient,
+      enabled, ci: this.getForgeCiClient(),
       refresh: async (request, repositories) => {
         context.signal?.throwIfAborted();
         const urls = request.url ? [request.url] : attached.filter((pr) => {
@@ -8878,6 +8926,13 @@ export function registerAppServerIpcHandlers(): void {
     runtime: getDesktopFederationRuntime,
     targetStore: getDesktopOverlayStore(),
   }));
+  getDesktopBackendRegistry().setForgePrToolHandler(
+    async (operation, args, context) => await appServerService.runForgePrToolForAgent(operation, args, context),
+    async (args, context) => await appServerService.resolveForgePrRepositoryForAgent(args, context),
+  );
+  getDesktopBackendRegistry().setForgeToolPolicyResolver(
+    () => getDesktopSettingsService().resolveForgeAgentToolPolicy(),
+  );
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
     async (args, context) =>
       await appServerService.checkThreadPullRequestStatusForTool(args, context),

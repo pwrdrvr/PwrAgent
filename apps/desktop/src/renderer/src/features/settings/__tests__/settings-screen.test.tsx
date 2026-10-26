@@ -488,6 +488,16 @@ function createSnapshot(
         source: "default",
       },
       defaultMergeMethod: { value: "squash", source: "default" },
+      agentTools: {
+        enabled: { value: true, source: "default" },
+        access: {
+          read: { value: "allow", source: "default" },
+          pull_requests: { value: "auto", source: "default" },
+          comments: { value: "auto", source: "default" },
+          issues: { value: "auto", source: "default" },
+          approve_merge: { value: "ask", source: "default" },
+        },
+      },
     },
     applications: {
       editors: [
@@ -567,6 +577,20 @@ function createSettingsState(
     writeConfig: vi.fn(async () => true),
   };
 }
+
+describe("SettingsScreen agent forge tools", () => {
+  it("writes the family switch and each group's access level", async () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen initialSection="git" settings={settings} onClose={() => undefined} />);
+    const section = screen.getByRole("heading", { name: "Agent forge tools" }).closest("section")!;
+    expect(within(section).getByRole("combobox", { name: "Approve and merge access" })).toHaveTextContent("Ask");
+    expect(selectOptionLabels(within(section).getByRole("combobox", { name: "Read access" }))).toEqual(["Allow", "Off"]);
+    chooseSelectOption(within(section).getByRole("combobox", { name: "Pull requests access" }), "Ask");
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { access: { pull_requests: "ask" } } } }));
+    fireEvent.click(within(section).getByRole("switch", { name: /Offer forge tools to threads/ }));
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ git: { agentTools: { enabled: false } } }));
+  });
+});
 
 describe("SettingsScreen segmented pending", () => {
   it("shows pending on a converted segmented group and clears it", async () => {

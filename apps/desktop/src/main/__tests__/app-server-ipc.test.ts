@@ -722,6 +722,8 @@ function emitRegistryEvent(event: unknown): void {
 }
 const publishLocalEvent = vi.fn(async (_event?: unknown) => undefined);
 const setForgeReadHandlers = vi.fn();
+const setForgePrToolHandler = vi.fn();
+const setForgeToolPolicyResolver = vi.fn();
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
@@ -1175,6 +1177,9 @@ vi.mock("../app-server/backend-registry", () => {
     onEvent,
     publishLocalEvent,
     setForgeReadHandlers,
+    setForgePrToolHandler,
+    setForgeToolPolicyResolver,
+    getLocalFilePrivateStorageRoots: () => [],
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
     setThreadPrimaryGitRepositoryReader: vi.fn(),
@@ -9483,6 +9488,22 @@ describe("app server ipc", () => {
         },
       );
     });
+  });
+
+  it("registers forge tools that act only in the calling thread's repositories", async () => {
+    listThreads.mockResolvedValue([{ id: "thread-1", source: "codex", title: "Fixture", linkedDirectories: [], updatedAt: 2000 }] as never);
+    getThreadOverlayState.mockResolvedValue({ backend: "codex", threadId: "thread-1", executionMode: "default", prs: [] });
+    registerAppServerIpcHandlers();
+    expect(setForgeToolPolicyResolver).toHaveBeenCalledWith(expect.any(Function));
+    const github = setForgePrToolHandler.mock.calls.at(-1)?.[0];
+    expect(github).toBeTypeOf("function");
+    await expect(github("get_issue", { number: 1 }, { backend: "codex", threadId: "thread-1", transport: "mcp" }))
+      .rejects.toMatchObject({ code: "not_found" });
+    await expect(github("get_issue", { number: 1 }, { backend: "codex", threadId: "missing-thread", transport: "mcp" }))
+      .rejects.toMatchObject({ code: "thread_not_found" });
+    const resolveRepository = setForgePrToolHandler.mock.calls.at(-1)?.[1];
+    await expect(resolveRepository({}, { backend: "codex", threadId: "thread-1", transport: "mcp" }))
+      .rejects.toMatchObject({ code: "not_found" });
   });
 
   it("forge tool cache reads and explicit refresh never publish transitions, attach PRs or write status", async () => {

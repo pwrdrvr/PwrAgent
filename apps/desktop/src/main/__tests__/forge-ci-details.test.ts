@@ -33,7 +33,7 @@ describe("individual checks and artifact contracts", () => {
       ? json({ check_runs: [] }) : String(url).includes("/status?") ? json({ statuses: [] }) : json({ artifacts: [] }));
     let enabled = true;
     const service = new ForgeReadService({ enabled: () => enabled, ci: githubClient(fetcher), refresh: vi.fn() });
-    const catalog = resolveAgentToolCatalogs({ forgeReadHandler: (operation, args) => service.execute(operation, args, { remotes: [github], attached: [], observations: [] }) }).find((c) => c.id === "thread_inspection")!;
+    const catalog = resolveAgentToolCatalogs({ forgeReadHandler: (operation, args) => service.execute(operation, args, { remotes: [github], attached: [], observations: [] }) }).find((c) => c.id === "forge")!;
     const invoke = async (tool: string, args: ForgeReadArgs) => {
       const response = transport === "mcp"
         ? await catalog.router.handleMcpToolCall({ backend: "acp:fixture", threadId: "fixture", tool, args })
