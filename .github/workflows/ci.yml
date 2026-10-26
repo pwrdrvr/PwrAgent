@@ -732,21 +732,27 @@ jobs:
         timeout-minutes: 5
         run: git lfs pull
 
+      - name: Locate the guest cache root
+        # One directory on the guest that only this repository uses. The
+        # install step keeps its pnpm store, Corepack home, and Electron
+        # caches here, and the out/ cache step keeps desktop-out/ beside them.
+        shell: bash
+        timeout-minutes: 1
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
       - name: Install Node.js and dependencies
-        # The guest keeps its disk between jobs, so the pnpm store, Corepack
-        # home, and Electron download caches live outside the workspace, in a
-        # directory only this repository uses, where checkout's clean cannot
-        # delete them. A warm store skips the ~50 s restore of the 750 MB
-        # dependency cache. A cold or expired (14-day) store restores and
-        # installs as before, then moves onto the guest.
-        # TODO: pin to the v1.7.0 release SHA once pwrdrvr/configure-nodejs#14
-        # merges. The branch reference is for trying the feature on this PR.
-        uses: pwrdrvr/configure-nodejs@feat/persistent-pnpm-store
+        # The guest keeps its disk between jobs, so the store and caches live
+        # outside the workspace, where checkout's clean cannot delete them. A
+        # warm store skips the ~50 s restore of the 750 MB dependency cache. A
+        # cold or expired (14-day) store restores and installs as default mode
+        # does, then moves onto the guest. Pinned to the head of
+        # pwrdrvr/configure-nodejs#14, which adds persistent-store-dir.
+        uses: pwrdrvr/configure-nodejs@2f9dc4bd6650829af1748bfd061ed0784c68d8bc # PR #14 head
         timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
-          persistent-store-dir: ~/Library/Caches/pwragent-ci
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
 
       - name: Clear leftover Electron state from previous jobs
         # This runner is a persistent Tart guest, not a fresh VM per job, so a
@@ -775,9 +781,7 @@ jobs:
         # builds first.
         shell: bash
         timeout-minutes: 10
-        run: >-
-          PWRAGENT_CI_CACHE_ROOT="$HOME/Library/Caches/pwragent-ci"
-          node scripts/ci/desktop-out-cache.mjs prepare
+        run: node scripts/ci/desktop-out-cache.mjs prepare
 
       - name: Run desktop replay-backed Electron tests
         # Tart's AppleParavirtGPU can reset under Electron load. The early
