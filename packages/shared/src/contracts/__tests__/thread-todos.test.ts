@@ -5,6 +5,7 @@ import {
   mergeThreadTodoItems,
   parseThreadTodoItemTexts,
   threadTodoBlockingItems,
+  threadTodoItemNoun,
   threadTodoItemProgress,
   threadTodoOpenItems,
   type ThreadTodoItem,
@@ -124,5 +125,9 @@ describe("prerequisites", () => {
     expect(threadTodoBlockingItems({ ...handoff, items: items.slice(1) })).toEqual([]);
     expect(threadTodoItemProgress({ items })).toEqual({ checked: 1, total: 2 });
     expect(threadTodoItemProgress({ items: [items[0]!] })).toBeUndefined();
+    expect(threadTodoItemNoun([items[0]!])).toBe("prerequisite");
+    expect(threadTodoItemNoun([items[0]!, items[0]!])).toBe("prerequisites");
+    expect(threadTodoItemNoun([items[0]!, items[1]!])).toBe("steps");
+    expect(threadTodoItemNoun([items[1]!])).toBe("step");
   });
 });

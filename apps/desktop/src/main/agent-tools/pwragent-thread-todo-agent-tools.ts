@@ -13,6 +13,7 @@ import {
   THREAD_TODO_DETAIL_MAX_LENGTH,
   THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
   THREAD_TODO_MAX_ITEMS,
+  THREAD_TODO_MAX_PREREQUISITES,
   THREAD_TODO_PROMPT_MAX_LENGTH,
   THREAD_TODO_TITLE_MAX_LENGTH,
   parseThreadTodoItemTexts,
@@ -247,17 +248,9 @@ export function normalizeAddTodoArgs(
       message: `add_todo project must be at most ${PROJECT_MAX_LENGTH} characters.`,
     };
   }
-  const items = args.items === undefined
-    ? undefined
-    : parseThreadTodoItemTexts(args.items, "add_todo items");
-  if (items && !items.ok) {
-    return items;
-  }
-  const prerequisites = args.prerequisites === undefined
-    ? undefined
-    : parseThreadTodoItemTexts(args.prerequisites, "add_todo prerequisites");
-  if (prerequisites && !prerequisites.ok) {
-    return prerequisites;
+  const checklist = readChecklistTexts(args, "add_todo");
+  if (!checklist.ok) {
+    return checklist;
   }
   const action = normalizeAction(args.action);
   if (action && !action.ok) {
@@ -268,8 +261,7 @@ export function normalizeAddTodoArgs(
     value: {
       title,
       ...(detail ? { detail } : {}),
-      ...(items ? { items: items.value } : {}),
-      ...(prerequisites ? { prerequisites: prerequisites.value } : {}),
+      ...checklist.value,
       ...(key ? { key } : {}),
       ...(project ? { project } : {}),
       ...(action ? { action: action.value } : {}),
@@ -354,6 +346,29 @@ function normalizeAction(
 }
 
 /**
+ * The card's step and prerequisite texts, each left out when absent so a
+ * restated card keeps that list. Prerequisites have their own, smaller cap.
+ */
+function readChecklistTexts(
+  args: Record<string, unknown>,
+  operation: "add_todo" | "update_todo",
+):
+  | { ok: true; value: { items?: string[]; prerequisites?: string[] } }
+  | { ok: false; message: string } {
+  const value: { items?: string[]; prerequisites?: string[] } = {};
+  for (const [field, maxItems] of [
+    ["items", THREAD_TODO_MAX_ITEMS],
+    ["prerequisites", THREAD_TODO_MAX_PREREQUISITES],
+  ] as const) {
+    if (args[field] === undefined) continue;
+    const texts = parseThreadTodoItemTexts(args[field], `${operation} ${field}`, maxItems);
+    if (!texts.ok) return texts;
+    value[field] = texts.value;
+  }
+  return { ok: true, value };
+}
+
+/**
  * update_todo's fields are a patch: an absent field is left alone, and an
  * empty string clears an optional one back to its default. That keeps
  * "use another model" from making the thread restate the whole card.
@@ -388,19 +403,9 @@ export function normalizeUpdateTodoArgs(
   const project = readClearable(args.project, "project", PROJECT_MAX_LENGTH);
   if (project && !project.ok) return project;
   if (project) value.project = project.value;
-  if (args.items !== undefined) {
-    const items = parseThreadTodoItemTexts(args.items, "update_todo items");
-    if (!items.ok) return items;
-    value.items = items.value;
-  }
-  if (args.prerequisites !== undefined) {
-    const prerequisites = parseThreadTodoItemTexts(
-      args.prerequisites,
-      "update_todo prerequisites",
-    );
-    if (!prerequisites.ok) return prerequisites;
-    value.prerequisites = prerequisites.value;
-  }
+  const checklist = readChecklistTexts(args, "update_todo");
+  if (!checklist.ok) return checklist;
+  Object.assign(value, checklist.value);
   for (const field of ["check", "uncheck"] as const) {
     if (args[field] === undefined) continue;
     const ids = readItemIds(args[field], field);
@@ -463,12 +468,12 @@ function readItemIds(
 ): { ok: true; value: string[] } | { ok: false; message: string } {
   if (
     !Array.isArray(value)
-    || value.length > THREAD_TODO_MAX_ITEMS
+    || value.length > THREAD_TODO_MAX_ITEMS + THREAD_TODO_MAX_PREREQUISITES
     || !value.every((entry) => typeof entry === "string" && entry.trim())
   ) {
     return {
       ok: false,
-      message: `update_todo ${name} must be an array of at most ${THREAD_TODO_MAX_ITEMS} step ids.`,
+      message: `update_todo ${name} must be an array of at most ${THREAD_TODO_MAX_ITEMS + THREAD_TODO_MAX_PREREQUISITES} step ids.`,
     };
   }
   return { ok: true, value: [...new Set(value.map((entry: string) => entry.trim()))] };
@@ -652,7 +657,7 @@ function inputSchemaForOperation(
           },
           prerequisites: {
             type: "array",
-            maxItems: THREAD_TODO_MAX_ITEMS,
+            maxItems: THREAD_TODO_MAX_PREREQUISITES,
             items: { type: "string", maxLength: THREAD_TODO_ITEM_TEXT_MAX_LENGTH },
             description: [
               "Checkable steps the operator must finish before the card's action runs.",
@@ -660,6 +665,7 @@ function inputSchemaForOperation(
               "Cloning a repository and pointing the card at it is one example.",
               "The operator is asked to confirm before starting while one is unchecked.",
               "They are shown above the steps and merged like items.",
+              `A card holds at most ${THREAD_TODO_MAX_PREREQUISITES} prerequisites.`,
             ].join(" "),
           },
           key: {
@@ -740,7 +746,7 @@ function inputSchemaForOperation(
           },
           prerequisites: {
             type: "array",
-            maxItems: THREAD_TODO_MAX_ITEMS,
+            maxItems: THREAD_TODO_MAX_PREREQUISITES,
             items: { type: "string", maxLength: THREAD_TODO_ITEM_TEXT_MAX_LENGTH },
             description: [
               "The card's prerequisites, restated in full, merged like items.",

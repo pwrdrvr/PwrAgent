@@ -23,6 +23,7 @@ import {
   threadTodoActionProject,
   threadTodoKindForAction,
   threadTodoBlockingItems,
+  threadTodoItemNoun,
 } from "@pwragent/shared";
 import type { ThreadTodoStore } from "./thread-todo-store.js";
 
@@ -693,12 +694,9 @@ function assertNoBlockingItems(todo: ThreadTodo): void {
   const open = threadTodoBlockingItems(todo);
   if (open.length === 0) return;
   const steps = open.map((item) => `"${item.text}" (${item.id})`).join(", ");
-  const noun = open.every((item) => item.prerequisite)
-    ? open.length === 1 ? "prerequisite" : "prerequisites"
-    : open.length === 1 ? "step" : "steps";
   throw new ThreadTodoError(
     "open_items",
-    `This to-do has ${open.length} unchecked ${noun}: ${steps}. `
+    `This to-do has ${open.length} unchecked ${threadTodoItemNoun(open)}: ${steps}. `
       + "Check finished steps with update_todo check, or pass allowOpenItems: true when the operator says the rest no longer apply.",
   );
 }

@@ -3,6 +3,7 @@ import type { ThreadTodo } from "@pwragent/shared";
 import {
   THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
   THREAD_TODO_MAX_ITEMS,
+  THREAD_TODO_MAX_PREREQUISITES,
 } from "@pwragent/shared";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import {
@@ -172,6 +173,12 @@ describe("checklist arguments", () => {
     expect(normalizeAddTodoArgs({ title: "Build", items: ["Implement"], prerequisites: [" Clone "] }))
       .toEqual({ ok: true, value: { title: "Build", items: ["Implement"], prerequisites: ["Clone"] } });
     expect(normalizeAddTodoArgs({ title: "Build", prerequisites: "Clone" })).toMatchObject({ ok: false });
+    // They show in full on a resting card, so they have a smaller cap.
+    const tooMany = Array.from({ length: THREAD_TODO_MAX_PREREQUISITES + 1 }, (_, index) => `P${index}`);
+    expect(normalizeAddTodoArgs({ title: "Build", prerequisites: tooMany })).toMatchObject({
+      ok: false,
+      message: `add_todo prerequisites may hold at most ${THREAD_TODO_MAX_PREREQUISITES} steps.`,
+    });
     expect(normalizeUpdateTodoArgs({ id: "todo-1", prerequisites: [] }))
       .toEqual({ ok: true, target: { id: "todo-1" }, value: { prerequisites: [] } });
     expect(normalizeUpdateTodoArgs({ id: "todo-1", prerequisites: [""] })).toMatchObject({ ok: false });

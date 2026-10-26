@@ -661,8 +661,8 @@ describe("thread to-do checklists", () => {
 
   it("starts a thread at once when only the new thread's steps are open", async () => {
     // The steps are the plan the new thread carries out, not chores for the
-    // operator. The override still goes along for an older peer, which
-    // blocks on every open step.
+    // operator. A local card sends no override, so the owner still refuses
+    // a prerequisite added since this card rendered.
     const handoff = todo({
       id: "k20",
       kind: "handoff",
@@ -680,7 +680,24 @@ describe("thread to-do checklists", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
     expect(screen.queryByText(/still open/)).toBeNull();
-    expect(view.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true });
+    expect(view.run).toHaveBeenCalledWith(handoff, {});
+    cleanup();
+
+    // A peer's card may live on an older owner, which blocks on every open
+    // step, so the override goes along.
+    const remote: ThreadTodo = {
+      ...handoff,
+      id: "k21",
+      federationTarget: { instanceId: "peer-1", scope: "remote" },
+    };
+    const remoteView = createView([remote]);
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-21" todos={[remote]} view={remoteView} onStartReview={vi.fn()} />,
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    });
+    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true });
   });
 
   it("drops the question once the last open step is checked", () => {

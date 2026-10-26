@@ -21,6 +21,7 @@ import {
   THREAD_TODO_MERGE_METHODS,
   resolveThreadTodoMergeMethod,
   threadTodoBlockingItems,
+  threadTodoItemNoun,
   threadTodoItemProgress,
   threadTodoOpenItems,
   threadTodoPrerequisites,
@@ -585,11 +586,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const prerequisites = threadTodoPrerequisites(todo);
   const blocking = threadTodoBlockingItems(todo);
   const openSteps = blocking.length;
-  const openStepsText = `${openSteps} ${
-    blocking.every((item) => item.prerequisite)
-      ? openSteps === 1 ? "prerequisite" : "prerequisites"
-      : openSteps === 1 ? "step" : "steps"
-  } still open.`;
+  const openStepsText = `${openSteps} ${threadTodoItemNoun(blocking)} still open.`;
   // Ticking the last step while the question is up answers it: the card
   // goes back to its buttons instead of asking about "0 steps".
   const stepsConfirmation = openSteps > 0 ? confirmingSteps : undefined;
@@ -626,8 +623,12 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
     if (openSteps === 0) {
       // A start_thread card's open steps do not block here. A federation
       // peer on an older version blocks on every open step, so the
-      // override still goes along with them.
-      complete(threadTodoOpenItems(todo).length > 0);
+      // override goes along to a peer's card. A local card's owner applies
+      // the same rule as this card, and still refuses a prerequisite added
+      // since it rendered.
+      complete(
+        todo.federationTarget !== undefined && threadTodoOpenItems(todo).length > 0,
+      );
       return;
     }
     setConfirmingSteps({ ...confirmation, proceed: () => complete(true) });
@@ -1035,11 +1036,12 @@ function useTodoCopy(
       if (selection) {
         items.push({ label: "Copy selection", action: () => copy(selection) });
       }
-      const steps = todo.items ?? [];
+      const steps = threadTodoSteps(todo);
       const stepId = event.target instanceof Element
         ? event.target.closest("[data-todo-item-id]")?.getAttribute("data-todo-item-id")
         : undefined;
-      const step = steps.find((item) => item.id === stepId);
+      // A prerequisite copies as a step too; the counts below are steps only.
+      const step = todo.items?.find((item) => item.id === stepId);
       if (step) {
         items.push({ label: "Copy step", action: () => copy(step.text) });
       }

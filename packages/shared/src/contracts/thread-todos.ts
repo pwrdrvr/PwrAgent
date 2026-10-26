@@ -179,6 +179,11 @@ export const THREAD_TODO_DETAIL_MAX_LENGTH = 1_000;
 export const THREAD_TODO_PROMPT_MAX_LENGTH = 20_000;
 /** Steps one card may hold; a longer plan belongs in more than one card. */
 export const THREAD_TODO_MAX_ITEMS = 20;
+/**
+ * Prerequisites one card may hold. They show in full above the resting
+ * card's step window, so the cap bounds the card's resting height too.
+ */
+export const THREAD_TODO_MAX_PREREQUISITES = 5;
 export const THREAD_TODO_ITEM_TEXT_MAX_LENGTH = 200;
 
 /**
@@ -188,14 +193,15 @@ export const THREAD_TODO_ITEM_TEXT_MAX_LENGTH = 200;
 export function parseThreadTodoItemTexts(
   value: unknown,
   field = "items",
+  maxItems = THREAD_TODO_MAX_ITEMS,
 ): { ok: true; value: string[] } | { ok: false; message: string } {
   if (!Array.isArray(value)) {
     return { ok: false, message: `${field} must be an array of step texts.` };
   }
-  if (value.length > THREAD_TODO_MAX_ITEMS) {
+  if (value.length > maxItems) {
     return {
       ok: false,
-      message: `${field} may hold at most ${THREAD_TODO_MAX_ITEMS} steps.`,
+      message: `${field} may hold at most ${maxItems} steps.`,
     };
   }
   const texts: string[] = [];
@@ -295,6 +301,16 @@ export function threadTodoBlockingItems(
   return todo.action?.type === "start_thread"
     ? open.filter((item) => item.prerequisite === true)
     : open;
+}
+
+/**
+ * What a list of open entries is called in a question or an error:
+ * "prerequisite(s)" when every one is a prerequisite, else "step(s)".
+ */
+export function threadTodoItemNoun(items: readonly ThreadTodoItem[]): string {
+  const prerequisites = items.length > 0 && items.every((item) => item.prerequisite);
+  const noun = prerequisites ? "prerequisite" : "step";
+  return items.length === 1 ? noun : `${noun}s`;
 }
 
 /** "2 of 4" for a card with steps; undefined for one without. */

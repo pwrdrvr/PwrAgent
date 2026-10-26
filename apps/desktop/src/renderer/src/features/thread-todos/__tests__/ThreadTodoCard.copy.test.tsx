@@ -112,6 +112,33 @@ describe("to-do card Markdown", () => {
       .toBe("## Add stdio server support\n\n- [ ] P1 Finding a\n- [x] Finding b\n- [x] ~~P2 Finding c~~ (declined)");
   });
 
+  it("heads prerequisites apart from the steps", () => {
+    const handoff = card([true, false], {
+      detail: undefined,
+      items: [
+        { id: "p1", text: "Clone the repository", checked: false, prerequisite: true },
+        ...card([true, false]).items!.slice(0, 2),
+      ],
+      action: { type: "start_thread", prompt: "Build the gateway." },
+    });
+    expect(threadTodoMarkdown(handoff)).toBe([
+      "## Add stdio server support",
+      "",
+      "### Before you start",
+      "",
+      "- [ ] Clone the repository",
+      "",
+      "### Steps",
+      "",
+      "- [x] Confirm the model is available",
+      "- [ ] Inspect the remote bridge branch",
+      "",
+      "### Prompt",
+      "",
+      "Build the gateway.",
+    ].join("\n"));
+  });
+
   it("separates cards with a blank line", () => {
     const one = card([], { items: undefined, detail: undefined, title: "One" });
     const two = card([], { items: undefined, detail: undefined, title: "Two" });
@@ -180,6 +207,21 @@ describe("to-do card copy", () => {
     fireEvent.contextMenu(screen.getByRole("heading", { name: todo.title }));
     await choose("Copy all to-dos");
     expect(copied.at(-1)).toBe(threadTodosMarkdown([todo, other]));
+  });
+
+  it("counts and copies the steps without the prerequisites", async () => {
+    const todo = card([true], {
+      items: [
+        { id: "p1", text: "Clone the repository", checked: false, prerequisite: true },
+        ...card([true]).items!,
+      ],
+    });
+    render(<ThreadTodoCard {...props(todo)} />);
+
+    fireEvent.contextMenu(screen.getByText("Clone the repository"));
+    expect(menuItems()).toEqual(["Copy step", "Copy to-do5 steps", "Copy open steps4"]);
+    await choose("Copy open steps");
+    expect(copied.at(-1)).not.toContain("Clone the repository");
   });
 
   it("leads with Copy selection when text inside the card is selected", async () => {
