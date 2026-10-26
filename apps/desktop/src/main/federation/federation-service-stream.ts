@@ -263,8 +263,10 @@ export class ServiceStreamEndpoint {
     const error = typeof frame.error === "string" ? frame.error.slice(0, 240) : undefined;
     if (this.remoteFin && !error) {
       // The peer sent everything it had. Let our writes of it finish.
+      // `writable` turns false at end(), before buffered writes flush: wait
+      // for `finish`. An error instead ends in `close`, which cleans up too.
       this.peerClosed = true;
-      if (this.socket.writableFinished || !this.socket.writable) this.cleanup();
+      if (this.socket.writableFinished || this.socket.destroyed) this.cleanup();
       else this.socket.once("finish", () => this.cleanup());
       return;
     }

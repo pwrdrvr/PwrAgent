@@ -366,6 +366,36 @@ describe("windowed stream endpoint", () => {
     expect(budget.inUse).toBe(0);
   });
 
+  it("flushes pending local writes when the peer closes after its FIN", async () => {
+    const window = 16 * 1024 * 1024;
+    const accepted = new Set<Socket>();
+    const server = createServer((socket) => { accepted.add(socket); socket.pause(); });
+    const port = await listen(server);
+    cleanups.push(() => { for (const socket of accepted) socket.destroy(); });
+    const socket = connect({ host: "127.0.0.1", port });
+    socket.on("error", () => undefined);
+    await once(socket, "connect");
+    const stream = new ServiceStreamEndpoint({ streamId: "s", socket, scheduler: new ServiceStreamScheduler(),
+      budget: new ServiceStreamBudget(window), window, send: () => undefined });
+    stream.start(window, 16_384);
+    await vi.waitFor(() => expect(accepted.size).toBe(1));
+    const [reader] = [...accepted];
+    const frame = Buffer.alloc(SERVICE_STREAM_FRAME_BYTES, 7).toString("base64");
+    const frames = window / SERVICE_STREAM_FRAME_BYTES;
+    for (let seq = 0; seq < frames; seq += 1) stream.receiveData({ seq, data: frame });
+    stream.receiveData({ seq: frames, data: "", fin: true });
+    // The reader is paused, so most of the window is still queued locally.
+    expect(socket.writableLength).toBeGreaterThan(0);
+    stream.receiveClose({ streamId: "s" });
+    let received = 0;
+    reader!.on("data", (data: Buffer) => { received += data.length; });
+    const ended = once(reader!, "end");
+    reader!.resume();
+    await ended;
+    expect(received).toBe(window);
+    await vi.waitFor(() => expect(stream.isClosed).toBe(true));
+  });
+
   it("grants credit back as the local socket drains, in batches", async () => {
     const { stream, sent, socket } = await endpoint(4096);
     cleanups.push(() => { socket.destroy(); });
