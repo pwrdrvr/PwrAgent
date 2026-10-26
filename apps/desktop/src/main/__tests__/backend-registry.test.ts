@@ -24494,6 +24494,44 @@ script = "printf setup-output"
     await registry.close();
   });
 
+  it("forks a Claude thread through the shared workspace path", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-fork-"));
+    const sessions = new ClaudeSessionStore(path.join(root, "sessions"));
+    const sourceId = "c2222222-2222-4222-8222-222222222222";
+    await sessions.save({ cwd: root, sdkSessionId: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", thread: {
+      id: sourceId, source: "claude", title: "Queue fix", titleSource: "explicit", linkedDirectories: [],
+    } });
+    await sessions.append(sourceId, [{ type: "message", id: "user:1", role: "user", text: "Fix the queue", turn: { id: "1" } }]);
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore,
+      agentToolMcpServer: null,
+      pdfToolMcpServer: null,
+      createScratchProjectDirectory: vi.fn(async () => path.join(root, "fork")),
+      claudeBackendOptions: {
+        store: sessions,
+        inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
+      },
+    });
+    try {
+      const response = await registry.forkThread({
+        backend: "claude", sourceThreadId: sourceId, parentThreadId: sourceId,
+        directoryKind: "workspace", directoryLabel: "New Workspace", workMode: "local", executionMode: "auto",
+      });
+      expect(response).toMatchObject({ backend: "claude", sourceThreadId: sourceId, executionMode: "auto" });
+      expect(response.threadId).not.toBe(sourceId);
+      const fork = await sessions.read(response.threadId);
+      expect(fork).toMatchObject({ cwd: path.join(root, "fork"), forkFromSdkSessionId: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" });
+      expect((await sessions.entries(response.threadId)).map((entry) => entry.id)).toEqual(["user:1"]);
+      expect(await overlayStore.getThreadOverlayState({ backend: "claude", threadId: response.threadId }))
+        .toMatchObject({ parentThreadId: sourceId, executionMode: "auto" });
+    } finally {
+      await registry.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  });
+
   it("forks a Codex thread into the same worktree and records the visual parent", async () => {
     const overlayStore = createOverlayStoreMock();
     const codexClient = new MockBackendClient({

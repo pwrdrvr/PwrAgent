@@ -136,8 +136,19 @@ mode selections add no commits. At 100 new threads and 100 permission changes
 per day, the measured projection is `(400 / 86400) commits/s × 16480 bytes ×
 86400 seconds`, or approximately 6.6 MB/day. This adds no timer-based writes.
 Archive changes metadata and
-retains the workspace. Native fork, workspace handoff, and transcript
-pagination are not advertised.
+retains the workspace. Workspace handoff and transcript pagination are not
+advertised.
+
+**Fork** goes through the registry's shared fork path, which prepares the
+workspace (same directory, new worktree, or scratch), sets the parent, and
+records the fork origin. The new thread copies the source's history and
+records the source's SDK session. Its first message resumes that session with
+`forkSession: true` from the fork's own working directory. The CLI resumes a
+session started in another directory and gives the fork a new session, which
+the thread adopts at `init`. Before that prompt, the fork reads its starting
+usage totals, as an older session without a baseline does, so the copied
+history is not billed as new work. A source with no conversation yet cannot
+be forked.
 
 Queue uses PwrAgent's shared FIFO and resumes the SDK session after the active
 turn finishes. Steer sends an additional native user message through the same

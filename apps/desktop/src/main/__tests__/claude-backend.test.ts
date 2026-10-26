@@ -2031,6 +2031,50 @@ describe("Claude SDK backend", () => {
     expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", additionalDirectories: [attached] });
   });
 
+  it("forks a thread: copies its history and continues its session in a new one", async () => {
+    let call = 0;
+    const usage = vi.fn().mockResolvedValue({ session: { model_usage: { opus: {
+      inputTokens: 40, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      costUSD: 0.4, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0,
+    } } } });
+    const f = await fixture(async function* () {
+      call += 1;
+      const sessionId = call === 1 ? "5a85c1ad-85c1-4930-ae19-50f721ad13dd" : "f0f0f0f0-0000-4000-8000-000000000002";
+      yield { type: "system", subtype: "init", session_id: sessionId } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: `reply-${call}`, content: [{ type: "text", text: `Reply ${call}` }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: `Reply ${call}` } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage } as Partial<Query>);
+    const { threadId: sourceId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId: sourceId, input: [{ type: "text", text: "Remember PINEAPPLE" }] });
+    await f.waitForTurn();
+    await expect(f.backend.forkThread({ sourceThreadId: (await f.backend.startThread({ cwd: f.root, executionMode: "default" })).threadId,
+      cwd: f.root, executionMode: "default" })).rejects.toThrow("no conversation to fork");
+
+    const forkCwd = path.join(f.root, "fork-worktree");
+    const { threadId } = await f.backend.forkThread({ sourceThreadId: sourceId, cwd: forkCwd, executionMode: "auto" });
+    const fork = await f.backend.readThread(threadId);
+    expect(fork.lastUserMessage).toBe("Remember PINEAPPLE");
+    expect(fork.lastAssistantMessage).toBe("Reply 1");
+    expect((await f.store.read(threadId)).thread).toMatchObject({ title: expect.stringContaining("(fork)"), executionMode: "auto" });
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "What did I ask?" }] });
+    await f.waitForTurn();
+    expect(f.queries[1]).toMatchObject({ cwd: forkCwd, resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", forkSession: true });
+    expect(f.queries[1].sessionId).toBeUndefined();
+    // The fork reads its starting totals, so the copied history is not billed again.
+    expect(usage).toHaveBeenCalled();
+    const saved = await f.store.read(threadId);
+    expect(saved.sdkSessionId).toBe("f0f0f0f0-0000-4000-8000-000000000002");
+    expect(saved.forkFromSdkSessionId).toBeUndefined();
+    // The source keeps its own session.
+    expect((await f.store.read(sourceId)).sdkSessionId).toBe("5a85c1ad-85c1-4930-ae19-50f721ad13dd");
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Again" }] });
+    await f.waitForTurn();
+    expect(f.queries[2]).toMatchObject({ resume: "f0f0f0f0-0000-4000-8000-000000000002" });
+    expect(f.queries[2].forkSession).toBeUndefined();
+  });
+
   describe("stopping a turn while a background task runs", () => {
     const capabilities = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"];
     async function stoppable(params: { capabilities?: string[]; answer?: boolean; interruptGraceMs?: number } = {}) {
