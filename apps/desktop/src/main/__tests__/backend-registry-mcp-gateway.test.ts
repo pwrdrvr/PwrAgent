@@ -31,7 +31,7 @@ describe("backend MCP gateway dispatch", () => {
   let startTurn: ReturnType<typeof vi.fn<() => Promise<{ threadId: string; turnId: string }>>>;
   let registerBridge: ReturnType<typeof vi.fn<McpConnectionGatewayService["registerBridge"]>>;
   let review: ReturnType<typeof vi.fn<CodexAppServerClient["generateStructuredObject"]>>;
-  let readReviewTurn: ReturnType<typeof vi.fn<CodexAppServerClient["readThreadTurn"]>>;
+  let readReviewTurn: ReturnType<typeof vi.fn<CodexAppServerClient["readMcpApprovalUserMessages"]>>;
   const brokers: McpConnectionGatewayService[] = [];
   let internals: {
     activeTurnKeys: Set<string>;
@@ -69,10 +69,7 @@ describe("backend MCP gateway dispatch", () => {
         } }]
       : { content: [{ type: "text", text: "fixture result" }] });
     review = vi.fn<CodexAppServerClient["generateStructuredObject"]>().mockResolvedValue({ status: "failed", reason: "fixture unavailable" });
-    readReviewTurn = vi.fn<CodexAppServerClient["readThreadTurn"]>().mockResolvedValue({
-      entries: [], messages: [{ id: "user-1", role: "user", text: "Look up fixture on Fixture." }],
-      pagination: { supportsPagination: false, hasPreviousPage: false },
-    });
+    readReviewTurn = vi.fn<CodexAppServerClient["readMcpApprovalUserMessages"]>().mockResolvedValue(["Look up fixture on Fixture."]);
     startTurn = vi.fn(async () => ({ threadId: "headless-1", turnId: "turn-1" }));
     registerBridge = vi.fn<McpConnectionGatewayService["registerBridge"]>(async () => ({
       server: { name: "one", command: "fixture", args: [], env: {} },
@@ -87,7 +84,7 @@ describe("backend MCP gateway dispatch", () => {
         close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
         onNotification: () => () => {}, onPendingRequest: () => () => {},
         readConfiguredMcpServerNames: async () => [], startThread: async () => ({ threadId: "headless-1" }),
-        startTurn, generateStructuredObject: review, readThreadTurn: readReviewTurn,
+        startTurn, generateStructuredObject: review, readMcpApprovalUserMessages: readReviewTurn,
       } as never,
       overlayStore, isBootstrapMode: () => false,
       mcpConnectionService: service ?? { registerBridge, requestGatewayToolOperation: operation },
@@ -150,7 +147,7 @@ describe("backend MCP gateway dispatch", () => {
     expect(review).toHaveBeenCalledTimes(2);
     expect(review).toHaveBeenCalledWith(expect.objectContaining({ helper: "mcp_approval_reviews", disableExecution: true,
       signal: expect.any(AbortSignal), prompt: expect.stringContaining('"schemaRevision":"r1"') }));
-    expect(readReviewTurn).toHaveBeenCalledWith({ threadId: "thread-1", turnId: "turn-1" });
+    expect(readReviewTurn).toHaveBeenCalledWith({ threadId: "thread-1", turnId: "turn-1", signal: expect.any(AbortSignal) });
   });
 
   it.each(["ask", "deny", "unavailable", "invalid-evidence", "high-risk"])("keeps Auto review conservative: %s", async (outcome) => {
@@ -171,8 +168,7 @@ describe("backend MCP gateway dispatch", () => {
     internals.activeCodexTurnModes.set("thread-1:turn-1", scenario === "default" ? "default" : "auto");
     if (scenario === "prompt") Object.assign((registry as unknown as { mcpConnectionService: object }).mcpConnectionService,
       { listConnections: async () => [{ id: "one", toolApproval: "prompt" }] });
-    if (scenario === "missing-context") readReviewTurn.mockResolvedValue({ entries: [], messages: [],
-      pagination: { supportsPagination: false, hasPreviousPage: false } });
+    if (scenario === "missing-context") readReviewTurn.mockResolvedValue(undefined);
     if (scenario === "ended") internals.activeTurnKeys.clear();
     declineUnexpectedApproval();
     expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args))).toMatchObject({ success: false });
@@ -216,6 +212,34 @@ describe("backend MCP gateway dispatch", () => {
     expect(internals.pendingServerRequests.size).toBe(0);
     expect(resolved.length).toBeGreaterThanOrEqual(1);
   });
+
+  it.each(["once", "tool-only", "other-thread", "other-connection", "changed-catalog", "revoked-selection"])(
+    "keeps a parallel approval pending outside a validated grant: %s", async (scenario) => {
+      const events: McpApprovalEvent[] = [];
+      registry.onEvent((event) => {
+        if (event.notification.method === "mcpServer/elicitation/request") events.push(event as McpApprovalEvent);
+      });
+      const context: AgentToolCallContext = { backend: "codex", threadId: "thread-1", turnId: "turn-1", transport: "codex_dynamic_tool" };
+      const invocation = { ...args, serverName: "Fixture" };
+      const controller = new AbortController();
+      const first = internals.approveGatewayInvocation(invocation, context, new AbortController().signal, undefined, "catalog-1");
+      const second = internals.approveGatewayInvocation({ ...invocation, toolName: "write",
+        ...(scenario === "other-connection" ? { connectionId: "two" } : {}),
+      }, { ...context, ...(scenario === "other-thread" ? { threadId: "thread-2" } : {}) },
+      controller.signal, undefined, scenario === "changed-catalog" ? "catalog-2" : "catalog-1");
+      await vi.waitFor(() => expect(events).toHaveLength(2));
+      const persist = scenario === "once" ? null : scenario === "tool-only" ? "session" : "server-session";
+      await registry.submitServerRequest({ ...context, requestId: String(events[0]!.notification.params.requestId),
+        response: { action: "accept", content: {}, _meta: persist ? { persist } : null } });
+      const grant = await first;
+      if (scenario === "revoked-selection") await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+      if (typeof grant === "object") await grant.onInvoked();
+      expect(internals.pendingServerRequests.size).toBe(1);
+      const cancelled = expect(second).rejects.toThrow("fixture cleanup");
+      controller.abort(new Error("fixture cleanup"));
+      await cancelled;
+    },
+  );
 
   it.each(["disabled", "cold", "expired"] as const)(
     "keeps unrelated new-thread defaults when Sandboxer status is slow (%s)",

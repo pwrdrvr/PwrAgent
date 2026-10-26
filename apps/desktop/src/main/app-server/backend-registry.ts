@@ -1052,6 +1052,7 @@ type BackendClient = {
   readThreadName?(threadId: string): Promise<string | undefined>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string; itemIds?: string[] }): Promise<AppServerThreadActivityEntry>;
   readThreadToolInvocation?(params: { threadId: string; turnId: string; itemId: string }): Promise<AppServerThreadActivityDetail[]>;
+  readMcpApprovalUserMessages?: CodexAppServerClient["readMcpApprovalUserMessages"];
   readThreadTurn?(params: { threadId: string; turnId: string }): Promise<AppServerThreadReplay>;
   prepareFreshNativeVoiceThread?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean>;
   resumeNativeVoiceThread?(params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]): Promise<void>;
@@ -39938,13 +39939,14 @@ export class DesktopBackendRegistry {
     try {
       // Protocol-only, source-thread scoped context. Never accept user intent
       // from the calling model's arguments or another instance's transcript.
-      const replay = await this.withCodexThreadClient(context.threadId, async (client) =>
-        client.readThreadTurn ? await client.readThreadTurn({ threadId: context.threadId, turnId: context.turnId! }) : undefined);
+      const messages = await this.withCodexThreadClient(context.threadId, async (client) =>
+        client.readMcpApprovalUserMessages ? await client.readMcpApprovalUserMessages({
+          threadId: context.threadId, turnId: context.turnId!, signal,
+        }) : undefined);
       signal.throwIfAborted();
-      const messages = replay?.messages.filter((message) => message.role === "user").map((message) => message.text) ?? [];
       // Missing/oversized context falls back to the operator; truncation must
       // not discard a constraint and manufacture authorization.
-      if (!messages.length || messages.some((text) => !text.trim())
+      if (!messages?.length || messages.some((text) => !text.trim())
         || Buffer.byteLength(JSON.stringify(messages)) > 32_000
         || Buffer.byteLength(JSON.stringify(definition)) > 24_000) return undefined;
       started = true;
