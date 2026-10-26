@@ -6279,7 +6279,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // timestamp (to rank the overlay against a provider snapshot), so an
     // unchanged mode elsewhere writes nothing.
     if (
-      stored?.executionMode === nextState.executionMode
+      stored
+      && stored.executionMode === nextState.executionMode
       && (
         !isAcpBackendId(params.backend)
         || stored.executionModeUpdatedAt === nextState.executionModeUpdatedAt
