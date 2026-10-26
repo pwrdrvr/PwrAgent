@@ -70,6 +70,25 @@ function thread(id: string): NavigationThreadSummary {
   };
 }
 
+function selectedCollectionService(): NavigationDetailService {
+  return new NavigationDetailService({
+    getCachedThreadSummary: () => thread("selected"),
+    listLiveTokenMiserSubAgents: () => [],
+    readLiveSubAgentRevisionSource: () => [],
+    mergeLiveTokenMiserSubAgents: (_id: string, cards: ThreadSubAgentSummary[]) => cards,
+  } as unknown as DesktopBackendRegistry);
+}
+
+const selectedCollectionRequest = {
+  protocol: 2 as const,
+  ref: { backend: "codex" as const, threadId: "selected-💡\"" },
+  collection: { name: "subAgents" as const },
+};
+
+function collectionCursor(offset: number, revision: string): string {
+  return Buffer.from(JSON.stringify({ offset, revision }), "utf8").toString("base64url");
+}
+
 describe("NavigationDetailService", () => {
   it("includes a continuation cursor in the queue wire-byte admission check", () => {
     const entries: ThreadQueuedTurnSummary[] = [{ queueEntryId: "first", createdAt: 1, displayText: "", origin: "manual", position: 0 }];
@@ -110,6 +129,118 @@ describe("NavigationDetailService", () => {
     mocks.getLaunchpadDefaults.mockReset().mockResolvedValue({ backend: "codex", executionMode: "default" });
     mocks.getDirectoryLaunchpad.mockReset().mockResolvedValue(undefined);
     mocks.listCodexEnvironmentOptions.mockReset().mockResolvedValue([]);
+  });
+
+  it.each([
+    { offset: 0, complete: false },
+    { offset: 8, complete: false },
+    { offset: 98, complete: false },
+    { offset: 0, complete: true },
+    { offset: 8, complete: true },
+    { offset: 98, complete: true },
+  ])("fits exactly at the byte budget and stops one byte over at $offset (complete:$complete)", async ({ offset, complete }) => {
+    const service = selectedCollectionService();
+    for (const over of [0, 1]) {
+      mocks.cards = Array.from({ length: offset + (complete ? 2 : 3) }, (_, index) => ({
+        monitorId: `card-${index}`, task: "é💡\"\\\n", status: "success" as const,
+        createdAt: -index, updatedAt: 1, lastMessage: index > offset + 1 ? "tail".repeat(100) : "",
+      }));
+      const baseline = await service.readSelectedDetail(selectedCollectionRequest);
+      const candidate = { ...baseline, collectionPage: { ...baseline.collectionPage!,
+        values: { subAgents: mocks.cards.slice(offset, offset + 2) }, complete,
+        nextCursor: complete ? undefined : collectionCursor(offset + 2, baseline.revision),
+      } };
+      const padding = NAVIGATION_QUERY_MAX_RESULT_BYTES - Buffer.byteLength(JSON.stringify(candidate)) + over;
+      mocks.cards[offset + 1]!.lastMessage = "x".repeat(padding);
+      // Padding changes the revision, whose SHA-256 encoding keeps the same length.
+      const first = await service.readSelectedDetail(selectedCollectionRequest);
+      const response = await service.readSelectedDetail({ ...selectedCollectionRequest,
+        collection: { name: "subAgents", cursor: collectionCursor(offset, first.revision) },
+      });
+      const taken = over === 0 ? 2 : 1;
+      expect(response.collectionPage?.values.subAgents).toEqual(mocks.cards.slice(offset, offset + taken));
+      expect(response.collectionPage?.complete).toBe(complete && over === 0);
+      expect(response.collectionPage?.nextCursor).toBe(complete && over === 0
+        ? undefined : collectionCursor(offset + taken, response.revision));
+      const bytes = Buffer.byteLength(JSON.stringify(response));
+      if (over === 0) expect(bytes).toBe(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+      else expect(bytes).toBeLessThan(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+    }
+  });
+
+  it.each([1, 2])("rejects a single oversized record with %i records remaining", async (count) => {
+    const service = selectedCollectionService();
+    mocks.cards = Array.from({ length: count }, (_, index) => ({
+      monitorId: `card-${index}`, task: "task", status: "success" as const,
+      createdAt: -index, updatedAt: 1, lastMessage: index > 0 ? "tail".repeat(100) : "",
+    }));
+    const baseline = await service.readSelectedDetail(selectedCollectionRequest);
+    const candidate = { ...baseline, collectionPage: { ...baseline.collectionPage!,
+      values: { subAgents: mocks.cards.slice(0, 1) }, complete: count === 1,
+      nextCursor: count === 1 ? undefined : collectionCursor(1, baseline.revision),
+    } };
+    mocks.cards[0]!.lastMessage = "x".repeat(NAVIGATION_QUERY_MAX_RESULT_BYTES - Buffer.byteLength(JSON.stringify(candidate)));
+    const exact = await service.readSelectedDetail(selectedCollectionRequest);
+    expect(exact.collectionPage?.values.subAgents).toHaveLength(1);
+    expect(Buffer.byteLength(JSON.stringify(exact))).toBe(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+    mocks.cards[0]!.lastMessage += "x";
+    await expect(service.readSelectedDetail(selectedCollectionRequest)).rejects.toMatchObject({
+      code: "navigation_item_too_large", message: "[navigation_item_too_large] One selected collection record exceeds the result budget.",
+    });
+  });
+
+  it("serializes only a linear number of bytes when sizing 100 large collection records", async () => {
+    mocks.cards = Array.from({ length: 100 }, (_, index) => ({
+      monitorId: `card-${index}`, task: "task", status: "success" as const,
+      createdAt: -index, updatedAt: 1, lastMessage: "x".repeat(2400),
+    }));
+    const service = selectedCollectionService();
+    const stringify = vi.spyOn(JSON, "stringify");
+    let serializedBytes = 0;
+    let response;
+    try {
+      response = await service.readSelectedDetail(selectedCollectionRequest);
+      serializedBytes = stringify.mock.results.reduce((sum, result) =>
+        sum + (result.type === "return" && typeof result.value === "string" ? Buffer.byteLength(result.value) : 0), 0);
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(response.collectionPage?.values.subAgents).toHaveLength(100);
+    expect(response.collectionPage?.complete).toBe(true);
+    // Includes the mock store's full-card revision hash as well as page sizing.
+    expect(serializedBytes).toBeLessThan(3 * NAVIGATION_QUERY_MAX_RESULT_BYTES);
+  });
+
+  it("keeps empty collection pages complete without a cursor", async () => {
+    const service = selectedCollectionService();
+    const empty = await service.readSelectedDetail(selectedCollectionRequest);
+    expect(empty.collectionPage).toMatchObject({ values: { subAgents: [] }, complete: true });
+    expect(empty.collectionPage).not.toHaveProperty("nextCursor");
+    const end = await service.readSelectedDetail({ ...selectedCollectionRequest,
+      collection: { name: "subAgents", cursor: collectionCursor(0, empty.revision) },
+    });
+    expect(end).toEqual(empty);
+  });
+
+  it("counts UTF-8 and escaped string records in overlay collections", async () => {
+    const service = selectedCollectionService();
+    const values = ["é💡\"\\\n", "", "tail".repeat(100)];
+    mocks.getThreadOverlayState.mockResolvedValue({ subthreadOrder: values });
+    const request = { ...selectedCollectionRequest, collection: { name: "subthreadOrder" as const } };
+    const baseline = await service.readSelectedDetail(request);
+    const candidate = { ...baseline, collectionPage: { ...baseline.collectionPage!,
+      values: { subthreadOrder: values.slice(0, 2) }, complete: false,
+      nextCursor: collectionCursor(2, baseline.revision),
+    } };
+    values[1] = "x".repeat(NAVIGATION_QUERY_MAX_RESULT_BYTES - Buffer.byteLength(JSON.stringify(candidate)));
+    const exact = await service.readSelectedDetail(request);
+    expect(exact.collectionPage?.values.subthreadOrder).toEqual(values.slice(0, 2));
+    expect(Buffer.byteLength(JSON.stringify(exact))).toBe(NAVIGATION_QUERY_MAX_RESULT_BYTES);
+    values[1] += "x";
+    const over = await service.readSelectedDetail(request);
+    expect(over.collectionPage?.values.subthreadOrder).toEqual(values.slice(0, 1));
+    expect(over.collectionPage?.complete).toBe(false);
+    expect(over.collectionPage?.nextCursor).toBe(collectionCursor(1, over.revision));
   });
 
   it("reads defaults and only the selected launchpad without enumerating navigation", async () => {

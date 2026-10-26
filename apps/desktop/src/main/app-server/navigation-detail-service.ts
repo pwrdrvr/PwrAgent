@@ -204,17 +204,30 @@ export class NavigationDetailService {
         collectionPage: { name: manifest.name, revision: manifest.revision,
           values: { [manifest.name]: [] }, complete: offset === end },
       };
+      const envelopeBytes = responseBytes(response);
+      let valuesBytes = 0;
+      let accepted = 0;
       for (let taken = 1; taken <= values.length; taken += 1) {
         const next = offset + taken;
-        const candidate = { ...response, collectionPage: { ...response.collectionPage!,
-          values: { [manifest.name]: values.slice(0, taken) }, complete: next === end,
-          nextCursor: next < end ? encodeQueueCursor({ offset: next, revision: manifest.revision }) : undefined,
-        } };
-        if (responseBytes(candidate) > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
+        const complete = next === end;
+        const nextCursor = next < end ? encodeQueueCursor({ offset: next, revision: manifest.revision }) : undefined;
+        // Size each record in array context (including JSON's null fallback),
+        // without reserializing the admitted prefix. Brackets are in the envelope.
+        valuesBytes += responseBytes([values[taken - 1]]) - 2 + (taken > 1 ? 1 : 0);
+        // Nonempty pages start with complete:false; true is one byte shorter.
+        // A base64url cursor needs no escaping, but its offset changes its length.
+        const candidateBytes = envelopeBytes + valuesBytes - (complete ? 1 : 0)
+          + (nextCursor === undefined ? 0 : ",\"nextCursor\":\"\"".length + nextCursor.length);
+        if (candidateBytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
           if (taken === 1) throw new NavigationQueryError("navigation_item_too_large", "One selected collection record exceeds the result budget.");
           break;
         }
-        response.collectionPage = candidate.collectionPage;
+        accepted = taken;
+        response.collectionPage!.complete = complete;
+        response.collectionPage!.nextCursor = nextCursor;
+      }
+      if (accepted > 0) {
+        response.collectionPage!.values = { [manifest.name]: values.slice(0, accepted) };
       }
       return response;
     }
