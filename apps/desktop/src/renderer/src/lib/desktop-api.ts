@@ -459,6 +459,8 @@ import type {
   PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
+  UndoThreadRewindRequest,
+  UndoThreadRewindResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -1156,6 +1158,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   rewindThread?: (
     request: RewindThreadRequest,
   ) => Promise<RewindThreadResponse>;
+  undoThreadRewind?: (
+    request: UndoThreadRewindRequest,
+  ) => Promise<UndoThreadRewindResponse>;
   configureGrokWorkflowBudget?: (
     request: ConfigureGrokWorkflowBudgetRequest,
   ) => Promise<ConfigureGrokWorkflowBudgetResponse>;

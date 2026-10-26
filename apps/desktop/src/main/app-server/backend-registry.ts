@@ -148,6 +148,8 @@ import {
   type PreviewThreadRewindResponse,
   type RewindThreadRequest,
   type RewindThreadResponse,
+  type UndoThreadRewindRequest,
+  type UndoThreadRewindResponse,
   anchorTurnUsageEntries,
   buildPrependPinRank,
   buildThreadMarkdownLink,
@@ -9144,7 +9146,11 @@ export class DesktopBackendRegistry {
    * revert (its thread/reverted, normalized to thread/rewound). The registry
    * announces only a revert Codex did not, so windows reload once.
    */
-  private readonly codexRevertsInFlight = new Map<string, { announced: boolean }>();
+  /**
+   * Codex threads this registry is reverting, and whether Codex has reported
+   * the revert. The registry announces each revert itself.
+   */
+  private readonly codexRevertsInFlight = new Map<string, { reported: boolean }>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new ActiveTurnKeySet();
   private readonly threadHandoffReservations = new Set<string>();
@@ -23393,11 +23399,12 @@ export class DesktopBackendRegistry {
     if (request.mode !== "conversation" && request.backend !== "claude") {
       throw new Error("This provider cannot restore files when it rewinds a thread");
     }
+    const rewindId = randomUUID();
     let result: {
-      announced?: boolean;
       promptText?: string;
       restoredFileCount?: number;
       targetPromptIndex?: number;
+      undoable?: boolean;
       updatedAt: number;
     };
     if (request.backend === "claude") {
@@ -23407,6 +23414,7 @@ export class DesktopBackendRegistry {
           threadId: request.threadId,
           target: request.target,
           mode: request.mode,
+          rewindId,
         });
       } finally {
         // A reply sent during the rewind waited in the queue.
@@ -23437,7 +23445,31 @@ export class DesktopBackendRegistry {
     } else {
       throw new Error("Rewind is not available for this provider");
     }
-    if (!result.announced) await this.emit({
+    try {
+      await this.overlayStore.appendThreadRewind({
+        backend: request.backend,
+        threadId: request.threadId,
+        rewind: {
+          id: rewindId,
+          occurredAt: result.updatedAt,
+          ...(request.removedTurnCount !== undefined
+            ? { removedTurnCount: request.removedTurnCount }
+            : {}),
+          ...(result.restoredFileCount !== undefined
+            ? { restoredFileCount: result.restoredFileCount }
+            : {}),
+          ...(result.undoable ? { undoable: true } : {}),
+        },
+      });
+    } catch (error) {
+      // The provider has rewound; a missing marker must not report failure.
+      backendRegistryLog.warn("failed to record thread rewind", {
+        backend: request.backend,
+        threadId: request.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    await this.emit({
       backend: request.backend,
       notification: {
         method: "thread/rewound",
@@ -23456,15 +23488,72 @@ export class DesktopBackendRegistry {
       target: request.target,
       mode: request.mode,
       updatedAt: result.updatedAt,
+      rewindId,
       ...(result.promptText ? { promptText: result.promptText } : {}),
       ...(result.restoredFileCount !== undefined ? { restoredFileCount: result.restoredFileCount } : {}),
+    };
+  }
+
+  /**
+   * Puts back what a rewind removed. Only Claude keeps the removed turns, and
+   * only until the thread's next turn starts.
+   */
+  async undoThreadRewind(
+    request: UndoThreadRewindRequest,
+  ): Promise<UndoThreadRewindResponse> {
+    if (request.backend !== "claude") {
+      throw new Error("This provider cannot undo a rewind");
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "claude",
+      threadId: request.threadId,
+    });
+    const record = overlay?.rewindLog?.find((entry) => entry.id === request.rewindId);
+    if (!record?.undoable || record.undoneAt !== undefined) {
+      throw new Error("This rewind can no longer be undone");
+    }
+    await this.assertThreadNotLocked("claude", request.threadId);
+    let updatedAt: number;
+    try {
+      ({ updatedAt } = await this.claudeBackend.undoRewind({
+        threadId: request.threadId,
+        rewindId: request.rewindId,
+      }));
+    } finally {
+      this.threadTurnQueue.scheduleThreadDrain({ backend: "claude", threadId: request.threadId });
+    }
+    try {
+      await this.overlayStore.markThreadRewindUndone({
+        backend: "claude",
+        threadId: request.threadId,
+        rewindId: request.rewindId,
+        undoneAt: updatedAt,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("failed to record undone thread rewind", {
+        threadId: request.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    await this.emit({
+      backend: "claude",
+      notification: {
+        method: "thread/rewound",
+        params: { threadId: request.threadId, updatedAt },
+      },
+    });
+    return {
+      backend: "claude",
+      threadId: request.threadId,
+      rewindId: request.rewindId,
+      updatedAt,
     };
   }
 
   private async revertCodexThread(params: {
     threadId: string;
     beforeTurnId?: string;
-  }): Promise<{ announced: boolean; updatedAt: number }> {
+  }): Promise<{ updatedAt: number }> {
     if (!params.beforeTurnId) {
       throw new Error("This prompt has no Codex turn to rewind to");
     }
@@ -23482,7 +23571,7 @@ export class DesktopBackendRegistry {
     // Hold the start reservation so no turn or compaction begins on this
     // thread while Codex replaces its history.
     this.reservedCodexStartThreadIds.add(params.threadId);
-    const revert = { announced: false };
+    const revert = { reported: false };
     this.codexRevertsInFlight.set(params.threadId, revert);
     try {
       await this.withCodexThreadClient(params.threadId, async (client) => {
@@ -23491,6 +23580,16 @@ export class DesktopBackendRegistry {
         }
         await client.revertThread({ threadId: params.threadId, beforeTurnId });
       });
+    } catch (error) {
+      // Codex changed the history before the request failed; readers still
+      // need to reload it.
+      if (revert.reported) {
+        await this.emit({
+          backend: "codex",
+          notification: { method: "thread/rewound", params: { threadId: params.threadId, updatedAt: Date.now() } },
+        });
+      }
+      throw error;
     } finally {
       this.codexRevertsInFlight.delete(params.threadId);
       this.reservedCodexStartThreadIds.delete(params.threadId);
@@ -23499,7 +23598,7 @@ export class DesktopBackendRegistry {
       this.threadTurnQueue.scheduleThreadDrain({ backend: "codex", threadId: params.threadId });
       this.maybeDrainCodexInvalidIdRecoveries();
     }
-    return { announced: revert.announced, updatedAt: Date.now() };
+    return { updatedAt: Date.now() };
   }
 
   async configureGrokWorkflowBudget(
@@ -29260,9 +29359,14 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        // The registry announces its own revert once the rewind is recorded,
+        // so the marker arrives with the event.
         if (backend === "codex" && notification.method === "thread/rewound") {
           const revert = this.codexRevertsInFlight.get(notification.params.threadId);
-          if (revert) revert.announced = true;
+          if (revert) {
+            revert.reported = true;
+            return;
+          }
         }
         // Match the client's running-turn ownership before the first await;
         // exit can arrive while lifecycle delivery is still in progress.

@@ -1728,6 +1728,49 @@ function createOverlayStoreMock(params?: {
       overlays.set(key, next);
       return next;
     },
+    appendThreadRewind: async ({
+      backend,
+      threadId,
+      rewind,
+    }: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      rewind: NonNullable<ThreadOverlayState["rewindLog"]>[number];
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current: ThreadOverlayState = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      const next = { ...current, rewindLog: [...current.rewindLog ?? [], rewind] } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
+    markThreadRewindUndone: async ({
+      backend,
+      threadId,
+      rewindId,
+      undoneAt,
+    }: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      rewindId: string;
+      undoneAt: number;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key);
+      if (!current) return current;
+      const next = {
+        ...current,
+        rewindLog: current.rewindLog?.map((entry) => entry.id === rewindId
+          ? { ...entry, undoable: false, undoneAt }
+          : entry),
+      } as ThreadOverlayState;
+      overlays.set(key, next);
+      return next;
+    },
   } as unknown as MockOverlayStore;
 }
 
@@ -54243,9 +54286,10 @@ script = "printf setup"
     });
     const revertThread = vi.fn(async () => undefined);
     Object.assign(codexClient, { revertThread });
+    const overlayStore = createOverlayStoreMock({ executionMode: "default" });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+      overlayStore,
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -54264,6 +54308,7 @@ script = "printf setup"
       threadId: "thread-1",
       target: { messageId: "user-2", turnId: "turn-2" },
       mode: "conversation",
+      removedTurnCount: 2,
     });
 
     expect(revertThread).toHaveBeenCalledWith({ threadId: "thread-1", beforeTurnId: "turn-2" });
@@ -54274,7 +54319,16 @@ script = "printf setup"
       target: { messageId: "user-2", turnId: "turn-2" },
       mode: "conversation",
       updatedAt: expect.any(Number),
+      rewindId: expect.any(String),
     });
+    // The marker names the removed turns; Codex discards them, so no undo.
+    const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" });
+    expect(overlay?.rewindLog).toEqual([{
+      id: response.rewindId, occurredAt: response.updatedAt, removedTurnCount: 2,
+    }]);
+    await expect(registry.undoThreadRewind({
+      backend: "codex", threadId: "thread-1", rewindId: response.rewindId!,
+    })).rejects.toThrow("cannot undo a rewind");
     expect(events).toContainEqual({
       backend: "codex",
       notification: {
@@ -54286,7 +54340,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("announces a Codex rewind once when Codex reports the revert itself", async () => {
+  it("announces a Codex rewind once, after its marker, when Codex reports the revert itself", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read", "thread/resume"] },
     });
@@ -54308,7 +54362,7 @@ script = "printf setup"
       events.push(event);
     });
 
-    await registry.rewindThread({
+    const response = await registry.rewindThread({
       backend: "codex",
       threadId: "thread-1",
       target: { messageId: "user-2", turnId: "turn-2" },
@@ -54322,9 +54376,44 @@ script = "printf setup"
       backend: "codex",
       notification: {
         method: "thread/rewound",
-        params: { threadId: "thread-1", updatedAt: 1_234 },
+        params: { threadId: "thread-1", updatedAt: response.updatedAt },
       },
     }]);
+
+    await registry.close();
+  });
+
+  it("announces a Codex revert that Codex reported even when the request then fails", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume"] },
+    });
+    const revertThread = vi.fn(async (params: { threadId: string }) => {
+      await codexClient.emit({
+        method: "thread/rewound",
+        params: { threadId: params.threadId, updatedAt: 1_234 },
+      });
+      throw new Error("connection lost");
+    });
+    Object.assign(codexClient, { revertThread });
+    const overlayStore = createOverlayStoreMock({ executionMode: "default" });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await expect(registry.rewindThread({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { messageId: "user-2", turnId: "turn-2" },
+      mode: "conversation",
+    })).rejects.toThrow("connection lost");
+    await flushAsync();
+
+    expect(events.filter((event) => event.notification.method === "thread/rewound")).toHaveLength(1);
+    // Nothing recorded: the request did not succeed.
+    expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.rewindLog)
+      .toBeUndefined();
 
     await registry.close();
   });
@@ -54345,7 +54434,7 @@ script = "printf setup"
       files: { paths: ["src/a.ts"], insertions: 3, deletions: 1 },
     });
     const rewindThread = vi.spyOn(internals.claudeBackend, "rewindThread").mockResolvedValue({
-      promptText: "Second prompt", restoredFileCount: 1, updatedAt: 4_000,
+      promptText: "Second prompt", restoredFileCount: 1, undoable: true, updatedAt: 4_000,
     });
     const scheduleThreadDrain = vi.spyOn(internals.threadTurnQueue, "scheduleThreadDrain");
     const events: AgentEvent[] = [];
@@ -54363,9 +54452,11 @@ script = "printf setup"
       backend: "claude", threadId: "claude-1", target, mode: "conversation-and-files",
     })).resolves.toEqual({
       backend: "claude", threadId: "claude-1", target, mode: "conversation-and-files",
-      updatedAt: 4_000, promptText: "Second prompt", restoredFileCount: 1,
+      updatedAt: 4_000, promptText: "Second prompt", restoredFileCount: 1, rewindId: expect.any(String),
     });
-    expect(rewindThread).toHaveBeenCalledWith({ threadId: "claude-1", target, mode: "conversation-and-files" });
+    expect(rewindThread).toHaveBeenCalledWith({
+      threadId: "claude-1", target, mode: "conversation-and-files", rewindId: expect.any(String),
+    });
     expect(scheduleThreadDrain).toHaveBeenCalledWith({ backend: "claude", threadId: "claude-1" });
     expect(events).toContainEqual({
       backend: "claude",
@@ -54378,6 +54469,52 @@ script = "printf setup"
     // A provider without file restore previews nothing.
     await expect(registry.previewThreadRewind({ backend: "codex", threadId: "thread-1", target }))
       .resolves.toEqual({ backend: "codex", threadId: "thread-1", target });
+
+    await registry.close();
+  });
+
+  it("records a Claude rewind as undoable and undoes it, once", async () => {
+    const overlayStore = createOverlayStoreMock({ executionMode: "default" });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+    const internals = registry as unknown as {
+      claudeBackend: {
+        rewindThread: (params: unknown) => Promise<unknown>;
+        undoRewind: (params: unknown) => Promise<unknown>;
+      };
+      threadTurnQueue: { scheduleThreadDrain: (params: { backend: string; threadId: string }) => void };
+    };
+    vi.spyOn(internals.claudeBackend, "rewindThread").mockResolvedValue({ undoable: true, updatedAt: 4_000 });
+    const undoRewind = vi.spyOn(internals.claudeBackend, "undoRewind").mockResolvedValue({ updatedAt: 5_000 });
+    const scheduleThreadDrain = vi.spyOn(internals.threadTurnQueue, "scheduleThreadDrain");
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const { rewindId } = await registry.rewindThread({
+      backend: "claude", threadId: "claude-1", target: { messageId: "user:turn-2", turnId: "turn-2" },
+      mode: "conversation", removedTurnCount: 1,
+    });
+    expect((await overlayStore.getThreadOverlayState({ backend: "claude", threadId: "claude-1" }))?.rewindLog)
+      .toEqual([{ id: rewindId, occurredAt: 4_000, removedTurnCount: 1, undoable: true }]);
+    scheduleThreadDrain.mockClear();
+
+    await expect(registry.undoThreadRewind({ backend: "claude", threadId: "claude-1", rewindId: rewindId! }))
+      .resolves.toEqual({ backend: "claude", threadId: "claude-1", rewindId, updatedAt: 5_000 });
+    expect(undoRewind).toHaveBeenCalledWith({ threadId: "claude-1", rewindId });
+    expect(scheduleThreadDrain).toHaveBeenCalledWith({ backend: "claude", threadId: "claude-1" });
+    expect((await overlayStore.getThreadOverlayState({ backend: "claude", threadId: "claude-1" }))?.rewindLog)
+      .toEqual([{ id: rewindId, occurredAt: 4_000, removedTurnCount: 1, undoable: false, undoneAt: 5_000 }]);
+    expect(events.at(-1)).toEqual({
+      backend: "claude",
+      notification: { method: "thread/rewound", params: { threadId: "claude-1", updatedAt: 5_000 } },
+    });
+    await expect(registry.undoThreadRewind({ backend: "claude", threadId: "claude-1", rewindId: rewindId! }))
+      .rejects.toThrow("can no longer be undone");
+    expect(undoRewind).toHaveBeenCalledOnce();
 
     await registry.close();
   });

@@ -944,6 +944,13 @@ function questionnaireActivityLogsEqual(
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
 }
 
+function rewindLogsEqual(
+  left: NavigationThreadSummary["rewindLog"],
+  right: NavigationThreadSummary["rewindLog"]
+): boolean {
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
+
 function threadSummariesEqual(
   left: NavigationPresentedThread,
   right: NavigationPresentedThread
@@ -1038,7 +1045,8 @@ function threadSummariesEqual(
     questionnaireActivityLogsEqual(
       left.questionnaireActivityLog,
       right.questionnaireActivityLog
-    )
+    ) &&
+    rewindLogsEqual(left.rewindLog, right.rewindLog)
   );
 }
 
@@ -3604,7 +3612,7 @@ export function useThreadNavigation(
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
     : undefined;
   const selectedDetail = useNavigationSelectedDetail({
-    collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
+    collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "rewindLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
     desktopApi, enabled: enabled && viewVisible,
     ref: selectedIdentity,
     federationTarget: selectedIdentity?.ownerInstanceId

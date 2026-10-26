@@ -204,9 +204,33 @@ contract and the confirmation.
   the prompt is confirmed rewindable, never for a rewind that is refused.
   A message sent during the rewind waits in the queue, which drains after it.
 - The session metadata records each rewind: the turn it removed, the SDK
-  session, and the removed branch's last entry, which is where an undo would
-  resume. The append-only history gains a truncation line that drops the
+  session, and the removed branch's last entry, which is where an undo
+  resumes. The append-only history gains a truncation line that drops the
   removed entries on every read, so the rewind survives a restart.
+
+### Undo
+
+Claude keeps the removed turns as a branch of its session, so the latest
+rewind can be undone until the next turn starts (`ClaudeBackend.undoRewind`).
+
+- The record keeps what the rewind left the session at (`after`) and what it
+  cleared (`before`: the earlier resume point, usage totals, and context
+  occupancy). Undo is refused once the session no longer matches `after`,
+  which the next turn's `init` changes, or once an entry follows the
+  truncation line in the history.
+- Undo points the next query back at the removed branch's last entry
+  (`resumeSessionAt`), restores what the rewind cleared, and appends a
+  `pwragent_truncation_undo` line, so reads keep the removed entries again.
+- `rewindFiles` restores checkpoints but cannot go forward again. Before a
+  file rewind, the adapter asks Claude for a dry run and copies the files it
+  names into `state/claude/rewind-backups/<thread>/<rewind>/`, PwrAgent's own
+  storage, up to 50 MB. After the restore it records a hash of each file.
+  Undo writes the copies back, and deletes the files the rewind brought back
+  that did not exist before. It refuses, changing nothing, when a file
+  changed after the rewind. A file rewind whose copies could not be kept
+  cannot be undone.
+- A turn's first `init` removes the thread's backups: no rewind before it can
+  be undone any more.
 
 ## Background tasks and sub-agents
 

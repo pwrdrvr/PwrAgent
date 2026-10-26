@@ -79,6 +79,7 @@ import type {
   ControlActiveTurnResponse,
   RewindThreadResponse,
   PreviewThreadRewindResponse,
+  UndoThreadRewindResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
@@ -196,6 +197,7 @@ import {
   type ControlActiveTurnRequest,
   type RewindThreadRequest,
   type PreviewThreadRewindRequest,
+  type UndoThreadRewindRequest,
   type ForkThreadRequest,
   type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
@@ -7342,6 +7344,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: PreviewThreadRewindRequest,
     ): Promise<PreviewThreadRewindResponse> {
       return await getDesktopBackendRegistry().previewThreadRewind(request);
+    },
+    async undoThreadRewind(
+      request: UndoThreadRewindRequest,
+    ): Promise<UndoThreadRewindResponse> {
+      return await getDesktopBackendRegistry().undoThreadRewind(request);
     },
     async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
       return {

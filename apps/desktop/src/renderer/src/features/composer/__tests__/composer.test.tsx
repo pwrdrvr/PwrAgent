@@ -4042,6 +4042,105 @@ describe("Composer", () => {
     ).toBeInTheDocument();
   });
 
+  it("marks a rewound prompt with a chip until the composer is cleared", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-rewound",
+      title: "Rewound thread",
+      titleSource: "explicit",
+      source: "claude",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const otherThread: NavigationThreadSummary = { ...thread, id: "thread-other", title: "Other thread" };
+    const props = {
+      desktopApi: { onAgentEvent: () => () => undefined },
+      disabled: false,
+      skills: [],
+      threads: [thread, otherThread],
+    };
+    const { rerender } = render(
+      <Composer
+        {...props}
+        draftRestore={{
+          id: 1,
+          threadId: thread.id,
+          backend: "claude",
+          text: "Try holding the lock until the child exits instead.",
+          kind: "rewound-prompt",
+        }}
+        thread={thread}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    await waitFor(() => {
+      expect(textbox).toHaveTextContent("Try holding the lock until the child exits instead.");
+    });
+    expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
+    // Editing the prompt keeps the chip; it is still the rewound prompt.
+    fireEvent.change(textbox, { target: { value: "Try holding the lock until exit." } });
+    expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
+    fireEvent.change(textbox, { target: { value: "" } });
+    await waitFor(() => {
+      expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+    });
+
+    rerender(
+      <Composer
+        {...props}
+        draftRestore={{
+          id: 2,
+          threadId: thread.id,
+          backend: "claude",
+          text: "Now add a regression test for it.",
+          kind: "rewound-prompt",
+        }}
+        thread={thread}
+      />,
+    );
+    expect(await screen.findByText("Rewound prompt")).toBeInTheDocument();
+    // Another thread's composer is not the rewound one.
+    rerender(<Composer {...props} thread={otherThread} />);
+    await waitFor(() => {
+      expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+    });
+  });
+
+  it("takes a rewound prompt back out once its rewind is undone, and nothing else", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-undone",
+      title: "Undone thread",
+      titleSource: "explicit",
+      source: "claude",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const props = {
+      desktopApi: { onAgentEvent: () => () => undefined },
+      disabled: false,
+      skills: [],
+      thread,
+      threads: [thread],
+    };
+    const restore = (id: number, kind: "rewound-prompt" | "rewound-prompt-undone", text = "") => ({
+      id, threadId: thread.id, backend: "claude" as const, text, kind,
+    });
+    const { rerender } = render(
+      <Composer {...props} draftRestore={restore(1, "rewound-prompt", "Try holding the lock instead.")} />,
+    );
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    await waitFor(() => expect(textbox).toHaveTextContent("Try holding the lock instead."));
+
+    rerender(<Composer {...props} draftRestore={restore(2, "rewound-prompt-undone")} />);
+    await waitFor(() => expect(textbox).toHaveTextContent(""));
+    expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+
+    // A draft the operator wrote after clearing the chip is theirs.
+    fireEvent.change(textbox, { target: { value: "Something else" } });
+    rerender(<Composer {...props} draftRestore={restore(3, "rewound-prompt-undone")} />);
+    expect(textbox).toHaveTextContent("Something else");
+  });
+
   it("forgets cold `#` anchors when the draft is cleared", async () => {
     const currentThread: NavigationThreadSummary = {
       id: "thread-current",

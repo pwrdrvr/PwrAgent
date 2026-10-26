@@ -248,6 +248,11 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * rollout omits them from durable transcript items.
    */
   questionnaireActivityLog?: ThreadQuestionnaireActivity[];
+  /**
+   * Per-thread rewind log. Persisted via the overlay store; each rewind
+   * shows as one marker row where its removed turns were.
+   */
+  rewindLog?: ThreadRewindRecord[];
   optimisticUserMessage?: {
     text: string;
     imageParts?: AppServerThreadImagePart[];
@@ -2288,7 +2293,7 @@ export type NavigationSelectedDetailRequest = {
 
 export const NAVIGATION_DETAIL_COLLECTION_NAMES = [
   "subAgents", "codexNativeSubAgents", "permissionTransitionLog",
-  "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog",
+  "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "rewindLog",
   "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder",
 ] as const;
 export type NavigationDetailCollectionName = typeof NAVIGATION_DETAIL_COLLECTION_NAMES[number];
@@ -3218,6 +3223,11 @@ export type ThreadOverlayState = {
    * in the transcript after hydration.
    */
   questionnaireActivityLog?: ThreadQuestionnaireActivity[];
+  /**
+   * Per-thread rewind log. Persisted to the overlay store, capped at
+   * `MAX_REWIND_LOG_ENTRIES` (oldest-first eviction).
+   */
+  rewindLog?: ThreadRewindRecord[];
 };
 
 /**
@@ -3365,6 +3375,27 @@ export type ThreadTurnFailure = {
  * user-input turns does not evict permission or messaging history.
  */
 export const MAX_QUESTIONNAIRE_ACTIVITY_LOG_ENTRIES = 100;
+
+/** Maximum number of rewinds retained per thread in its rewind log. */
+export const MAX_REWIND_LOG_ENTRIES = 50;
+
+/**
+ * A rewind, as the transcript's marker row shows it. The provider's own
+ * record of what it changed stays with the provider.
+ */
+export type ThreadRewindRecord = {
+  id: string;
+  /** Epoch ms; places the marker where the removed turns were. */
+  occurredAt: number;
+  /** Turns the rewind removed, when the caller counted them. */
+  removedTurnCount?: number;
+  /** Files the rewind restored; absent for a conversation-only rewind. */
+  restoredFileCount?: number;
+  /** The provider kept the removed turns, so the rewind can be undone. */
+  undoable?: boolean;
+  /** Set once the rewind is undone; the marker no longer shows. */
+  undoneAt?: number;
+};
 
 export type ThreadQuestionnaireActivityStatus =
   | "pending"
