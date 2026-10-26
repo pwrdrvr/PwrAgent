@@ -96,10 +96,18 @@ export function selectGraduatedProfilePids(
     if (pid === process.pid || !commandLine.includes(ELECTRON_E2E_ENTRY)) {
       continue;
     }
-    // `replaceProfileLaunchArgs` always appends the flag and its value as two
-    // separate argv entries, so the rendered command line contains them in
-    // that order with one separator between.
-    if (!new RegExp(`--profile[\\s"']+${escapeRegExp(profile)}(\\s|"|'|$)`).test(commandLine)) {
+    // `replaceProfileLaunchArgs` appends the flag and its value as two argv
+    // entries, but the two need not stay together. On Linux, Chromium
+    // rewrites the process title with every switch ahead of every
+    // positional argument, so `--profile personal` reads as
+    // `--profile <entry> personal`. Match the bare switch and the profile
+    // name as separate whole arguments. The Playwright-owned window has no
+    // `--profile` at all.
+    const name = escapeRegExp(profile);
+    if (
+      !/(^|[\s"'])--profile([\s"'=]|$)/.test(commandLine)
+      || !new RegExp(`(^|[\\s"'=])${name}([\\s"']|$)`).test(commandLine)
+    ) {
       continue;
     }
     pids.push(pid);

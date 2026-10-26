@@ -5,6 +5,7 @@ import { hydrateComposerDraft } from "../composer-draft-hydration";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
@@ -21,6 +22,8 @@ import {
   type ModelSettingsRecent,
   type FederationCapability,
   type MoveQueuedTurnResponse,
+  type SetQueuedTurnPausedRequest,
+  type SetQueuedTurnPausedResponse,
   type SetThreadModelSettingsRequest,
   type StartTurnRequest,
   type StartTurnResponse,
@@ -3072,6 +3075,65 @@ describe("Composer", () => {
     });
   });
 
+  it("keeps the selected environment on the chip when its config is no longer discoverable", async () => {
+    // A thread whose worktree was deleted (or moved to a checkout without
+    // `.codex/environments/`) reports no environment options, but its runtime
+    // still names the environment and carries its commands. The commands
+    // stayed on screen while the picker that names them disappeared.
+    const setCodexThreadEnvironment = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+    }));
+    const thread: NavigationThreadSummary = {
+      id: "thread-1",
+      title: "Deleted worktree",
+      titleSource: "explicit",
+      source: "codex",
+      executionMode: "default",
+      linkedDirectories: [
+        {
+          id: "fixture-repo",
+          label: "FixtureRepo",
+          path: "/repo/FixtureRepo",
+          worktreePath: "/repo/.worktrees/deleted/FixtureRepo",
+          kind: "worktree",
+        },
+      ],
+      inbox: { inInbox: false },
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        environmentName: "PwrAgnt",
+        executionTarget: "local",
+        sourcePath: "/repo/.worktrees/older/FixtureRepo/.codex/environments/environment.toml",
+        actions: [{ id: "work", name: "Work", command: "pnpm dev" }],
+      },
+      codexEnvironmentOptions: [],
+    };
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ runCodexEnvironmentAction: vi.fn(), setCodexThreadEnvironment }}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+      />,
+    );
+
+    expect(screen.getByLabelText(/^Environment command(?::|$)/)).toHaveTextContent("Work");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("PwrAgnt");
+
+    chooseDropdownOption("Environment", "No environment");
+    await waitFor(() => {
+      expect(setCodexThreadEnvironment).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        environmentId: undefined,
+        actionId: undefined,
+      });
+    });
+  });
+
   it("shows No environment while retained action runs still expose logs and Stop", () => {
     const onStopEnvActionRun = vi.fn();
     const thread: NavigationThreadSummary = {
@@ -3626,6 +3688,71 @@ describe("Composer", () => {
       });
     });
     expect(runCodexEnvironmentAction).not.toHaveBeenCalled();
+  });
+
+  it("offers Edit environments… below the Environment list for the thread's workspace", () => {
+    const onEditEnvironments = vi.fn();
+    const thread = {
+      id: "thread-1",
+      title: "Environment editing",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        environmentName: "PwrAgnt",
+        executionTarget: "local" as const,
+        cwd: "/repo/.worktrees/abc/repo",
+      },
+      codexEnvironmentOptions: [
+        {
+          id: "environment",
+          name: "PwrAgnt",
+          sourcePath: "/repo/.worktrees/abc/repo/.codex/environments/environment.toml",
+          actions: [],
+        },
+      ],
+    };
+    const { rerender } = render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        thread={thread}
+        onEditEnvironments={onEditEnvironments}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^Environment(?::|$)/ }));
+    const listbox = screen.getByRole("listbox", { name: "Environment" });
+    // A button after the list, not an option, so choosing it never changes
+    // the selection.
+    expect(within(listbox).queryByText("Edit environments…")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit environments…" }));
+
+    expect(onEditEnvironments).toHaveBeenCalledWith("/repo/.worktrees/abc/repo");
+    expect(screen.queryByRole("listbox", { name: "Environment" })).not.toBeInTheDocument();
+
+    // Environments run on the machine that owns the thread, so a remote
+    // execution workspace offers no editor here.
+    rerender(
+      <Composer
+        backends={[backendSummary("codex")]}
+        desktopApi={{ setCodexThreadEnvironment: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          ...thread,
+          codexEnvironmentRuntime: { ...thread.codexEnvironmentRuntime, executionTarget: "remote" as const },
+        }}
+        onEditEnvironments={onEditEnvironments}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Environment(?::|$)/ }));
+    expect(screen.queryByRole("button", { name: "Edit environments…" })).not.toBeInTheDocument();
   });
 
   it("shows an explicit empty state when a selected environment has no commands", () => {
@@ -5326,7 +5453,8 @@ describe("Composer", () => {
     fireEvent.mouseEnter(moon);
     expect(within(screen.getByRole("tooltip")).getByText(/Usage Activity/)).toBeInTheDocument();
     fireEvent.click(moon);
-    expect(openUsageActivity).toHaveBeenCalledOnce();
+    // The window opens on the limits of the account this thread's turns use.
+    expect(openUsageActivity).toHaveBeenCalledExactlyOnceWith({ provider: "openai" });
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
@@ -6042,7 +6170,7 @@ describe("Composer", () => {
     expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
   });
 
-  it("restores provider-specific launchpad settings across repeated OpenAI and Grok flips", async () => {
+  it("restores provider settings and shares environments across repeated OpenAI and Grok flips", async () => {
     const codexBackend = {
       ...backendSummary("codex", {
         models: [
@@ -6279,7 +6407,7 @@ describe("Composer", () => {
     expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
     expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");
     expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("priority");
-    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Grok Environment");
+    expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
       "feature/provider-memory",
@@ -6314,7 +6442,7 @@ describe("Composer", () => {
       expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("standard");
       expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
       expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
-        "Grok Environment",
+        "Codex Environment",
       );
     });
   });
@@ -10996,6 +11124,347 @@ describe("Composer", () => {
     });
 
     expect(screen.queryByText("Steering now")).not.toBeInTheDocument();
+  });
+
+  describe("mid-turn send menu", () => {
+    const runningThread = (source: BackendSummary["kind"]) => ({
+      id: "thread-1",
+      title: "Running thread",
+      titleSource: "explicit" as const,
+      source,
+      executionMode: "default" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    });
+    const capableBackend = (
+      kind: BackendSummary["kind"],
+      capabilities: Partial<BackendSummary["capabilities"]>,
+    ): BackendSummary => ({
+      ...backendSummary(kind, {
+        models: [{ id: "model-1", label: "Model One", current: true }],
+      }),
+      capabilities: { ...backendSummary(kind).capabilities, ...capabilities },
+    });
+
+    it("interrupts a Claude turn from the menu with delivery now", async () => {
+      const steerTurn = vi.fn(async () => ({
+        backend: "claude" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      const startTurn = vi.fn();
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[
+            capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+          ]}
+          desktopApi={{ startTurn, steerTurn }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("claude")}
+        />
+      );
+
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "Stop and use the other API" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      // Groups run in send order: in-turn options, then Queue, then timed sends.
+      expect(
+        [...document.querySelectorAll(".composer__schedule-menu-label, [role=menuitem]")]
+          .map((node) => node.getAttribute("role") === "menuitem"
+            ? node.textContent?.match(/^(Steer|Interrupt|Queue|Send in 15m)/)?.[0]
+            : node.textContent)
+          .filter(Boolean)
+          .slice(0, 7),
+      ).toEqual([
+        "Now · while Claude works",
+        "Steer",
+        "Interrupt",
+        "After this turn",
+        "Queue",
+        "Later",
+        "Send in 15m",
+      ]);
+      const steer = screen.getByRole("menuitem", { name: /^Steer/ });
+      expect(steer).not.toHaveAttribute("aria-disabled");
+      expect(steer).toHaveTextContent("Add it at the next tool call");
+      // The delayed sends stay below the turn actions.
+      expect(screen.getByRole("menuitem", { name: "Send in 15m" })).toBeInTheDocument();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: /^Interrupt/ }));
+      });
+
+      await waitFor(() => {
+        expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+          backend: "claude",
+          expectedTurnId: "turn-1",
+          delivery: "now",
+          input: [{ type: "text", text: "Stop and use the other API" }],
+        }));
+      });
+      expect(screen.getByText("Interrupting")).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+
+    it("steers from the menu without a delivery", async () => {
+      const steerTurn = vi.fn(async () => ({
+        backend: "claude" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      }));
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[
+            capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+          ]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("claude")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Also cover Windows" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: /^Steer/ }));
+      });
+
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledTimes(1));
+      expect(steerTurn).toHaveBeenCalledWith(
+        expect.not.objectContaining({ delivery: expect.anything() }),
+      );
+      expect(screen.getByText("Steering now")).toBeInTheDocument();
+    });
+
+    it("explains an Interrupt the provider cannot do", async () => {
+      const steerTurn = vi.fn();
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[capableBackend("codex", { steerTurn: true })]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("codex")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("codex can't cut in mid-response");
+      fireEvent.click(interrupt);
+      expect(steerTurn).not.toHaveBeenCalled();
+      // A refused pick keeps the menu open on its explanation.
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+    });
+
+    it("explains a Steer the provider cannot do", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[capableBackend("acp:grok", { steerTurn: false })]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("acp:grok")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const steer = screen.getByRole("menuitem", { name: /^Steer/ });
+      expect(steer).toHaveAttribute("aria-disabled", "true");
+      expect(steer).toHaveTextContent("can't take messages mid-turn");
+      expect(
+        screen.getByRole("menuitem", { name: /^Queue/ }),
+      ).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("dims Interrupt on a pinned peer thread whose owner it cannot see", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          // These are the local instance's summaries, not the peer's.
+          backends={[
+            capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+          ]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            ...runningThread("claude"),
+            federation: {
+              ref: {
+                backend: "claude",
+                target: { scope: "remote", instanceId: "peer-1" },
+                threadId: "thread-1",
+              },
+              instanceLabel: "Studio",
+            },
+          }}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("Open this instance's window to interrupt");
+      expect(
+        screen.getByRole("menuitem", { name: /^Steer/ }),
+      ).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("offers Interrupt on a peer thread in that peer's own window", () => {
+      const target = window as typeof window & {
+        __pwragentFederationTarget?: { scope: "remote"; instanceId: string };
+      };
+      target.__pwragentFederationTarget = { scope: "remote", instanceId: "peer-1" };
+      try {
+        render(
+          <Composer
+            activeTurnId="turn-1"
+            backends={[
+              capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+            ]}
+            desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+            disabled={false}
+            skills={[]}
+            thread={{
+              ...runningThread("claude"),
+              federation: {
+                ref: {
+                  backend: "claude",
+                  target: { scope: "remote", instanceId: "peer-1" },
+                  threadId: "thread-1",
+                },
+                instanceLabel: "Studio",
+              },
+            }}
+          />
+        );
+
+        fireEvent.change(screen.getByLabelText("Reply"), {
+          target: { value: "Change course" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+        expect(
+          screen.getByRole("menuitem", { name: /^Interrupt/ }),
+        ).not.toHaveAttribute("aria-disabled");
+      } finally {
+        delete target.__pwragentFederationTarget;
+      }
+    });
+
+    it("explains why a second steer cannot start while one is pending", async () => {
+      let resolveSteer: (() => void) | undefined;
+      const steerTurn = vi.fn(() => new Promise<{
+        backend: "claude";
+        threadId: string;
+        turnId: string;
+      }>((resolve) => {
+        resolveSteer = () => resolve({ backend: "claude", threadId: "thread-1", turnId: "turn-1" });
+      }));
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[
+            capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+          ]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("claude")}
+        />
+      );
+
+      const textarea = screen.getByLabelText("Reply");
+      fireEvent.change(textarea, { target: { value: "First correction" } });
+      fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+      await waitFor(() => expect(steerTurn).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        resolveSteer?.();
+      });
+      expect(screen.getByLabelText("Pending steer message")).toBeInTheDocument();
+
+      fireEvent.change(textarea, { target: { value: "Second correction" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      for (const name of [/^Steer/, /^Interrupt/]) {
+        const row = screen.getByRole("menuitem", { name });
+        expect(row).toHaveAttribute("aria-disabled", "true");
+        expect(row).toHaveTextContent("Another message is already steering in");
+      }
+    });
+
+    it("moves focus into the menu and walks only the rows that can act", async () => {
+      const user = userEvent.setup();
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[capableBackend("codex", { steerTurn: true })]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("codex")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      await user.click(screen.getByRole("button", { name: "Send options" }));
+
+      expect(screen.getByRole("menuitem", { name: /^Steer/ })).toHaveFocus();
+      await user.keyboard("{ArrowDown}");
+      // The dimmed Interrupt row is skipped.
+      expect(screen.getByRole("menuitem", { name: /^Queue/ })).toHaveFocus();
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Send options" })).toHaveFocus();
+    });
+
+    it("keeps the idle menu to delayed sends", () => {
+      render(
+        <Composer
+          backends={[
+            capableBackend("claude", { steerTurn: true, interruptSteerTurn: true }),
+          ]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("claude")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Later please" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Schedule message" }));
+
+      expect(screen.queryByRole("menuitem", { name: /^Steer/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /^Interrupt/ })).not.toBeInTheDocument();
+      expect(screen.getByRole("menuitem", { name: "Send in 15m" })).toBeInTheDocument();
+    });
   });
 
   it("keeps a Grok next-turn steer projected until its queued message arrives", async () => {
@@ -16294,6 +16763,118 @@ describe("Composer", () => {
     });
   });
 
+  describe("picking a slash command during an active turn", () => {
+    const renderRunningClaudeComposer = (
+      startTurn: (request: StartTurnRequest) => Promise<StartTurnResponse> =
+        vi.fn(),
+    ): void => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[backendSummary("claude")]}
+          desktopApi={{
+            onAgentEvent: () => () => undefined,
+            startTurn,
+          }}
+          disabled={false}
+          providerCommands={[
+            {
+              name: "code-review",
+              description: "Review the current diff",
+              backend: "claude",
+              scope: "session",
+              source: "provider",
+            },
+          ]}
+          skills={[]}
+          thread={{
+            id: "thread-1",
+            title: "Claude thread",
+            titleSource: "explicit",
+            source: "claude",
+            executionMode: "default",
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+          }}
+        />
+      );
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "/code" },
+      });
+      expect(
+        within(screen.getByRole("listbox", { name: "Commands" })).getByRole(
+          "option",
+          { name: /\/code-review/i },
+        ),
+      ).toBeInTheDocument();
+    };
+
+    it("inserts the command on Tab instead of queueing the partial text", async () => {
+      renderRunningClaudeComposer();
+
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Tab" });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Reply")).toHaveValue("/code-review ");
+      });
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    });
+
+    it("inserts the command on Enter instead of queueing the partial text", async () => {
+      renderRunningClaudeComposer();
+
+      fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Reply")).toHaveValue("/code-review ");
+      });
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    });
+
+    it("inserts the clicked command instead of queueing the partial text", async () => {
+      renderRunningClaudeComposer();
+
+      fireEvent.click(
+        within(screen.getByRole("listbox", { name: "Commands" })).getByRole(
+          "option",
+          { name: /\/code-review/i },
+        ),
+      );
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Reply")).toHaveValue("/code-review ");
+      });
+      expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+    });
+
+    it("queues the full command once the operator sends it", async () => {
+      const startTurn = vi.fn(async (request: StartTurnRequest) => ({
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "queue-entry-1",
+        queueStatus: "queued" as const,
+        queueEntryId: "queue-entry-1",
+      }));
+      renderRunningClaudeComposer(startTurn);
+
+      const reply = screen.getByLabelText("Reply");
+      fireEvent.keyDown(reply, { key: "Tab" });
+      await waitFor(() => {
+        expect(reply).toHaveValue("/code-review ");
+      });
+      fireEvent.keyDown(reply, { key: "Enter" });
+
+      await waitFor(() => {
+        expect(startTurn).toHaveBeenCalledTimes(1);
+        expect(screen.getByText("Next")).toBeInTheDocument();
+      });
+      expect(startTurn.mock.calls[0]![0].input).toEqual([
+        { type: "text", text: "/code-review" },
+      ]);
+      expect(reply).toHaveValue("");
+    });
+  });
+
   it("opens review composer from the focused slash command option", async () => {
     render(
       <Composer
@@ -18252,6 +18833,103 @@ describe("Composer", () => {
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue("main");
     fireEvent.click(screen.getByLabelText(/^Base branch(?::|$)/));
     expect(screen.queryByRole("option", { name: "HEAD" })).not.toBeInTheDocument();
+  });
+
+  it("hands a worktree thread to Local without switching Local's branch by default", async () => {
+    const onHandoffThreadWorkspace = vi.fn(async () => undefined);
+    const onMoveThreadToMainCheckout = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", repositoryPath: "/repo", branch: "main", warnings: [], completedAt: 1,
+      linkedDirectory: { id: "pwragent-handoff:codex:thread-1", kind: "local" as const, label: "repo", path: "/repo" },
+    }));
+    const props: ComponentProps<typeof Composer> = {
+      backends: [backendSummary("codex")],
+      directory: {
+        key: "directory:/repo",
+        kind: "directory",
+        label: "PwrAgent",
+        path: "/repo",
+        gitStatus: { currentBranch: "main", branches: ["main", "feature/handoff"] },
+      },
+      onHandoffThreadWorkspace,
+      onMoveThreadToMainCheckout,
+      skills: [],
+      thread: {
+        id: "thread-1",
+        title: "Worktree thread",
+        titleSource: "explicit",
+        source: "codex",
+        executionMode: "default",
+        gitBranch: "feature/handoff",
+        linkedDirectories: [{
+          id: "dir-1", label: "PwrAgent", path: "/repo",
+          worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree",
+        }],
+        inbox: { inInbox: false },
+      },
+    };
+    render(<Composer {...props} />);
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    const dialog = screen.getByRole("dialog", { name: "Handoff to Local" });
+    const keep = within(dialog).getByRole("radio", { name: /^Keep Local on main/ });
+    expect(keep).toHaveAttribute("aria-checked", "true");
+    expect(within(dialog).getByRole("radio", { name: /^Move feature\/handoff to Local/ }))
+      .toHaveAttribute("aria-checked", "false");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Handoff" }));
+
+    await waitFor(() => {
+      expect(onMoveThreadToMainCheckout).toHaveBeenCalledWith("/repo/.worktrees/pwragent-feature");
+    });
+    expect(onHandoffThreadWorkspace).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Handoff to Local" })).toBeNull());
+
+    // Today's behavior is still one click away.
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    const again = screen.getByRole("dialog", { name: "Handoff to Local" });
+    fireEvent.click(within(again).getByRole("radio", { name: /^Move feature\/handoff to Local/ }));
+    fireEvent.click(within(again).getByRole("button", { name: "Handoff" }));
+    await waitFor(() => {
+      expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
+        direction: "worktree-to-local",
+        repositoryPath: "/repo",
+        sourcePath: "/repo/.worktrees/pwragent-feature",
+        sourceBranch: "feature/handoff",
+      });
+    });
+  });
+
+  it("names the machine to update when its owner cannot keep Local's branch", async () => {
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        directory={{ key: "directory:/repo", kind: "directory", label: "PwrAgent", path: "/repo", gitStatus: { currentBranch: "main", branches: ["main"] } }}
+        onHandoffThreadWorkspace={vi.fn(async () => undefined)}
+        onMoveThreadToMainCheckout={async () => {
+          throw new Error("Error invoking remote method: Error: method_not_found: No federation handler registered for backend.moveThreadToMainCheckout");
+        }}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Worktree thread", titleSource: "explicit", source: "codex",
+          executionMode: "default", gitBranch: "feature/handoff",
+          linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: "/repo", worktreePath: "/repo/.worktrees/pwragent-feature", kind: "worktree" }],
+          inbox: { inInbox: false },
+          federation: {
+            ref: { backend: "codex", threadId: "thread-1", target: { scope: "remote", instanceId: "studio" } },
+            instanceLabel: "studio-mac",
+            peerStatus: "connected",
+          },
+        } as ComponentProps<typeof Composer>["thread"]}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText(/^Workspace mode(?::|$)/));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Handoff to Local" }));
+    fireEvent.click(screen.getByRole("button", { name: "Handoff" }));
+
+    expect(await screen.findByText(/studio-mac runs an older PwrAgent that can only hand off by switching Local’s branch/))
+      .toBeInTheDocument();
   });
 
   it("shows handoff to local for existing worktree threads", async () => {
@@ -25079,6 +25757,42 @@ describe("Composer", () => {
     });
   });
 
+  it("offers Plan on Claude threads, sends it for one turn, and leaves other providers without it", async () => {
+    const startTurn = vi.fn().mockResolvedValue({ backend: "claude", threadId: "thread-1", turnId: "turn-1" });
+    const claudeThread = {
+      id: "thread-1", title: "Plan", titleSource: "explicit" as const,
+      source: "claude" as const, executionMode: "default" as const,
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    const { rerender } = render(
+      <Composer
+        backends={[backendSummary("claude")]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        skills={[]}
+        thread={claudeThread}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Plan this change" } });
+    fireEvent.click(screen.getByLabelText("Plan mode"));
+    await clickButton("Send");
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+    expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", threadId: "thread-1", collaborationMode: expect.objectContaining({ mode: "plan" }),
+    }));
+    await waitFor(() => expect(screen.getByLabelText("Plan mode")).toHaveAttribute("aria-pressed", "false"));
+    rerender(
+      <Composer
+        backends={[backendSummary("acp:grok")]}
+        desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+        disabled={false}
+        skills={[]}
+        thread={{ ...claudeThread, source: "acp:grok" }}
+      />,
+    );
+    expect(screen.queryByLabelText("Plan mode")).toBeNull();
+  });
+
   describe("permission-mode queue indicator", () => {
     function baseQueuedThread(overrides: {
       executionMode?: "default" | "full-access";
@@ -25357,5 +26071,126 @@ describe("queued message reordering", () => {
       desktopApi={{ onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
       thread={thread} />);
     expect(screen.queryByRole("button", { name: /^Reorder: / })).toBeNull();
+  });
+});
+
+describe("queued message pausing", () => {
+  const thread = {
+    id: "thread-1", title: "Recipient", titleSource: "explicit" as const, source: "codex" as const,
+    linkedDirectories: [], inbox: { inInbox: false },
+  };
+  const mirror = (id: string, extra: Partial<ComposerQueuedTurnSnapshot> = {}): ComposerQueuedTurnSnapshot => ({
+    id, queueEntryId: id, title: `Message ${id}`, text: id, imageAttachments: [], fileAttachments: [], ...extra,
+  });
+  const row = (title: string): HTMLElement =>
+    screen.getByText(title).closest<HTMLElement>(".composer__queued--message")!;
+  const labels = (): string[] =>
+    [...document.querySelectorAll(".composer__queued--message")].map((queued) =>
+      `${queued.querySelector(".composer__queued-text")?.textContent}=${queued.querySelector(".composer__queued-label")?.textContent}`);
+
+  it("pauses an owner's queued message, numbers the rest around it, and resumes it", async () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b"), mirror("c")]);
+    const setQueuedTurnPaused = vi.fn(async (request: SetQueuedTurnPausedRequest): Promise<SetQueuedTurnPausedResponse> =>
+      ({ queueEntryId: request.queueEntryId, disposition: "updated", paused: request.paused }));
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ setQueuedTurnPaused, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+    expect(labels()).toEqual(["Message a=Next", "Message b=#2", "Message c=#3"]);
+
+    fireEvent.click(within(row("Message a")).getByRole("button", { name: "Pause" }));
+
+    await waitFor(() => expect(labels()).toEqual(["Message a=Paused", "Message b=Next", "Message c=#2"]));
+    expect(setQueuedTurnPaused).toHaveBeenCalledWith({ queueEntryId: "a", paused: true });
+    expect(screen.getByLabelText("Paused queued message")).toHaveClass(
+      "composer__queued--paused",
+      "composer__queued--pinned-actions",
+    );
+    expect(within(row("Message a")).queryByRole("button", { name: "Pause" })).toBeNull();
+    expect(within(row("Message a")).queryByRole("button", { name: "Steer" })).toBeNull();
+
+    fireEvent.click(within(row("Message a")).getByRole("button", { name: "Resume" }));
+    await waitFor(() => expect(labels()).toEqual(["Message a=Next", "Message b=#2", "Message c=#3"]));
+    expect(setQueuedTurnPaused).toHaveBeenLastCalledWith({ queueEntryId: "a", paused: false });
+  });
+
+  it("follows the owner's queue event, which reaches every window", () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a"), mirror("b")]);
+    let publish!: (event: AgentEvent) => void;
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{
+        setQueuedTurnPaused: vi.fn(),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => { publish = listener; return () => undefined; },
+      }} disabled={false} skills={[]} thread={thread} />);
+    const queueEvent = (paused?: boolean): AgentEvent => ({ backend: "codex", notification: {
+      method: "thread/turnQueue/updated",
+      params: {
+        threadId: "thread-1", queueEntryId: "b", origin: "manual", status: "queued",
+        displayText: "b", manualReleaseRequired: false, ...(paused ? { paused } : {}),
+      },
+    } });
+
+    act(() => publish(queueEvent(true)));
+    expect(draftStore.getQueuedTurns(scopeKey)[1]).toMatchObject({ id: "b", paused: true });
+    // Every queued event carries the entry's whole state: no flag is not paused.
+    act(() => publish(queueEvent()));
+    expect(draftStore.getQueuedTurns(scopeKey)[1]).not.toHaveProperty("paused", true);
+  });
+
+  it("reports an owner that refused, and leaves the row as the owner has it", async () => {
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [mirror("a"), mirror("b")]);
+    const setQueuedTurnPaused = vi.fn(async (): Promise<SetQueuedTurnPausedResponse> =>
+      ({ queueEntryId: "b", disposition: "not_found" }));
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ setQueuedTurnPaused, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    fireEvent.click(within(row("Message b")).getByRole("button", { name: "Pause" }));
+
+    expect(await screen.findByText("That message already started or was removed.")).toBeInTheDocument();
+    expect(labels()).toEqual(["Message a=Next", "Message b=#2"]);
+  });
+
+  it("pauses a message only this composer holds without asking an owner", () => {
+    const draftStore = createComposerDraftStore();
+    const scopeKey = buildThreadComposerScopeKey("codex", "thread-1");
+    draftStore.setQueuedTurns(scopeKey, [mirror("a", { queueEntryId: undefined })]);
+    const setQueuedTurnPaused = vi.fn();
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={{ setQueuedTurnPaused, onAgentEvent: () => () => undefined }} disabled={false} skills={[]}
+      thread={thread} />);
+
+    fireEvent.click(within(row("Message a")).getByRole("button", { name: "Pause" }));
+
+    expect(draftStore.getQueuedTurns(scopeKey)[0]).toMatchObject({ id: "a", paused: true });
+    expect(labels()).toEqual(["Message a=Paused"]);
+    expect(setQueuedTurnPaused).not.toHaveBeenCalled();
+  });
+
+  it("offers no pause on a held row, or for a peer that does not advertise pausing", () => {
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const draftStore = createComposerDraftStore();
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1"), [
+      mirror("held", { manualReleaseRequired: true, holdReason: "Retry when ready." }),
+    ]);
+    draftStore.setQueuedTurns(buildThreadComposerScopeKey("codex", "thread-1", target), [mirror("a")]);
+    const desktopApi = { setQueuedTurnPaused: vi.fn(), onAgentEvent: () => () => undefined };
+    const { unmount } = render(<Composer activeTurnId="active" backends={[backendSummary("codex")]}
+      draftStore={draftStore} desktopApi={desktopApi} disabled={false} skills={[]} thread={thread} />);
+    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+    unmount();
+
+    render(<Composer activeTurnId="active" backends={[backendSummary("codex")]} draftStore={draftStore}
+      desktopApi={desktopApi} disabled={false} skills={[]}
+      thread={{ ...thread, federation: {
+        instanceLabel: "Owner", ref: { backend: "codex" as const, threadId: "thread-1", target },
+        capabilities: ["turn_control", "turn_queue_reorder"],
+      } }} />);
+    expect(screen.getByText("Message a")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
   });
 });

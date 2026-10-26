@@ -15,6 +15,7 @@ import {
   normalizeCommitShas,
   parsePullRequestProvider,
 } from "./pr-derivations";
+import type { GithubTerminalNode } from "./pr-terminal-details";
 
 const execFileAsync = promisify(execFile);
 const graphqlLog = getMainLogger("pwragent:pr-graphql");
@@ -121,6 +122,42 @@ export async function readGithubDotComAuthToken(command: string, run?: GhAuthTok
  * fork-originated PR is NOT the same as `PrSummary.org`/`repo` (those track the
  * HEAD repo, matching what `gh` reports). Derive this from the PR's URL.
  */
+/**
+ * Merge details for one PR that has merged or closed. Read once when a merge
+ * or close watch fires, never on the poll path. `parents` and `commits(last: 1)`
+ * are what `classifyGithubMergeMethod` compares; the last CLOSED_EVENT names
+ * who closed an unmerged PR.
+ */
+const PR_TERMINAL_DETAILS_QUERY = `query PullRequestTerminalDetails($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number
+      url
+      title
+      state
+      merged
+      mergedAt
+      closedAt
+      baseRefName
+      headRefOid
+      mergedBy { login }
+      mergeCommit {
+        oid
+        message
+        authoredDate
+        parents(first: 2) { totalCount }
+      }
+      commits(last: 1) {
+        totalCount
+        nodes { commit { oid message authoredDate } }
+      }
+      timelineItems(last: 1, itemTypes: [CLOSED_EVENT]) {
+        nodes { ... on ClosedEvent { actor { login } createdAt } }
+      }
+    }
+  }
+}`;
+
 export type PrRef = {
   owner: string;
   repo: string;
@@ -789,6 +826,32 @@ export class GithubGraphqlPrClient {
   }
 
   /**
+   * Read the merge details of one terminal PR. Returns undefined when GitHub
+   * gave no answer (no token, slow mode, request failure, no access); the
+   * caller then reports what cached status knows.
+   */
+  async fetchPullRequestTerminalDetails(
+    ref: PrRef,
+  ): Promise<GithubTerminalNode | undefined> {
+    const token = await this.resolveToken();
+    if (!token) return undefined;
+    const data = await this.runBatchQuery(
+      {
+        query: PR_TERMINAL_DETAILS_QUERY,
+        variables: { owner: ref.owner, name: ref.repo, number: ref.number },
+      },
+      token,
+      1,
+      [ref],
+    );
+    const repository = data?.repository as
+      | { pullRequest?: GithubTerminalNode | null }
+      | null
+      | undefined;
+    return repository?.pullRequest ?? undefined;
+  }
+
+  /**
    * Look up PRs by head branch, batched across repos.
    *
    * Returns a map keyed by `branchRefKey`. A key is present ONLY when GitHub
@@ -1012,7 +1075,7 @@ export class GithubGraphqlPrClient {
     built: { query: string; variables: Record<string, string | number> },
     token: string,
     refCount: number,
-    repositoryRefs?: Array<Pick<BranchRef, "owner" | "repo" | "branch">>,
+    repositoryRefs?: Array<Pick<BranchRef, "owner" | "repo"> & { branch?: string }>,
     bypassFailureBackoff = false,
   ): Promise<Record<string, unknown> | undefined> {
     if (

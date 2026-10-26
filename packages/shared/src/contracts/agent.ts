@@ -1,5 +1,4 @@
 import type {
-  AcpBackendId,
   AppServerBackendKind,
   AppServerMcpElicitationResponse,
   AppServerNotification,
@@ -75,6 +74,39 @@ export type CodexEnvironmentStartupFailure = {
   message: string;
   phase: "setup" | "action";
   worktreeCleanupAvailable: boolean;
+};
+
+/** Reserved environment selector that starts a thread with no environment. */
+export const THREAD_ENVIRONMENT_NONE = "none";
+
+/**
+ * The environment an agent-created thread started with, and how its setup
+ * went in that thread's workspace.
+ */
+export type CreatedThreadEnvironmentReport = {
+  /**
+   * `requested`: the caller named it. `inherited`: the parent thread's
+   * selection, in the same project. `project`: the project's new-thread
+   * preset. `none`: the thread has no environment.
+   */
+  source: "requested" | "inherited" | "project" | "none";
+  /** The caller's id or name, as given. */
+  requested?: string;
+  environmentId?: string;
+  environmentName?: string;
+  /**
+   * Absent when there is no environment. `completed` and `failed` describe a
+   * setup that ran in the thread's workspace. `reused`: setup did not run
+   * again, and the thread reuses the parent's setup. `skipped`: there is no setup
+   * script, or the environment runs remotely. `not_applied`: the owner did
+   * not apply the requested environment.
+   */
+  setup?: "completed" | "failed" | "reused" | "skipped" | "not_applied";
+  setupExitCode?: number;
+  setupDurationMs?: number;
+  /** The end of the setup output, when setup failed. */
+  setupOutputTail?: string;
+  message: string;
 };
 
 export type ThreadAutoPinFailure = {
@@ -352,6 +384,26 @@ export type MoveQueuedTurnResponse = {
   queueEntryIds?: string[];
 };
 
+export type SetQueuedTurnPausedRequest = {
+  federationTarget?: FederationTarget;
+  queueEntryId: string;
+  /** True holds the entry back from dispatch; false puts it back in line. */
+  paused: boolean;
+};
+
+export type SetQueuedTurnPausedResponse = {
+  queueEntryId: string;
+  /**
+   * `held`: the entry is held for retry and cannot pause until Retry or
+   * Delete answers it. `not_found`: it already started or was removed.
+   */
+  disposition: "updated" | "unchanged" | "not_found" | "held";
+  /** Whether the entry is paused after the request, while it is queued. */
+  paused?: boolean;
+  /** See `ThreadQueuedTurnSummary.pauseRevision`. */
+  pauseRevision?: number;
+};
+
 export type ReleaseQueuedTurnRequest = {
   federationTarget?: FederationTarget;
   queueEntryId: string;
@@ -595,6 +647,8 @@ export type ReloadCodexMcpConfigResponse = {
   queued: true;
 };
 
+export type SteerTurnDelivery = "next" | "now";
+
 export type SteerTurnRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
@@ -602,6 +656,13 @@ export type SteerTurnRequest = {
   input: AppServerTurnInputItem[];
   expectedTurnId: string;
   requestId: string;
+  /**
+   * When the message reaches the running turn. `"next"` (the default) joins
+   * at the turn's next boundary, usually the next tool call. `"now"` cuts off
+   * the response being streamed; only an owner advertising
+   * `capabilities.interruptSteerTurn` accepts it.
+   */
+  delivery?: SteerTurnDelivery;
   /**
    * Durable fallback accepted by main together with the steer request. Main
    * schedules it when the expected target is already stale.
@@ -633,31 +694,60 @@ export type AcpThreadRewindPoint = {
   promptPreview: string;
 };
 
-export type ListAcpThreadRewindPointsRequest = {
-  backend: AcpBackendId;
+export type ThreadRewindMode = "conversation" | "conversation-and-files";
+
+/**
+ * The prompt a rewind goes back before. The rewind removes that prompt's turn
+ * and every later turn. `messageId` is the transcript user message; `turnId`
+ * is its turn when the provider reports one.
+ */
+export type ThreadRewindTarget = {
+  messageId: string;
+  turnId?: string;
+};
+
+export type PreviewThreadRewindRequest = {
+  backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
+  target: ThreadRewindTarget;
 };
 
-export type ListAcpThreadRewindPointsResponse = {
-  backend: AcpBackendId;
+/** What a rewind to before one prompt would put back, read without changing anything. */
+export type PreviewThreadRewindResponse = {
+  backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  rewindPoints: AcpThreadRewindPoint[];
+  target: ThreadRewindTarget;
+  /** Why this prompt cannot be rewound at all right now. */
+  unavailableReason?: string;
+  /** The files a conversation-and-files rewind restores, from a dry run. */
+  files?: {
+    paths: string[];
+    insertions: number;
+    deletions: number;
+  };
+  /** Why this prompt's files cannot be restored, where the provider otherwise can. */
+  filesUnavailableReason?: string;
 };
 
-export type RewindAcpThreadRequest = {
-  backend: AcpBackendId;
+export type RewindThreadRequest = {
+  backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
-  targetPromptIndex: number;
+  target: ThreadRewindTarget;
+  mode: ThreadRewindMode;
 };
 
-export type RewindAcpThreadResponse = {
-  backend: AcpBackendId;
+export type RewindThreadResponse = {
+  backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  targetPromptIndex: number;
+  target: ThreadRewindTarget;
+  mode: ThreadRewindMode;
   updatedAt: number;
+  /** The removed prompt's text, when the provider returns it. */
   promptText?: string;
+  /** Files the rewind restored, for a conversation-and-files rewind. */
+  restoredFileCount?: number;
 };
 
 export type GrokWorkflowBudgetPolicy = {
@@ -994,6 +1084,8 @@ export type UpdateDirectoryLaunchpadResponse = {
 
 export type ResetDirectoryLaunchpadRequest = {
   directoryKey: string;
+  /** Clear submitted viewer input while retaining the project's environment. */
+  preserveEnvironment?: boolean;
 };
 
 export type ResetDirectoryLaunchpadResponse = {
@@ -1032,6 +1124,13 @@ export type MaterializeDirectoryLaunchpadRequest = {
    * threads starting in one directory do not share one progress stream.
    */
   codexEnvironmentSetupProgressKey?: string;
+  /**
+   * An environment id or name for the owner to resolve against its own
+   * project config, replacing the draft's `codexEnvironmentId`. The owner
+   * rejects one it cannot resolve before preparing a workspace. Owners that
+   * predate this field ignore it and match the draft's id.
+   */
+  codexEnvironmentSelector?: string;
 };
 
 export type MaterializedDirectoryLaunchpadThread = {

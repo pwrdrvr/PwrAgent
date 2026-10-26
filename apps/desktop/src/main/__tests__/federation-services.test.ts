@@ -13,6 +13,20 @@ import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { decodeServiceData, SERVICE_CHUNK_BYTES } from "../federation/federation-service-socket";
 
+// Count long-polls that ran out their timer. Bulk transfer must never wait one out.
+const waits = vi.hoisted(() => ({ timedOut: 0 }));
+vi.mock("../federation/federation-service-socket", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../federation/federation-service-socket")>();
+  return {
+    ...actual,
+    waitServiceReadable: async (...args: Parameters<typeof actual.waitServiceReadable>) => {
+      const progressed = await actual.waitServiceReadable(...args);
+      if (!progressed) waits.timedOut += 1;
+      return progressed;
+    },
+  };
+});
+
 const thread: ServiceThread = { backend: "codex", threadId: "fixture-thread" };
 const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -326,37 +340,112 @@ it("supports declared IPv6 loopback without DNS and refuses stopped services", a
   await expect(service.open("viewer", lease.leaseId)).rejects.toThrow("not accepting");
 });
 
-it("streams a multi-quantum upload/download while unrelated Federation control requests run", async () => {
+it("answers Federation control requests while a transfer keeps streaming", async () => {
   const payload = Buffer.alloc(512 * 1024, "f");
+  const chunk = Buffer.alloc(SERVICE_CHUNK_BYTES, "g");
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  let sent = 0;
+  let forwarder!: FederationServiceForwarder;
+  const receivedBytes = (): number => forwarder.list(1, "owner", thread)[0]?.receivedBytes ?? 0;
   const server = createHttpServer((request, response) => {
     let received = 0;
     request.on("data", (data: Buffer) => { received += data.length; });
-    request.on("end", () => { response.setHeader("X-Fixture-Received", received); response.end(payload); });
+    request.on("end", () => {
+      response.setHeader("X-Fixture-Received", received);
+      // Stream until the test releases it, so the transfer is in flight while the
+      // control requests run however fast the tunnel is. Stay two chunks ahead of
+      // the viewer: deep loopback buffers would otherwise outlast the release.
+      let open = true;
+      void released.then(() => { open = false; });
+      const pump = (): void => {
+        if (!open || response.destroyed) { response.end(); return; }
+        if (sent - receivedBytes() < 2 * chunk.length) {
+          sent += chunk.length;
+          response.write(chunk);
+        }
+        setTimeout(pump, 1);
+      };
+      pump();
+    });
   });
   const port = await listen(server);
+  // Cleanups run in reverse: stop the pump before the server waits to close, even
+  // when an assertion fails before the release.
+  cleanups.push(() => release());
   const service = owner();
   const declaration = await service.advertise(thread, { port, name: "bulk", protocol: "http" });
   const { rpc, router } = routed(service, true);
   router.registerHandler("fixture.control", () => ({ responsive: true }));
-  const forwarder = new FederationServiceForwarder();
+  forwarder = new FederationServiceForwarder();
   cleanups.push(() => forwarder.dispose());
   const forward = await forwarder.connect(1, declaration, rpc);
   let finished = false;
   const transfer = fetch(forward.url!, { method: "POST", body: payload }).then(async (response) => {
     expect(response.headers.get("x-fixture-received")).toBe(String(payload.length));
-    expect(Buffer.from(await response.arrayBuffer())).toEqual(payload);
+    const body = Buffer.from(await response.arrayBuffer());
+    expect(body.length).toBe(sent);
+    expect(body.every((byte) => byte === chunk[0])).toBe(true);
     finished = true;
   });
+  await vi.waitFor(() => expect(receivedBytes()).toBeGreaterThan(0), { timeout: 5000 });
   for (let i = 0; i < 4; i += 1) {
+    const before = receivedBytes();
     expect(await rpc.request({ method: "fixture.control", params: {}, timeoutMs: 1000 })).toEqual({ responsive: true });
+    // The stream keeps moving between control requests: neither starves the other.
+    await vi.waitFor(() => expect(receivedBytes()).toBeGreaterThan(before), { timeout: 5000 });
   }
   expect(finished).toBe(false);
+  release();
   await transfer;
   const stats = forwarder.list(1, "owner", thread)[0]!;
   expect(stats.sentBytes).toBeGreaterThanOrEqual(payload.length);
-  expect(stats.receivedBytes).toBeGreaterThanOrEqual(payload.length);
+  expect(stats.receivedBytes).toBeGreaterThanOrEqual(sent);
 });
 
+it("moves bulk data one chunk per exchange without sitting out long-polls", async () => {
+  const chunks = 64;
+  const size = chunks * SERVICE_CHUNK_BYTES;
+  const service = owner();
+  const { rpc, frames } = routed(service, false);
+  const exchanges = (): number => frames.filter((frame) => frame.kind === "request" && frame.method === METHODS.exchange).length;
+  let upload: { exchanges: number; timedOut: number } | undefined;
+  const server = createServer({ allowHalfOpen: true }, (socket) => {
+    let received = 0;
+    socket.on("data", (data: Buffer) => {
+      received += data.length;
+      if (received !== size) return;
+      upload = { exchanges: exchanges(), timedOut: waits.timedOut };
+      socket.end(Buffer.alloc(size, "d"));
+    });
+  });
+  const port = await listen(server);
+  const declaration = await service.advertise(thread, { port, name: "bulk", protocol: "tcp" });
+  const forwarder = new FederationServiceForwarder();
+  cleanups.push(() => forwarder.dispose());
+  const forward = await forwarder.connect(1, declaration, rpc);
+  waits.timedOut = 0;
+  const startExchanges = exchanges();
+  const socket = connect({ host: "127.0.0.1", port: forward.localPort, allowHalfOpen: true });
+  cleanups.push(() => { socket.destroy(); });
+  await once(socket, "connect");
+  let downloaded = 0;
+  socket.on("data", (data: Buffer) => { downloaded += data.length; });
+  const ended = once(socket, "end");
+  socket.write(Buffer.alloc(size, "u"));
+  await ended;
+  expect(downloaded).toBe(size);
+  expect(upload).toBeDefined();
+  // Upload: each full chunk returns once written. Waiting out the 50ms reply
+  // long-poll on every chunk capped uploads near 0.3 MB/s. Only a poll before the
+  // first bytes arrive may still expire.
+  expect(upload!.timedOut).toBeLessThanOrEqual(2);
+  expect(upload!.exchanges - startExchanges).toBeLessThanOrEqual(chunks + 8);
+  // Download: the viewer waits for its local write instead of spending an empty
+  // exchange and a 10ms backoff after every chunk, which doubled the count.
+  expect(exchanges() - upload!.exchanges).toBeLessThanOrEqual(chunks + 8);
+  expect(waits.timedOut - upload!.timedOut).toBeLessThanOrEqual(1);
+});
 
 it("passes HTTPS through to the app and retains normal certificate validation", async () => {
   const tls = await serviceTlsFixture();

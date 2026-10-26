@@ -1,4 +1,5 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
+import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
 import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
@@ -27,6 +28,7 @@ import {
   QueuedMessageInspector,
   QueuedRowGrip,
   QueuedRowIconButton,
+  QueuedRowPausedLabel,
   QueuedRowPositionLabel,
 } from "./QueuedMessageInspector";
 import {
@@ -37,6 +39,13 @@ import {
   requestOwnerQueuedTurnMove,
   settleQueuedTurnMove,
 } from "./queued-turn-move";
+import {
+  canPauseQueuedTurn,
+  canResumeQueuedTurn,
+  queuedTurnOwnerCanPause,
+  setQueuedTurnPausedIn,
+  withOwnerPause,
+} from "./queued-turn-pause";
 import {
   type QueuedReorderRow,
   useQueuedRowReorder,
@@ -61,6 +70,7 @@ import {
 import { createPortal, flushSync } from "react-dom";
 import type { JSONContent } from "@tiptap/react";
 import type {
+  MoveThreadToMainCheckoutResponse,
   AppServerAvailableCommandSummary,
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
@@ -88,6 +98,7 @@ import type {
   PrSummary,
   RenderComposerPdfPreviewResponse,
   ReviewRunMode,
+  SteerTurnDelivery,
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -102,6 +113,7 @@ import {
   parseCodexAsyncQuestionReply,
   readCodexEnvironmentActionRuns,
   summarizeCodexAsyncQuestionReply,
+  usageLimitProviderForBackend,
   withoutSupersededCodexEnvironmentActionRuns,
 } from "@pwragent/shared";
 import {
@@ -113,6 +125,7 @@ import {
   FolderIcon,
   LightningIcon,
   MoreVerticalIcon,
+  PauseIcon,
   PencilIcon,
   PlanIcon,
   PlayIcon,
@@ -126,6 +139,7 @@ import {
 } from "../../icons";
 import { AppIcon } from "../../components/AppIcon";
 import { InstanceChip, InstanceGlyph } from "../federation/InstanceGlyph";
+import { isOutdatedOwnerError } from "../workspace-recovery/MissingWorktreeCard";
 import { filterAtReferenceCandidates } from "../../lib/instance-references";
 import { ImageLightbox } from "../thread-detail/ImageLightbox";
 import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
@@ -135,6 +149,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import {
   agentEventMatchesThread,
   threadSummaryIdentityKey,
@@ -251,6 +266,8 @@ import {
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import {
   ComposerDropdown,
+  type ComposerDropdownGroup,
+  type ComposerDropdownOption,
   useDismissableMenu,
 } from "./ComposerDropdown";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
@@ -288,7 +305,12 @@ import {
   type ComposerQueuedTurnSnapshot,
 } from "./useComposerDraftStore";
 import { useComposerMentionSources } from "./useComposerMentionSources";
-import { isSteerShortcut, useQueueSteerTooltip } from "./steer-shortcut";
+import {
+  formatQueueShortcut,
+  formatSteerShortcut,
+  isSteerShortcut,
+  useQueueSteerTooltip,
+} from "./steer-shortcut";
 import { useComposerPopoverClamp } from "./useComposerPopoverClamp";
 import { useOwnedComposerDraftStore } from "./useOwnedComposerDraftStore";
 import { useComposerTip } from "./useComposerTip";
@@ -358,6 +380,19 @@ export type ComposerProps = {
   };
   /** A review this composer submitted was accepted by the backend. */
   onReviewStarted?: (threadKey: string, requestId?: number) => void;
+  /**
+   * Puts a prompt back in the composer, as a rewind does with the prompt it
+   * removed. A draft in progress is parked in the recovery journal first.
+   * Each id applies once.
+   */
+  draftRestore?: {
+    id: number;
+    threadId: string;
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    text: string;
+    imageAttachments?: NavigationLaunchpadImageAttachment[];
+  };
   /**
    * Focus the input once this composer shows the named thread and can take
    * input. Sent for a mouse click on the thread's sidebar row only; each id
@@ -531,6 +566,10 @@ export type ComposerProps = {
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
   workspaceActionsBlocked?: boolean;
+  /** Opens Settings → Environments on this workspace. Omitted, or for a
+   *  thread whose environment runs on another machine, the Environment menu
+   *  offers no "Edit environments…". */
+  onEditEnvironments?: (workspacePath: string) => void;
   /** Selected-thread Thinking state from useThreadSessionState. Do not rebuild it here. */
   threadBusy?: boolean;
   updatingExecutionMode?: ThreadExecutionMode;
@@ -544,6 +583,10 @@ export type ComposerProps = {
   onHandoffThreadWorkspace?: (
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
+  /** Handoff to Local that leaves the main checkout on its own branch. */
+  onMoveThreadToMainCheckout?: (
+    worktreePath: string
+  ) => Promise<MoveThreadToMainCheckoutResponse>;
   onBeforeStartTurn?: (signal?: AbortSignal) => Promise<boolean>;
   onSetThreadModelSettings?: (
     patch: Partial<
@@ -721,6 +764,8 @@ type QueuedTurnDraft = {
   errorMessage?: string;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  paused?: boolean;
+  pauseRevision?: number;
   title?: string;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
@@ -737,6 +782,8 @@ type QueuedTurnDraft = {
 
 type PendingSteerDraft = QueuedTurnDraft & {
   clearComposerDraftOnAdmission?: boolean;
+  /** `"now"` interrupts the running response; absent steers at the next boundary. */
+  delivery?: "now";
   expectedTurnId: string;
   status: "pending" | "queued" | "steering";
 };
@@ -836,6 +883,9 @@ type ReviewWorkspaceOption = {
 };
 
 const DEFAULT_REASONING_EFFORT = "medium";
+
+/** Backends whose turns take Plan: Codex's collaboration mode, Claude's plan permission mode. */
+const PLAN_MODE_BACKENDS: ReadonlySet<string> = new Set(["codex", "claude"]);
 
 // Fast keeps the Fast toggle's own tooltip copy. Ultrafast claims only what
 // the catalog proves: the model advertises it, and nothing is priced yet.
@@ -1060,6 +1110,29 @@ const REVIEW_TARGET_OPTIONS: Array<{
     description: "Review using custom instructions",
   },
 ];
+
+function toModelDropdownOption(model: ModelOption): ComposerDropdownOption {
+  return {
+    label: model.label ?? model.id,
+    ...(model.providerLabel ? { selectedLabel: formatModelOptionLabel(model) } : {}),
+    value: model.id,
+  };
+}
+
+function groupModelOptionsByProvider(models: readonly ModelOption[]): ComposerDropdownGroup[] {
+  const groups = new Map<string, ComposerDropdownGroup>();
+  for (const model of models) {
+    const providerId = model.providerId;
+    if (!providerId) continue;
+    let group = groups.get(providerId);
+    if (!group) {
+      group = { label: model.providerLabel ?? providerId, options: [] };
+      groups.set(providerId, group);
+    }
+    group.options.push(toModelDropdownOption(model));
+  }
+  return [...groups.values()];
+}
 
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -3120,10 +3193,29 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     () => setWorkspaceMenuOpen(false),
   );
   const [scheduleMenuOpen, setScheduleMenuOpen] = useState(false);
-  const scheduleMenuRef = useDismissableMenu<HTMLDivElement>(
-    scheduleMenuOpen,
-    () => setScheduleMenuOpen(false),
-  );
+  // The send split (pill and menu), the menu itself, and its caret. The
+  // menu takes the ARIA menu keyboard from useMenuNavigation, which leaves
+  // the pointer to us: a press outside the split closes it.
+  const scheduleMenuRef = useRef<HTMLDivElement>(null);
+  const scheduleMenuListRef = useRef<HTMLDivElement>(null);
+  const scheduleMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeScheduleMenu = useCallback(() => setScheduleMenuOpen(false), []);
+  useMenuNavigation({
+    open: scheduleMenuOpen,
+    menuRef: scheduleMenuListRef,
+    triggerRef: scheduleMenuTriggerRef,
+    onClose: closeScheduleMenu,
+  });
+  useEffect(() => {
+    if (!scheduleMenuOpen) return;
+    const handlePointerDown = (event: PointerEvent): void => {
+      if (!scheduleMenuRef.current?.contains(event.target as Node)) {
+        setScheduleMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [scheduleMenuOpen]);
   const [addReferenceMenuOpen, setAddReferenceMenuOpen] = useState(false);
   // Recently referenced files for the reference picker's Files tab —
   // loaded lazily from the main process each time the picker opens.
@@ -3153,6 +3245,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   >();
   const [localHandoffStrategy, setLocalHandoffStrategy] =
     useState<LocalHandoffStrategy>("detached-changes");
+  // Handoff to Local: keep the main checkout's branch (the default), or move
+  // the worktree's branch into it as before.
+  const [worktreeHandoffStrategy, setWorktreeHandoffStrategy] =
+    useState<"keep-local-branch" | "move-branch">("keep-local-branch");
   const [leaveLocalBranch, setLeaveLocalBranch] = useState("");
   const [newLocalBranch, setNewLocalBranch] = useState("");
   const [projectTargetPath, setProjectTargetPath] = useState("");
@@ -3936,6 +4032,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       id: queued.id,
       title: queued.title ?? formatDraftPreview(queued),
       group: queuedReorderGroup(queued, scheduleNow, ownerCanMoveQueuedTurns),
+      ...(queued.paused ? { paused: true } : {}),
     })),
     [queuedTurns, scheduleNow, ownerCanMoveQueuedTurns],
   );
@@ -3947,6 +4044,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const queuedBandHasMovableRow = queuedTurns.some((queued) =>
     queuedReorder.canMove(queued.id)
   );
+  const ownerCanPauseQueuedTurns = queuedTurnOwnerCanPause(props.desktopApi, props.thread);
+  // Retry answers the row the queue would send next, which can sit behind
+  // paused rows.
+  const firstWaitingQueuedIndex = queuedTurns.findIndex((queued) => !queued.paused);
   const futureScheduledDraftSendAt = getFutureScheduledSendAt(
     scheduledDraftSendAt,
     scheduleNow,
@@ -4187,6 +4288,43 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // The helpers are recreated each render; the id guard opens once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.reviewRequest, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
+  const appliedDraftRestoreId = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const restore = props.draftRestore;
+    if (!restore || appliedDraftRestoreId.current === restore.id) {
+      return;
+    }
+    if (
+      restore.threadId !== props.thread?.id
+      || restore.backend !== props.thread?.source
+      || requestOwner(restore.federationTarget ?? readRendererFederationTarget()) !== composerRequestOwner
+    ) {
+      appliedDraftRestoreId.current = restore.id;
+      return;
+    }
+    if (props.disabled) return;
+    appliedDraftRestoreId.current = restore.id;
+    // A draft in progress is parked in the recovery journal, where ArrowUp
+    // brings it back, rather than overwritten by the restored prompt.
+    abandonComposerDraftSnapshot(composerScopeKey);
+    const hydrated = hydrateComposerDraft(
+      restore.text,
+      props.skills,
+      threadLinks,
+      pullRequestLinks,
+    );
+    pendingProgrammaticComposerChangeRef.current = {
+      expectedDraft: hydrated.draft,
+      expectedSkillTokensSignature: getComposerSkillTokensSignature(hydrated.skillTokens),
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    setComposerDraftFromCanonical(restore.text);
+    setImageAttachments(restore.imageAttachments ?? []);
+    requestAnimationFrame(() => inputRef.current?.focus());
+    // The helpers are recreated each render; the id guard applies once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.draftRestore, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   const clearComposerDraftSnapshot = (scopeKey: string): void => {
     if (isDraftStoreScope(scopeKey)) {
       draftStore.delete(scopeKey);
@@ -4701,6 +4839,31 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       setQueuedTurnsState(settled);
       if (answer.failure) setSendError(answer.failure);
     });
+  };
+  /** Pauses or resumes `queued`; see `setQueuedTurnPausedIn`. */
+  const setQueuedTurnPaused = (queued: QueuedTurnDraft, paused: boolean): void => {
+    const scopeKey = composerScopeKey;
+    setSendError(undefined);
+    const run = async (): Promise<void> => {
+      const failure = await setQueuedTurnPausedIn({
+        queued,
+        paused,
+        read: () => draftStore.getQueuedTurns(scopeKey),
+        write: (turns) => {
+          saveQueuedTurnSnapshots(scopeKey, turns);
+          if (activeComposerScopeKeyRef.current === scopeKey) setQueuedTurnsState(turns);
+        },
+        desktopApi: props.desktopApi,
+        federationTarget:
+          props.thread?.federation?.ref.target
+          ?? readRendererFederationTarget(),
+      });
+      if (failure && activeComposerScopeKeyRef.current === scopeKey) {
+        setSendError(failure);
+      }
+    };
+    // Only a request to the owner can be in flight.
+    void (queued.queueEntryId ? runQueuedRowAction(queued, run) : run());
   };
   const preserveCancelledQueuedTurnInScope = (
     scopeKey: string,
@@ -5982,6 +6145,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               title?: unknown;
               errorMessage?: unknown;
               manualReleaseRequired?: unknown;
+              paused?: unknown;
+              pauseRevision?: unknown;
               queueEntryId?: unknown;
               queueEntryCreatedAt?: unknown;
               status?: unknown;
@@ -6022,10 +6187,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           typeof turnQueueRecord.title === "string" && turnQueueRecord.title
             ? turnQueueRecord.title
             : undefined;
+        // Every queued and held event carries the entry's whole state, so
+        // an absent flag is an entry that is not paused.
+        const ownerPause = {
+          paused: turnQueueRecord.paused === true,
+          ...(typeof turnQueueRecord.pauseRevision === "number"
+            ? { pauseRevision: turnQueueRecord.pauseRevision }
+            : {}),
+        };
         if (matchingIndex >= 0) {
           const next = mirrorCurrent.map((queued, index) =>
             index === matchingIndex
-              ? {
+              ? withOwnerPause({
                   ...queued,
                   ...(turnQueueRecord.inputUpdated === true
                     && typeof turnQueueRecord.displayText === "string"
@@ -6040,12 +6213,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                       : {}),
                   manualReleaseRequired,
                   holdReason,
-                }
+                }, ownerPause)
               : queued
           );
           draftStore.setQueuedTurns(mirrorScopeKey, next);
         } else if (!mirrorCurrent.some((queued) => queued.backendQueuePending)) {
-          const mirrored = {
+          const mirrored = withOwnerPause<ComposerQueuedTurnSnapshot>({
               id: `backend-queued:${turnQueueRecord.queueEntryId}`,
               queueEntryId: turnQueueRecord.queueEntryId,
               ...(typeof turnQueueRecord.queueEntryCreatedAt === "number"
@@ -6060,7 +6233,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   : "",
               imageAttachments: [],
               fileAttachments: [],
-          };
+          }, ownerPause);
           draftStore.setQueuedTurns(
             mirrorScopeKey,
             manualReleaseRequired
@@ -8065,7 +8238,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ? { ...current, status: "steering" }
         : current
     );
-    props.onPendingStatusChange?.("Steering");
+    props.onPendingStatusChange?.(
+      pending.delivery === "now" ? "Interrupting" : "Steering",
+    );
     try {
       const responsePromise = props.desktopApi.steerTurn({
         backend: props.thread.source,
@@ -8075,6 +8250,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         expectedTurnId: turnId,
         input: payload.input,
         requestId: pending.id,
+        ...(pending.delivery === "now" ? { delivery: "now" as const } : {}),
         fallback: {
           displayText: pending.text,
           imageAttachments: pending.imageAttachments,
@@ -8275,6 +8451,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     expectedTurnId = activeTurnIdRef.current,
     expectedScopeKey = composerScopeKey,
     clearComposerDraftOnAdmission = false,
+    delivery?: SteerTurnDelivery,
   ):
     | PendingSteerDraft
     | Promise<PendingSteerDraft | undefined>
@@ -8292,6 +8469,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       || !supportsSteering
     ) {
       setSendError("Steering is not available for this model.");
+      return undefined;
+    }
+    if (delivery === "now" && !supportsInterruptSteer) {
+      setSendError("Interrupting is not available for this backend.");
       return undefined;
     }
 
@@ -8314,6 +8495,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         const accepted: PendingSteerDraft = {
           ...pending,
           clearComposerDraftOnAdmission,
+          ...(delivery === "now" ? { delivery } : {}),
           expectedTurnId: turnId,
           input,
           status: "pending",
@@ -8337,7 +8519,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     return complete(inputOrPayload.input);
   };
 
-  const steerCurrentDraft = (): Promise<void> | undefined => {
+  const steerCurrentDraft = (
+    delivery?: SteerTurnDelivery,
+  ): Promise<void> | undefined => {
     if (!props.thread || !activeTurnIdRef.current || !props.desktopApi?.steerTurn) {
       void queueCurrentDraft();
       setSendError("Steering is not available for this backend.");
@@ -8362,6 +8546,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       expectedTurnId,
       expectedScopeKey,
       true,
+      delivery,
     );
     const continueSteering = (accepted?: PendingSteerDraft): void => {
       if (accepted) {
@@ -8560,7 +8745,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   };
 
   const submitTurn = async (
-    mode: "default" | "steer" = "default",
+    mode: "default" | "steer" | "interrupt" = "default",
     options?: { restoreComposerFocus?: boolean },
   ): Promise<void> => {
     // The status line under the tray says why: the message would reference
@@ -8631,8 +8816,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
 
     if (shouldQueueThreadSubmit()) {
-      if (activeTurnIdRef.current && mode === "steer") {
-        const steering = steerCurrentDraft();
+      if (
+        activeTurnIdRef.current
+        && (mode === "steer" || mode === "interrupt")
+      ) {
+        const steering = steerCurrentDraft(
+          mode === "interrupt" ? "now" : undefined,
+        );
         if (steering) {
           await steering;
         }
@@ -9011,11 +9201,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       return;
     }
 
-    if (command.id !== FORK_SLASH_COMMAND.id && shouldQueueThreadSubmit()) {
-      void queueCurrentDraft();
-      return;
-    }
-
+    // Picking a command inserts it, even while a turn runs. Queueing here
+    // would send the partial text the operator typed ("/code"), not the
+    // command they picked; the next Enter queues the completed command.
     const selectionStart = Math.min(
       inputRef.current.selectionStart ?? draft.length,
       draft.length,
@@ -10413,16 +10601,39 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const prAutoDispatchAvailable =
     backgroundPrPollingEnabled && prAutoDispatchAllowed;
   const modelOptions = backend?.launchpadOptions?.models ?? [];
+  // Codex model providers list their models after Codex's own, one titled
+  // section each. Codex fixes a thread's provider when it starts, so an
+  // existing thread offers only its own provider's models.
+  const threadModelProvider = backend?.kind === "codex" && props.thread && !props.launchpad
+    ? codexProviderIdOfModel(props.thread.model)
+    : undefined;
+  const ownModelOptions = threadModelProvider
+    ? modelOptions.filter((model) => model.providerId === threadModelProvider)
+    : modelOptions.filter((model) => !model.providerId);
+  const providerModelOptions = modelOptions.filter((model) => model.providerId);
+  const providerModelGroups = props.launchpad
+    ? groupModelOptionsByProvider(providerModelOptions)
+    : [];
+  const threadProviderLabel = threadModelProvider
+    ? ownModelOptions[0]?.providerLabel ?? threadModelProvider
+    : "Codex";
+  const modelMenuFootnote = backend?.kind === "codex"
+    && props.thread
+    && !props.launchpad
+    && (threadModelProvider || providerModelOptions.length > 0)
+    ? `This thread runs on ${threadProviderLabel}. To use another provider, hand it off to a new thread.`
+    : undefined;
   const showOlderCodexModelsUnderOther = backend?.kind === "codex"
-    && modelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
+    && !threadModelProvider
+    && ownModelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
   const otherModelOptions = backend?.kind === "claude"
-    ? modelOptions.filter((model) => model.other)
+    ? ownModelOptions.filter((model) => model.other)
     : showOlderCodexModelsUnderOther
-    ? modelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
+    ? ownModelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
     : [];
   const visibleModelOptions = otherModelOptions.length
-    ? modelOptions.filter((model) => !otherModelOptions.includes(model))
-    : modelOptions;
+    ? ownModelOptions.filter((model) => !otherModelOptions.includes(model))
+    : ownModelOptions;
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
     getDefaultModelOption(backend);
@@ -10630,11 +10841,23 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       mode.available || (backend.available && mode.mode === "auto"),
     ) ?? [];
   const workspaceLabel = formatThreadWorkspaceLabel(props.thread);
-  const supportsPlanMode =
-    (props.launchpad?.backend ?? props.thread?.source) === "codex";
+  // Claude maps Plan to its own read-only plan permission mode.
+  const supportsPlanMode = PLAN_MODE_BACKENDS.has(props.launchpad?.backend ?? props.thread?.source ?? "");
   const supportsSteering =
     Boolean(backend?.capabilities.steerTurn) &&
     selectedModelOption?.supportsSteering !== false;
+  // The backend summaries describe the instance this window fronts. A
+  // peer's thread pinned into a local window is answered by an owner whose
+  // capabilities this window cannot see, and an owner that predates
+  // Interrupt would quietly deliver it as a Steer.
+  const threadOwnerTarget = props.thread?.federation?.ref.target;
+  const backendsDescribeThreadOwner =
+    threadOwnerTarget?.scope !== "remote"
+    || rendererFederationTarget?.instanceId === threadOwnerTarget.instanceId;
+  const supportsInterruptSteer =
+    supportsSteering
+    && backendsDescribeThreadOwner
+    && backend?.capabilities.interruptSteerTurn === true;
   const launchpadSubmitting = isLaunchpad && (sending || Boolean(props.launchpadMaterializing));
   // A launchpad with a parent starts a sub-thread. Detaching clears the
   // parent, and the copy goes back to a plain new thread.
@@ -10761,6 +10984,32 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const submitButtonSteerHint =
     submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
   const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
+  // Mid-turn the send menu also names how this message can meet the running
+  // turn. Steer and Interrupt stay listed where the provider or model cannot
+  // do them, dimmed with the reason, so the menu explains the gap.
+  const turnSendActionsVisible =
+    submitButtonLabel === "Queue"
+    && Boolean(activeTurnId)
+    && Boolean(props.thread)
+    && !isLaunchpad
+    && !parsedReviewCommand;
+  const turnBackendLabel = props.thread
+    ? formatBackendLabel(props.thread.source, props.backends)
+    : "This agent";
+  const steerUnavailableReason = supportsSteering
+    ? undefined
+    : backend?.capabilities.steerTurn
+      ? `${selectedModelOption?.label ?? selectedModelOption?.id ?? "This model"} can't take messages mid-turn`
+      : `${turnBackendLabel} can't take messages mid-turn`;
+  const interruptUnavailableReason = supportsInterruptSteer
+    ? undefined
+    : !backendsDescribeThreadOwner && supportsSteering
+      ? "Open this instance's window to interrupt"
+      : `${turnBackendLabel} can't cut in mid-response`;
+  // One steer at a time: a second would be dropped while the first waits.
+  const pendingSteerReason = pendingSteer
+    ? "Another message is already steering in"
+    : undefined;
   const launchpadWorkspaceOptions = props.launchpad
     ? buildLaunchpadWorkspaceOptions(props.launchpad, props.directory)
     : [];
@@ -10841,6 +11090,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           actions: threadCodexEnvironmentActions,
         }
       : undefined);
+  // The picker lists the environments discovered in the thread's workspace,
+  // plus the one its runtime has selected when that one is not among them.
+  // A deleted worktree, or a checkout without `.codex/environments/`, reports
+  // no options while the runtime keeps its environment and commands; without
+  // this the Run chip stayed and nothing said which environment it ran.
+  const threadCodexEnvironmentPickerOptions =
+    selectedThreadCodexEnvironmentForAction && !selectedThreadCodexEnvironmentOption
+      ? [...threadCodexEnvironmentOptions, selectedThreadCodexEnvironmentForAction]
+      : threadCodexEnvironmentOptions;
   const selectedThreadCodexActionId = resolveSelectedCodexEnvironmentActionId({
     environment: selectedThreadCodexEnvironmentForAction,
     actionId:
@@ -10918,6 +11176,24 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : hasAttachedPullRequest
         ? "Auto-fix PR — handle new CI failures or merge conflicts"
         : "Auto-fix PR — starts when a PR for this workspace is linked";
+  // Environments are edited on the machine that runs them, so a peer's
+  // thread or a remote execution workspace gets no editor here.
+  const environmentEditPath =
+    !props.onEditEnvironments
+    || filesystemFederationTarget?.scope === "remote"
+    || props.thread?.codexEnvironmentRuntime?.executionTarget === "remote"
+      ? undefined
+      : props.launchpad
+        ? props.launchpad.directoryPath
+        : props.thread?.codexEnvironmentRuntime?.cwd ?? threadWorkspace?.sourcePath;
+  const onEditEnvironments = props.onEditEnvironments;
+  const environmentFooterAction = environmentEditPath && onEditEnvironments
+    ? {
+        label: "Edit environments…",
+        icon: PencilIcon,
+        onSelect: () => onEditEnvironments(environmentEditPath),
+      }
+    : undefined;
   const workspaceOpenPath = props.workspaceActionsBlocked ? undefined : getComposerWorkspaceOpenPath({
     directory: props.directory,
     launchpad: props.launchpad,
@@ -10945,6 +11221,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       : props.directory?.gitStatus?.currentBranch ??
         props.thread?.observedGitBranch ??
         props.thread?.gitBranch;
+  const keepLocalBranchAvailable = Boolean(props.onMoveThreadToMainCheckout)
+    && threadWorkspace?.mode === "worktree";
+  const keepLocalBranchSelected = handoffDialog === "worktree-to-local"
+    && keepLocalBranchAvailable
+    && worktreeHandoffStrategy === "keep-local-branch";
+  // The project's own status describes the main checkout, not the worktree.
+  const localCheckoutBranch = threadWorkspace?.mode === "worktree"
+    ? props.directory?.gitStatus?.currentBranch
+    : undefined;
   const leaveLocalBranchOptions = useMemo(
     () =>
       buildLeaveLocalBranchPickerOptions({
@@ -10987,6 +11272,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     setHandoffDialog(direction);
     setProjectTargetPath("");
     setProjectSearch("");
+    if (direction === "worktree-to-local") {
+      setWorktreeHandoffStrategy(
+        props.onMoveThreadToMainCheckout ? "keep-local-branch" : "move-branch",
+      );
+    }
     if (direction === "local-to-worktree") {
       setLocalHandoffStrategy("detached-changes");
       setLeaveLocalBranch(branchOptions[0] ?? "");
@@ -11020,6 +11310,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         setHandoffDialog(undefined);
         return;
       }
+      if (keepLocalBranchSelected && props.onMoveThreadToMainCheckout) {
+        await props.onMoveThreadToMainCheckout(threadWorkspace.sourcePath);
+        setHandoffDialog(undefined);
+        return;
+      }
       await props.onHandoffThreadWorkspace({
         direction: handoffDialog!,
         ...(handoffStrategy ? { strategy: handoffStrategy } : {}),
@@ -11035,7 +11330,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       });
       setHandoffDialog(undefined);
     } catch (error) {
-      setHandoffError(error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      // An owner that predates the keep-branch handoff answers
+      // method_not_found; nothing moved. The text survives IPC, the code does not.
+      const outdated = keepLocalBranchSelected && isOutdatedOwnerError(message);
+      const owner = props.thread?.federation?.instanceLabel ?? "the other machine";
+      setHandoffError(outdated
+        ? `${owner} runs an older PwrAgent that can only hand off by switching Local’s branch. Update PwrAgent on ${owner}, or choose Move ${sourceBranch ?? "the branch"} to Local.`
+        : message);
     } finally {
       setHandoffSubmitting(false);
     }
@@ -11074,7 +11376,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
   const handoffDisabled =
     handoffSubmitting ||
-    (handoffDialog === "to-project" ? !projectTargetPath.trim() : !sourceBranch) ||
+    (handoffDialog === "to-project"
+      ? !projectTargetPath.trim()
+      : !keepLocalBranchSelected && !sourceBranch) ||
     (handoffDialog === "local-to-worktree" &&
       ((localHandoffStrategy === "move-branch" && !leaveLocalBranch) ||
         (localHandoffStrategy === "new-branch" && !newLocalBranch.trim())));
@@ -11593,8 +11897,57 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   ? "Continue this conversation in another Git project. Files and branches stay in their current locations."
                   : handoffDialog === "local-to-worktree"
                     ? "Choose how this thread should move into a new worktree."
-                    : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
+                    : keepLocalBranchAvailable
+                      ? <>Continue this thread in the main checkout, <code>{threadWorkspace.repositoryPath}</code>.</>
+                      : "Move this worktree branch back to Local. Dirty tracked and non-ignored files will be stashed and applied in Local, then the old worktree will be archived."}
               </p>
+              {handoffDialog === "worktree-to-local" && keepLocalBranchAvailable ? (
+                <div
+                  aria-label="Handoff strategy"
+                  className="workspace-handoff-dialog__strategy-list"
+                  role="radiogroup"
+                >
+                  <button
+                    aria-checked={worktreeHandoffStrategy === "keep-local-branch"}
+                    className="workspace-handoff-dialog__strategy"
+                    disabled={handoffSubmitting}
+                    role="radio"
+                    type="button"
+                    onClick={() => setWorktreeHandoffStrategy("keep-local-branch")}
+                  >
+                    <span className="workspace-handoff-dialog__strategy-title">
+                      {localCheckoutBranch && localCheckoutBranch !== sourceBranch
+                        ? `Keep Local on ${localCheckoutBranch}`
+                        : "Keep Local on its branch"}
+                    </span>
+                    <span>
+                      Only the thread moves. Local stays on its branch. The worktree is
+                      archived with a checkpoint of its uncommitted changes, and
+                      {" "}{sourceBranch && sourceBranch !== "HEAD" ? <code>{sourceBranch}</code> : "its branch"}{" "}
+                      stays where it is.
+                    </span>
+                  </button>
+                  <button
+                    aria-checked={worktreeHandoffStrategy === "move-branch"}
+                    className="workspace-handoff-dialog__strategy"
+                    disabled={handoffSubmitting || !sourceBranch}
+                    role="radio"
+                    type="button"
+                    onClick={() => setWorktreeHandoffStrategy("move-branch")}
+                  >
+                    <span className="workspace-handoff-dialog__strategy-title">
+                      {sourceBranch && sourceBranch !== "HEAD"
+                        ? `Move ${sourceBranch} to Local`
+                        : "Move this worktree to Local"}
+                    </span>
+                    <span>
+                      Switch Local to the worktree&rsquo;s branch. Dirty tracked and
+                      non-ignored files are stashed and applied in Local, then the
+                      worktree is archived.
+                    </span>
+                  </button>
+                </div>
+              ) : null}
               {handoffDialog === "to-project" ? (
                 <div className="workspace-handoff-dialog__field">
                   <label htmlFor={projectDestinationInputId}>Destination project</label>
@@ -11619,7 +11972,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     onQueryChange={setProjectSearch}
                   />
                 </div>
-              ) : (
+              ) : keepLocalBranchSelected ? null : (
                 <dl className="workspace-handoff-dialog__summary">
                   <div>
                     <dt>
@@ -11747,7 +12100,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   dirty non-ignored changes on top.
                 </p>
               ) : null}
-              {handoffDialog !== "to-project" ? (
+              {keepLocalBranchSelected ? (
+                <p className="workspace-handoff-dialog__note">
+                  Uncommitted changes stay in the checkpoint; they are not copied into Local.
+                </p>
+              ) : handoffDialog !== "to-project" ? (
                 <p className="workspace-handoff-dialog__note">
                   Ignored files are not moved by handoff.
                 </p>
@@ -11950,10 +12307,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           <div className="composer__queued-copy">
             <span className="composer__queued-label">
               {pendingSteer.status === "steering"
-                ? "Steering now"
+                ? pendingSteer.delivery === "now" ? "Interrupting" : "Steering now"
                 : pendingSteer.status === "queued"
                   ? "Queued by Grok"
-                  : "Pending steer"}
+                  : pendingSteer.delivery === "now"
+                    ? "Pending interrupt"
+                    : "Pending steer"}
             </span>
             <span className="composer__queued-text">
               {formatDraftPreview(pendingSteer)}
@@ -12115,6 +12474,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           : undefined;
         const failed = Boolean(queued.errorMessage || queued.manualReleaseRequired);
         const movable = queuedReorder.canMove(queued.id);
+        const queuedTitle = queued.title ?? formatDraftPreview(queued);
 
         return (
           <div
@@ -12123,8 +12483,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               "composer__queued--message",
               scheduledSendAt ? "composer__queued--scheduled" : "",
               failed ? "composer__queued--failed" : "",
+              queued.paused ? "composer__queued--paused" : "",
               // Rows waiting on an answer keep their actions on screen.
-              failed || scheduledSendAt ? "composer__queued--pinned-actions" : "",
+              failed || scheduledSendAt || queued.paused
+                ? "composer__queued--pinned-actions"
+                : "",
               queuedBandHasMovableRow ? "composer__queued--reorderable" : "",
               movable ? "composer__queued--movable" : "",
             ]
@@ -12134,7 +12497,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
             onKeyDown={(event) => queuedReorder.onKeyDown(event, queued.id)}
             onPointerDown={(event) => queuedReorder.onPointerDown(event, queued.id)}
             aria-label={
-              queued.manualReleaseRequired
+              queued.paused
+                ? index === 0
+                  ? "Paused queued message"
+                  : `Paused queued message ${index + 1}`
+                : queued.manualReleaseRequired
                 ? index === 0
                   ? "Held queued message"
                   : `Held queued message ${index + 1}`
@@ -12156,7 +12523,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 // A row that cannot move keeps the slot, so every chevron in
                 // the band stays on one line.
                 movable ? (
-                  <QueuedRowGrip title={queued.title ?? formatDraftPreview(queued)} />
+                  <QueuedRowGrip title={queuedTitle} />
                 ) : (
                   <span className="composer__queued-grip composer__queued-grip--empty" aria-hidden="true" />
                 )
@@ -12174,7 +12541,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ) : null
               }
               actions={<>
-              {isLaunchpad ? (
+              {queued.paused ? (
+                <button
+                  className="composer__secondary-action"
+                  disabled={!canResumeQueuedTurn(queued, ownerCanPauseQueuedTurns)}
+                  type="button"
+                  onClick={() => {
+                    setQueuedTurnPaused(queued, false);
+                  }}
+                >
+                  Resume
+                </button>
+              ) : isLaunchpad ? (
                 supportsSteering ? (
                   <button
                     className="composer__secondary-action"
@@ -12190,7 +12568,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     {queued.steerWhenReady ? "Queue instead" : "Steer when ready"}
                   </button>
                 ) : null
-              ) : queued.manualReleaseRequired && index === 0 ? (
+              ) : queued.manualReleaseRequired && index === firstWaitingQueuedIndex ? (
                 <button
                   className="composer__secondary-action"
                   disabled={
@@ -12243,6 +12621,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 >
                   Send now
                 </button>
+              ) : null}
+              {canPauseQueuedTurn(queued, scheduleNow, ownerCanPauseQueuedTurns) ? (
+                <QueuedRowIconButton
+                  label="Pause"
+                  onClick={() => {
+                    setQueuedTurnPaused(queued, true);
+                  }}
+                >
+                  <PauseIcon size={14} />
+                </QueuedRowIconButton>
               ) : null}
               <QueuedRowIconButton
                 label="Edit"
@@ -12335,7 +12723,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               </>}
             >
               <span className="composer__queued-label" role="status">
-                {queuedLabel ?? (
+                {queued.paused ? (
+                  <QueuedRowPausedLabel />
+                ) : queuedLabel ?? (
                   <QueuedRowPositionLabel
                     reorder={queuedReorder}
                     id={queued.id}
@@ -12356,7 +12746,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   queued.title ? "" : "composer__queued-text--raw",
                 ].filter(Boolean).join(" ")}
               >
-                {queued.title ?? formatDraftPreview(queued)}
+                {queuedTitle}
               </span>
             </QueuedMessageInspector>
           </div>
@@ -13797,14 +14187,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               ariaLabel="Model"
               disabled={launchpadSubmitting}
               value={selectedModelOption?.id ?? ""}
-              options={visibleModelOptions.map((model) => ({
-                label: model.label ?? model.id,
-                value: model.id,
-              }))}
-              otherOptions={otherModelOptions.map((model) => ({
-                label: model.label ?? model.id,
-                value: model.id,
-              }))}
+              options={visibleModelOptions.map(toModelDropdownOption)}
+              optionsLabel={formatBackendLabel(backend.kind)}
+              groups={providerModelGroups}
+              footnote={modelMenuFootnote}
+              otherOptions={otherModelOptions.map(toModelDropdownOption)}
               otherLabel={backend.kind === "claude" ? "Other Models" : undefined}
               onChange={(value) => {
                 const model = value;
@@ -14192,6 +14579,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 }
                 compact
                 disabled={launchpadSubmitting}
+                footerAction={environmentFooterAction}
                 icon={FileCodeIcon}
                 value={props.launchpad.codexEnvironmentId ?? ""}
                 options={[
@@ -14216,23 +14604,32 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               />
             ) : null}
 
-            {!props.launchpad && threadCodexEnvironmentOptions.length > 0 ? (
+            {!props.launchpad && threadCodexEnvironmentPickerOptions.length > 0 ? (
               <ComposerDropdown
                 ariaLabel="Environment"
                 busy={threadEnvironmentBusy}
                 compact
                 disabled={!props.desktopApi?.setCodexThreadEnvironment}
+                footerAction={environmentFooterAction}
                 icon={FileCodeIcon}
                 value={threadEnvironmentValue}
                 options={[
                   { label: "No environment", value: "" },
-                  ...threadCodexEnvironmentOptions.map((environment) => ({
-                    label: environment.name,
-                    value: environment.id,
-                  })),
+                  ...threadCodexEnvironmentPickerOptions.map((environment) =>
+                    threadCodexEnvironmentOptions.includes(environment)
+                      ? { label: environment.name, value: environment.id }
+                      : {
+                          // Main re-reads the workspace to select one, so an
+                          // environment it cannot find stays on the chip only.
+                          description: "Not found in this workspace",
+                          disabled: true,
+                          label: environment.name,
+                          value: environment.id,
+                        },
+                  ),
                 ]}
                 onChange={(value) => {
-                  const environment = threadCodexEnvironmentOptions.find(
+                  const environment = threadCodexEnvironmentPickerOptions.find(
                     (candidate) => candidate.id === value,
                   );
                   const actionId = resolveSelectedCodexEnvironmentActionId({
@@ -14331,7 +14728,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
           <ContextWindowMoon
             contextWindow={props.contextWindow}
             onOpenUsage={props.desktopApi?.openUsageActivity
-              ? () => void props.desktopApi?.openUsageActivity?.()
+              ? () => void props.desktopApi?.openUsageActivity?.({
+                provider: usageLimitProviderForBackend(props.thread?.source),
+              })
               : undefined}
           />
           {preparingSend ? (
@@ -14399,7 +14798,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 <button
                   aria-expanded={scheduleMenuOpen}
                   aria-haspopup="menu"
-                  aria-label={props.launchpad ? "Schedule thread" : "Schedule message"}
+                  ref={scheduleMenuTriggerRef}
+                  aria-label={
+                    props.launchpad
+                      ? "Schedule thread"
+                      : turnSendActionsVisible
+                        ? "Send options"
+                        : "Schedule message"
+                  }
                   className="button composer__send-schedule-button"
                   disabled={scheduleButtonDisabled}
                   type="button"
@@ -14471,7 +14877,89 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               {submitTooltip.tooltipNode}
             </div>
             {scheduleAffordanceVisible && scheduleMenuOpen ? (
-              <div className="composer__schedule-menu" role="menu">
+              <div
+                className={[
+                  "composer__schedule-menu",
+                  turnSendActionsVisible ? "composer__schedule-menu--turn" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                ref={scheduleMenuListRef}
+                role="menu"
+              >
+                {turnSendActionsVisible ? (
+                  <>
+                    {/* Groups run in send order. Queue is not "now": it
+                        waits for the turn, however long that runs, so it
+                        can even land after a timed send below it. */}
+                    <div
+                      className="composer__schedule-menu-label"
+                      role="presentation"
+                    >
+                      Now · while {turnBackendLabel} works
+                    </div>
+                    <ComposerSendMenuItem
+                      description={
+                        steerUnavailableReason
+                        ?? pendingSteerReason
+                        ?? "Add it at the next tool call"
+                      }
+                      disabled={Boolean(steerUnavailableReason ?? pendingSteerReason)}
+                      label="Steer"
+                      shortcut={
+                        steerUnavailableReason ?? pendingSteerReason
+                          ? undefined
+                          : formatSteerShortcut()
+                      }
+                      onSelect={() => {
+                        setScheduleMenuOpen(false);
+                        void submitTurn("steer", { restoreComposerFocus: true });
+                      }}
+                    />
+                    <ComposerSendMenuItem
+                      description={
+                        interruptUnavailableReason
+                        ?? pendingSteerReason
+                        ?? "Cut off the current response and send now"
+                      }
+                      disabled={Boolean(interruptUnavailableReason ?? pendingSteerReason)}
+                      label="Interrupt"
+                      onSelect={() => {
+                        setScheduleMenuOpen(false);
+                        void submitTurn("interrupt", { restoreComposerFocus: true });
+                      }}
+                    />
+                    <div
+                      className="composer__schedule-menu-separator"
+                      role="separator"
+                    />
+                    <div
+                      className="composer__schedule-menu-label"
+                      role="presentation"
+                    >
+                      After this turn
+                    </div>
+                    <ComposerSendMenuItem
+                      description="Behind any messages already queued"
+                      label="Queue"
+                      shortcut={formatQueueShortcut()}
+                      onSelect={() => {
+                        setScheduleMenuOpen(false);
+                        void submitTurn("default", { restoreComposerFocus: true });
+                      }}
+                    />
+                    <div
+                      className="composer__schedule-menu-separator"
+                      role="separator"
+                    />
+                    <div
+                      className="composer__schedule-menu-label"
+                      role="presentation"
+                    >
+                      Later
+                    </div>
+                  </>
+                ) : null}
                 {scheduledSendOptions.map((option) => (
                   <button
                     className="composer__schedule-menu-item"
@@ -14501,6 +14989,50 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     </>
   );
 });
+
+/**
+ * One row of the send menu: a name, the clause saying what it does (or why
+ * it can't), and the shortcut that does the same thing. An unavailable row
+ * stays readable and hoverable with `aria-disabled`, since its description
+ * is the answer to "why can't I?". useMenuNavigation's arrow walk skips it.
+ */
+function ComposerSendMenuItem({
+  description,
+  disabled = false,
+  label,
+  shortcut,
+  onSelect,
+}: {
+  description: string;
+  disabled?: boolean;
+  label: string;
+  shortcut?: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      aria-disabled={disabled || undefined}
+      className="composer__schedule-menu-item composer__schedule-menu-item--described"
+      role="menuitem"
+      type="button"
+      onClick={() => {
+        if (!disabled) onSelect();
+      }}
+    >
+      <span className="composer__schedule-menu-item-body">
+        <span>{label}</span>
+        <span className="composer__schedule-menu-item-description">
+          {description}
+        </span>
+      </span>
+      {shortcut ? (
+        <span aria-hidden="true" className="composer__schedule-menu-item-shortcut">
+          {shortcut}
+        </span>
+      ) : null}
+    </button>
+  );
+}
 
 /**
  * Names the thread a sub-thread launchpad will start under, beside the input

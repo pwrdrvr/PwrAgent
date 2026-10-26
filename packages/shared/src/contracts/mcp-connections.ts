@@ -1,8 +1,95 @@
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationRemoteTarget } from "./federation";
+import { isAcpBackendId } from "./navigation";
 
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
 export const PWRGIT_MCP_CONNECTION_ID = "pwrgit" as const;
+// The colon cannot appear in a stored custom ID. Keep legacy `sandboxer`
+// connections, credentials, and thread selections on their original identity.
+export const SANDBOXER_MCP_CONNECTION_ID = "builtin:sandboxer" as const;
+
+// Docker also installs an unrelated `sbx`. Never resolve this name on PATH.
+export const SANDBOXER_CLI_PATH = "/usr/local/bin/sbx";
+export const SANDBOXER_MCP_ARGS = ["mcp", "--type", "small", "--ttl", "1800"] as const;
+/** Exactly what the gateway launches; Settings shows this line verbatim. */
+export const SANDBOXER_MCP_LAUNCH_ARGS = [...SANDBOXER_MCP_ARGS, "--no-update"] as const;
+// `onboard` signs in an existing account or creates one, then asks only for
+// what the account still lacks (the plan checkout). `login` only signs in, so
+// a new account would reach "Signed in" and still fail its first create.
+export const SANDBOXER_SETUP_COMMAND = `${SANDBOXER_CLI_PATH} onboard`;
+
+/** Remote compute today; a remote PwrAgent runtime is reserved for later work. */
+export type SandboxerRole = "compute" | "remote_agent";
+/**
+ * What `sbx status --json` says about this machine's Sandboxer setup.
+ *
+ * Signed in is not ready: an account without a plan, with a card that can't
+ * be charged, or with no machine time left signs in fine and then fails its
+ * first create. Those states come from the status's `plan.canStart`.
+ */
+export type SandboxerCliState =
+  | "signed_in"
+  | "not_signed_in"
+  | "no_plan"
+  | "billing_issue"
+  | "out_of_credit"
+  | "cannot_start"
+  | "cli_missing"
+  | "unavailable";
+
+/** Signed in, but Sandboxer will not start a machine for this account. */
+export function isSandboxerAccountLimited(state: SandboxerCliState | undefined): boolean {
+  return state === "no_plan"
+    || state === "billing_issue"
+    || state === "out_of_credit"
+    || state === "cannot_start";
+}
+
+/**
+ * The account the local CLI login bills. Shown in Settings only; federation
+ * strips it, and no agent tool returns it.
+ */
+export type SandboxerAccountSummary = {
+  email?: string;
+  /** The plan's monthly price, as the CLI reports it. */
+  planDollars?: number;
+  creditBalanceHours?: number;
+};
+
+/** Sandboxer pages Settings can open. Main maps each to a fixed URL. */
+export const SANDBOXER_LINK_TARGETS = [
+  "home",
+  "pricing",
+  "quickstart",
+  "docs_mcp",
+  "docs_machines",
+  "docs_billing",
+  "dashboard",
+] as const;
+
+export type SandboxerLinkTarget = (typeof SANDBOXER_LINK_TARGETS)[number];
+
+export function isSandboxerLinkTarget(value: unknown): value is SandboxerLinkTarget {
+  return SANDBOXER_LINK_TARGETS.some((target) => target === value);
+}
+
+export const SANDBOXER_ORIGIN = "https://sandboxer.com";
+
+/**
+ * Every fixed Sandboxer page, for main's link handler and the launchpad
+ * tile. The dashboard link comes from the CLI.
+ */
+export const SANDBOXER_LINKS: Readonly<Record<Exclude<SandboxerLinkTarget, "dashboard">, string>> = {
+  home: `${SANDBOXER_ORIGIN}/`,
+  pricing: `${SANDBOXER_ORIGIN}/pricing`,
+  quickstart: `${SANDBOXER_ORIGIN}/docs/quickstart`,
+  docs_mcp: `${SANDBOXER_ORIGIN}/docs/mcp`,
+  docs_machines: `${SANDBOXER_ORIGIN}/docs/machines`,
+  docs_billing: `${SANDBOXER_ORIGIN}/docs/billing`,
+};
+
+export type OpenSandboxerLinkRequest = { target: SandboxerLinkTarget };
+export type OpenSandboxerLinkResponse = { opened: boolean; error?: string };
 
 /**
  * Shown on the New thread PwrSnap band next to the Connect to PwrSnap button
@@ -14,6 +101,7 @@ export const PWRSNAP_SESSION_REVOKED_DETAIL =
 export const MCP_CONNECTION_IDS = [
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
+  SANDBOXER_MCP_CONNECTION_ID,
 ] as const;
 /**
  * Any connection id. Remote connections are slugged from their display name,
@@ -21,12 +109,76 @@ export const MCP_CONNECTION_IDS = [
  */
 export type McpConnectionId = string;
 
-/** The two connections PwrAgent synthesizes rather than stores. */
+/** The connections PwrAgent synthesizes rather than stores. */
 export type BuiltInMcpConnectionId = (typeof MCP_CONNECTION_IDS)[number];
 
-export type McpConnectionAuthMode = "oauth";
+/**
+ * How PwrAgent holds a connection's access. `none` is a local command: there
+ * is nothing to sign in to, and any secrets it needs travel as environment
+ * variables PwrAgent stores encrypted.
+ */
+export type McpConnectionAuthMode = "oauth" | "local_cli" | "none";
 
-export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit";
+/** `stdio` is an operator-configured local command (an MCP stdio server). */
+export type McpConnectionKind = "remote" | "pwrsnap" | "pwrgit" | "sandboxer" | "stdio";
+
+/** One environment variable a local command server receives. */
+export type McpStdioEnvironmentEntry = {
+  name: string;
+  /**
+   * The plain value. Always absent for a secret: secret values stay in the
+   * main process and are never sent to a window or a federation peer.
+   */
+  value?: string;
+  secret: boolean;
+};
+
+/**
+ * What PwrAgent launches for a local command connection.
+ *
+ * There is no shell anywhere in this: `command` is executed directly with
+ * `args` as its argv, so nothing in either is expanded or reparsed.
+ */
+export type McpStdioLaunch = {
+  /** Absolute path, resolved when the operator tested or saved it. */
+  command: string;
+  args: string[];
+  /** Absent means the operator's home folder. */
+  cwd?: string;
+  env: McpStdioEnvironmentEntry[];
+};
+
+export type McpStdioEnvironmentInput = {
+  name: string;
+  secret: boolean;
+  /**
+   * The value to store. For a secret that already has a stored value,
+   * omitting this keeps the stored one, so an edit never has to read it back.
+   */
+  value?: string;
+};
+
+/** A local command as the Settings form submits it. */
+export type McpStdioLaunchInput = {
+  /** A program name, resolved on the login-shell PATH, or a full path. */
+  command: string;
+  args: string[];
+  cwd?: string;
+  env: McpStdioEnvironmentInput[];
+};
+
+/**
+ * A portable variable name. `__proto__` is refused: every place that holds
+ * these names as object keys would turn it into a prototype assignment.
+ */
+export const MCP_STDIO_ENV_NAME_PATTERN = /^(?!__proto__$)[A-Za-z_][A-Za-z0-9_]*$/;
+export const MCP_STDIO_LIMITS = {
+  args: 128,
+  argLength: 4_096,
+  env: 64,
+  envValueLength: 32_768,
+  commandLength: 4_096,
+} as const;
 
 export type McpConnectionRecord = {
   id: McpConnectionId;
@@ -34,6 +186,14 @@ export type McpConnectionRecord = {
   serverUrl: string;
   authMode: McpConnectionAuthMode;
   kind: McpConnectionKind;
+  /** Only Sandboxer uses this domain role. remote_agent is not implemented. */
+  sandboxerRole?: SandboxerRole;
+  /**
+   * The launch of a `stdio` connection. Absent for every other kind, and also
+   * absent on a federation peer's copy: the command, its folder and its
+   * variables belong to the machine that runs it.
+   */
+  stdio?: McpStdioLaunch;
   enabled: boolean;
   /**
    * Whether a new thread starts with this connection already selected.
@@ -64,6 +224,15 @@ export type McpConnectionRecord = {
    * absent reads as `auto`.
    */
   toolApproval?: McpConnectionToolApproval;
+  /**
+   * Only the Sandboxer connection uses this. When true, PwrAgent stops or
+   * deletes the sandboxes a thread created through this connection once
+   * every PR attached to that thread has merged or closed.
+   *
+   * Optional because an owner broker from an older build answers without it;
+   * absent reads as `true`.
+   */
+  sandboxerCleanupOnPrClose?: boolean;
   createdAt: number;
   updatedAt: number;
 };
@@ -86,27 +255,79 @@ export type McpConnectionRuntimeState =
 
 export type McpConnectionStatus = McpConnectionRecord & {
   state: McpConnectionRuntimeState;
+  sandboxerCliState?: SandboxerCliState;
+  sandboxerAccount?: SandboxerAccountSummary;
   configured: boolean;
   detail?: string;
+  /**
+   * Live copies of a local command running on the owning machine right now:
+   * one per thread session, plus a Settings test while it runs.
+   */
+  localProcesses?: number;
   /** In-memory live catalog health, independent of stored authorization. */
   discovery?: {
     state: "untested" | "ready" | "failed";
     lastSuccessAt?: number;
-    lastFailure?: { at: number; message: string };
+    lastFailure?: {
+      at: number;
+      message: string;
+      /**
+       * A local command's last stderr, with stored secrets masked. Settings
+       * only: it is stripped from a peer's copy and never sent to an agent.
+       */
+      output?: string;
+    };
   };
 };
 
+/**
+ * A connection list for a federation peer. The account a local CLI login
+ * bills (its email and balance) stays on the machine that holds the login.
+ */
+export function mcpConnectionsForPeer(connections: McpConnectionStatus[]): McpConnectionStatus[] {
+  // A local command's executable path, folder and variables describe the
+  // owner's machine; a peer only ever needs the name and the switch.
+  return connections.map(({ sandboxerAccount: _account, stdio: _stdio, ...connection }) => {
+    const failure = connection.discovery?.lastFailure;
+    if (!failure?.output) return connection;
+    const { output: _output, ...lastFailure } = failure;
+    return { ...connection, discovery: { ...connection.discovery!, lastFailure } };
+  });
+}
+
 export type ListMcpConnectionsRequest = {
   federationTarget?: FederationRemoteTarget;
+  /**
+   * Accept a cached Sandboxer status only this recent, in milliseconds.
+   * Absent uses the ordinary cache. An owner broker from an older build
+   * ignores it.
+   */
+  sandboxerStatusMaxAgeMs?: number;
 };
 
 export type ListMcpConnectionsResponse = {
   connections: McpConnectionStatus[];
 };
 
+/**
+ * Pushed to this instance's windows when a connection's status may have
+ * changed: a setting, a sign-in, a removal, or a Sandboxer CLI answer that
+ * differs from the last one. Carries ids only; re-read the list for status.
+ * A change made from another PwrAgent instance on the same profile is not
+ * announced here, so status reads still happen on window focus.
+ */
+export type McpConnectionsChangedEvent = {
+  connectionIds: McpConnectionId[];
+};
+
+/**
+ * Add a connection. Exactly one of `serverUrl` (a remote server that signs in
+ * with OAuth) or `stdio` (a local command) is given.
+ */
 export type CreateMcpConnectionRequest = {
   displayName: string;
-  serverUrl: string;
+  serverUrl?: string;
+  stdio?: McpStdioLaunchInput;
 };
 
 export type CreateMcpConnectionResponse = {
@@ -156,6 +377,11 @@ export type SetMcpConnectionEnabledRequest = {
 export type SetMcpConnectionSelectForNewThreadsRequest = {
   connectionId: McpConnectionId;
   selectForNewThreads: boolean;
+};
+
+/** See `McpConnectionRecord.sandboxerCleanupOnPrClose`. */
+export type SetSandboxerCleanupOnPrCloseRequest = {
+  enabled: boolean;
 };
 
 /** See `McpConnectionRecord.toolApproval`. */
@@ -243,6 +469,7 @@ export function isBuiltInMcpConnectionId(
 export const MCP_CONNECTION_DISPLAY_NAMES: Record<BuiltInMcpConnectionId, string> = {
   [PWRSNAP_MCP_CONNECTION_ID]: "PwrSnap",
   [PWRGIT_MCP_CONNECTION_ID]: "PwrGit",
+  [SANDBOXER_MCP_CONNECTION_ID]: "Sandboxer",
 };
 
 /**
@@ -374,15 +601,24 @@ export function mcpSelectionApplyTiming(
  * nothing keeps. Both the renderer control and the main-process writer read
  * this, so a thread cannot end up holding a flag its backend ignores.
  */
+/**
+ * Whether a thread on this backend loads the gateway connections it selects.
+ * Codex, Claude, and ACP agents all do; the launchpad tiles and the MCP access
+ * panel ask this one question so they cannot disagree.
+ */
+export function backendLoadsMcpConnections(backend: AppServerBackendKind): boolean {
+  return backend === "codex" || backend === "claude" || isAcpBackendId(backend);
+}
+
 export function canIsolateMcpProviderServers(
   backend: AppServerBackendKind,
 ): boolean {
   return backend === "codex";
 }
 
-/** A connection PwrAgent reaches by launching a local PwrSuite application. */
+/** A built-in connection reached through a local application or CLI. */
 export function isLocalMcpConnectionKind(kind: McpConnectionKind): boolean {
-  return kind === "pwrsnap" || kind === "pwrgit";
+  return kind === "pwrsnap" || kind === "pwrgit" || kind === "sandboxer";
 }
 
 /**
@@ -440,6 +676,14 @@ export type ResolveMcpConnectionSetupInput = {
   localAvailability?: McpConnectionAvailability;
 };
 
+// Signed in, but every create would fail. The chip names the reason.
+const SANDBOXER_ACCOUNT_HEADLINES: Partial<Record<SandboxerCliState, string>> = {
+  no_plan: "No plan",
+  billing_issue: "Billing issue",
+  out_of_credit: "Out of credit",
+  cannot_start: "Can't start",
+};
+
 export function resolveMcpConnectionSetup(
   input: ResolveMcpConnectionSetupInput,
 ): McpConnectionSetupSummary {
@@ -469,6 +713,61 @@ export function resolveMcpConnectionSetup(
       "Gateway off",
       "No thread can reach this while the managed gateway is off. Credentials stay stored.",
       "idle",
+    );
+  }
+
+  if (connection.kind === "sandboxer") {
+    const detail = connection.detail ?? "Check Sandboxer with /usr/local/bin/sbx status.";
+    if (connection.sandboxerCliState === "cli_missing") {
+      return build("app_not_installed", "CLI missing", detail, "idle");
+    }
+    if (connection.sandboxerCliState === "unavailable") {
+      return build("unavailable", "Unavailable", detail, "err");
+    }
+    const account = SANDBOXER_ACCOUNT_HEADLINES[connection.sandboxerCliState ?? "signed_in"];
+    // No plan means no sandbox exists yet, so threads are not offered it.
+    if (account && !configured) return build("login_required", account, detail, "warn");
+    if (!configured) return build("login_required", "Not signed in", detail, "warn");
+    // A billing problem stops new machines, not running ones. Threads keep
+    // reaching it so the agent can still list and stop what is running.
+    if (account) {
+      return build(connection.enabled ? "ready" : "parked", account, detail, "warn");
+    }
+    // A sandbox outlives its thread, so the ready line says who stops it.
+    const billing =
+      "Sandboxes bill per second while they run. Closing the thread does not stop one; auto-stop or the agent does.";
+    return connection.enabled
+      ? build("ready", "Signed in", `Turn Sandboxer on in a thread's MCP access. ${billing}`, "ok")
+      : build("parked", "Parked", `Turn on Offer to threads, then turn Sandboxer on in a thread's MCP access. ${billing}`, "warn");
+  }
+
+  if (connection.kind === "stdio") {
+    // Nothing to sign in to. The one credential-like failure is a stored
+    // secret that encrypted storage can no longer give back.
+    if (!configured) {
+      return build(
+        "login_required",
+        "Secret missing",
+        connection.detail
+          ?? "PwrAgent could not read a stored secret for this server. Edit it and enter the secret again.",
+        "warn",
+      );
+    }
+    if (!connection.enabled) {
+      return build(
+        "parked",
+        "Parked",
+        "Kept, but no thread can start it until you offer it to threads again.",
+        "warn",
+      );
+    }
+    return build(
+      "ready",
+      "Ready",
+      connection.selectForNewThreads
+        ? "Starts on this computer for each thread that turns it on, and every new thread starts with it on."
+        : "Starts on this computer for each thread that turns it on.",
+      "ok",
     );
   }
 
@@ -586,12 +885,129 @@ export type UpdateMcpConnectionRequest = {
   connectionId: McpConnectionId;
   displayName?: string;
   serverUrl?: string;
+  /** Replaces a local command's launch. Restarts its running copies. */
+  stdio?: McpStdioLaunchInput;
 };
+
+/**
+ * Start a local command once, read its tools, and stop it, before anything is
+ * saved. `connectionId` lets an edit test with that connection's stored
+ * secrets for any secret the form left blank.
+ */
+export type TestMcpStdioConnectionRequest = {
+  stdio: McpStdioLaunchInput;
+  connectionId?: McpConnectionId;
+};
+
+export type McpStdioTestProblem =
+  /** A field is malformed: a bad variable name, an empty command. */
+  | "invalid"
+  /** The program could not be found on the login-shell PATH or at its path. */
+  | "not_found"
+  /** It exists, but this account may not run it. */
+  | "not_executable"
+  /** A stored secret could not be read back from encrypted storage. */
+  | "secret_unavailable"
+  /** The operating system refused to start it. */
+  | "spawn_failed"
+  /** It started and exited before answering the MCP handshake. */
+  | "exited"
+  /** It kept running but never answered as an MCP server. */
+  | "no_handshake"
+  /** The managed gateway is off, so PwrAgent starts no servers. */
+  | "gateway_off";
+
+export type TestMcpStdioConnectionResponse =
+  | {
+      ok: true;
+      /** The absolute path that ran. Saving stores this. */
+      command: string;
+      serverName?: string;
+      serverVersion?: string;
+      toolCount: number;
+      elapsedMs: number;
+    }
+  | {
+      ok: false;
+      problem: McpStdioTestProblem;
+      /** One sentence naming what to do. */
+      message: string;
+      /** The end of the server's own output, with stored secrets masked. */
+      output?: string;
+      command?: string;
+    };
+
+/**
+ * Split a pasted command line into argv, once, for the operator to review.
+ *
+ * Deliberately not a shell: quotes group and backslashes escape, and nothing
+ * else happens -- no `~`, no `$VAR`, no globbing, no operators. The result is
+ * shown in the form before anything runs, and it is what gets stored, so no
+ * later step reparses a string. Returns undefined for an unterminated quote.
+ */
+export function splitMcpCommandLine(text: string): string[] | undefined {
+  const args: string[] = [];
+  let current = "";
+  let started = false;
+  let quote: "'" | "\"" | undefined;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!;
+    if (quote === "'") {
+      if (character === "'") quote = undefined;
+      else current += character;
+      continue;
+    }
+    if (quote === "\"") {
+      if (character === "\"") {
+        quote = undefined;
+      } else if (character === "\\" && (text[index + 1] === "\"" || text[index + 1] === "\\")) {
+        current += text[index + 1];
+        index += 1;
+      } else {
+        current += character;
+      }
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (started) {
+        args.push(current);
+        current = "";
+        started = false;
+      }
+      continue;
+    }
+    started = true;
+    if (character === "'" || character === "\"") {
+      quote = character;
+    } else if (character === "\\" && /[\s'"\\]/.test(text[index + 1] ?? "")) {
+      // Only before a space, a quote or another backslash, so a pasted
+      // Windows path such as C:\Tools\server.exe keeps its separators.
+      current += text[index + 1];
+      index += 1;
+    } else {
+      current += character;
+    }
+  }
+  if (quote) return undefined;
+  if (started) args.push(current);
+  return args;
+}
+
+/**
+ * One display line for a launch: what a connection row shows and Copy copies.
+ * Quotes only what a POSIX shell would split, so the common case reads clean.
+ * Display only -- PwrAgent never runs this string.
+ */
+export function formatMcpCommandLine(launch: Pick<McpStdioLaunch, "command" | "args">): string {
+  return [launch.command, ...launch.args]
+    .map((part) => /^[\w@%+=:,./-]+$/.test(part) ? part : `'${part.replaceAll("'", "'\\''")}'`)
+    .join(" ");
+}
 
 export type McpConnectionProbeProblem =
   /** The text is not a URL PwrAgent can fetch. */
   | "not_a_url"
-  /** Looks like a command line for a stdio server, which the gateway cannot host. */
+  /** Looks like a command line for a stdio server: add it as a local command. */
   | "looks_like_stdio"
   /** Reachable, but it is not an MCP endpoint. */
   | "not_mcp"

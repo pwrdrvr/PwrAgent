@@ -13,9 +13,14 @@ export function scopeDesktopApiToFederationTarget(
   const openApplication = desktopApi.openApplication;
   const resolveTranscriptFiles = desktopApi.resolveTranscriptFiles;
   const readMarkdownFile = desktopApi.readMarkdownFile;
+  const readUsageActivity = desktopApi.readUsageActivity;
   const openMarkdownFileViewer = desktopApi.openMarkdownFileViewer;
   const refreshDirectoryGitStatuses = desktopApi.refreshDirectoryGitStatuses;
   const readPwrSnapConnectionStatus = desktopApi.readPwrSnapConnectionStatus;
+  const listMcpConnections = desktopApi.listMcpConnections;
+  const readThreadMcpConnections = desktopApi.readThreadMcpConnections;
+  const setThreadMcpConnections = desktopApi.setThreadMcpConnections;
+  const describeThreadMcpConnections = desktopApi.describeThreadMcpConnections;
   const listWorktreeUnpublishedCommits =
     desktopApi.listWorktreeUnpublishedCommits;
   const getWorktreeUnpublishedCommitDiff =
@@ -44,6 +49,20 @@ export function scopeDesktopApiToFederationTarget(
     readPwrSnapConnectionStatus: readPwrSnapConnectionStatus
       ? async () => await readPwrSnapConnectionStatus({ federationTarget })
       : undefined,
+    // Inventory and the saved selection must describe the same owner, even
+    // when a caller relies on this scoped API rather than passing a target.
+    listMcpConnections: listMcpConnections
+      ? async (request) => await listMcpConnections({ ...request, federationTarget })
+      : undefined,
+    readThreadMcpConnections: readThreadMcpConnections
+      ? async (request) => await readThreadMcpConnections({ ...request, federationTarget })
+      : undefined,
+    setThreadMcpConnections: setThreadMcpConnections
+      ? async (request) => await setThreadMcpConnections({ ...request, federationTarget })
+      : undefined,
+    describeThreadMcpConnections: describeThreadMcpConnections
+      ? async (request) => await describeThreadMcpConnections({ ...request, federationTarget })
+      : undefined,
     listWorktreeUnpublishedCommits: listWorktreeUnpublishedCommits
       ? async (request) => await listWorktreeUnpublishedCommits({
           ...request,
@@ -69,6 +88,8 @@ export function scopeDesktopApiToFederationTarget(
     connectPwrGit: undefined,
     openPwrGit: undefined,
     openPwrGitDownload: undefined,
+    // The dashboard link signs in with the viewer's own CLI login.
+    openSandboxerLink: undefined,
     // Installers download onto the viewer's machine, which is never where a
     // remote thread's tools run.
     readPwrSuiteInstaller: undefined,
@@ -84,6 +105,12 @@ export function scopeDesktopApiToFederationTarget(
       : undefined,
     readMarkdownFile: readMarkdownFile
       ? async (request) => await readMarkdownFile({ ...request, federationTarget })
+      : undefined,
+    // The Pricing rail's limit card is drawn from the owner's backends, so its
+    // limit history and spend must come from the owner's ledger too. The
+    // viewer's own ledger may hold no reading since a reset, or another account.
+    readUsageActivity: readUsageActivity
+      ? async (request) => await readUsageActivity({ ...request, federationTarget })
       : undefined,
     openMarkdownFileViewer: openMarkdownFileViewer
       ? async (request) => await openMarkdownFileViewer({

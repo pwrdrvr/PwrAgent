@@ -92,7 +92,7 @@ describe("Claude executable discovery", () => {
 
   it("does not pass application credentials to the CLI", () => {
     const input = { PATH: "/bin", ANTHROPIC_API_KEY: "key", CLAUDE_CODE_OAUTH_TOKEN: "token" };
-    expect(claudeEnvironment(input)).toEqual({ PATH: "/bin", CLAUDE_CODE_REPORT_FINDINGS: "1" });
+    expect(claudeEnvironment(input)).toEqual({ PATH: "/bin", CLAUDE_CODE_REPORT_FINDINGS: "1", CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1" });
     expect(input.ANTHROPIC_API_KEY).toBe("key");
   });
 

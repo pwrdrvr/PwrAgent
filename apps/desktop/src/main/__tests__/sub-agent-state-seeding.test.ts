@@ -2,9 +2,9 @@
 //
 // `e2e/fixtures/sub-agent-state-seeding.ts` writes the `threads` table by
 // hand, so it encodes three assumptions the app could change underneath it:
-// the storage key format, the overlay payload shape, and the fact that
-// `subAgents` lives in that payload at all. If any drifts, the seeder writes a
-// row nothing reads — and the a11y block it feeds would keep passing while
+// the storage key format, the overlay payload shape, and the capture triggers
+// that move `payload.subAgents` into `thread_sub_agents`. If any drifts, the
+// seeder writes a row nothing reads — and the a11y block it feeds would keep passing while
 // auditing a strip that never rendered. That failure is silent by
 // construction, which is exactly why it gets a test rather than a comment.
 //
@@ -45,13 +45,13 @@ describe("seedThreadSubAgents", () => {
       threadId: "thread-smoke",
     });
 
-    const state = await openStore(dbPath).getThreadOverlayState({
+    const subAgents = await openStore(dbPath).listThreadSubAgents({
       backend: "codex",
       threadId: "thread-smoke",
     });
 
-    expect(state?.subAgents).toHaveLength(4);
-    expect(state?.subAgents?.map((subAgent) => subAgent.status)).toEqual([
+    expect(subAgents).toHaveLength(4);
+    expect(subAgents.map((subAgent) => subAgent.status)).toEqual([
       "running",
       "blocked",
       "failed",
@@ -74,12 +74,16 @@ describe("seedThreadSubAgents", () => {
       threadId: "thread-two",
     });
 
-    const state = await openStore(dbPath).getThreadOverlayState({
+    const store = openStore(dbPath);
+    const state = await store.getThreadOverlayState({
       backend: "codex",
       threadId: "thread-two",
     });
 
-    expect(state?.subAgents).toHaveLength(2);
+    expect(await store.listThreadSubAgents({
+      backend: "codex",
+      threadId: "thread-two",
+    })).toHaveLength(2);
     // Merging, not clobbering — the seeder must not wipe what the app wrote.
     expect(state?.reactions).toEqual(["🔥"]);
   });

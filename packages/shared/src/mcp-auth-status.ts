@@ -1,5 +1,8 @@
 import type { CodexMcpAuthStatus } from "./contracts/agent";
-import type { McpConnectionStatus } from "./contracts/mcp-connections";
+import {
+  isSandboxerAccountLimited,
+  type McpConnectionStatus,
+} from "./contracts/mcp-connections";
 
 /**
  * One wording for the Codex MCP sign-in enum, shared by every surface that
@@ -91,8 +94,39 @@ export function formatMcpAuthStatus(status: CodexMcpAuthStatus): string {
  * PwrAgent here, Codex there.
  */
 export function describeMcpConnectionAuth(
-  connection: Pick<McpConnectionStatus, "configured" | "state">,
+  connection: Pick<McpConnectionStatus, "configured" | "state"> & Partial<Pick<McpConnectionStatus, "authMode" | "sandboxerCliState" | "detail">>,
 ): McpAuthStatusPresentation {
+  if (connection.authMode === "none") {
+    // A local command signs in to nothing. What it can be missing is a
+    // stored secret that encrypted storage no longer gives back.
+    return connection.configured
+      ? {
+          label: "Local command",
+          description: "PwrAgent starts this command on this computer. Its secrets are stored encrypted in this profile and passed as environment variables.",
+          tone: "ok",
+          canSignIn: false,
+        }
+      : {
+          label: "Secret missing",
+          description: connection.detail ?? "A stored secret for this server could not be read. Edit it and enter the secret again.",
+          tone: "warn",
+          canSignIn: false,
+        };
+  }
+  if (connection.authMode === "local_cli") {
+    // An account that can't start a machine is still signed in. Its own
+    // chip names what the account lacks; this one says the login is fine.
+    const cliState = connection.sandboxerCliState;
+    const signedIn = connection.configured || isSandboxerAccountLimited(cliState);
+    return {
+      label: cliState === "cli_missing" ? "CLI missing"
+        : cliState === "unavailable" ? "Status unavailable"
+        : signedIn ? "Signed in" : "Not signed in",
+      description: connection.detail ?? "Uses the Sandboxer CLI login on this machine.",
+      tone: signedIn ? "ok" : "warn",
+      canSignIn: false,
+    };
+  }
   const signedIn =
     connection.configured
     && connection.state !== "disconnected"

@@ -9,6 +9,7 @@ export * from "./codex-git-action-directives";
 export * from "./codex-async-questions";
 export * from "./contracts/backend";
 export * from "./contracts/agent";
+export * from "./contracts/codex-environment-editor";
 export * from "./contracts/durable-turn-requests";
 export * from "./durable-turn-request";
 export * from "./contracts/agent-tools";
@@ -49,6 +50,7 @@ export * from "./contracts/thread-todos";
 export * from "./contracts/thread-reviews";
 export * from "./contracts/operator-requests";
 export * from "./contracts/thread-dependencies";
+export * from "./contracts/thread-system-messages";
 export * from "./contracts/thread-search";
 export * from "./messaging-contact-labels";
 export * from "./messaging-id-validation";
@@ -100,6 +102,7 @@ export * from "./forge-product";
 export { isCodexAuthenticationFailure } from "./codex-authentication";
 
 export * from "./local-model-pricing";
+export * from "./codex-model-providers";
 
 export * from "./thread-search-query";
 
@@ -109,3 +112,4 @@ export * from "./contracts/background-terminals";
 export * from "./thread-archive-policy";
 export * from "./transcript-file-reference";
 export * from "./acp-permission-mode";
+export * from "./uuid-v7";

@@ -44,7 +44,9 @@ function Band(props: {
             ) : null}
             <button type="button">{`open ${row.id}`}</button>
             <span data-testid={`label-${row.id}`}>
-              {row.group
+              {row.paused
+                ? "Paused"
+                : row.group
                 ? <QueuedRowPositionLabel reorder={reorder} id={row.id} index={index} />
                 : "Held for retry"}
             </span>
@@ -139,6 +141,19 @@ describe("useQueuedRowReorder", () => {
     expect(screen.getByTestId("band")).not.toHaveClass("is-queued-reordering");
     expect(screen.getByTestId("band").querySelector(".composer__queued-slot")).toBeNull();
     expect(screen.getByLabelText("row a").style.transform).toBe("");
+  });
+
+  it("numbers only the rows that will send, while dragging past a paused one too", () => {
+    const band = rows("a", "b", "c").map((row) => (row.id === "a" ? { ...row, paused: true } : row));
+    render(<Band initial={band} />);
+    // A paused row takes no place: the row behind it is Next.
+    expect(labels()).toEqual(["a=Paused", "b=Next", "c=#2"]);
+
+    fireEvent.pointerDown(screen.getByText("open c"), { button: 0, clientY: rowCenter("c"), pointerId: 7 });
+    fireEvent.pointerMove(window, { clientY: rowCenter("a"), pointerId: 7 });
+    // Lifted above the paused row, c would send first.
+    expect(labels()).toEqual(["a=Paused", "b=#2", "c=Next"]);
+    fireEvent.pointerCancel(window, { pointerId: 7 });
   });
 
   it("stops a lifted row at a row that cannot move", () => {

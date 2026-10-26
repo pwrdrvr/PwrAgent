@@ -17,6 +17,7 @@ import type {
 import {
   FEDERATION_SEARCH_SCOPES,
   isAppServerBackendKind,
+  NAVIGATION_QUERY_MAX_PAGE_ROWS,
   PWRAGENT_FEDERATION_OPERATION_NAMES,
   PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
@@ -39,6 +40,17 @@ const INSTANCE_THREAD_GROUPING_MODES = ["none", "subthread"] as const;
 export type PwrAgentFederationHandler = (
   request: PwrAgentFederationRequest,
 ) => PwrAgentFederationResponse | Promise<PwrAgentFederationResponse>;
+
+/** Internal UI callers must obey the same argument contract as agent tools. */
+export function normalizePwrAgentFederationRequest(request: PwrAgentFederationRequest):
+  | { ok: true; request: PwrAgentFederationRequest }
+  | { ok: false; error: { code: "invalid_arguments"; message: string } } {
+  const args = normalizeArgsForOperation(request.operation, request.args);
+  if (!args) {
+    return { ok: false, error: { code: "invalid_arguments", message: invalidArgumentsMessageForOperation(request.operation) } };
+  }
+  return { ok: true, request: { ...request, args } as PwrAgentFederationRequest };
+}
 
 export function buildPwrAgentFederationToolRouter(
   handler: PwrAgentFederationHandler | undefined,
@@ -112,9 +124,9 @@ function descriptionForOperation(
     case "list_federation_instances":
       return "List the local instance and known PwrAgent peers. Results include identity, purpose, status, capabilities, and host facts. Use this before you route work to a machine. Profiles with the same machineId share one host. Do not add their CPU, memory, or disk capacity. Host facts come from the last connection. Set includeLoad=true for current load, available memory, free disk, and sample time. A peer can omit load if it does not reply in time. Load is per machineId. Count it once. Use query instead of paging when possible. Cursor tokens expire after about one minute. A local-only result is valid when Federation is disabled. Only local or connected instances can accept work.";
     case "list_instance_projects":
-      return "List projects on one local or remote PwrAgent instance. Pass an instanceId from list_federation_instances. Each result includes projectKey, label, path, and launchpad status. Use projectKey with create_instance_thread. The result also lists the instance's available backends with exact model IDs. Pass those to create_instance_thread when the user names a provider or model.";
+      return "List an instance's projects and backends. Get instanceId from list_federation_instances. Use projectKey with create_instance_thread. Projects include label, path, and launchpad status. models lists exact IDs. Match modelOptions.label and pass its id to create_instance_thread or handoff_task. IDs may be aliases. Older responses may omit modelOptions.";
     case "create_instance_thread":
-      return "Create a PwrAgent thread in a project on a selected instance. Get instanceId and projectKey from the list tools. The input becomes the first prompt. Set groupingMode=subthread for delegated child work across instances. Use none for independent intake. Settings inherit from the launchpad and then the instance. Set backend when the user asks for a provider other than the target launchpad's configured provider. Set other overrides only when the user requests them. Read ~/.pwragent/AGENTS.md for operator startup preferences when it exists. Use handoff_task for local delegation that needs workspace or grouping controls. Use this tool for a selected instance or instance-based intake. Startup can take minutes. Do not retry a slow request. Use search_federation_threads to check for the thread. Return threadLink verbatim. Keep instanceId for later remote calls.";
+      return "Create a PwrAgent thread in a project on a selected instance. Get instanceId and projectKey from the list tools. The input becomes the first prompt. Set groupingMode=subthread for delegated child work across instances. Use none for independent intake. Settings inherit from the launchpad and then the instance. Set backend when the user asks for a provider the target launchpad does not use. Set other overrides only when the user requests them. Read ~/.pwragent/AGENTS.md for operator startup preferences when it exists. Use handoff_task for local delegation that needs workspace or grouping controls. Use this tool for a selected instance or instance-based intake. Startup can take minutes. Do not retry a slow request. Use search_federation_threads to check for the thread. Return threadLink verbatim. Keep instanceId for later remote calls.";
     case "list_attention_threads":
       return "List the threads that need the operator's attention on this instance and every connected peer. It is the Attention queue each machine's sidebar shows. Each row says whether a turn is running, the thread is unread, or it is waiting on the operator's input. Use it to answer what needs attention, what is running, or what is waiting. Pass instanceId for one machine. Follow up with get_thread_status or read_thread for detail. Return threadLink verbatim. Keep instanceId for later remote calls.";
     case "search_federation_threads":
@@ -178,7 +190,7 @@ function inputSchemaForOperation(
           limit: {
             type: "integer",
             minimum: 1,
-            maximum: 100,
+            maximum: NAVIGATION_QUERY_MAX_PAGE_ROWS,
             description: "Page size. Defaults to 25.",
           },
           cursor: {
@@ -200,7 +212,7 @@ function inputSchemaForOperation(
         required: ["instanceId"],
         properties: {
           cursor: { type: "string", description: "Continuation from the previous bounded project page." },
-          limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum project descriptors, default 100." },
+          limit: { type: "integer", minimum: 1, maximum: NAVIGATION_QUERY_MAX_PAGE_ROWS, description: "Maximum project descriptors, default 100." },
           instanceId: {
             type: "string",
             description:
@@ -236,7 +248,7 @@ function inputSchemaForOperation(
           model: {
             type: "string",
             description:
-              "Exact model ID from the backends list_instance_projects returns for this instance. Omit to inherit the launchpad model.",
+              "Exact model ID from list_instance_projects. Match modelOptions.label and pass its id, which may be an alias. Omit to inherit the launchpad model.",
           },
           reasoningEffort: { type: "string" },
           executionMode: { type: "string" },
@@ -263,6 +275,11 @@ function inputSchemaForOperation(
             description:
               "Use subthread for child work that must remain nested across instances. The default none keeps independent intake separate.",
           },
+          environment: {
+            type: "string",
+            description:
+              "Environment id or name, or `none`. Omit for this thread's environment or the project preset.",
+          },
         },
       };
     case "list_attention_threads":
@@ -278,7 +295,7 @@ function inputSchemaForOperation(
           limit: {
             type: "integer",
             minimum: 1,
-            maximum: 100,
+            maximum: NAVIGATION_QUERY_MAX_PAGE_ROWS,
             description: "Maximum rows per instance. Defaults to 25.",
           },
         },
@@ -414,7 +431,7 @@ function invalidArgumentsMessageForOperation(
     case "list_federation_instances":
       return "list_federation_instances accepts an optional non-empty query, an integer limit between 1 and 100, an optional non-empty cursor, and an optional boolean includeLoad.";
     case "list_instance_projects":
-      return "list_instance_projects requires a non-empty instanceId string.";
+      return "list_instance_projects requires a non-empty instanceId string, an integer limit between 1 and 100, and an optional non-empty cursor.";
     case "create_instance_thread":
       return "create_instance_thread requires non-empty instanceId and projectKey strings, and accepts only known backend, workMode, and groupingMode values.";
     case "list_attention_threads":
@@ -436,7 +453,7 @@ function normalizeListAttentionThreadsArgs(
   }
   const limit = args.limit;
   if (limit !== undefined
-    && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)) {
+    && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > NAVIGATION_QUERY_MAX_PAGE_ROWS)) {
     return undefined;
   }
   return {
@@ -459,7 +476,7 @@ function normalizeListFederationInstancesArgs(
       typeof args.limit !== "number"
       || !Number.isInteger(args.limit)
       || args.limit < 1
-      || args.limit > 100
+      || args.limit > NAVIGATION_QUERY_MAX_PAGE_ROWS
     ) {
       return undefined;
     }
@@ -491,7 +508,7 @@ function normalizeListInstanceProjectsArgs(
   const cursor = readTrimmedString(args.cursor);
   if (args.cursor !== undefined && (!cursor || cursor.length > 4096)) return undefined;
   const limit = args.limit;
-  if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)) return undefined;
+  if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > NAVIGATION_QUERY_MAX_PAGE_ROWS)) return undefined;
   return { instanceId, ...(cursor ? { cursor } : {}), ...(typeof limit === "number" ? { limit } : {}) };
 }
 
@@ -524,6 +541,7 @@ function normalizeCreateInstanceThreadArgs(
     "reasoningEffort",
     "executionMode",
     "branchName",
+    "environment",
   ] as const;
   for (const field of optionalStringFields) {
     if (Object.hasOwn(args, field) && !readTrimmedString(args[field])) {
@@ -536,6 +554,7 @@ function normalizeCreateInstanceThreadArgs(
   const reasoningEffort = readTrimmedString(args.reasoningEffort);
   const executionMode = readTrimmedString(args.executionMode);
   const branchName = readTrimmedString(args.branchName);
+  const environment = readTrimmedString(args.environment);
   if (backend && !isAppServerBackendKind(backend)) {
     return undefined;
   }
@@ -562,6 +581,7 @@ function normalizeCreateInstanceThreadArgs(
     ...(workMode ? { workMode } : {}),
     ...(branchName ? { branchName } : {}),
     ...(groupingMode ? { groupingMode } : {}),
+    ...(environment ? { environment } : {}),
   };
 }
 

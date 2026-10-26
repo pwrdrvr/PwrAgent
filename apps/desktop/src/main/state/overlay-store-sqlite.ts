@@ -3,10 +3,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
+import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
 import { sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared";
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
+import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
+import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
@@ -101,8 +104,11 @@ import {
   isRemoteFederationTarget,
   normalizeNavigationBrowseMode,
   normalizeThreadIdentityKey,
+  forgetRecentThreadLockNote,
+  parseRecentThreadLockNotes,
   parseThreadIdentityKey,
   projectNavigationLaunchpadProviderSettings,
+  rememberRecentThreadLockNote,
   resolveDefaultLaunchpadExecutionMode,
   resolveTokenUsagePriceUnavailableReason,
 } from "@pwragent/shared";
@@ -113,10 +119,35 @@ import type {
 } from "./remote-thread-target-store.js";
 
 const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
+// The focused thread, its context panel, and a few threads open in other
+// windows. A long thread's ledger holds a few MB.
+const THREAD_PRICING_CACHE_THREADS = 8;
+
+type ThreadPricingLedgerRead = {
+  lines: ThreadUsageLineRecord[];
+  summaries: ThreadPricingSummary[];
+};
 // A live usage flush stamps one `updated_at` per batch, one line per turn
 // running at that moment. On a real 22,000-line profile no flush stamp was
 // shared by more than 2 lines; one migration stamp was shared by 7,251.
 const THREAD_USAGE_BULK_REWRITE_MIN_LINES = 64;
+
+// PwrAgent recorded no turn usage before 2026.
+const EARLIEST_USAGE_TURN_START = Date.UTC(2026, 0, 1);
+// Set once the one-time ledger turn time repair has run.
+const USAGE_TURN_TIME_REPAIR_META_KEY = "usage_turn_time_repair_v1";
+
+/**
+ * A recorded turn start falls between 2026 and the end of next year. A value
+ * outside that span is not a clock reading: Claude's UUIDv4 turn ids, read as
+ * UUIDv7, stored starts in years such as 2042, 2090, and 6903.
+ */
+function plausibleUsageTurnStartSpan(now: number): { from: number; before: number } {
+  return {
+    from: EARLIEST_USAGE_TURN_START,
+    before: Date.UTC(new Date(now).getUTCFullYear() + 2, 0, 1),
+  };
+}
 
 class UnsupportedStarMapWorkspaceVersionError extends Error {}
 
@@ -290,12 +321,21 @@ type PrStatusWatchRow = {
   payload: string;
 };
 
+/** The head_sha column of a terminal watch, which no head binds. */
+const TERMINAL_WATCH_HEAD_SHA = "";
+
+function prStatusWatchColumnHeadSha(watch: ThreadPullRequestWatchSummary): string {
+  return watch.kind === "terminal" ? TERMINAL_WATCH_HEAD_SHA : watch.headSha;
+}
+
 function parsePrStatusWatchSummary(
   payload: string,
 ): ThreadPullRequestWatchSummary | undefined {
   try {
     const parsed = JSON.parse(payload) as ThreadPullRequestWatchSummary;
-    return parsed?.watchId && parsed.prKey && parsed.headSha
+    return parsed?.watchId
+      && parsed.prKey
+      && (parsed.headSha || parsed.kind === "terminal")
       ? parsed
       : undefined;
   } catch {
@@ -614,6 +654,12 @@ const LAUNCHPAD_AUTO_ACCESS_NOTICE_META_KEY = "launchpad_auto_access_notice";
  */
 const NAVIGATION_PINNED_GROUP_COLLAPSED_META_KEY = "navigation_pinned_group_collapsed";
 /**
+ * The operator's recent short lock notes, offered as chips in the lock
+ * dialog. Written only when the dialog saves a note or a chip is removed, and
+ * not at all when the list would not change.
+ */
+const THREAD_LOCK_RECENT_NOTES_META_KEY = "thread_lock_recent_notes";
+/**
  * Which thread the Star Map manager card reopens. Written once when the
  * manager thread is created (and once more if the operator resets it), so
  * it needs no write budget: this is not a per-turn or per-event write.
@@ -674,7 +720,9 @@ type NavigationUnreadBaseline = { seenUpdatedAt: Record<string, number>; knownTh
  * Preserve the legacy per-overlay malformed-entry boundary: keep the valid
  * prefix, then stop that parent's traversal if an entry cannot be read.
  */
-function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | "threadId" | "subAgents">): Set<string> {
+function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | "threadId"> & {
+  subAgents?: readonly ThreadSubAgentSummary[];
+}): Set<string> {
   const keys = new Set<string>();
   try {
     for (const subAgent of overlay.subAgents ?? []) {
@@ -690,6 +738,7 @@ function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | 
 }
 
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
+  private readonly codexEnvironmentLiveOutput = new CodexEnvironmentLiveOutput();
   private managedSubAgentThreadKeysCache?: { generation: number; keys: Set<string> };
   private navigationOverlayCache?: {
     dataVersion: number;
@@ -705,10 +754,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     state: { knownThreadKeys: string[]; lastSnapshotHash?: string } | undefined;
   };
 
+  /** Recent whole-ledger reads, least recently used first. */
+  private readonly threadPricingCache = new Map<string, {
+    dataVersion: number;
+    ledgerVersion: number;
+    pricing: ThreadPricingLedgerRead;
+  }>();
+
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
   private readonly directoryLaunchpadListeners = new Set<() => void>();
   private transactionNavigationRead = 0;
-  constructor(private readonly stateDb: StateDb) {}
+  private readonly subAgentTable: ThreadSubAgentTable;
+  constructor(private readonly stateDb: StateDb) {
+    this.subAgentTable = new ThreadSubAgentTable(stateDb.raw, {
+      get: (key) => stateDb.getMeta(key),
+      set: (key, value) => stateDb.setMeta(key, value),
+    });
+  }
 
   /** Read-only stamp prevents a post-mutation query joining pre-mutation work. */
   readNavigationSourceVersion(): string {
@@ -748,30 +810,23 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       skippedOwnerlessWithOtherRuntimes: 0,
     };
 
+    // Cards still inside legacy payloads must be visible to the repair. Once
+    // the move is done, stay synchronous like the repair always was: startup
+    // begins it during registry construction, before any other write.
+    if (!this.subAgentTable.isMoveComplete()) await this.moveLegacyThreadSubAgents();
     const reconcile = this.stateDb.raw.transaction(() => {
-      const rows = this.stateDb.raw
-        .prepare(
-          `SELECT payload
-           FROM threads
-           WHERE payload LIKE '%"subAgents"%'`,
-        )
-        .all() as Array<{ payload: string }>;
+      // Only unfinished cards can need repair; finished ones, including every
+      // Token Miser gate card, are not in this index.
+      const byThread = new Map<string, ThreadSubAgentSummary[]>();
+      for (const { storageKey, card } of this.subAgentTable.listIncomplete()) {
+        const cards = byThread.get(storageKey);
+        if (cards) cards.push(card);
+        else byThread.set(storageKey, [card]);
+      }
 
-      for (const row of rows) {
-        let overlay: ThreadOverlayState;
-        try {
-          overlay = normalizeThreadOverlayState(
-            JSON.parse(row.payload) as ThreadOverlayState,
-          );
-        } catch {
-          continue;
-        }
-        if (!overlay.subAgents?.length) {
-          continue;
-        }
-
+      for (const [storageKey, incomplete] of byThread) {
         let changed = false;
-        const subAgents = overlay.subAgents.map((subAgent) => {
+        const subAgents = incomplete.map((subAgent) => {
           if (subAgent.completedAt !== undefined) {
             return subAgent;
           }
@@ -847,10 +902,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         }
 
         result.repairedThreads += 1;
-        this.putThread(buildThreadIdentityKey(overlay.backend, overlay.threadId), {
-          ...overlay,
-          subAgents,
-        });
+        this.subAgentTable.upsert(
+          storageKey,
+          subAgents.filter((subAgent, index) => subAgent !== incomplete[index]),
+        );
       }
     });
     reconcile();
@@ -1188,7 +1243,6 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           managedReviewEntries: current?.managedReviewEntries,
           pendingManagedReviewContextEntryIds:
             current?.pendingManagedReviewContextEntryIds,
-          subAgents: current?.subAgents,
           handoffOrigin: current?.handoffOrigin,
           lastSeenAt: params.fetchedAt,
           lastSeenUpdatedAt: thread.updatedAt,
@@ -2324,6 +2378,122 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   /**
+   * Ledger turns whose recorded times may be wrong, for the one-time repair
+   * in `repairThreadUsageTurnTimes`. Undefined once that repair has run.
+   *
+   * - A start that is not a plausible time (see `plausibleUsageTurnStartSpan`):
+   *   Claude's UUIDv4 turn ids were read as UUIDv7.
+   * - A start equal to the first observation, or none: every launch before
+   *   provider-scope convergence stopped rewriting the ledger reset each start
+   *   to its first usage write.
+   * - An end that is missing or inferred: the same rewrite cleared ends, and
+   *   the startup repair inferred some of them again.
+   */
+  async readThreadUsageTurnTimeRepairCandidates(params: { now?: number } = {}): Promise<Array<{
+    backend: string;
+    completedAt?: number;
+    completedAtInferred: boolean;
+    threadId: string;
+    turnId?: string;
+    usageTurnId: string;
+  }> | undefined> {
+    if (this.stateDb.getMeta(USAGE_TURN_TIME_REPAIR_META_KEY)) {
+      return undefined;
+    }
+    const span = plausibleUsageTurnStartSpan(params.now ?? Date.now());
+    const rows = this.stateDb.raw.prepare(
+      `SELECT usage_turn_id, backend, thread_id, turn_id, completed_at, completed_at_inferred
+         FROM thread_usage_turns
+        WHERE started_at IS NULL
+           OR started_at < ?
+           OR started_at >= ?
+           OR started_at = observed_at
+           OR completed_at IS NULL
+           OR completed_at_inferred = 1`,
+    ).all(span.from, span.before) as Array<{
+      backend: string;
+      completed_at: number | null;
+      completed_at_inferred: number | null;
+      thread_id: string;
+      turn_id: string | null;
+      usage_turn_id: string;
+    }>;
+    return rows.map((row) => ({
+      backend: row.backend,
+      ...(row.completed_at !== null ? { completedAt: row.completed_at } : {}),
+      completedAtInferred: row.completed_at_inferred === 1,
+      threadId: row.thread_id,
+      ...(row.turn_id ? { turnId: row.turn_id } : {}),
+      usageTurnId: row.usage_turn_id,
+    }));
+  }
+
+  /**
+   * Apply the one-time turn time repair and record that it ran. One
+   * transaction.
+   *
+   * A recovered start replaces the stored one when it is plausible, no later
+   * than the turn's first observation, and earlier than the stored start (or
+   * the stored start is implausible). Any start still implausible afterwards
+   * is cleared; readers then fall back to the first observation.
+   * A recovered end replaces only a missing or inferred end, and never lands
+   * before the start.
+   */
+  async repairThreadUsageTurnTimes(params: {
+    now?: number;
+    repairs: Array<{ completedAt?: number; startedAt?: number; usageTurnId: string }>;
+  }): Promise<number> {
+    const now = params.now ?? Date.now();
+    const span = plausibleUsageTurnStartSpan(now);
+    const repair = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET started_at = CASE
+                WHEN @startedAt IS NOT NULL
+                  AND @startedAt >= @from AND @startedAt < @before
+                  AND @startedAt <= observed_at
+                  AND (started_at IS NULL OR started_at < @from OR started_at >= @before
+                    OR @startedAt < started_at)
+                  THEN @startedAt
+                ELSE started_at
+              END,
+              completed_at = CASE
+                WHEN @completedAt IS NOT NULL
+                  AND (completed_at IS NULL OR completed_at_inferred = 1)
+                  AND @completedAt >= COALESCE(@startedAt, started_at, observed_at)
+                  THEN @completedAt
+                ELSE completed_at
+              END,
+              completed_at_inferred = CASE
+                WHEN @completedAt IS NOT NULL
+                  AND (completed_at IS NULL OR completed_at_inferred = 1)
+                  AND @completedAt >= COALESCE(@startedAt, started_at, observed_at)
+                  THEN NULL
+                ELSE completed_at_inferred
+              END,
+              updated_at = @now
+        WHERE usage_turn_id = @usageTurnId`,
+    );
+    const clearImplausible = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_turns
+          SET started_at = NULL, updated_at = ?
+        WHERE started_at < ? OR started_at >= ?`,
+    );
+    return this.stateDb.raw.transaction(() => {
+      const changed = params.repairs.reduce((total, row) => total + repair.run({
+        before: span.before,
+        completedAt: row.completedAt ?? null,
+        from: span.from,
+        now,
+        startedAt: row.startedAt ?? null,
+        usageTurnId: row.usageTurnId,
+      }).changes, 0);
+      const cleared = clearImplausible.run(now, span.from, span.before).changes;
+      this.stateDb.setMeta(USAGE_TURN_TIME_REPAIR_META_KEY, String(now));
+      return changed + cleared;
+    })();
+  }
+
+  /**
    * Close ledger turns whose end was never observed: the process running them
    * quit or crashed, or its app-server died, before a terminal event arrived.
    * The caller picks `lastWriteBefore` so no live turn can qualify.
@@ -2598,10 +2768,57 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     } : undefined;
   }
 
+  /**
+   * One thread's whole pricing ledger.
+   *
+   * A turn end publishes the ledger once, and the renderer then reads it again
+   * for the accounting display, the transcript, and an open context panel.
+   * On a long thread each read materialized thousands of rows. A read is
+   * reused until a row of this thread's ledger changes on this connection
+   * (`sqliteUsageLedgerVersions`) or another connection commits. Callers
+   * receive their own copy, because several of them decorate the lines.
+   */
   async readThreadPricing(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
-  }): Promise<{ lines: ThreadUsageLineRecord[]; summaries: ThreadPricingSummary[] }> {
+  }): Promise<ThreadPricingLedgerRead> {
+    const db = this.stateDb.raw;
+    const ledgerVersions = sqliteUsageLedgerVersions(db);
+    if (!ledgerVersions || db.inTransaction) {
+      return this.materializeThreadPricing(params);
+    }
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    const dataVersion = db.pragma("data_version", { simple: true }) as number;
+    const cached = this.threadPricingCache.get(key);
+    this.threadPricingCache.delete(key);
+    if (
+      cached
+      && cached.dataVersion === dataVersion
+      && cached.ledgerVersion === (ledgerVersions.get(params.threadId) ?? 0)
+    ) {
+      this.threadPricingCache.set(key, cached);
+      return structuredClone(cached.pricing);
+    }
+    const pricing = this.materializeThreadPricing(params);
+    // Lazy repricing may have written; record the version after it.
+    this.threadPricingCache.set(key, {
+      dataVersion,
+      ledgerVersion: ledgerVersions.get(params.threadId) ?? 0,
+      pricing,
+    });
+    for (const staleKey of this.threadPricingCache.keys()) {
+      if (this.threadPricingCache.size <= THREAD_PRICING_CACHE_THREADS) {
+        break;
+      }
+      this.threadPricingCache.delete(staleKey);
+    }
+    return structuredClone(pricing);
+  }
+
+  private materializeThreadPricing(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): ThreadPricingLedgerRead {
     const lineRows = this.stateDb.raw
       .prepare(
         `SELECT *
@@ -2678,7 +2895,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
       if (repairs.length > 0) {
         this.persistThreadUsagePricingRepairsSync(repairs);
-        return this.readThreadPricing(params);
+        return this.materializeThreadPricing(params);
       }
     }
 
@@ -3523,99 +3740,236 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             AND parent_thread_id = ?
             AND thread_id != ?`,
       )
-      .all(backend, threadId, backend, threadId, threadId) as Array<{
-      completed_at: number | null;
-      started_at: number;
-      usage_turn_id: string;
-      observed_cold_replay_count: number | null;
-      observed_cold_replay_uncached_tokens: number | null;
-      observed_hot_replay_cached_tokens: number | null;
-      observed_hot_replay_count: number | null;
-      final_context_tokens: number | null;
-      peak_context_tokens: number | null;
-      model_context_window: number | null;
-    }>;
-    if (turnRows.length === 0) {
-      return;
+      .all(backend, threadId, backend, threadId, threadId) as UsageTurnMetadataRow[];
+    applyUsageTurnMetadata(lines, turnRows);
+  }
+
+  /**
+   * The ledger rows that price a batch of Token Miser gates: rows naming a
+   * gate as their source item, and this thread's own rows for a gate's turn.
+   * Those are the only rows `indexTokenMiserPricingLines` lookups return, so
+   * this gives them the whole-ledger read's rows, order, turn metadata, and
+   * repricing without materializing every line of a long thread. SQLite still
+   * filters the thread's index range; only matches become records.
+   */
+  async readTokenMiserGatePricingLines(params: {
+    backend: ThreadOverlayState["backend"];
+    sourceItemIds: readonly string[];
+    threadId: string;
+    turnIds: readonly string[];
+  }): Promise<ThreadUsageLineRecord[]> {
+    if (params.sourceItemIds.length === 0 && params.turnIds.length === 0) {
+      return [];
     }
-    const byTurnId = new Map(turnRows.map((row) => [row.usage_turn_id, row]));
-    for (const line of lines) {
-      if (!line.usageTurnId) {
-        continue;
-      }
-      const turn = byTurnId.get(line.usageTurnId);
-      if (!turn) {
-        continue;
-      }
-      line.startedAt = turn.started_at;
-      if (line.completedAt === undefined && turn.completed_at !== null) {
-        line.completedAt = turn.completed_at;
-      }
-      if (turn.observed_cold_replay_count !== null) {
-        line.observedColdReplayCount = turn.observed_cold_replay_count;
-      }
-      if (turn.observed_cold_replay_uncached_tokens !== null) {
-        line.observedColdReplayUncachedTokens =
-          turn.observed_cold_replay_uncached_tokens;
-      }
-      if (turn.observed_hot_replay_cached_tokens !== null) {
-        line.observedHotReplayCachedTokens =
-          turn.observed_hot_replay_cached_tokens;
-      }
-      if (turn.observed_hot_replay_count !== null) {
-        line.observedHotReplayCount = turn.observed_hot_replay_count;
-      }
-      if (turn.final_context_tokens !== null) {
-        line.finalContextTokens = turn.final_context_tokens;
-      }
-      if (turn.peak_context_tokens !== null) {
-        line.peakContextTokens = turn.peak_context_tokens;
-      }
-      if (turn.model_context_window !== null) {
-        line.modelContextWindow = turn.model_context_window;
-      }
+    const sourceItemIds = JSON.stringify(params.sourceItemIds);
+    const turnIds = JSON.stringify(params.turnIds);
+    const lineRows = this.stateDb.raw
+      .prepare(
+        `SELECT *
+         FROM (
+           SELECT *
+           FROM thread_usage_lines
+           WHERE backend = ?
+             AND status != 'superseded'
+             AND thread_id = ?
+             AND (
+               source_item_id IN (SELECT value FROM json_each(?))
+               OR turn_id IN (SELECT value FROM json_each(?))
+               OR usage_turn_id IN (SELECT value FROM json_each(?))
+             )
+           UNION ALL
+           SELECT *
+           FROM thread_usage_lines
+           WHERE backend = ?
+             AND status != 'superseded'
+             AND parent_thread_id = ?
+             AND thread_id != ?
+             AND source_item_id IN (SELECT value FROM json_each(?))
+         )
+         ORDER BY created_at DESC, usage_line_id DESC`,
+      )
+      .all(
+        params.backend,
+        params.threadId,
+        sourceItemIds,
+        turnIds,
+        turnIds,
+        params.backend,
+        params.threadId,
+        params.threadId,
+        sourceItemIds,
+      ) as ThreadUsageLineRow[];
+    const lines = lineRows.map(threadUsageLineFromRow);
+    // The whole-ledger read reprices unpriced rows by a rule that depends on
+    // every unpriced row of the thread. Take its copy of these rows, so a
+    // gate card prices exactly as the thread's savings total does.
+    if (lines.some((line) => line.priceStatus !== "priced")) {
+      const matched = new Set(lines.map((line) => line.usageLineId));
+      const ledger = await this.readThreadPricing({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      return ledger.lines.filter((line) => matched.has(line.usageLineId));
     }
+    const usageTurnIds = [...new Set(lines.flatMap((line) =>
+      line.usageTurnId ? [line.usageTurnId] : []))];
+    if (usageTurnIds.length > 0) {
+      const turnRows = this.stateDb.raw
+        .prepare(
+          `SELECT usage_turn_id,
+                  started_at,
+                  completed_at,
+                  observed_cold_replay_count,
+                  observed_cold_replay_uncached_tokens,
+                  observed_hot_replay_cached_tokens,
+                  observed_hot_replay_count,
+                  final_context_tokens,
+                  peak_context_tokens,
+                  model_context_window
+             FROM thread_usage_turns
+            WHERE usage_turn_id IN (SELECT value FROM json_each(?))
+              AND backend = ?
+              AND (thread_id = ? OR parent_thread_id = ?)`,
+        )
+        .all(
+          JSON.stringify(usageTurnIds),
+          params.backend,
+          params.threadId,
+          params.threadId,
+        ) as UsageTurnMetadataRow[];
+      applyUsageTurnMetadata(lines, turnRows);
+    }
+    return lines;
   }
 
   async upsertThreadSubAgent(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     subAgent: ThreadSubAgentSummary;
-  }): Promise<ThreadOverlayState> {
-    return await this.upsertThreadSubAgents({
+  }): Promise<void> {
+    await this.upsertThreadSubAgents({
       backend: params.backend,
       threadId: params.threadId,
       subAgents: [params.subAgent],
     });
   }
 
+  /**
+   * Per-card upsert keyed by `monitorId`. Its cost does not depend on how many
+   * cards the thread already has, and it never rewrites the parent overlay.
+   */
   async upsertThreadSubAgents(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
     subAgents: ThreadSubAgentSummary[];
-  }): Promise<ThreadOverlayState> {
-    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    const current = this.getThread(threadKey) ?? {
-      backend: params.backend,
-      threadId: params.threadId,
-      executionMode: "default" as const,
-      extraLinkedDirectories: [],
-    };
-    const replacements = new Map(
-      params.subAgents.map((subAgent) => [subAgent.monitorId, subAgent]),
+  }): Promise<void> {
+    if (params.subAgents.length === 0) return;
+    const storageKey = encodeThreadIdentityKeyForStorage(
+      buildThreadIdentityKey(params.backend, params.threadId),
     );
-    const nextSubAgents = [
-      ...replacements.values(),
-      ...(current.subAgents ?? []).filter(
-        (subAgent) => !replacements.has(subAgent.monitorId),
-      ),
-    ].sort((left, right) => right.createdAt - left.createdAt);
-    const nextState: ThreadOverlayState = {
-      ...current,
-      subAgents: nextSubAgents,
-    };
-    this.putThread(threadKey, nextState);
-    return nextState;
+    // Immediate: the legacy-card check reads before it writes, and upgrading a
+    // read snapshot fails at once (SQLITE_BUSY_SNAPSHOT) if another instance
+    // committed in between.
+    this.stateDb.raw.transaction(() => {
+      this.subAgentTable.moveLegacyCards(storageKey);
+      this.subAgentTable.upsert(storageKey, params.subAgents);
+    }).immediate();
+  }
+
+  async getThreadSubAgent(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    monitorId: string;
+  }): Promise<ThreadSubAgentSummary | undefined> {
+    const storageKey = this.subAgentStorageKey(params);
+    return this.subAgentTable.get(storageKey, params.monitorId);
+  }
+
+  /**
+   * Every card on the thread, newest first. Prefer `getThreadSubAgent` or
+   * `listActiveThreadSubAgents`; this one grows with the thread's history.
+   */
+  async listThreadSubAgents(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    excludeTokenMiser?: boolean;
+  }): Promise<ThreadSubAgentSummary[]> {
+    const storageKey = this.subAgentStorageKey(params);
+    return this.subAgentTable.list(storageKey, { excludeTokenMiser: params.excludeTokenMiser });
+  }
+
+  /** Cards whose `monitorId` starts with `monitorIdPrefix`, keyed by thread id. */
+  async listThreadSubAgentsByMonitorIdPrefix(params: {
+    backend: ThreadOverlayState["backend"];
+    threadIds: readonly string[];
+    monitorIdPrefix: string;
+  }): Promise<Record<string, ThreadSubAgentSummary[]>> {
+    const keys = [...new Set(params.threadIds)].map((threadId) => ({
+      threadId,
+      storageKey: this.subAgentStorageKey({ backend: params.backend, threadId }),
+    }));
+    const cards = this.subAgentTable.listByMonitorIdPrefix(
+      keys.map((key) => key.storageKey),
+      params.monitorIdPrefix,
+    );
+    const result: Record<string, ThreadSubAgentSummary[]> = {};
+    for (const { threadId, storageKey } of keys) {
+      const found = cards.get(storageKey);
+      if (found) result[threadId] = found;
+    }
+    return result;
+  }
+
+  /** Unfinished cards and failures, from a partial index that gate cards never enter. */
+  async listActiveThreadSubAgents(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<ThreadSubAgentSummary[]> {
+    const storageKey = this.subAgentStorageKey(params);
+    return this.subAgentTable.listAttention(storageKey);
+  }
+
+  /** Changes on every card write, without reading or hashing any card. */
+  async readThreadSubAgentRevision(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<{ revision: number; count: number }> {
+    const storageKey = this.subAgentStorageKey(params);
+    return this.subAgentTable.revision(storageKey);
+  }
+
+  /**
+   * The one-time move of cards out of `threads.payload`, in slices of about
+   * `byteBudget` payload bytes with the event loop free between them. A no-op
+   * once the profile's marker is set, so later launches do no scanning.
+   */
+  async moveLegacyThreadSubAgents(options?: {
+    byteBudget?: number;
+    yieldBetweenSlices?: () => Promise<void>;
+  }): Promise<{ slices: number }> {
+    const byteBudget = options?.byteBudget ?? 4 * 1024 * 1024;
+    const yieldBetweenSlices = options?.yieldBetweenSlices
+      ?? (() => new Promise<void>((resolve) => setImmediate(resolve)));
+    let cursor: number | undefined = 0;
+    let slices = 0;
+    while (cursor !== undefined && !this.subAgentTable.isMoveComplete()) {
+      cursor = this.subAgentTable.moveLegacyCardsSlice(cursor, byteBudget);
+      slices += 1;
+      if (cursor !== undefined) {
+        // Keep the WAL near one slice's size instead of the whole move's.
+        this.stateDb.raw.pragma("wal_checkpoint(PASSIVE)");
+        await yieldBetweenSlices();
+      }
+    }
+    return { slices };
+  }
+
+  private subAgentStorageKey(params: { backend: ThreadOverlayState["backend"]; threadId: string }): string {
+    const storageKey = encodeThreadIdentityKeyForStorage(
+      buildThreadIdentityKey(params.backend, params.threadId),
+    );
+    this.subAgentTable.moveLegacyCards(storageKey);
+    return storageKey;
   }
 
   async setThreadReaction(params: {
@@ -5576,19 +5930,22 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       const requested = ids.slice(offset, offset + 500).map((id) => ({
         id, key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(params.backend, id)),
       }));
-      // Remove only transcript fields. Retain every metadata field (including
-      // workspace snapshots, federation parent identity and native workers).
+      // Remove only transcript fields, plus any legacy card array a row the
+      // one-time move has not reached still holds. Retain every metadata field
+      // (including workspace snapshots and federation parent identity).
       // json_remove parses the source once, rather than one extract per field.
       const rows = this.stateDb.raw.prepare(`
         SELECT json_extract(requested.value, '$.id') AS id,
           json_remove(threads.payload, '$.immutableUsageActivities', '$.managedReviewEntries',
             '$.permissionTransitionLog', '$.messagingBindingTransitionLog',
-            '$.turnFailureLog', '$.questionnaireActivityLog') AS payload
+            '$.turnFailureLog', '$.questionnaireActivityLog', '$.subAgents') AS payload
         FROM json_each(?) AS requested
         LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
       `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
       for (const row of rows) {
-        entries.push([row.id, row.payload === null ? undefined : normalizeThreadOverlayState(JSON.parse(row.payload))]);
+        entries.push([row.id, row.payload === null ? undefined : this.withCodexEnvironmentLiveOutput(
+          normalizeThreadOverlayState(JSON.parse(row.payload)),
+        )]);
       }
     }
     return Object.fromEntries(entries);
@@ -5615,7 +5972,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
       const overlays = rows.map((row) => ({
         id: row.id,
-        overlay: row.payload === null ? undefined : normalizeThreadOverlayState(JSON.parse(row.payload)),
+        overlay: row.payload === null ? undefined : this.withCodexEnvironmentLiveOutput(
+          normalizeThreadOverlayState(JSON.parse(row.payload)),
+        ),
       }));
       // Read pending claims using the decoded identity, as getThread does.
       // Do not json_extract the full overlay in SQLite: histories can be large
@@ -6947,23 +7306,27 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     watch: ThreadPullRequestWatchSummary;
     now: number;
   }): Promise<PrStatusWatchRegistrationResult> {
+    const headSha = prStatusWatchColumnHeadSha(params.watch);
     const register = this.stateDb.raw.transaction(() => {
       const inserted = this.stateDb.raw
         .prepare(
           `INSERT OR IGNORE INTO pr_status_watches(
              watch_id, backend, thread_id, pr_key, head_sha,
-             notify_on_success, notify_on_failure, status, attempt_count,
+             notify_on_success, notify_on_failure,
+             notify_on_merged, notify_on_closed, status, attempt_count,
              lease_owner, lease_expires_at, created_at, updated_at, payload
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, 'watching', 0, NULL, NULL, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'watching', 0, NULL, NULL, ?, ?, ?)`,
         )
         .run(
           params.watch.watchId,
           params.watch.backend,
           params.watch.threadId,
           params.watch.prKey,
-          params.watch.headSha,
+          headSha,
           params.watch.notifyOn.includes("success") ? 1 : 0,
           params.watch.notifyOn.includes("failure") ? 1 : 0,
+          params.watch.notifyOn.includes("merged") ? 1 : 0,
+          params.watch.notifyOn.includes("closed") ? 1 : 0,
           params.watch.createdAt,
           params.now,
           JSON.stringify(params.watch),
@@ -6983,7 +7346,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           params.watch.backend,
           params.watch.threadId,
           params.watch.prKey,
-          params.watch.headSha,
+          headSha,
         ) as { payload: string } | undefined;
       const existing = duplicate
         ? parsePrStatusWatchSummary(duplicate.payload)
@@ -7003,12 +7366,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           .prepare(
             `UPDATE pr_status_watches
              SET notify_on_success = ?, notify_on_failure = ?,
+                 notify_on_merged = ?, notify_on_closed = ?,
                  updated_at = ?, payload = ?
              WHERE watch_id = ? AND status IN ('watching', 'dispatching')`,
           )
           .run(
             notifyOn.includes("success") ? 1 : 0,
             notifyOn.includes("failure") ? 1 : 0,
+            notifyOn.includes("merged") ? 1 : 0,
+            notifyOn.includes("closed") ? 1 : 0,
             params.now,
             JSON.stringify(merged),
             existing.watchId,
@@ -7031,6 +7397,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     ownerId: string;
     leaseExpiresAt: number;
     maxAttempts: number;
+    /**
+     * Set when the PR is merged or closed: a thread that also holds a
+     * terminal watch gets one terminal wake instead of a CI wake as well.
+     */
+    skipThreadsWithTerminalWatch?: boolean;
   }): Promise<PrStatusWatchClaim[]> {
     const claim = this.stateDb.raw.transaction(() => {
       const activeDispatch = this.stateDb.raw
@@ -7048,8 +7419,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       const rows = this.stateDb.raw
         .prepare(
           `SELECT watch_id, attempt_count, payload
-           FROM pr_status_watches
-           WHERE pr_key = ? AND head_sha = ?
+           FROM pr_status_watches AS w
+           WHERE pr_key = ? AND head_sha = ? AND head_sha <> ''
              AND (
                (? = 'success' AND notify_on_success = 1)
                OR (? = 'failure' AND notify_on_failure = 1)
@@ -7062,6 +7433,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
                  AND COALESCE(lease_expires_at, 0) <= ?
                )
              )
+             AND (
+               ? = 0
+               OR NOT EXISTS (
+                 SELECT 1 FROM pr_status_watches AS t
+                 WHERE t.backend = w.backend AND t.thread_id = w.thread_id
+                   AND t.pr_key = w.pr_key AND t.head_sha = ''
+                   AND t.status IN ('watching', 'dispatching')
+               )
+             )
            ORDER BY created_at ASC, watch_id ASC
            LIMIT 1`,
         )
@@ -7072,6 +7452,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           params.outcome,
           params.maxAttempts,
           params.now,
+          params.skipThreadsWithTerminalWatch ? 1 : 0,
         ) as Array<PrStatusWatchRow & { watch_id: string }>;
       const claimed: PrStatusWatchClaim[] = [];
       for (const row of rows) {
@@ -7226,7 +7607,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         `UPDATE pr_status_watches
          SET status = 'superseded', lease_owner = NULL,
              lease_expires_at = NULL, updated_at = ?
-         WHERE pr_key = ? AND head_sha <> ?
+         WHERE pr_key = ? AND head_sha <> ? AND head_sha <> ''
            AND (
              status = 'watching'
              OR (
@@ -7237,6 +7618,149 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       )
       .run(params.now, params.prKey, params.headSha, params.now);
     return result.changes;
+  }
+
+  /**
+   * Claim every eligible merge/close watch on a PR. Unlike a CI watch, each
+   * thread is woken: every thread that asked to hear about the merge may own
+   * resources to release for it.
+   */
+  async claimThreadPrTerminalWatches(params: {
+    prKey: string;
+    outcome: "merged" | "closed";
+    now: number;
+    ownerId: string;
+    leaseExpiresAt: number;
+    maxAttempts: number;
+  }): Promise<PrStatusWatchClaim[]> {
+    const claim = this.stateDb.raw.transaction(() => {
+      const rows = this.stateDb.raw
+        .prepare(
+          `SELECT watch_id, attempt_count, payload
+           FROM pr_status_watches
+           WHERE pr_key = ? AND head_sha = ''
+             AND (
+               (? = 'merged' AND notify_on_merged = 1)
+               OR (? = 'closed' AND notify_on_closed = 1)
+             )
+             AND attempt_count < ?
+             AND (
+               status = 'watching'
+               OR (
+                 status = 'dispatching'
+                 AND COALESCE(lease_expires_at, 0) <= ?
+               )
+             )
+           ORDER BY created_at ASC, watch_id ASC`,
+        )
+        .all(
+          params.prKey,
+          params.outcome,
+          params.outcome,
+          params.maxAttempts,
+          params.now,
+        ) as Array<PrStatusWatchRow & { watch_id: string }>;
+      const claimed: PrStatusWatchClaim[] = [];
+      const update = this.stateDb.raw.prepare(
+        `UPDATE pr_status_watches
+         SET status = 'dispatching',
+             attempt_count = attempt_count + 1,
+             lease_owner = ?, lease_expires_at = ?, updated_at = ?
+         WHERE watch_id = ?
+           AND (
+             status = 'watching'
+             OR (
+               status = 'dispatching'
+               AND COALESCE(lease_expires_at, 0) <= ?
+             )
+           )`,
+      );
+      for (const row of rows) {
+        const watch = parsePrStatusWatchSummary(row.payload);
+        if (!watch) continue;
+        const updated = update.run(
+          params.ownerId,
+          params.leaseExpiresAt,
+          params.now,
+          row.watch_id,
+          params.now,
+        );
+        if (updated.changes > 0) {
+          claimed.push({ attemptCount: row.attempt_count + 1, watch });
+        }
+      }
+      return claimed;
+    });
+    return claim();
+  }
+
+  /**
+   * Finish one delivered merge/close watch. The same thread's CI watches on
+   * the PR end with it: a merged or closed PR has no CI result left to wait for.
+   */
+  async finishThreadPrTerminalWatch(params: {
+    watchId: string;
+    ownerId: string;
+    now: number;
+  }): Promise<void> {
+    const finish = this.stateDb.raw.transaction(() => {
+      const claimed = this.stateDb.raw
+        .prepare(
+          `SELECT backend, thread_id, pr_key
+           FROM pr_status_watches
+           WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
+        )
+        .get(params.watchId, params.ownerId) as
+        | { backend: string; thread_id: string; pr_key: string }
+        | undefined;
+      if (!claimed) return;
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_status_watches
+           SET status = 'dispatched', lease_owner = NULL,
+               lease_expires_at = NULL, updated_at = ?
+           WHERE watch_id = ? AND status = 'dispatching' AND lease_owner = ?`,
+        )
+        .run(params.now, params.watchId, params.ownerId);
+      this.stateDb.raw
+        .prepare(
+          `UPDATE pr_status_watches
+           SET status = 'superseded', lease_owner = NULL,
+               lease_expires_at = NULL, updated_at = ?
+           WHERE backend = ? AND thread_id = ? AND pr_key = ?
+             AND head_sha <> '' AND status = 'watching'`,
+        )
+        .run(params.now, claimed.backend, claimed.thread_id, claimed.pr_key);
+    });
+    finish();
+  }
+
+  /**
+   * PR keys that still have an undelivered merge/close watch, optionally for
+   * one thread. The caller re-offers each terminal PR's cached status, since
+   * the poller no longer fetches a PR once it is merged or closed.
+   */
+  async listPendingPrTerminalWatchPrKeys(params: {
+    backend?: ThreadOverlayState["backend"];
+    threadId?: string;
+  } = {}): Promise<string[]> {
+    const rows = (params.backend && params.threadId
+      ? this.stateDb.raw
+          .prepare(
+            `SELECT DISTINCT pr_key
+             FROM pr_status_watches
+             WHERE head_sha = '' AND status IN ('watching', 'dispatching')
+               AND backend = ? AND thread_id = ?`,
+          )
+          .all(params.backend, params.threadId)
+      : this.stateDb.raw
+          .prepare(
+            `SELECT DISTINCT pr_key
+             FROM pr_status_watches
+             WHERE head_sha = '' AND status IN ('watching', 'dispatching')`,
+          )
+          .all()) as Array<{ pr_key: string }>;
+    return rows.map((row) => row.pr_key);
   }
 
   async listActiveThreadPrStatusWatches(params: {
@@ -7305,7 +7829,56 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     };
     this.putThread(threadKey, nextState);
+    this.codexEnvironmentLiveOutput.prune(threadKey, params.codexEnvironmentRuntime);
     return nextState;
+  }
+
+  /**
+   * Record a running action's latest output in memory. Reads of the thread
+   * see it immediately; sqlite gets it at the run's next boundary write.
+   */
+  setThreadCodexEnvironmentActionLiveOutput(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    runId: string;
+    output: string;
+  }): void {
+    this.codexEnvironmentLiveOutput.set(
+      buildThreadIdentityKey(params.backend, params.threadId),
+      params.runId,
+      params.output,
+    );
+  }
+
+  /** Forget a run's live output, for example once its exit is recorded. */
+  dropThreadCodexEnvironmentActionLiveOutput(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    runId: string;
+  }): void {
+    this.codexEnvironmentLiveOutput.drop(
+      buildThreadIdentityKey(params.backend, params.threadId),
+      params.runId,
+    );
+  }
+
+  /**
+   * Persist every live output tail that sqlite does not have yet, in one
+   * transaction. Runs at app shutdown. Returns the number of rows written.
+   */
+  flushThreadCodexEnvironmentActionLiveOutputs(): number {
+    const updates = this.codexEnvironmentLiveOutput.threadKeys().flatMap((threadKey) => {
+      const stored = this.readStoredThread(threadKey);
+      const merged = this.codexEnvironmentLiveOutput.apply(threadKey, stored);
+      return merged && merged !== stored ? [{ threadKey, state: merged }] : [];
+    });
+    if (updates.length > 0) {
+      this.stateDb.raw.transaction(() => {
+        for (const { threadKey, state } of updates) this.putThread(threadKey, state);
+      })();
+    }
+    this.codexEnvironmentLiveOutput.clear();
+    return updates.length;
   }
 
   async setThreadMessagingPdfToolCatalogVersion(params: {
@@ -7760,6 +8333,35 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return collapsed;
   }
 
+  listRecentThreadLockNotes(): string[] {
+    const raw = this.stateDb.getMeta(THREAD_LOCK_RECENT_NOTES_META_KEY);
+    if (!raw) return [];
+    try {
+      return parseRecentThreadLockNotes(JSON.parse(raw));
+    } catch {
+      return [];
+    }
+  }
+
+  async rememberRecentThreadLockNote(note: string): Promise<string[]> {
+    // Saving the newest note again commits nothing.
+    return this.writeRecentThreadLockNotes((current) => rememberRecentThreadLockNote(current, note));
+  }
+
+  async forgetRecentThreadLockNote(note: string): Promise<string[]> {
+    // Removing a note that is already gone commits nothing.
+    return this.writeRecentThreadLockNotes((current) => forgetRecentThreadLockNote(current, note));
+  }
+
+  private writeRecentThreadLockNotes(change: (current: string[]) => string[]): string[] {
+    const current = this.listRecentThreadLockNotes();
+    const next = change(current);
+    if (next.length !== current.length || next.some((entry, index) => entry !== current[index])) {
+      this.stateDb.setMeta(THREAD_LOCK_RECENT_NOTES_META_KEY, JSON.stringify(next));
+    }
+    return next;
+  }
+
   async getDirectoryLaunchpad(params: {
     directoryKey: string;
   }): Promise<DirectoryLaunchpadOverlayState | undefined> {
@@ -8129,12 +8731,29 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   private getThread(threadKey: string): ThreadOverlayState | undefined {
+    return this.codexEnvironmentLiveOutput.apply(threadKey, this.readStoredThread(threadKey));
+  }
+
+  private withCodexEnvironmentLiveOutput(overlay: ThreadOverlayState): ThreadOverlayState {
+    return this.codexEnvironmentLiveOutput.apply(
+      buildThreadIdentityKey(overlay.backend, overlay.threadId),
+      overlay,
+    );
+  }
+
+  private readStoredThread(threadKey: string): ThreadOverlayState | undefined {
     const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
     const row = this.stateDb.raw
       .prepare("SELECT payload FROM threads WHERE thread_id = ?")
       .get(storageKey) as { payload: string } | undefined;
     if (!row) return undefined;
-    const overlay = normalizeThreadOverlayState(JSON.parse(row.payload));
+    const parsed = JSON.parse(row.payload) as ThreadOverlayState & { subAgents?: unknown };
+    if (parsed.subAgents !== undefined) {
+      // First touch of a row the one-time move has not reached yet.
+      this.subAgentTable.moveLegacyCards(storageKey);
+      delete parsed.subAgents;
+    }
+    const overlay = normalizeThreadOverlayState(parsed);
     const pending = this.readThreadPrAutoDispatchPending({
       backend: overlay.backend,
       threadId: overlay.threadId,
@@ -8155,18 +8774,36 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (generation !== undefined && this.managedSubAgentThreadKeysCache?.generation === generation) {
       return new Set(this.managedSubAgentThreadKeysCache.keys);
     }
-    // One statement reads parent references and child flags from the same
-    // SQLite snapshot. Persistent triggers cover older/shared-profile writers.
+    // One statement reads card references, legacy payload references and
+    // child flags from the same SQLite snapshot. Persistent triggers cover
+    // older/shared-profile writers.
     const rows = this.stateDb.raw.prepare(
-      "SELECT thread_id, managed_children AS projection, grouped_subthread FROM thread_navigation_relationships",
-    ).all() as Array<{ thread_id: string; projection: string | null; grouped_subthread: number }>;
+      `SELECT thread_id, managed_children AS projection, grouped_subthread, NULL AS backend, NULL AS child
+         FROM thread_navigation_relationships
+       UNION ALL
+       SELECT thread_id, NULL, 0, backend, monitor_thread_id
+         FROM thread_sub_agents INDEXED BY thread_sub_agents_child
+         WHERE monitor_thread_id IS NOT NULL`,
+    ).all() as Array<{
+      thread_id: string;
+      projection: string | null;
+      grouped_subthread: number;
+      backend: string | null;
+      child: string | null;
+    }>;
     const groupedKeys = new Set(rows.filter((row) => row.grouped_subthread === 1).map((row) => row.thread_id));
     const threadKeys = new Set<string>();
     for (const row of rows) {
+      if (row.child !== null) {
+        const key = managedChildKeyFromCard(row.thread_id, row.backend, row.child);
+        if (key) threadKeys.add(key);
+        continue;
+      }
       try {
         if (!row.projection) continue;
+        // A legacy payload array the one-time move has not reached yet.
         const [backend, threadId, subAgents] = JSON.parse(row.projection) as [
-          ThreadOverlayState["backend"], string, ThreadOverlayState["subAgents"],
+          ThreadOverlayState["backend"], string, ThreadSubAgentSummary[] | undefined,
         ];
         for (const key of managedSubAgentChildKeys({ backend, threadId, subAgents })) {
           threadKeys.add(key);
@@ -8243,7 +8880,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (!records.length) return;
     this.stateDb.raw.transaction(() => {
       const remove = this.stateDb.raw.prepare("DELETE FROM threads WHERE thread_id = ?");
-      for (const record of records) remove.run(encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(record.backend, record.threadId)));
+      const storageKeys = records.map((record) => encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(record.backend, record.threadId)));
+      for (const storageKey of storageKeys) remove.run(storageKey);
+      // Explicit, not a trigger: with recursive_triggers on, INSERT OR REPLACE
+      // fires delete triggers, which would erase a live thread's cards.
+      this.subAgentTable.deleteForThreads(storageKeys);
     })();
     this.navigationOverlayCache = undefined;
   }
@@ -8256,9 +8897,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       queuedExecutionMode: _queuedExecutionMode,
       queuedExecutionModeAt: _queuedExecutionModeAt,
       prAutoDispatchPending: _prAutoDispatchPending,
+      // Cards are rows in `thread_sub_agents`, never overlay JSON.
+      subAgents: _subAgents,
       ...persistable
-    } = state;
+    } = state as ThreadOverlayState & { subAgents?: unknown };
     const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
+    // Replacing a row the one-time move has not reached would drop its cards.
+    this.subAgentTable.moveLegacyCards(storageKey);
     const navigationCache = this.navigationOverlayCache;
     const previousThreadChanges = navigationCache ? sqliteThreadChangeVersion(this.stateDb.raw) : undefined;
     this.stateDb.raw
@@ -8724,6 +9369,12 @@ function normalizeThreadAgent(
 function normalizeThreadOverlayState(
   state: ThreadOverlayState,
 ): ThreadOverlayState {
+  // A row the one-time move has not reached may still carry its card array.
+  // Cards are read from `thread_sub_agents`; never hand the array onward.
+  if ((state as { subAgents?: unknown }).subAgents !== undefined) {
+    const { subAgents: _legacyCards, ...withoutCards } = state as ThreadOverlayState & { subAgents?: unknown };
+    state = withoutCards;
+  }
   if (
     state.agent?.instructions === LEGACY_HANDOFF_AGENT_INSTRUCTIONS &&
     state.handoffOrigin &&
@@ -9229,6 +9880,67 @@ function enrichProtectedThreadUsage(
   // Never copy the incoming cost or reprice a finalized priced row. A missing
   // model/context ceiling can price an unpriced row using its frozen tokens.
   return preserved.priceStatus === "priced" ? enriched : repriceTokenUsageLine(enriched);
+}
+
+type UsageTurnMetadataRow = {
+  completed_at: number | null;
+  started_at: number | null;
+  usage_turn_id: string;
+  observed_cold_replay_count: number | null;
+  observed_cold_replay_uncached_tokens: number | null;
+  observed_hot_replay_cached_tokens: number | null;
+  observed_hot_replay_count: number | null;
+  final_context_tokens: number | null;
+  peak_context_tokens: number | null;
+  model_context_window: number | null;
+};
+
+function applyUsageTurnMetadata(
+  lines: ThreadUsageLineRecord[],
+  turnRows: readonly UsageTurnMetadataRow[],
+): void {
+  if (turnRows.length === 0) {
+    return;
+  }
+  const byTurnId = new Map(turnRows.map((row) => [row.usage_turn_id, row]));
+  for (const line of lines) {
+    if (!line.usageTurnId) {
+      continue;
+    }
+    const turn = byTurnId.get(line.usageTurnId);
+    if (!turn) {
+      continue;
+    }
+    if (turn.started_at !== null) {
+      line.startedAt = turn.started_at;
+    }
+    if (line.completedAt === undefined && turn.completed_at !== null) {
+      line.completedAt = turn.completed_at;
+    }
+    if (turn.observed_cold_replay_count !== null) {
+      line.observedColdReplayCount = turn.observed_cold_replay_count;
+    }
+    if (turn.observed_cold_replay_uncached_tokens !== null) {
+      line.observedColdReplayUncachedTokens =
+        turn.observed_cold_replay_uncached_tokens;
+    }
+    if (turn.observed_hot_replay_cached_tokens !== null) {
+      line.observedHotReplayCachedTokens =
+        turn.observed_hot_replay_cached_tokens;
+    }
+    if (turn.observed_hot_replay_count !== null) {
+      line.observedHotReplayCount = turn.observed_hot_replay_count;
+    }
+    if (turn.final_context_tokens !== null) {
+      line.finalContextTokens = turn.final_context_tokens;
+    }
+    if (turn.peak_context_tokens !== null) {
+      line.peakContextTokens = turn.peak_context_tokens;
+    }
+    if (turn.model_context_window !== null) {
+      line.modelContextWindow = turn.model_context_window;
+    }
+  }
 }
 
 function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineRecord {
@@ -9825,6 +10537,11 @@ export type OverlayStoreLike = Pick<
   | "persistThreadToolHistoryAnalysis"
   | "readRecentThreadToolInvocations"
   | "upsertThreadSubAgent"
+  | "getThreadSubAgent"
+  | "listThreadSubAgents"
+  | "listActiveThreadSubAgents"
+  | "readThreadSubAgentRevision"
+  | "listThreadSubAgentsByMonitorIdPrefix"
   | "setThreadReaction"
   | "setThreadLock"
   | "setThreadArchiveTombstone"
@@ -9890,6 +10607,9 @@ export type OverlayStoreLike = Pick<
   | "supersedeThreadPrStatusWatches"
   | "listActiveThreadPrStatusWatches"
   | "cancelThreadPrStatusWatchesForPr"
+  | "claimThreadPrTerminalWatches"
+  | "finishThreadPrTerminalWatch"
+  | "listPendingPrTerminalWatchPrKeys"
   | "turnOffCodexFastEverywhere"
   | "setThreadExpectedBranch"
   | "setThreadObservedBranch"
@@ -9910,6 +10630,9 @@ export type OverlayStoreLike = Pick<
 > & {
   getThreadListingOverlayStates?: SqliteOverlayStore["getThreadListingOverlayStates"];
   setThreadCodexEnvironmentRuntime?: SqliteOverlayStore["setThreadCodexEnvironmentRuntime"];
+  setThreadCodexEnvironmentActionLiveOutput?: SqliteOverlayStore["setThreadCodexEnvironmentActionLiveOutput"];
+  dropThreadCodexEnvironmentActionLiveOutput?: SqliteOverlayStore["dropThreadCodexEnvironmentActionLiveOutput"];
+  flushThreadCodexEnvironmentActionLiveOutputs?: SqliteOverlayStore["flushThreadCodexEnvironmentActionLiveOutputs"];
   listThreadOverlaysWithCodexEnvironmentRuntime?: SqliteOverlayStore["listThreadOverlaysWithCodexEnvironmentRuntime"];
   listThreadArchiveStates?: SqliteOverlayStore["listThreadArchiveStates"];
   observeArchivedThreads?: SqliteOverlayStore["observeArchivedThreads"];
@@ -9917,6 +10640,9 @@ export type OverlayStoreLike = Pick<
   upsertThreadMessageOrigin?: SqliteOverlayStore["upsertThreadMessageOrigin"];
   readThreadMessageOrigins?: SqliteOverlayStore["readThreadMessageOrigins"];
   setPinnedGroupCollapsed?: SqliteOverlayStore["setPinnedGroupCollapsed"];
+  listRecentThreadLockNotes?: SqliteOverlayStore["listRecentThreadLockNotes"];
+  rememberRecentThreadLockNote?: SqliteOverlayStore["rememberRecentThreadLockNote"];
+  forgetRecentThreadLockNote?: SqliteOverlayStore["forgetRecentThreadLockNote"];
 };
 
 function reliableSubAgentCompletionBoundary(

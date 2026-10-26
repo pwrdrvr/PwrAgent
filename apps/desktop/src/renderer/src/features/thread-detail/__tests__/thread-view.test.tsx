@@ -10,6 +10,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerPendingRequestNotification,
+  BackendSummary,
   MessagingPlatformStatus,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
@@ -18,6 +19,7 @@ import type {
   ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
+import { SANDBOXER_MCP_CONNECTION_ID } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
@@ -324,112 +326,181 @@ describe("ThreadView", () => {
     expect(within(question).getByRole("button", { name: "Answer" })).toBeEnabled();
   });
 
-  it("rewinds Grok with the explicit conversation-only UI flow", async () => {
-    const listAcpThreadRewindPoints = vi.fn(async () => ({
-      backend: "acp:grok" as const,
-      threadId: "grok-thread",
-      rewindPoints: [
-        {
-          promptIndex: 0,
-          fileSnapshotCount: 1,
-          hasFileChanges: true,
-          promptPreview: "Write a breakfast poem",
-        },
+  function rewindBackend(
+    kind: "codex" | "acp:grok" | "claude",
+    label: string,
+    threadRewind: BackendSummary["capabilities"]["threadRewind"] | null = { files: false, undo: false },
+  ): BackendSummary {
+    return {
+      kind,
+      label,
+      available: true,
+      methods: [],
+      capabilities: {
+        listThreads: true,
+        createThread: true,
+        resumeThread: true,
+        renameThread: true,
+        readThread: true,
+        startTurn: true,
+        interruptTurn: true,
+        steerTurn: false,
+        transcriptPagination: false,
+        toolUse: true,
+        approvalRequests: true,
+        multiDirectoryThreads: true,
+        ...(threadRewind ? { threadRewind } : {}),
+      },
+      executionModes: [],
+    };
+  }
+
+  const rewindTranscript: AppServerThreadEntry[] = [
+    {
+      type: "message",
+      id: "prompt-1",
+      role: "user",
+      text: "The queue test fails one run in ten on Windows.",
+      turn: { id: "turn-1" },
+    },
+    {
+      type: "message",
+      id: "reply-1",
+      role: "assistant",
+      text: "The child outlives the lock.",
+      turn: { id: "turn-1" },
+    },
+    {
+      type: "message",
+      id: "prompt-2",
+      role: "user",
+      text: "Try holding the lock until the child exits instead.",
+      turn: { id: "turn-2" },
+    },
+    {
+      type: "message",
+      id: "steer-2",
+      role: "user",
+      text: "Keep the timeout too.",
+      turn: { id: "turn-2" },
+    },
+    {
+      type: "activity",
+      id: "edit-2",
+      summary: "Edited 2 files",
+      details: [
+        { id: "edit-2:a", kind: "write", label: "lock.ts", path: "src/queue/lock.ts" },
+        { id: "edit-2:b", kind: "write", label: "lock.test.ts", path: "src/queue/lock.test.ts" },
       ],
-    }));
-    const rewindAcpThread = vi.fn(async () => ({
-      backend: "acp:grok" as const,
-      threadId: "grok-thread",
-      targetPromptIndex: 0,
+      turn: { id: "turn-2" },
+    },
+    {
+      type: "message",
+      id: "prompt-3",
+      role: "user",
+      text: "Now add a regression test for it.",
+      turn: { id: "turn-3" },
+    },
+  ];
+
+  const rewindThread = (source: "codex" | "acp:grok" | "claude"): NavigationThreadSummary => ({
+    id: `${source}-thread`,
+    title: "Fix the flaky queue test",
+    titleSource: "explicit",
+    source,
+    executionMode: "default",
+    linkedDirectories: [],
+    inbox: { inInbox: true },
+  });
+
+  it("rewinds a Codex thread from the prompt itself and restores its text", async () => {
+    const rewindThreadApi = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "codex-thread",
+      target: { messageId: "prompt-2", turnId: "turn-2" },
+      mode: "conversation" as const,
       updatedAt: 2000,
     }));
     const onReloadThread = vi.fn(async () => undefined);
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
-        backends={[]}
+        backends={[rewindBackend("codex", "Codex")]}
         clearPendingRequest={() => undefined}
         composerDisabled={false}
-        desktopApi={{ listAcpThreadRewindPoints, rewindAcpThread }}
+        desktopApi={{ rewindThread: rewindThreadApi }}
         loading={false}
         loadingMore={false}
-        messageCount={1}
+        messageCount={4}
         onLoadOlder={async () => undefined}
         onReloadThread={onReloadThread}
         removeOptimisticMessage={(_id) => undefined}
-        selectedThread={{
-          id: "grok-thread",
-          title: "Breakfast",
-          titleSource: "explicit",
-          source: "acp:grok",
-          executionMode: "default",
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-        }}
+        selectedThread={rewindThread("codex")}
         skills={[]}
-        transcriptEntries={[]}
+        transcriptEntries={rewindTranscript}
       />,
     );
 
+    // A steer inside a turn is not a rewind point: Codex rewinds whole turns.
+    expect(
+      screen.getAllByRole("button", { name: "Rewind to before this message" }),
+    ).toHaveLength(3);
+    const prompt = screen
+      .getByText("Try holding the lock until the child exits instead.")
+      .closest(".transcript-list__item") as HTMLElement;
     fireEvent.click(
-      screen.getByRole("button", { name: "Rewind Grok conversation" }),
+      within(prompt).getByRole("button", { name: "Rewind to before this message" }),
     );
-    expect(await screen.findByText("Write a breakfast poem")).toBeInTheDocument();
-    expect(screen.getByText(/Files stay exactly as they are/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Rewind conversation" }));
+    const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    expect(confirm).toHaveTextContent("1 turn after it");
+    expect(confirm).toHaveTextContent(
+      "Codex rewinds the conversation only. The 2 files changed since stay as they are.",
+    );
+    expect(confirm).toHaveTextContent("This rewind cannot be undone.");
+    expect(within(confirm).getByRole("checkbox", { name: /Restore files/ })).toBeDisabled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
 
     await waitFor(() => {
-      expect(rewindAcpThread).toHaveBeenCalledWith({
-        backend: "acp:grok",
-        threadId: "grok-thread",
-        targetPromptIndex: 0,
+      expect(rewindThreadApi).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "codex-thread",
+        target: { messageId: "prompt-2", turnId: "turn-2" },
+        mode: "conversation",
       });
       expect(onReloadThread).toHaveBeenCalledOnce();
     });
+    expect(screen.queryByRole("dialog", { name: "Rewind to before this message?" }))
+      .not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Reply" })).toHaveTextContent(
+        "Try holding the lock until the child exits instead.",
+      );
+    });
   });
 
-  it("keeps the Grok rewind and workflow-budget dialogs keyboard-contained", async () => {
+  it("opens the rewind on the last prompt from the header and keeps it keyboard-contained", async () => {
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
-        backends={[]}
+        backends={[rewindBackend("acp:grok", "Grok Build")]}
         clearPendingRequest={() => undefined}
         composerDisabled={false}
         desktopApi={{
           configureGrokWorkflowBudget: vi.fn(async () => ({
             backend: "acp:grok" as const,
-            threadId: "grok-thread",
+            threadId: "acp:grok-thread",
             policy: { defaultAgentBudget: 128, maxAgentBudget: 1024 },
           })),
-          listAcpThreadRewindPoints: vi.fn(async () => ({
-            backend: "acp:grok" as const,
-            threadId: "grok-thread",
-            rewindPoints: [
-              {
-                promptIndex: 0,
-                fileSnapshotCount: 1,
-                hasFileChanges: true,
-                promptPreview: "Write a breakfast poem",
-              },
-            ],
-          })),
+          rewindThread: vi.fn(),
         }}
         loading={false}
         loadingMore={false}
-        messageCount={1}
+        messageCount={4}
         onLoadOlder={async () => undefined}
         removeOptimisticMessage={(_id) => undefined}
-        selectedThread={{
-          id: "grok-thread",
-          title: "Breakfast",
-          titleSource: "explicit",
-          source: "acp:grok",
-          executionMode: "default",
-          linkedDirectories: [],
-          inbox: { inInbox: true },
-        }}
+        selectedThread={rewindThread("acp:grok")}
         skills={[]}
-        transcriptEntries={[]}
+        transcriptEntries={rewindTranscript}
       />,
     );
     const openFrom = (button: HTMLElement) => {
@@ -439,14 +510,18 @@ describe("ThreadView", () => {
       });
     };
 
-    const rewind = screen.getByRole("button", { name: "Rewind Grok conversation" });
+    const rewind = screen.getByRole("button", { name: "Rewind to before the last prompt" });
     openFrom(rewind);
-    const rewindDialog = screen.getByRole("dialog", { name: "Rewind Grok conversation" });
-    await within(rewindDialog).findByText("Write a breakfast poem");
-    expect(rewindDialog.contains(document.activeElement)).toBe(true);
-    expect(tabEscapes(rewindDialog)).toEqual({ forward: [], backward: [] });
+    const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    const lastPrompt = screen
+      .getByText("Now add a regression test for it.")
+      .closest(".transcript-list__item") as HTMLElement;
+    expect(lastPrompt.contains(confirm)).toBe(true);
+    expect(confirm).toHaveTextContent("This message and its reply are removed from the Grok Build conversation.");
+    expect(confirm.contains(document.activeElement)).toBe(true);
+    expect(tabEscapes(confirm)).toEqual({ forward: [], backward: [] });
     pressEscape();
-    expect(rewindDialog).not.toBeInTheDocument();
+    expect(confirm).not.toBeInTheDocument();
     expect(document.activeElement).toBe(rewind);
 
     const budgets = screen.getByRole("button", { name: "Configure Grok workflow budgets" });
@@ -458,6 +533,300 @@ describe("ThreadView", () => {
     pressEscape();
     expect(budgetDialog).not.toBeInTheDocument();
     expect(document.activeElement).toBe(budgets);
+  });
+
+  it("mounts the last turn's prompt before opening the header rewind on it", async () => {
+    const entries: AppServerThreadEntry[] = [
+      ...rewindTranscript,
+      { type: "message", id: "steer-3", role: "user", text: "Cover Linux too.", turn: { id: "turn-3" } },
+      ...[1, 2, 3].map((index): AppServerThreadEntry => ({
+        type: "message",
+        id: `reply-3-${index}`,
+        role: "assistant",
+        text: `Working on it, step ${index}.`,
+        turn: { id: "turn-3" },
+      })),
+    ];
+    function Harness() {
+      const [limit, setLimit] = useState(3);
+      return (
+        <ThreadView
+          addOptimisticUserMessage={(_text) => "optimistic-1"}
+          backends={[rewindBackend("codex", "Codex")]}
+          clearPendingRequest={() => undefined}
+          composerDisabled={false}
+          desktopApi={{ rewindThread: vi.fn() }}
+          loading={false}
+          loadingMore={false}
+          messageCount={entries.length}
+          onLoadOlder={async () => undefined}
+          onRenderedTranscriptEntryLimitChange={setLimit}
+          removeOptimisticMessage={(_id) => undefined}
+          renderedTranscriptEntryLimit={limit}
+          selectedThread={rewindThread("codex")}
+          skills={[]}
+          transcriptEntries={entries}
+        />
+      );
+    }
+    render(<Harness />);
+    // Only the steer is pinned; the turn's first prompt is outside the window.
+    expect(screen.queryByText("Now add a regression test for it.")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Rewind to before the last prompt" }));
+
+    const confirm = await screen.findByRole("dialog", { name: "Rewind to before this message?" });
+    const prompt = screen
+      .getByText("Now add a regression test for it.")
+      .closest(".transcript-list__item") as HTMLElement;
+    expect(prompt.contains(confirm)).toBe(true);
+  });
+
+  it("returns the rewound prompt's images to the composer and reports the rest", async () => {
+    const local = `pwragent-image://file/${encodeURIComponent("file:///Users/pat/lock-race.png")}`;
+    const onShowNotice = vi.fn();
+    const entries: AppServerThreadEntry[] = [
+      rewindTranscript[0]!,
+      rewindTranscript[1]!,
+      {
+        type: "message",
+        id: "prompt-2",
+        role: "user",
+        text: "Why does this race?",
+        parts: [
+          { type: "text", text: "Why does this race?" },
+          { type: "image", url: local },
+          { type: "file", name: "notes.pdf" },
+        ],
+        turn: { id: "turn-2" },
+      },
+    ];
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[rewindBackend("codex", "Codex")]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{
+          rewindThread: vi.fn(async () => ({
+            backend: "codex" as const,
+            threadId: "codex-thread",
+            target: { messageId: "prompt-2", turnId: "turn-2" },
+            mode: "conversation" as const,
+            updatedAt: 2000,
+          })),
+        }}
+        loading={false}
+        loadingMore={false}
+        messageCount={entries.length}
+        onLoadOlder={async () => undefined}
+        onShowNotice={onShowNotice}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={rewindThread("codex")}
+        skills={[]}
+        transcriptEntries={entries}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Rewind to before this message" })[1]!);
+    fireEvent.click(screen.getByRole("button", { name: "Rewind and edit" }));
+
+    expect(await screen.findByRole("button", { name: "Remove lock-race.png" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: "Reply" })).toHaveTextContent("Why does this race?");
+    });
+    expect(onShowNotice).toHaveBeenCalledWith(expect.objectContaining({
+      title: "Attachments not restored",
+      tone: "warning",
+    }));
+  });
+
+  it("offers rewind on a pinned peer thread only when its owner can rewind", async () => {
+    const remoteThread: NavigationThreadSummary = {
+      ...rewindThread("codex"),
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "peer-1" },
+          threadId: "codex-thread",
+        },
+      },
+    } as NavigationThreadSummary;
+    const props = {
+      addOptimisticUserMessage: (_text: string) => "optimistic-1",
+      // This window's own Codex can rewind; the peer's may not.
+      backends: [rewindBackend("codex", "Codex")],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      loading: false,
+      loadingMore: false,
+      messageCount: 4,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: (_id: string) => undefined,
+      selectedThread: remoteThread,
+      skills: [],
+      transcriptEntries: rewindTranscript,
+    };
+    const olderOwner = vi.fn(async () => ({
+      fetchedAt: 1,
+      backends: [rewindBackend("codex", "Codex", null)],
+    }));
+    const view = render(<ThreadView {...props} desktopApi={{ listBackends: olderOwner, rewindThread: vi.fn() }} />);
+    await waitFor(() => expect(olderOwner).toHaveBeenCalledWith(expect.objectContaining({
+      federationTarget: { scope: "remote", instanceId: "peer-1" },
+    })));
+    expect(screen.queryByRole("button", { name: "Rewind to before this message" }))
+      .not.toBeInTheDocument();
+    view.unmount();
+
+    const currentOwner = vi.fn(async () => ({
+      fetchedAt: 1,
+      backends: [rewindBackend("codex", "Codex")],
+    }));
+    render(<ThreadView {...props} desktopApi={{ listBackends: currentOwner, rewindThread: vi.fn() }} />);
+    expect(
+      await screen.findAllByRole("button", { name: "Rewind to before this message" }),
+    ).toHaveLength(3);
+  });
+
+  it("previews Claude's file restore and rewinds the conversation and files", async () => {
+    const preview = Promise.withResolvers<{
+      backend: "claude";
+      threadId: string;
+      target: { messageId: string; turnId?: string };
+      files: { paths: string[]; insertions: number; deletions: number };
+    }>();
+    const previewThreadRewind = vi.fn(async () => await preview.promise);
+    const rewindThreadApi = vi.fn(async () => ({
+      backend: "claude" as const,
+      threadId: "claude-thread",
+      target: { messageId: "prompt-2", turnId: "turn-2" },
+      mode: "conversation-and-files" as const,
+      updatedAt: 2000,
+      restoredFileCount: 2,
+    }));
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[rewindBackend("claude", "Claude", { files: true, undo: false })]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{ previewThreadRewind, rewindThread: rewindThreadApi }}
+        loading={false}
+        loadingMore={false}
+        messageCount={4}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={rewindThread("claude")}
+        skills={[]}
+        transcriptEntries={rewindTranscript}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Rewind to before this message" })[1]!);
+    const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    expect(previewThreadRewind).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", threadId: "claude-thread", target: { messageId: "prompt-2", turnId: "turn-2" },
+    }));
+    // Nothing is confirmed until Claude says what it would restore.
+    expect(confirm).toHaveTextContent("Checking which files Claude can restore...");
+    expect(within(confirm).getByRole("button", { name: "Rewind and edit" })).toBeDisabled();
+
+    preview.resolve({
+      backend: "claude",
+      threadId: "claude-thread",
+      target: { messageId: "prompt-2", turnId: "turn-2" },
+      files: { paths: ["src/queue/lock.ts", "src/queue/lock.test.ts"], insertions: 59, deletions: 6 },
+    });
+    const restore = await within(confirm).findByRole("checkbox", { name: /Restore files/ });
+    await waitFor(() => expect(restore).toBeEnabled());
+    expect(restore).toBeChecked();
+    expect(confirm).toHaveTextContent("Restores 2 files Claude changed since this prompt (+59 \u22126).");
+    expect(confirm).toHaveTextContent("Changes made by shell commands are not restored.");
+    expect(confirm).toHaveTextContent("src/queue/lock.test.ts");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
+
+    await waitFor(() => expect(rewindThreadApi).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", mode: "conversation-and-files",
+    })));
+  });
+
+  it("explains why Claude cannot restore a prompt's files, or rewind it at all", async () => {
+    const previewThreadRewind = vi.fn()
+      .mockResolvedValueOnce({
+        backend: "claude", threadId: "claude-thread", target: { messageId: "prompt-2", turnId: "turn-2" },
+        filesUnavailableReason: "Claude has no file checkpoint for this prompt.",
+      })
+      .mockResolvedValueOnce({
+        backend: "claude", threadId: "claude-thread", target: { messageId: "prompt-1", turnId: "turn-1" },
+        unavailableReason: "Stop Claude's background tasks before rewinding.",
+      });
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[rewindBackend("claude", "Claude", { files: true, undo: false })]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{ previewThreadRewind, rewindThread: vi.fn() }}
+        loading={false}
+        loadingMore={false}
+        messageCount={4}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={rewindThread("claude")}
+        skills={[]}
+        transcriptEntries={rewindTranscript}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Rewind to before this message" })[1]!);
+    let confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    expect(await within(confirm).findByText("Claude has no file checkpoint for this prompt.")).toBeInTheDocument();
+    expect(within(confirm).getByRole("checkbox", { name: /Restore files/ })).toBeDisabled();
+    expect(within(confirm).getByRole("button", { name: "Rewind and edit" })).toBeEnabled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Rewind to before this message" })[0]!);
+    confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    expect(await within(confirm).findByRole("alert")).toHaveTextContent("Stop Claude's background tasks before rewinding.");
+    expect(within(confirm).getByRole("button", { name: "Rewind and edit" })).toBeDisabled();
+  });
+
+  it("keeps the rewind open with the provider's error and offers none without the capability", async () => {
+    const rewindThreadApi = vi.fn(async () => {
+      throw new Error("Update Codex to rewind threads");
+    });
+    const props = {
+      addOptimisticUserMessage: (_text: string) => "optimistic-1",
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      desktopApi: { rewindThread: rewindThreadApi },
+      loading: false,
+      loadingMore: false,
+      messageCount: 4,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: (_id: string) => undefined,
+      selectedThread: rewindThread("codex"),
+      skills: [],
+      transcriptEntries: rewindTranscript,
+    };
+    const view = render(<ThreadView {...props} backends={[rewindBackend("codex", "Codex")]} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Rewind to before this message" })[0]!);
+    const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    expect(confirm).toHaveTextContent("2 turns after it");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
+    expect(await within(confirm).findByRole("alert")).toHaveTextContent(
+      "Update Codex to rewind threads",
+    );
+
+    view.rerender(
+      <ThreadView {...props} backends={[rewindBackend("codex", "Codex", null)]} />,
+    );
+    expect(screen.queryByRole("button", { name: "Rewind to before this message" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rewind to before the last prompt" }))
+      .not.toBeInTheDocument();
   });
 
   it("reads and updates distinct Grok workflow default and maximum budgets", async () => {
@@ -2320,7 +2689,7 @@ describe("ThreadView", () => {
     })).toHaveTextContent("#Bob's Best Thread 3000");
   });
 
-  it("offers both PwrSuite apps on a local launchpad, whichever is connected", async () => {
+  it("offers both PwrSuite apps and Sandboxer on a local launchpad, whichever is connected", async () => {
     // Only PwrGit rendered here once PwrSnap's card moved into MCP access,
     // so a connected PwrGit read as having replaced PwrSnap for good.
     const selectedDirectory = {
@@ -2344,6 +2713,8 @@ describe("ThreadView", () => {
       workMode: "local",
     } satisfies NavigationLaunchpadDraft;
 
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
@@ -2351,6 +2722,23 @@ describe("ThreadView", () => {
         clearPendingRequest={() => undefined}
         composerDisabled={false}
         desktopApi={{
+          listMcpConnections: async () => ({
+            connections: [{
+              id: SANDBOXER_MCP_CONNECTION_ID,
+              displayName: "Sandboxer",
+              kind: "sandboxer" as const,
+              authMode: "local_cli" as const,
+              serverUrl: "sandboxer:compute",
+              enabled: true,
+              selectForNewThreads: false,
+              toolApproval: "prompt" as const,
+              configured: true,
+              state: "ready" as const,
+              sandboxerCliState: "signed_in" as const,
+              createdAt: 0,
+              updatedAt: 0,
+            }],
+          }),
           readPwrGitConnectionStatus: async () => ({
             connectionId: "pwrgit" as const,
             displayName: "PwrGit" as const,
@@ -2372,6 +2760,7 @@ describe("ThreadView", () => {
         skills={[]}
         transcriptEntries={[]}
         onLoadOlder={async () => undefined}
+        onUpdateLaunchpad={onUpdateLaunchpad}
         removeOptimisticMessage={(_id) => undefined}
       />,
     );
@@ -2382,6 +2771,14 @@ describe("ThreadView", () => {
     expect(
       await screen.findByRole("button", { name: "Get PwrSnap" }),
     ).toBeInTheDocument();
+    fireEvent.click(
+      await screen.findByRole("switch", { name: "Use Sandboxer in this thread" }),
+    );
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith("directory:/repo", {
+        mcpConnectionIds: [SANDBOXER_MCP_CONNECTION_ID],
+      });
+    });
   });
 
   it("treats a main-window launchpad as remote from the active federation target", async () => {
@@ -2411,6 +2808,7 @@ describe("ThreadView", () => {
       availability: "running" as const,
       configured: false,
     }));
+    const listMcpConnections = vi.fn(async () => ({ connections: [] }));
 
     render(
       <ThreadView
@@ -2423,7 +2821,7 @@ describe("ThreadView", () => {
         backends={[]}
         clearPendingRequest={() => undefined}
         composerDisabled={false}
-        desktopApi={{ readPwrSnapConnectionStatus }}
+        desktopApi={{ listMcpConnections, readPwrSnapConnectionStatus }}
         loading={false}
         loadingMore={false}
         messageCount={0}
@@ -2443,6 +2841,9 @@ describe("ThreadView", () => {
     expect(
       screen.queryByRole("button", { name: "Connect to PwrSnap" }),
     ).not.toBeInTheDocument();
+    // The owner's Sandboxer CLI is invisible here, so nothing is read.
+    expect(listMcpConnections).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Sandboxer connection")).not.toBeInTheDocument();
   });
 
   it("shows environment setup details from config even when the deprecated setup flag is false", async () => {
@@ -3516,6 +3917,52 @@ describe("ThreadView", () => {
 
     expect(screen.getByRole("heading", { name: "Select a thread" })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /^(New thread|Reply)$/ })).toBeNull();
+  });
+
+  // Reusing the empty state's <div> as the layout box made the layout's
+  // padding-right transition run whenever it opened a launchpad: the
+  // column slid from 16px of padding to the pinned rail's gutter, and the
+  // composer rewrapped as it narrowed. jsdom runs no transitions, so pin
+  // the cause.
+  it("mounts a new layout box when the empty state opens a launchpad", () => {
+    const { result } = renderHook(useComposerDraftStore);
+    const props: Omit<ThreadViewProps, "terminals"> = {
+      addOptimisticUserMessage: () => "optimistic-1",
+      backends: [],
+      clearPendingRequest: () => undefined,
+      composerDisabled: false,
+      composerDraftStore: result.current,
+      transcriptEntries: [],
+      loading: false,
+      loadingMore: false,
+      messageCount: 0,
+      onLoadOlder: async () => undefined,
+      removeOptimisticMessage: () => undefined,
+      skills: [],
+    };
+    const view = render(<ThreadView {...props} />);
+    const emptyState = document.querySelector(".thread-empty-state");
+    expect(emptyState).not.toBeNull();
+
+    view.rerender(
+      <ThreadView
+        {...props}
+        selectedDirectory={{
+          key: "directory:/repo", kind: "directory", label: "Example", path: "/repo",
+        }}
+        selectedLaunchpad={{
+          backend: "codex", directoryKey: "directory:/repo", directoryKind: "directory",
+          directoryLabel: "Example", directoryPath: "/repo", executionMode: "default",
+          prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+        }}
+      />,
+    );
+
+    const layout = document.querySelector(".thread-view__layout");
+    expect(screen.getByRole("textbox", { name: "New thread" })).toBeInTheDocument();
+    expect(layout).not.toBeNull();
+    expect(layout).not.toBe(emptyState);
+    expect(emptyState?.isConnected).toBe(false);
   });
 
   it("opens submitted image previews while the launchpad is materializing", () => {

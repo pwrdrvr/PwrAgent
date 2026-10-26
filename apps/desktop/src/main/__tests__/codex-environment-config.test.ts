@@ -2,10 +2,11 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { NavigationLaunchpadDraft } from "@pwragent/shared";
+import type { CodexEnvironmentOption, NavigationLaunchpadDraft } from "@pwragent/shared";
 import {
   listCodexEnvironmentOptions,
   parseCodexEnvironmentToml,
+  resolveCodexEnvironmentSelector,
   withCodexEnvironmentOptions,
 } from "../app-server/codex-environment-config";
 
@@ -224,6 +225,58 @@ command = "pnpm dev:alt"
           name: "Repo Environment",
         },
       ],
+    });
+  });
+});
+
+describe("resolveCodexEnvironmentSelector", () => {
+  const option = (id: string, name: string): CodexEnvironmentOption => ({
+    id,
+    name,
+    sourcePath: `/repo/.codex/environments/${id}.toml`,
+    actions: [],
+  });
+  const options = [
+    option("pwragent", "PwrAgent"),
+    option("docs", "Docs Site"),
+    option("docs-2", "docs site"),
+  ];
+
+  it("matches an exact id before a name", () => {
+    expect(resolveCodexEnvironmentSelector(" pwragent ", options)).toEqual({
+      kind: "found",
+      environment: options[0],
+    });
+  });
+
+  it("matches an id or a name without regard to case", () => {
+    expect(resolveCodexEnvironmentSelector("PWRAGENT", options)).toMatchObject({
+      kind: "found",
+      environment: { id: "pwragent" },
+    });
+    expect(resolveCodexEnvironmentSelector("pwrAgent", [option("env", "PwrAgent")]))
+      .toMatchObject({ kind: "found", environment: { id: "env" } });
+  });
+
+  it("refuses a name that more than one environment uses", () => {
+    const resolution = resolveCodexEnvironmentSelector("Docs Site", options);
+    expect(resolution).toEqual({
+      kind: "missing",
+      message:
+        'Environment "Docs Site" matches more than one environment: Docs Site (docs), docs site (docs-2). Pass an id.',
+    });
+  });
+
+  it("lists the available environments when nothing matches", () => {
+    expect(resolveCodexEnvironmentSelector("Nope", options, "repo")).toEqual({
+      kind: "missing",
+      message:
+        'Environment "Nope" is not defined in repo. Available environments: PwrAgent (pwragent), Docs Site (docs), docs site (docs-2). Pass environment="none" to start without one.',
+    });
+    expect(resolveCodexEnvironmentSelector("Nope", [], "repo")).toEqual({
+      kind: "missing",
+      message:
+        'Environment "Nope" is not defined in repo. The project has no .codex/environments/*.toml files. Pass environment="none" to start without one.',
     });
   });
 });

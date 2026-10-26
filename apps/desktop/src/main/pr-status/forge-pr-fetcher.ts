@@ -1,10 +1,11 @@
-import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind, type PrSummary, type PullRequestProviderAvailability } from "@pwragent/shared";
+import { FORGE_KINDS, FORGE_PRODUCTS, type ForgeKind, type PrSummary, type PullRequestProviderAvailability, type PullRequestTerminalDetails } from "@pwragent/shared";
 import { GithubPrFetcher, type GithubPrFetcherOptions } from "./github-pr-fetcher";
 import { GithubGraphqlPrClient } from "./github-graphql-client";
 import { GitLabPrFetcher } from "./gitlab-pr-fetcher";
 import { resolveGitHubReposForDirectory, type GitHubRepoRef } from "./git-remote";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { parseForgePrRefFromUrl, type ForgePrRef } from "./forge-pr-ref";
+import { parseGithubTerminalDetails, parseGitLabTerminalDetails } from "./pr-terminal-details";
 
 export { parseForgePrRefFromUrl, type ForgePrRef } from "./forge-pr-ref";
 
@@ -21,10 +22,12 @@ export type ForgePrProvider = {
   fetchForBranch: (params: BranchLookup) => Promise<PrSummary[]>;
   fetchByUrl: (params: UrlLookup, ref: ForgePrRef) => Promise<PrSummary | undefined>;
   fetchRefs: (refs: ForgePrRef[], options: PollOptions) => Promise<PrSummary[]>;
+  /** Undefined when the forge gave no answer or the PR is not terminal. */
+  fetchTerminalDetails?: (ref: ForgePrRef, pr: PrSummary) => Promise<PullRequestTerminalDetails | undefined>;
 };
 
 type ForgePrFetcherOptions = GithubPrFetcherOptions & {
-  graphqlClient?: GithubPrFetcherOptions["graphqlClient"] & Partial<Pick<GithubGraphqlPrClient, "fetchPullRequestsAfterReconnect">>;
+  graphqlClient?: GithubPrFetcherOptions["graphqlClient"] & Partial<Pick<GithubGraphqlPrClient, "fetchPullRequestsAfterReconnect" | "fetchPullRequestTerminalDetails">>;
   isProviderEnabled?: (provider: ForgeKind) => boolean;
   providers?: Record<ForgeKind, ForgePrProvider>;
 };
@@ -53,6 +56,10 @@ export class ForgePrFetcher {
         fetchRefs: (refs, poll) => poll.reconnect && graphql.fetchPullRequestsAfterReconnect
           ? graphql.fetchPullRequestsAfterReconnect(refs)
           : graphql.fetchPullRequests(refs),
+        fetchTerminalDetails: async (ref, pr) => {
+          const node = await graphql.fetchPullRequestTerminalDetails?.(ref);
+          return node ? parseGithubTerminalDetails(node, pr) : undefined;
+        },
       },
       gitlab: {
         resolveRepos: (cwd) => gitlab.resolveRepos(cwd),
@@ -75,6 +82,8 @@ export class ForgePrFetcher {
           }
           return results;
         },
+        fetchTerminalDetails: async (ref, pr) =>
+          parseGitLabTerminalDetails(await gitlab.fetchTerminalPayload(ref), pr),
       },
     } satisfies Record<ForgeKind, ForgePrProvider>;
   }
@@ -128,6 +137,19 @@ export class ForgePrFetcher {
       params.onProviderFailure?.();
       return undefined;
     }
+  }
+
+  /**
+   * Merge details for a merged or closed PR. Throws when the provider is
+   * disabled or the lookup fails, so the caller can say why it fell back.
+   */
+  async fetchPullRequestTerminalDetails(pr: PrSummary): Promise<PullRequestTerminalDetails | undefined> {
+    const ref = parseForgePrRefFromUrl(pr.url);
+    if (!ref) throw new Error("The PR URL does not belong to a supported forge.");
+    if (!this.isProviderEnabled(ref.kind)) throw new Error(`The ${FORGE_PRODUCTS[ref.kind].label} integration is off.`);
+    const fetchDetails = this.providers[ref.kind].fetchTerminalDetails;
+    if (!fetchDetails) throw new Error("This forge provider cannot read merge details.");
+    return await fetchDetails(ref, pr);
   }
 
   async fetchPullRequests(refs: ForgePrRef[], options: PollOptions = {}): Promise<PrSummary[]> {

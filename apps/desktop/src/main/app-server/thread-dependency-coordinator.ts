@@ -6,6 +6,8 @@ import type {
 } from "@pwragent/shared";
 import {
   isRepairableDependencyFailure, THREAD_DEPENDENCY_CONDITION_PHRASES, THREAD_DEPENDENCY_CONDITIONS, THREAD_DEPENDENCY_DELIVERY_TARGETS,
+  THREAD_DEPENDENCY_PROMPT_ANY_MET, THREAD_DEPENDENCY_PROMPT_FAILED, THREAD_DEPENDENCY_PROMPT_INTRO,
+  THREAD_DEPENDENCY_PROMPT_PLAN_LEAD, THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD,
   THREAD_TODO_DETAIL_MAX_LENGTH, THREAD_TODO_TITLE_MAX_LENGTH, threadDependencyDeliveryTarget, threadDependencyTodoKey,
 } from "@pwragent/shared";
 import type { ThreadDependencyStore } from "../state/thread-dependency-store";
@@ -374,9 +376,11 @@ export function evaluateCondition(condition: ThreadDependencyCondition, snapshot
 export function buildDependencyPrompt(item: ThreadDependency): string {
   const satisfied = item.outcome === "success";
   return [
-    `PwrAgent resumed this thread because ${satisfied
-      ? item.mode === "any" ? "one of its prerequisites was met" : `its prerequisites were met (all of ${item.conditions.length})`
-      : "a prerequisite failed"}.`,
+    // The transcript summarizes this prompt from these lines; see
+    // summarizeThreadDependencyPrompt in @pwragent/shared.
+    `${THREAD_DEPENDENCY_PROMPT_INTRO}${satisfied
+      ? item.mode === "any" ? THREAD_DEPENDENCY_PROMPT_ANY_MET : `its prerequisites were met (all of ${item.conditions.length})`
+      : THREAD_DEPENDENCY_PROMPT_FAILED}.`,
     ...item.evidence.map((entry) => {
       const name = entry.condition.title?.trim() ? `"${entry.condition.title.trim()}"` : `Thread ${entry.condition.threadId}`;
       return `- ${name} ${THREAD_DEPENDENCY_CONDITION_PHRASES[entry.condition.when]}: ${entry.reason}${entry.prUrl ? `; PR: ${entry.prUrl}` : ""}${entry.headSha ? `; observed head: ${entry.headSha}` : ""}`;
@@ -384,11 +388,11 @@ export function buildDependencyPrompt(item: ThreadDependency): string {
     "",
     ...satisfied
       ? item.continuation
-        ? ["Do what was planned when this dependency was registered:", item.continuation, "",
+        ? [THREAD_DEPENDENCY_PROMPT_PLAN_LEAD, item.continuation, "",
           "Recheck the prerequisite head before using it; a new commit can arrive after this notification."]
         : ["Continue the previously authorized work. Recheck the prerequisite head before using it; a new commit can arrive after this notification."]
       : ["Report the prerequisite failure. Do not bypass the dependency or begin dependent work; repair only if the operator already authorized it.",
-        ...item.continuation ? ["", "The work planned for success, not to start now:", item.continuation] : []],
+        ...item.continuation ? ["", THREAD_DEPENDENCY_PROMPT_UNSTARTED_PLAN_LEAD, item.continuation] : []],
     "Do not poll this dependency or start a Job Monitor for it.",
     `Dependency ${item.id} (mode ${item.mode}, outcome ${item.outcome}); prerequisites: ${item.conditions.map((condition) => `${condition.backend}:${condition.threadId} (${condition.when})`).join(", ")}.`,
   ].join("\n");

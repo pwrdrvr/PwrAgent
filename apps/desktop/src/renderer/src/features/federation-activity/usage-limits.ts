@@ -1,9 +1,23 @@
 import type { UsageLimitObservation, UsageLimitReading } from "@pwragent/shared";
 
-/** One owner's limit readings, as returned by its usage read. */
-export type LimitSource = { owner: string; current?: UsageLimitObservation; history?: UsageLimitObservation[] };
+/**
+ * One owner's limit readings, as returned by its usage read. An owner can
+ * hold a current reading for each provider it runs.
+ */
+export type LimitSource = {
+  owner: string;
+  current?: UsageLimitObservation | UsageLimitObservation[];
+  history?: UsageLimitObservation[];
+};
 
-export type LimitPoint = { at: number; usedPercent: number; used?: number; limit?: number; resetAt?: number };
+export type LimitPoint = {
+  at: number; usedPercent: number; used?: number; limit?: number; resetAt?: number;
+  /** `resetAt` ends the allowance (a credit grant) instead of renewing it. */
+  expires?: boolean;
+};
+
+/** The ledger provider a reading describes; older owners reported OpenAI's (Codex) only. */
+export const limitProvider = (observation: Pick<UsageLimitObservation, "provider">) => observation.provider ?? "openai";
 
 /**
  * A limit went back down between two readings. `scheduled` means the earlier
@@ -15,6 +29,7 @@ export type LimitReset = { at: number; kind: "scheduled" | "unscheduled"; after:
 export type LimitSeries = {
   key: string;
   name: string;
+  limitId?: string;
   windowKey?: UsageLimitReading["windowKey"];
   windowMinutes?: number;
   points: LimitPoint[];
@@ -28,6 +43,10 @@ export type LimitSeries = {
 
 export type LimitAccount = {
   key: string;
+  /** Ledger provider (`openai`, `anthropic`, `xai`). */
+  provider: string;
+  /** The provider's opaque account key; absent when the provider reports none. */
+  accountKey?: string;
   planType?: string;
   owners: string[];
   observedAt: number;
@@ -52,16 +71,21 @@ export function limitSeriesFor(account: LimitAccount | undefined, limit: UsageLi
 }
 
 /**
- * Group owners' readings by account, never blending two accounts. Readings
- * without an account key stay with their own owner.
+ * Group owners' readings by provider and account, never blending two
+ * accounts. Readings without an account key stay with their own owner.
  */
 export function buildLimitAccounts(sources: LimitSource[]): LimitAccount[] {
-  const accounts = new Map<string, { planType?: string; owners: Set<string>; observations: Array<UsageLimitObservation & { owner: string }> }>();
+  const accounts = new Map<string, { provider: string; accountKey?: string; planType?: string; owners: Set<string>;
+    observations: Array<UsageLimitObservation & { owner: string }> }>();
   for (const source of sources) {
-    for (const observation of [...source.history ?? [], ...source.current ? [source.current] : []]) {
-      const key = observation.accountKey ? `account:${observation.accountKey}` : `owner:${source.owner}`;
+    const current = source.current === undefined ? [] : Array.isArray(source.current) ? source.current : [source.current];
+    for (const observation of [...source.history ?? [], ...current]) {
+      const provider = limitProvider(observation);
+      // OpenAI keeps the keys it had before other providers reported limits.
+      const scope = provider === "openai" ? "" : `${provider}:`;
+      const key = observation.accountKey ? `account:${scope}${observation.accountKey}` : `owner:${scope}${source.owner}`;
       let account = accounts.get(key);
-      if (!account) accounts.set(key, account = { owners: new Set(), observations: [] });
+      if (!account) accounts.set(key, account = { provider, accountKey: observation.accountKey, owners: new Set(), observations: [] });
       account.owners.add(source.owner);
       account.planType ??= observation.planType;
       account.observations.push({ ...observation, owner: source.owner });
@@ -84,7 +108,8 @@ export function buildLimitAccounts(sources: LimitSource[]): LimitAccount[] {
         if (!entry) byLimit.set(id, entry = { reading: limit, points: [] });
         entry.reading = limit;
         const last = entry.points.at(-1);
-        const point = { at: observation.observedAt, usedPercent: limit.usedPercent, used: limit.used, limit: limit.limit, resetAt: limit.resetAt };
+        const point = { at: observation.observedAt, usedPercent: limit.usedPercent, used: limit.used, limit: limit.limit,
+          resetAt: limit.resetAt, ...limit.expires ? { expires: true } : {} };
         // Several owners can relay the same account reading.
         if (last && last.at === point.at) entry.points[entry.points.length - 1] = point;
         else entry.points.push(point);
@@ -92,14 +117,24 @@ export function buildLimitAccounts(sources: LimitSource[]): LimitAccount[] {
     }
     const series = [...byLimit.entries()].map(([id, { reading, points }]) => describeSeries(id, reading, points))
       .sort((a, b) => windowOrder(a) - windowOrder(b));
-    return { key, planType: account.planType, owners: [...account.owners], observedAt: newest.observedAt,
+    return { key, provider: account.provider, accountKey: account.accountKey, planType: account.planType,
+      owners: [...account.owners], observedAt: newest.observedAt,
       observedBy: newest.owner, series, credits };
   }).sort((a, b) => b.observedAt - a.observedAt);
 }
 
 function windowOrder(series: LimitSeries) {
-  return series.windowKey === "primary" ? 0 : series.windowKey === "secondary" ? 1 : series.windowKey === "individual" ? 2 : 3;
+  if (series.windowKey) {
+    return series.windowKey === "primary" ? 0 : series.windowKey === "secondary" ? 1 : series.windowKey === "individual" ? 2 : 3;
+  }
+  // Providers without Codex's slots: the 5-hour window, the account-wide
+  // weekly one, per-model weekly ones, then the rest in the provider's order.
+  return series.windowMinutes === 300 ? 0 : series.limitId === CLAUDE_WEEKLY_LIMIT_ID ? 1
+    : series.windowMinutes === 10_080 ? 2 : 3;
 }
+
+/** Claude's weekly limit across all models; the others are per model. */
+const CLAUDE_WEEKLY_LIMIT_ID = "seven_day";
 
 function describeSeries(key: string, reading: UsageLimitReading, points: LimitPoint[]): LimitSeries {
   const resets: LimitReset[] = [];
@@ -110,9 +145,15 @@ function describeSeries(key: string, reading: UsageLimitReading, points: LimitPo
     const elapsed = before.resetAt !== undefined && before.resetAt <= after.at;
     // A window that elapsed and filled back up past its old level still reset.
     if (!dropped && !(elapsed && after.resetAt !== undefined && after.resetAt > before.resetAt!)) continue;
+    // An early reset that moved the schedule says when the new window began.
+    // Without that, a gap in readings (an idle instance, or one that took no
+    // turns since) would restart the window at the next reading it saw.
+    const began = after.resetAt !== undefined && after.resetAt !== before.resetAt && reading.windowMinutes
+      ? after.resetAt - reading.windowMinutes * 60_000 : undefined;
     resets.push(elapsed
       ? { at: before.resetAt!, kind: "scheduled", after: before.at, before: after.at }
-      : { at: after.at, kind: "unscheduled", after: before.at, before: after.at });
+      : { at: began !== undefined && began > before.at && began <= after.at ? began : after.at,
+        kind: "unscheduled", after: before.at, before: after.at });
   }
   const latest = points.at(-1)!;
   const lastReset = resets.at(-1);
@@ -133,7 +174,8 @@ function describeSeries(key: string, reading: UsageLimitReading, points: LimitPo
       pacePerHour = Math.max(0, latest.usedPercent - first.usedPercent) / ((latest.at - first.at) / HOUR);
     }
   }
-  return { key, name: reading.name, windowKey: reading.windowKey, windowMinutes: reading.windowMinutes, points, resets,
+  return { key, name: reading.name, limitId: reading.limitId, windowKey: reading.windowKey, windowMinutes: reading.windowMinutes,
+    points, resets,
     latest, windowStart, pacePerHour };
 }
 
@@ -142,6 +184,8 @@ export function sinceResetSeries(account: LimitAccount | undefined): LimitSeries
   if (!account) return undefined;
   return account.series.find((series) => series.windowKey === "individual")
     ?? account.series.find((series) => series.windowKey === "secondary")
+    ?? account.series.find((series) => series.limitId === CLAUDE_WEEKLY_LIMIT_ID)
+    ?? account.series.find((series) => !series.windowKey && series.windowMinutes === 10_080)
     ?? account.series.at(-1);
 }
 
@@ -188,7 +232,8 @@ export function projectLimit(series: LimitSeries): LimitProjection | undefined {
 
 export function limitLabel(series: LimitSeries): string {
   if (series.windowMinutes === 300) return "5-hour window";
-  if (series.windowMinutes === 10_080) return "Weekly limit";
+  // Claude has several weekly limits (all models, Opus, Sonnet) and names each.
+  if (series.windowMinutes === 10_080) return series.windowKey ? "Weekly limit" : series.name;
   if (series.windowKey === "individual") return "Individual limit";
   return series.name;
 }

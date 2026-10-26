@@ -1,6 +1,7 @@
 import { FederationShutdown } from "../federation/federation-shutdown";
 import { setFederationTrafficCapture, snapshotFederationTrafficHistory } from "../federation/federation-traffic-capture";
 import net from "node:net";
+import { EventEmitter } from "node:events";
 import http from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -220,6 +221,37 @@ describe("federation transport", () => {
       kind: "envelope",
       envelope,
     }), "utf8");
+    expect(federationTransportCodecForTest.decodeEnvelope(jsonWire)).toBeUndefined();
+  });
+
+  it("carries service stream bytes raw after the header, never as JSON", () => {
+    const data = Buffer.from([0, 1, 2, 0xff, 0x7b]);
+    const envelope = {
+      id: "service-codec",
+      kind: "service_data" as const,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "client_two",
+      createdAt: 1_000,
+      streamId: "stream-1",
+      seq: 3,
+      fin: true,
+      data,
+    };
+
+    const wire = federationTransportCodecForTest.encodeEnvelope(envelope);
+    expect(wire.subarray(0, 8).toString("ascii")).toBe("PWRBLOB1");
+    const headerLength = wire.readUInt32BE(8);
+    const header = JSON.parse(wire.subarray(12, 12 + headerLength).toString("utf8"));
+    expect(header.envelope).not.toHaveProperty("data");
+    expect(wire.subarray(12 + headerLength)).toEqual(data);
+    expect(federationTransportCodecForTest.decodeEnvelope(wire)).toEqual(envelope);
+    // An empty FIN frame is still a binary frame.
+    const fin = { ...envelope, seq: 4, data: new Uint8Array(0) };
+    expect(federationTransportCodecForTest.decodeEnvelope(federationTransportCodecForTest.encodeEnvelope(fin)))
+      .toMatchObject({ kind: "service_data", seq: 4, data: Buffer.alloc(0) });
+
+    const jsonWire = Buffer.from(JSON.stringify({ kind: "envelope", envelope }), "utf8");
     expect(federationTransportCodecForTest.decodeEnvelope(jsonWire)).toBeUndefined();
   });
 
@@ -1987,6 +2019,45 @@ describe("federation send backpressure", () => {
     await vi.advanceTimersByTimeAsync(5);
     await waiting;
     expect(resolved).toBe(true);
+  });
+
+  it("waits for the raw socket to drain instead of polling", async () => {
+    const raw = new EventEmitter();
+    const socket = {
+      bufferedAmount: FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES + 1,
+      readyState: WebSocket.OPEN,
+      _socket: raw,
+    };
+    let resolved = false;
+    const waiting = waitForFederationSendCapacity(socket).then(() => {
+      resolved = true;
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(resolved).toBe(false);
+    socket.bufferedAmount = 0;
+    raw.emit("drain");
+    await waiting;
+    expect(resolved).toBe(true);
+    expect(raw.listenerCount("drain")).toBe(0);
+    expect(raw.listenerCount("close")).toBe(0);
+  });
+
+  it("shares one drain wait among every sender waiting on a socket", async () => {
+    const raw = new EventEmitter();
+    const socket = {
+      bufferedAmount: FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES + 1,
+      readyState: WebSocket.OPEN,
+      _socket: raw,
+    };
+    // More waiters than EventEmitter's default listener limit.
+    const waiting = Array.from({ length: 16 }, () => waitForFederationSendCapacity(socket));
+    expect(raw.listenerCount("drain")).toBe(1);
+    expect(raw.listenerCount("close")).toBe(1);
+    socket.bufferedAmount = 0;
+    raw.emit("drain");
+    await Promise.all(waiting);
+    expect(raw.listenerCount("drain")).toBe(0);
+    expect(raw.listenerCount("close")).toBe(0);
   });
 });
 

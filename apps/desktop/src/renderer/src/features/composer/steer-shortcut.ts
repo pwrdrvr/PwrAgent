@@ -11,6 +11,7 @@ import {
   formatPrimaryAccel,
   isPlatformPrimaryAccel,
 } from "../../lib/keyboard-accel";
+import { getDesktopApi } from "../../lib/desktop-api";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 
 export function isSteerShortcut(
@@ -19,9 +20,24 @@ export function isSteerShortcut(
   return isPlatformPrimaryAccel(event);
 }
 
+/**
+ * Return as a send-menu shortcut hint: the glyph on macOS, the key name
+ * elsewhere, matching how each platform's own menus print it.
+ */
+export function formatQueueShortcut(): string {
+  return getDesktopApi()?.platform === "darwin" ? "↵" : "Enter";
+}
+
+/** The steer chord as a send-menu shortcut hint. */
+export function formatSteerShortcut(): string {
+  return formatPrimaryAccel(
+    getDesktopApi()?.platform === "darwin" ? "↵" : "Enter",
+  );
+}
+
 /** Tooltip for a Queue button whose running turn can take a steer. */
 export function formatQueueButtonTooltip(): string {
-  return `Queue after this turn · ${formatPrimaryAccel("Enter")} to steer it in`;
+  return `Queue after this turn · ${formatSteerShortcut()} to steer it in`;
 }
 
 /**

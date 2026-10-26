@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   decodeFederationFramePayload,
   encodeFederationFramePayload,
+  FEDERATION_COMPRESSION_PROBE_MIN_BYTES,
 } from "../federation/federation-frame-codec";
 
 describe("federation frame codec", () => {
@@ -47,6 +48,20 @@ describe("federation frame codec", () => {
       json: incompressible,
       compressionEnabled: true,
     })).toBe(incompressible);
+  });
+
+  it("probes a large frame's tail and skips compressing incompressible bytes", () => {
+    const text = Buffer.from("export const value = compute(index, \"row\");\n".repeat(2_000));
+    const random = randomBytes(FEDERATION_COMPRESSION_PROBE_MIN_BYTES);
+    // A compressible head does not hide an incompressible tail, as in a
+    // binary envelope frame: the probe sends the frame as it is.
+    const tailRandom = Buffer.concat([text, random.subarray(0, 8 * 1024)]);
+    expect(encodeFederationFramePayload({ json: tailRandom, compressionEnabled: true })).toBe(tailRandom);
+    // An incompressible head before a compressible tail still compresses.
+    const tailText = Buffer.concat([random.subarray(0, 8 * 1024), text]);
+    const frame = encodeFederationFramePayload({ json: tailText, compressionEnabled: true });
+    expect(frame.subarray(0, 4).toString("ascii")).toBe("PWB1");
+    expect(decodeFederationFramePayload({ frame, compressionEnabled: true }).equals(tailText)).toBe(true);
   });
 
   it("rejects compressed frames unless the signed capability negotiated them", () => {

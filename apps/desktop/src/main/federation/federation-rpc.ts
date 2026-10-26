@@ -2,11 +2,15 @@ import { randomUUID } from "node:crypto";
 import type {
   FederationErrorEnvelope,
   FederationInstanceId,
+  FederationNotificationEnvelope,
   FederationProtocolEnvelope,
   FederationRequestEnvelope,
   FederationResponseEnvelope,
+  FederationServiceDataEnvelope,
+  ServiceStreamData,
 } from "@pwragent/shared";
 import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+import { serviceDataEnvelope } from "./federation-service-stream";
 
 type PendingRequest = {
   cleanupAbort: () => void;
@@ -46,12 +50,18 @@ export function hasFederationErrorCode(
 
 export class FederationRpcEndpoint {
   private readonly pending = new Map<string, PendingRequest>();
+  private readonly notificationPrefix = `federation-notification:${randomUUID()}:`;
+  private notificationCount = 0;
 
   constructor(
     private readonly options: {
       localInstanceId: FederationInstanceId;
       remoteInstanceId: FederationInstanceId;
       sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
+      /** One-way path that may wait for transport capacity. Defaults to `sendEnvelope`. */
+      sendOneWay?: (
+        envelope: FederationNotificationEnvelope | FederationServiceDataEnvelope,
+      ) => void | Promise<void>;
       now?: () => number;
       defaultTimeoutMs?: number;
     },
@@ -128,6 +138,32 @@ export class FederationRpcEndpoint {
       }
     }
     return promise;
+  }
+
+  /** One-way message to the remote instance. A returned promise is transport backpressure. */
+  notify(method: string, params: unknown): void | Promise<void> {
+    const envelope: FederationNotificationEnvelope = {
+      id: `${this.notificationPrefix}${(this.notificationCount += 1)}`,
+      kind: "notification",
+      method,
+      params,
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: this.options.localInstanceId,
+      targetInstanceId: this.options.remoteInstanceId,
+      createdAt: this.now(),
+    };
+    return (this.options.sendOneWay ?? this.options.sendEnvelope)(envelope);
+  }
+
+  /** One binary service stream frame. A returned promise is transport backpressure. */
+  sendServiceData(frame: ServiceStreamData): void | Promise<void> {
+    const envelope = serviceDataEnvelope(frame, {
+      id: `${this.notificationPrefix}${(this.notificationCount += 1)}`,
+      sourceInstanceId: this.options.localInstanceId,
+      targetInstanceId: this.options.remoteInstanceId,
+      createdAt: this.now(),
+    });
+    return (this.options.sendOneWay ?? this.options.sendEnvelope)(envelope);
   }
 
   receiveEnvelope(envelope: FederationProtocolEnvelope): boolean {

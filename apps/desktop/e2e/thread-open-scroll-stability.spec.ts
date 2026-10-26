@@ -1,4 +1,5 @@
 import path from "node:path";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
@@ -6,6 +7,59 @@ import { launchElectronApp } from "./fixtures/electron-app";
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const STABILITY_SAMPLE_COUNT = 8;
 const STABILITY_SAMPLE_INTERVAL_MS = 125;
+
+test("restores a native Claude transcript after switching threads", async () => {
+  const fixturePath = path.resolve(specDir, "fixtures/long-thread-scroll-stability/replay.fixture.json");
+  const fixture = JSON.parse(await readFile(fixturePath, "utf8"));
+  const threadId = "11111111-1111-4111-8111-111111111111";
+  const companionId = "22222222-2222-4222-8222-222222222222";
+  const entries = fixture.steps.find((step: { id: string }) => step.id === "thread-read-1").result.entries;
+  const app = await launchElectronApp({
+    fixturePath,
+    windowSize: { width: 1280, height: 720 },
+    preLaunchHook: async (homeRoot) => {
+      const root = path.join(homeRoot, ".pwragent/profiles/default/state/claude");
+      await mkdir(root, { recursive: true });
+      for (const [id, title, history] of [
+        [threadId, "Claude scroll restoration", entries.slice(-16)],
+        [companionId, "Claude companion", entries.slice(-4)],
+      ] as const) {
+        await writeFile(path.join(root, `${id}.json`), JSON.stringify({
+          cwd: homeRoot,
+          thread: { id, title, titleSource: "explicit", source: "claude", updatedAt: Date.now(), linkedDirectories: [] },
+        }));
+        await writeFile(path.join(root, `${id}.jsonl`), history.map((entry: unknown) => JSON.stringify(entry)).join("\n") + "\n");
+      }
+    },
+  });
+  try {
+    const list = app.window.locator(".transcript-list__items");
+    const openThread = async (title: string) => {
+      await app.window.getByRole("button", { name: new RegExp(title) }).first().click();
+      await expect(app.window.getByRole("heading", { level: 2, name: title, exact: true })).toBeVisible();
+      await expect(list.getByText("Long thread message 180: final transcript marker.")).toBeVisible();
+    };
+    await openThread("Claude scroll restoration");
+    await expect.poll(() => distanceFromTranscriptBottom(list)).toBeLessThanOrEqual(1);
+    const metrics = await readScrollMetrics(list);
+    expect(metrics.maxScrollTop).toBeGreaterThan(400);
+    const saved = await setTranscriptScrollTop(list, metrics.maxScrollTop - 250);
+    for (const companion of ["Claude companion", "Short companion thread"]) {
+      await app.window.getByRole("button", { name: new RegExp(companion) }).first().click();
+      await expect(app.window.getByRole("heading", { level: 2, name: companion, exact: true })).toBeVisible();
+      await openThread("Claude scroll restoration");
+      const samples = await collectScrollSamples(list);
+      expectStableSeries(samples, "native Claude near-bottom viewport restore");
+      expect(Math.max(...samples.map((top) => Math.abs(top - saved.scrollTop)))).toBeLessThanOrEqual(4);
+    }
+    await app.window.getByRole("button", { name: /Claude companion/ }).first().click();
+    await app.window.getByRole("button", { name: /Claude scroll restoration/ }).first().click();
+    const rapidSamples = await collectScrollSamples(list);
+    expect(Math.max(...rapidSamples.map((top) => Math.abs(top - saved.scrollTop)))).toBeLessThanOrEqual(4);
+  } finally {
+    await app.close();
+  }
+});
 
 async function collectScrollSamples(locator: Locator, bottom = false) {
   const values: number[] = [];
@@ -442,32 +496,31 @@ test("jump-to-latest re-enters glue mode so later content stays pinned", async (
   });
 
   try {
-    await app.window
-      .getByRole("button", { name: /Long scroll stability thread/i })
-      .first()
-      .click();
-
-    await expect(
-      app.window.getByRole("heading", {
-        level: 2,
-        name: "Long scroll stability thread"
-      })
-    ).toBeVisible();
+    const transcript = app.window.getByRole("region", { name: "Transcript" });
+    await selectLongThread(app.window, transcript);
 
     const list = app.window.locator(".transcript-list__items");
     const jumpToLatest = app.window.getByRole("button", {
       name: "Jump to latest message",
     });
 
+    // Zero distance also describes an empty/loading pane. Wait for real
+    // overflow before asserting that the hydrated transcript is bottom-pinned.
+    await expect
+      .poll(async () => (await readScrollMetrics(list)).maxScrollTop)
+      .toBeGreaterThan(2000);
+
     await expect
       .poll(async () => await distanceFromTranscriptBottom(list))
       .toBeLessThanOrEqual(4);
 
-    // Scroll to the top, then click jump-to-latest to re-enter glue mode.
-    await list.evaluate((element) => {
-      element.scrollTop = 0;
-      element.dispatchEvent(new Event("scroll", { bubbles: true }));
-    });
+    // A real upward navigation cancels pending bottom-follow frames. A bare
+    // scrollTop assignment can be overwritten by the opening layout's frame.
+    // Page Up also keeps clear of the older-history loading threshold.
+    await list.press("PageUp");
+    await expect
+      .poll(async () => await distanceFromTranscriptBottom(list))
+      .toBeGreaterThan(100);
     await expect(jumpToLatest).toBeVisible();
     await jumpToLatest.click();
 

@@ -145,6 +145,29 @@ export function parseThreadUrl(value: string): ThreadLinkRef | undefined {
   };
 }
 
+// A thread URL inside prose or a markdown link target. The scheme grammar
+// has no whitespace, quotes, or brackets, so the first one ends the URL.
+const THREAD_URL_IN_TEXT = /pwragent:\/\/thread\/[^\s()<>[\]"'`]+/giu;
+
+/**
+ * Stamp `instanceId` onto every thread link in `text` that has none.
+ *
+ * A link without an instance means "a thread on the machine reading this".
+ * Text written on one machine and sent to another (a turn for a peer's
+ * thread) would otherwise point the peer at its own threads: the sender's
+ * `#` chips, copied sidebar links, and restored drafts all mint local links
+ * bare. Links that already name an instance are left byte-for-byte alone.
+ */
+export function qualifyThreadUrlsInText(
+  text: string,
+  instanceId: FederationInstanceId,
+): string {
+  return text.replace(THREAD_URL_IN_TEXT, (url) => {
+    const ref = parseThreadUrl(url);
+    return ref && !ref.instanceId ? buildThreadUrl({ ...ref, instanceId }) : url;
+  });
+}
+
 export function isThreadUrl(value: string): boolean {
   return parseThreadUrl(value) !== undefined;
 }

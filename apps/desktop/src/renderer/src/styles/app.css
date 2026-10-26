@@ -871,7 +871,7 @@
   --danger-base: #e43b36;
   --danger-soft: color-mix(in srgb, var(--danger-base) 24%, transparent);
   --danger-border: color-mix(in srgb, var(--danger-base) 45%, transparent);
-  --danger-text: #f1a2a0;
+  --danger-text: #f2a3a1;
   --danger-text-light: #f1a281;
   --success-soft: color-mix(in srgb, #859900 18%, transparent);
   --success-border: color-mix(in srgb, #859900 32%, transparent);
@@ -1411,12 +1411,21 @@
    carry a `.thread-row__chip--*` variant (e.g. the questionnaire's mode
    chip in the transcript) don't get collapsed when compact density is
    on. The skill chip in the composer and the standalone SkillChip use
-   `.chip` directly and aren't affected by this rule. */
-:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--persistent) {
+   `.chip` directly and aren't affected by this rule.
+
+   Every density rule has two halves. The `:root` half applies the operator's
+   density to the live list, except while X-ray is held (`data-xray`, see
+   lib/xray-mode.ts) and except inside a `.density-preview`, which shows its
+   own density whatever the app's is. The `.density-preview--*` half is that
+   preview: the Settings and onboarding density pickers render real thread
+   rows, so their previews cannot drift from the list. */
+:root[data-density="compact"]:not([data-xray]) .thread-row__chips:not(.density-preview *) .thread-row__chip:not(.thread-row__chip--persistent),
+.density-preview--compact .thread-row__chips .thread-row__chip:not(.thread-row__chip--persistent) {
   display: none;
 }
 
-:root[data-density="compact"] .thread-row__chips {
+:root[data-density="compact"]:not([data-xray]) .thread-row__chips:not(.density-preview *),
+.density-preview--compact .thread-row__chips {
   /* Tighter inter-chip gap when only reactions + PRs remain visible. */
   gap: 4px;
 }
@@ -1430,14 +1439,268 @@
    hidden-chips selector zeroes the column gap for rows where every chip
    is suppressed — the `--persistent` marker (same source of truth as
    the suppression rule above) plus `.pr-chip` are the only things that
-   survive, so two :has() checks decide it without JS. */
-:root[data-density="compact"] .thread-row {
+   survive, so two :has() checks decide it without JS. The `.pr-chip`
+   check reads the flow only: the Minimal rollup on the title line is a
+   `.pr-chip` too, and must not hold a chip row open. */
+:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *),
+.density-preview--compact .thread-row {
   gap: 4px;
   padding-left: 12px;
 }
 
-:root[data-density="compact"] .thread-row:not(:has(.thread-row__chip--persistent)):not(:has(.pr-chip)) {
+:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)),
+.density-preview--compact .thread-row:not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)) {
   gap: 0;
+}
+
+/* MINIMAL — one line per thread.
+
+   The chip flow keeps only what is waiting on the operator: a held or
+   unsent message and an approval or question (`--essential` in
+   ThreadMetaChips). Everything else, PR chips included, leaves the flow, and
+   the title line gains one PR chip (`.thread-row__pr-rollup`) that wears the
+   least ready PR's state. Reactions move to the title line too
+   (`.thread-row__title-reactions`); there are rarely more than two, and the
+   title ellipsizes to make room. An unsent draft becomes the Draft chip's
+   pencil before the title (`.thread-row__title-draft`). Holding the X-ray
+   key brings the full Mission Control rows back; the title-line copies hide
+   again because the chips they stand for are back in the flow. */
+.thread-row__pr-rollup,
+.thread-row__title-reactions,
+.thread-row__title-draft {
+  display: none;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row__title-draft:not(.density-preview *),
+.density-preview--minimal .thread-row__title-draft {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-right: 4px;
+  color: var(--text-secondary);
+  pointer-events: auto;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row__pr-rollup:not(.density-preview *),
+.density-preview--minimal .thread-row__pr-rollup {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  pointer-events: auto;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row__title-reactions:not(.density-preview *),
+.density-preview--minimal .thread-row__title-reactions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+  pointer-events: auto;
+}
+
+.thread-row__pr-rollup .pr-chip {
+  height: 20px;
+}
+
+.thread-row__title-reactions .thread-row__chip--reaction {
+  height: 20px;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row__chips:not(.density-preview *) > :not(.thread-row__chip--essential),
+.density-preview--minimal .thread-row__chips > :not(.thread-row__chip--essential) {
+  display: none;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *),
+.density-preview--minimal .thread-row {
+  gap: 4px;
+  padding-left: 12px;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *):not(:has(.thread-row__chip--essential)),
+.density-preview--minimal .thread-row:not(:has(.thread-row__chip--essential)) {
+  gap: 0;
+}
+
+/* The X-ray badge: a pill over the foot of the sidebar while X-ray is on
+   (features/navigation/XrayBadge.tsx). The wrapper spans the sidebar so
+   the pill centres in it; only the pill takes the pointer. */
+.xray-badge {
+  position: fixed;
+  z-index: 95;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.xray-badge__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 4px 0 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--popover-bg);
+  box-shadow: 0 8px 20px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  font-size: 11px;
+  pointer-events: auto;
+}
+
+.xray-badge__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.xray-badge__label {
+  color: var(--accent-bright);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.xray-badge__hint {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.xray-badge__pin {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.xray-badge__pin:hover,
+.xray-badge__pin:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.xray-badge__pin:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.xray-badge__pin.is-pinned {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+/* The rollup's list of PRs: a portal on <body>, at the PR status card's
+   layer so it also clears the Settings overlay (see `.pr-status-card`). */
+.pr-rollup-popover {
+  position: fixed;
+  z-index: 140;
+  display: flex;
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  max-height: min(320px, calc(100vh - 16px));
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  /* Opaque, as the thread menu is: a list read over busy rows. */
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.pr-rollup-popover__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px 6px;
+}
+
+.pr-rollup-popover__eyebrow {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pr-rollup-popover__summary {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-rollup-popover__list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0 4px 4px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.pr-rollup-popover__row {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pr-rollup-popover__row:hover,
+.pr-rollup-popover__row:focus-visible {
+  background: var(--accent-soft);
+}
+
+.pr-rollup-popover__row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.pr-rollup-popover__row .pr-chip {
+  height: 20px;
+  flex: none;
+  pointer-events: none;
+}
+
+.pr-rollup-popover__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pr-rollup-popover__title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-rollup-popover__status {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 14px;
 }
 
 /* (No compact-specific list gap anymore: the base `.sidebar-list` /
@@ -2645,6 +2908,8 @@ textarea,
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
+  /* Width-query container for the chrome rules below. */
+  container: thread-header / inline-size;
   -webkit-app-region: drag;
 }
 
@@ -2952,6 +3217,15 @@ textarea,
 .thread-header__rewind-toggle.is-disabled:hover {
   background: transparent;
   color: var(--text-muted);
+}
+
+/* In a narrow thread pane the rewind button would squeeze the title to
+   nothing. Each prompt keeps its own rewind control, so the header's
+   last-prompt shortcut is the one to drop. */
+@container thread-header (max-width: 480px) {
+  .thread-header__rewind-toggle--thread {
+    display: none;
+  }
 }
 
 .thread-header__terminal-toggle.is-open {
@@ -6800,29 +7074,60 @@ a.button {
   line-height: 1.25;
 }
 
-/* Rename in place: the title becomes a field of the same type, so the row
-   keeps its height and the text does not jump. The header passes pointer
-   events through to the open-thread overlay; the field takes them back. */
+/* Rename in place: the title becomes a field of the same type. The header
+   passes pointer events through to the open-thread overlay; the field
+   takes them back.
+
+   Everything the field draws stays inside its own box. It has focus for
+   as long as it exists (leaving it saves), so it always draws its 2px
+   focus ring: the 1px border plus a 1px outline pulled inside it by the
+   negative offset. The box already sits close to the status mark on its
+   left and the card's top border above it: the old 2px outline at 1px
+   outside the box covered the unread cookie and the thinking scanner and
+   touched the card edge. An outline, unlike an inset box-shadow, survives
+   forced-colors mode.
+
+   Block: the box is the title's line plus 2px of border and the title's
+   2px descender pad, and the -1px margins cancel the border, so the field
+   occupies exactly the title's line and pad. The row keeps its height and
+   the chips do not move. The bottom padding keeps the text
+   on the title's baseline.
+
+   Inline: after a status mark the box starts 6px clear of the mark's
+   16px lane (2px heading gap + 4px margin), the same air as between two
+   chips. The text moves right to make that room. A row with no mark pulls
+   the box left instead, so its text moves only 2px, and the box stays 4px
+   clear of the selected card's 2px accent edge. A parent card keeps the
+   box in place: its sub-thread chevron sits in that inset. */
 .thread-row__rename-input {
   flex: 1 1 auto;
   min-width: 0;
-  margin: -2px -4px;
-  padding: 1px 3px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
+  height: calc(var(--sidebar-title-size) * 1.25 + 4px);
+  margin: -1px 0;
+  padding: 0 5px 2px;
+  border: 1px solid var(--focus-ring);
+  border-radius: 5px;
   background: var(--bg-panel);
   color: var(--text-primary);
   font: inherit;
   font-size: var(--sidebar-title-size);
   font-weight: 600;
   line-height: 1.25;
+  outline: 1px solid var(--focus-ring);
+  outline-offset: -2px;
   pointer-events: auto;
 }
 
-.thread-row__rename-input:focus,
-.thread-row__rename-input:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
+.thread-row__heading > .thread-row__rename-input:first-child {
+  margin-left: -4px;
+}
+
+.thread-row-shell.has-subthreads .thread-row__heading > .thread-row__rename-input:first-child {
+  margin-left: 0;
+}
+
+.thread-row__status-indicator + .thread-row__rename-input {
+  margin-left: 4px;
 }
 
 .thread-row__time,
@@ -7147,6 +7452,17 @@ a.button {
   background: var(--accent-soft);
   color: var(--accent-bright);
   font-weight: 600;
+}
+
+/* "Held": a queued message that waits on the operator to retry or delete
+   it, and blocks the queue behind it. It wears the composer's held-row
+   danger tone on its label and edge, never a filled panel, so it reads as
+   "needs you" in every theme without pretending to be an error banner. */
+.thread-row__chip--held {
+  border: 1px solid var(--danger-border);
+  background: transparent;
+  color: var(--danger-text);
+  font-weight: 650;
 }
 
 /* Unsent draft. Deliberately the quietest of the three pending states: a
@@ -8909,7 +9225,7 @@ a.button {
   position: fixed;
   z-index: 50;
   min-width: 168px;
-  padding: 6px;
+  padding: 4px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
@@ -8925,18 +9241,22 @@ a.button {
   z-index: 140;
 }
 
+/* Native menu density: a 24px row of regular-weight 13px type, the size of
+   the macOS and Claude desktop menus. 24px is also the WCAG 2.2 target-size
+   floor, so a row never goes below it. */
 .thread-context-menu button {
   display: flex;
   width: 100%;
-  min-height: 34px;
+  min-height: 24px;
   align-items: center;
-  padding: 0 10px;
+  padding: 4px 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--text-primary);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 400;
+  line-height: 16px;
   text-align: left;
 }
 
@@ -8963,17 +9283,19 @@ a.button {
 }
 
 .thread-context-menu .thread-context-menu__button--stacked {
-  min-height: 46px;
+  min-height: 36px;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  gap: 2px;
+  gap: 0;
+  padding-block: 3px;
 }
 
 .thread-context-menu__item-detail {
   color: var(--text-muted);
   font-size: 11px;
-  font-weight: 500;
+  font-weight: 400;
+  line-height: 14px;
 }
 
 .thread-context-menu button:hover:not(:disabled) .thread-context-menu__item-detail,
@@ -8988,10 +9310,10 @@ a.button {
    shortcuts have a visible affordance. */
 .thread-context-menu__shortcut {
   margin-left: auto;
-  padding-left: 16px;
+  padding-left: 20px;
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
 }
@@ -9008,10 +9330,10 @@ a.button {
    After's waiting registrations. */
 .thread-context-menu__aside {
   margin-left: auto;
-  padding-left: 16px;
+  padding-left: 20px;
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
 
@@ -9025,14 +9347,19 @@ a.button {
    with a muted check, so the item still reads as checkable. */
 .thread-context-menu__check {
   display: grid;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   flex: none;
   place-items: center;
-  margin-right: 7px;
-  border-radius: 5px;
-  box-shadow: inset 0 0 0 1.5px var(--text-muted);
+  margin-right: 6px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1.25px var(--text-muted);
   color: var(--text-muted);
+}
+
+.thread-context-menu__check svg {
+  width: 10px;
+  height: 10px;
 }
 
 .thread-context-menu button[aria-checked="true"] .thread-context-menu__check {
@@ -9042,7 +9369,7 @@ a.button {
 }
 
 /* A menu with checkable items gives every other item the same check column,
-   so labels align down the menu. 10px button padding + 16px box + 7px gap.
+   so labels align down the menu. 8px button padding + 14px box + 6px gap.
    A cascade row's button sits one level down, inside its wrapper; the child
    combinator there keeps the indent off the flyout's own rows. */
 .thread-context-menu--check-column
@@ -9052,12 +9379,12 @@ a.button {
   > .thread-context-menu__section
   > .thread-context-menu__cascade
   > button {
-  padding-left: 33px;
+  padding-left: 28px;
 }
 
 .thread-context-menu__separator {
   height: 1px;
-  margin: 6px 0;
+  margin: 4px 8px;
   background: var(--border-subtle);
 }
 
@@ -9069,10 +9396,10 @@ a.button {
 
 .thread-context-menu__cascade-chevron {
   margin-left: auto;
-  padding-left: 16px;
+  padding-left: 20px;
   color: var(--text-muted);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .thread-context-menu button:hover:not(:disabled) .thread-context-menu__cascade-chevron,
@@ -9092,7 +9419,7 @@ a.button {
    cross the window edge. */
 .thread-context-menu.thread-context-menu__flyout {
   position: absolute;
-  top: -6px;
+  top: -4px;
   left: calc(100% + 2px);
   min-width: 220px;
   max-width: 320px;
@@ -9105,25 +9432,30 @@ a.button {
   right: calc(100% + 2px);
 }
 
+.thread-context-menu__flyout .new-thread-menu__section-label {
+  padding-inline: 8px;
+}
+
 /* A machine row: the "New chat on" row (`.new-thread-menu__item--target`)
    inside the context menu. Its dot, name and state reuse that list's own
    classes, so the two read as one family. */
 .thread-context-menu .thread-context-menu__machine {
-  min-height: 36px;
+  min-height: 28px;
   gap: 8px;
   font-weight: 400;
 }
 
 /* A machine row that names the branch a new worktree there starts from. */
 .thread-context-menu .thread-context-menu__machine--detailed {
-  min-height: 46px;
+  min-height: 36px;
+  padding-block: 3px;
 }
 
 .thread-context-menu__machine-label {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 2px;
+  gap: 0;
 }
 
 /* One line, so a long branch widens the flyout up to its cap and then
@@ -9257,6 +9589,102 @@ a.button {
 .thread-lock-dialog textarea:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+/* Recent notes: one Tab stop under the field. The chip matching the note
+   takes the accent-soft fill the Star Map filter chips use for a choice.
+   Each chip is a pill holding the note button and a remove button; both are
+   24px tall so neither is an undersized target beside the other. */
+.thread-lock-dialog__recents {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.thread-lock-dialog__recents-label {
+  margin-right: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.thread-lock-dialog__recent {
+  display: inline-flex;
+  align-items: stretch;
+  max-width: 100%;
+  min-height: 26px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+}
+
+.thread-lock-dialog__recent:has([aria-pressed="true"]) {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.thread-lock-dialog__recent:has(.thread-lock-dialog__recent-pick:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-lock-dialog__recent-pick,
+.thread-lock-dialog__recent-remove {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.thread-lock-dialog__recent-pick {
+  min-width: 0;
+  padding: 0 4px 0 10px;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-lock-dialog__recent-pick:focus-visible {
+  outline: none;
+}
+
+.thread-lock-dialog__recent-pick:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.thread-lock-dialog__recent-remove {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 24px;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.thread-lock-dialog__recent-remove:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.thread-lock-dialog__recent:has(:disabled) {
+  opacity: 0.6;
+}
+
+.thread-lock-dialog__recent :disabled {
+  cursor: default;
 }
 
 .thread-lock-dialog__blocks {
@@ -11171,8 +11599,8 @@ a.button {
 /* ----------------------------------------------------------------
    SETTINGS NAV — full-height left column. Mirrors the main app
    screen's `.sidebar` pattern: brand at the top in `__masthead`
-   (with 80px stoplight gutter and drag region), then Exit Settings,
-   GENERAL group label, and the section list.
+   (with 80px stoplight gutter and drag region), then Exit Settings
+   and the section list, headed by category.
    ---------------------------------------------------------------- */
 
 .settings-nav {
@@ -11257,7 +11685,7 @@ a.button {
 
 /* Exit Settings — plain text-style link styled like a quiet nav row.
    No border, no panel background — matches the design's
-   `pa-settings__exit`. Sits above the GENERAL group label. */
+   `pa-settings__exit`. Sits above the first category heading. */
 /* Baseline, not centre, and the arrow is why.
    `←` (U+2190) is in none of the fonts this app asks for by name, nothing here
    declares an `@font-face`, so which font draws it is whatever the OS
@@ -11544,8 +11972,7 @@ a.button {
    first character. The explicit width is load-bearing and must track the
    margin: a form control shrink-to-fits even as a block-level flex box,
    so `width: auto` collapses this row to its label instead of filling
-   the clip. (`.settings-nav__divider` needs no such width — an `<hr>` is
-   a plain flex item and stretches.) */
+   the clip. */
 .settings-nav__subbutton {
   display: flex;
   align-items: center;
@@ -11629,13 +12056,21 @@ a.button {
   text-transform: uppercase;
 }
 
-/* Margins alone set the width — a flex item stretches across the
-   column, so the inset is stated once. */
-.settings-nav__divider {
-  height: 1px;
-  margin: 6px 8px;
-  border: 0;
-  background: var(--border-subtle);
+/* One labeled category of sections (`role="group"`, named by its
+   `.settings-nav__group-label`). It runs the lane's own 2px row gap, so
+   grouping moves no row against its neighbours. A later category adds 4px:
+   with the lane gap and the label's 8px top margin that is 14px of air over
+   its heading, against 2px between rows, so a break reads as a break. The
+   first adds nothing, keeping the first heading 12px below Exit Settings,
+   the rhythm `.settings-nav__new` matches in Automations. */
+.settings-nav__category {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-nav__category + .settings-nav__category {
+  margin-top: 4px;
 }
 
 .settings-content {
@@ -11863,6 +12298,362 @@ a.button {
   color: var(--text-muted);
   font-size: 11px;
   font-weight: 600;
+}
+
+/* Settings → Environments. Rows, banners and the save bar read the same
+   tokens as `.settings-index__row` and `.settings-panel--warning`. */
+.env-file-list,
+.env-actions,
+.env-unreadable,
+.env-script {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.env-actions {
+  padding: 14px 18px;
+}
+
+.env-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.env-explainer {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.env-explainer b,
+.env-banner__body b,
+.env-savebar__text b {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.env-code {
+  min-height: 116px;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.env-code--short {
+  min-height: 52px;
+}
+
+.env-scripthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.env-tab-badge,
+.env-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.env-chip--err {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.env-action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.env-action {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.env-action.is-editing {
+  align-items: start;
+  border-color: var(--accent-border);
+}
+
+.env-action.is-invalid {
+  border-color: var(--danger-border);
+}
+
+.env-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+}
+
+.env-action__main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.env-action.is-editing .env-action__main {
+  padding-top: 4px;
+}
+
+.env-action__titleline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.env-action__name {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.env-action__cmd {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.env-action__tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.env-iconbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.env-iconbtn:hover,
+.env-iconbtn[aria-expanded="true"] {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.env-iconbtn:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.env-menu {
+  position: relative;
+}
+
+.env-menu__list {
+  top: calc(100% + 4px);
+}
+
+.todo-split__item.env-menu__danger {
+  color: var(--danger-text);
+}
+
+.env-action__edit {
+  grid-column: 2 / 4;
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  align-items: start;
+  gap: 10px 14px;
+  padding-top: 6px;
+}
+
+.env-action__edit > label,
+.env-action__label {
+  padding-top: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.env-action__edit > .settings-segmented,
+.env-action__edit > .settings-input--inline,
+.env-action__edit > .env-icon-select {
+  justify-self: start;
+}
+
+.env-action__edit .env-icon-select {
+  width: 180px;
+}
+
+.env-link {
+  color: var(--accent-bright);
+  text-underline-offset: 2px;
+}
+
+/* Settings buttons inherit the 16px root size; these sit among 12–13px
+   rows and fields. */
+.env-file-list .button,
+.env-actions .button,
+.env-script .button,
+.env-banner .button,
+.env-savebar .button {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.env-project-select {
+  max-width: 420px;
+}
+
+.env-action__wide {
+  grid-column: 1 / -1;
+}
+
+.env-action > .env-action__wide {
+  grid-column: 2 / 4;
+}
+
+.env-action__foot {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.env-action__foot .spacer {
+  flex: 1;
+}
+
+.env-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.env-button--small {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.env-button--danger {
+  color: var(--danger-text);
+}
+
+/* A neutral frame; the tone is on the bold lead-in (status tone belongs on
+   labels, not panels). The warn variant uses the accent, which follows each
+   theme's own hue. */
+.env-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.env-banner:not(.env-banner--warn) .env-banner__body > b {
+  color: var(--danger-text);
+}
+
+.env-banner--warn {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.env-banner__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.env-banner__acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.env-excerpt {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* Stays in view at the bottom of the scrolling pane while edits wait. */
+.env-savebar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 -8px 18px var(--shadow-tint-faint);
+}
+
+.env-savebar__text {
+  flex: 1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.env-savebar__text.is-err {
+  color: var(--danger-text);
 }
 
 /* Card panel — eyebrow + title + optional chip in head, body below. */
@@ -15407,6 +16198,118 @@ a.button {
   color: var(--accent-bright);
 }
 
+/* Settings -> Codex -> Model providers: the add/edit form under the list. */
+.codex-provider-editor {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.codex-provider-editor > .settings-inline-actions,
+.codex-provider-editor > .settings-error,
+.codex-provider-editor > .settings-field__help {
+  margin: 0;
+  padding: 12px 18px 0;
+}
+
+.codex-provider-editor > .settings-field__help {
+  padding-bottom: 14px;
+}
+
+.codex-provider-rates {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.codex-provider-rates th,
+.codex-provider-rates td {
+  padding: 3px 6px 3px 0;
+  text-align: left;
+}
+
+.codex-provider-rates thead th {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.codex-provider-rates tbody th {
+  max-width: 180px;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-provider-rates .settings-input {
+  width: 100%;
+  min-width: 64px;
+}
+
+.codex-provider-test {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  list-style: none;
+}
+
+.codex-provider-test strong {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.codex-provider-test .is-ok {
+  color: var(--success-text);
+}
+
+.codex-provider-test .is-err {
+  color: var(--danger-text);
+}
+
+.codex-provider-test .is-skip {
+  color: var(--text-muted);
+}
+
+/* Settings -> Codex -> Model providers: what Codex config files define. */
+.settings-section__body > .codex-provider-imports {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.codex-provider-imports__title {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.codex-provider-imports__skipped {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  list-style: none;
+}
+
+.codex-provider-imports__skipped strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
 .settings-pathrow__action {
   flex: 0 0 auto;
 }
@@ -15993,6 +16896,254 @@ a.button {
 }
 
 /*
+ * Settings → Plugins, local command (stdio) servers. A label column beside
+ * each control, the way the design review lays the form out; the add form's
+ * `label` rule is overridden because these fields carry a hint under the name.
+ */
+.settings-mcp-local {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-mcp-local .settings-mcp-local__field {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  align-items: start;
+  gap: 14px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.settings-mcp-local__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 8px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.settings-mcp-local__label small {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.settings-mcp-local__control {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-mcp-local__control--row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-mcp-local__control--row > .settings-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-mcp-local__control .settings-input--multiline {
+  min-height: 64px;
+  resize: vertical;
+}
+
+.settings-mcp-local__hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.settings-mcp-local__hint--err {
+  color: var(--danger-text);
+}
+
+/* The command line as it was split: one chip per word, so a quoted path that
+   stayed whole, or one that did not, is visible before anything runs. */
+.settings-mcp-local__argv {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-mcp-local__argv-label {
+  margin-right: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-mcp-local__argv code {
+  max-width: 100%;
+  padding: 1px 5px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+
+.settings-mcp-local__argv .settings-mcp-local__argv-program {
+  color: var(--success-text);
+}
+
+.settings-mcp-local__hint code,
+.settings-mcp-create__constraint code {
+  padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.settings-mcp-local__env {
+  display: grid;
+  grid-template-columns: minmax(120px, 200px) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-mcp-local .settings-mcp-local__secret {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 9px 0 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-mcp-local__secret-box {
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.settings-mcp-local .settings-mcp-local__secret.is-on {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+}
+
+.settings-mcp-local__secret.is-on .settings-mcp-local__secret-box {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 3px, transparent 3.5px);
+}
+
+.settings-mcp-local__secret:focus-visible {
+  outline: 2px solid var(--accent-border);
+  outline-offset: 1px;
+}
+
+.settings-mcp-local__secret:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.settings-mcp-create .settings-mcp-local__remove {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0 6px;
+}
+
+.settings-mcp-local__add {
+  align-self: flex-start;
+}
+
+.settings-mcp-local__where {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.settings-mcp-local__where strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.settings-mcp-local__where-key {
+  flex: 0 0 auto;
+  padding-top: 2px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-mcp-local__output {
+  max-height: 160px;
+  margin: 6px 0 0;
+  padding: 7px 9px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.settings-mcp-local__actions,
+.settings-mcp-create__convert {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settings-mcp-create__convert {
+  justify-content: flex-start;
+}
+
+/* Doubled class: the base dialog rule is declared later in this file. */
+.settings-confirm-dialog.settings-confirm-dialog--local-command {
+  width: min(680px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.settings-confirm-dialog--local-command .settings-mcp-local .settings-mcp-local__field {
+  grid-template-columns: 120px minmax(0, 1fr);
+}
+
+.settings-confirm-dialog__leading {
+  margin-right: auto;
+}
+
+/*
  * The two per-connection switches, each named for the question it answers.
  *
  * They sat in a narrow column beside the actions with a one-word label, which
@@ -16218,6 +17369,221 @@ a.button {
   flex: 0 0 auto;
 }
 
+/*
+ * Sandboxer is a paid service most operators have never heard of. Its setup
+ * states say what it is and link to its site; its ladder shows where setup
+ * stands so the state line only has to say what to do next.
+ */
+.settings-mcp-row__toggle--static {
+  cursor: default;
+}
+
+.settings-sandboxer-about {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-width: 620px;
+  margin: 4px 0 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.settings-sandboxer-about p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-sandboxer-about strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.settings-sandboxer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-mcp-row__detail > .settings-sandboxer-links {
+  margin-top: 6px;
+}
+
+.settings-sandboxer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: none;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* An arrow says the page opens in the browser, not in Settings. */
+.settings-sandboxer-link::after {
+  content: "\2197";
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.settings-sandboxer-link:hover:not([disabled]) {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.settings-sandboxer-link--inline {
+  height: auto;
+  padding: 0 2px;
+  border-color: transparent;
+  color: var(--accent-bright);
+}
+
+.settings-sandboxer-link--inline::after {
+  color: var(--accent-bright);
+}
+
+.settings-sandboxer-link--inline:hover:not([disabled]) {
+  border-color: transparent;
+  color: var(--accent-bright);
+  text-decoration: underline;
+}
+
+.settings-sandboxer-action::after {
+  content: " \2197";
+  font-size: 11px;
+}
+
+.settings-sandboxer-link[disabled] {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.settings-sandboxer-ladder {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-sandboxer-ladder__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.settings-sandboxer-ladder__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: var(--bg-panel-hover);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.settings-sandboxer-ladder__step.is-done {
+  color: var(--text-secondary);
+}
+
+.settings-sandboxer-ladder__step.is-done .settings-sandboxer-ladder__mark {
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.settings-sandboxer-ladder__step.is-current {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.settings-sandboxer-ladder__step.is-current .settings-sandboxer-ladder__mark {
+  background: var(--accent-fill);
+  color: var(--button-text);
+}
+
+.settings-sandboxer-ladder__done {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.settings-sandboxer-account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.settings-sandboxer-account strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Same columns as the Tools line above it (.mcp-inventory-panel__line), so
+   the three values start at one edge. */
+.settings-sandboxer-drawer {
+  display: grid;
+  flex: 1 1 100%;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 6px 8px;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.settings-sandboxer-drawer > div {
+  display: contents;
+}
+
+.settings-sandboxer-drawer dt {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.settings-sandboxer-drawer dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.settings-sandboxer-drawer code {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-mcp-row__chevron {
     transition: none;
@@ -16227,6 +17593,19 @@ a.button {
 @media (max-width: 820px) {
   .settings-mcp-create__fields {
     grid-template-columns: 1fr;
+  }
+
+  .settings-mcp-local .settings-mcp-local__field {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .settings-mcp-local__label {
+    padding-top: 0;
+  }
+
+  .settings-mcp-local__env {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 }
 
@@ -21686,8 +23065,10 @@ a.button {
   flex: 0 0 auto;
 }
 
-/* A remote launchpad can show one tile alone; it takes the row. */
-.pwrsuite-tiles > .mcp-connection:only-child {
+/* A lone tile (a remote launchpad can show one), or the odd one out on the
+   last row (Sandboxer, after the two PwrSuite tiles), takes the full width
+   rather than leaving half a row empty. */
+.pwrsuite-tiles > .mcp-connection:last-child:nth-child(odd) {
   grid-column: 1 / -1;
 }
 
@@ -22484,6 +23865,309 @@ a.button {
   line-height: 1.35;
 }
 
+/* A thread whose worktree folder is gone. The card takes the composer's
+   place in the composer band and borrows the lock card's surface; its
+   options borrow the handoff dialog's strategy rows. */
+.missing-worktree-card {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  overflow: hidden;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel-elevated));
+  color: var(--text-primary);
+}
+
+/* The env setup row's scanner, on the card's top edge while Git runs. */
+.missing-worktree-card--busy::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 34%;
+  height: 2px;
+  background: var(--accent);
+  content: "";
+  animation: missing-worktree-card-scan 1.4s ease-in-out infinite;
+}
+
+@keyframes missing-worktree-card-scan {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .missing-worktree-card--busy::before {
+    animation: none;
+  }
+}
+
+.missing-worktree-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.missing-worktree-card__heading svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.missing-worktree-card__owner {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.missing-worktree-card__path {
+  margin: -4px 0 0 23px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.missing-worktree-card__lede,
+.missing-worktree-card__meta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.missing-worktree-card__meta {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.missing-worktree-card code,
+.workspace-recovery-notice code {
+  padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.missing-worktree-card__options,
+.missing-worktree-card__steps {
+  display: grid;
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.missing-worktree-card__option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 16px;
+  padding: 10px 12px;
+}
+
+.missing-worktree-card__option + .missing-worktree-card__option {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.missing-worktree-card__option-title,
+.missing-worktree-card__option-text {
+  grid-column: 1;
+  margin: 0;
+}
+
+.missing-worktree-card__option-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.missing-worktree-card__option-text {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.missing-worktree-card__option > .button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-height: 30px;
+}
+
+.missing-worktree-card__option.is-unavailable .missing-worktree-card__option-title,
+.missing-worktree-card__option.is-unavailable .missing-worktree-card__option-text {
+  color: var(--text-muted);
+}
+
+.missing-worktree-card .button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.missing-worktree-card__steps {
+  gap: 6px;
+  padding: 10px 12px;
+  list-style: none;
+}
+
+.missing-worktree-card__step {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.missing-worktree-card__step.is-planned,
+.missing-worktree-card__step.is-skipped {
+  color: var(--text-muted);
+}
+
+.missing-worktree-card__step.is-failed {
+  color: var(--text-primary);
+}
+
+.missing-worktree-card__step-mark {
+  display: inline-flex;
+  width: 16px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+.missing-worktree-card__step.is-done .missing-worktree-card__step-mark {
+  color: var(--status-ok);
+}
+
+.missing-worktree-card__step.is-failed .missing-worktree-card__step-mark {
+  color: var(--status-error);
+}
+
+.missing-worktree-card__ring {
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.missing-worktree-card__dash {
+  width: 9px;
+  height: 2px;
+  background: currentColor;
+}
+
+.missing-worktree-card__step-detail {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.missing-worktree-card__error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--danger-border);
+  border-radius: 6px;
+  background: var(--danger-soft);
+  color: var(--danger-text);
+  font-size: 12.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.missing-worktree-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.missing-worktree-card__actions .button {
+  min-height: 30px;
+}
+
+.missing-worktree-card__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* What a recovery did, above the returned composer until dismissed. */
+.workspace-recovery-notice {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 8px;
+  margin: 0 0 8px;
+  padding: 9px 12px;
+  border: 1px solid var(--success-border);
+  border-radius: 8px;
+  background: var(--success-soft);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.workspace-recovery-notice--warning {
+  border-color: color-mix(in srgb, var(--status-warning) 45%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+}
+
+.workspace-recovery-notice > p {
+  grid-column: 2;
+  margin: 0;
+}
+
+.workspace-recovery-notice__mark {
+  display: inline-flex;
+  padding-top: 2px;
+  color: var(--status-ok);
+  font-weight: 700;
+}
+
+.workspace-recovery-notice--warning .workspace-recovery-notice__mark {
+  color: var(--status-warning-text);
+}
+
+.workspace-recovery-notice__title {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.workspace-recovery-notice__dismiss {
+  display: inline-flex;
+  grid-row: 1;
+  grid-column: 3;
+  padding: 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.workspace-recovery-notice__dismiss:hover {
+  color: var(--text-primary);
+}
+
 /* A failed environment setup can coincide with a failed first history read.
    The setup row lives in the composer band, which can give up height, so
    reserve one readable history-error row and let the band take the deficit.
@@ -22642,11 +24326,39 @@ a.button {
   flex: none;
 }
 
+/* The row under the title: the project on the left, progress and age on
+   the right. They sat in the title row until the Copy tool joined it, and
+   left a 340px card's title about 150px. */
+.thread-todo-card__meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px 4px 22px;
+}
+
+.thread-todo-card__stats {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  margin-left: auto;
+}
+
 /* Indented past the kind glyph, so the text lines up under the title. */
 .thread-todo-card__body {
   min-width: 0;
   padding: 0 8px 0 22px;
   user-select: text;
+}
+
+/* An opened card scrolls its body rather than growing over the transcript
+   and the composer. The 4px pads a checkbox's focus ring at either edge,
+   and the margin pulls it back out so the text does not move. */
+.thread-todo-card__body.is-expanded {
+  max-height: min(440px, 55vh);
+  margin-block: -4px;
+  padding-block: 4px;
+  overflow-y: auto;
 }
 
 .thread-todo-card__detail {
@@ -22656,6 +24368,15 @@ a.button {
   overflow-wrap: anywhere;
   font-size: 12.5px;
   line-height: 17px;
+}
+
+/* A resting card's description: three lines, the proposed prompt's clamp,
+   until the card is opened. */
+.thread-todo-card__detail.is-clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 /* A card's steps. The box is the settings archive list's drawn checkbox
@@ -22672,6 +24393,24 @@ a.button {
 
 .thread-todo-card__detail + .thread-todo-checklist {
   margin-top: 8px;
+}
+
+/* Names a checklist when the card has two kinds: what the operator does
+   before starting, and what the new thread does. The facts' label type. */
+.thread-todo-card__group-label {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.thread-todo-card__detail + .thread-todo-card__group-label {
+  margin-top: 8px;
+}
+
+.thread-todo-card__group-label + .thread-todo-checklist {
+  margin-top: 2px;
 }
 
 .thread-todo-checklist__label {
@@ -22815,6 +24554,34 @@ a.button {
   -webkit-line-clamp: unset;
 }
 
+/* Opens and closes a resting card: the review card's "Show N more" type,
+   under the text column. */
+.thread-todo-card__more {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  align-self: flex-start;
+  gap: 4px;
+  margin: 2px 0 0 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.thread-todo-card__more:hover {
+  color: var(--accent-bright);
+}
+
+.thread-todo-card__more:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .thread-todo-card__error {
   margin: 6px 0 0;
   color: var(--danger-text);
@@ -22927,7 +24694,7 @@ a.button {
   min-width: 0;
   align-items: center;
   gap: 5px;
-  margin: 0 8px 4px 22px;
+  margin: 0;
   color: var(--text-muted);
   font-size: 11.5px;
   font-weight: 600;
@@ -22939,14 +24706,12 @@ a.button {
 }
 
 /* As a menu button, the label keeps the static line's left edge: the
-   6px of border and padding come out of the indent. */
+   6px of border and padding come out of the meta row's indent. */
 .thread-todo-project {
   position: relative;
   display: flex;
   min-width: 0;
-  align-self: flex-start;
-  max-width: calc(100% - 24px);
-  margin: 0 8px 4px 16px;
+  margin: 0 0 0 -6px;
 }
 
 .thread-todo-card__project--button {
@@ -24426,6 +26191,38 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   transform: rotate(45deg);
 }
 
+.transcript-monitor-result__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A thread delivery previews the message it sent: quoted text, not a title. */
+.transcript-monitor-result__toggle--quote {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.transcript-monitor-result__toggle--quote:hover {
+  color: var(--text-primary);
+}
+
+/* Lines up under the label, past the 8px chevron and its 8px gap. */
+.transcript-monitor-result__preview {
+  margin: 0 0 0 16px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transcript-monitor-result__preview-label {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
 .transcript-monitor-result__details {
   flex: 0 0 auto;
   min-height: 26px;
@@ -24770,10 +26567,31 @@ a.transcript-message__messaging-origin:focus-visible {
 .transcript-message:hover .transcript-copy-button--message,
 .transcript-message:focus-within .transcript-copy-button--message,
 .transcript-copy-button--message[data-copied="true"],
+.transcript-rewind-button[aria-expanded="true"],
 .transcript-message:hover .transcript-copy-button--segment,
 .transcript-message:focus-within .transcript-copy-button--segment,
 .transcript-copy-button--segment[data-copied="true"] {
   opacity: 1;
+}
+
+/* Rewind shares the copy control's chrome and draws HistoryIcon in place of
+   the copy mask. */
+.transcript-rewind-button::before {
+  content: none;
+}
+
+.transcript-rewind-button[aria-expanded="true"] {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+  background: var(--accent-soft);
+}
+
+.transcript-rewind-button.is-disabled,
+.transcript-rewind-button.is-disabled:hover {
+  border-color: var(--border-subtle);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-panel-elevated) 92%, transparent);
+  cursor: default;
 }
 
 .transcript-message__text {
@@ -35883,6 +37701,19 @@ button.pricing-token-miser__folded:focus-visible {
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.usage-pace-card__spend {
+  display: flex;
+  min-width: 0;
+  white-space: pre;
+}
+
+.usage-pace-card__owner {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .usage-pace-card__foot b {
@@ -37192,6 +39023,34 @@ button.pricing-token-miser__folded:focus-visible {
 .composer__queued--failed .composer__queued-label,
 .composer__queued-error {
   color: var(--status-error);
+}
+
+/* A paused row is in the band but out of line. A dashed edge marks it rather
+   than a new color: the band already spends danger on held rows and the
+   accent on scheduled ones. */
+.composer__queued--message.composer__queued--paused {
+  --queued-row-bg: var(--bg-panel);
+  border-style: dashed;
+  border-color: var(--border-strong);
+}
+
+.composer__queued--message.composer__queued--paused:hover {
+  border-color: var(--text-muted);
+}
+
+.composer__queued--paused .composer__queued-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.composer__queued--paused .composer__queued-text {
+  color: var(--text-secondary);
+}
+
+.composer__queued-pause-glyph {
+  flex: none;
 }
 
 /* A queued row's tint is translucent (the soft tokens carry alpha), and the
@@ -39699,6 +41558,62 @@ button.composer__subthread-source-parent:hover {
   box-shadow: var(--shadow-popover);
 }
 
+/* A titled section of the list: the models of one Codex model provider. */
+.composer-dropdown__group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.composer-dropdown__group-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.composer-dropdown__group-detail {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+/* Why the list is what it is, under it and outside the listbox. */
+.composer-dropdown__footnote {
+  margin: 6px 0 0;
+  padding: 6px 10px 2px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+/* A command under the list (Edit environments…), outside the listbox. */
+.composer-dropdown__footer {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.composer-dropdown__footer .composer-dropdown__footer-action {
+  color: var(--text-secondary);
+}
+
+.composer-dropdown__footer-action .composer-dropdown__check {
+  color: var(--text-muted);
+}
+
 /* Opens downward from a trigger near the top of the window; the component
    sets `top` and `right` from the trigger's rect. */
 .composer-dropdown__menu--below {
@@ -39811,18 +41726,32 @@ button.composer__subthread-source-parent:hover {
   right: 0;
   left: auto;
   min-width: min(204px, calc(100vw - 32px));
+  padding: 4px;
   overflow: visible;
 }
 
+/* An action menu, so it takes the thread context menu's native density
+   rather than the composer pickers' 40px option rows. Scoped to the menu so
+   every row in it, including "Use default for monitor suggestions", matches. */
+.composer-thread-options__menu .composer-dropdown__option {
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  line-height: 16px;
+}
+
+.composer-thread-options__menu .composer-dropdown__separator {
+  margin: 4px 8px;
+}
+
 .composer-thread-options__option {
-  min-height: 34px;
   align-items: center;
   justify-content: space-between;
-  padding: 7px 10px;
 }
 
 .composer-thread-options__label {
-  font-weight: 650;
+  font-weight: 400;
 }
 
 /* "· this thread" beside a menu item whose per-thread override is set, so an
@@ -40809,53 +42738,6 @@ button.composer__subthread-source-parent:hover {
   width: min(560px, 100%);
 }
 
-.rewind-dialog__points {
-  display: grid;
-  max-height: min(320px, 45vh);
-  gap: 6px;
-  margin-top: 14px;
-  overflow-y: auto;
-}
-
-.rewind-dialog__point {
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  padding: 9px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-panel);
-  color: var(--text-primary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.rewind-dialog__point:hover,
-.rewind-dialog__point:focus-visible {
-  border-color: var(--accent-border);
-  background: var(--bg-panel-hover);
-}
-
-.rewind-dialog__point:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
-}
-
-.rewind-dialog__point[aria-checked="true"] {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-}
-
-.rewind-dialog__point small {
-  color: var(--text-muted);
-  font-size: 11px;
-}
-
-.workspace-handoff-dialog p.rewind-dialog__warning {
-  color: var(--danger-text);
-}
-
 .workspace-handoff-dialog p.rewind-dialog__error {
   color: var(--danger-text);
 }
@@ -40894,8 +42776,120 @@ button.composer__subthread-source-parent:hover {
   color: var(--danger-text);
 }
 
-.rewind-dialog__actions button:disabled,
-.rewind-dialog__point:disabled {
+.rewind-dialog__actions button:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+/* Rewind confirmation (mockup 1b): opens under the prompt it would go back
+   before, in the dialog chrome of .rewind-dialog at popover scale. */
+.thread-rewind-confirm {
+  align-self: flex-end;
+  box-sizing: border-box;
+  width: min(360px, 100%);
+  margin-top: -4px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+}
+
+.thread-rewind-confirm h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.thread-rewind-confirm p {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.thread-rewind-confirm p strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.thread-rewind-confirm__files.composer__checkbox {
+  align-items: flex-start;
+  margin-top: 10px;
+  font-size: 12.5px;
+}
+
+.thread-rewind-confirm__files input {
+  margin-top: 2px;
+}
+
+.thread-rewind-confirm__files:has(input:disabled) {
+  color: var(--text-muted);
+}
+
+.thread-rewind-confirm__files small {
+  display: block;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.thread-rewind-confirm__files small.thread-rewind-confirm__file-list {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.thread-rewind-confirm__file-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-rewind-confirm p.thread-rewind-confirm__warning,
+.thread-rewind-confirm p.thread-rewind-confirm__error {
+  color: var(--danger-text);
+}
+
+.thread-rewind-confirm__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.thread-rewind-confirm__actions button {
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.thread-rewind-confirm__actions button:hover:not(:disabled),
+.thread-rewind-confirm__actions button:focus-visible:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.thread-rewind-confirm__actions button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.thread-rewind-confirm__actions .thread-rewind-confirm__confirm {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.thread-rewind-confirm__actions button:disabled {
   opacity: 0.52;
   cursor: not-allowed;
 }
@@ -42484,6 +44478,78 @@ button.composer__subthread-source-parent:hover {
   color: var(--accent-bright);
 }
 
+/* Mid-turn the menu also holds Queue, Steer, and Interrupt, each with a
+   clause that says what it does, so it widens to fit those lines. */
+.composer__schedule-menu--turn {
+  width: 300px;
+  max-width: calc(100vw - 32px);
+}
+
+.composer__schedule-menu-label {
+  padding: 6px 10px 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.composer__schedule-menu-separator {
+  height: 1px;
+  margin: 6px 2px;
+  background: var(--border-subtle);
+}
+
+.composer__schedule-menu-item--described {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.composer__schedule-menu-item-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The supporting clause stays muted through hover, like
+   .composer-dropdown__option-description. */
+.composer__schedule-menu-item-description {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* Same chip as .thread-context-menu__shortcut. */
+.composer__schedule-menu-item-shortcut {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.composer__schedule-menu-item:hover .composer__schedule-menu-item-shortcut,
+.composer__schedule-menu-item:focus-visible .composer__schedule-menu-item-shortcut {
+  color: var(--accent-bright);
+}
+
+/* Unavailable for this provider or model. Still hoverable and readable: its
+   description says why. It takes no highlight, so it never reads as a target. */
+.composer__schedule-menu-item[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.composer__schedule-menu-item[aria-disabled="true"]:hover,
+.composer__schedule-menu-item[aria-disabled="true"]:focus-visible {
+  background: transparent;
+  color: var(--text-muted);
+}
+
 .context-window-moon {
   display: inline-flex;
   min-height: 26px;
@@ -43836,135 +45902,143 @@ button.composer__subthread-source-parent:hover {
   margin: 0;
 }
 
-/* Embedded mini thread-list previews */
-.onboarding-wizard__mini {
-  background: var(--bg-app);
+/* Density picker (features/settings/DensityPicker.tsx): Settings →
+   General → Info density and the onboarding appearance step. Each card
+   previews real thread rows (`.density-preview--*` above), so the preview
+   pane borrows the sidebar's surface, and the card's radio is stretched
+   over the whole card, since the inert preview takes no pointer. */
+.density-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.density-picker--wizard {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.density-picker__card {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 12px 14px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  padding: 8px;
-  height: 200px;
-  overflow: hidden;
-}
-.onboarding-wizard__mini-section {
-  font: 600 9px/1 var(--font-mono);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 6px 6px 4px;
-}
-.onboarding-wizard__mini-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border-radius: 6px;
-  background: var(--bg-panel);
-  margin-bottom: 4px;
-}
-.onboarding-wizard__mini-row.is-active {
-  background: var(--bg-row-active);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-.onboarding-wizard__mini-cookie {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-}
-.onboarding-wizard__mini-cookie--off {
-  background: transparent;
-}
-.onboarding-wizard__mini-title {
-  font: 600 11px/1.2 var(--font-sans, sans-serif);
-  color: var(--text-primary);
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.onboarding-wizard__mini-chip {
-  font: 600 9px/1 var(--font-sans, sans-serif);
-  color: var(--text-secondary);
   background: var(--bg-panel-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  padding: 3px 5px;
-}
-.onboarding-wizard__mini-chip--accent {
-  color: var(--accent);
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-}
-.onboarding-wizard__mini-chip--ok {
-  color: var(--success-text);
-  border-color: var(--success-border);
-  background: var(--success-soft);
+  transition: border-color 140ms ease, background 140ms ease;
 }
 
-/* Real-app-mimic chips used in the preview cards. The visual contract
-   mirrors the live ThreadRow primitive — the pin is the title line's
-   accent marker (`.thread-row__pin` in the live sidebar), PR chip uses
-   a small status dot + #number, Meta chips are gray-on-near-black for
-   OpenAI / directory / branch slots. */
-.onboarding-wizard__mini-pin {
-  display: inline-flex;
-  flex: 0 0 auto;
+.density-picker__card:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.density-picker__card.is-selected {
+  border-color: var(--accent);
+  background: var(--bg-row-active);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
+.density-picker__card:has(.density-picker__choose:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.density-picker__choose {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.density-picker__choose::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+}
+
+.density-picker__choose:focus-visible {
+  outline: none;
+}
+
+.density-picker__eyebrow {
+  color: var(--text-muted);
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.density-picker__card.is-selected .density-picker__eyebrow {
   color: var(--accent-bright);
 }
-.onboarding-wizard__mini-chip--pr {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--text-secondary);
-  background: var(--bg-app);
-  border-color: var(--border-strong);
-}
-.onboarding-wizard__mini-pr-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-.onboarding-wizard__mini-pr-dot.is-ok {
-  background: var(--status-ok);
-}
-.onboarding-wizard__mini-pr-dot.is-draft {
-  background: var(--text-subtle);
-}
-.onboarding-wizard__mini-pr-dot.is-merged {
-  background: var(--brand-purple, var(--text-muted));
-}
-.onboarding-wizard__mini-chip--meta {
-  color: var(--text-secondary);
-  background: var(--bg-app);
-  border-color: var(--border-strong);
-}
-.onboarding-wizard__mini-time {
-  font: 500 9px/1 var(--font-mono);
-  color: var(--text-muted);
-  margin-left: auto;
-  flex-shrink: 0;
-}
-.onboarding-wizard__mini-emoji {
-  font-size: 11px;
-  line-height: 1;
+
+.density-picker__title {
+  color: var(--text-primary);
+  font: 650 14px/1.25 var(--font-sans, sans-serif);
 }
 
-/* Mission-Control rows use a two-line layout: title + time on row 1,
-   chip cluster on row 2. Compact stays single-row (`.mini-row` default). */
-.onboarding-wizard__mini-row--mc {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 4px 8px;
-  padding: 8px 8px 9px;
+.density-picker--wizard .density-picker__title {
+  font-size: 15px;
 }
-.onboarding-wizard__mini-row--mc .onboarding-wizard__mini-meta {
-  grid-column: 1 / -1;
+
+.density-picker__badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 3px 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font: 600 10px/1 var(--font-sans, sans-serif);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Fixed height so the three cards line up; the fade says the list goes
+   on, which Minimal's shorter rows show by fitting more of it. */
+.density-picker__preview {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
+  height: 184px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 2px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-sidebar);
+  /* A mask reads only alpha; any opaque token serves. */
+  -webkit-mask-image: linear-gradient(to bottom, var(--text-primary) 78%, transparent);
+  mask-image: linear-gradient(to bottom, var(--text-primary) 78%, transparent);
+}
+
+.density-picker--wizard .density-picker__preview {
+  height: 220px;
+}
+
+.density-picker__desc {
+  margin: 0;
+  color: var(--text-secondary);
+  font: 400 13px/1.5 var(--font-sans, sans-serif);
+}
+
+.density-picker__hint {
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-subtle);
+  color: var(--text-muted);
+  font: 500 12px/1.4 var(--font-sans, sans-serif);
 }
 
 /* Codex profile diagrams */
@@ -47632,8 +49706,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   color: var(--text-muted);
 }
 
-/* Addressed reads as a done step; declined is final too, but nothing was
-   done, so it stays unstruck. */
+/* Addressed reads as a done step. Declined is final too, but nothing was
+   done, and a deferred finding is still to do, so both stay unstruck. */
 .review-todo__finding[data-status="addressed"] .review-todo__finding-title {
   text-decoration: line-through;
 }
@@ -47699,8 +49773,32 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 }
 
 .review-status__state[data-status="dismissed"],
-.review-finding-state[data-status="dismissed"] {
+.review-finding-state[data-status="dismissed"],
+.review-finding-state[data-status="declined"],
+.review-finding-state[data-status="deferred"] {
   color: var(--text-secondary);
+}
+
+/* The to-do card a deferred finding waits on, by its title. */
+.review-status__todo {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.review-status__todo svg {
+  flex: none;
+}
+
+.review-status__todo-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .review-status__note {

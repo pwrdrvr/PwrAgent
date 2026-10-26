@@ -1,3 +1,4 @@
+import { sandboxerStub } from "./helpers/sandboxer-stub";
 import type { Query as ClaudeQuery, SDKMessage as ClaudeMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -17,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { runGitCommand } from "../app-server/git-executable";
 import { CodexEnvironmentHydrationStore } from "../app-server/codex-environment-hydration-store";
+import type { CodexEnvironmentCommandRunner } from "../app-server/codex-environment-runtime";
 import { ensureStarMapIntakeLaunchpad } from "../app-server/star-map-intake";
 import { AutomationStore } from "../automations/automation-store";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
@@ -250,7 +252,7 @@ describe("sqlite write metrics", () => {
       expect(prompts.map((prompt) => prompt.message.content)).toEqual([
         [{ type: "text", text: "Start" }], [{ type: "text", text: "Focus on the PR" }], [{ type: "text", text: "Next queued task" }],
       ]);
-      expect(prompts[1].priority).toBe("now");
+      expect(prompts[1].priority).toBe("next");
       const replay = await registry.readThread(identity);
       expect(replay.replay.messages.find((message) => message.text === "Focus on the PR")?.origin).toEqual(origin);
       expect(registry.getActiveTurnForThread(identity)).toBeUndefined();
@@ -825,7 +827,7 @@ describe("sqlite write metrics", () => {
     expectSqliteWriteBudget({
       note:
         "nine finalized Token Miser helper lines persisted during the active "
-        + "turn, plus one batched parent overlay write at completion",
+        + "turn, plus one batched write of their nine gate-card rows at completion",
       scenario: "token-miser-turn-ledger",
       writes,
     });
@@ -1154,6 +1156,151 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("budgets an agent-created thread that starts with a named environment", async () => {
+    const environmentDir = path.join(tempDir, ".codex", "environments");
+    mkdirSync(environmentDir, { recursive: true });
+    writeFileSync(path.join(environmentDir, "environment.toml"),
+      'version = 1\nname = "Fixture"\n[setup]\nscript = "fixture-setup"\n');
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+      codexEnvironmentHydrationStore: new CodexEnvironmentHydrationStore(stateDb),
+      codexEnvironmentCommandRunner: async () => ({
+        output: "ready", exitCode: 0, durationMs: 1,
+        shellEnvironment: { PATH: "/fixture/node/bin:/usr/bin" },
+      }),
+      threadTitleGenerationService: null,
+    });
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        // What handoff_task does for environment="Fixture" in the project checkout.
+        await registry.startThread({
+          backend: "codex",
+          cwd: tempDir,
+          workMode: "local",
+          codexEnvironmentRuntime: {
+            environmentId: "environment",
+            environmentName: "Fixture",
+            executionTarget: "local",
+          },
+          rerunCodexEnvironmentSetup: true,
+        });
+      });
+      expectSqliteWriteBudget({
+        note: "One agent-created thread with a named environment: thread start bookkeeping, setup hydration and runtime persistence; no per-event writes. ~74 KB per thread: ~7.4 MB/day at 100 agent-created threads/day, 0 MB/day idle.",
+        scenario: "agent-thread-named-environment-start",
+        writes,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
+  describe("environment action output", () => {
+    // One minute of a chatty action at the 500 ms snapshot throttle
+    // (DETACHED_OUTPUT_SNAPSHOT_MS). Each snapshot is a full rolling 32,000-
+    // character tail, which is what a long-running dev server produces.
+    const SNAPSHOTS = 120;
+    const snapshot = (index: number) => `snapshot ${index} `.padEnd(32_000, ".");
+    const readRun = async () => (await store.getThreadOverlayState({
+      backend: "codex", threadId: "action-thread",
+    }))?.codexEnvironmentRuntime?.actionRuns?.[0];
+    // Rows in sqlite that hold the last snapshot, read past the store.
+    const storedLastSnapshot = () => (stateDb.raw
+      .prepare("SELECT count(*) AS count FROM threads WHERE instr(payload, ?) > 0")
+      .get(`snapshot ${SNAPSHOTS - 1} `) as { count: number }).count;
+
+    async function createActionRegistry() {
+      const environmentDir = path.join(tempDir, ".codex", "environments");
+      mkdirSync(environmentDir, { recursive: true });
+      writeFileSync(path.join(environmentDir, "environment.toml"),
+        'version = 1\nname = "Fixture"\n[[actions]]\nname = "Dev"\ncommand = "fixture-dev"\n');
+      const detached: { params?: Parameters<CodexEnvironmentCommandRunner>[0] } = {};
+      const registry = new DesktopBackendRegistry({
+        codexClient: createStubBackendClient({ threads: [{
+          id: "action-thread", source: "codex", title: "Fixture",
+          titleSource: "explicit", updatedAt: 1,
+          linkedDirectories: [{ id: tempDir, kind: "local", label: "Fixture", path: tempDir }],
+        }] }),
+        overlayStore: store as never,
+        codexEnvironmentHydrationStore: new CodexEnvironmentHydrationStore(stateDb),
+        codexEnvironmentCommandRunner: async (params) => {
+          if (params.mode === "detach") detached.params = params;
+          return { output: "", exitCode: 0, durationMs: 1, pid: 4242 };
+        },
+      });
+      const selected = await registry.setCodexThreadEnvironment({
+        backend: "codex", threadId: "action-thread", environmentId: "environment",
+      });
+      const actionId = selected.codexEnvironmentRuntime?.actions?.[0]?.id;
+      expect(actionId).toBeTruthy();
+      const emitted: AgentEvent[] = [];
+      registry.onEvent((event) => { emitted.push(event); });
+      const start = () => registry.runCodexEnvironmentAction({
+        backend: "codex", threadId: "action-thread", actionId: actionId!,
+      });
+      const print = async () => {
+        for (let index = 0; index < SNAPSHOTS; index += 1) {
+          detached.params?.onDetachedOutput?.({ output: snapshot(index) });
+        }
+        await vi.waitFor(async () => {
+          expect((await readRun())?.output).toBe(snapshot(SNAPSHOTS - 1));
+        }, { timeout: 10_000 });
+        // Served from memory: the store read and the renderer event have the
+        // tail, and sqlite does not.
+        expect(emitted.at(-1)?.notification).toMatchObject({
+          method: "thread/codexEnvironment/updated",
+          params: { codexEnvironmentRuntime: { actionRuns: [{ output: snapshot(SNAPSHOTS - 1) }] } },
+        });
+        expect(storedLastSnapshot()).toBe(0);
+      };
+      return { detached, print, registry, start };
+    }
+
+    it("budgets one action run without a commit per output snapshot", async () => {
+      const { detached, print, registry, start } = await createActionRegistry();
+      try {
+        const { writes } = await measureSqliteWrites(async () => {
+          await start();
+          await print();
+          detached.params?.onDetachedExit?.({
+            exitCode: 0, exitSignal: null, durationMs: 60_000, output: snapshot(SNAPSHOTS),
+          });
+          await vi.waitFor(async () => {
+            expect(await readRun()).toMatchObject({ status: "exited", output: snapshot(SNAPSHOTS) });
+          }, { timeout: 10_000 });
+        });
+        expectSqliteWriteBudget({
+          note: `one environment action run: start, ${SNAPSHOTS} output snapshots (one minute at the 500 ms throttle, each a full 32,000-character tail) and exit`,
+          scenario: "codex-environment-action-output",
+          writes,
+        });
+      } finally {
+        await registry.close();
+      }
+    });
+
+    it("budgets the shutdown write of a running action's output", async () => {
+      const { print, registry, start } = await createActionRegistry();
+      try {
+        await start();
+        const { writes } = await measureSqliteWrites(async () => {
+          await print();
+          await registry.close();
+        });
+        expect(storedLastSnapshot()).toBe(1);
+        expectSqliteWriteBudget({
+          note: `${SNAPSHOTS} output snapshots from a running environment action, then app shutdown`,
+          scenario: "codex-environment-action-output-shutdown",
+          writes,
+        });
+      } finally {
+        // close() is idempotent; this covers a failure before the measured close.
+        await registry.close();
+      }
+    });
+  });
+
   it("budgets demand-driven directory repair and unchanged refreshes", async () => {
     const cwd = path.join(tempDir, ".codex", "worktrees", "one", "repo");
     const thread: AppServerThreadSummary = {
@@ -1468,9 +1615,9 @@ describe("sqlite write metrics", () => {
         },
       },
     } as AgentEvent);
-    const storedCard = async () => (await store.getThreadOverlayState({
+    const storedCard = async () => (await store.listThreadSubAgents({
       backend: "codex", threadId: "thread-parent",
-    }))?.subAgents?.[0];
+    }))[0];
     try {
       const { writes } = await measureSqliteWrites(async () => {
         for (let index = 1; index <= 20; index += 1) {
@@ -1608,8 +1755,8 @@ describe("sqlite write metrics", () => {
       expect(await storedWorkerLine()).toBeUndefined();
       await registry.close();
       expect(await storedWorkerLine()).toMatchObject({ inputTokens: 1_000, model: "gpt-5.5" });
-      expect((await store.getThreadOverlayState({ backend: "codex", threadId: "thread-parent" }))
-        ?.subAgents?.[0]?.monitorUsage).toBeDefined();
+      const [workerCard] = await store.listThreadSubAgents({ backend: "codex", threadId: "thread-parent" });
+      expect(workerCard?.monitorUsage).toBeDefined();
     });
 
     it("repairs a model-less worker line once when discovery names the model", async () => {
@@ -1638,6 +1785,8 @@ describe("sqlite write metrics", () => {
         overlayStore: store as never,
       });
       try {
+        // Startup ledger repairs are setup, not the discovery under measure.
+        await (registry as unknown as { usageTurnStartupRepair: Promise<void> }).usageTurnStartupRepair;
         const { writes } = await measureSqliteWrites(async () => {
           await registry.listThreads({ backend: "codex", forceRefresh: true });
         });
@@ -1836,18 +1985,20 @@ describe("sqlite write metrics", () => {
     });
     const internal = registry as unknown as {
       restoreCodexNativeSubAgentsFromReplay(threadId: string, replay: AppServerThreadReplay): Promise<void>;
-      reconcilePersistedCodexNativeSubAgents(threads: AppServerThreadSummary[], overlays: Record<string, unknown>): Promise<void>;
+      reconcilePersistedCodexNativeSubAgents(threads: AppServerThreadSummary[], nativeCardsByThreadId: Record<string, ThreadSubAgentSummary[]>): Promise<void>;
     };
-    const overlays = await store.getThreadOverlayStates({ backend: "codex", threadIds: [parent.id] });
+    const nativeCards = await store.listThreadSubAgentsByMonitorIdPrefix({
+      backend: "codex", threadIds: [parent.id], monitorIdPrefix: "codex-native:",
+    });
     try {
       const { writes } = await measureSqliteWrites(async () => {
         for (let index = 0; index < 3; index += 1) {
           if (source === "replay") await internal.restoreCodexNativeSubAgentsFromReplay(parent.id, replay);
-          else await internal.reconcilePersistedCodexNativeSubAgents([parent], overlays);
+          else await internal.reconcilePersistedCodexNativeSubAgents([parent], nativeCards);
         }
       });
-      const overlay = await store.getThreadOverlayState({ backend: "codex", threadId: parent.id });
-      expect(overlay?.subAgents?.[0]?.status).toBe(source === "replay" ? "cancelled" : "success");
+      const [card] = await store.listThreadSubAgents({ backend: "codex", threadId: parent.id });
+      expect(card?.status).toBe(source === "replay" ? "cancelled" : "success");
       expectSqliteWriteBudget({
         scenario: `native-subagent-${source}-repair`,
         note: "One persisted worker terminal correction; repeated recovery makes no commits. At 100 repairs/day, approximately 1.6 MB/day, with no idle writes.",
@@ -3129,12 +3280,14 @@ describe("sqlite write metrics", () => {
       store: instances,
     });
     const owner = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       brokerDiscovery: discovery,
       leaseManager: ownerLeases,
       registry,
       settings,
     });
     const viewer = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       brokerDiscovery: discovery,
       leaseManager: viewerLeases,
       registry,

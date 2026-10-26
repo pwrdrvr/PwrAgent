@@ -11,8 +11,10 @@ export type McpGatewayApproval = boolean | {
   onInvoked: () => Promise<void>;
 };
 export type McpGatewaySearchResult = {
-  tools: Array<McpGatewayTool & { invocation: { name: "call_mcp_tool"; codeModeName: "pwragent__call_mcp_tool" } }>;
+  tools: Array<Omit<McpGatewayTool, "serverInstructions"> & { invocation: { name: "call_mcp_tool"; codeModeName: "pwragent__call_mcp_tool" } }>;
   unavailable: Array<{ connectionId: string; message: string }>;
+  /** Each returned tool's server guidance, once per server. */
+  serverInstructions?: Array<{ connectionId: string; serverName: string; instructions: string }>;
 };
 
 export type McpGatewayToolServiceOptions = {
@@ -48,6 +50,7 @@ export class McpGatewayToolService {
       const ids = args.connectionId ? [args.connectionId] : [...new Set(selected)];
       if (ids.length > 64) throw new Error("Specify a connectionId when searching more than 64 selected connections.");
       const candidates: McpGatewayTool[] = [];
+      const instructions = new Map<string, { serverName: string; instructions: string }>();
       let candidateBytes = 0;
       const unavailable: McpGatewaySearchResult["unavailable"] = [];
       // Bounded fan-out; one slow server must not consume every socket.
@@ -64,7 +67,12 @@ export class McpGatewayToolService {
             const bytes = Buffer.byteLength(JSON.stringify(tools));
             if (candidateBytes + bytes > 8 * 1024 * 1024) throw new Error("Search a specific connectionId to stay within the catalog memory budget.");
             candidateBytes += bytes;
-            candidates.push(...tools);
+            for (const { serverInstructions, ...tool } of tools) {
+              if (serverInstructions) {
+                instructions.set(connectionId, { serverName: tool.serverName, instructions: serverInstructions });
+              }
+              candidates.push(tool);
+            }
           } catch (error) {
             signal.throwIfAborted();
             unavailable.push({ connectionId, message: (error instanceof Error ? error.message : String(error)).slice(0, 180) });
@@ -85,12 +93,17 @@ export class McpGatewayToolService {
       const result: McpGatewaySearchResult = { tools: [], unavailable };
       for (const { tool } of ranked.slice(0, args.limit ?? 3)) {
         const entry = { ...tool, invocation: { name: "call_mcp_tool" as const, codeModeName: "pwragent__call_mcp_tool" as const } };
+        const guidance = instructions.get(tool.connectionId);
+        const serverInstructions = guidance && !result.serverInstructions?.some((entry) => entry.connectionId === tool.connectionId)
+          ? [...(result.serverInstructions ?? []), { connectionId: tool.connectionId, ...guidance }]
+          : result.serverInstructions;
         // Exact schemas are indivisible. Never return truncated valid-looking JSON.
-        if (Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry] })) > 24_000) {
+        if (Buffer.byteLength(JSON.stringify({ ...result, tools: [...result.tools, entry], serverInstructions })) > 24_000) {
           result.unavailable.push({ connectionId: tool.connectionId, message: `The exact schema for ${tool.toolName} exceeds this result's size budget. Search its exact name alone or use native MCP invocation.` });
           continue;
         }
         result.tools.push(entry);
+        if (serverInstructions) result.serverInstructions = serverInstructions;
       }
       return result;
     });

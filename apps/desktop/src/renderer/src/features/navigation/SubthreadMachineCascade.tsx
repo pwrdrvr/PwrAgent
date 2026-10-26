@@ -104,7 +104,7 @@ export function SubthreadMachineCascade(props: {
     const fitsEnd = row.right + 2 + width <= window.innerWidth - VIEWPORT_MARGIN;
     const fitsStart = row.left - 2 - width >= VIEWPORT_MARGIN;
     setStartSide(!fitsEnd && fitsStart);
-    const top = row.top - 6;
+    const top = row.top - 4;
     const overflow = top + height - (window.innerHeight - VIEWPORT_MARGIN);
     setShiftY(overflow > 0 ? -Math.min(overflow, top - VIEWPORT_MARGIN) : 0);
   });
@@ -205,7 +205,7 @@ export function SubthreadMachineCascade(props: {
           className={startSide
             ? "thread-context-menu thread-context-menu__flyout thread-context-menu__flyout--start"
             : "thread-context-menu thread-context-menu__flyout"}
-          style={shiftY !== 0 ? { top: -6 + shiftY } : undefined}
+          style={shiftY !== 0 ? { top: -4 + shiftY } : undefined}
           role="menu"
           aria-labelledby={groupLabelId}
           onKeyDown={handleFlyoutKeyDown}

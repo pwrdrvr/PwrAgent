@@ -26,6 +26,8 @@ import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadPlaceholderHeader } from "../thread-detail/ThreadPlaceholderHeader";
 import { AgentThreadChip } from "../navigation/AgentThreadChip";
+import { useProviderChipNeeded } from "../navigation/provider-chip-visibility";
+import { formatBackendLabel } from "../../lib/backend-label";
 import { ProjectSearchInput } from "./ProjectSearchInput";
 import { mergeAgentMatches, mergePrNumberMatches } from "./thread-match";
 import { BranchIcon, FolderIcon, SearchIcon, WorktreeIcon } from "../../icons";
@@ -172,6 +174,7 @@ function ThreadSearchResultRow(props: {
   onOpen: () => void;
 }): ReactElement {
   const { result, query } = props;
+  const showProvider = useProviderChipNeeded(result.backend);
   const directory = result.linkedDirectories[0];
   // `projectKey` is often a full checkout/worktree path (Codex keys projects by
   // cwd), so collapse whatever we resolve down to its final path segment — the
@@ -190,7 +193,9 @@ function ThreadSearchResultRow(props: {
       <span className="thread-search-result__body">
         <span className="thread-search-result__title">{result.title}</span>
         <span className="thread-search-result__meta">
-          <span className="chip chip--backend">{result.backend}</span>
+          {showProvider ? (
+            <span className="chip chip--backend">{formatBackendLabel(result.backend)}</span>
+          ) : null}
           {props.isAgent ? <AgentThreadChip /> : null}
           {result.federation ? (
             <span className="chip">{result.federation.instanceLabel}</span>

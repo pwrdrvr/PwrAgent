@@ -180,6 +180,28 @@ it("keeps messages missing from the provider timeline and never includes transcr
   expect(JSON.stringify(pricing)).not.toContain("Visible answer");
 });
 
+it("anchors a turn total after its turn's last row, including the turn reconciliation skips", () => {
+  // Real clocks: the total was minted before Codex wrote the turn's final
+  // reply (second-truncated completion) and before a late tool row arrived.
+  // Reconciliation leaves the active turn alone, so only the anchor places it.
+  const turn = { id: "turn-live", status: "in_progress" as const, startedAt: 1_800_000_000_000 };
+  const entries = [
+    { type: "message" as const, id: "user", role: "user" as const, text: "Go", createdAt: turn.startedAt, turn },
+    { type: "activity" as const, id: "live-turn-usage-turn-live", summary: "Turn usage: 1,200 uncached in", status: "completed" as const, details: [], createdAt: turn.startedAt + 89_400, turn },
+    { type: "activity" as const, id: "activity-exec", summary: "Ran 2 commands", status: "completed" as const, details: [], turn },
+    { type: "message" as const, id: "final", role: "assistant" as const, phase: "final" as const, text: "Done", createdAt: turn.startedAt + 90_000, turn },
+  ];
+  const data: AppServerReadThreadResponse = {
+    backend: "codex", threadId: "fixture", fetchedAt: 1_800_100_000_000,
+    replay: { entries, messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+    pricing: { lines: [], summaries: [] },
+  };
+  const result = projectThreadDisplay(data, { threadId: "fixture", display: { resource: "transcript" } }, { activeTurnId: turn.id });
+  expect(result.replay.entries.map((entry) => entry.id)).toEqual([
+    "user", "activity-exec", "final", "live-turn-usage-turn-live",
+  ]);
+});
+
 it("selects one authoritative correction and completes stale running turn metadata", () => {
   const data = snapshot(2);
   data.pricing!.lines.push({ ...line(0), usageLineId: "new-authoritative", totalCostMicros: 1000 });
@@ -319,7 +341,8 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
   const registry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
     automaticArchiveReservations: new Map(),
     overlayStore: {
-      getThreadOverlayState: async () => ({ subAgents: [] }),
+      getThreadOverlayState: async () => undefined,
+      listThreadSubAgents: async () => [],
       readThreadPricing: async () => data.pricing,
       readThreadToolAccounting: async () => undefined,
     },

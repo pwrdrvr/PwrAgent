@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { isBranchDrifted, operatorTodoItemKey } from "@pwragent/shared";
 import {
@@ -6,11 +6,13 @@ import {
   ContinueAfterIcon,
   DraftIcon,
   FolderIcon,
+  PauseIcon,
   TerminalIcon,
   TodoIcon,
   WorktreeIcon,
 } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
+import { useProviderChipNeeded } from "./provider-chip-visibility";
 import { copyText } from "../../lib/copy-text";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
@@ -46,9 +48,10 @@ type ThreadMetaChipsProps = {
   hasIntegratedTerminal?: boolean;
   hasInputRequest?: boolean;
   /**
-   * When set, renders the "Scheduled" (future send time) or "Queued"
-   * (waiting on the active turn) chip. Resolved upstream so a thread with
-   * both pending states shows only the higher-priority "Scheduled".
+   * When set, renders the "Held" (waiting on the operator to retry or
+   * delete), "Scheduled" (future send time) or "Queued" (waiting on the
+   * active turn) chip. Resolved upstream so a thread with several pending
+   * states shows only the highest-priority one.
    */
   queuedMessageState?: ThreadQueuedMessageState;
   includeLinkedDirectories?: boolean;
@@ -98,7 +101,8 @@ export function ThreadMetaChips({
   chipVisibility,
   thread,
 }: ThreadMetaChipsProps) {
-  const showProvider = chipVisibility?.provider ?? true;
+  const providerChipNeeded = useProviderChipNeeded(thread.source);
+  const showProvider = (chipVisibility?.provider ?? true) && providerChipNeeded;
   const showBranch = chipVisibility?.branch ?? true;
   const maxLinkedDirectories = chipVisibility?.maxLinkedDirectories;
   const gitStateTooltip = useViewportTooltip({ className: "viewport-tooltip" });
@@ -293,7 +297,17 @@ export function ThreadMetaChips({
 
       {thread.agent ? <AgentThreadChip threadRow /> : null}
 
-      {queuedMessageState === "scheduled" ? (
+      {queuedMessageState === "held" ? (
+        <span
+          aria-label="A message is held"
+          role="img"
+          className="thread-row__chip thread-row__chip--held thread-row__chip--persistent thread-row__chip--essential"
+          title="A message is held. Open the thread to retry or delete it."
+        >
+          <PauseIcon size={11} strokeWidth={2.5} />
+          Held
+        </span>
+      ) : queuedMessageState === "scheduled" ? (
         <span
           aria-label="A message is scheduled to send"
           role="img"
@@ -350,7 +364,7 @@ export function ThreadMetaChips({
         <span
           aria-label={`${operatorWaitLabel(leadWait)}: ${leadWait.title}`}
           role="img"
-          className={`thread-row__chip ${
+          className={`thread-row__chip thread-row__chip--essential ${
             isBlockingWait(leadWait) ? "thread-row__chip--approval" : "thread-row__chip--question"
           }`}
           data-thread-wait={leadWait.kind}
@@ -434,7 +448,7 @@ export function ThreadMetaChips({
       {!leadWait && hasApprovalRequest ? (
         <span
           aria-label="Waiting for approval"
-          className="thread-row__chip thread-row__chip--approval"
+          className="thread-row__chip thread-row__chip--approval thread-row__chip--essential"
           title="Waiting for approval"
         >
           Waiting for approval
@@ -444,7 +458,7 @@ export function ThreadMetaChips({
       {!leadWait && hasInputRequest ? (
         <span
           aria-label="Input needed"
-          className="thread-row__chip thread-row__chip--input"
+          className="thread-row__chip thread-row__chip--input thread-row__chip--essential"
           title="Input needed"
         >
           Input needed
@@ -662,6 +676,24 @@ export function CopyableThreadChip(props: {
   const [copied, setCopied] = useState(false);
   const tooltipBody = props.tooltipText ?? props.value;
   const tooltipText = copied ? "Copied" : `${tooltipBody}\nClick to copy to clipboard`;
+  const latestTooltipTextRef = useRef(tooltipText);
+  latestTooltipTextRef.current = tooltipText;
+  const updateTooltip = tooltip.update;
+  const tooltipVisible = tooltip.visible;
+
+  // Hovering the branch chip asks for a Git refresh, so its base drift can
+  // change while the tooltip is open. Push a changed body into the open
+  // tooltip; an unchanged one leaves it alone. Tracking the body while hidden
+  // keeps the next hover from pushing a stale one, as PrChip does.
+  const pushedTooltipBodyRef = useRef(tooltipBody);
+  useEffect(() => {
+    const moved = pushedTooltipBodyRef.current !== tooltipBody;
+    pushedTooltipBodyRef.current = tooltipBody;
+    if (!moved || !tooltipVisible || copied) {
+      return;
+    }
+    updateTooltip(`${tooltipBody}\nClick to copy to clipboard`);
+  }, [copied, tooltipBody, tooltipVisible, updateTooltip]);
 
   useEffect(() => {
     if (!copied) {
@@ -702,9 +734,13 @@ export function CopyableThreadChip(props: {
           event.stopPropagation();
           copy(event.currentTarget);
         }}
+        // A delayed tooltip reads its text when the delay fires.
         onMouseEnter={(event) =>
           props.delayedTooltip
-            ? tooltip.showAfterDelay(event.currentTarget, tooltipText)
+            ? tooltip.showAfterDelay(
+              event.currentTarget,
+              () => latestTooltipTextRef.current,
+            )
             : tooltip.show(event.currentTarget, tooltipText)
         }
         onMouseLeave={tooltip.hide}

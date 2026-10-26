@@ -13,6 +13,53 @@ export class ConnectionRpcClient {
     private readonly token: string,
   ) {}
 
+  /**
+   * Open the socket that tells the gateway this bridge is alive.
+   *
+   * It stays open until this process exits; the gateway stops a local
+   * command started for this bridge's grant when the last one closes. The
+   * socket is unref'd, so it never keeps the bridge running after its agent
+   * has closed stdin. Resolves false when the gateway does not support it
+   * (an older owner), which only means cleanup waits for revocation instead.
+   */
+  attach(timeoutMs = 5_000): Promise<boolean> {
+    return new Promise((resolve) => {
+      const socket: Socket = connect(this.socketPath);
+      let buffer = "";
+      let settled = false;
+      const finish = (attached: boolean): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (!attached) socket.destroy();
+        resolve(attached);
+      };
+      const timer = setTimeout(() => finish(false), timeoutMs);
+      socket.setEncoding("utf8");
+      socket.on("connect", () => {
+        socket.write(`${JSON.stringify({ token: this.token, op: "attach" })}\n`);
+      });
+      socket.on("data", (chunk: string) => {
+        if (settled) return;
+        buffer += chunk;
+        const newline = buffer.indexOf("\n");
+        if (newline === -1) {
+          if (buffer.length > 4_096) finish(false);
+          return;
+        }
+        try {
+          const response = JSON.parse(buffer.slice(0, newline)) as RpcResponse;
+          if (response.ok) socket.unref();
+          finish(response.ok);
+        } catch {
+          finish(false);
+        }
+      });
+      socket.on("error", () => finish(false));
+      socket.on("close", () => finish(false));
+    });
+  }
+
   request(
     operation: string,
     params?: unknown,

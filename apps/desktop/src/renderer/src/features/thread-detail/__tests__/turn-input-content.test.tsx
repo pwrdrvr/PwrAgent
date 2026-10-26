@@ -37,6 +37,20 @@ describe("correspondence navigation", () => {
     expect(onShowThread).toHaveBeenCalledWith(expect.objectContaining({ threadId: recipient, messageId: "user:turn-1" }));
   });
 
+  it("collapses a sender breadcrumb to its first line and delivery state", () => {
+    const { container } = render(<ThreadLinkProvider onShowThread={vi.fn()} threads={[]}>
+      <TranscriptMessage parentThreadId={sender} skills={[]} message={{ type: "message", id: "correspondence:two", role: "assistant", origin: { kind: "pwragent", systemReason: "thread-correspondence" }, text: `**Message to [Destination](pwragent://thread/${recipient}?backend=codex)** · Failed to send\n\n## Authorize **one** packet.\n\nSecond paragraph.` }} />
+    </ThreadLinkProvider>);
+    const toggle = screen.getByRole("button", { name: "Authorize one packet." });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Failed to send")).toBeInTheDocument();
+    expect(screen.queryByText("Second paragraph.")).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(screen.getByText("Second paragraph.")).toBeInTheDocument();
+    // The heading line lives in the header and chip, not in the body.
+    expect(container.querySelector(".transcript-monitor-result__content")).not.toHaveTextContent("Message to");
+  });
+
   it("identifies a received prompt as coming from another thread", () => {
     render(<TranscriptMessage parentThreadId={recipient} skills={[]} message={{
       type: "message", id: "received-one", role: "user", text: "Please check the query name.",

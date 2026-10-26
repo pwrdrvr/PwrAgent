@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  forgetRecentThreadLockNote,
   isThreadLockRefusal,
+  normalizeRecentThreadLockNote,
   normalizeThreadLockNote,
+  parseRecentThreadLockNotes,
+  rememberRecentThreadLockNote,
   THREAD_LOCK_NOTE_MAX_LENGTH,
+  THREAD_LOCK_RECENT_NOTE_MAX_LENGTH,
+  THREAD_LOCK_RECENT_NOTES_LIMIT,
   threadLockRefusalMessage,
 } from "../thread-lock";
 
@@ -16,6 +22,42 @@ describe("thread lock notes", () => {
   it("caps a note at the maximum length", () => {
     const note = normalizeThreadLockNote("x".repeat(THREAD_LOCK_NOTE_MAX_LENGTH + 50));
     expect(note).toHaveLength(THREAD_LOCK_NOTE_MAX_LENGTH);
+  });
+});
+
+describe("recent thread lock notes", () => {
+  it("offers only short one-line notes", () => {
+    expect(normalizeRecentThreadLockNote("  Claude Design ")).toBe("Claude Design");
+    expect(normalizeRecentThreadLockNote("Claude\nDesign")).toBeUndefined();
+    expect(normalizeRecentThreadLockNote("x".repeat(THREAD_LOCK_RECENT_NOTE_MAX_LENGTH))).toHaveLength(
+      THREAD_LOCK_RECENT_NOTE_MAX_LENGTH,
+    );
+    expect(normalizeRecentThreadLockNote("x".repeat(THREAD_LOCK_RECENT_NOTE_MAX_LENGTH + 1))).toBeUndefined();
+    expect(normalizeRecentThreadLockNote(" ")).toBeUndefined();
+  });
+
+  it("moves a remembered note to the front without repeats, capped", () => {
+    expect(rememberRecentThreadLockNote(["A", "Claude Design", "B"], " Claude Design"))
+      .toEqual(["Claude Design", "A", "B"]);
+    const full = Array.from({ length: THREAD_LOCK_RECENT_NOTES_LIMIT }, (_, index) => `Note ${index}`);
+    expect(rememberRecentThreadLockNote(full, "New")).toEqual(["New", ...full.slice(0, -1)]);
+  });
+
+  it("leaves the list alone for a note that does not qualify", () => {
+    expect(rememberRecentThreadLockNote(["A"], "Two\nlines")).toEqual(["A"]);
+    expect(rememberRecentThreadLockNote(["A"], "")).toEqual(["A"]);
+  });
+
+  it("forgets a note, and leaves the list alone for one it does not hold", () => {
+    expect(forgetRecentThreadLockNote(["A", "Claude Design", "B"], " Claude Design ")).toEqual(["A", "B"]);
+    expect(forgetRecentThreadLockNote(["A"], "Missing")).toEqual(["A"]);
+  });
+
+  it("reads a stored list defensively", () => {
+    expect(parseRecentThreadLockNotes(["A", 3, "A", " B ", "multi\nline"])).toEqual(["A", "B"]);
+    expect(parseRecentThreadLockNotes("A")).toEqual([]);
+    expect(parseRecentThreadLockNotes(Array.from({ length: 9 }, (_, index) => `N${index}`)))
+      .toHaveLength(THREAD_LOCK_RECENT_NOTES_LIMIT);
   });
 });
 

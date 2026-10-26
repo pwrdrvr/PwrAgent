@@ -289,6 +289,30 @@ describe("ThreadRow chip flow", () => {
     expect(bindingChip?.getAttribute("role")).toBe("button");
   });
 
+  it("offers Unbind on a local row's binding chip but not on a peer's", () => {
+    const local = renderRow();
+    const localChip = local.container.querySelector(".thread-row__chip--binding");
+    expect(localChip?.getAttribute("aria-haspopup")).toBe("menu");
+    expect(localChip?.getAttribute("aria-disabled")).toBeNull();
+    local.unmount();
+
+    // The peer holds this binding, so this machine cannot revoke it.
+    const remote = renderRow({
+      thread: {
+        ...baseThread,
+        messagingBindings: [telegramBinding],
+        federation: {
+          ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: baseThread.id },
+          instanceLabel: "Peer",
+        },
+      } as NavigationThreadSummary,
+    });
+    const remoteChip = remote.container.querySelector(".thread-row__chip--binding");
+    expect(remoteChip).not.toBeNull();
+    expect(remoteChip?.getAttribute("aria-haspopup")).toBeNull();
+    expect(remoteChip?.getAttribute("aria-disabled")).toBe("true");
+  });
+
   it("renders Slack binding chips with the Slack icon", () => {
     const slackBinding: MessagingThreadBindingSummary = {
       ...telegramBinding,
@@ -902,6 +926,68 @@ describe("ThreadRow chip flow", () => {
     }
   });
 
+  it("keeps an open branch tooltip in step with refreshed base drift", () => {
+    vi.useFakeTimers();
+    try {
+      const gitWorkingState = {
+        dirtyFiles: 0,
+        dirtyAdditions: 0,
+        dirtyDeletions: 0,
+        untrackedFiles: 0,
+        unpushedCommits: 0,
+        baseBranch: "main",
+        baseCommit: "1db9ac256441aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        baseTipCommit: "bb3732d8930cbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        baseBehindCommitCount: 3,
+        baseAheadCommitCount: 0,
+        isBehindBase: true,
+      };
+      const props: React.ComponentProps<typeof ThreadRow> = {
+        thread: { ...baseThread, gitWorkingState },
+        onSelectThread: vi.fn(),
+        onOpenContextMenu: vi.fn(),
+      };
+      const view = render(<ThreadRow {...props} />);
+
+      const branchChip = screen.getByRole("button", {
+        name: "Copy branch feat/chips",
+      });
+      fireEvent.mouseEnter(branchChip);
+      act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Behind base: 3 commits");
+
+      // An unchanged refresh result arrives as a new object; the open tooltip
+      // must neither close nor change.
+      view.rerender(
+        <ThreadRow
+          {...props}
+          thread={{ ...baseThread, gitWorkingState: { ...gitWorkingState } }}
+        />,
+      );
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Behind base: 3 commits");
+
+      view.rerender(
+        <ThreadRow
+          {...props}
+          thread={{
+            ...baseThread,
+            gitWorkingState: {
+              ...gitWorkingState,
+              baseTipCommit: "cc0ffee00000cccccccccccccccccccccccccccc",
+              baseBehindCommitCount: 27,
+            },
+          }}
+        />,
+      );
+      const tooltip = screen.getByRole("tooltip");
+      expect(tooltip).toHaveTextContent("Base tip: cc0ffee00000");
+      expect(tooltip).toHaveTextContent("Behind base: 27 commits");
+      expect(tooltip).not.toHaveTextContent("Behind base: 3 commits");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("marks Agent threads and explains their messaging role", () => {
     const { container } = renderRow({
       thread: {
@@ -1444,8 +1530,23 @@ describe("ThreadRow chip flow", () => {
     expect(container.querySelector(".thread-row__chip--scheduled")).toBeNull();
   });
 
+  it("renders a danger-outlined Held chip when a queued message waits on the operator", () => {
+    const { container } = renderRow({
+      queuedMessageThreadKeys: { "codex:thread-chips": "held" },
+    });
+    const chip = container.querySelector(".thread-row__chip--held");
+    expect(chip).not.toBeNull();
+    expect(chip).toHaveTextContent("Held");
+    expect(chip).toHaveClass("thread-row__chip--persistent");
+    expect(chip).toHaveAttribute("aria-label", "A message is held");
+    expect(chip?.querySelector("svg")).not.toBeNull();
+    expect(container.querySelector(".thread-row__chip--queued")).toBeNull();
+    expect(container.querySelector(".thread-row__chip--scheduled")).toBeNull();
+  });
+
   it("renders no pending-send chip when the thread has no queued message", () => {
     const { container } = renderRow({ queuedMessageThreadKeys: {} });
+    expect(container.querySelector(".thread-row__chip--held")).toBeNull();
     expect(container.querySelector(".thread-row__chip--scheduled")).toBeNull();
     expect(container.querySelector(".thread-row__chip--queued")).toBeNull();
   });

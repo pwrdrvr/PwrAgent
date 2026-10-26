@@ -156,6 +156,39 @@ class KimiConfigOptionTransport extends FakeAcpAgentTransport {
   }
 }
 
+/**
+ * Holds `session/prompt` open the way a busy agent does, and applies the same
+ * deadline `JsonRpcConnection` does: every request gets a timer, and an
+ * omitted deadline falls back to the ACP stdio transport's 10-minute default.
+ */
+class DeadlineEnforcingAcpTransport extends FakeAcpAgentTransport {
+  private settle: ((value: unknown) => void) | undefined;
+
+  override async request(
+    method: string,
+    params?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<unknown> {
+    if (method !== "session/prompt") {
+      return await super.request(method, params, timeoutMs);
+    }
+    this.requests.push({ method, params, timeoutMs });
+    return await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`json-rpc timeout: ${method}`));
+      }, Math.max(100, timeoutMs ?? 10 * 60_000));
+      this.settle = (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      };
+    });
+  }
+
+  settlePrompt(value: unknown): void {
+    this.settle?.(value);
+  }
+}
+
 function readRawAcpSessionPayload(
   backendId: string,
   sessionId: string,
@@ -529,7 +562,7 @@ describe("AcpAgentClient", () => {
       sessionId: "session-1",
       prompt: [{ type: "text", text: "hello" }],
     });
-    expect(transport.requests[2]?.timeoutMs).toBe(60 * 60_000);
+    expect(transport.requests[2]?.timeoutMs).toBe(2_147_483_647);
     expect(prompt).toEqual({ sessionId: "session-1", turnId: "turn-1" });
     expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
       title: "Test ACP",
@@ -619,7 +652,7 @@ describe("AcpAgentClient", () => {
 
     expect(sessionUpdates).toContain("agent_message_chunk");
     expect(client.hasActiveTurns()).toBe(false);
-    expect(transport.requests[2]?.timeoutMs).toBe(60 * 60_000);
+    expect(transport.requests[2]?.timeoutMs).toBe(2_147_483_647);
   });
 
   it("sends control prompts without recording transcript updates", async () => {
@@ -4273,6 +4306,11 @@ describe("AcpAgentClient", () => {
     expect((errors[0] as Error).message).toContain(
       "Grok Build reported that the turn ended, but its ACP prompt request did not close",
     );
+    // The agent never answered the prompt, so it is told to stop before
+    // PwrAgent forgets the turn.
+    expect(transport.notifications).toEqual([
+      { method: "session/cancel", params: { sessionId: session.sessionId } },
+    ]);
     expect(store.getSession("acp:grok", session.sessionId)).toMatchObject({
       status: "idle",
       lastError: expect.stringContaining("provider connection may be unavailable"),
@@ -4283,6 +4321,101 @@ describe("AcpAgentClient", () => {
       type: "activity",
       summary: "Turn failed",
     }));
+  });
+
+  it("keeps a working turn open for hours, so Stop can still cancel it", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const transport = new DeadlineEnforcingAcpTransport();
+    const errors: unknown[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      agentDisplayName: "Grok Build",
+      store,
+      transport,
+      now: () => 1000,
+      onPromptError: ({ error }) => {
+        errors.push(error);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "Research the winning kernels",
+      turnId: "turn-1",
+    });
+    // A Grok research turn has run for more than three and a half hours,
+    // streaming the whole time.
+    for (let hour = 1; hour <= 4; hour += 1) {
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: `Hour ${hour}. ` },
+      });
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+    }
+
+    expect(errors).toEqual([]);
+    expect(store.getSession("acp:grok", session.sessionId)?.status).toBe("active");
+    expect(client.readReplay(session.sessionId).threadStatus).toBe("active");
+
+    await client.cancelSession(session.sessionId);
+    expect(transport.notifications).toEqual([
+      { method: "session/cancel", params: { sessionId: session.sessionId } },
+    ]);
+    transport.settlePrompt({ stopReason: "cancelled" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(errors).toEqual([]);
+    expect(store.getSession("acp:grok", session.sessionId)?.status).toBe("idle");
+  });
+
+  it("tells the agent to stop when its prompt request times out", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const errors: unknown[] = [];
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport: {
+        request: async (method, params, timeoutMs) => {
+          if (method === "session/prompt") {
+            throw new Error("json-rpc timeout: session/prompt");
+          }
+          return await transport.request(method, params, timeoutMs);
+        },
+        notify: (method, params) => transport.notify(method, params),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      now: () => 1000,
+      onPromptError: ({ error }) => {
+        errors.push(error);
+      },
+    });
+
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    client.startPrompt({
+      sessionId: session.sessionId,
+      prompt: "keep going",
+      turnId: "turn-1",
+    });
+
+    await vi.waitFor(() => {
+      expect(errors).toHaveLength(1);
+    });
+    expect(transport.notifications).toEqual([
+      { method: "session/cancel", params: { sessionId: session.sessionId } },
+    ]);
+    expect(store.getSession("acp:grok", session.sessionId)?.status).toBe("idle");
   });
 
   it("reports fire-and-forget prompt failures", async () => {
@@ -4343,6 +4476,8 @@ describe("AcpAgentClient", () => {
     });
     expect(errors[0]?.error).toBeInstanceOf(Error);
     expect((errors[0]!.error as Error).message).toBe(quotaError);
+    // The agent answered the prompt with an error, so it has nothing to cancel.
+    expect(transport.notifications).toEqual([]);
     expect(sessionUpdateKinds).not.toContain("turn_finished");
     expect(store.getSession("acp:codex-acp", "session-1")).toMatchObject({
       hasConversationHistory: true,

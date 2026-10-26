@@ -419,6 +419,63 @@ unknown, or mismatched metadata fails startup explicitly instead of advertising
 stale capabilities. Version probes skip discovery. Restart the provider connection
 after changing the loaded model's vision projector so Codex reloads the catalog.
 
+### Codex model providers
+
+Settings → Codex → Model providers (`models.codex.providers` and
+`models.codex.provider_rates`) lists OpenAI Responses-compatible endpoints that
+the one Codex App Server can run threads on beside its default provider: a
+second API account, a hosted open-weight model, or a local server. Each becomes
+a process-local `-c model_providers.<id>.*` override with
+`wire_api = "responses"`. Its API key is a keychain secret
+(`codexModelProviderKeys`) that reaches Codex only as
+`PWRAGENT_CODEX_PROVIDER_<ID>_API_KEY` in the app-server environment, never
+as a process argument or in `config.toml`. Codex passes `*KEY*` variables to
+the commands a model runs by default (`ignore_default_excludes = true`), so a
+`shell_environment_policy.set.<VAR>=""` override blanks each key for them. Changing a provider's endpoint or
+key reconnects Codex when it is idle; its models and rates do not.
+
+When the section opens, it offers the providers that Codex config files
+already define. The main process
+(`apps/desktop/src/main/settings/codex-model-provider-import.ts`) reads only
+`config.toml` in the active Codex home and in each auth profile home that
+Settings lists. It picks those paths itself, so the renderer cannot name a
+file. Import prefills the add form with the name, the Codex key as the id,
+`base_url`, the model each profile sets for it, and Runs locally for a
+loopback URL. It never copies a key, bearer token or header from the file. It
+skips a provider that PwrAgent cannot run, such as a `wire_api` other than
+`responses`, and says why.
+
+Every PwrAgent surface names a provider model with a qualified id,
+`@<provider>/<model>` (`packages/shared/src/codex-model-providers.ts`). Codex
+ids never start with `@`. `CodexModelProviderTranslator` is the one place the
+two forms meet: it wraps the Codex connection's `request`, turns a qualified
+id into `model` plus `modelProvider` on `thread/start`, `thread/resume` and
+`thread/fork`, and qualifies the models Codex reports for a thread whose
+`modelProvider` is configured. Codex fixes a thread's provider when it
+starts, so a turn or settings update that names another provider's model is
+refused, and the composer and messaging pickers offer an existing thread only
+its own provider's models. Because the id is an ordinary model string,
+federation, messaging and the Agent tools carry it without a protocol change;
+`BackendModelOption.providerId` and `providerLabel` are optional additions
+that older peers ignore. `resolveModelOptionReference` lets an Agent name a
+model as `Refuseless / GLM-5.3 abliterated` or by its bare id when only one
+provider serves it.
+
+`CodexModelProviderCatalog` adds each provider's listed models, plus those its
+`GET /models` reports, to the Codex backend's model options. Discovery is
+cached ten minutes per provider, bounded to one 1 MiB response with an
+eight-second timeout and no redirects, and falls back to the listed ids.
+
+Usage on a provider thread is never OpenAI usage. Every usage-line write
+passes through `wrapCodexProviderUsageAttribution`, which records the line
+under the provider's id, an account key hashed from the endpoint origin and
+the API key (`codexModelProviderAccountKey`), and the qualified model. It is
+priced at the rates entered in Settings (USD per 1M tokens), at zero for a
+provider marked local, and otherwise left unpriced. The one exception is
+`api.openai.com` with no rates, which keeps the OpenAI catalog price. The
+attribution rewrites a line before its existing write and adds no SQLite
+commits.
+
 ## Background PR status and Star Map
 
 - The main process polls tracked pull requests with focused, warm, and cold

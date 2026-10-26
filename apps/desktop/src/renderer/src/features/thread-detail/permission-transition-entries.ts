@@ -4,6 +4,7 @@ import type {
   ThreadExecutionMode,
   ThreadPermissionTransition,
 } from "@pwragent/shared";
+import { insertSyntheticEntriesByTime } from "./synthetic-transcript-entries";
 
 /**
  * Synthetic activity entries built from `permissionTransitionLog` are
@@ -77,9 +78,8 @@ export function buildPermissionTransitionActivityEntries(
 
 /**
  * Splice synthetic permission-transition activity entries into the
- * transcript entries list, preserving stable order by `createdAt` /
- * `occurredAt` so the transitions appear inline at the moment they
- * happened.
+ * transcript at the moment they happened (`occurredAt`), without
+ * reordering the transcript itself.
  */
 export function injectPermissionTransitions(
   entries: AppServerThreadEntry[],
@@ -89,28 +89,7 @@ export function injectPermissionTransitions(
   if (synthetic.length === 0) {
     return entries;
   }
-  const merged: AppServerThreadEntry[] = [...entries, ...synthetic];
-  merged.sort((left, right) => {
-    const leftAt = left.createdAt ?? 0;
-    const rightAt = right.createdAt ?? 0;
-    if (leftAt !== rightAt) {
-      return leftAt - rightAt;
-    }
-    // Stable tie-break: existing entries before synthetic transitions
-    // when timestamps match, so a transition recorded at the exact
-    // moment a turn entry exists doesn't shove the turn entry around.
-    const leftIsTransition = left.id.startsWith(
-      PERMISSION_TRANSITION_ENTRY_PREFIX,
-    );
-    const rightIsTransition = right.id.startsWith(
-      PERMISSION_TRANSITION_ENTRY_PREFIX,
-    );
-    if (leftIsTransition === rightIsTransition) {
-      return 0;
-    }
-    return leftIsTransition ? 1 : -1;
-  });
-  return merged;
+  return insertSyntheticEntriesByTime(entries, synthetic);
 }
 
 export function isPermissionTransitionEntry(

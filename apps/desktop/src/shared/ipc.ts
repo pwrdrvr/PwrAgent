@@ -144,6 +144,10 @@ export const APP_SERVER_ARCHIVE_WORKTREE_CHANNEL = "app-server:archive-worktree"
 export const APP_SERVER_RESTORE_WORKTREE_CHANNEL = "app-server:restore-worktree";
 export const APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL =
   "app-server:handoff-thread-workspace";
+export const APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL =
+  "app-server:recreate-thread-worktree";
+export const APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL =
+  "app-server:move-thread-to-main-checkout";
 export const APP_SERVER_RENAME_THREAD_CHANNEL = "app-server:rename-thread";
 export const THREAD_MIGRATION_LIST_SOURCES_CHANNEL =
   "thread-migration:list-sources";
@@ -172,6 +176,7 @@ export const AGENT_READ_QUEUED_TURN_CHANNEL = "agent:read-queued-turn";
 export const AGENT_CANCEL_QUEUED_TURN_CHANNEL = "agent:cancel-queued-turn";
 export const AGENT_RELEASE_QUEUED_TURN_CHANNEL = "agent:release-queued-turn";
 export const AGENT_MOVE_QUEUED_TURN_CHANNEL = "agent:move-queued-turn";
+export const AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL = "agent:set-queued-turn-paused";
 export const SCHEDULED_ACTIONS_LIST_CHANNEL = "scheduled-actions:list";
 export const SCHEDULED_ACTIONS_CREATE_CHANNEL = "scheduled-actions:create";
 export const SCHEDULED_ACTIONS_UPDATE_CHANNEL = "scheduled-actions:update";
@@ -215,9 +220,8 @@ export const CODEX_MCP_SERVER_REMOVE_CHANNEL = "codex-mcp-server:remove";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
 export const AGENT_STOP_SUB_AGENT_CHANNEL = "agent:stop-sub-agent";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
-export const AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL =
-  "agent:list-acp-thread-rewind-points";
-export const AGENT_REWIND_ACP_THREAD_CHANNEL = "agent:rewind-acp-thread";
+export const AGENT_REWIND_THREAD_CHANNEL = "agent:rewind-thread";
+export const AGENT_PREVIEW_THREAD_REWIND_CHANNEL = "agent:preview-thread-rewind";
 export const AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL =
   "agent:configure-grok-workflow-budget";
 export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL = "agent:set-thread-execution-mode";
@@ -255,6 +259,14 @@ export const AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL =
   "agent:stop-codex-environment-action";
 export const AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL =
   "agent:set-codex-thread-environment";
+export const CODEX_ENVIRONMENT_EDITOR_LIST_PROJECTS_CHANNEL =
+  "codex-environment-editor:list-projects";
+export const CODEX_ENVIRONMENT_EDITOR_LIST_FILES_CHANNEL =
+  "codex-environment-editor:list-files";
+export const CODEX_ENVIRONMENT_EDITOR_READ_CHANNEL =
+  "codex-environment-editor:read";
+export const CODEX_ENVIRONMENT_EDITOR_SAVE_CHANNEL =
+  "codex-environment-editor:save";
 export const AGENT_SUBMIT_SERVER_REQUEST_CHANNEL = "agent:submit-server-request";
 export const AGENT_TRUST_CODEX_PROJECT_CHANNEL = "agent:trust-codex-project";
 export const AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL =
@@ -276,6 +288,8 @@ export const MCP_CONNECTION_PWRGIT_OPEN_CHANNEL =
   "mcp-connection:pwrgit-open";
 export const MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL =
   "mcp-connection:pwrgit-download";
+export const MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL =
+  "mcp-connection:sandboxer-open";
 export const PWRSUITE_INSTALLER_READ_CHANNEL = "pwrsuite-installer:read";
 export const PWRSUITE_INSTALLER_START_CHANNEL = "pwrsuite-installer:start";
 export const PWRSUITE_INSTALLER_CANCEL_CHANNEL = "pwrsuite-installer:cancel";
@@ -283,6 +297,7 @@ export const PWRSUITE_INSTALLER_OPEN_CHANNEL = "pwrsuite-installer:open";
 export const PWRSUITE_INSTALLER_REVEAL_CHANNEL = "pwrsuite-installer:reveal";
 export const PWRSUITE_INSTALLER_EVENT_CHANNEL = "pwrsuite-installer:event";
 export const MCP_CONNECTION_LIST_CHANNEL = "mcp-connection:list";
+export const MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL = "mcp-connections:changed";
 export const MCP_CONNECTION_CREATE_CHANNEL = "mcp-connection:create";
 export const MCP_CONNECTION_AUTHORIZE_CHANNEL = "mcp-connection:authorize";
 export const MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL =
@@ -291,12 +306,15 @@ export const MCP_CONNECTION_DISCONNECT_CHANNEL = "mcp-connection:disconnect";
 export const MCP_CONNECTION_REMOVE_CHANNEL = "mcp-connection:remove";
 export const MCP_CONNECTION_UPDATE_CHANNEL = "mcp-connection:update";
 export const MCP_CONNECTION_PROBE_CHANNEL = "mcp-connection:probe";
+export const MCP_CONNECTION_TEST_STDIO_CHANNEL = "mcp-connection:test-stdio";
 export const MCP_CONNECTION_SET_ENABLED_CHANNEL =
   "mcp-connection:set-enabled";
 export const MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL =
   "mcp-connection:set-select-for-new-threads";
 export const MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL =
   "mcp-connection:set-tool-approval";
+export const MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL =
+  "mcp-connection:set-sandboxer-cleanup-on-pr-close";
 export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";
@@ -320,6 +338,12 @@ export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen"
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
 export const NAVIGATION_SET_THREAD_LOCK_CHANNEL = "navigation:set-thread-lock";
+export const NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL =
+  "navigation:recent-thread-lock-notes";
+export const NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL =
+  "navigation:remember-thread-lock-note";
+export const NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL =
+  "navigation:forget-thread-lock-note";
 export const NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL =
   "navigation:set-thread-tool-incident-notice";
 export const NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL = "navigation:pending-thread-spend-alerts";
@@ -737,6 +761,12 @@ export const SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL =
 export const SETTINGS_WRITE_CONFIG_CHANNEL = "settings:write-config";
 export const SETTINGS_REPLACE_SECRET_CHANNEL = "settings:replace-secret";
 export const SETTINGS_CLEAR_SECRET_CHANNEL = "settings:clear-secret";
+export const SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL =
+  "settings:set-codex-model-provider-key";
+export const SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL =
+  "settings:test-codex-model-provider";
+export const SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL =
+  "settings:scan-codex-model-provider-imports";
 export const SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL =
   "settings:refresh-codex-discovery";
 export const SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL =
@@ -890,6 +920,8 @@ export const THREAD_FAMILY_PRICING_READ_CHANNEL = "pricing:readThreadFamilyPrici
 export const USAGE_ACTIVITY_ANALYZE_CHANNEL = "usage-activity:analyzeUsageActivity";
 /** Spawn or focus the dedicated Usage Activity window. */
 export const USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL = "usage-activity:openWindow";
+/** To an open Usage Activity window: focus a provider's account limits. */
+export const USAGE_ACTIVITY_FOCUS_PROVIDER_EVENT_CHANNEL = "usage-activity:focusProvider";
 /** From the Usage Activity window: focus the main window and open a thread there. */
 export const USAGE_ACTIVITY_OPEN_THREAD_CHANNEL = "usage-activity:openThreadInMainWindow";
 

@@ -22,6 +22,88 @@ afterEach(() => {
 });
 
 describe("McpConnectionRegistry", () => {
+  it("synthesizes Sandboxer with opt-in compute and persists independent profile choices", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target, randomId: () => "custom" });
+    expect(registry.get("builtin:sandboxer")).toMatchObject({
+      kind: "sandboxer", authMode: "local_cli", sandboxerRole: "compute",
+      enabled: false, selectForNewThreads: false, toolApproval: "prompt",
+    });
+    expect(registry.get("pwrsnap")?.toolApproval).toBe("auto");
+    expect(registry.get("pwrgit")?.toolApproval).toBe("auto");
+    registry.setEnabled("builtin:sandboxer", true);
+    registry.setSelectForNewThreads("builtin:sandboxer", true);
+    registry.setToolApproval("builtin:sandboxer", "auto");
+    const reread = new McpConnectionRegistry({ configPath: target });
+    expect(reread.get("builtin:sandboxer")).toMatchObject({ enabled: true, selectForNewThreads: true, toolApproval: "auto" });
+    registry.setEnabled("builtin:sandboxer", false);
+    expect(registry.get("builtin:sandboxer")?.selectForNewThreads).toBe(true);
+    registry.setToolApproval("builtin:sandboxer", "prompt");
+    expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer_tool_approval");
+    expect(registry.get("builtin:sandboxer")?.toolApproval).toBe("prompt");
+    expect(() => registry.remove("builtin:sandboxer")).toThrow("Built-in");
+    expect(() => registry.update({ connectionId: "builtin:sandboxer", serverUrl: "https://example.com" })).toThrow("Built-in");
+    expect(registry.create({ displayName: "Sandboxer", serverUrl: "https://example.com/mcp" }).id).toBe("sandboxer");
+    expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer:compute");
+  });
+
+  it("cleans up Sandboxer sandboxes on PR close unless the profile turns it off", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    expect(registry.get("builtin:sandboxer")?.sandboxerCleanupOnPrClose).toBe(true);
+    expect(registry.setSandboxerCleanupOnPrClose(false).sandboxerCleanupOnPrClose).toBe(false);
+    expect(fs.readFileSync(target, "utf8")).toContain("sandboxer_cleanup_on_pr_close = false");
+    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:sandboxer")?.sandboxerCleanupOnPrClose)
+      .toBe(false);
+    expect(registry.setSandboxerCleanupOnPrClose(true).sandboxerCleanupOnPrClose).toBe(true);
+    expect(fs.readFileSync(target, "utf8")).toContain("sandboxer_cleanup_on_pr_close = true");
+    // Only Sandboxer has the setting.
+    expect(registry.get("pwrgit")?.sandboxerCleanupOnPrClose).toBeUndefined();
+  });
+
+  it("reads a hand-written sandboxer_cleanup_on_pr_close = false as off", () => {
+    const target = configPath();
+    fs.writeFileSync(target, "[mcp_connections]\nsandboxer_cleanup_on_pr_close = false\n");
+    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:sandboxer")?.sandboxerCleanupOnPrClose)
+      .toBe(false);
+  });
+
+  it("preserves a pre-existing sandboxer custom identity alongside the built-in", () => {
+    const target = configPath();
+    const legacy = `[mcp_connections]
+# Existing operator configuration
+[[mcp_connections.connections]]
+id = "sandboxer"
+display_name = "Sandboxer"
+server_url = "https://legacy.example/mcp"
+auth_mode = "oauth"
+enabled = true
+select_for_new_threads = true
+tool_approval = "approve"
+created_at = 123
+updated_at = 456
+`;
+    fs.writeFileSync(target, legacy);
+    const registry = new McpConnectionRegistry({ configPath: target });
+    expect(registry.get("sandboxer")).toMatchObject({
+      id: "sandboxer", kind: "remote", authMode: "oauth",
+      serverUrl: "https://legacy.example/mcp", selectForNewThreads: true,
+      toolApproval: "approve", createdAt: 123, updatedAt: 456,
+    });
+    expect(registry.get("builtin:sandboxer")).toMatchObject({ kind: "sandboxer", enabled: false });
+    expect(fs.readFileSync(target, "utf8")).toBe(legacy);
+    registry.setEnabled("builtin:sandboxer", true);
+    expect(registry.get("sandboxer")?.enabled).toBe(true);
+    registry.setEnabled("sandboxer", false);
+    expect(registry.get("builtin:sandboxer")?.enabled).toBe(true);
+    registry.update({ connectionId: "sandboxer", displayName: "Existing remote" });
+    expect(new McpConnectionRegistry({ configPath: target }).get("sandboxer")).toMatchObject({
+      kind: "remote", enabled: false, displayName: "Existing remote", selectForNewThreads: true,
+    });
+    expect(registry.remove("sandboxer")).toBe(true);
+    expect(registry.get("builtin:sandboxer")).toBeDefined();
+  });
+
   it("reserves PwrGit's routing ID when creating a custom connection", () => {
     const registry = new McpConnectionRegistry({
       configPath: configPath(),
@@ -140,6 +222,7 @@ describe("McpConnectionRegistry", () => {
     expect(registry.list()).toMatchObject([
       { id: "pwrsnap", kind: "pwrsnap" },
       { id: "pwrgit", kind: "pwrgit" },
+      { id: "builtin:sandboxer", kind: "sandboxer" },
       {
         id: "atlassian-rovo",
         kind: "remote",
@@ -152,6 +235,7 @@ describe("McpConnectionRegistry", () => {
     expect(registry.list().map((connection) => connection.id)).toEqual([
       "pwrsnap",
       "pwrgit",
+      "builtin:sandboxer",
     ]);
     expect(fs.readFileSync(target, "utf8")).toContain("theme = \"dark\"");
   });
@@ -223,7 +307,7 @@ describe("McpConnectionRegistry", () => {
     });
 
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "pwrgit", "acme"]);
+      .toEqual(["pwrsnap", "pwrgit", "builtin:sandboxer", "acme"]);
 
     registry.setEnabled("acme", false);
 
@@ -277,7 +361,7 @@ describe("McpConnectionRegistry", () => {
 
     expect(registry.remove("acme")).toBe(true);
     expect(registry.list().map((connection) => connection.id))
-      .toEqual(["pwrsnap", "pwrgit"]);
+      .toEqual(["pwrsnap", "pwrgit", "builtin:sandboxer"]);
     expect(fs.readFileSync(target, "utf8")).not.toContain("acme");
   });
 
@@ -427,5 +511,79 @@ describe("McpConnectionRegistry", () => {
       .toThrow("cannot contain credentials");
     expect(() => normalizeMcpServerUrl("https://example.com/mcp#token"))
       .toThrow("cannot contain fragments");
+  });
+});
+
+describe("McpConnectionRegistry local commands", () => {
+  const launch = {
+    command: "/opt/fixture/bin/npx",
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/example/My Projects"],
+    cwd: "/home/example",
+    env: [
+      { name: "FIXTURE_ROOT", secret: false, value: "/home/example" },
+      { name: "FIXTURE_TOKEN", secret: true },
+    ],
+  };
+
+  it("stores argv, folder and variables as TOML arrays, and secret names only", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    const created = registry.createStdio({ displayName: "Project files", launch });
+
+    const text = fs.readFileSync(target, "utf8");
+    expect(text).toContain(`transport = "stdio"`);
+    expect(text).toContain(`command = "/opt/fixture/bin/npx"`);
+    expect(text).toContain(`"/home/example/My Projects"`);
+    expect(text).toContain(`env = ["FIXTURE_ROOT=/home/example"]`);
+    expect(text).toContain(`secret_env = ["FIXTURE_TOKEN"]`);
+    expect(text).not.toMatch(/server_url|auth_mode/);
+
+    const reread = new McpConnectionRegistry({ configPath: target }).get(created.id);
+    expect(reread).toMatchObject({ kind: "stdio", authMode: "none", stdio: launch, enabled: true });
+  });
+
+  it("drops a removed folder and variables on edit, and refuses a URL for a command", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    const created = registry.createStdio({ displayName: "Project files", launch });
+
+    const result = registry.update({
+      connectionId: created.id,
+      launch: { command: launch.command, args: [], env: [] },
+    });
+    expect(result.launchChanged).toBe(true);
+    const text = fs.readFileSync(target, "utf8");
+    expect(text).not.toMatch(/^cwd|^env|^secret_env/m);
+    expect(registry.get(created.id)?.stdio).toEqual({ command: launch.command, args: [], env: [] });
+    expect(() => registry.update({ connectionId: created.id, serverUrl: "https://example.com/mcp" }))
+      .toThrow();
+    expect(registry.update({ connectionId: created.id, displayName: "Renamed" }).launchChanged).toBe(false);
+    // The form may list a secret before a plain variable; the row cannot.
+    const interleaved = {
+      command: launch.command,
+      args: [],
+      env: [
+        { name: "FIXTURE_TOKEN", secret: true },
+        { name: "FIXTURE_ROOT", secret: false, value: "/home/example" },
+      ],
+    };
+    registry.update({ connectionId: created.id, launch: interleaved });
+    const reread = new McpConnectionRegistry({ configPath: target });
+    expect(reread.update({ connectionId: created.id, launch: interleaved }).launchChanged).toBe(false);
+  });
+
+  it("keeps a row from a newer build that it cannot read, byte for byte, through its own writes", () => {
+    const target = configPath();
+    const future = `[[mcp_connections.connections]]
+id = "future"
+display_name = "From a newer build"
+transport = "websocket"
+endpoint = "wss://example.com/mcp"
+`;
+    fs.writeFileSync(target, future);
+    const registry = new McpConnectionRegistry({ configPath: target });
+    expect(registry.get("future")).toBeUndefined();
+    registry.createStdio({ displayName: "Project files", launch });
+    expect(fs.readFileSync(target, "utf8")).toContain(future.trim());
   });
 });

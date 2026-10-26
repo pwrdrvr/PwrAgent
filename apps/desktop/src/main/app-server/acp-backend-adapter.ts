@@ -6,7 +6,6 @@ import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import {
   findAcpPermissionModeConfigOption,
   type AcpBackendId,
-  type AcpThreadRewindPoint,
   type AgentEvent,
   type AppServerBackendKind,
   type AppServerNotification,
@@ -25,7 +24,9 @@ import {
   type BackendSummary,
   type GrokWorkflowBudgetPolicy,
   type ThreadExecutionMode,
+  type UsageLimitObservation,
   isAcpBackendId,
+  usageLimitProviderForBackend,
 } from "@pwragent/shared";
 import {
   AcpAgentStore,
@@ -466,6 +467,9 @@ export function buildAcpCapabilities(
     toolUse: true,
     approvalRequests: true,
     multiDirectoryThreads: true,
+    ...(agentCapabilities?.conversationRewind
+      ? { threadRewind: { files: false, undo: false } }
+      : {}),
   };
 }
 
@@ -568,6 +572,24 @@ function acpAgentLaunchIdentity(agent: AcpInstalledAgentRecord): string {
       : undefined,
   });
 }
+function rewindPointShowsPrompt(
+  point: { promptIndex: number; promptPreview: string },
+  promptText: string,
+): boolean {
+  // Grok sent no preview; `listRewindPoints` filled in a placeholder.
+  if (point.promptPreview === `Prompt ${point.promptIndex + 1}`) {
+    return true;
+  }
+  const normalize = (value: string): string =>
+    value.replace(/\s+/g, " ").trim().toLowerCase();
+  const preview = normalize(point.promptPreview)
+    .replace(/(?:\u2026|\.\.\.)$/, "")
+    .trimEnd()
+    .slice(0, 40);
+  const text = normalize(promptText);
+  return text.startsWith(preview) || preview.startsWith(text);
+}
+
 function effectiveAcpAgentCapabilities(
   agent: AcpInstalledAgentRecord,
 ): AcpAgentCapabilities {
@@ -1214,6 +1236,8 @@ export class AcpBackendAdapter {
   private readonly modelRetryTracker = new AcpModelRetryTracker();
   private readonly liveNotificationFingerprints = new Map<string, string>();
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
+  /** When each provider status was read, for Usage Activity's limit history. */
+  private readonly providerStatusObservedAt = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
   private readonly providerStatusRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
@@ -1437,6 +1461,7 @@ export class AcpBackendAdapter {
         return;
       }
       this.providerStatuses.set(backend, providerStatus);
+      this.providerStatusObservedAt.set(backend, Date.now());
       await this.emit({
         backend,
         notification: {
@@ -1450,6 +1475,28 @@ export class AcpBackendAdapter {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * The account limits an enabled agent last reported, as a Usage Activity
+   * reading. Grok reports a plan but no account identity, so its readings
+   * stay with the instance that read them.
+   */
+  limitObservation(backend: AcpBackendId): UsageLimitObservation | undefined {
+    const status = this.providerStatuses.get(backend);
+    const observedAt = this.providerStatusObservedAt.get(backend);
+    const provider = usageLimitProviderForBackend(backend);
+    if (!provider || !status?.rateLimits?.length || observedAt === undefined
+      || (this.isAcpAgentEnabled && !this.isAcpAgentEnabled(backend.slice("acp:".length)))) return undefined;
+    return {
+      observedAt,
+      provider,
+      planType: status.account?.planType,
+      limits: status.rateLimits.map((limit) => ({
+        name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
+        resetAt: limit.resetAt, windowMinutes: limit.windowMinutes,
+      })),
+    };
   }
 
   invalidateLocalAgentDiscovery(): void {
@@ -1682,24 +1729,16 @@ export class AcpBackendAdapter {
     }
   }
 
-  async listRewindPoints(
-    backend: AcpBackendId,
-    sessionId: string,
-  ): Promise<AcpThreadRewindPoint[]> {
-    const session = this.requireIdleGrokRewindSession(backend, sessionId);
-    const client = await this.getClientForSession(backend, sessionId);
-    if (!client.listRewindPoints) {
-      throw new Error("Installed Grok Build does not support conversation rewind");
-    }
-    await client.ensureSession(session);
-    return await client.listRewindPoints(sessionId);
-  }
-
-  async rewindSession(params: {
+  /**
+   * Rewinds a Grok session to before a transcript user message. Grok counts
+   * its rewind points by prompt, so the message resolves to its ordinal among
+   * the session's user messages, which must be a point Grok still offers.
+   */
+  async rewindSessionBeforeMessage(params: {
     backend: AcpBackendId;
     sessionId: string;
-    targetPromptIndex: number;
-  }): Promise<{ promptText?: string; updatedAt: number }> {
+    messageId: string;
+  }): Promise<{ promptText?: string; targetPromptIndex: number; updatedAt: number }> {
     const session = this.requireIdleGrokRewindSession(
       params.backend,
       params.sessionId,
@@ -1708,14 +1747,37 @@ export class AcpBackendAdapter {
       params.backend,
       params.sessionId,
     );
-    if (!client.rewindSession) {
+    if (!client.listRewindPoints || !client.rewindSession) {
       throw new Error("Installed Grok Build does not support conversation rewind");
     }
     await client.ensureSession(session);
-    return await client.rewindSession({
+    const replay = await this.readReplay(params.backend, params.sessionId);
+    const userMessages = replay.entries.filter(
+      (entry) => entry.type === "message" && entry.role === "user",
+    );
+    const targetPromptIndex = userMessages.findIndex(
+      (entry) => entry.id === params.messageId,
+    );
+    const target = userMessages[targetPromptIndex];
+    if (!target || target.type !== "message") {
+      throw new Error("This prompt is no longer in the Grok conversation");
+    }
+    const points = await client.listRewindPoints(params.sessionId);
+    const point = points.find((candidate) => candidate.promptIndex === targetPromptIndex);
+    if (!point) {
+      throw new Error("Grok cannot rewind to before this prompt");
+    }
+    // The rewind cannot be undone. A user message Grok does not count as a
+    // prompt would shift the ordinal onto a later prompt, so the point Grok
+    // offers at that index must show this prompt's text.
+    if (!rewindPointShowsPrompt(point, target.text)) {
+      throw new Error("Grok's rewind points do not match this transcript; reload the thread and try again");
+    }
+    const result = await client.rewindSession({
       sessionId: params.sessionId,
-      targetPromptIndex: params.targetPromptIndex,
+      targetPromptIndex,
     });
+    return { ...result, targetPromptIndex };
   }
 
   async steerSession(params: {
@@ -2627,6 +2689,7 @@ export class AcpBackendAdapter {
     this.liveToolUpdateResolver.clear();
     this.liveNotificationFingerprints.clear();
     this.providerStatuses.clear();
+    this.providerStatusObservedAt.clear();
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
     this.grokUpdateRefreshes.clear();

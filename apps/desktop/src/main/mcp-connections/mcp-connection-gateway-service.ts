@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat } from "node:fs/promises";
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,17 +11,31 @@ import {
   type Socket,
 } from "node:net";
 import { shell } from "electron";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode, McpError, ToolListChangedNotificationSchema, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { McpDiscovery, McpDiscoveryError, mcpDiscoveryContext, mcpDiscoveryPhaseContext, mcpRequestSignalContext, waitForMcp } from "./mcp-discovery";
+import { SandboxerConnection } from "./sandboxer-connection";
+import {
+  McpStdioLaunchError,
+  OwnedStdioClientTransport,
+  describeStdioStartFailure,
+  normalizeStdioLaunchInput,
+  resolveStdioExecutable,
+  resolveStdioLaunch,
+  type StdioSpawn,
+} from "./mcp-stdio-launch";
+import { McpStdioSecretVault, type McpStdioSecretSettings } from "./mcp-stdio-secret-vault";
 import { ConnectionRpcClient } from "./mcp-connection-rpc-client";
 import { gatewayToolRevision, validateGatewayArguments, type McpGatewayTool, type McpGatewayInvocation } from "./mcp-gateway-catalog";
 import {
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   PWRSNAP_SESSION_REVOKED_DETAIL,
+  SANDBOXER_MCP_CONNECTION_ID,
   isAcpBackendId,
+  isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
   type AppServerBackendKind,
   type CreateMcpConnectionRequest,
@@ -32,10 +46,17 @@ import {
   type UpdateMcpConnectionRequest,
   type McpConnectionRecord,
   type McpConnectionStatus,
+  type McpConnectionsChangedEvent,
   type McpConnectionToolApproval,
+  type McpStdioLaunch,
+  type McpStdioLaunchInput,
+  type TestMcpStdioConnectionRequest,
+  type TestMcpStdioConnectionResponse,
   type ConnectPwrSnapResponse,
   type OpenPwrSnapResponse,
+  type OpenSandboxerLinkResponse,
   type PwrSnapConnectionStatus,
+  type SandboxerLinkTarget,
 } from "@pwragent/shared";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
 import { getMainLogger } from "../log";
@@ -46,7 +67,9 @@ import {
   type RuntimeLeaseHolder,
 } from "../runtime-lease-manager";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { getAppStateMode, getAppOverlayStore } from "../state/app-state";
+import { getAppStateDb, getAppStateMode, getAppOverlayStore } from "../state/app-state";
+import { ThreadSandboxStore } from "../state/thread-sandbox-store";
+import { readCreatedSandbox, type SandboxerCleanupTransport } from "./sandboxer-pr-cleanup";
 import {
   McpConnectionRegistry,
 } from "./mcp-connection-registry";
@@ -91,11 +114,24 @@ const OAUTH_CALLBACK_TIMEOUT_MS = 5 * 60_000;
 const MAX_RPC_LINE_BYTES = 1024 * 1024;
 const MAX_RPC_CONNECTIONS = 32;
 /**
+ * Attach sockets are held for a bridge child's whole life, one per thread
+ * per managed connection, so they are bounded apart from the in-flight RPC
+ * sockets rather than allowed to use up their 32 slots.
+ */
+const MAX_BRIDGE_ATTACHMENTS = 1_024;
+/**
  * A server that keeps answering with a cursor is paging forever or paging
  * something far larger than a Settings row can show. Either way the row gets
  * what arrived rather than a spinner that never ends.
  */
 const MAX_TOOL_LIST_PAGES = 20;
+const MAX_SERVER_INSTRUCTIONS_CHARS = 2_000;
+/**
+ * How long a Settings test waits for a local command to answer the MCP
+ * handshake and list its tools. A first `npx -y` run downloads the package,
+ * so this is longer than the URL probe.
+ */
+const STDIO_TEST_TIMEOUT_MS = 30_000;
 const GATEWAY_OFF_ERROR =
   "The PwrAgent MCP gateway is turned off. Turn it on in Settings → Plugins to use managed connections.";
 
@@ -106,7 +142,7 @@ type BridgeGrant = {
 
 type UpstreamSession = {
   client: Client;
-  transport: StreamableHTTPClientTransport;
+  transport: Transport;
 };
 
 type BridgeRequest = {
@@ -157,6 +193,7 @@ type FetchLike = (
 ) => Promise<Response>;
 
 export type McpConnectionGatewayServiceOptions = {
+  sandboxer?: SandboxerConnection;
   readGatewaySelection?: (context: { backend: AppServerBackendKind; threadId: string }) => Promise<string[]>;
   bridgeEntryPath?: string;
   fetchFn?: FetchLike;
@@ -175,6 +212,30 @@ export type McpConnectionGatewayServiceOptions = {
   brokerDiscovery?: McpConnectionBrokerDiscovery;
   /** Profile-wide gateway switch; defaults to the desktop setting. */
   gatewayEnabled?: () => boolean;
+  /** Secret environment values for local command connections. */
+  stdioSecrets?: McpStdioSecretVault;
+  /** Test seam: starts a local command's process. */
+  stdioSpawn?: StdioSpawn;
+  /**
+   * The environment whose PATH resolves a bare program name and is handed to
+   * local commands. Defaults to the login-shell environment Codex uses.
+   */
+  resolveStdioSearchEnv?: () => Promise<NodeJS.ProcessEnv>;
+  /** How long a Settings test waits for a local command to answer. */
+  stdioTestTimeoutMs?: number;
+  /**
+   * Records a sandbox a thread created through the built-in Sandboxer
+   * connection, so PwrAgent can release exactly that one when the thread's
+   * PRs close. Defaults to the profile state database.
+   */
+  recordCreatedSandbox?: (params: {
+    connectionId: string;
+    sandboxId: string;
+    name?: string;
+    backend?: string;
+    threadId: string;
+    now: number;
+  }) => void;
 };
 
 function resolveDefaultPwrSnapInstallPaths(): string[] {
@@ -502,13 +563,45 @@ export class McpConnectionGatewayService {
   private brokerToken?: string;
   private nonOwnerHolder?: RuntimeLeaseHolder;
 
+  private readonly sandboxer: SandboxerConnection;
+  private readonly changeListeners = new Set<(event: McpConnectionsChangedEvent) => void>();
+  private readonly stdioSecrets: McpStdioSecretVault;
+  private readonly stdioSpawn?: StdioSpawn;
+  private readonly resolveStdioSearchEnv: () => Promise<NodeJS.ProcessEnv>;
+  private readonly stdioTestTimeoutMs: number;
+  /** Live local command processes, per connection, on this machine. */
+  private readonly stdioProcessCounts = new Map<string, number>();
+  /** Settings tests in flight, so shutdown can stop them too. */
+  private readonly stdioTestTransports = new Set<OwnedStdioClientTransport>();
+  /**
+   * Bridge children holding an attach socket, per grant token.
+   *
+   * A thread's agent starts PwrAgent's bridge as one of its MCP servers and
+   * keeps it for as long as it keeps its MCP servers. The bridge holds one
+   * socket open for that whole time, so when the last one closes, the
+   * thread's agent has let go and a local command started for it is stopped.
+   */
+  private readonly bridgeAttachments = new Map<string, Set<Socket>>();
+  private bridgeAttachmentCount = 0;
+  private readonly rpcSockets = new Set<Socket>();
+  private activeRpcSockets = 0;
+  private readonly recordCreatedSandbox: NonNullable<McpConnectionGatewayServiceOptions["recordCreatedSandbox"]>;
+
   constructor(options: McpConnectionGatewayServiceOptions = {}) {
+    this.recordCreatedSandbox = options.recordCreatedSandbox
+      ?? ((params) => {
+        if (!getAppStateMode()) return;
+        new ThreadSandboxStore(getAppStateDb().raw).recordCreated(params);
+      });
     this.readGatewaySelection = options.readGatewaySelection
       ?? (async (context) => (await getAppOverlayStore().getThreadOverlayState(context))?.mcpConnectionIds ?? []);
     this.bridgeEntryPath =
       options.bridgeEntryPath ?? join(__dirname, "mcp-connection-bridge.js");
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url));
+    this.sandboxer = options.sandboxer
+      ?? new SandboxerConnection(undefined, { openExternal: this.openExternal });
+    this.sandboxer.onStatusChanged(() => this.announceChanged([SANDBOXER_MCP_CONNECTION_ID]));
     this.openPath = options.openPath ?? ((path) => shell.openPath(path));
     this.resolveInstallPaths =
       options.resolveInstallPaths ?? resolveDefaultPwrSnapInstallPaths;
@@ -535,6 +628,13 @@ export class McpConnectionGatewayService {
       options.brokerDiscovery ?? new McpConnectionBrokerDiscovery();
     this.launchPollAttempts = options.launchPollAttempts ?? 16;
     this.launchPollDelayMs = options.launchPollDelayMs ?? 500;
+    this.stdioSecrets = options.stdioSecrets ?? new McpStdioSecretVault(
+      hasStdioSecretStore(this.settings) ? { settings: this.settings } : {},
+    );
+    this.stdioSpawn = options.stdioSpawn;
+    this.resolveStdioSearchEnv = options.resolveStdioSearchEnv
+      ?? (async () => await getDesktopSettingsService().resolveCodexSpawnEnvAsync());
+    this.stdioTestTimeoutMs = options.stdioTestTimeoutMs ?? STDIO_TEST_TIMEOUT_MS;
   }
 
   async readStatus(): Promise<PwrSnapConnectionStatus> {
@@ -609,17 +709,54 @@ export class McpConnectionGatewayService {
     return await this.connectPromise;
   }
 
-  async listConnections(): Promise<McpConnectionStatus[]> {
+  /**
+   * Hear when a connection's status may have changed through this instance:
+   * a mutation it made (or forwarded to the owner broker), or a Sandboxer
+   * CLI answer that differs from the last. See `McpConnectionsChangedEvent`.
+   */
+  onConnectionsChanged(
+    listener: (event: McpConnectionsChangedEvent) => void,
+  ): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  /** Announces a mutation's result, so each return point stays one line. */
+  private announced<T extends { id: string }>(status: T): T {
+    this.announceChanged([status.id]);
+    return status;
+  }
+
+  private announceChanged(connectionIds: readonly string[]): void {
+    const event: McpConnectionsChangedEvent = { connectionIds: [...connectionIds] };
+    for (const listener of this.changeListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        // A window that cannot hear the change must not fail the mutation.
+        connectionLog.warn("MCP connection change listener failed", { error });
+      }
+    }
+  }
+
+  async listConnections(
+    options: { cachedLocalStatus?: boolean; sandboxerStatusMaxAgeMs?: number } = {},
+  ): Promise<McpConnectionStatus[]> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
       return await this.requestOwnerBroker<McpConnectionStatus[]>(
         ownership.holder,
         "broker/list",
+        options,
       );
     }
     return await Promise.all(
       this.registry.list().map(async (connection) =>
-        await this.connectionStatus(connection),
+        await this.connectionStatus(
+          connection,
+          options.cachedLocalStatus,
+          options.sandboxerStatusMaxAgeMs,
+        ),
       ),
     );
   }
@@ -629,26 +766,264 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/create",
         request,
+      ));
+    }
+    if (request.stdio !== undefined) {
+      if (request.serverUrl !== undefined) {
+        throw new Error("Add either a remote URL or a local command, not both.");
+      }
+      const { launch, secretValues } = await this.prepareStdioLaunch(request.stdio);
+      const connection = this.registry.createStdio({ displayName: request.displayName, launch });
+      try {
+        await this.stdioSecrets.write(connection.id, secretValues);
+      } catch (error) {
+        // A row whose secrets never landed could only ever fail to start.
+        this.registry.remove(connection.id);
+        throw error;
+      }
+      return this.announced(await this.connectionStatus(connection));
+    }
+    if (typeof request.serverUrl !== "string") {
+      throw new Error("Enter a remote MCP URL or a local command.");
+    }
+    const connection = this.registry.create({
+      displayName: request.displayName,
+      serverUrl: request.serverUrl,
+    });
+    return this.announced(await this.connectionStatus(connection));
+  }
+
+  /**
+   * Start a local command once, read its tools, and stop it.
+   *
+   * Nothing is written. The process is not one of a thread's running copies,
+   * and it is stopped on every path out of here, including shutdown.
+   */
+  async testStdioConnection(
+    request: TestMcpStdioConnectionRequest,
+  ): Promise<TestMcpStdioConnectionResponse> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<TestMcpStdioConnectionResponse>(
+        ownership.holder,
+        "broker/test-stdio",
+        request,
       );
     }
-    const connection = this.registry.create(request);
-    return await this.connectionStatus(connection);
+    if (!this.gatewayEnabled()) {
+      return { ok: false, problem: "gateway_off", message: GATEWAY_OFF_ERROR };
+    }
+    const existing = request.connectionId
+      ? this.requireConnection(request.connectionId)
+      : undefined;
+    if (existing && existing.kind !== "stdio") {
+      return { ok: false, problem: "invalid", message: "That connection is not a local command." };
+    }
+    let command: string | undefined;
+    let transport: OwnedStdioClientTransport | undefined;
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(new DOMException("The local command did not answer in time.", "TimeoutError")),
+      this.stdioTestTimeoutMs,
+    );
+    timer.unref?.();
+    const displayName = existing?.displayName ?? "The server";
+    try {
+      const { launch, secretValues } = await this.prepareStdioLaunch(request.stdio, existing?.id);
+      command = launch.command;
+      // Not counted toward "Running": no thread is using this copy.
+      transport = await this.createStdioTransport("", launch, secretValues);
+      this.stdioTestTransports.add(transport);
+      const client = new Client({ name: "pwragent-settings-test", version: "1.0.0" }, { capabilities: {} });
+      const abort = (): void => { void transport?.close().catch(() => undefined); };
+      controller.signal.addEventListener("abort", abort, { once: true });
+      try {
+        await client.connect(transport, { timeout: this.stdioTestTimeoutMs, signal: controller.signal });
+        let toolCount = 0;
+        let cursor: string | undefined;
+        const cursors = new Set<string>();
+        for (let page = 0; page < MAX_TOOL_LIST_PAGES; page += 1) {
+          const result = await client.listTools(cursor ? { cursor } : undefined, {
+            timeout: this.stdioTestTimeoutMs,
+            signal: controller.signal,
+          });
+          toolCount += result.tools.length;
+          cursor = result.nextCursor;
+          if (!cursor || cursors.has(cursor)) break;
+          cursors.add(cursor);
+        }
+        const version = client.getServerVersion();
+        return {
+          ok: true,
+          command: launch.command,
+          ...(version?.name ? { serverName: version.name } : {}),
+          ...(version?.version ? { serverVersion: version.version } : {}),
+          toolCount,
+          elapsedMs: Date.now() - startedAt,
+        };
+      } finally {
+        controller.signal.removeEventListener("abort", abort);
+      }
+    } catch (error) {
+      const failure = describeStdioStartFailure({
+        error,
+        transport,
+        displayName,
+        command: command ?? request.stdio?.command ?? "The command",
+        timedOut: controller.signal.aborted
+          || (error instanceof McpError && error.code === ErrorCode.RequestTimeout),
+      });
+      return {
+        ok: false,
+        problem: failure.problem,
+        message: failure.message,
+        ...(failure.output ? { output: failure.output } : {}),
+        ...(command ? { command } : {}),
+      };
+    } finally {
+      clearTimeout(timer);
+      if (transport) {
+        await transport.close().catch(() => undefined);
+        this.stdioTestTransports.delete(transport);
+      }
+    }
+  }
+
+  /**
+   * Validate a submitted launch and resolve everything it names.
+   *
+   * The executable is looked up now and stored as an absolute path; the
+   * folder has to exist; a secret left blank on an edit keeps its stored
+   * value, and one left blank anywhere else is an error.
+   */
+  private async prepareStdioLaunch(
+    input: McpStdioLaunchInput,
+    connectionId?: string,
+  ): Promise<{ launch: McpStdioLaunch; secretValues: Record<string, string> }> {
+    const normalized = normalizeStdioLaunchInput(input);
+    const searchEnv = await this.readStdioSearchEnv();
+    const command = await resolveStdioExecutable(normalized.command, searchEnv);
+    if (normalized.cwd) {
+      const info = await stat(normalized.cwd).catch(() => undefined);
+      if (!info?.isDirectory()) {
+        throw new McpStdioLaunchError("invalid", `The folder ${normalized.cwd} does not exist.`);
+      }
+    }
+    let stored: Record<string, string> | undefined;
+    // Keyed by variable names the operator typed: no prototype to collide with.
+    const secretValues: Record<string, string> = Object.create(null) as Record<string, string>;
+    for (const entry of normalized.env) {
+      if (!entry.secret) continue;
+      if (entry.value !== undefined && entry.value !== "") {
+        secretValues[entry.name] = entry.value;
+        continue;
+      }
+      if (connectionId) {
+        try {
+          stored ??= await this.stdioSecrets.read(connectionId);
+        } catch {
+          throw new McpStdioLaunchError(
+            "secret_unavailable",
+            "PwrAgent could not read this server's stored secrets. Enter each secret again.",
+          );
+        }
+        const kept = Object.hasOwn(stored, entry.name) ? stored[entry.name] : undefined;
+        if (kept !== undefined) {
+          secretValues[entry.name] = kept;
+          continue;
+        }
+      }
+      throw new McpStdioLaunchError("invalid", `Enter a value for ${entry.name}.`);
+    }
+    return {
+      launch: {
+        command,
+        args: normalized.args,
+        ...(normalized.cwd ? { cwd: normalized.cwd } : {}),
+        env: normalized.env.map((entry) => entry.secret
+          ? { name: entry.name, secret: true }
+          : { name: entry.name, secret: false, value: entry.value ?? "" }),
+      },
+      secretValues,
+    };
+  }
+
+  private async readStdioSearchEnv(): Promise<NodeJS.ProcessEnv> {
+    try {
+      return await this.resolveStdioSearchEnv();
+    } catch (error) {
+      connectionLog.warn("login-shell environment unavailable for a local MCP command", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return process.env;
+    }
+  }
+
+  /** A transport for a local command, counted while its process runs. */
+  private async createStdioTransport(
+    connectionId: string,
+    launch: McpStdioLaunch,
+    secretValues: Record<string, string>,
+  ): Promise<OwnedStdioClientTransport> {
+    const searchEnv = await this.readStdioSearchEnv();
+    const resolved = resolveStdioLaunch({
+      launch,
+      secretValues,
+      processEnv: process.env,
+      ...(searchEnv.PATH ? { loginShellPath: searchEnv.PATH } : {}),
+    });
+    return new OwnedStdioClientTransport(resolved, this.stdioSpawn, {
+      onSpawn: () => {
+        if (!connectionId) return;
+        this.stdioProcessCounts.set(connectionId, (this.stdioProcessCounts.get(connectionId) ?? 0) + 1);
+      },
+      onExit: () => {
+        if (!connectionId) return;
+        const next = (this.stdioProcessCounts.get(connectionId) ?? 1) - 1;
+        if (next > 0) this.stdioProcessCounts.set(connectionId, next);
+        else this.stdioProcessCounts.delete(connectionId);
+      },
+    });
+  }
+
+  /**
+   * Opens a Sandboxer page from this machine. No broker hop: the dashboard
+   * link is signed in through this machine's CLI login.
+   */
+  async openSandboxerLink(target: SandboxerLinkTarget): Promise<OpenSandboxerLinkResponse> {
+    return await this.sandboxer.openLink(target);
   }
 
   async authorizeConnection(connectionId: string): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/authorize",
         { connectionId },
-      );
+      ));
     }
     const connection = this.requireConnection(connectionId);
+    if (connection.kind === "stdio") {
+      throw new Error(`${connection.displayName} is a local command. It has nothing to sign in to.`);
+    }
+    if (connection.kind === "sandboxer") {
+      // The CLI may have logged into a different account since this process
+      // started. Only then retire servers holding the previous login and its
+      // catalog: Settings refreshes on window focus during setup, and closing
+      // a live `sbx mcp` drops the sandbox a thread was implicitly using.
+      const { accountChanged } = await this.sandboxer.refreshStatus();
+      if (accountChanged) {
+        await this.closeConnectionSessions(connectionId);
+        this.invalidateConnectionTools(connectionId);
+      }
+      return this.announced(await this.connectionStatus(connection));
+    }
     // Restore the first attempt's state before its callback rejection runs.
     this.coordinatorFor(connection).abandonAuthorization();
     this.abandonPendingAuthorization(
@@ -680,7 +1055,7 @@ export class McpConnectionGatewayService {
         "connected",
         `PwrAgent can now offer ${connection.displayName} to the agents and threads you choose.`,
       );
-      return await this.connectionStatus(connection);
+      return this.announced(await this.connectionStatus(connection));
     } catch (cause) {
       callback.complete(
         "failed",
@@ -688,6 +1063,9 @@ export class McpConnectionGatewayService {
           ? cause.message
           : "The secure connection could not be completed.",
       );
+      // Its sessions are already closed and its state moved; other windows
+      // must hear it as they would a success.
+      this.announceChanged([connectionId]);
       throw cause;
     } finally {
       if (this.pendingAuthorizations.get(connectionId)?.abandon === callback.abandon) {
@@ -710,13 +1088,14 @@ export class McpConnectionGatewayService {
   async cancelAuthorization(connectionId: string): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/cancel-authorize",
         { connectionId },
-      );
+      ));
     }
     const connection = this.requireConnection(connectionId);
+    if (connection.kind === "sandboxer" || connection.kind === "stdio") return this.announced(await this.connectionStatus(connection));
     // Retire the attempt in the coordinator *before* ending its wait, so the
     // rejection that follows lands on a stale attempt and cannot report a
     // called-off authorization as `reauthorization_required`. Doing it the
@@ -728,7 +1107,7 @@ export class McpConnectionGatewayService {
       connectionId,
       `${connection.displayName} authorization was cancelled.`,
     );
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   private abandonPendingAuthorization(connectionId: string, reason: string): void {
@@ -750,13 +1129,19 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/update",
         request,
-      );
+      ));
     }
     const existing = this.requireConnection(request.connectionId);
+    if (existing.kind === "stdio") {
+      return this.announced(await this.updateStdioConnection(existing, request));
+    }
+    if (request.stdio !== undefined) {
+      throw new Error("A remote server has no command. Remove it and add a local command instead.");
+    }
     const { connection, serverUrlChanged } = this.registry.update({
       connectionId: request.connectionId,
       displayName: request.displayName,
@@ -767,6 +1152,56 @@ export class McpConnectionGatewayService {
       await this.coordinatorFor(existing).disconnect();
       this.coordinators.delete(request.connectionId);
       this.invalidateConnectionTools(request.connectionId);
+    }
+    return this.announced(await this.connectionStatus(connection));
+  }
+
+  /**
+   * Rename or re-launch a local command.
+   *
+   * A changed launch stops every running copy: a thread's next call starts
+   * the new command, rather than a server that was configured differently
+   * from what Settings now shows. Secrets are written after the record, and
+   * the record is put back if they cannot be.
+   */
+  private async updateStdioConnection(
+    existing: McpConnectionRecord,
+    request: UpdateMcpConnectionRequest,
+  ): Promise<McpConnectionStatus> {
+    if (request.serverUrl !== undefined) {
+      throw new Error("A local command has no URL. Remove it and add a remote server instead.");
+    }
+    const prepared = request.stdio
+      ? await this.prepareStdioLaunch(request.stdio, existing.id)
+      : undefined;
+    // A save from the edit dialog always carries the launch. Only a launch or
+    // secret that actually changed restarts running copies; a rename must not
+    // throw away every thread's server state.
+    const previousSecrets = prepared
+      ? await this.stdioSecrets.read(existing.id).catch(() => undefined)
+      : undefined;
+    const secretsChanged = prepared !== undefined
+      && !sameSecretValues(previousSecrets, prepared.secretValues);
+    const { connection, launchChanged } = this.registry.update({
+      connectionId: existing.id,
+      ...(request.displayName === undefined ? {} : { displayName: request.displayName }),
+      ...(prepared ? { launch: prepared.launch } : {}),
+    });
+    if (prepared && secretsChanged) {
+      try {
+        await this.stdioSecrets.write(existing.id, prepared.secretValues);
+      } catch (error) {
+        this.registry.update({
+          connectionId: existing.id,
+          displayName: existing.displayName,
+          launch: existing.stdio!,
+        });
+        throw error;
+      }
+    }
+    if (launchChanged || secretsChanged) {
+      await this.closeConnectionSessions(existing.id);
+      this.discoveryHealth.delete(existing.id);
     }
     return await this.connectionStatus(connection);
   }
@@ -825,21 +1260,27 @@ export class McpConnectionGatewayService {
   async disconnectConnection(connectionId: string): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/disconnect",
         { connectionId },
-      );
+      ));
     }
     const connection = this.requireConnection(connectionId);
     await this.closeConnectionSessions(connectionId);
+    if (connection.kind === "sandboxer") {
+      return this.announced(await this.connectionStatus(this.registry.setEnabled(connectionId, false)));
+    }
+    // A local command holds no credentials to discard; stopping its running
+    // copies is all a disconnect can mean.
+    if (connection.kind === "stdio") return this.announced(await this.connectionStatus(connection));
     await this.coordinatorFor(connection).disconnect();
     this.invalidateConnectionTools(connectionId);
     if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
       this.sessionRevoked = false;
       await this.settings.clearPwrSnapMcpCredential();
     }
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   /**
@@ -855,18 +1296,18 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/set-enabled",
         { connectionId, enabled },
-      );
+      ));
     }
     this.requireConnection(connectionId);
     const connection = this.registry.setEnabled(connectionId, enabled);
     if (!enabled) {
       await this.closeConnectionSessions(connectionId);
     }
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   /**
@@ -883,18 +1324,53 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/set-select-for-new-threads",
         { connectionId, selectForNewThreads },
-      );
+      ));
     }
     this.requireConnection(connectionId);
     const connection = this.registry.setSelectForNewThreads(
       connectionId,
       selectForNewThreads,
     );
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
+  }
+
+  /**
+   * Choose whether PwrAgent cleans up the sandboxes a thread created once
+   * every PR attached to that thread has merged or closed.
+   *
+   * Nothing live changes. The flag is read when a thread's last open PR
+   * merges or closes, so the next such PR follows it.
+   */
+  async setSandboxerCleanupOnPrClose(
+    enabled: boolean,
+  ): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/set-sandboxer-cleanup-on-pr-close",
+        { enabled },
+      ));
+    }
+    const connection = this.registry.setSandboxerCleanupOnPrClose(enabled);
+    return this.announced(await this.connectionStatus(connection));
+  }
+
+  /**
+   * Whether Sandboxer cleanup on PR close is on.
+   *
+   * Reads the local registry rather than asking the owner broker: config.toml
+   * is profile-local, so every instance on the profile reads the same value.
+   */
+  isSandboxerCleanupOnPrCloseEnabled(): boolean {
+    return (
+      this.registry.get(SANDBOXER_MCP_CONNECTION_ID)?.sandboxerCleanupOnPrClose
+      !== false
+    );
   }
 
   /**
@@ -909,15 +1385,15 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/set-tool-approval",
         { connectionId, toolApproval },
-      );
+      ));
     }
     this.requireConnection(connectionId);
     const connection = this.registry.setToolApproval(connectionId, toolApproval);
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   /**
@@ -1026,21 +1502,35 @@ export class McpConnectionGatewayService {
   async removeConnection(connectionId: string): Promise<boolean> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<boolean>(
+      const removed = await this.requestOwnerBroker<boolean>(
         ownership.holder,
         "broker/remove",
         { connectionId },
       );
+      this.announceChanged([connectionId]);
+      return removed;
     }
-    if (connectionId === PWRSNAP_MCP_CONNECTION_ID || connectionId === PWRGIT_MCP_CONNECTION_ID) {
+    if (isBuiltInMcpConnectionId(connectionId)) {
       throw new Error("Built-in MCP connections cannot be removed.");
     }
-    this.requireConnection(connectionId);
+    const connection = this.requireConnection(connectionId);
     await this.closeConnectionSessions(connectionId);
-    await this.coordinatorFor(this.requireConnection(connectionId)).disconnect();
+    if (connection.kind === "stdio") {
+      this.invalidateConnectionTools(connectionId);
+      this.discoveryHealth.delete(connectionId);
+      // Secrets first: if storage refuses, the row stays and Remove can be
+      // tried again, rather than leaving a token with no row to reach it.
+      await this.stdioSecrets.delete(connectionId);
+      const removed = this.registry.remove(connectionId);
+      this.announceChanged([connectionId]);
+      return removed;
+    }
+    await this.coordinatorFor(connection).disconnect();
     this.coordinators.delete(connectionId);
     this.invalidateConnectionTools(connectionId);
-    return this.registry.remove(connectionId);
+    const removed = this.registry.remove(connectionId);
+    this.announceChanged([connectionId]);
+    return removed;
   }
 
   async registerBridge(
@@ -1064,14 +1554,16 @@ export class McpConnectionGatewayService {
     // problem, and telling the operator to reauthorize would send them to
     // the wrong control.
     const connection = this.requireAvailableConnection(connectionId);
-    const configured = await this.coordinatorFor(connection).configured();
+    const status = await this.connectionStatus(connection);
+    const configured = status.configured;
     signal?.throwIfAborted();
     if (
       !configured
       && !(connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked)
     ) {
       throw new Error(
-        `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
+        connection.kind === "sandboxer" || connection.kind === "stdio" ? status.detail
+          : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
       );
     }
     const registrationKey = threadId
@@ -1167,6 +1659,14 @@ export class McpConnectionGatewayService {
   async close(): Promise<void> {
     this.grants.clear();
     this.threadRegistrations.clear();
+    for (const sockets of this.bridgeAttachments.values()) {
+      for (const socket of sockets) socket.destroy();
+    }
+    this.bridgeAttachments.clear();
+    this.bridgeAttachmentCount = 0;
+    await Promise.all([...this.stdioTestTransports].map(async (transport) =>
+      await transport.close().catch(() => undefined)));
+    this.stdioTestTransports.clear();
     await Promise.all(
       [...new Set([...this.upstreamSessions.keys(), ...this.upstreamStarts.keys()])].map(async (token) =>
         await this.closeUpstreamSession(token),
@@ -1697,6 +2197,7 @@ export class McpConnectionGatewayService {
   private coordinatorFor(
     connection: McpConnectionRecord,
   ): McpOAuthSessionCoordinator {
+    if (connection.authMode !== "oauth") throw new Error("This connection uses the local CLI login, not OAuth.");
     let coordinator = this.coordinators.get(connection.id);
     if (!coordinator) {
       const serverUrl = new URL(connection.serverUrl);
@@ -1753,7 +2254,30 @@ export class McpConnectionGatewayService {
 
   private async connectionStatus(
     connection: McpConnectionRecord,
+    cachedLocalStatus = false,
+    sandboxerStatusMaxAgeMs?: number,
   ): Promise<McpConnectionStatus> {
+    if (connection.kind === "sandboxer") {
+      // New-thread defaults have a two-second total budget. Refresh enabled
+      // compute in the background without delaying unrelated defaults. A cold
+      // cache skips only Sandboxer until a probe has established its login.
+      if (cachedLocalStatus && connection.enabled) {
+        void this.sandboxer.readStatus();
+      }
+      const status = cachedLocalStatus
+        ? this.sandboxer.cachedStatus()
+        : await this.sandboxer.readStatus(
+          sandboxerStatusMaxAgeMs === undefined
+            ? false
+            : { maxAgeMs: sandboxerStatusMaxAgeMs },
+        );
+      return {
+        ...connection,
+        ...status,
+        discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
+      };
+    }
+    if (connection.kind === "stdio") return await this.stdioConnectionStatus(connection);
     const coordinator = this.coordinatorFor(connection);
     const configured = await coordinator.configured();
     return {
@@ -1762,6 +2286,36 @@ export class McpConnectionGatewayService {
       discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
       state: configured ? coordinator.state : "disconnected",
       ...(coordinator.detail ? { detail: coordinator.detail } : {}),
+    };
+  }
+
+  /**
+   * A local command is configured when every secret it names can be read
+   * back. There is no sign-in, so its state is otherwise always ready; a
+   * server that fails to start says so through its discovery health.
+   */
+  private async stdioConnectionStatus(connection: McpConnectionRecord): Promise<McpConnectionStatus> {
+    const secretNames = (connection.stdio?.env ?? []).filter((entry) => entry.secret).map((entry) => entry.name);
+    let detail: string | undefined;
+    if (secretNames.length > 0) {
+      try {
+        const stored = await this.stdioSecrets.read(connection.id);
+        const missing = secretNames.find((name) => !Object.hasOwn(stored, name));
+        if (missing) {
+          detail = `PwrAgent could not read the stored value of ${missing}. Edit this connection and enter it again.`;
+        }
+      } catch {
+        detail = "PwrAgent could not read this server's stored secrets. Edit this connection and enter them again.";
+      }
+    }
+    const running = this.stdioProcessCounts.get(connection.id) ?? 0;
+    return {
+      ...connection,
+      configured: detail === undefined,
+      state: "ready",
+      ...(detail ? { detail } : {}),
+      ...(running > 0 ? { localProcesses: running } : {}),
+      discovery: this.discoveryHealth.get(connection.id) ?? { state: "untested" },
     };
   }
 
@@ -1811,6 +2365,7 @@ export class McpConnectionGatewayService {
     const session = await this.connectUpstreamClient(connection, {
       clientName: `pwragent-${connection.id}-proxy`,
       discovery,
+      threadSession: true,
       // A session evicts itself when it actually dies. Leaving that to the
       // per-request error path would close a healthy session shared by every
       // in-flight request on this token the first time one of them was
@@ -1845,20 +2400,32 @@ export class McpConnectionGatewayService {
       clientName: string;
       onClose?: (client: Client) => void;
       discovery: McpDiscovery;
+      /** A thread's session, counted in a local command's running total. */
+      threadSession?: boolean;
     },
   ): Promise<UpstreamSession> {
-    const coordinator = this.coordinatorFor(connection);
-    if (!(await coordinator.configured())) {
-      throw new Error(
-        connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked
-          ? PWRSNAP_SESSION_REVOKED_ERROR
-          : `${connection.displayName} needs to be reauthorized in Settings → Plugins.`,
+    let transport: Transport;
+    if (connection.kind === "stdio") {
+      return await this.connectStdioClient(connection, options);
+    }
+    if (connection.kind === "sandboxer") {
+      const status = await this.sandboxer.readStatus();
+      if (!status.configured) throw new Error(status.detail);
+      transport = this.sandboxer.createTransport();
+    } else {
+      const coordinator = this.coordinatorFor(connection);
+      if (!(await coordinator.configured())) {
+        throw new Error(
+          connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked
+            ? PWRSNAP_SESSION_REVOKED_ERROR
+            : `${connection.displayName} needs to be reauthorized in Settings → Plugins.`,
+        );
+      }
+      transport = new StreamableHTTPClientTransport(
+        new URL(connection.serverUrl),
+        { fetch: coordinator.authorizedFetch() },
       );
     }
-    const transport = new StreamableHTTPClientTransport(
-      new URL(connection.serverUrl),
-      { fetch: coordinator.authorizedFetch() },
-    );
     const client = new Client(
       {
         name: options.clientName,
@@ -1895,6 +2462,116 @@ export class McpConnectionGatewayService {
       options.discovery.signal.removeEventListener("abort", abort);
     }
     return { client, transport };
+  }
+
+  /**
+   * Start a local command and complete the MCP handshake with it.
+   *
+   * Every failure path stops the process group before it returns, and the
+   * reason -- with the server's stderr, secrets masked -- is kept for the
+   * Settings row. The error thrown carries only PwrAgent's own description,
+   * because it can reach an agent.
+   */
+  private async connectStdioClient(
+    connection: McpConnectionRecord,
+    options: {
+      clientName: string;
+      onClose?: (client: Client) => void;
+      discovery: McpDiscovery;
+      threadSession?: boolean;
+    },
+  ): Promise<UpstreamSession> {
+    const launch = connection.stdio;
+    if (!launch) throw new Error(`${connection.displayName} has no command to run.`);
+    let transport: OwnedStdioClientTransport | undefined;
+    const client = new Client({ name: options.clientName, version: "1.0.0" }, { capabilities: {} });
+    client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+      this.invalidateConnectionTools(connection.id);
+    });
+    const abort = (): void => { void transport?.close().catch(() => undefined); };
+    options.discovery.signal.addEventListener("abort", abort, { once: true });
+    try {
+      const secretNames = launch.env.filter((entry) => entry.secret);
+      let secretValues: Record<string, string> = {};
+      if (secretNames.length > 0) {
+        try {
+          secretValues = await this.stdioSecrets.read(connection.id);
+        } catch {
+          throw new McpStdioLaunchError(
+            "secret_unavailable",
+            `PwrAgent could not read ${connection.displayName}'s stored secrets. Edit it in Settings → Plugins and enter them again.`,
+          );
+        }
+      }
+      options.discovery.remaining();
+      // Only a thread's copy counts toward "Running": a Settings listing
+      // starts one for a moment and stops it.
+      transport = await this.createStdioTransport(
+        options.threadSession ? connection.id : "",
+        launch,
+        secretValues,
+      );
+      const onClose = options.onClose;
+      if (onClose) client.onclose = () => onClose(client);
+      await client.connect(transport, {
+        timeout: options.discovery.remaining(), signal: options.discovery.signal,
+      });
+      options.discovery.remaining();
+      return { client, transport };
+    } catch (error) {
+      client.onclose = undefined;
+      await transport?.close().catch(() => undefined);
+      if (options.discovery.signal.aborted && options.discovery.signal.reason?.name !== "TimeoutError") {
+        throw error;
+      }
+      const failure = describeStdioStartFailure({
+        error,
+        transport,
+        displayName: connection.displayName,
+        command: launch.command,
+        timedOut: options.discovery.signal.aborted
+          || (error instanceof McpError && error.code === ErrorCode.RequestTimeout),
+      });
+      this.discoveryHealth.set(connection.id, {
+        ...this.discoveryHealth.get(connection.id),
+        state: "failed",
+        lastFailure: {
+          at: Date.now(),
+          message: failure.message,
+          ...(failure.output ? { output: failure.output } : {}),
+        },
+      });
+      throw failure;
+    } finally {
+      options.discovery.signal.removeEventListener("abort", abort);
+    }
+  }
+
+  /**
+   * Stop the sessions a thread holds for the given connections.
+   *
+   * Called when a thread turns connections off. The thread's grant survives,
+   * as it does for every connection, because its agent learns of the change
+   * only on its next turn or session load; what ends now is the local
+   * process the thread no longer selects.
+   */
+  async closeThreadSessions(threadId: string, connectionIds: readonly string[]): Promise<void> {
+    if (connectionIds.length === 0) return;
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      await this.requestOwnerBroker<boolean>(
+        ownership.holder,
+        "broker/close-thread-sessions",
+        { threadId, connectionIds },
+      );
+      return;
+    }
+    const targets = new Set(connectionIds);
+    await Promise.all(
+      [...this.grants.entries()]
+        .filter(([, grant]) => targets.has(grant.connectionId) && grantThreadId(grant) === threadId)
+        .map(async ([token]) => await this.closeUpstreamSession(token)),
+    );
   }
 
   private async closeUpstreamSession(token: string): Promise<void> {
@@ -1959,7 +2636,6 @@ export class McpConnectionGatewayService {
       socketPath = join(directory, "bridge.sock");
     }
     const server = createServer((socket) => this.handleBridgeSocket(socket));
-    server.maxConnections = MAX_RPC_CONNECTIONS;
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(socketPath, () => {
@@ -1998,6 +2674,17 @@ export class McpConnectionGatewayService {
   }
 
   private handleBridgeSocket(socket: Socket): void {
+    // In-flight RPCs keep their old bound of 32 sockets. A socket that turns
+    // out to be an attach leaves this count when it is classified.
+    if (this.activeRpcSockets >= MAX_RPC_CONNECTIONS) {
+      socket.destroy();
+      return;
+    }
+    this.activeRpcSockets += 1;
+    this.rpcSockets.add(socket);
+    socket.once("close", () => {
+      if (this.rpcSockets.delete(socket)) this.activeRpcSockets -= 1;
+    });
     socket.setEncoding("utf8");
     socket.setTimeout(MCP_CONNECTION_TOOL_TIMEOUT_MS, () => socket.destroy());
     let buffer = "";
@@ -2052,6 +2739,10 @@ export class McpConnectionGatewayService {
       this.respond(socket, { ok: false, error: "unauthorized" });
       return;
     }
+    if (request.op === "attach") {
+      this.attachBridge(request.token, grant, socket);
+      return;
+    }
     const abortController = new AbortController();
     socket.once("close", () => abortController.abort());
     try {
@@ -2086,6 +2777,43 @@ export class McpConnectionGatewayService {
     }
   }
 
+  /**
+   * Hold a bridge child's attach socket open for its lifetime.
+   *
+   * When the last socket for a grant closes, the agent that started the
+   * bridge has exited or dropped its MCP servers. A local command started
+   * for that grant is stopped then, rather than running until PwrAgent quits.
+   * The grant itself survives: the agent may start the bridge again for the
+   * same thread, and the next request starts a fresh process.
+   */
+  private attachBridge(token: string, grant: BridgeGrant, socket: Socket): void {
+    if (this.rpcSockets.delete(socket)) this.activeRpcSockets -= 1;
+    if (this.bridgeAttachmentCount >= MAX_BRIDGE_ATTACHMENTS) {
+      this.respond(socket, { ok: false, error: "too many attached bridges" });
+      return;
+    }
+    socket.setTimeout(0);
+    let sockets = this.bridgeAttachments.get(token);
+    if (!sockets) {
+      sockets = new Set();
+      this.bridgeAttachments.set(token, sockets);
+    }
+    sockets.add(socket);
+    this.bridgeAttachmentCount += 1;
+    const detach = (): void => {
+      const current = this.bridgeAttachments.get(token);
+      if (!current?.delete(socket)) return;
+      this.bridgeAttachmentCount -= 1;
+      if (current.size > 0) return;
+      this.bridgeAttachments.delete(token);
+      if (this.registry.get(grant.connectionId)?.kind === "stdio") {
+        void this.closeUpstreamSession(token);
+      }
+    };
+    socket.once("close", detach);
+    if (!socket.destroyed) socket.write(`${JSON.stringify({ ok: true, result: true })}\n`);
+  }
+
   private async dispatchBrokerOperation(
     operation: unknown,
     params: unknown,
@@ -2094,7 +2822,13 @@ export class McpConnectionGatewayService {
       ? params as Record<string, unknown>
       : {};
     if (operation === "broker/list") {
-      return await this.listConnections();
+      return await this.listConnections({
+        cachedLocalStatus: values.cachedLocalStatus === true,
+        ...(typeof values.sandboxerStatusMaxAgeMs === "number"
+          && Number.isFinite(values.sandboxerStatusMaxAgeMs)
+          ? { sandboxerStatusMaxAgeMs: values.sandboxerStatusMaxAgeMs }
+          : {}),
+      });
     }
     if (operation === "broker/pwrsnap-status") {
       return await this.readStatus();
@@ -2105,14 +2839,33 @@ export class McpConnectionGatewayService {
     if (operation === "broker/create") {
       if (
         typeof values.displayName !== "string"
-        || typeof values.serverUrl !== "string"
+        || (typeof values.serverUrl !== "string" && values.stdio === undefined)
       ) {
         throw new Error("Invalid MCP connection create request.");
       }
       return await this.createConnection({
         displayName: values.displayName,
-        serverUrl: values.serverUrl,
+        ...(typeof values.serverUrl === "string" ? { serverUrl: values.serverUrl } : {}),
+        // Validated field by field in prepareStdioLaunch.
+        ...(values.stdio !== undefined ? { stdio: values.stdio as McpStdioLaunchInput } : {}),
       });
+    }
+    if (operation === "broker/test-stdio") {
+      return await this.testStdioConnection({
+        stdio: values.stdio as McpStdioLaunchInput,
+        ...(typeof values.connectionId === "string" ? { connectionId: values.connectionId } : {}),
+      });
+    }
+    if (operation === "broker/close-thread-sessions") {
+      if (
+        typeof values.threadId !== "string"
+        || !Array.isArray(values.connectionIds)
+        || values.connectionIds.some((id) => typeof id !== "string")
+      ) {
+        throw new Error("Invalid MCP thread session release request.");
+      }
+      await this.closeThreadSessions(values.threadId, values.connectionIds as string[]);
+      return true;
     }
     if (operation === "broker/update") {
       if (typeof values.connectionId !== "string") {
@@ -2126,6 +2879,7 @@ export class McpConnectionGatewayService {
         ...(typeof values.serverUrl === "string"
           ? { serverUrl: values.serverUrl }
           : {}),
+        ...(values.stdio !== undefined ? { stdio: values.stdio as McpStdioLaunchInput } : {}),
       });
     }
     if (operation === "broker/probe") {
@@ -2145,6 +2899,12 @@ export class McpConnectionGatewayService {
         values.connectionId,
         values.selectForNewThreads,
       );
+    }
+    if (operation === "broker/set-sandboxer-cleanup-on-pr-close") {
+      if (typeof values.enabled !== "boolean") {
+        throw new Error("Invalid Sandboxer cleanup on PR close request.");
+      }
+      return await this.setSandboxerCleanupOnPrClose(values.enabled);
     }
     if (operation === "broker/set-tool-approval") {
       if (
@@ -2207,9 +2967,11 @@ export class McpConnectionGatewayService {
         throw new Error("Invalid MCP bridge registration request.");
       }
       const connection = this.requireAvailableConnection(values.connectionId);
-      if (!(await this.coordinatorFor(connection).configured())) {
+      const status = await this.connectionStatus(connection);
+      if (!status.configured) {
         throw new Error(
-          `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
+          connection.kind === "sandboxer" || connection.kind === "stdio" ? status.detail
+            : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
         );
       }
       const threadId = typeof values.threadId === "string"
@@ -2347,6 +3109,16 @@ export class McpConnectionGatewayService {
       throw new Error("The MCP connection changed during discovery. Search again.");
     }
     this.recordDiscoverySuccess(connection.id);
+    // Sandboxer's say to stop each sandbox when done; dropping them left the
+    // agent nothing telling it a forgotten machine keeps billing. Only the
+    // built-in Sandboxer CLI's: a third-party server's instructions would be
+    // untrusted text the agent is told to follow.
+    const instructions = connection.kind === "sandboxer"
+      ? client.getInstructions?.()?.trim()
+      : undefined;
+    if (instructions && tools[0]) {
+      tools[0] = { ...tools[0], serverInstructions: instructions.slice(0, MAX_SERVER_INSTRUCTIONS_CHARS) };
+    }
     return tools;
   }
 
@@ -2392,8 +3164,10 @@ export class McpConnectionGatewayService {
             validateGatewayArguments(tool.definition, values.arguments as Record<string, unknown>);
             signal?.throwIfAborted();
             discovery.close();
-            return await client.callTool({ name: tool.toolName, arguments: values.arguments as Record<string, unknown> },
+            const result = await client.callTool({ name: tool.toolName, arguments: values.arguments as Record<string, unknown> },
               undefined, { signal, timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS });
+            this.observeToolResult(grant, tool.toolName, result as CallToolResult);
+            return result;
           }
           case "describe": {
             const capabilities = client.getServerCapabilities();
@@ -2408,8 +3182,8 @@ export class McpConnectionGatewayService {
             if (!result.nextCursor) this.recordDiscoverySuccess(grant.connectionId);
             return result;
           }
-          case "tools/call":
-            return await client.callTool(
+          case "tools/call": {
+            const result = await client.callTool(
               values as Parameters<Client["callTool"]>[0],
               undefined,
               {
@@ -2417,6 +3191,9 @@ export class McpConnectionGatewayService {
                 timeout: MCP_CONNECTION_TOOL_TIMEOUT_MS,
               },
             );
+            this.observeToolResult(grant, values.name, result as CallToolResult);
+            return result;
+          }
           case "resources/list":
             return await client.listResources(values);
           case "resources/templates/list":
@@ -2444,9 +3221,127 @@ export class McpConnectionGatewayService {
     return await mcpDiscoveryContext.exit(async () => await mcpDiscoveryPhaseContext.exit(dispatch));
   }
 
+  /**
+   * Every Sandboxer tool call reaches the upstream server here, on the
+   * profile's owner, whether it came through a thread's native MCP bridge or
+   * `call_mcp_tool`. A successful `create_sandbox` is recorded against the
+   * calling thread. Recording never affects the call's result.
+   */
+  private observeToolResult(
+    grant: BridgeGrant,
+    toolName: unknown,
+    result: CallToolResult,
+  ): void {
+    if (grant.connectionId !== SANDBOXER_MCP_CONNECTION_ID || toolName !== "create_sandbox") return;
+    const thread = readGrantThread(grant.threadId);
+    if (!thread) return;
+    try {
+      const sandbox = readCreatedSandbox(result);
+      if (!sandbox) return;
+      this.recordCreatedSandbox({
+        connectionId: grant.connectionId,
+        ...sandbox,
+        ...thread,
+        now: Date.now(),
+      });
+    } catch (error) {
+      connectionLog.warn("failed to record a created sandbox", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * A tool session for PwrAgent's own calls, such as releasing a closed PR's
+   * sandboxes. It uses the same owner-broker path as an agent's call, so it
+   * works for a local process or a hosted endpoint alike, but it is not tied
+   * to a thread's MCP selection: the operator's cleanup switch governs it.
+   * The connection must still be enabled and signed in. Close it when done.
+   */
+  async openPwrAgentToolSession(params: {
+    connectionId: string;
+    scopeKey: string;
+    signal: AbortSignal;
+  }): Promise<SandboxerCleanupTransport> {
+    const registration = await this.registerBridge(
+      params.connectionId,
+      params.scopeKey,
+      params.signal,
+    );
+    const rpc = new ConnectionRpcClient(
+      registration.server.env.PWRAGENT_MCP_CONNECTION_SOCKET,
+      registration.server.env.PWRAGENT_MCP_CONNECTION_TOKEN,
+    );
+    return {
+      listToolNames: async () => {
+        const names: string[] = [];
+        let cursor: string | undefined;
+        for (let page = 0; page < 5; page += 1) {
+          const result = await rpc.request(
+            "tools/list",
+            cursor ? { cursor } : {},
+            params.signal,
+            Date.now() + MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
+          ) as { tools?: Array<{ name?: unknown }>; nextCursor?: unknown };
+          for (const tool of result.tools ?? []) {
+            if (typeof tool.name === "string") names.push(tool.name);
+          }
+          cursor = typeof result.nextCursor === "string" ? result.nextCursor : undefined;
+          if (!cursor) break;
+        }
+        return names;
+      },
+      callTool: async (name, args) => await rpc.request(
+        "tools/call",
+        { name, arguments: args },
+        params.signal,
+        undefined,
+        undefined,
+        MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS,
+      ) as CallToolResult,
+      close: () => registration.revoke(),
+    };
+  }
+
   private respond(socket: Socket, response: BridgeResponse): void {
     if (!socket.destroyed) socket.end(`${JSON.stringify(response)}\n`);
   }
+}
+
+/**
+ * The thread a grant serves. A thread's own bridge carries the bare id; the
+ * gateway search/call path carries `["gateway", backend, threadId]`.
+ */
+function grantThreadId(grant: BridgeGrant): string | undefined {
+  if (!grant.threadId) return undefined;
+  if (!grant.threadId.startsWith("[")) return grant.threadId;
+  try {
+    const scope = JSON.parse(grant.threadId) as unknown;
+    return Array.isArray(scope) && scope[0] === "gateway" && typeof scope[2] === "string"
+      ? scope[2]
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function sameSecretValues(
+  previous: Record<string, string> | undefined,
+  next: Record<string, string>,
+): boolean {
+  if (!previous) return false;
+  const names = Object.keys(next);
+  return names.length === Object.keys(previous).length
+    && names.every((name) => Object.hasOwn(previous, name) && previous[name] === next[name]);
+}
+
+function hasStdioSecretStore(
+  settings: GatewaySettings,
+): settings is GatewaySettings & McpStdioSecretSettings {
+  const candidate = settings as Partial<Record<string, unknown>>;
+  return typeof candidate.resolveMcpStdioConnectionSecrets === "function"
+    && typeof candidate.saveMcpStdioConnectionSecrets === "function"
+    && typeof candidate.clearMcpStdioConnectionSecrets === "function";
 }
 
 function secureTokenEqual(candidate: string, expected: string | undefined): boolean {
@@ -2458,6 +3353,35 @@ function secureTokenEqual(candidate: string, expected: string | undefined): bool
 }
 
 let mcpConnectionGatewayService: McpConnectionGatewayService | undefined;
+
+/**
+ * The thread a grant serves. Gateway calls carry `["gateway", backend,
+ * threadId]`; a thread's native bridge carries the bare thread id. Settings
+ * discovery and PwrAgent's own sessions name no thread.
+ */
+function readGrantThread(
+  scope: string | undefined,
+): { backend?: string; threadId: string } | undefined {
+  const value = scope?.trim();
+  if (!value) return undefined;
+  if (!value.startsWith("[")) return { threadId: value };
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      Array.isArray(parsed)
+      && parsed.length === 3
+      && parsed[0] === "gateway"
+      && typeof parsed[1] === "string"
+      && typeof parsed[2] === "string"
+      && parsed[2]
+    ) {
+      return { backend: parsed[1], threadId: parsed[2] };
+    }
+  } catch {
+    // Not a thread scope.
+  }
+  return undefined;
+}
 
 export function getMcpConnectionGatewayService(): McpConnectionGatewayService {
   mcpConnectionGatewayService ??= new McpConnectionGatewayService();

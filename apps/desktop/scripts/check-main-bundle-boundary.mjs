@@ -5,29 +5,53 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const desktopRoot = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-);
+const desktopRoot = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const mainOutputDirectory = path.resolve(desktopRoot, "out", "main");
-const entries = await readdir(mainOutputDirectory, { withFileTypes: true });
-const javascriptFiles = entries
-  .filter((entry) => entry.isFile() && /\.(?:c|m)?js$/.test(entry.name))
-  .map((entry) => path.join(mainOutputDirectory, entry.name));
+
+async function listJavaScriptFiles(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const files = await Promise.all(entries.map(async (entry) => {
+    const filePath = path.join(directory, entry.name);
+    if (entry.isDirectory()) return listJavaScriptFiles(filePath);
+    return entry.isFile() && /\.(?:c|m)?js$/.test(entry.name) ? [filePath] : [];
+  }));
+  return files.flat();
+}
+
+const javascriptFiles = await listJavaScriptFiles(mainOutputDirectory);
 const forbidden = [
   {
     label: "externalized ws runtime import",
-    pattern: /\b(?:from\s+|import\(|require\()["']ws["']/,
+    pattern: /\b(?:from\s+|import\(|require\()["'`]ws["'`]/,
   },
   {
     label: "externalized workspace bundled-dependency import",
     pattern:
-      /\b(?:from\s+|import\(|require\()["']@pwragent\/(?:shared|messaging-interface|messaging-provider-[^/"']+)["']/,
+      /\b(?:from\s+|import\(|require\()["'`]@pwragent\/(?:shared|messaging-interface|messaging-provider-[^/"'`]+)["'`]/,
   },
 ];
 const violations = [];
 
+function checkSyntax(filePath) {
+  try {
+    execFileSync(process.execPath, ["--check", filePath], {
+      stdio: "pipe",
+      maxBuffer: 8 * 1024 * 1024,
+    });
+  } catch (error) {
+    const reason = error.stderr?.toString().match(/^SyntaxError:.*$/m)?.[0]
+      ?? error.message.split("\n")[0];
+    violations.push({
+      file: path.relative(desktopRoot, filePath),
+      label: `invalid JavaScript: ${reason}`,
+    });
+  }
+}
+
 for (const filePath of javascriptFiles) {
+  checkSyntax(filePath);
   const contents = await readFile(filePath, "utf8");
   for (const rule of forbidden) {
     if (rule.pattern.test(contents)) {
@@ -63,12 +87,11 @@ for (const filePath of javascriptFiles) {
 // `out/preload/chunks/`, and each entry's `require("./chunks/...")` throws at
 // load. The main window then has no desktop API and the app cannot start.
 const preloadOutputDirectory = path.resolve(desktopRoot, "out", "preload");
-const preloadFiles = (await readdir(preloadOutputDirectory, { withFileTypes: true }))
-  .filter((entry) => entry.isFile() && /\.(?:c|m)?js$/.test(entry.name))
-  .map((entry) => path.join(preloadOutputDirectory, entry.name));
+const preloadFiles = await listJavaScriptFiles(preloadOutputDirectory);
 for (const filePath of preloadFiles) {
+  checkSyntax(filePath);
   const contents = await readFile(filePath, "utf8");
-  for (const [, specifier] of contents.matchAll(/\brequire\(["']([^"']+)["']\)/g)) {
+  for (const [, specifier] of contents.matchAll(/\brequire\(["'`]([^"'`]+)["'`]\)/g)) {
     if (specifier !== "electron") {
       violations.push({
         file: path.relative(desktopRoot, filePath),

@@ -1878,6 +1878,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   gateway_relay: "reach sibling instances",
   remote_pty: "remote terminal protocol",
   service_forward_v1: "port forwarding",
+  service_forward_v2: "fast port forwarding",
   file_push: "file push protocol",
   thread_handoff: "transfer existing threads",
   file_pull: "File pull",
@@ -1892,6 +1893,10 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   operator_questions: "dismiss async questions",
   thread_mcp_connections: "Thread MCP connections",
   turn_queue_reorder: "reorder queued messages",
+  turn_queue_pause: "pause queued messages",
+  // Display read sizes are negotiation, not a remote action.
+  thread_display_bulk_reads: "",
+  turn_assistant_reply: "read a turn's reply images",
 };
 
 function formatFederationCapabilities(

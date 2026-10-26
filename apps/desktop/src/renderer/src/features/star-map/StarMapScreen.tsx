@@ -34,6 +34,11 @@ import {
   type StarMapViewSurface,
   type StarMapWorkspaceAnchor,
 } from "@pwragent/shared";
+import {
+  ThreadProvidersContext,
+  useStableThreadProviders,
+} from "../navigation/provider-chip-visibility";
+import { starMapThreadProviders } from "./star-map-thread-providers";
 import { useStarMapProjectPages, starMapProjectResource } from "./useStarMapProjectPages";
 import type { NavigationWindowResource } from "../../lib/navigation-window-queries";
 import { navigationPageErrorCopy } from "../../lib/navigation-query-state";
@@ -1335,6 +1340,27 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     return result;
   }, [projectPages.state, localInstanceId]);
+  // Providers across the fleet, so an opted-in provider chip only shows
+  // when it tells cards apart.
+  const fleetProviders = useMemo(() => starMapThreadProviders({
+    instanceCounts: [
+      localRowsAreOwnerMatched ? localFeed.counts : undefined,
+      ...remote.countsByInstance.values(),
+    ],
+    threads: [
+      ...localThreads,
+      ...[...remote.threadsByInstance.values()].flat(),
+      ...[...projectThreadsByInstance.values()].flat(),
+    ],
+  }), [
+    localRowsAreOwnerMatched,
+    localFeed.counts,
+    remote.countsByInstance,
+    remote.threadsByInstance,
+    projectThreadsByInstance,
+    localThreads,
+  ]);
+  const threadProviders = useStableThreadProviders(fleetProviders);
   const draftIndicatorThreads = useMemo(() => [
     ...localThreads, ...[...remote.threadsByInstance.values()].flat(),
   ], [localThreads, remote.threadsByInstance]);
@@ -5991,6 +6017,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   };
 
   return (
+    <ThreadProvidersContext.Provider value={threadProviders}>
     <div
       ref={layerRef}
       // `is-flying` mirrors the pointer pan's `is-panning` for keyboard
@@ -6876,5 +6903,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
         </div>
       ) : null}
     </div>
+    </ThreadProvidersContext.Provider>
   );
 }

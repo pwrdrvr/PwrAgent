@@ -3,6 +3,8 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessage,
 } from "@pwragent/shared";
+import { turnUsageEntryTurnId } from "@pwragent/shared";
+import { isTurnAnswer, lateWorkBelongsAboveAnswer } from "../features/thread-detail/turn-answer-placement";
 import {
   addTranscriptReviewSegmentToIndex,
   createTranscriptReviewHistoryIndex,
@@ -543,14 +545,38 @@ function transcriptEntryTime(entry: AppServerThreadEntry): number | undefined {
   return entry.createdAt ?? entry.turn?.completedAt ?? entry.turn?.startedAt;
 }
 
+/**
+ * The time a retained row is placed by. A turn total has none: its place is
+ * after the last entry of its turn, wherever its own clock landed.
+ */
+function retainedPlacementTime(entry: AppServerThreadEntry): number | undefined {
+  return turnUsageEntryTurnId(entry) === undefined
+    ? transcriptEntryTime(entry)
+    : undefined;
+}
+
 function findHistoryInsertionPoint(
   entry: AppServerThreadEntry,
+  turnId: string,
   turnPages: TranscriptHistoryTurnPage[],
 ): TranscriptHistoryInsertionPoint | undefined {
-  const entryTime = transcriptEntryTime(entry);
+  const entryTime = retainedPlacementTime(entry);
   let lastTurnEntry:
     | { entryIndex: number; page: TranscriptHistoryPage }
     | undefined;
+  let firstTurnTotal: TranscriptHistoryInsertionPoint | undefined;
+  // The first entry stamped later than the row, and the turn's last reply.
+  // `position` orders them across pages.
+  let laterEntry:
+    | (TranscriptHistoryInsertionPoint & { position: number })
+    | undefined;
+  let lastAnswer:
+    | (TranscriptHistoryInsertionPoint & {
+        answer: AppServerThreadEntry;
+        position: number;
+      })
+    | undefined;
+  let position = 0;
 
   for (let pageIndex = turnPages.length - 1; pageIndex >= 0; pageIndex -= 1) {
     const turnPage = turnPages[pageIndex]!;
@@ -559,24 +585,59 @@ function findHistoryInsertionPoint(
       if (!historyEntry) {
         continue;
       }
+      // The page's own turn total is no anchor: retained work belongs above
+      // it, and a retained total beside it.
+      if (turnUsageEntryTurnId(historyEntry) !== undefined) {
+        firstTurnTotal ??= { entryIndex, page: turnPage.page };
+        continue;
+      }
+      position += 1;
       const historyEntryTime = transcriptEntryTime(historyEntry);
       if (
-        typeof entryTime === "number"
+        !laterEntry
+        && typeof entryTime === "number"
         && typeof historyEntryTime === "number"
         && historyEntryTime > entryTime
       ) {
-        return { entryIndex, page: turnPage.page };
+        // With no reply above it, this entry is the row's place.
+        if (!lastAnswer) {
+          return { entryIndex, page: turnPage.page };
+        }
+        laterEntry = { entryIndex, page: turnPage.page, position };
+      }
+      if (isTurnAnswer(historyEntry, turnId)) {
+        lastAnswer = {
+          answer: historyEntry,
+          entryIndex,
+          page: turnPage.page,
+          position,
+        };
       }
       lastTurnEntry = { entryIndex, page: turnPage.page };
     }
   }
 
+  // A finished turn's work goes above its answer, however late its stamp,
+  // unless an entry stamped later than the row comes first.
+  if (
+    lastAnswer
+    && (!laterEntry || laterEntry.position > lastAnswer.position)
+    && lateWorkBelongsAboveAnswer(entry, lastAnswer.answer)
+  ) {
+    return { entryIndex: lastAnswer.entryIndex, page: lastAnswer.page };
+  }
+  if (laterEntry) {
+    return { entryIndex: laterEntry.entryIndex, page: laterEntry.page };
+  }
+
+  // A page split inside the turn can carry only the turn's total; the row
+  // still belongs with its turn, just above that total.
   return lastTurnEntry
     ? {
         entryIndex: lastTurnEntry.entryIndex + 1,
         page: lastTurnEntry.page,
       }
-    : undefined;
+    : firstTurnTotal;
 }
 
 function retainedEntryInsertionPoint(
@@ -585,7 +646,7 @@ function retainedEntryInsertionPoint(
   turnId: string,
   turnPages: TranscriptHistoryTurnPage[],
 ): TranscriptHistoryInsertionPoint | undefined {
-  const entryTime = transcriptEntryTime(entry);
+  const entryTime = retainedPlacementTime(entry);
   const cached = index.retainedEntryPlacements.get(entry.id);
   if (
     cached
@@ -596,7 +657,7 @@ function retainedEntryInsertionPoint(
     return cached.insertionPoint;
   }
 
-  const insertionPoint = findHistoryInsertionPoint(entry, turnPages);
+  const insertionPoint = findHistoryInsertionPoint(entry, turnId, turnPages);
   if (insertionPoint) {
     index.retainedEntryPlacements.set(entry.id, {
       entryTime,

@@ -1,5 +1,11 @@
 import type { DesktopThreadArchivePolicy, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
-import { isAcpBackendId, isThreadTodoMergeMethod, validateLocalModelIds } from "@pwragent/shared";
+import {
+  isAcpBackendId,
+  isThreadTodoMergeMethod,
+  validateCodexModelProviders,
+  validateLocalModelIds,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
 import os from "node:os";
@@ -113,6 +119,7 @@ export type DesktopSettingsConfig = {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
     pinnedThreadsOnTop?: boolean;
+    passSetupVariablesToAgents?: boolean;
     interactiveSvgSkipNotice?: boolean;
     interactiveSvgAutoOpen?: boolean;
     mcpGatewayEnabled?: boolean;
@@ -320,6 +327,7 @@ export type DesktopSettingsConfig = {
       managedBuildChannel?: DesktopUpdateChannel;
       configOverrides?: string[];
       localModelIds?: string[];
+      providers?: CodexModelProviderSettings[];
     };
   };
   acpAgents?: {
@@ -670,6 +678,12 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "pinned_threads_on_top"],
       patch.general.pinnedThreadsOnTop,
+    );
+  }
+  if (patch.general?.passSetupVariablesToAgents !== undefined) {
+    set(
+      ["general", "pass_setup_variables_to_agents"],
+      patch.general.passSetupVariablesToAgents,
     );
   }
   if (patch.general?.interactiveSvgSkipNotice !== undefined) {
@@ -1733,6 +1747,10 @@ export function desktopSettingsPatchToEdits(
   if (patch.models?.codex?.localModelIds !== undefined) {
     set(["models", "codex", "local_model_ids"], validateLocalModelIds(patch.models.codex.localModelIds));
   }
+  if (patch.models?.codex?.providers !== undefined) {
+    const providers = validateCodexModelProviders(patch.models.codex.providers);
+    edits.push(...codexModelProviderTableEdits(providers));
+  }
   if (patch.models?.codex?.allowFast !== undefined) {
     set(["models", "codex", "allow_fast"], patch.models.codex.allowFast);
   }
@@ -2083,6 +2101,9 @@ function normalizeDesktopConfig(
         general?.attention_promote_on_turn_end,
       ),
       pinnedThreadsOnTop: readBoolean(general?.pinned_threads_on_top),
+      passSetupVariablesToAgents: readBoolean(
+        general?.pass_setup_variables_to_agents,
+      ),
       interactiveSvgSkipNotice: readBoolean(
         general?.interactive_svg_skip_notice,
       ),
@@ -2454,6 +2475,7 @@ function normalizeDesktopConfig(
         managedBuilds: readBoolean(codex?.managed_builds),
         managedBuildChannel: readUpdateChannel(codex?.managed_build_channel),
         localModelIds: codex?.local_model_ids === undefined ? undefined : validateLocalModelIds(codex.local_model_ids),
+        providers: readCodexModelProviders(codex?.providers, codex?.provider_rates),
         configOverrides: codex?.config_overrides === undefined
           ? undefined
           : validateCodexConfigOverrides(codex.config_overrides),
@@ -2552,6 +2574,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     config.general?.confirmQuitWithInProgressThreads;
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
   const pinnedThreadsOnTop = config.general?.pinnedThreadsOnTop;
+  const passSetupVariablesToAgents = config.general?.passSetupVariablesToAgents;
   const interactiveSvgSkipNotice = config.general?.interactiveSvgSkipNotice;
   const interactiveSvgAutoOpen = config.general?.interactiveSvgAutoOpen;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
@@ -2576,6 +2599,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     confirmQuitWithInProgressThreads !== undefined ||
     attentionPromoteOnTurnEnd !== undefined ||
     pinnedThreadsOnTop !== undefined ||
+    passSetupVariablesToAgents !== undefined ||
     interactiveSvgSkipNotice !== undefined ||
     interactiveSvgAutoOpen !== undefined ||
     pdfAnalysisEnabled !== undefined ||
@@ -2620,6 +2644,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (pinnedThreadsOnTop !== undefined) {
       pruned.general.pinnedThreadsOnTop = pinnedThreadsOnTop;
+    }
+    if (passSetupVariablesToAgents !== undefined) {
+      pruned.general.passSetupVariablesToAgents = passSetupVariablesToAgents;
     }
     if (interactiveSvgSkipNotice !== undefined) {
       pruned.general.interactiveSvgSkipNotice = interactiveSvgSkipNotice;
@@ -3235,6 +3262,75 @@ function normalizeHelperModelChoice(
 
 // Additive setting: older builds ignore these rows. Reading never rewrites
 // config, and saving replaces only this table array.
+/**
+ * `[[models.codex.providers]]` holds endpoints and `[[models.codex.provider_rates]]`
+ * their per-model prices, because a table-array entry cannot nest tables.
+ * Malformed entries fail the read, as config overrides do, so Codex keeps the
+ * last-known-good providers instead of losing one.
+ */
+function readCodexModelProviders(
+  value: unknown,
+  ratesValue: unknown,
+): CodexModelProviderSettings[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error("models.codex.providers must be a table array.");
+  }
+  const rateRows = Array.isArray(ratesValue) ? ratesValue : [];
+  return validateCodexModelProviders(value.map((row) => {
+    const entry = row && typeof row === "object" ? row as Record<string, unknown> : {};
+    const id = typeof entry.id === "string" ? entry.id.trim() : entry.id;
+    const rates = rateRows
+      .filter((rate) => rate && typeof rate === "object" && (rate as Record<string, unknown>).provider === id)
+      .map((rate) => {
+        const fields = rate as Record<string, unknown>;
+        return {
+          model: fields.model,
+          inputPerMillion: fields.input,
+          outputPerMillion: fields.output,
+          cachedInputPerMillion: fields.cached_input,
+        };
+      });
+    return {
+      id,
+      name: entry.name,
+      baseUrl: entry.base_url,
+      ...(entry.models === undefined ? {} : { models: entry.models }),
+      ...(entry.discover_models === undefined ? {} : { discoverModels: entry.discover_models }),
+      ...(entry.local === undefined ? {} : { local: entry.local }),
+      ...(rates.length ? { rates } : {}),
+    };
+  }));
+}
+
+function codexModelProviderTableEdits(
+  providers: readonly CodexModelProviderSettings[],
+): TomlEdit[] {
+  const providerRows = providers.map((provider) => ({
+    id: provider.id,
+    name: provider.name,
+    base_url: provider.baseUrl,
+    ...(provider.models?.length ? { models: provider.models } : {}),
+    ...(provider.discoverModels === undefined ? {} : { discover_models: provider.discoverModels }),
+    ...(provider.local ? { local: true } : {}),
+  }));
+  const rateRows = providers.flatMap((provider) => (provider.rates ?? []).map((rate) => ({
+    provider: provider.id,
+    model: rate.model,
+    ...(rate.inputPerMillion === undefined ? {} : { input: rate.inputPerMillion }),
+    ...(rate.outputPerMillion === undefined ? {} : { output: rate.outputPerMillion }),
+    ...(rate.cachedInputPerMillion === undefined ? {} : { cached_input: rate.cachedInputPerMillion }),
+  })));
+  return [
+    providerRows.length
+      ? { op: "setTableArray", path: ["models", "codex", "providers"], value: providerRows }
+      : { op: "deleteTableArray", path: ["models", "codex", "providers"] },
+    rateRows.length
+      ? { op: "setTableArray", path: ["models", "codex", "provider_rates"], value: rateRows }
+      : { op: "deleteTableArray", path: ["models", "codex", "provider_rates"] },
+  ];
+}
+
 function readUsageAccountGroups(value: unknown): Record<string, string> | undefined {
   const entries = Array.isArray(value)
     ? value.map((row) => [readString(row?.backend), readString(row?.group)])

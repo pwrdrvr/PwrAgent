@@ -112,6 +112,10 @@ function createSnapshot(
         value: true,
         source: "default",
       },
+      passSetupVariablesToAgents: {
+        value: true,
+        source: "default",
+      },
       mcpGatewayEnabled: {
         value: true,
         source: "default",
@@ -842,6 +846,34 @@ async function renderPlatformPageWithApprovedSurface(
   return assign;
 }
 
+/** A contrived local command connection, as main reports it. */
+function localCommandConnection(
+  overrides: Partial<McpConnectionStatus> = {},
+): McpConnectionStatus {
+  return {
+    id: "project-files",
+    displayName: "Project files",
+    serverUrl: "stdio:project-files",
+    authMode: "none",
+    kind: "stdio",
+    enabled: true,
+    toolApproval: "auto",
+    createdAt: 1,
+    updatedAt: 1,
+    configured: true,
+    state: "ready",
+    stdio: {
+      command: "/opt/fixture/bin/npx",
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/example/My Projects"],
+      env: [
+        { name: "FIXTURE_ROOT", secret: false, value: "/home/example" },
+        { name: "FIXTURE_TOKEN", secret: true },
+      ],
+    },
+    ...overrides,
+  };
+}
+
 function messagingRoutesHeader(): Element | null {
   return document.querySelector(
     '[aria-controls="settings-section-messaging-routes-body"]',
@@ -1399,6 +1431,63 @@ describe("SettingsScreen", () => {
     expect(screen.queryByText(/PWRDRVR_CODEX_COMMAND/)).not.toBeInTheDocument();
   });
 
+  it("opens an environment from Settings → Environments and names it in the breadcrumb", async () => {
+    const settings = createSettingsState();
+    const desktopApi = {
+      listCodexEnvironmentProjects: vi.fn(async () => ({
+        projects: [{ path: "/fixture/code/demo", label: "demo" }],
+      })),
+      listCodexEnvironmentFiles: vi.fn(async () => ({
+        directoryPath: "/fixture/code/demo",
+        files: [{ fileName: "environment.toml", name: "Node dev", setupPlatforms: [], actionCount: 0 }],
+      })),
+      readCodexEnvironmentDocument: vi.fn(async () => ({
+        status: "ok" as const,
+        revision: "rev-1",
+        sourcePath: "/fixture/code/demo/.codex/environments/environment.toml",
+        document: {
+          name: "Node dev",
+          setup: { mode: "shared" as const, script: "pnpm install", platformScripts: {} },
+          cleanup: { mode: "shared" as const, script: "", platformScripts: {} },
+          actions: [],
+        },
+      })),
+    } as unknown as DesktopApi;
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(
+      within(screen.getByRole("navigation", { name: "Settings sections" }))
+        .getByRole("button", { name: "Environments" }),
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("switch", { name: /Pass setup variables to agents/ }));
+    });
+    expect(settings.writeConfig).toHaveBeenCalledWith({
+      general: { passSetupVariablesToAgents: false },
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open Node dev settings" }));
+    await screen.findByRole("heading", { name: "Node dev", level: 1 });
+    const titlebar = document.querySelector(".settings-titlebar")! as HTMLElement;
+    expect(within(titlebar).getByRole("button", { name: "Environments" })).toBeInTheDocument();
+    expect(titlebar.querySelector(".settings-titlebar__current")).toHaveTextContent("Node dev");
+    // The editor is a page of Environments, so the nav still marks it.
+    expect(
+      within(screen.getByRole("navigation", { name: "Settings sections" }))
+        .getByRole("button", { name: "Environments" }),
+    ).toHaveAttribute("aria-current", "page");
+
+    fireEvent.click(within(titlebar).getByRole("button", { name: "Environments" }));
+    expect(await screen.findByRole("button", { name: "Open Node dev settings" })).toBeInTheDocument();
+  });
+
   it("leaves terminal contrast off by default and writes only the opt-in", async () => {
     const controller: AppearanceController = {
       appearance: {
@@ -1564,15 +1653,16 @@ describe("SettingsScreen", () => {
     expect(nav).not.toBeNull();
     expect(lane).not.toBeNull();
 
-    // Every scrolling part, not just the rows: the collapsible sublists and
-    // the divider come out of the same map, and a refactor that hoisted the
-    // sublists out — to stop the scroller clipping them, say — would leave a
-    // rows-only assertion green while group children stopped scrolling with
-    // their parent row.
+    // Every scrolling part, not just the rows: the category groups, their
+    // headings and the collapsible sublists come out of the same map, and a
+    // refactor that hoisted the sublists out — to stop the scroller clipping
+    // them, say — would leave a rows-only assertion green while group
+    // children stopped scrolling with their parent row.
     for (const selector of [
       ".settings-nav__row",
       ".settings-nav__sublist",
-      ".settings-nav__divider",
+      ".settings-nav__category",
+      ".settings-nav__group-label",
     ]) {
       const members = [...container.querySelectorAll(selector)];
       expect(members.length).toBeGreaterThan(0);
@@ -1587,6 +1677,63 @@ describe("SettingsScreen", () => {
       expect(chrome).not.toBeNull();
       expect(chrome?.parentElement).toBe(nav);
     }
+  });
+
+  it("lists every section once, under a category heading that is not a control", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+
+    // Each category is a group named by its heading, in nav order, holding
+    // its section rows in order, none listed twice. A section left out of
+    // every category fails typecheck in SettingsScreen.tsx instead.
+    const categories = within(nav).getAllByRole("group").map((group) => [
+      document.getElementById(group.getAttribute("aria-labelledby") ?? "")
+        ?.textContent,
+      [...group.querySelectorAll(".settings-nav__button")].map(
+        (button) => button.textContent,
+      ),
+    ]);
+    expect(categories).toEqual([
+      ["App", ["General", "Keyboard", "Updates", "Applications", "Profiles"]],
+      ["Agents", ["AI Providers", "Plugins", "Usage & Pricing"]],
+      ["Projects", ["Git", "Worktrees", "Environments"]],
+      ["Threads", ["Thread Management", "Archived Threads"]],
+      ["Remote Access", ["Messaging", "Access Control", "Federation"]],
+      ["Support", ["Experimental", "Troubleshooting", "About"]],
+    ]);
+    expect(within(nav).getByRole("group", { name: "Agents" })).toContainElement(
+      within(nav).getByRole("button", { name: "AI Providers" }),
+    );
+
+    // A heading is plain text: no route, no Tab stop, nothing to activate.
+    const headings = [...nav.querySelectorAll(".settings-nav__group-label")];
+    expect(headings).toHaveLength(6);
+    for (const heading of headings) {
+      expect(heading.tagName).toBe("P");
+      expect(heading).not.toHaveAttribute("tabindex");
+      expect(heading.closest("button, a")).toBeNull();
+    }
+  });
+
+  it("opens a deep-linked section inside its category with the page marker", () => {
+    render(
+      <SettingsScreen
+        initialSection="environments"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+    const projects = within(
+      screen.getByRole("navigation", { name: "Settings sections" }),
+    ).getByRole("group", { name: "Projects" });
+    expect(
+      within(projects).getByRole("button", { name: "Environments" }),
+    ).toHaveAttribute("aria-current", "page");
   });
 
   it("switches sections and saves settings", async () => {
@@ -9309,7 +9456,7 @@ describe("SettingsScreen", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
-  it("keeps Exit, the General label, and section order in the settings nav", () => {
+  it("keeps Exit, the category headings, and section order in the settings nav", () => {
     // Regression lock for the design contract: Exit Settings lives
     // INSIDE `.settings-nav` (left column), not inside the title-bar
     // strip. Two prior attempts in this branch put it in the strip
@@ -9326,9 +9473,17 @@ describe("SettingsScreen", () => {
     expect(exit.closest(".settings-titlebar")).toBeNull();
     expect(exit).toHaveClass("settings-nav__exit");
 
-    const label = document.querySelector(".settings-nav__group-label");
-    expect(label).not.toBeNull();
-    expect(label?.textContent?.toLowerCase()).toBe("general");
+    const labels = Array.from(
+      document.querySelectorAll(".settings-nav__group-label"),
+    ).map((label) => label.textContent);
+    expect(labels).toEqual([
+      "App",
+      "Agents",
+      "Projects",
+      "Threads",
+      "Remote Access",
+      "Support",
+    ]);
 
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
     // Caret toggles sit beside the group labels and sub-items live in
@@ -9342,17 +9497,18 @@ describe("SettingsScreen", () => {
       "Keyboard",
       "Updates",
       "Applications",
-      "Plugins",
       "Profiles",
       "AI Providers",
+      "Plugins",
       "Usage & Pricing",
-      "Messaging",
-      "Federation",
-      "Access Control",
       "Git",
       "Worktrees",
+      "Environments",
       "Thread Management",
       "Archived Threads",
+      "Messaging",
+      "Access Control",
+      "Federation",
       "Experimental",
       "Troubleshooting",
       "About",
@@ -9365,11 +9521,11 @@ describe("SettingsScreen", () => {
       nav.querySelectorAll(".settings-nav__caret"),
     ).map((button) => button.getAttribute("aria-label"));
     expect(caretLabels).toEqual([
-      "Expand Plugins",
       "Expand AI Providers",
+      "Expand Plugins",
+      "Expand Git",
       "Expand Messaging",
       "Expand Federation",
-      "Expand Git",
     ]);
     // Collapsed sublists keep their children out of the accessibility
     // tree — MCP Gateway only appears once Plugins expands.
@@ -9382,9 +9538,8 @@ describe("SettingsScreen", () => {
     expect(
       within(nav).getByRole("button", { name: "MCP Gateway" }),
     ).toBeInTheDocument();
-    expect(within(nav).getByRole("separator")).toHaveClass(
-      "settings-nav__divider",
-    );
+    // Category headings replaced the one unlabeled divider.
+    expect(within(nav).queryByRole("separator")).not.toBeInTheDocument();
   });
 
   /**
@@ -10237,20 +10392,30 @@ describe("SettingsScreen", () => {
     expect(screen.queryByText("Adding Datadog...")).not.toBeInTheDocument();
   });
 
-  it("refuses to save a URL the gateway cannot hold, and says where it belongs", async () => {
+  it("refuses to save a command as a URL, and turns it into a local command", async () => {
     const probeMcpConnection = vi.fn(async () => ({
       ok: false as const,
       problem: "looks_like_stdio" as const,
       message:
-        "That looks like a command line, not a URL. Command-line (stdio) MCP servers are configured in the agent itself — PwrAgent's gateway holds credentials for remote servers.",
+        "That is a command, not a URL. Add it as a local command instead; a person sets those up in Settings → Plugins.",
     }));
-    const createMcpConnection = vi.fn();
+    const createMcpConnection = vi.fn(async () => ({
+      connection: localCommandConnection(),
+    }));
+    const testMcpStdioConnection = vi.fn(async () => ({
+      ok: true as const,
+      command: "/opt/fixture/bin/npx",
+      serverName: "Project files",
+      toolCount: 3,
+      elapsedMs: 840,
+    }));
 
     render(
       <SettingsScreen
         desktopApi={{
           createMcpConnection,
           probeMcpConnection,
+          testMcpStdioConnection,
           listMcpConnections: vi.fn(async () => ({ connections: [] })),
           listCodexMcpServers: vi.fn(async () => ({
             codexHome: "/home/example/.codex",
@@ -10265,19 +10430,244 @@ describe("SettingsScreen", () => {
     );
 
     fireEvent.change(await screen.findByLabelText("Remote MCP URL"), {
-      target: { value: "npx -y @modelcontextprotocol/server-filesystem" },
+      target: { value: "npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Check" }));
 
     expect(
-      await screen.findByText(/Command-line \(stdio\) MCP servers/),
+      await screen.findByText(/That looks like a command, not a URL/),
     ).toBeInTheDocument();
-    // The whole point: the record was never written, so there is no dead row
-    // to remove and no credentials to clean up.
+    // The record was never written, so there is no dead row to remove.
     expect(createMcpConnection).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("button", { name: "Add and authorize" }),
     ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use as local command" }));
+    // Split once, for the operator to check: quotes kept one argument whole.
+    expect(screen.getByRole("radio", { name: /Local command/ })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText(/^Command line/)).toHaveValue(
+      "npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'",
+    );
+    // The split is on screen, one chip per word, before anything runs.
+    expect(screen.getByText("/home/example/My Projects", { selector: "code" })).toBeInTheDocument();
+    expect(screen.getByText(/this computer, as you/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    expect(
+      await screen.findByText(/Started Project files in 0.8 s and read 3 tools/),
+    ).toBeInTheDocument();
+    expect(testMcpStdioConnection).toHaveBeenCalledWith({
+      stdio: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/example/My Projects"],
+        env: [],
+      },
+    });
+    expect(screen.getByText("/opt/fixture/bin/npx")).toBeInTheDocument();
+    // The server's own name filled the empty Name field.
+    expect(screen.getByPlaceholderText("Project files")).toHaveValue("Project files");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await waitFor(() => {
+      expect(createMcpConnection).toHaveBeenCalledWith({
+        displayName: "Project files",
+        stdio: {
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/example/My Projects"],
+          env: [],
+        },
+      });
+    });
+  });
+
+  it("shows a local command's own output when it exits, and still lets it be added", async () => {
+    const createMcpConnection = vi.fn(async () => ({
+      connection: localCommandConnection(),
+    }));
+    const testMcpStdioConnection = vi.fn(async () => ({
+      ok: false as const,
+      problem: "exited" as const,
+      message: "The server exited before it answered (exit code 1). Its output is below.",
+      output: "error: FIXTURE_TOKEN •••• was rejected",
+      command: "/opt/fixture/bin/fixture-server",
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          createMcpConnection,
+          testMcpStdioConnection,
+          listMcpConnections: vi.fn(async () => ({ connections: [] })),
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [],
+          })),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("radio", { name: /Local command/ }));
+    fireEvent.change(screen.getByPlaceholderText("Project files"), {
+      target: { value: "Fixture server" },
+    });
+    fireEvent.change(screen.getByLabelText(/^Command line/), {
+      target: { value: "fixture-server" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add variable" }));
+    fireEvent.change(screen.getByLabelText("Variable 1 name"), {
+      target: { value: "FIXTURE_TOKEN" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Keep FIXTURE_TOKEN secret" }));
+    const value = screen.getByLabelText("FIXTURE_TOKEN value");
+    // A secret is typed into a password field and never echoed.
+    expect(value).toHaveAttribute("type", "password");
+    fireEvent.change(value, { target: { value: "fixture-secret" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    expect(await screen.findByLabelText("Server output")).toHaveTextContent(
+      "error: FIXTURE_TOKEN •••• was rejected",
+    );
+    expect(screen.queryByRole("button", { name: "Add" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add anyway" }));
+    await waitFor(() => {
+      expect(createMcpConnection).toHaveBeenCalledWith({
+        displayName: "Fixture server",
+        stdio: {
+          command: "fixture-server",
+          args: [],
+          env: [{ name: "FIXTURE_TOKEN", secret: true, value: "fixture-secret" }],
+        },
+      });
+    });
+  });
+
+  it("moves NAME=value words from a pasted line into variables, and refuses an open quote", async () => {
+    const testMcpStdioConnection = vi.fn();
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          testMcpStdioConnection,
+          listMcpConnections: vi.fn(async () => ({ connections: [] })),
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [],
+          })),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("radio", { name: /Local command/ }));
+    const commandLine = screen.getByLabelText(/^Command line/);
+    fireEvent.change(commandLine, {
+      target: { value: "FIXTURE_API_TOKEN=fixture-secret LOG_LEVEL=debug npx -y fixture-server" },
+    });
+    fireEvent.blur(commandLine);
+
+    expect(commandLine).toHaveValue("npx -y fixture-server");
+    // A credential-looking name starts hidden; the operator can still flip it.
+    expect(screen.getByLabelText("FIXTURE_API_TOKEN value")).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("FIXTURE_API_TOKEN value")).toHaveValue("fixture-secret");
+    expect(screen.getByLabelText("LOG_LEVEL value")).toHaveAttribute("type", "text");
+
+    // Pasting a line that sets a variable the operator marked secret keeps it secret.
+    fireEvent.click(screen.getByLabelText("Keep LOG_LEVEL secret"));
+    fireEvent.change(commandLine, { target: { value: "LOG_LEVEL=trace npx -y fixture-server" } });
+    fireEvent.blur(commandLine);
+    expect(screen.getByLabelText("LOG_LEVEL value")).toHaveAttribute("type", "password");
+    expect(screen.getByLabelText("LOG_LEVEL value")).toHaveValue("trace");
+
+    fireEvent.change(commandLine, { target: { value: "npx -y 'fixture-server" } });
+    expect(screen.getByText("A quote is not closed.")).toBeInTheDocument();
+    expect(commandLine).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Test" })).toBeDisabled();
+    expect(testMcpStdioConnection).not.toHaveBeenCalled();
+  });
+
+  it("lists a local command by its command line and edits it without echoing a stored secret", async () => {
+    const connection = localCommandConnection({ localProcesses: 2 });
+    const mutated = { connectionId: connection.id, connection };
+    const updateMcpConnection = vi.fn(async () => mutated);
+
+    render(
+      <SettingsScreen
+        desktopApi={{
+          updateMcpConnection,
+          setMcpConnectionEnabled: vi.fn(async () => mutated),
+          setMcpConnectionSelectForNewThreads: vi.fn(async () => mutated),
+          listMcpConnections: vi.fn(async () => ({ connections: [connection] })),
+          listMcpConnectionTools: vi.fn(async () => ({
+            connectionId: connection.id,
+            tools: ["read_file", "list_directory"],
+            fetchedAt: 1,
+          })),
+          listCodexMcpServers: vi.fn(async () => ({
+            codexHome: "/home/example/.codex",
+            detail: "toolsAndAuthOnly" as const,
+            servers: [],
+          })),
+        }}
+        initialSection="plugins"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const row = (await screen.findByText("Project files"))
+      .closest<HTMLElement>(".settings-mcp-row")!;
+    expect(within(row).getByText("Running · 2 threads")).toBeInTheDocument();
+    expect(
+      within(row).getByText(
+        "/opt/fixture/bin/npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'",
+      ),
+    ).toBeInTheDocument();
+    // Nothing to sign in to, and nothing to disconnect from.
+    expect(within(row).queryByRole("button", { name: /Authorize/ })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Disconnect" })).not.toBeInTheDocument();
+    expect(within(row).getByRole("switch", { name: "Offer Project files to threads" })).toBeInTheDocument();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit connection" });
+    expect(within(dialog).queryByLabelText("Remote MCP URL")).not.toBeInTheDocument();
+    const secret = within(dialog).getByLabelText("FIXTURE_TOKEN value");
+    expect(secret).toHaveValue("");
+    expect(secret).toHaveAttribute("placeholder", "Stored encrypted");
+    expect(within(dialog).getByText(/restarts it in the 2 threads/)).toBeInTheDocument();
+    // Shown as one line, the way it was pasted, with the resolved program.
+    const commandLine = within(dialog).getByLabelText(/^Command line/);
+    expect(commandLine).toHaveValue(
+      "/opt/fixture/bin/npx -y @modelcontextprotocol/server-filesystem '/home/example/My Projects'",
+    );
+    fireEvent.change(commandLine, {
+      target: { value: "/opt/fixture/bin/npx -y @modelcontextprotocol/server-filesystem /home/example/Other" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(updateMcpConnection).toHaveBeenCalledWith({
+        connectionId: "project-files",
+        displayName: "Project files",
+        stdio: {
+          command: "/opt/fixture/bin/npx",
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/example/Other"],
+          env: [
+            { name: "FIXTURE_ROOT", secret: false, value: "/home/example" },
+            // Left blank, so the stored value stays; no value travels.
+            { name: "FIXTURE_TOKEN", secret: true },
+          ],
+        },
+      });
+    });
   });
 
   it("disables MCP mutations when the selected Codex profile changed after startup", async () => {

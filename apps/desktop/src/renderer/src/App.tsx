@@ -3,6 +3,8 @@ import { FederationShutdownNotices } from "./features/notifications/FederationSh
 import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRenameNotice";
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
+import { XrayMode } from "./features/navigation/XrayBadge";
+import { ThreadRowDensityContext } from "./features/navigation/thread-row-density";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
 import { formatBackendLabel } from "./lib/backend-label";
@@ -74,6 +76,10 @@ import {
   ThreadDependencyIndicatorsContext,
   useThreadDependencyIndicators,
 } from "./features/thread-dependencies/useThreadDependencyIndicators";
+import {
+  ThreadProvidersContext,
+  useStableThreadProviders,
+} from "./features/navigation/provider-chip-visibility";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
 import type {
   LaunchpadMachineControl,
@@ -85,6 +91,7 @@ import { useFindHotkeys } from "./features/chrome/useFindHotkeys";
 import { useHistoryNavHotkeys } from "./features/chrome/useHistoryNavHotkeys";
 import { useLayoutChordHotkeys } from "./features/chrome/useLayoutChordHotkeys";
 import type { SettingsSection } from "./features/settings/SettingsScreen";
+import { encodeEnvironmentsRoute } from "./features/settings/environments-route";
 import { checkForManagedCodexUpdates, refreshManagedCodexModelCatalog } from "./features/settings/managed-codex-actions";
 import type { ConfirmSettingsLeave } from "./features/settings/UnsavedSettingsChanges";
 import {
@@ -175,6 +182,8 @@ import {
   useOperatorRequests,
 } from "./features/operator-requests/useOperatorRequests";
 import { useOffscreenQuestionAnswers } from "./features/operator-requests/useOffscreenQuestionAnswers";
+import { useApprovalNotices } from "./features/operator-requests/approval-notices";
+import type { OperatorWait } from "./features/operator-requests/operator-waits";
 import { copyTextAsCodeBlock } from "./lib/copy-text";
 import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
@@ -397,12 +406,14 @@ export function App() {
   }
 
   return (
-    <DesktopAppShell
-      appearanceController={appearanceController}
-      bootstrapConfig={bootstrapConfig}
-      desktopApi={desktopApi}
-      settings={settings}
-    />
+    <ThreadRowDensityContext.Provider value={appearanceController.appearance.density}>
+      <DesktopAppShell
+        appearanceController={appearanceController}
+        bootstrapConfig={bootstrapConfig}
+        desktopApi={desktopApi}
+        settings={settings}
+      />
+    </ThreadRowDensityContext.Provider>
   );
 }
 
@@ -850,6 +861,9 @@ function DesktopAppShell(props: {
   }, [openSettingsSection]);
   const openPluginSettings = useCallback(() => {
     openSettingsSection("plugins");
+  }, [openSettingsSection]);
+  const handleEditEnvironments = useCallback((workspacePath: string) => {
+    openSettingsSection("environments", encodeEnvironmentsRoute({ project: workspacePath }));
   }, [openSettingsSection]);
   const dismissGithubPrSamlNotice = useCallback(() => {
     dispatchAppNotice({ type: "dismiss-prefix", prefix: "github-pr-saml:" });
@@ -1902,17 +1916,15 @@ function DesktopAppShell(props: {
     return () => { disposed = true; unsubscribe?.(); };
   }, [acknowledgeThreadSpendAlert, desktopApi, normalAppEnabled, pendingSpendAlertCapacity]);
 
-  useEffect(() => {
-    if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
-      return;
-    }
-    return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
-      const thread = navigation.selectedThread;
-      const metadataPromise = desktopApi.readAppMetadata?.();
+  // Help → Copy Diagnostics Info reports the selected thread; the sidebar's
+  // thread menu reports the thread it was opened on, without selecting it.
+  const copyThreadDiagnosticsInfo = useEventCallback(
+    (thread: NavigationThreadSummary | undefined): void => {
+      const metadataPromise = desktopApi?.readAppMetadata?.();
       if (!metadataPromise) {
         return;
       }
-      const federationHealthPromise = desktopApi.readFederationHealth
+      const federationHealthPromise = desktopApi?.readFederationHealth
         ? desktopApi.readFederationHealth({})
             .then((response) => response.health)
             .catch(() => undefined)
@@ -1923,7 +1935,7 @@ function DesktopAppShell(props: {
       ]) => {
         const federationHealth =
           refreshedFederationHealth ?? liveFederationHealth;
-        void copyTextAsCodeBlock(
+        return copyTextAsCodeBlock(
           buildLocalThreadDiagnosticsInfo(
             thread
               ? {
@@ -1945,9 +1957,23 @@ function DesktopAppShell(props: {
           ),
           desktopApi,
         );
+      }).catch((error) => {
+        console.warn("Copying diagnostics info failed.", error);
       });
-    });
-  }, [desktopApi, liveFederationHealth, navigation.selectedThread]);
+    },
+  );
+  const copySelectedThreadDiagnosticsInfo = useEventCallback((): void => {
+    copyThreadDiagnosticsInfo(navigation.selectedThread);
+  });
+
+  useEffect(() => {
+    if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
+      return;
+    }
+    return desktopApi.onCopyLocalDiagnosticsInfoRequested(
+      copySelectedThreadDiagnosticsInfo,
+    );
+  }, [copySelectedThreadDiagnosticsInfo, desktopApi]);
   const recentRemoteThreads = useRecentRemoteThreads({
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
@@ -2466,6 +2492,11 @@ function DesktopAppShell(props: {
     .map(threadSummaryIdentityKey).sort().join("\n"), [navigation.threads]);
   const threadTodoController = useThreadTodos(desktopApi, mountedTodoThreadKeys);
   const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
+  // Providers with threads, from the directory index that counts them all.
+  // Keyed by the joined list so a refreshed page keeps one array identity.
+  const threadProviders = useStableThreadProviders(
+    navigation.pagedNavigation.resources.get("directory-index")?.state.page?.counts.backends,
+  );
   const operatorWaitsContext = useMemo(
     () => operatorRequests.ready ? {
       waitsByThreadKey: operatorRequests.waitsByThreadKey,
@@ -2519,6 +2550,32 @@ function DesktopAppShell(props: {
     window.addEventListener("focus", mark);
     return () => window.removeEventListener("focus", mark);
   }, [markOperatorItemsSeen, selectedOpenTodos, selectedWaits]);
+  // A pending approval in a thread off screen gets a durable card. Hiding
+  // it only closes the card; the request stays in its thread and To-dos.
+  // One lookup for every surface that names a wait's thread.
+  const waitThreadTitle = useCallback(
+    (threadKey: string) => localThreadTitles.get(threadKey) ?? "Untitled thread",
+    [localThreadTitles],
+  );
+  const reviewApprovalNotice = useCallback((wait: OperatorWait): void => {
+    showThreadFromLink({
+      backend: wait.backend,
+      threadId: wait.threadId,
+      ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
+    });
+  }, [showThreadFromLink]);
+  const approvalNotices = useApprovalNotices({
+    waits: operatorRequests.waits,
+    selectedThreadKey,
+    threadTitleForKey: waitThreadTitle,
+    onReview: reviewApprovalNotice,
+  });
+  const durableNotices = useMemo(
+    () => approvalNotices.length > 0
+      ? [...approvalNotices, ...appNotices.durable]
+      : appNotices.durable,
+    [appNotices.durable, approvalNotices],
+  );
   const listThreadTodos = desktopApi?.listThreadTodos;
   const listThreadTodoProjects = desktopApi?.listThreadTodoProjects;
   const setThreadTodoProject = desktopApi?.setThreadTodoProject;
@@ -2687,7 +2744,7 @@ function DesktopAppShell(props: {
         });
       },
       ...offscreenQuestionAnswers,
-      threadTitleForKey: (threadKey) => localThreadTitles.get(threadKey) ?? "Untitled thread",
+      threadTitleForKey: waitThreadTitle,
       threadProjectForKey: (threadKey) => localThreadProjects.get(threadKey),
     };
   }, [
@@ -2704,6 +2761,7 @@ function DesktopAppShell(props: {
     threadTodoController,
     todoProjectMenu,
     todoHandoffInstances,
+    waitThreadTitle,
   ]);
   // Fetch the boot info once at mount. Stable for the renderer's
   // lifetime — the main process records the decision before this
@@ -3560,6 +3618,18 @@ function DesktopAppShell(props: {
     const thread = navigation.selectedThread;
     if (thread) await navigation.handoffThreadWorkspace(thread, request);
   });
+  const handleRecreateThreadWorktree = useEventCallback(async (
+    request: Parameters<NonNullable<ThreadViewProps["onRecreateThreadWorktree"]>>[0],
+  ) => {
+    const thread = navigation.selectedThread;
+    if (!thread) throw new Error("Select the thread again, then try once more.");
+    return await navigation.recreateThreadWorktree(thread, request);
+  });
+  const handleMoveThreadToMainCheckout = useEventCallback(async (worktreePath: string) => {
+    const thread = navigation.selectedThread;
+    if (!thread) throw new Error("Select the thread again, then try once more.");
+    return await navigation.moveThreadToMainCheckout(thread, worktreePath);
+  });
   const handleSetExecutionMode = useEventCallback(async (
     executionMode: Parameters<NonNullable<ThreadViewProps["onSetExecutionMode"]>>[0],
   ) => {
@@ -3819,8 +3889,13 @@ function DesktopAppShell(props: {
       }
     },
     workspaceActionsBlocked: navigation.selectedWorkspaceHandoffPending,
+    onEditEnvironments: handleEditEnvironments,
     onHandoffThreadWorkspace: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
       ? handleHandoffThreadWorkspace : undefined,
+    onRecreateThreadWorktree: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
+      ? handleRecreateThreadWorktree : undefined,
+    onMoveThreadToMainCheckout: navigation.selectedThread && !navigation.selectedWorkspaceHandoffPending
+      ? handleMoveThreadToMainCheckout : undefined,
     onLoadOlder: session.loadOlder,
     onLiveTranscriptEntry: session.upsertLiveTranscriptEntry,
     onCancelLaunchpad: handleCancelLaunchpad,
@@ -3959,6 +4034,7 @@ function DesktopAppShell(props: {
     <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
+    <ThreadProvidersContext.Provider value={threadProviders}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
@@ -4234,6 +4310,14 @@ function DesktopAppShell(props: {
           onPrefetchGitWorkingState={gitWorkingState.prefetch}
           onDetachPullRequest={detachThreadPullRequest}
           onUnbindMessagingBinding={unbindMessagingBinding}
+          onCopyThreadDiagnostics={
+            desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
+          }
+        />
+        <XrayMode
+          density={props.appearanceController.appearance.density}
+          enabled={!sidebarHidden && layerView === undefined}
+          platform={desktopApi?.platform}
         />
         {/* Sibling of the sidebar, not a child: the seam straddles the
             sidebar's border, which the aside's overflow clip would cut off. */}
@@ -4536,7 +4620,7 @@ function DesktopAppShell(props: {
         />
         <AppNoticeStack
           desktopApi={desktopApi}
-          durableNotices={appNotices.durable}
+          durableNotices={durableNotices}
           onDismissDurable={dismissAppNotice}
           onOpenThread={showThreadFromLink}
           onSuppressSkillQuestionsWarning={() => settings.writeConfig({
@@ -4575,6 +4659,7 @@ function DesktopAppShell(props: {
 
       {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
+    </ThreadProvidersContext.Provider>
     </ThreadDependencyIndicatorsContext.Provider>
     </OperatorWaitsContext.Provider>
     </ThreadTodoCountsContext.Provider>

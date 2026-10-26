@@ -30,6 +30,29 @@ describe("usage limit history", () => {
     expect(projectLimit(series)).toEqual({ kind: "full", at: t0 + 2.5 * HOUR + 93 / 3.5 * HOUR });
   });
 
+  it("starts an early reset's window from its new schedule when no reading saw it happen", () => {
+    // The provider reset the week early at 9:00 and moved the reset to a week
+    // later; this instance's next reading came six hours after.
+    const before = weekly(t0 - 20 * HOUR, 64, t0 + 3 * 24 * HOUR);
+    const after = weekly(t0 + 6 * HOUR, 22, t0 + 7 * 24 * HOUR);
+    const [account] = buildLimitAccounts([{ owner: "Studio", history: [before], current: after }]);
+    const series = sinceResetSeries(account)!;
+    expect(series.resets).toEqual([{ at: t0, kind: "unscheduled", after: t0 - 20 * HOUR, before: t0 + 6 * HOUR }]);
+    expect(seriesStart(series)).toBe(t0);
+    expect(series.pacePerHour).toBeCloseTo(22 / 6);
+  });
+
+  it("restarts where an early reset was first seen when its new schedule began before the previous reading", () => {
+    // The new schedule claims a start three hours ago, but a reading an hour
+    // ago was still in the old window, so the reset came after that reading.
+    const before = weekly(t0 - HOUR, 62, t0 + 3 * 24 * HOUR);
+    const after = weekly(t0 + HOUR, 5, t0 + 7 * 24 * HOUR - 3 * HOUR);
+    const [account] = buildLimitAccounts([{ owner: "Studio", history: [before], current: after }]);
+    const series = sinceResetSeries(account)!;
+    expect(series.resets).toEqual([{ at: t0 + HOUR, kind: "unscheduled", after: t0 - HOUR, before: t0 + HOUR }]);
+    expect(seriesStart(series)).toBe(t0 + HOUR);
+  });
+
   it("marks a reset scheduled when the previous window had elapsed", () => {
     const first = weekly(t0 - 2 * HOUR, 88, t0);
     const second = weekly(t0 + HOUR, 2, t0 + 7 * 24 * HOUR);
@@ -86,5 +109,24 @@ describe("usage limit history", () => {
       limits: [{ name: "5h", windowKey: "primary", usedPercent: 30, resetAt: t0 + 5 * HOUR, windowMinutes: 300 }],
     } }]);
     expect(projectLimit(account.series[0])).toEqual({ kind: "atReset", percent: 50, resetAt: t0 + 5 * HOUR });
+  });
+
+  it("keeps each provider's account apart and labels Claude's weekly limits by name", () => {
+    const claude: UsageLimitObservation = { observedAt: t0, provider: "anthropic", accountKey: "a", planType: "max", limits: [
+      { name: "Weekly Opus limit", limitId: "seven_day_opus", usedPercent: 3, resetAt: t0 + 5 * 24 * HOUR, windowMinutes: 10_080 },
+      { name: "Weekly limit", limitId: "seven_day", usedPercent: 30, resetAt: t0 + 5 * 24 * HOUR, windowMinutes: 10_080 },
+      { name: "5-hour limit", limitId: "five_hour", usedPercent: 9, resetAt: t0 + HOUR, windowMinutes: 300 },
+      { name: "Cloud session credits", limitId: "iguana_necktie", usedPercent: 30, resetAt: t0 + 9 * 24 * HOUR, expires: true },
+    ] };
+    // The same opaque key from two providers is two accounts.
+    const accounts = buildLimitAccounts([{ owner: "Studio", current: [weekly(t0 + HOUR, 9), claude] }]);
+    expect(accounts.map((account) => [account.key, account.provider])).toEqual([
+      ["account:a", "openai"], ["account:anthropic:a", "anthropic"]]);
+    const series = accounts[1].series;
+    // The account-wide weekly limit leads, whatever order Claude sent.
+    expect(series.map(limitLabel)).toEqual(["5-hour window", "Weekly limit", "Weekly Opus limit", "Cloud session credits"]);
+    expect(fiveHourSeries(accounts[1])?.name).toBe("5-hour limit");
+    expect(sinceResetSeries(accounts[1])?.limitId).toBe("seven_day");
+    expect(series.at(-1)!.latest.expires).toBe(true);
   });
 });

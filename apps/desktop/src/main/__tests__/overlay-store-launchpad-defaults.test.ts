@@ -334,6 +334,70 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     }
   });
 
+  it("remembers and forgets recent lock notes with one commit per change", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const { dbPath, tempDir } = createTempStateDb(
+      "pwragent-recent-lock-notes-test-",
+    );
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    store = new SqliteOverlayStore(stateDb);
+
+    try {
+      expect(store.listRecentThreadLockNotes()).toEqual([]);
+      const { writes } = await measureSqliteWrites(async () => {
+        await store.rememberRecentThreadLockNote("Waiting on PR review");
+        await expect(store.rememberRecentThreadLockNote(" Claude Design ")).resolves.toEqual([
+          "Claude Design",
+          "Waiting on PR review",
+        ]);
+        // Saving the newest note again, or a note too long or multi-line to
+        // offer as a chip, commits nothing.
+        await store.rememberRecentThreadLockNote("Claude Design");
+        await store.rememberRecentThreadLockNote("x".repeat(80));
+        await store.rememberRecentThreadLockNote("Two\nlines");
+        // An older note moves back to the front.
+        await store.rememberRecentThreadLockNote("Waiting on PR review");
+        // A chip's remove button forgets a note; forgetting it twice, or a
+        // note never remembered, commits nothing.
+        await store.rememberRecentThreadLockNote("Pairing");
+        await expect(store.forgetRecentThreadLockNote("Pairing")).resolves.toEqual([
+          "Waiting on PR review",
+          "Claude Design",
+        ]);
+        await store.forgetRecentThreadLockNote("Pairing");
+        await store.forgetRecentThreadLockNote("Never saved");
+      });
+      expectSqliteWriteBudget({
+        note: "five list changes (four saved notes, one removed chip) and five no-ops (repeats, unofferable notes, absent removals): one commit per change, none per no-op; a few locks a day is well under 1 MB/day of WAL",
+        scenario: "recent-thread-lock-notes",
+        writes,
+      });
+      stateDb.close();
+
+      const reopenedDb = StateDb.open(dbPath);
+      try {
+        expect(new SqliteOverlayStore(reopenedDb).listRecentThreadLockNotes()).toEqual([
+          "Waiting on PR review",
+          "Claude Design",
+        ]);
+      } finally {
+        reopenedDb.close();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      stateDb.close();
+      removeTempStateDbDir(tempDir);
+      stateDb = openInMemoryStateDb();
+      store = new SqliteOverlayStore(stateDb);
+    }
+  });
+
+  it("reads a malformed recent lock notes list as empty", () => {
+    stateDb.setMeta("thread_lock_recent_notes", "{not json");
+    expect(store.listRecentThreadLockNotes()).toEqual([]);
+  });
+
   it("does not persist Codex Fast serviceTier in launchpad defaults", async () => {
     const defaults = await store.setLaunchpadDefaults({
       model: "gpt-5.5",
@@ -540,7 +604,7 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
     });
   });
 
-  it("persists provider-specific launchpad environments across a database reopen", async () => {
+  it("persists a provider-independent launchpad environment across a database reopen", async () => {
     const { dbPath, tempDir } = createTempStateDb(
       "pwragent-provider-launchpad-test-",
     );
@@ -614,9 +678,9 @@ describe("SqliteOverlayStore - launchpad defaults", () => {
           acpRuntime: {
             currentModeId: "default",
           },
-          codexEnvironmentId: "grok-environment",
+          codexEnvironmentId: "codex-environment",
           codexEnvironmentExecutionTarget: "local",
-          codexEnvironmentActionId: "grok-action",
+          codexEnvironmentActionId: "codex-action",
           prompt: "Keep the draft",
           workMode: "worktree",
           branchName: "feature/provider-memory",

@@ -1,6 +1,11 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AgentEvent, AppServerBackendKind, ThreadUsageLineRecord } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import type { ClaudeBackendOptions } from "../claude/claude-backend";
+import { ClaudeSessionStore, type ClaudeSession } from "../claude/claude-session-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
@@ -33,6 +38,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
   const createRegistry = (
     liveRuntimeInstanceIds: string[] = [],
     options: {
+      claudeBackendOptions?: Partial<ClaudeBackendOptions>;
       codexClient?: Record<string, unknown>;
       runningTurnShutdownStopTimeoutMs?: number;
       resolveUsageAccountGroups?: () => Record<string, string>;
@@ -52,6 +58,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       resolveLiveProfileRuntimeInstanceIds: () => liveRuntimeInstanceIds,
       runningTurnShutdownStopTimeoutMs: options.runningTurnShutdownStopTimeoutMs,
       resolveUsageAccountGroups: options.resolveUsageAccountGroups,
+      claudeBackendOptions: options.claudeBackendOptions,
     });
     registries.push(registry);
     return registry;
@@ -192,6 +199,39 @@ describe("DesktopBackendRegistry usage turn ends", () => {
     const snapshot = await store.readUsageActivity(window);
     expect(snapshot.rows[0].accountKey).toBe(usageAccountKey(undefined, group));
     expect(snapshot.limitHistory).toEqual([]);
+  });
+
+  it("relays Claude's account limits and records them on its turns, apart from Codex's", async () => {
+    const registry = createRegistry();
+    const reading = {
+      observedAt: Date.now() - 1_000, provider: "anthropic", accountKey: "claude-account", planType: "max",
+      limits: [{ name: "Weekly limit", limitId: "seven_day", usedPercent: 41, windowMinutes: 10_080 }],
+    };
+    const claude = (registry as unknown as { claudeBackend: object }).claudeBackend;
+    vi.spyOn(claude as { usageAccountKey(): Promise<string | undefined> }, "usageAccountKey")
+      .mockResolvedValue("claude-account");
+    vi.spyOn(claude as { limitObservation(): unknown }, "limitObservation").mockReturnValue(reading);
+    await runTurn(registry, "claude", "claude-turn");
+    await internals(registry).emit({ backend: "claude", notification: { method: "turn/completed",
+      params: { threadId: "thread-1", turn: { id: "claude-turn", status: "completed" } } } } as AgentEvent);
+    const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
+    expect(snapshot.rows[0].accountKey).toBe("claude-account");
+    expect(snapshot.limitObservations).toEqual([reading]);
+    expect(snapshot.providerLimitHistory).toEqual([reading]);
+    // A viewer that predates other providers charts every `limitHistory` reading as Codex.
+    expect(snapshot.limitHistory).toEqual([]);
+    expect(snapshot.limitObservation).toBeUndefined();
+  });
+
+  it("keys Claude's reading by the operator's account group, as its turns are", async () => {
+    const registry = createRegistry([], { resolveUsageAccountGroups: () => ({ claude: "team" }) });
+    const claude = (registry as unknown as { claudeBackend: object }).claudeBackend;
+    vi.spyOn(claude as { limitObservation(): unknown }, "limitObservation").mockReturnValue({
+      observedAt: Date.now(), provider: "anthropic", accountKey: "claude-account", limits: [] });
+    await runTurn(registry, "claude", "claude-turn");
+    const snapshot = await registry.readUsageActivity({ from: Date.now() - 60_000, to: Date.now() + 60_000 });
+    expect(snapshot.rows[0].accountKey).toBe(usageAccountKey(undefined, "team"));
+    expect(snapshot.limitObservations?.[0].accountKey).toBe(usageAccountKey(undefined, "team"));
   });
 
   it("attributes refreshed quotas to the account read used for metadata recovery", async () => {
@@ -585,6 +625,129 @@ describe("DesktopBackendRegistry usage turn ends", () => {
 
       expect(completedAt("quiet")).toBe(quietForTwoDays);
       expect(completedAt("peer-live")).toBeNull();
+    });
+  });
+
+  // Only a UUIDv7 id carries a start time. Claude turn ids are UUIDv4, whose
+  // leading bits are random: read as milliseconds, this one is Jan 7, 6903.
+  describe("turn start times", () => {
+    const claudeTurnId = "8d94fa8e-3a98-464b-914e-9b77c8bedc71";
+    const startedAt = (turnId: string) => (stateDb.raw.prepare(
+      "SELECT started_at FROM thread_usage_turns WHERE turn_id = ?",
+    ).get(turnId) as { started_at: number } | undefined)?.started_at;
+    const lineStartedAt = async (backend: AppServerBackendKind) => {
+      const { lines } = await store.readThreadPricing({ backend, threadId: "thread-1" });
+      expect(lines).toHaveLength(1);
+      return lines[0].startedAt;
+    };
+
+    it("records the start a Claude turn reports, not a time read from its UUIDv4 id", async () => {
+      const reported = 1_792_856_921_084;
+      const registry = createRegistry();
+      await internals(registry).emit({
+        backend: "claude",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turn: { id: claudeTurnId, status: "in_progress", startedAt: reported },
+          },
+        },
+      });
+      await internals(registry).emit(usage("claude", claudeTurnId));
+      await internals(registry).flushLiveThreadUsageLines();
+
+      expect(startedAt(claudeTurnId)).toBe(reported);
+      expect(await lineStartedAt("claude")).toBe(reported);
+    });
+
+    it("does not read a start time from a UUIDv4 turn id", async () => {
+      const before = Date.now();
+      const registry = createRegistry();
+      await internals(registry).emit(started("claude", claudeTurnId));
+      await internals(registry).emit(usage("claude", claudeTurnId));
+      await internals(registry).flushLiveThreadUsageLines();
+
+      const recorded = startedAt(claudeTurnId);
+      expect(recorded).toBeGreaterThanOrEqual(before);
+      expect(recorded).toBeLessThanOrEqual(Date.now());
+    });
+
+    it("still reads the start time from a Codex UUIDv7 turn id", async () => {
+      const turnId = "019a3c1f-5e2b-7a82-b681-9ca30ad325fa";
+      const registry = createRegistry();
+      await runTurn(registry, "codex", turnId);
+
+      expect(startedAt(turnId)).toBe(0x019a3c1f5e2b);
+      expect(await lineStartedAt("codex")).toBe(0x019a3c1f5e2b);
+    });
+
+    it("repairs stored turn times once, from Codex turn ids and PwrAgent's own Claude transcripts", async () => {
+      const claudeRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-starts-"));
+      try {
+        const claudeStore = new ClaudeSessionStore(claudeRoot);
+        const claudeThreadId = "3b1e9a4c-5d2f-4e6a-9b7c-0d1e2f3a4b5c";
+        const userAt = 1_792_856_921_084;
+        const completedAt = 1_792_856_926_771;
+        const turn = { id: claudeTurnId, status: "failed" as const, completedAt };
+        await claudeStore.save({
+          cwd: claudeRoot,
+          thread: { id: claudeThreadId, source: "claude", title: "Untitled thread", createdAt: userAt, updatedAt: completedAt },
+        } as unknown as ClaudeSession);
+        await claudeStore.append(claudeThreadId, [
+          { type: "message", id: `user:${claudeTurnId}`, role: "user", text: "Hi", createdAt: userAt, turn },
+          { type: "message", id: "answer", role: "assistant", text: "Hello", createdAt: userAt + 3_065, turn },
+        ]);
+        const seed = (
+          backend: AppServerBackendKind,
+          threadId: string,
+          turnId: string,
+          startedAt = 0x8d94fa8e3a98,
+        ) => store.upsertThreadUsageLine({ line: {
+          backend, provider: backend === "claude" ? "anthropic" : "openai", threadId, turnId,
+          usageLineId: `line-${turnId}`, source: "live", scope: "turn", status: "finalized",
+          turnUsageAttributed: true, startedAt, createdAt: completedAt, completedAt,
+          currency: "USD", priceStatus: "unpriced", model: "claude-haiku-5-5",
+          inputTokens: 10, cachedInputTokens: 0, uncachedInputTokens: 10, outputTokens: 1,
+          reasoningOutputTokens: 0, totalTokens: 11, uncachedInputCostMicros: 0,
+          cachedInputCostMicros: 0, outputCostMicros: 0, totalCostMicros: 0,
+        } });
+        await seed("claude", claudeThreadId, claudeTurnId);
+        // No transcript to recover from: the start becomes unknown.
+        await seed("claude", "0f2b7c1e-3d4a-4b5c-8d6e-7f8091a2b3c4", "8f477f20-e354-4c1a-9d2e-1f0a5b6c7d8e");
+        // An earlier launch reset this Codex turn's start to its first usage
+        // write; its UUIDv7 id still carries the real start.
+        const codexTurnId = "01a16e99-96ab-7a82-b681-9ca30ad325fa";
+        await seed("codex", "codex-thread", codexTurnId, completedAt);
+        // The same rewrite cleared the Claude turn's end; startup inferred one.
+        stateDb.raw.prepare(
+          "UPDATE thread_usage_turns SET completed_at = ?, completed_at_inferred = 1 WHERE turn_id = ?",
+        ).run(completedAt + 60_000, claudeTurnId);
+        expect(startedAt(claudeTurnId)).toBe(0x8d94fa8e3a98);
+        const turnTimes = (turnId: string) => stateDb.raw.prepare(
+          "SELECT started_at, completed_at, completed_at_inferred FROM thread_usage_turns WHERE turn_id = ?",
+        ).get(turnId);
+
+        const registry = createRegistry([], { claudeBackendOptions: { store: claudeStore } });
+        await internals(registry).usageTurnStartupRepair;
+
+        expect(turnTimes(claudeTurnId)).toEqual({
+          started_at: userAt, completed_at: completedAt, completed_at_inferred: null,
+        });
+        expect(startedAt("8f477f20-e354-4c1a-9d2e-1f0a5b6c7d8e")).toBeNull();
+        expect(startedAt(codexTurnId)).toBe(0x01a16e9996ab);
+        const { lines } = await store.readThreadPricing({ backend: "claude", threadId: claudeThreadId });
+        expect(lines[0].startedAt).toBe(userAt);
+
+        // The repair runs once per profile: a later launch leaves the ledger alone.
+        stateDb.raw.prepare("UPDATE thread_usage_turns SET started_at = ? WHERE turn_id = ?")
+          .run(completedAt, codexTurnId);
+        const relaunched = createRegistry([], { claudeBackendOptions: { store: claudeStore } });
+        await internals(relaunched).usageTurnStartupRepair;
+        expect(startedAt(codexTurnId)).toBe(completedAt);
+      } finally {
+        await rm(claudeRoot, { recursive: true, force: true });
+      }
     });
   });
 });

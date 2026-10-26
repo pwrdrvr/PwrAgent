@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import {
   isMcpConnectionToolApproval,
+  isSandboxerLinkTarget,
   type AuthorizeMcpConnectionRequest,
   type AuthorizeMcpConnectionResponse,
   type CancelMcpConnectionAuthorizationRequest,
@@ -10,6 +11,8 @@ import {
   type DescribeThreadMcpConnectionsResponse,
   type ProbeMcpConnectionRequest,
   type ProbeMcpConnectionResponse,
+  type TestMcpStdioConnectionRequest,
+  type TestMcpStdioConnectionResponse,
   type UpdateMcpConnectionRequest,
   type DisconnectMcpConnectionRequest,
   type ListMcpConnectionToolsRequest,
@@ -24,12 +27,15 @@ import {
   type SetMcpConnectionEnabledRequest,
   type SetMcpConnectionSelectForNewThreadsRequest,
   type SetMcpConnectionToolApprovalRequest,
+  type SetSandboxerCleanupOnPrCloseRequest,
   type ReadThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsResponse,
   type ConnectPwrSnapResponse,
   type OpenPwrGitResponse,
   type OpenPwrSnapResponse,
+  type OpenSandboxerLinkRequest,
+  type OpenSandboxerLinkResponse,
   type PwrGitConnectionStatus,
   type PwrSnapConnectionStatus,
   type ReadPwrSnapConnectionStatusRequest,
@@ -44,20 +50,24 @@ import {
   MCP_CONNECTION_CREATE_CHANNEL,
   MCP_CONNECTION_DISCONNECT_CHANNEL,
   MCP_CONNECTION_LIST_CHANNEL,
+  MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL,
   MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL,
   MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL,
   MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL,
   MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
   MCP_CONNECTION_REMOVE_CHANNEL,
+  MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
+  MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
   MCP_CONNECTION_UPDATE_CHANNEL,
   MCP_CONNECTION_PROBE_CHANNEL,
+  MCP_CONNECTION_TEST_STDIO_CHANNEL,
   PWRSUITE_INSTALLER_CANCEL_CHANNEL,
   PWRSUITE_INSTALLER_EVENT_CHANNEL,
   PWRSUITE_INSTALLER_OPEN_CHANNEL,
@@ -89,6 +99,10 @@ import { federationWindowTargetForWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
 
 let unsubscribeInstallerEvents: (() => void) | undefined;
+let unsubscribeConnectionChanges: (() => void) | undefined;
+
+/** The freshest Sandboxer answer a list read may demand; `sbx status` runs at most this often. */
+const MIN_SANDBOXER_STATUS_AGE_MS = 1_000;
 
 export function registerMcpConnectionIpcHandlers(
   service: McpConnectionGatewayService = getMcpConnectionGatewayService(),
@@ -104,6 +118,16 @@ export function registerMcpConnectionIpcHandlers(
       );
     }
   };
+  unsubscribeConnectionChanges?.();
+  unsubscribeConnectionChanges = service.onConnectionsChanged((change) => {
+    for (const webContents of subscribersForChannel(
+      MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL,
+    )) {
+      if (!webContents.isDestroyed()) {
+        webContents.send(MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL, change);
+      }
+    }
+  });
   ipcMain.removeHandler(MCP_CONNECTION_LIST_CHANNEL);
   ipcMain.handle(
     MCP_CONNECTION_LIST_CHANNEL,
@@ -119,7 +143,14 @@ export function registerMcpConnectionIpcHandlers(
           .remoteBackend(target)
           .listMcpConnections();
       }
-      return { connections: await service.listConnections() };
+      const maxAge = request.sandboxerStatusMaxAgeMs;
+      return {
+        connections: await service.listConnections(
+          typeof maxAge === "number" && Number.isFinite(maxAge)
+            ? { sandboxerStatusMaxAgeMs: Math.max(maxAge, MIN_SANDBOXER_STATUS_AGE_MS) }
+            : {},
+        ),
+      };
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
@@ -144,6 +175,26 @@ export function registerMcpConnectionIpcHandlers(
       return {
         connection: await service.authorizeConnection(request.connectionId),
       };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
+    async (
+      event,
+      request: OpenSandboxerLinkRequest,
+    ): Promise<OpenSandboxerLinkResponse> => {
+      // The dashboard link signs in with this machine's CLI login.
+      if (federationWindowTargetForWebContents(event.sender)) {
+        return {
+          opened: false,
+          error: "Open Sandboxer from the machine that owns this window.",
+        };
+      }
+      if (!isSandboxerLinkTarget(request?.target)) {
+        return { opened: false, error: "Unknown Sandboxer page." };
+      }
+      return await service.openSandboxerLink(request.target);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL);
@@ -235,6 +286,22 @@ export function registerMcpConnectionIpcHandlers(
       return { connectionId: request.connectionId, connection };
     },
   );
+  ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
+    async (
+      event,
+      request: SetSandboxerCleanupOnPrCloseRequest,
+    ): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      if (typeof request?.enabled !== "boolean") {
+        throw new Error("Choose whether Sandboxer cleans up when PRs close.");
+      }
+      const connection: McpConnectionStatus =
+        await service.setSandboxerCleanupOnPrClose(request.enabled);
+      return { connectionId: connection.id, connection };
+    },
+  );
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
   ipcMain.handle(
     MCP_CONNECTION_LIST_TOOLS_CHANNEL,
@@ -324,6 +391,18 @@ export function registerMcpConnectionIpcHandlers(
     ): Promise<ProbeMcpConnectionResponse> => {
       requireLocalOwner(event);
       return await service.probeConnection(request);
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_TEST_STDIO_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_TEST_STDIO_CHANNEL,
+    async (
+      event,
+      request: TestMcpStdioConnectionRequest,
+    ): Promise<TestMcpStdioConnectionResponse> => {
+      // Runs a program on this machine: only its own windows may ask.
+      requireLocalOwner(event);
+      return await service.testStdioConnection(request);
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL);
@@ -511,6 +590,8 @@ function registerPwrSuiteInstallerHandlers(
 export function disposeMcpConnectionIpcHandlers(): void {
   unsubscribeInstallerEvents?.();
   unsubscribeInstallerEvents = undefined;
+  unsubscribeConnectionChanges?.();
+  unsubscribeConnectionChanges = undefined;
   ipcMain.removeHandler(PWRSUITE_INSTALLER_READ_CHANNEL);
   ipcMain.removeHandler(PWRSUITE_INSTALLER_START_CHANNEL);
   ipcMain.removeHandler(PWRSUITE_INSTALLER_CANCEL_CHANNEL);
@@ -520,8 +601,10 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_LIST_TOOLS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_AUTHORIZE_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_DISCONNECT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_REMOVE_CHANNEL);
@@ -531,6 +614,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_UPDATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PROBE_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_TEST_STDIO_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_PWRSNAP_OPEN_CHANNEL);

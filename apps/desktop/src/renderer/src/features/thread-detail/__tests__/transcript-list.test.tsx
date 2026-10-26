@@ -5,7 +5,8 @@ import {
 } from "@pwragent/shared";
 import type {
   AppServerReadThreadResponse,
-  AppServerThreadMessageEntry,
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
@@ -17,8 +18,9 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
+import { withRendererSequence } from "../live-transcript-activity";
 import { TranscriptList } from "../TranscriptList";
 
 const compactMarkdownTable = `| Key | Value |
@@ -189,6 +191,223 @@ describe("TranscriptList", () => {
     expect(
       screen.getByText("Channel bound: Telegram - PwrDrvr / PwrDrvr/Topic")
     ).toBeInTheDocument();
+  });
+
+  it("keeps a turn total below its final message in a channel-bound thread", () => {
+    // Codex stamps the final message with its second-truncated completion
+    // time, or a live read carries the receipt time forward, while the
+    // renderer stamps the turn total when it mints it. The final message can
+    // therefore read as later than the total that follows it. A Telegram
+    // binding adds a synthetic row, which once re-sorted the whole transcript
+    // by those timestamps and moved the total above the reply.
+    const turn = { id: "turn-1", status: "completed" as const };
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "from-thread",
+            role: "user",
+            text: "Handled stale train PR dependency wake.",
+            createdAt: 2_000_000,
+            turn,
+          },
+          {
+            type: "message",
+            id: "acknowledged",
+            role: "assistant",
+            phase: "final",
+            text: "Acknowledged: PR65 is reported merged.",
+            createdAt: 2_005_400,
+            turn,
+          },
+          {
+            type: "activity",
+            id: "live-turn-usage-turn-1",
+            summary: "Turn usage: 94,799 uncached in · 0 cached · 149 out",
+            status: "completed",
+            details: [],
+            createdAt: 2_005_000,
+            turn,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        messagingBindingTransitions={[
+          {
+            id: "bind-1",
+            action: "bound",
+            bindingId: "binding-1",
+            platform: "telegram",
+            conversationKind: "topic",
+            conversationTitle: "PwrDrvr/Topic",
+            parentTitle: "PwrDrvr",
+            occurredAt: 1_000,
+          },
+        ]}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const text = container.textContent ?? "";
+    const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
+    const usage = text.indexOf("Turn usage: 94,799 uncached in");
+    expect(reply).toBeGreaterThan(-1);
+    expect(usage).toBeGreaterThan(-1);
+    expect(reply).toBeLessThan(usage);
+  });
+
+  describe("turn usage placement", () => {
+    // Real clocks: the user message carries the turn start, commentary and
+    // tool rows no time, the final reply the second-truncated completion, and
+    // the turn total and late live rows the millisecond the renderer saw them.
+    const turn = {
+      id: "turn-1",
+      status: "completed" as const,
+      startedAt: 1_792_852_051_000,
+      completedAt: 1_792_852_200_000,
+      durationMs: 149_000,
+    };
+    const completedTurnEntries: AppServerThreadEntry[] = [
+      { type: "message", id: "from-thread", role: "user", text: "Handled stale train PR dependency wake.", createdAt: turn.startedAt, turn },
+      { type: "message", id: "commentary", role: "assistant", phase: "commentary", text: "Checking the merge train.", turn },
+      { type: "activity", id: "activity-exec-1", summary: "Ran 3 commands", status: "completed", details: [], turn },
+      { type: "activity", id: "activity-exec-2", summary: "Ran 2 commands", status: "completed", details: [], turn },
+      { type: "message", id: "acknowledged", role: "assistant", phase: "final", text: "Acknowledged: PR65 is reported merged.", createdAt: turn.completedAt, turn },
+      // Minted when usage arrived, before Codex wrote the final reply.
+      { type: "activity", id: "live-turn-usage-turn-1", summary: "Turn usage: 94,799 uncached in · 0 cached · 149 out", status: "completed", details: [], createdAt: turn.completedAt - 600, turn },
+    ];
+    // A late live row of the same turn, received after its completion.
+    const lateLiveRow: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-protocol-1",
+      summary: "MCP server pwragent ready",
+      status: "completed",
+      details: [],
+      createdAt: turn.completedAt + 400,
+      turn,
+    };
+    const telegramBinding = {
+      id: "bind-1",
+      action: "bound" as const,
+      bindingId: "binding-1",
+      platform: "telegram" as const,
+      conversationKind: "topic" as const,
+      conversationTitle: "PwrDrvr/Topic",
+      parentTitle: "PwrDrvr",
+      occurredAt: turn.completedAt + 100,
+    };
+
+    it("keeps the total last in its turn with a channel transition and a late live row", () => {
+      // Both work groups expanded, so every row of the turn renders inline.
+      const { container } = render(
+        <TranscriptList
+          entries={completedTurnEntries}
+          expandedWorkPhaseGroupIds={[
+            "work:turn-1:commentary:complete",
+            "work:turn-1:live-protocol-1:complete",
+          ]}
+          loading={false}
+          loadingMore={false}
+          messagingBindingTransitions={[telegramBinding]}
+          pendingProtocolActivityEntry={lateLiveRow}
+          onLoadOlder={async () => undefined}
+        />
+      );
+
+      const text = container.textContent ?? "";
+      const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
+      const late = text.indexOf("MCP server pwragent ready");
+      const usage = text.indexOf("Turn usage: 94,799 uncached in");
+      expect(reply).toBeGreaterThan(-1);
+      expect(late).toBeGreaterThan(-1);
+      expect(usage).toBeGreaterThan(reply);
+      expect(usage).toBeGreaterThan(late);
+      expect(text.indexOf("Turn usage:", usage + 1)).toBe(-1);
+    });
+
+    it("keeps a late work row in the turn's work group, above the answer and the total", () => {
+      const { container } = render(
+        <TranscriptList
+          entries={completedTurnEntries}
+          loading={false}
+          loadingMore={false}
+          pendingActivityEntry={{ ...lateLiveRow, id: "live-tools-1", summary: "Ran 1 command" }}
+          onLoadOlder={async () => undefined}
+        />
+      );
+
+      // The late row is the turn's work: it joins the work group above the
+      // answer. Below the answer it would make the answer read as interim and
+      // fold it into the group.
+      const group = screen.getByRole("button", { name: /Worked for 2m 29s · 3 tool updates/ });
+      expect(group).toBeInTheDocument();
+      const text = container.textContent ?? "";
+      const worked = text.indexOf("Worked for 2m 29s");
+      const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
+      const usage = text.indexOf("Turn usage: 94,799 uncached in");
+      expect(reply).toBeGreaterThan(worked);
+      expect(usage).toBeGreaterThan(reply);
+      expect(text.indexOf("More work")).toBe(-1);
+    });
+
+    it("keeps a sequenced late work row above the answer when a later-sequenced diff follows it", () => {
+      // The Edited Files row stays below the answer; the work row must not
+      // land between them just because the renderer saw it before the diff.
+      const editedFiles = withRendererSequence<AppServerThreadActivityEntry>({
+        type: "activity",
+        id: "live-file-change-1",
+        summary: "Changed 1 file",
+        status: "completed",
+        details: [{
+          id: "diff-1",
+          kind: "write",
+          label: "src/a.ts",
+          fileDiff: { kind: "update", diff: "+a", additions: 1, removals: 0 },
+        }],
+        createdAt: turn.completedAt + 500,
+        turn,
+      }, 9);
+      const { container } = render(
+        <TranscriptList
+          entries={[...completedTurnEntries.slice(0, 5), editedFiles]}
+          loading={false}
+          loadingMore={false}
+          pendingActivityEntry={withRendererSequence(
+            { ...lateLiveRow, id: "live-tools-1", summary: "Ran 1 command" },
+            5,
+          )}
+          onLoadOlder={async () => undefined}
+        />
+      );
+
+      const text = container.textContent ?? "";
+      const reply = text.indexOf("Acknowledged: PR65 is reported merged.");
+      expect(reply).toBeGreaterThan(text.indexOf("Worked for 2m 29s"));
+    });
+
+    it("keeps work the renderer saw after an agent's reply below that reply", () => {
+      // A finished turn: only the observed order keeps the row below.
+      const reply = withRendererSequence(completedTurnEntries[4]!, 4);
+      const { container } = render(
+        <TranscriptList
+          entries={[...completedTurnEntries.slice(0, 4), reply]}
+          expandedWorkPhaseGroupIds={["work:turn-1:commentary:complete"]}
+          loading={false}
+          loadingMore={false}
+          pendingActivityEntry={withRendererSequence(
+            { ...lateLiveRow, id: "live-tools-1", summary: "Ran 1 command" },
+            5,
+          )}
+          onLoadOlder={async () => undefined}
+        />
+      );
+
+      const text = container.textContent ?? "";
+      expect(text.indexOf("Ran 1 command")).toBeGreaterThan(
+        text.indexOf("Acknowledged: PR65 is reported merged."),
+      );
+    });
   });
 
   it("attributes an injected Agent message and links its source thread", () => {
@@ -618,6 +837,33 @@ describe("TranscriptList", () => {
     />);
     expect(screen.getByText("Continue after")).toBeInTheDocument();
     expect(screen.queryByText("PwrAgent")).not.toBeInTheDocument();
+  });
+
+  it("collapses a dependency continuation to its prerequisite, outcome, and plan", () => {
+    const prompt = [
+      "PwrAgent resumed this thread because its prerequisites were met (all of 1).",
+      "- \"Focused counters\" finishes its turn: Turn abc completed",
+      "",
+      "Do what was planned when this dependency was registered:",
+      "Review the new profile once.",
+      "",
+      "Recheck the prerequisite head before using it; a new commit can arrive after this notification.",
+      "Do not poll this dependency or start a Job Monitor for it.",
+    ].join("\n");
+    render(<TranscriptList
+      entries={[{ type: "message", id: "continuation", role: "user", text: prompt,
+        origin: { kind: "pwragent", dependencyId: "dependency-1" } }]}
+      loading={false} loadingMore={false} onLoadOlder={async () => undefined}
+    />);
+    const toggle = screen.getByRole("button", { name: "\"Focused counters\" finishes its turn" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByText("Met")).toBeInTheDocument();
+    expect(screen.getByText("Next:")).toBeInTheDocument();
+    expect(screen.getByText(/Review the new profile once\./)).toBeInTheDocument();
+    expect(screen.queryByText(/Do not poll this dependency/)).not.toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/Do not poll this dependency/)).toBeInTheDocument();
   });
 
   it("renders PR automation prompts as compact expandable PwrAgent cards", () => {
@@ -2265,7 +2511,7 @@ Implementation notes remain in a readable bubble.`;
         questionItemId: JSON.stringify(["request_user_input_async", itemId, 0]),
       }])}\n</send_user_message_question_reply>`;
     const renderList = (
-      entries: AppServerThreadMessageEntry[],
+      entries: AppServerThreadEntry[],
       props: Partial<Parameters<typeof TranscriptList>[0]> = {},
     ) => render(
       <TranscriptList
@@ -2427,6 +2673,45 @@ Implementation notes remain in a readable bubble.`;
       expect(within(card).getAllByRole("listitem").map((item) => item.textContent))
         .toEqual(["Allow one command", "Keep policy"]);
       expect(within(card).queryByRole("button")).not.toBeInTheDocument();
+    });
+
+    it("keeps a commentary question in view, answerable, and reachable from its To-dos link", async () => {
+      // Codex can tag the question commentary, between a finished turn's tools.
+      // Folded into its work group, the card lost its controls and the To-dos
+      // row had no transcript entry to scroll to.
+      const turn = { id: "turn-1", status: "completed" as const, durationMs: 284_000 };
+      const scrollIntoView = vi.fn();
+      const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value: scrollIntoView,
+      });
+      onTestFinished(() => {
+        if (original) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", original);
+        else delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+      });
+      const onLinkedMessageHandled = vi.fn();
+      renderList([
+        { type: "message", id: "c1", role: "assistant", phase: "commentary", text: "Checking the lab.", turn },
+        { type: "activity", id: "tool-1", summary: "Bash", details: [], turn },
+        { ...freeTextQuestion, phase: "commentary", turn },
+        { type: "activity", id: "tool-2", summary: "Bash", details: [], turn },
+        { type: "message", id: "f1", role: "assistant", phase: "final", text: "Blocked on the lab config.", turn },
+      ], {
+        linkedMessageId: "call-question",
+        linkedMessageRequestKey: 3,
+        onAnswerAsyncQuestions: vi.fn(async () => true),
+        onLinkedMessageHandled,
+      });
+
+      const card = screen.getByRole("group", { name: "Question from Codex" });
+      expect(within(card).getByLabelText("Your answer")).toBeInTheDocument();
+      expect(within(card).getByRole("button", { name: "Answer" })).toBeInTheDocument();
+      await waitFor(() => {
+        expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+      });
+      expect(card.closest("[data-entry-id]")).toHaveAttribute("data-entry-id", "call-question");
+      expect(onLinkedMessageHandled).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -3809,6 +4094,34 @@ Implementation notes remain in a readable bubble.`;
     expect(
       screen.queryByRole("button", { name: "Jump to latest message" })
     ).not.toBeInTheDocument();
+  });
+
+  it.each(["claude", "codex"])("does not replay an old send request when restoring a %s transcript", (backend) => {
+    const entries: AppServerThreadEntry[] = [
+      { type: "message", id: "prompt", role: "user", text: "A previous prompt" },
+      { type: "message", id: "answer", role: "assistant", text: "A completed answer" },
+    ];
+    const onViewportChange = vi.fn();
+    const props = {
+      entries,
+      loading: false,
+      loadingMore: false,
+      onLoadOlder: async () => undefined,
+      onViewportChange,
+      pagination: { supportsPagination: backend === "codex", hasPreviousPage: false },
+      reglueRequestKey: 1,
+      threadId: `${backend}:thread-1`,
+    };
+    const view = render(<TranscriptList {...props} />);
+    scrollAwayWithScrollbar(screen.getByRole("list"), 72);
+    view.unmount();
+    const restoredViewport = onViewportChange.mock.calls.at(-1)?.[0];
+    expect(restoredViewport).toMatchObject({ scrollTop: 72, isGluedToBottom: false });
+
+    const restored = render(<TranscriptList {...props} restoredViewport={restoredViewport} />);
+    expect(screen.getByRole("list").scrollTop).toBe(72);
+    restored.rerender(<TranscriptList {...props} restoredViewport={restoredViewport} reglueRequestKey={2} />);
+    expect(screen.getByRole("list").scrollTop).toBe(scrollHeight);
   });
 
   it("restores the previous viewport when switching back to a cached thread", () => {

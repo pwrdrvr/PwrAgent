@@ -27,6 +27,8 @@ import {
   type CancelQueuedTurnResponse,
   type MoveQueuedTurnRequest,
   type MoveQueuedTurnResponse,
+  type SetQueuedTurnPausedRequest,
+  type SetQueuedTurnPausedResponse,
   type ReleaseQueuedTurnRequest,
   type ReleaseQueuedTurnResponse,
   type CancelThreadExecutionModeQueueRequest,
@@ -47,8 +49,6 @@ import {
   type StopSubAgentRequest,
   type StopSubAgentResponse,
   type LatestCodexConfigWarningResponse,
-  type ListAcpThreadRewindPointsRequest,
-  type ListAcpThreadRewindPointsResponse,
   type ListBackendsRequest,
   type ListBackendsResponse,
   type ListCodexMcpServersRequest,
@@ -59,8 +59,10 @@ import {
   type QueueThreadExecutionModeResponse,
   type RetainThreadBranchDriftRequest,
   type RetainThreadBranchDriftResponse,
-  type RewindAcpThreadRequest,
-  type RewindAcpThreadResponse,
+  type PreviewThreadRewindRequest,
+  type PreviewThreadRewindResponse,
+  type RewindThreadRequest,
+  type RewindThreadResponse,
   type ReloadCodexMcpConfigRequest,
   type ReloadCodexMcpConfigResponse,
   type ReloadCodexMcpServersResponse,
@@ -110,7 +112,10 @@ import {
   federationEventClassForMethod,
   getDesktopFederationRuntime,
 } from "../federation/federation-runtime";
-import { QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE } from "../federation/federation-backend-bridge";
+import {
+  QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE,
+  QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE,
+} from "../federation/federation-backend-bridge";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { buildLiveDiffActivityEntry } from "../app-server/live-diff-activity";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
@@ -119,12 +124,12 @@ import {
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_RELEASE_QUEUED_TURN_CHANNEL,
   AGENT_MOVE_QUEUED_TURN_CHANNEL,
+  AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL,
   AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL,
   AGENT_APPLY_THREAD_MODEL_MIGRATION_CHANNEL,
   AGENT_EVENT_CHANNEL,
   AGENT_FORK_THREAD_CHANNEL,
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
-  AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
   AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL,
@@ -139,7 +144,8 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
-  AGENT_REWIND_ACP_THREAD_CHANNEL,
+  AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
+  AGENT_REWIND_THREAD_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -351,8 +357,9 @@ function coalescedAgentEventLogKey(
   });
 }
 
+/** Any backend that reports a turn's cumulative diff gets its live row. */
 function withRendererActivityEntry(event: AgentEvent): AgentEvent {
-  if (event.backend !== "codex" || event.notification.method !== "turn/diff/updated") {
+  if (event.notification.method !== "turn/diff/updated") {
     return event;
   }
 
@@ -773,6 +780,32 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL);
+  ipcMain.handle(
+    AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL,
+    async (
+      _event,
+      request: SetQueuedTurnPausedRequest,
+    ): Promise<SetQueuedTurnPausedResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        const { federationTarget, ...remoteRequest } = request;
+        const runtime = getDesktopFederationRuntime();
+        // The renderer offers no pause without the capability; this answers
+        // a stale window without a round trip to an owner that cannot pause.
+        if (!runtime.remoteTargetSupportsCapability(federationTarget, "turn_queue_pause")) {
+          throw new Error(QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE);
+        }
+        return await runtime
+          .remoteBackend(federationTarget)
+          .setQueuedTurnPaused(remoteRequest);
+      }
+      return await registry.setQueuedTurnPaused(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_RELEASE_QUEUED_TURN_CHANNEL);
   ipcMain.handle(
     AGENT_RELEASE_QUEUED_TURN_CHANNEL,
@@ -1080,37 +1113,51 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
-  ipcMain.removeHandler(AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL);
+  ipcMain.removeHandler(AGENT_PREVIEW_THREAD_REWIND_CHANNEL);
   ipcMain.handle(
-    AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL,
+    AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
     async (
       _event,
-      request: ListAcpThreadRewindPointsRequest,
-    ): Promise<ListAcpThreadRewindPointsResponse> => {
+      request: PreviewThreadRewindRequest,
+    ): Promise<PreviewThreadRewindResponse> => {
       if (
         request.federationTarget
         && isRemoteFederationTarget(request.federationTarget)
       ) {
-        throw new Error("Conversation rewind is not available from a remote viewer yet");
+        return await getDesktopFederationRuntime()
+          .remoteBackend(request.federationTarget)
+          .previewThreadRewind(stripFederationTarget(request));
       }
-      return await registry.listAcpThreadRewindPoints(request);
+      return await registry.previewThreadRewind(request);
     },
   );
 
-  ipcMain.removeHandler(AGENT_REWIND_ACP_THREAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_REWIND_THREAD_CHANNEL);
   ipcMain.handle(
-    AGENT_REWIND_ACP_THREAD_CHANNEL,
+    AGENT_REWIND_THREAD_CHANNEL,
     async (
       _event,
-      request: RewindAcpThreadRequest,
-    ): Promise<RewindAcpThreadResponse> => {
-      if (
-        request.federationTarget
-        && isRemoteFederationTarget(request.federationTarget)
-      ) {
-        throw new Error("Conversation rewind is not available from a remote viewer yet");
+      request: RewindThreadRequest,
+    ): Promise<RewindThreadResponse> => {
+      try {
+        if (
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        ) {
+          return await getDesktopFederationRuntime()
+            .remoteBackend(request.federationTarget)
+            .rewindThread(stripFederationTarget(request));
+        }
+        return await registry.rewindThread(request);
+      } catch (error) {
+        appServerLog.error("rewindThread failed", {
+          backend: request.backend,
+          threadId: request.threadId,
+          mode: request.mode,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
       }
-      return await registry.rewindAcpThread(request);
     },
   );
 
@@ -1515,8 +1562,8 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
-  ipcMain.removeHandler(AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL);
-  ipcMain.removeHandler(AGENT_REWIND_ACP_THREAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_PREVIEW_THREAD_REWIND_CHANNEL);
+  ipcMain.removeHandler(AGENT_REWIND_THREAD_CHANNEL);
   ipcMain.removeHandler(AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL);

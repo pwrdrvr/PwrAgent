@@ -27,6 +27,7 @@ import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../shared/ipc";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../shared/ipc";
+import { createUsageActivityFocusSubscription } from "./usage-activity-focus";
 import type {
   ListThreadTodoProjectsResponse,
   ListThreadTodoProjectsRequest,
@@ -48,7 +49,7 @@ import type {
   MarkOperatorItemsSeenRequest,
   OperatorRequestsChangedEvent,
 } from "@pwragent/shared";
-import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse, OpenUsageActivityRequest } from "@pwragent/shared";
 import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
 import type { PrActivitySnapshot } from "@pwragent/shared";
 import { subscribeBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
@@ -73,6 +74,7 @@ import {
   DESKTOP_DARK_THEME_DEFAULT,
   DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopAppearanceDensity,
   isDesktopDarkTheme,
   isDesktopLightTheme,
   isDesktopTextSize,
@@ -100,6 +102,8 @@ import type {
   CancelQueuedTurnResponse,
   MoveQueuedTurnRequest,
   MoveQueuedTurnResponse,
+  SetQueuedTurnPausedRequest,
+  SetQueuedTurnPausedResponse,
   ReleaseQueuedTurnRequest,
   ReleaseQueuedTurnResponse,
   CreateScheduledThreadActionRequest,
@@ -107,6 +111,8 @@ import type {
   CreateMcpConnectionResponse,
   UpdateMcpConnectionRequest,
   ProbeMcpConnectionRequest,
+  TestMcpStdioConnectionRequest,
+  TestMcpStdioConnectionResponse,
   ProbeMcpConnectionResponse,
   ListMcpConnectionToolsRequest,
   ListMcpConnectionToolsResponse,
@@ -144,6 +150,7 @@ import type {
   ListBackendsResponse,
   ListMcpConnectionsRequest,
   ListMcpConnectionsResponse,
+  McpConnectionsChangedEvent,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
   ListThreadMcpServersRequest,
@@ -163,18 +170,19 @@ import type {
   SetMcpConnectionEnabledRequest,
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
+  SetSandboxerCleanupOnPrCloseRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
   RemoveCodexMcpServerRequest,
   RemoveCodexMcpServerResponse,
-  RewindAcpThreadRequest,
-  RewindAcpThreadResponse,
+  PreviewThreadRewindRequest,
+  PreviewThreadRewindResponse,
+  RewindThreadRequest,
+  RewindThreadResponse,
   StartCodexMcpServerLoginRequest,
   StartCodexMcpServerLoginResponse,
   LatestCodexConfigWarningResponse,
-  ListAcpThreadRewindPointsRequest,
-  ListAcpThreadRewindPointsResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -242,6 +250,10 @@ import type {
   GetNavigationSnapshotTransportRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  MoveThreadToMainCheckoutRequest,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
   CancelProviderCatalogRefreshRequest,
@@ -284,6 +296,8 @@ import type {
   SetThreadReactionResponse,
   SetThreadLockRequest,
   SetThreadLockResponse,
+  RecentThreadLockNotesResponse,
+  ThreadLockNoteRequest,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
@@ -352,6 +366,8 @@ import type {
   ConnectPwrGitResponse,
   ConnectPwrSnapResponse,
   OpenPwrGitResponse,
+  OpenSandboxerLinkResponse,
+  SandboxerLinkTarget,
   OpenPwrSnapResponse,
   PwrGitConnectionStatus,
   PwrSnapConnectionStatus,
@@ -406,6 +422,13 @@ import type {
   StopCodexEnvironmentActionRequest,
   StopCodexEnvironmentActionResponse,
   SetCodexThreadEnvironmentRequest,
+  ListCodexEnvironmentFilesRequest,
+  ListCodexEnvironmentFilesResponse,
+  ListCodexEnvironmentProjectsResponse,
+  ReadCodexEnvironmentDocumentRequest,
+  ReadCodexEnvironmentDocumentResponse,
+  SaveCodexEnvironmentDocumentRequest,
+  SaveCodexEnvironmentDocumentResponse,
   SetCodexThreadEnvironmentResponse,
   RestoreWorktreeRequest,
   RestoreWorktreeResponse,
@@ -537,6 +560,11 @@ import type {
   ReadDesktopFullAccessPolicyResponse,
   ReadDesktopMessagingSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
+  SetCodexModelProviderApiKeyRequest,
+  SetCodexModelProviderApiKeyResponse,
+  TestCodexModelProviderRequest,
+  CodexModelProviderTestResult,
+  CodexModelProviderImportScan,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
   RecordComposerDraftHistoryResponse,
@@ -640,6 +668,7 @@ import {
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   AGENT_RELEASE_QUEUED_TURN_CHANNEL,
   AGENT_MOVE_QUEUED_TURN_CHANNEL,
+  AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL,
   SCHEDULED_ACTIONS_CANCEL_CHANNEL,
   SCHEDULED_ACTIONS_CREATE_CHANNEL,
   SCHEDULED_ACTIONS_LIST_CHANNEL,
@@ -664,7 +693,6 @@ import {
   AGENT_EVENT_CHANNEL,
   AGENT_FORK_THREAD_CHANNEL,
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
-  AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
@@ -680,10 +708,15 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
-  AGENT_REWIND_ACP_THREAD_CHANNEL,
+  AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
+  AGENT_REWIND_THREAD_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
+  CODEX_ENVIRONMENT_EDITOR_LIST_FILES_CHANNEL,
+  CODEX_ENVIRONMENT_EDITOR_LIST_PROJECTS_CHANNEL,
+  CODEX_ENVIRONMENT_EDITOR_READ_CHANNEL,
+  CODEX_ENVIRONMENT_EDITOR_SAVE_CHANNEL,
   AGENT_SET_ACP_SESSION_RUNTIME_OPTION_CHANNEL,
   AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_SET_THREAD_MODEL_SETTINGS_CHANNEL,
@@ -762,6 +795,8 @@ import {
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
+  APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL,
+  APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL,
   APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
   APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
@@ -867,21 +902,25 @@ import {
   MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL,
   MCP_CONNECTION_PWRGIT_OPEN_CHANNEL,
   MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
+  MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL,
   MCP_CONNECTION_AUTHORIZE_CHANNEL,
   MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL,
   MCP_CONNECTION_CREATE_CHANNEL,
   MCP_CONNECTION_DISCONNECT_CHANNEL,
   MCP_CONNECTION_LIST_CHANNEL,
+  MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL,
   MCP_CONNECTION_REMOVE_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
+  MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
   MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL,
   MCP_CONNECTION_UPDATE_CHANNEL,
   MCP_CONNECTION_PROBE_CHANNEL,
+  MCP_CONNECTION_TEST_STDIO_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
@@ -960,6 +999,9 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_LOCK_CHANNEL,
+  NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL,
+  NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL,
+  NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_PENDING_THREAD_SPEND_ALERTS_CHANNEL,
   NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
@@ -1001,6 +1043,9 @@ import {
   LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
+  SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL,
+  SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL,
+  SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
@@ -1162,6 +1207,8 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
   },
 );
 
+const subscribeToUsageActivityFocus = createUsageActivityFocusSubscription(ipcRenderer);
+
 let federationJumpSearchRequestSequence = 0;
 let threadSearchRequestSequence = 0;
 
@@ -1197,6 +1244,18 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(TRANSCRIPT_IMAGE_READ_CHANNEL, url),
   listMcpConnections: async (request?: ListMcpConnectionsRequest): Promise<ListMcpConnectionsResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_LIST_CHANNEL, request),
+  onMcpConnectionsChanged: (
+    callback: (event: McpConnectionsChangedEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: McpConnectionsChangedEvent,
+    ) => callback(payload);
+    ipcRenderer.on(MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
   createMcpConnection: async (
     request: CreateMcpConnectionRequest,
   ): Promise<CreateMcpConnectionResponse> =>
@@ -1225,6 +1284,10 @@ const desktopApi = Object.freeze({
     request: ProbeMcpConnectionRequest,
   ): Promise<ProbeMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_PROBE_CHANNEL, request),
+  testMcpStdioConnection: async (
+    request: TestMcpStdioConnectionRequest,
+  ): Promise<TestMcpStdioConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_TEST_STDIO_CHANNEL, request),
   setMcpConnectionEnabled: async (
     request: SetMcpConnectionEnabledRequest,
   ): Promise<MutateMcpConnectionResponse> =>
@@ -1240,6 +1303,13 @@ const desktopApi = Object.freeze({
     request: SetMcpConnectionToolApprovalRequest,
   ): Promise<MutateMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL, request),
+  setSandboxerCleanupOnPrClose: async (
+    request: SetSandboxerCleanupOnPrCloseRequest,
+  ): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(
+      MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
+      request,
+    ),
   listMcpConnectionTools: async (
     request: ListMcpConnectionToolsRequest,
   ): Promise<ListMcpConnectionToolsResponse> =>
@@ -1274,6 +1344,10 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(MCP_CONNECTION_PWRGIT_OPEN_CHANNEL),
   openPwrGitDownload: async (): Promise<OpenPwrGitResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL),
+  openSandboxerLink: async (
+    target: SandboxerLinkTarget,
+  ): Promise<OpenSandboxerLinkResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL, { target }),
   readPwrSuiteInstaller: async (
     app: PwrSuiteAppId,
   ): Promise<PwrSuiteInstallerState> =>
@@ -1795,6 +1869,16 @@ const desktopApi = Object.freeze({
     request: RefreshDesktopCodexDiscoveryRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
     await ipcRenderer.invoke(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL, request),
+  setCodexModelProviderApiKey: async (
+    request: SetCodexModelProviderApiKeyRequest,
+  ): Promise<SetCodexModelProviderApiKeyResponse> =>
+    await ipcRenderer.invoke(SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL, request),
+  testCodexModelProvider: async (
+    request: TestCodexModelProviderRequest,
+  ): Promise<CodexModelProviderTestResult> =>
+    await ipcRenderer.invoke(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL, request),
+  scanCodexModelProviderImports: async (): Promise<CodexModelProviderImportScan> =>
+    await ipcRenderer.invoke(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL),
   createCodexAuthProfile: async (
     request: CreateDesktopCodexAuthProfileRequest,
   ): Promise<CreateDesktopCodexAuthProfileResponse> =>
@@ -2102,8 +2186,9 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(THREAD_FAMILY_PRICING_READ_CHANNEL, request),
   analyzeUsageActivity: async (request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_ANALYZE_CHANNEL, request),
-  openUsageActivity: async (): Promise<void> =>
-    await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL),
+  openUsageActivity: async (request?: OpenUsageActivityRequest): Promise<void> =>
+    await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL, request),
+  onUsageActivityFocusProvider: subscribeToUsageActivityFocus,
   openUsageThreadInMainWindow: async (request: WindowShowThreadRequest): Promise<void> =>
     await ipcRenderer.invoke(USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, request),
   inspectTokenMiserOutput: async (
@@ -2169,6 +2254,14 @@ const desktopApi = Object.freeze({
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse> =>
     await ipcRenderer.invoke(APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL, request),
+  recreateThreadWorktree: async (
+    request: RecreateThreadWorktreeRequest,
+  ): Promise<RecreateThreadWorktreeResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_RECREATE_THREAD_WORKTREE_CHANNEL, request),
+  moveThreadToMainCheckout: async (
+    request: MoveThreadToMainCheckoutRequest,
+  ): Promise<MoveThreadToMainCheckoutResponse> =>
+    await ipcRenderer.invoke(APP_SERVER_MOVE_THREAD_TO_MAIN_CHECKOUT_CHANNEL, request),
   renameThread: async (
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> =>
@@ -2241,6 +2334,10 @@ const desktopApi = Object.freeze({
     request: MoveQueuedTurnRequest,
   ): Promise<MoveQueuedTurnResponse> =>
     await ipcRenderer.invoke(AGENT_MOVE_QUEUED_TURN_CHANNEL, request),
+  setQueuedTurnPaused: async (
+    request: SetQueuedTurnPausedRequest,
+  ): Promise<SetQueuedTurnPausedResponse> =>
+    await ipcRenderer.invoke(AGENT_SET_QUEUED_TURN_PAUSED_CHANNEL, request),
   listThreadTodos: async (
     request?: ListThreadTodosRequest,
   ): Promise<ListThreadTodosResponse> =>
@@ -2336,14 +2433,14 @@ const desktopApi = Object.freeze({
     request: SteerTurnRequest
   ): Promise<SteerTurnResponse> =>
     await ipcRenderer.invoke(AGENT_STEER_TURN_CHANNEL, request),
-  listAcpThreadRewindPoints: async (
-    request: ListAcpThreadRewindPointsRequest,
-  ): Promise<ListAcpThreadRewindPointsResponse> =>
-    await ipcRenderer.invoke(AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL, request),
-  rewindAcpThread: async (
-    request: RewindAcpThreadRequest,
-  ): Promise<RewindAcpThreadResponse> =>
-    await ipcRenderer.invoke(AGENT_REWIND_ACP_THREAD_CHANNEL, request),
+  previewThreadRewind: async (
+    request: PreviewThreadRewindRequest,
+  ): Promise<PreviewThreadRewindResponse> =>
+    await ipcRenderer.invoke(AGENT_PREVIEW_THREAD_REWIND_CHANNEL, request),
+  rewindThread: async (
+    request: RewindThreadRequest,
+  ): Promise<RewindThreadResponse> =>
+    await ipcRenderer.invoke(AGENT_REWIND_THREAD_CHANNEL, request),
   configureGrokWorkflowBudget: async (
     request: ConfigureGrokWorkflowBudgetRequest,
   ): Promise<ConfigureGrokWorkflowBudgetResponse> =>
@@ -2454,6 +2551,20 @@ const desktopApi = Object.freeze({
       AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
       request,
     ),
+  listCodexEnvironmentProjects: async (): Promise<ListCodexEnvironmentProjectsResponse> =>
+    await ipcRenderer.invoke(CODEX_ENVIRONMENT_EDITOR_LIST_PROJECTS_CHANNEL),
+  listCodexEnvironmentFiles: async (
+    request: ListCodexEnvironmentFilesRequest,
+  ): Promise<ListCodexEnvironmentFilesResponse> =>
+    await ipcRenderer.invoke(CODEX_ENVIRONMENT_EDITOR_LIST_FILES_CHANNEL, request),
+  readCodexEnvironmentDocument: async (
+    request: ReadCodexEnvironmentDocumentRequest,
+  ): Promise<ReadCodexEnvironmentDocumentResponse> =>
+    await ipcRenderer.invoke(CODEX_ENVIRONMENT_EDITOR_READ_CHANNEL, request),
+  saveCodexEnvironmentDocument: async (
+    request: SaveCodexEnvironmentDocumentRequest,
+  ): Promise<SaveCodexEnvironmentDocumentResponse> =>
+    await ipcRenderer.invoke(CODEX_ENVIRONMENT_EDITOR_SAVE_CHANNEL, request),
   submitServerRequest: async (
     request: SubmitServerRequestRequest
   ): Promise<SubmitServerRequestResponse> =>
@@ -2528,6 +2639,16 @@ const desktopApi = Object.freeze({
     request: SetThreadLockRequest,
   ): Promise<SetThreadLockResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_LOCK_CHANNEL, request),
+  listRecentThreadLockNotes: async (): Promise<RecentThreadLockNotesResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_RECENT_THREAD_LOCK_NOTES_CHANNEL),
+  rememberThreadLockNote: async (
+    request: ThreadLockNoteRequest,
+  ): Promise<RecentThreadLockNotesResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_REMEMBER_THREAD_LOCK_NOTE_CHANNEL, request),
+  forgetThreadLockNote: async (
+    request: ThreadLockNoteRequest,
+  ): Promise<RecentThreadLockNotesResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_FORGET_THREAD_LOCK_NOTE_CHANNEL, request),
   setThreadToolIncidentNotice: async (
     request: SetThreadToolIncidentNoticeRequest,
   ): Promise<SetThreadToolIncidentNoticeResponse> =>
@@ -3334,7 +3455,7 @@ function readBootstrapAppearance(): {
   theme: "system" | "dark" | "light";
   darkTheme: DesktopDarkTheme;
   lightTheme: DesktopLightTheme;
-  density: "mission-control" | "compact";
+  density: DesktopAppearanceDensity;
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
 } {
@@ -3356,13 +3477,14 @@ function readBootstrapAppearance(): {
           && isDesktopLightTheme(raw.lightTheme)
           ? raw.lightTheme
           : DESKTOP_LIGHT_THEME_DEFAULT;
+      // Shared guards, not hand-copied literal lists: a density or notch
+      // added to the shared lists must not silently coerce to the default
+      // on first paint only (the flash this bootstrap exists to prevent).
       const density =
-        raw && (raw.density === "mission-control" || raw.density === "compact")
+        raw && typeof raw.density === "string"
+          && isDesktopAppearanceDensity(raw.density)
           ? raw.density
           : "mission-control";
-      // Shared guard, not a hand-copied literal list: a notch added to
-      // DESKTOP_TEXT_SIZES must not silently coerce to "md" on
-      // first paint only (the flash this bootstrap exists to prevent).
       const sidebarTextSize =
         raw && typeof raw.sidebarTextSize === "string"
           && isDesktopTextSize(raw.sidebarTextSize)

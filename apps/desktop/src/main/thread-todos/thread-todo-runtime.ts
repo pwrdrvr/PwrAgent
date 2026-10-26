@@ -10,7 +10,7 @@ import type {
   ThreadTodoProject,
   ThreadTodosChangedEvent,
 } from "@pwragent/shared";
-import { DEFAULT_THREAD_TODO_MERGE_METHOD } from "@pwragent/shared";
+import { DEFAULT_THREAD_TODO_MERGE_METHOD, NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
@@ -38,6 +38,7 @@ import {
   resetThreadReviewServiceForTests,
 } from "../thread-reviews/thread-review-runtime";
 import { completedThreadReview, reportedThreadReviewOutcomes } from "../thread-reviews/thread-review-events";
+import { ThreadReviewError } from "../thread-reviews/thread-review-service";
 
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
 
@@ -287,7 +288,25 @@ export function installThreadTodoRuntime(params: {
         });
       },
       list: (identity, status) => reviews.list({ ...identity, status }),
-      update: (identity, request) => reviews.update(request, "agent", identity),
+      update: (identity, request) => {
+        // A deferral names a card this thread raised; the lookup refuses any other.
+        let todo: { id: string; title: string } | undefined;
+        if (request.todoId) {
+          let card: ThreadTodo;
+          try {
+            card = todos.findForThread({ ...identity, id: request.todoId });
+          } catch (error) {
+            if (!(error instanceof ThreadTodoError)) throw error;
+            throw new ThreadReviewError("not_found", "No to-do card with that todoId belongs to this thread.");
+          }
+          // A closed card tracks nothing; the finding would leave every queue.
+          if (card.status !== "open") {
+            throw new ThreadReviewError("conflict", "That to-do card is closed. Defer the finding to an open card.");
+          }
+          todo = card;
+        }
+        return reviews.update(request, "agent", identity, todo && { id: todo.id, title: todo.title });
+      },
     },
     importReviews: (identity, entries) => {
       for (const entry of entries) importReview(identity, entry);
@@ -324,6 +343,7 @@ export function installThreadTodoRuntime(params: {
         ...(input.title !== undefined ? { title: input.title } : {}),
         ...(input.detail !== undefined ? { detail: input.detail } : {}),
         ...(input.items !== undefined ? { items: input.items } : {}),
+        ...(input.prerequisites !== undefined ? { prerequisites: input.prerequisites } : {}),
         ...(input.check ? { check: input.check } : {}),
         ...(input.uncheck ? { uncheck: input.uncheck } : {}),
         ...(targetProject !== undefined ? { targetProject } : {}),
@@ -453,14 +473,30 @@ export function createThreadTodoRunners(params: {
               backend: sourceBackend,
               threadId: sourceThreadId,
             };
-            const listed = await federation({
-              operation: "list_instance_projects",
-              context,
-              args: { instanceId, limit: 500 },
-            });
-            if (!listed.ok) throw new Error(listed.error.message);
-            const projects = listed.data as ListInstanceProjectsResult;
-            const counterpart = findPeerThreadTodoProject(project, projects.projects);
+            // Match against the complete list, including label matches that
+            // take precedence over a folder-name fallback on an earlier page.
+            const candidates: ListInstanceProjectsResult["projects"] = [];
+            const cursors = new Set<string>();
+            let cursor: string | undefined;
+            let projects: ListInstanceProjectsResult;
+            do {
+              const listed = await federation({
+                operation: "list_instance_projects",
+                context,
+                args: { instanceId, limit: NAVIGATION_QUERY_MAX_PAGE_ROWS, ...(cursor ? { cursor } : {}) },
+              });
+              if (!listed.ok) throw new Error(listed.error.message);
+              projects = listed.data as ListInstanceProjectsResult;
+              if (typeof projects.complete !== "boolean" || projects.complete === Boolean(projects.nextCursor)) {
+                throw new Error("The peer project listing is not complete and cannot be continued.");
+              }
+              candidates.push(...projects.projects);
+              if (projects.complete) break;
+              cursor = projects.nextCursor!;
+              if (cursors.has(cursor)) throw new Error("The peer project listing cursor did not advance.");
+              cursors.add(cursor);
+            } while (cursor);
+            const counterpart = findPeerThreadTodoProject(project, candidates);
             if (!counterpart) {
               throw new Error(`${projects.instanceLabel} has no project named ${project.label}.`);
             }

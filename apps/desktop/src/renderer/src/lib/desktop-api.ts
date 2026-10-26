@@ -112,6 +112,8 @@ import type {
   CancelQueuedTurnResponse,
   MoveQueuedTurnRequest,
   MoveQueuedTurnResponse,
+  SetQueuedTurnPausedRequest,
+  SetQueuedTurnPausedResponse,
   ReleaseQueuedTurnRequest,
   ReleaseQueuedTurnResponse,
   CreateScheduledThreadActionRequest,
@@ -119,6 +121,8 @@ import type {
   CreateMcpConnectionResponse,
   UpdateMcpConnectionRequest,
   ProbeMcpConnectionRequest,
+  TestMcpStdioConnectionRequest,
+  TestMcpStdioConnectionResponse,
   ProbeMcpConnectionResponse,
   ListMcpConnectionToolsRequest,
   ListMcpConnectionToolsResponse,
@@ -179,13 +183,15 @@ import type {
   GetNavigationSnapshotTransportRequest,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  MoveThreadToMainCheckoutRequest,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   StopSubAgentRequest,
   StopSubAgentResponse,
   LatestCodexConfigWarningResponse,
-  ListAcpThreadRewindPointsRequest,
-  ListAcpThreadRewindPointsResponse,
   ListAutomationReplayCandidatesRequest,
   ListAutomationReplayCandidatesResponse,
   OpenAutomationRunWindowRequest,
@@ -201,6 +207,7 @@ import type {
   ListBackendsResponse,
   ListMcpConnectionsRequest,
   ListMcpConnectionsResponse,
+  McpConnectionsChangedEvent,
   ListCodexMcpServersRequest,
   ListCodexMcpServersResponse,
   ListThreadMcpServersRequest,
@@ -284,6 +291,8 @@ import type {
   SetThreadReactionResponse,
   SetThreadLockRequest,
   SetThreadLockResponse,
+  RecentThreadLockNotesResponse,
+  ThreadLockNoteRequest,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
   AcknowledgeThreadEnvironmentFailureRequest,
@@ -360,6 +369,8 @@ import type {
   ConnectPwrSnapResponse,
   ConnectPwrGitResponse,
   OpenPwrGitResponse,
+  OpenSandboxerLinkResponse,
+  SandboxerLinkTarget,
   PwrGitConnectionStatus,
   OpenPwrSnapResponse,
   PwrSnapConnectionStatus,
@@ -370,6 +381,7 @@ import type {
   SetMcpConnectionEnabledRequest,
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
+  SetSandboxerCleanupOnPrCloseRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
@@ -422,6 +434,13 @@ import type {
   StopCodexEnvironmentActionRequest,
   StopCodexEnvironmentActionResponse,
   SetCodexThreadEnvironmentRequest,
+  ListCodexEnvironmentFilesRequest,
+  ListCodexEnvironmentFilesResponse,
+  ListCodexEnvironmentProjectsResponse,
+  ReadCodexEnvironmentDocumentRequest,
+  ReadCodexEnvironmentDocumentResponse,
+  SaveCodexEnvironmentDocumentRequest,
+  SaveCodexEnvironmentDocumentResponse,
   SetCodexThreadEnvironmentResponse,
   RestoreWorktreeRequest,
   RestoreWorktreeResponse,
@@ -436,8 +455,10 @@ import type {
   QueueThreadExecutionModeResponse,
   ReloadCodexMcpConfigRequest,
   ReloadCodexMcpConfigResponse,
-  RewindAcpThreadRequest,
-  RewindAcpThreadResponse,
+  PreviewThreadRewindRequest,
+  PreviewThreadRewindResponse,
+  RewindThreadRequest,
+  RewindThreadResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -542,6 +563,11 @@ import type {
   PickGhCommandResponse,
   PickGitCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
+  SetCodexModelProviderApiKeyRequest,
+  SetCodexModelProviderApiKeyResponse,
+  TestCodexModelProviderRequest,
+  CodexModelProviderTestResult,
+  CodexModelProviderImportScan,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
   RecordComposerDraftHistoryResponse,
@@ -611,6 +637,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   copyRichText?: (payload: { text: string; html: string }) => Promise<void>;
   readTranscriptImage?: (url: string) => Promise<{ dataBase64: string; mimeType: string }>;
   listMcpConnections?: (request?: ListMcpConnectionsRequest) => Promise<ListMcpConnectionsResponse>;
+  /** This machine's connection changes only; a federation viewer hears none. */
+  onMcpConnectionsChanged?: (
+    callback: (event: McpConnectionsChangedEvent) => void,
+  ) => () => void;
   createMcpConnection?: (
     request: CreateMcpConnectionRequest,
   ) => Promise<CreateMcpConnectionResponse>;
@@ -632,6 +662,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   probeMcpConnection?: (
     request: ProbeMcpConnectionRequest,
   ) => Promise<ProbeMcpConnectionResponse>;
+  /** Start a local command once, read its tools, and stop it. Saves nothing. */
+  testMcpStdioConnection?: (
+    request: TestMcpStdioConnectionRequest,
+  ) => Promise<TestMcpStdioConnectionResponse>;
   setMcpConnectionEnabled?: (
     request: SetMcpConnectionEnabledRequest,
   ) => Promise<MutateMcpConnectionResponse>;
@@ -640,6 +674,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => Promise<MutateMcpConnectionResponse>;
   setMcpConnectionToolApproval?: (
     request: SetMcpConnectionToolApprovalRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  setSandboxerCleanupOnPrClose?: (
+    request: SetSandboxerCleanupOnPrCloseRequest,
   ) => Promise<MutateMcpConnectionResponse>;
   listMcpConnectionTools?: (
     request: ListMcpConnectionToolsRequest,
@@ -663,6 +700,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   connectPwrGit?: () => Promise<ConnectPwrGitResponse>;
   openPwrGit?: () => Promise<OpenPwrGitResponse>;
   openPwrGitDownload?: () => Promise<OpenPwrGitResponse>;
+  openSandboxerLink?: (target: SandboxerLinkTarget) => Promise<OpenSandboxerLinkResponse>;
   readPwrSuiteInstaller?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;
   startPwrSuiteDownload?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;
   cancelPwrSuiteDownload?: (app: PwrSuiteAppId) => Promise<PwrSuiteInstallerState>;
@@ -955,8 +993,10 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   /** Stored totals for a local thread and every sub-thread under it. */
   readThreadFamilyPricing?: (request: ReadThreadFamilyPricingRequest) => Promise<ReadThreadFamilyPricingResponse>;
   analyzeUsageActivity?: (request: AnalyzeUsageActivityRequest) => Promise<AnalyzeUsageActivityResponse>;
-  /** Spawns or focuses the dedicated Usage Activity window. */
-  openUsageActivity?: () => Promise<void>;
+  /** Spawns or focuses the dedicated Usage Activity window, on a provider's limits when named. */
+  openUsageActivity?: (request?: import("@pwragent/shared").OpenUsageActivityRequest) => Promise<void>;
+  /** In the Usage Activity window: another surface asked to focus a provider's limits. */
+  onUsageActivityFocusProvider?: (callback: (provider: string) => void) => () => void;
   /** From the Usage Activity window: focus the main window and open a thread there. */
   openUsageThreadInMainWindow?: (request: WindowShowThreadRequest) => Promise<void>;
   inspectTokenMiserOutput?: (
@@ -999,6 +1039,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   handoffThreadWorkspace?: (
     request: HandoffThreadWorkspaceRequest
   ) => Promise<HandoffThreadWorkspaceResponse>;
+  recreateThreadWorktree?: (
+    request: RecreateThreadWorktreeRequest
+  ) => Promise<RecreateThreadWorktreeResponse>;
+  moveThreadToMainCheckout?: (
+    request: MoveThreadToMainCheckoutRequest
+  ) => Promise<MoveThreadToMainCheckoutResponse>;
   renameThread?: (
     request: RenameThreadRequest
   ) => Promise<RenameThreadResponse>;
@@ -1043,6 +1089,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   moveQueuedTurn?: (
     request: MoveQueuedTurnRequest,
   ) => Promise<MoveQueuedTurnResponse>;
+  setQueuedTurnPaused?: (
+    request: SetQueuedTurnPausedRequest,
+  ) => Promise<SetQueuedTurnPausedResponse>;
   listThreadTodos?: (
     request?: ListThreadTodosRequest,
   ) => Promise<ListThreadTodosResponse>;
@@ -1101,12 +1150,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: StopSubAgentRequest,
   ) => Promise<StopSubAgentResponse>;
   steerTurn?: (request: SteerTurnRequest) => Promise<SteerTurnResponse>;
-  listAcpThreadRewindPoints?: (
-    request: ListAcpThreadRewindPointsRequest,
-  ) => Promise<ListAcpThreadRewindPointsResponse>;
-  rewindAcpThread?: (
-    request: RewindAcpThreadRequest,
-  ) => Promise<RewindAcpThreadResponse>;
+  previewThreadRewind?: (
+    request: PreviewThreadRewindRequest,
+  ) => Promise<PreviewThreadRewindResponse>;
+  rewindThread?: (
+    request: RewindThreadRequest,
+  ) => Promise<RewindThreadResponse>;
   configureGrokWorkflowBudget?: (
     request: ConfigureGrokWorkflowBudgetRequest,
   ) => Promise<ConfigureGrokWorkflowBudgetResponse>;
@@ -1153,6 +1202,16 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setCodexThreadEnvironment?: (
     request: SetCodexThreadEnvironmentRequest,
   ) => Promise<SetCodexThreadEnvironmentResponse>;
+  listCodexEnvironmentProjects?: () => Promise<ListCodexEnvironmentProjectsResponse>;
+  listCodexEnvironmentFiles?: (
+    request: ListCodexEnvironmentFilesRequest,
+  ) => Promise<ListCodexEnvironmentFilesResponse>;
+  readCodexEnvironmentDocument?: (
+    request: ReadCodexEnvironmentDocumentRequest,
+  ) => Promise<ReadCodexEnvironmentDocumentResponse>;
+  saveCodexEnvironmentDocument?: (
+    request: SaveCodexEnvironmentDocumentRequest,
+  ) => Promise<SaveCodexEnvironmentDocumentResponse>;
   submitServerRequest?: (
     request: SubmitServerRequestRequest
   ) => Promise<SubmitServerRequestResponse>;
@@ -1232,6 +1291,14 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   refreshCodexDiscovery?: (
     request: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;
+  setCodexModelProviderApiKey?: (
+    request: SetCodexModelProviderApiKeyRequest
+  ) => Promise<SetCodexModelProviderApiKeyResponse>;
+  testCodexModelProvider?: (
+    request: TestCodexModelProviderRequest
+  ) => Promise<CodexModelProviderTestResult>;
+  /** Providers the Codex config files Settings lists already define. */
+  scanCodexModelProviderImports?: () => Promise<CodexModelProviderImportScan>;
   createCodexAuthProfile?: (
     request: CreateDesktopCodexAuthProfileRequest,
   ) => Promise<CreateDesktopCodexAuthProfileResponse>;
@@ -1399,6 +1466,13 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setThreadLock?: (
     request: SetThreadLockRequest,
   ) => Promise<SetThreadLockResponse>;
+  listRecentThreadLockNotes?: () => Promise<RecentThreadLockNotesResponse>;
+  rememberThreadLockNote?: (
+    request: ThreadLockNoteRequest,
+  ) => Promise<RecentThreadLockNotesResponse>;
+  forgetThreadLockNote?: (
+    request: ThreadLockNoteRequest,
+  ) => Promise<RecentThreadLockNotesResponse>;
   setThreadToolIncidentNotice?: (
     request: SetThreadToolIncidentNoticeRequest,
   ) => Promise<SetThreadToolIncidentNoticeResponse>;

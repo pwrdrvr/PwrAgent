@@ -3,6 +3,7 @@ import type {
   AppServerThreadEntry,
   ThreadQuestionnaireActivity,
 } from "@pwragent/shared";
+import { insertSyntheticEntriesByTime } from "./synthetic-transcript-entries";
 
 export const QUESTIONNAIRE_ACTIVITY_ENTRY_PREFIX = "questionnaire:";
 
@@ -59,25 +60,7 @@ export function injectQuestionnaireActivities(
   if (additions.length === 0) {
     return entries;
   }
-  const merged: AppServerThreadEntry[] = [...entries, ...additions];
-  merged.sort((left, right) => {
-    const leftAt = left.createdAt ?? 0;
-    const rightAt = right.createdAt ?? 0;
-    if (leftAt !== rightAt) {
-      return leftAt - rightAt;
-    }
-    const leftIsQuestionnaire = left.id.startsWith(
-      QUESTIONNAIRE_ACTIVITY_ENTRY_PREFIX,
-    );
-    const rightIsQuestionnaire = right.id.startsWith(
-      QUESTIONNAIRE_ACTIVITY_ENTRY_PREFIX,
-    );
-    if (leftIsQuestionnaire === rightIsQuestionnaire) {
-      return 0;
-    }
-    return leftIsQuestionnaire ? 1 : -1;
-  });
-  return merged;
+  return insertSyntheticEntriesByTime(entries, additions);
 }
 
 function summarizeQuestionnaireActivity(

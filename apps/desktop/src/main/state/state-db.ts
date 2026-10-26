@@ -5,7 +5,9 @@ import type BetterSqlite3 from "better-sqlite3";
 import {
   encodeLegacyThreadIdentityKey,
   estimateTokenUsageCost,
+  normalizeThreadReview,
   resolveTokenUsagePriceUnavailableReason,
+  type ThreadReview,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadata.js";
@@ -15,14 +17,19 @@ import {
 } from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
 import { THREAD_DEPENDENCY_SCHEMA } from "./thread-dependency-store.js";
+import { THREAD_SANDBOX_SCHEMA } from "./thread-sandbox-store.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
 import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
+import {
+  ensureThreadSubAgentSchema,
+  THREAD_SUB_AGENTS_MOVED_META_KEY,
+} from "./thread-sub-agents";
 import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 78;
+export const CURRENT_STATE_DB_USER_VERSION = 79;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -883,6 +890,8 @@ CREATE TABLE IF NOT EXISTS pr_status_watches (
   head_sha           TEXT NOT NULL,
   notify_on_success  INTEGER NOT NULL,
   notify_on_failure  INTEGER NOT NULL,
+  notify_on_merged   INTEGER NOT NULL DEFAULT 0,
+  notify_on_closed   INTEGER NOT NULL DEFAULT 0,
   status             TEXT NOT NULL,
   attempt_count      INTEGER NOT NULL DEFAULT 0,
   lease_owner        TEXT,
@@ -897,6 +906,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_status_watches_active_target
 CREATE INDEX IF NOT EXISTS idx_pr_status_watches_active_pr
   ON pr_status_watches(pr_key, status, lease_expires_at);
 `;
+
+/**
+ * Merge/close interests. A terminal watch is stored with an empty head_sha:
+ * it is not bound to a head, and the active-target unique index then allows
+ * one terminal watch per thread and PR beside its CI watch. Added here rather
+ * than in a numbered step because ensureCurrentSchema runs on every open.
+ */
+function ensurePrStatusWatchTerminalColumns(db: BetterSqlite3.Database): void {
+  if (!tableColumnExists(db, "pr_status_watches", "notify_on_merged")) {
+    db.exec("ALTER TABLE pr_status_watches ADD COLUMN notify_on_merged INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!tableColumnExists(db, "pr_status_watches", "notify_on_closed")) {
+    db.exec("ALTER TABLE pr_status_watches ADD COLUMN notify_on_closed INTEGER NOT NULL DEFAULT 0");
+  }
+}
 
 // Finalization is keyed by turn identity, so a replacement usage-line id cannot
 // bypass it. Token intervals establish ordering; wall clocks and replay arrival
@@ -2090,6 +2114,28 @@ export class StateDb {
           db.pragma("user_version = 78");
         })();
       }
+      if ((db.pragma("user_version", { simple: true }) as number) < 79) {
+        db.transaction(() => {
+          // Another opener may have migrated while this connection waited.
+          if ((db.pragma("user_version", { simple: true }) as number) >= 79) return;
+          // Schema and capture triggers only. Existing cards move out of
+          // `threads.payload` lazily and in a sliced background pass, never
+          // here: in one transaction the move is seconds and >100 MB of WAL
+          // on a large profile.
+          ensureThreadSubAgentSchema(db);
+          // A profile with no overlay rows has nothing to move. Marking it
+          // here saves its first launch the sweep's commits.
+          if (tableExists(db, "threads")) {
+            db.prepare(
+              "INSERT OR IGNORE INTO meta(key, value) SELECT ?, '1' WHERE NOT EXISTS (SELECT 1 FROM threads)",
+            ).run(THREAD_SUB_AGENTS_MOVED_META_KEY);
+          }
+          db.pragma("user_version = 79");
+        }).immediate();
+      }
+      // Converge a profile whose v79 came from another branch. On a current
+      // profile every statement is IF NOT EXISTS and writes nothing.
+      ensureThreadSubAgentSchema(db);
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
@@ -2785,7 +2831,9 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_AUTO_DISPATCH_SCHEMA);
     db.exec(PR_AUTO_DISPATCH_BUDGET_SCHEMA);
     db.exec(PR_STATUS_WATCH_SCHEMA);
+    ensurePrStatusWatchTerminalColumns(db);
     db.exec(THREAD_DEPENDENCY_SCHEMA);
+    db.exec(THREAD_SANDBOX_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);
     ensurePullRequestProviderColumns(db);
     ensureThreadUsagePricingProviderScope(db);
@@ -2811,6 +2859,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     // other's table. Both are idempotent.
     db.exec(DURABLE_TURN_REQUEST_SCHEMA);
     db.exec(THREAD_REVIEW_SCHEMA);
+    ensureThreadReviewFindingStatusNames(db);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
@@ -2823,6 +2872,36 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
 CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
   ON app_runtime_instances(profile_name, cwd_hash, heartbeat_at DESC);
 `);
+}
+
+/**
+ * A finding declined before `declined` had its name was stored `dismissed`.
+ * This renames each in place, in the open's one transaction. The query
+ * selects only rows whose findings still say `dismissed`, so a profile with
+ * none left reads no payload into JavaScript and writes nothing. A dismissed
+ * review keeps its own name. CASE keeps json_each off a malformed payload.
+ */
+function ensureThreadReviewFindingStatusNames(db: BetterSqlite3.Database): void {
+  const rows = db.prepare(
+    `SELECT review_id, payload FROM thread_reviews
+       WHERE CASE WHEN NOT json_valid(payload) THEN 0
+         WHEN json_type(payload, '$.items') IS NOT 'array' THEN 0
+         ELSE EXISTS (SELECT 1 FROM json_each(payload, '$.items')
+           WHERE json_extract(value, '$.status') = 'dismissed') END`,
+  ).all() as Array<{ review_id: string; payload: string }>;
+  if (rows.length === 0) return;
+  const update = db.prepare("UPDATE thread_reviews SET payload = ? WHERE review_id = ?");
+  for (const row of rows) {
+    let stored: ThreadReview;
+    try {
+      stored = JSON.parse(row.payload) as ThreadReview;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(stored.items)) continue;
+    const renamed = normalizeThreadReview(stored);
+    if (renamed !== stored) update.run(JSON.stringify(renamed), row.review_id);
+  }
 }
 
 function ensureThreadToolIncidentExplorerSchema(
@@ -2915,6 +2994,16 @@ function ensureThreadUsagePricingProviderScope(db: BetterSqlite3.Database): void
     db.exec(THREAD_USAGE_PRICING_SCHEMA);
     return;
   }
+  // This runs on every open, so it converts only what predates provider
+  // scope. Rewriting every ledger row here once cost each launch about 0.8 s
+  // and 35 MB of WAL on a 53,000-turn profile, and replaced every turn's
+  // recorded start and end with values derived from its lines. Every usage
+  // line is now written together with its turn row, so only a database that
+  // predates these columns or the turns table needs the backfill.
+  const backfillUsageTurns =
+    !tableExists(db, "thread_usage_turns")
+    || !tableColumnExists(db, "thread_usage_lines", "provider")
+    || !tableColumnExists(db, "thread_usage_lines", "usage_turn_id");
 
   db.exec(`
 CREATE TABLE IF NOT EXISTS pricing_catalog_versions (
@@ -2976,6 +3065,9 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
   ON thread_usage_turns(provider, backend, thread_id, turn_id);
 `);
 
+  const providerScopedSummaries = Boolean(db.prepare(
+    "SELECT 1 FROM pragma_table_info('thread_pricing_summaries') WHERE name = 'provider' AND pk > 0",
+  ).get());
   if (!tableColumnExists(db, "thread_usage_lines", "provider")) {
     db.exec(
       "ALTER TABLE thread_usage_lines ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'",
@@ -2984,77 +3076,18 @@ CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_turn
   if (!tableColumnExists(db, "thread_usage_lines", "usage_turn_id")) {
     db.exec("ALTER TABLE thread_usage_lines ADD COLUMN usage_turn_id TEXT");
   }
-  db.exec(`
-UPDATE thread_usage_lines
-SET
-  provider = COALESCE(NULLIF(provider, ''), 'openai'),
-  usage_turn_id = COALESCE(
-    NULLIF(usage_turn_id, ''),
-    COALESCE(NULLIF(provider, ''), 'openai') || ':' || backend || ':' || thread_id || ':' || COALESCE(turn_id, usage_line_id)
-  )
-`);
-
-  db.exec(`
-INSERT INTO thread_usage_turns (
-  usage_turn_id,
-  provider,
-  backend,
-  thread_id,
-  parent_thread_id,
-  turn_id,
-  model,
-  reasoning_effort,
-  service_tier,
-  fast_mode,
-  settings_source,
-  settings_confidence,
-  started_at,
-  completed_at,
-  observed_at,
-  updated_at
-)
-SELECT
-  usage_turn_id,
-  provider,
-  backend,
-  thread_id,
-  parent_thread_id,
-  turn_id,
-  model,
-  reasoning_effort,
-  service_tier,
-  fast_mode,
-  settings_source,
-  settings_confidence,
-  MIN(created_at),
-  MAX(completed_at),
-  MIN(created_at),
-  MAX(updated_at)
-FROM thread_usage_lines
-WHERE usage_turn_id IS NOT NULL
-GROUP BY usage_turn_id
-ON CONFLICT(usage_turn_id) DO UPDATE SET
-  provider = excluded.provider,
-  backend = excluded.backend,
-  thread_id = excluded.thread_id,
-  parent_thread_id = excluded.parent_thread_id,
-  turn_id = excluded.turn_id,
-  model = excluded.model,
-  reasoning_effort = excluded.reasoning_effort,
-  service_tier = excluded.service_tier,
-  fast_mode = excluded.fast_mode,
-  settings_source = excluded.settings_source,
-  settings_confidence = excluded.settings_confidence,
-  started_at = excluded.started_at,
-  completed_at = excluded.completed_at,
-  observed_at = MIN(thread_usage_turns.observed_at, excluded.observed_at),
-  updated_at = excluded.updated_at
-`);
+  if (backfillUsageTurns) {
+    backfillProviderScopedUsageTurns(db);
+  }
 
   if (!tableColumnExists(db, "thread_pricing_summaries", "provider")) {
     db.exec(
       "ALTER TABLE thread_pricing_summaries ADD COLUMN provider TEXT NOT NULL DEFAULT 'openai'",
     );
+  }
+  if (providerScopedSummaries) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
   }
   db.exec("DROP TABLE IF EXISTS thread_pricing_summaries_v2");
   db.exec(`
@@ -3100,6 +3133,65 @@ FROM thread_pricing_summaries
   db.exec("DROP TABLE thread_pricing_summaries");
   db.exec("ALTER TABLE thread_pricing_summaries_v2 RENAME TO thread_pricing_summaries");
   db.exec(THREAD_USAGE_PRICING_SCHEMA);
+}
+
+/** Give pre-provider-scope usage lines a provider, a turn id, and turn rows. */
+function backfillProviderScopedUsageTurns(db: BetterSqlite3.Database): void {
+  db.exec(`
+UPDATE thread_usage_lines
+SET
+  provider = COALESCE(NULLIF(provider, ''), 'openai'),
+  usage_turn_id = COALESCE(
+    NULLIF(usage_turn_id, ''),
+    COALESCE(NULLIF(provider, ''), 'openai') || ':' || backend || ':' || thread_id || ':' || COALESCE(turn_id, usage_line_id)
+  )
+WHERE provider IS NULL OR provider = '' OR usage_turn_id IS NULL OR usage_turn_id = ''
+`);
+
+  db.exec(`
+INSERT INTO thread_usage_turns (
+  usage_turn_id,
+  provider,
+  backend,
+  thread_id,
+  parent_thread_id,
+  turn_id,
+  model,
+  reasoning_effort,
+  service_tier,
+  fast_mode,
+  settings_source,
+  settings_confidence,
+  started_at,
+  completed_at,
+  observed_at,
+  updated_at
+)
+SELECT
+  usage_turn_id,
+  provider,
+  backend,
+  thread_id,
+  parent_thread_id,
+  turn_id,
+  model,
+  reasoning_effort,
+  service_tier,
+  fast_mode,
+  settings_source,
+  settings_confidence,
+  MIN(created_at),
+  MAX(completed_at),
+  MIN(created_at),
+  MAX(updated_at)
+FROM thread_usage_lines AS line
+WHERE usage_turn_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM thread_usage_turns AS turn WHERE turn.usage_turn_id = line.usage_turn_id
+  )
+GROUP BY usage_turn_id
+ON CONFLICT(usage_turn_id) DO NOTHING
+`);
 }
 
 function ensureThreadUsagePricingCumulativeColumns(db: BetterSqlite3.Database): void {
@@ -4224,6 +4316,7 @@ function tableColumnExists(
     | "automation_runs"
     | "pr_lookup_cache"
     | "pr_status_cache"
+    | "pr_status_watches"
     | "thread_message_origins"
     | "thread_pricing_summaries"
     | "remote_thread_pins"
@@ -4264,6 +4357,7 @@ function readTableInfo(
     | "automation_runs"
     | "pr_lookup_cache"
     | "pr_status_cache"
+    | "pr_status_watches"
     | "thread_message_origins"
     | "thread_pricing_summaries"
     | "remote_thread_pins"
@@ -4291,6 +4385,10 @@ function readTableInfo(
       }>;
     case "pr_status_cache":
       return db.prepare("PRAGMA table_info(pr_status_cache)").all() as Array<{
+        name: string;
+      }>;
+    case "pr_status_watches":
+      return db.prepare("PRAGMA table_info(pr_status_watches)").all() as Array<{
         name: string;
       }>;
     case "thread_message_origins":

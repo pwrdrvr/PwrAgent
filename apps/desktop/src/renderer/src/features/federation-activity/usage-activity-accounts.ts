@@ -6,7 +6,14 @@ const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI", xai: "xAI", anthropic: "Anthropic", google: "Google", moonshot: "Moonshot", qwen: "Qwen",
 };
 
-export const usageProviderLabel = (provider: string) => PROVIDER_LABELS[provider] ?? provider;
+/**
+ * A Codex model provider records its configured id (`refuseless`), which is
+ * the same on every instance that reports it, so the label is derived from
+ * the id rather than from this machine's settings.
+ */
+export const usageProviderLabel = (provider: string) => PROVIDER_LABELS[provider]
+  ?? (provider.split(/[-_]+/u).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
+    || provider);
 
 export type UsageAccount = {
   key: string;
@@ -15,7 +22,7 @@ export type UsageAccount = {
   /** What the label leaves out: provider and plan for a named account, and its machines. */
   detail: string;
   owners: string[];
-  /** The corresponding Codex account-limit series, when available. */
+  /** The corresponding account-limit series, when available. */
   limitKey?: string;
   unknown: boolean;
   /** Where an operator name is stored (`provider:accountKey`). Absent for unknown accounts. */
@@ -28,14 +35,29 @@ export function usageAccountKey(row: OwnedUsageRow): string {
   return JSON.stringify([row.line.provider, row.accountKey ? ["account", row.accountKey] : ["owner", owner]]);
 }
 
-/** Limit observations currently describe Codex only; keyless limits prove no row attribution. */
+/** The provider of a `usageAccountKey`. */
+export function usageAccountProvider(key: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(key);
+    return Array.isArray(parsed) && typeof parsed[0] === "string" ? parsed[0] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The usage account a limit account describes; keyless limits prove no row attribution. */
 export function limitUsageAccountKey(limit: LimitAccount): string | undefined {
-  return limit.key.startsWith("account:")
-    ? JSON.stringify(["openai", ["account", limit.key.slice("account:".length)]]) : undefined;
+  return limit.accountKey ? JSON.stringify([limit.provider, ["account", limit.accountKey]]) : undefined;
+}
+
+/** A plan as its provider's own surfaces print it (`plus` → `Plus`, `max` → `Max`). */
+function planLabel(planType: string): string {
+  const formatted = formatBackendPlanType({ kind: "codex" }, planType);
+  return formatted.charAt(0).toUpperCase() + formatted.slice(1);
 }
 
 /**
- * Build choices from deduplicated ledger rows and known Codex limit accounts,
+ * Build choices from deduplicated ledger rows and known limit accounts,
  * including accounts with no turns.
  *
  * One rule names an account everywhere: the operator's name for it, else the
@@ -53,15 +75,13 @@ export function buildUsageAccounts(rows: OwnedUsageRow[], limits: LimitAccount[]
     account.owners.add(row.owner);
   }
   for (const limit of limits) {
-    // Limit observations currently describe Codex only. A keyless reading
-    // cannot identify the account behind any historical row.
+    // A keyless reading cannot identify the account behind any historical row.
     const key = limitUsageAccountKey(limit);
     if (!key) continue;
-    const accountKey = limit.key.slice("account:".length);
     let account = accounts.get(key);
-    if (!account) accounts.set(key, account = { provider: "openai", accountKey, owners: new Set() });
+    if (!account) accounts.set(key, account = { provider: limit.provider, accountKey: limit.accountKey, owners: new Set() });
     account.limitKey = limit.key;
-    account.plan ??= limit.planType ? formatBackendPlanType({ kind: "codex" }, limit.planType) : undefined;
+    account.plan ??= limit.planType ? planLabel(limit.planType) : undefined;
     for (const owner of limit.owners) account.owners.add(owner);
   }
   const built = [...accounts].map(([key, account]) => {

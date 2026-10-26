@@ -4,6 +4,7 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
+import { useProviderChipNeeded } from "../navigation/provider-chip-visibility";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { paintsAppTitleBar } from "../../lib/window-chrome";
@@ -139,6 +140,7 @@ export type ThreadTitleRenameControls = {
  */
 export function ThreadHeader(props: ThreadHeaderProps) {
   const projectLabel = props.projectLabel?.trim();
+  const showProvider = useProviderChipNeeded(props.thread.source);
   // Where the app paints its own title strip — Windows and Linux, both of
   // which lose the native title bar and the menu bar inside it — that strip
   // owns everything window-scoped: the layout toggles, the Star Map, the MSG
@@ -266,9 +268,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                 <FixedMachineChip machine={props.machine} />
               </span>
             ) : null}
-            <span className="chip chip--backend">
-              {formatBackendLabel(props.thread.source)}
-            </span>
+            {showProvider ? (
+              <span className="chip chip--backend">
+                {formatBackendLabel(props.thread.source)}
+              </span>
+            ) : null}
             {props.hasApprovalRequest ? (
               <span
                 aria-label="Waiting for approval"
@@ -296,8 +300,8 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           {props.rewind ? (
             <button
               aria-disabled={props.rewind.disabledReason ? true : undefined}
-              aria-label={props.rewind.disabledReason ?? "Rewind Grok conversation"}
-              className={`thread-header__rewind-toggle${
+              aria-label={props.rewind.disabledReason ?? "Rewind to before the last prompt"}
+              className={`thread-header__rewind-toggle thread-header__rewind-toggle--thread${
                 props.rewind.disabledReason ? " is-disabled" : ""
               }`}
               type="button"
@@ -311,13 +315,13 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               onFocus={(event) =>
                 rewindTooltip.show(
                   event.currentTarget,
-                  props.rewind?.disabledReason ?? "Rewind conversation",
+                  props.rewind?.disabledReason ?? "Rewind to before the last prompt",
                 )
               }
               onMouseEnter={(event) =>
                 rewindTooltip.show(
                   event.currentTarget,
-                  props.rewind?.disabledReason ?? "Rewind conversation",
+                  props.rewind?.disabledReason ?? "Rewind to before the last prompt",
                 )
               }
               onMouseLeave={rewindTooltip.hide}

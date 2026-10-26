@@ -5,6 +5,7 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
+import { turnUsageEntryTurnId } from "@pwragent/shared";
 import { formatElapsedMs } from "../../lib/format-duration";
 
 export type TranscriptRenderItem =
@@ -155,8 +156,16 @@ function buildActiveWorkGroups(
   const activeEntries: AppServerThreadEntry[] = [];
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
+    // The turn's total sits after its last entry; the work above it is
+    // still the turn's bottom work.
     if (
-      alwaysVisibleEntryIds?.has(entry.id)
+      activeEntries.length === 0
+      && turnUsageEntryTurnId(entry) === activeTurnId
+    ) {
+      continue;
+    }
+    if (
+      staysInView(entry, alwaysVisibleEntryIds)
       || entry.turn?.id !== activeTurnId
       || !isConcreteWorkEntry(entry)
     ) {
@@ -199,6 +208,7 @@ function buildCompletedGroups(
       lastReviewIndexByTurn.set(entry.turn.id, index);
     }
   });
+  const interimReplies = collectInterimReplies(entries);
   let currentEntries: AppServerThreadEntry[] = [];
   let currentTurnId: string | undefined;
 
@@ -264,10 +274,14 @@ function buildCompletedGroups(
       && (turnId === activeReview?.turnId
         || index < (lastReviewIndexByTurn.get(turnId ?? "") ?? -1));
     const canJoinGroup =
-      !alwaysVisibleEntryIds?.has(entry.id)
+      !staysInView(entry, alwaysVisibleEntryIds)
       && Boolean(turnId)
       && turnId !== excludeTurnId
-      && (isWorkPhaseEntry(entry) || isReplyBetweenReviewCards);
+      && (
+        isWorkPhaseEntry(entry)
+        || isReplyBetweenReviewCards
+        || interimReplies.has(entry)
+      );
 
     if (!canJoinGroup) {
       flushCurrent();
@@ -284,6 +298,35 @@ function buildCompletedGroups(
 
   flushCurrent();
   return groups;
+}
+
+/**
+ * Replies a turn wrote on its way to its answer. Codex tags those commentary,
+ * but Claude tags no reply and ACP agents tag every reply final, so a finished
+ * turn of theirs kept each reply between tool calls in view and split its work
+ * into a run of "More work" groups. A reply that more tool work follows in the
+ * same turn was not the answer, whatever its phase says. A user message in
+ * between ends the search: a reply the operator answered stays in view.
+ */
+function collectInterimReplies(
+  entries: AppServerThreadEntry[],
+): Set<AppServerThreadEntry> {
+  const interim = new Set<AppServerThreadEntry>();
+  let workFollowsInTurn: string | undefined;
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    const turnId = entry.turn?.id;
+    if (entry.type === "message" && entry.role === "user") {
+      workFollowsInTurn = undefined;
+    } else if (turnId && isConcreteWorkEntry(entry)) {
+      workFollowsInTurn = turnId;
+    } else if (!turnId || turnId !== workFollowsInTurn) {
+      workFollowsInTurn = undefined;
+    } else if (isAssistantMessage(entry)) {
+      interim.add(entry);
+    }
+  }
+  return interim;
 }
 
 function buildCommentaryOnlyGroup(
@@ -321,7 +364,7 @@ function buildCommentaryOnlyGroups(
 
   for (const entry of entries) {
     if (
-      !alwaysVisibleEntryIds?.has(entry.id)
+      !staysInView(entry, alwaysVisibleEntryIds)
       && isAssistantCommentaryMessage(entry)
       && !isLiveInProgressTurn(entry.turn, completedTurnIds)
     ) {
@@ -392,6 +435,33 @@ function renderWithGroups(
 }
 
 /**
+ * A question waits on the operator, so it never folds into work, whatever its
+ * phase. Folded, it lost its answer controls and the To-dos row that links to
+ * it had nothing to scroll to.
+ */
+function staysInView(
+  entry: AppServerThreadEntry,
+  alwaysVisibleEntryIds: ReadonlySet<string> | undefined,
+): boolean {
+  return Boolean(alwaysVisibleEntryIds?.has(entry.id)) || isAsyncQuestionMessage(entry);
+}
+
+function isAsyncQuestionMessage(entry: AppServerThreadEntry): boolean {
+  return asyncQuestionsOfEntry(entry) !== undefined;
+}
+
+/** The questions Codex asked in an entry, when the entry draws a question card. */
+export function asyncQuestionsOfEntry(
+  entry: AppServerThreadEntry,
+): AppServerThreadMessageEntry["questions"] {
+  return isAssistantMessage(entry)
+    && entry.delivery === "async"
+    && entry.questions?.length
+    ? entry.questions
+    : undefined;
+}
+
+/**
  * In a review turn every assistant message is working output: the review's
  * answer is its result card. A streamed reply carries no `commentary` phase
  * until it completes, so matching on the phase alone would show each line of
@@ -438,7 +508,7 @@ function hasConcreteWork(entries: AppServerThreadEntry[]): boolean {
   return entries.some(isConcreteWorkEntry);
 }
 
-function isConcreteWorkEntry(
+export function isConcreteWorkEntry(
   entry: AppServerThreadEntry
 ): entry is AppServerThreadActivityEntry | AppServerThreadPlanEntry {
   return (

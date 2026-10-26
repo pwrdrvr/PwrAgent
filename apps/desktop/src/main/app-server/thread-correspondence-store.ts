@@ -12,7 +12,12 @@ import type {
   AppServerThreadTurnMetadata,
   AppServerTurnInputItem,
 } from "@pwragent/shared";
-import { buildThreadMarkdownLink } from "@pwragent/shared";
+import {
+  buildThreadCorrespondenceHeading,
+  buildThreadMarkdownLink,
+  readUuidV7Timestamp,
+  type ThreadCorrespondenceState,
+} from "@pwragent/shared";
 import { isUsageActivityEntry, usageActivityScope } from "./overlay-transcript-entries";
 
 type ThreadRef = { backend: AppServerBackendKind; threadId: string; instanceId?: string; title?: string };
@@ -22,7 +27,7 @@ export type CorrespondenceRecord = {
   destination: ThreadRef;
   input: AppServerTurnInputItem[];
   createdAt: number;
-  state: "sending" | "queued" | "started" | "failed" | "cancelled" | "held";
+  state: ThreadCorrespondenceState;
   queueEntryId?: string;
   turnId?: string;
   sourceTurnId?: string;
@@ -30,12 +35,6 @@ export type CorrespondenceRecord = {
 };
 type Status = Pick<CorrespondenceRecord, "state"> & Partial<Pick<CorrespondenceRecord, "destination" | "queueEntryId" | "turnId">>;
 type Event = { type: "message"; record: CorrespondenceRecord } | { type: "status"; id: string; status: Status };
-
-function codexTurnStartedAt(id: string): number | undefined {
-  // Only UUIDv7 encodes a creation time. Arbitrary provider ids are opaque.
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) return undefined;
-  return Number.parseInt(id.replace(/-/g, "").slice(0, 12), 16);
-}
 
 /** PwrAgent-owned supplemental correspondence, never provider history or SQLite. */
 export class ThreadCorrespondenceStore {
@@ -142,15 +141,8 @@ export class ThreadCorrespondenceStore {
     records.sort((left, right) => left.createdAt - right.createdAt);
     const messages: AppServerThreadMessageEntry[] = records.map((record) => {
       const destination = buildThreadMarkdownLink({ ...record.destination, ...(record.turnId ? { messageId: `user:${record.turnId}` } : {}) });
-      const state = {
-        sending: "Send outcome unknown",
-        queued: "Queued (last confirmed)",
-        started: "Receiving thread started work",
-        failed: "Failed to send",
-        cancelled: "Cancelled",
-        held: "Held for retry",
-      }[record.state];
-      const heading = `**Message to ${destination}** · ${state}`;
+      // The transcript collapses this message by parsing the heading back.
+      const heading = buildThreadCorrespondenceHeading(destination, record.state);
       const body = record.input.flatMap((item) => item.type === "text" ? [item.text] : []).join("\n");
       return {
         type: "message",
@@ -158,7 +150,7 @@ export class ThreadCorrespondenceStore {
         role: "assistant",
         createdAt: record.createdAt,
         ...(record.sourceTurnId ? { turn: { id: record.sourceTurnId } } : {}),
-        origin: { kind: "pwragent", systemReason: "thread-correspondence" },
+        origin: { kind: "pwragent", systemReason: "thread-correspondence", sourceThread: { ...record.source, ...(source.title ? { title: source.title } : {}) } },
         text: `${heading}\n\n${body}`,
         parts: [
           { type: "text", text: `${heading}\n\n${body}` },
@@ -210,7 +202,7 @@ export class ThreadCorrespondenceStore {
       }
     });
     const startedAt = (turn: AppServerThreadTurnMetadata) => turn.startedAt
-      ?? (source.backend === "codex" ? codexTurnStartedAt(turn.id) : undefined);
+      ?? (source.backend === "codex" ? readUuidV7Timestamp(turn.id) : undefined);
     const timedTurns = [...turns.values()].flatMap((turn) => {
       const time = startedAt(turn);
       return time === undefined ? [] : [{ id: turn.id, time, completedAt: turn.completedAt }];

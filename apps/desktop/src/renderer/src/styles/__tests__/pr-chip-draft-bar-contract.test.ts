@@ -232,6 +232,20 @@ describe("PR chip draft bar contract", () => {
         ),
       },
       {
+        name: "Minimal density title line",
+        height: px(
+          declaration(ruleBody(".thread-row__pr-rollup .pr-chip"), "height"),
+          "rollup pill"
+        ),
+      },
+      {
+        name: "PR rollup list row",
+        height: px(
+          declaration(ruleBody(".pr-rollup-popover__row .pr-chip"), "height"),
+          "rollup list pill"
+        ),
+      },
+      {
         name: "⌘K palette row",
         height: px(
           declaration(ruleBody(".jump-palette__row-prs .pr-chip"), "height"),
@@ -286,7 +300,9 @@ describe("PR chip draft bar contract", () => {
     expect([...sized.pill].sort()).toEqual([
       ".jump-palette__row-prs .pr-chip",
       ".pr-chip",
+      ".pr-rollup-popover__row .pr-chip",
       ".thread-row__chips .pr-chip",
+      ".thread-row__pr-rollup .pr-chip",
     ]);
     expect([...sized.mention].sort()).toEqual([COMPACT_MENTION, MENTION]);
   });

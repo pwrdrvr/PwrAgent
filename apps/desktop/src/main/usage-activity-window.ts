@@ -9,7 +9,7 @@ import {
   WINDOW_KIND_USAGE_ACTIVITY,
   registerWindowChannels,
 } from "./window-channels";
-import { APPEARANCE_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
+import { APPEARANCE_CHANGED_EVENT_CHANNEL, USAGE_ACTIVITY_FOCUS_PROVIDER_EVENT_CHANNEL } from "../shared/ipc";
 import {
   readBootstrapAppearance,
   themedWindowAdditionalArguments,
@@ -44,10 +44,15 @@ let usageWindow: BrowserWindow | undefined;
  * Spawn (or focus, if already open) the Usage Activity window. It reuses the
  * renderer bundle, like the other auxiliary windows, and reads usage on its
  * own through the usage-activity IPC; it subscribes to no push channels
- * except appearance.
+ * except appearance. A `provider` focuses that provider's account limits:
+ * a new window reads it from its hash, an open one is told.
  */
-export function showUsageActivityWindow(source: WindowPlacementSource = {}): void {
+export function showUsageActivityWindow(
+  source: WindowPlacementSource = {},
+  focus: { provider?: string } = {},
+): void {
   if (usageWindow && !usageWindow.isDestroyed()) {
+    if (focus.provider) usageWindow.webContents.send(USAGE_ACTIVITY_FOCUS_PROVIDER_EVENT_CHANNEL, focus.provider);
     positionWindowForSourceDisplay(usageWindow, source);
     showAndFocusAuxiliaryWindow(usageWindow);
     return;
@@ -81,10 +86,11 @@ export function showUsageActivityWindow(source: WindowPlacementSource = {}): voi
   ]);
 
   const rendererEntry = getRendererEntry();
+  const hash = focus.provider ? `${USAGE_HASH}?provider=${encodeURIComponent(focus.provider)}` : USAGE_HASH;
   if (rendererEntry.kind === "url") {
-    void window.loadURL(`${rendererEntry.value}#${USAGE_HASH}`);
+    void window.loadURL(`${rendererEntry.value}#${hash}`);
   } else {
-    void window.loadFile(rendererEntry.value, { hash: USAGE_HASH });
+    void window.loadFile(rendererEntry.value, { hash });
   }
 
   showAuxiliaryWindowWhenReady(window);

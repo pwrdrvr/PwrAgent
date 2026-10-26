@@ -74,6 +74,54 @@ describe("navigation query projection", () => {
     });
   });
 
+  it("names the providers that own threads in the directory index counts", () => {
+    const codexOnly = projectNavigationQuery({
+      index: snapshot([thread("one"), thread("two")]),
+      request: request({ kind: "directory-index" }),
+    });
+    expect(codexOnly.counts.backends).toEqual(["codex"]);
+
+    const mixed = projectNavigationQuery({
+      index: snapshot([
+        thread("one"),
+        thread("two", { source: "claude" }),
+        thread("three", { source: "acp:gemini" }),
+      ]),
+      request: request({ kind: "directory-index" }),
+    });
+    expect(mixed.counts.backends).toEqual(["acp:gemini", "claude", "codex"]);
+
+    const empty = projectNavigationQuery({
+      index: snapshot([]),
+      request: request({ kind: "directory-index" }),
+    });
+    expect(empty.counts.backends).toEqual([]);
+  });
+
+  it("keeps the provider list off scoped counts", () => {
+    const page = projectNavigationQuery({
+      index: snapshot([thread("one"), thread("two", { source: "claude" })]),
+      request: request({ kind: "lens", lens: "inbox" }),
+    });
+    expect(page.counts.backends).toBeUndefined();
+  });
+
+  it("names the providers of every owner thread on the whole-map star-map page", () => {
+    const index = snapshot([thread("one"), thread("two", { source: "claude" })]);
+    const map = projectNavigationQuery({
+      index,
+      request: request({ kind: "star-map", filters: { pr: "include" } }),
+    });
+    // Counted over every owner thread, not the filter's matches.
+    expect(map.counts.backends).toEqual(["claude", "codex"]);
+
+    const project = projectNavigationQuery({
+      index,
+      request: request({ kind: "star-map", projectKey: "directory:/repo", filters: {} }),
+    });
+    expect(project.counts.backends).toBeUndefined();
+  });
+
   it.each([
     ["PwrSuiteLab", "pws"], ["PwrAgent", "PA"], ["PwrSnap", "ps"], ["trading-system", "TS"],
   ])("finds owner threads and directory-index projects by initials: %s / %s", (name, text) => {
@@ -113,6 +161,34 @@ describe("navigation query projection", () => {
     });
     const directories = projectNavigationQuery({ index: source, request: request({ kind: "directory-index" }) });
     expect(directories.directories[0]?.counts.active).toBe(2);
+  });
+
+  it("counts threads with background tasks as active without changing turn status", () => {
+    const source = snapshot([
+      thread("background", { threadStatus: "idle", hasBackgroundTasks: true }),
+      thread("finished", { threadStatus: "idle", hasBackgroundTasks: false }),
+    ]);
+    const attention = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "attention" }) });
+    expect(attention.counts.active).toBe(1);
+    expect(attention.entries.map(({ row }) => row.id)).toEqual(["background"]);
+    expect(attention.entries[0]?.row).toMatchObject({ threadStatus: "idle", hasBackgroundTasks: true });
+  });
+
+  // A Codex terminal never wakes the agent, so it marks the row without
+  // making the thread active or holding it in Attention.
+  it("projects a running agent command without counting the thread as active", () => {
+    const source = snapshot([
+      thread("dev-server", { threadStatus: "idle", hasAgentCommands: true }),
+      thread("finished", { threadStatus: "idle" }),
+    ]);
+    const attention = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "attention" }) });
+    expect(attention.counts.active).toBe(0);
+    expect(attention.entries.map(({ row }) => row.id)).toEqual([]);
+    const inbox = projectNavigationQuery({ index: source, request: request({ kind: "lens", lens: "inbox" }) });
+    expect(inbox.entries.find(({ row }) => row.id === "dev-server")?.row).toMatchObject({
+      threadStatus: "idle", hasAgentCommands: true,
+    });
+    expect(inbox.entries.find(({ row }) => row.id === "finished")?.row).not.toHaveProperty("hasAgentCommands");
   });
 
   it.each(["active", "unread"])("shows an Attention child whose parent is outside the lens (%s)", (signal) => {

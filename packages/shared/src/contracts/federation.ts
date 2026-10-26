@@ -30,6 +30,8 @@ export const FEDERATION_CAPABILITIES = [
   "gateway_relay",
   "remote_pty",
   "service_forward_v1",
+  /** Windowed, owner-pushed service streams; see `FEDERATION_SERVICE_V2_CAPABILITY`. */
+  "service_forward_v2",
   "file_push",
   "thread_handoff",
   "file_pull",
@@ -55,6 +57,25 @@ export const FEDERATION_CAPABILITIES = [
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
   "operator_requests",
+  /**
+   * The owner answers `backend.setQueuedTurnPaused` and skips paused entries
+   * when it dispatches, so a viewer can pause the thread's queued messages.
+   * A viewer offers no pause without it.
+   */
+  "turn_queue_pause",
+  /**
+   * The owner accepts `THREAD_DISPLAY_MAX_ACCOUNTING_TURNS` turns in one
+   * accounting display read and `THREAD_DISPLAY_MAX_PAGE_ROWS` rows in one
+   * display page, so a viewer refresh is one read per resource. A viewer
+   * keeps the legacy 256-turn chunks and 20-row pages without it.
+   */
+  "thread_display_bulk_reads",
+  /**
+   * The owner answers `backend.readTurnAssistantReply` with one finished
+   * turn's reply, its images materialized. A messaging gateway without it
+   * reads a transcript page at every bound turn end.
+   */
+  "turn_assistant_reply",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";
@@ -864,12 +885,29 @@ export type FederationBlobChunkEnvelope = FederationEnvelopeBase & {
   data: Uint8Array;
 };
 
+/**
+ * One data frame of a windowed service stream (`service_forward_v2`). As with
+ * `blob_chunk`, the transport sends `data` raw after a small JSON header in a
+ * binary WebSocket frame, so tunnel bytes are never base64 encoded. Only peers
+ * and gateways that grant `service_forward_v2` send or relay it.
+ */
+export type FederationServiceDataEnvelope = FederationEnvelopeBase & {
+  kind: "service_data";
+  streamId: string;
+  /** Counts data frames per direction from 0. */
+  seq: number;
+  /** Half-closes this direction after `data`. */
+  fin?: boolean;
+  data: Uint8Array;
+};
+
 export type FederationProtocolEnvelope =
   | FederationRequestEnvelope
   | FederationResponseEnvelope
   | FederationErrorEnvelope
   | FederationNotificationEnvelope
-  | FederationBlobChunkEnvelope;
+  | FederationBlobChunkEnvelope
+  | FederationServiceDataEnvelope;
 
 export function isFederationCapability(
   value: unknown,

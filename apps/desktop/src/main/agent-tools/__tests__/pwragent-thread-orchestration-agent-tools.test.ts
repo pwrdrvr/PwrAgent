@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  buildPwrAgentThreadOrchestrationToolDefinitions,
   buildPwrAgentThreadOrchestrationToolRouter,
   PWRAGENT_THREAD_ORCHESTRATION_UNAVAILABLE_MESSAGE,
 } from "../pwragent-thread-orchestration-agent-tools";
@@ -80,7 +81,7 @@ describe("pwragent thread orchestration agent tools", () => {
                   description: expect.stringContaining("`acp:grok`"),
                 }),
                 model: expect.objectContaining({
-                  description: expect.stringContaining("list_instance_projects lists each backend's model IDs"),
+                  description: expect.stringContaining("list_instance_projects backends[].modelOptions"),
                 }),
                 branchName: expect.objectContaining({
                   description: expect.stringContaining("resolves this ref in cwd"),
@@ -563,6 +564,7 @@ describe("pwragent thread orchestration agent tools", () => {
           workspaceMode: "same_workspace",
           cwd: " /Users/test/OtherRepo ",
           messagingAttachment: "auto",
+          environment: " PwrAgent ",
         },
       },
     });
@@ -582,8 +584,25 @@ describe("pwragent thread orchestration agent tools", () => {
         workspaceMode: "same_workspace",
         cwd: "/Users/test/OtherRepo",
         messagingAttachment: "auto",
+        environment: "PwrAgent",
       },
     });
+  });
+
+  it("advertises the handoff_task environment parameter", () => {
+    const tool = buildPwrAgentThreadOrchestrationToolDefinitions(undefined)
+      .find((definition) => definition.name === "handoff_task")!;
+
+    expect(tool.description).toContain("environment=none");
+    expect(tool.inputSchema).toMatchObject({
+      properties: {
+        environment: {
+          type: "string",
+          description: expect.stringContaining("inherits the parent thread's environment"),
+        },
+      },
+    });
+    expect((tool.inputSchema as { required: string[] }).required).toEqual(["task"]);
   });
 
   it("normalizes send_message_to_thread identifiers while preserving prompt content and caller context", async () => {

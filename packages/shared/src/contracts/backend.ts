@@ -173,15 +173,45 @@ export type BackendCapabilities = {
   reviewCodexSubAgent?: boolean;
   interruptTurn: boolean;
   steerTurn: boolean;
+  /**
+   * A steer can carry `delivery: "now"`: the backend abandons the response it
+   * is streaming and reads the message at once, inside the same turn. Only
+   * Claude does this today (`priority: "now"`). Optional so an owner that
+   * predates it never advertises it, and a viewer never sends a delivery the
+   * owner would ignore.
+   */
+  interruptSteerTurn?: boolean;
   transcriptPagination: boolean;
   toolUse: boolean;
   approvalRequests: boolean;
   multiDirectoryThreads: boolean;
+  /**
+   * This backend can rewind a thread to before one of its prompts. Absent
+   * when it cannot, and on federation owners that predate generic rewind,
+   * so a viewer never offers a rewind the owner would refuse.
+   */
+  threadRewind?: ThreadRewindSupport;
+};
+
+/** What a provider can put back when it rewinds a thread. */
+export type ThreadRewindSupport = {
+  /** The provider can restore files its own edit tools changed. */
+  files: boolean;
+  /** The provider keeps the removed branch, so a rewind can be undone. */
+  undo: boolean;
 };
 
 export type BackendModelOption = {
   id: string;
   label?: string;
+  /**
+   * The Codex model provider that serves this model, when it is not Codex's
+   * default. The id is then qualified as `@<providerId>/<model>`. Absent on
+   * older peers, which list such models as plain options.
+   */
+  providerId?: string;
+  /** Display name of `providerId`, such as `Refuseless`. */
+  providerLabel?: string;
   current?: boolean;
   /** Older or secondary catalog models shown in the Other Models submenu. */
   other?: boolean;

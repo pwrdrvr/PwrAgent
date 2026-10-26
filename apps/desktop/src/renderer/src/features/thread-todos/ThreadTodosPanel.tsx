@@ -365,6 +365,7 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
                       {mine && todo.status === "open" ? (
                         <ThreadTodoCard
                           todo={todo}
+                          copyAllTodos={threadOpenCards(group.items, threadKey)}
                           running={view.runningIds.has(todo.id)}
                           threadRunning={props.threadRunning}
                           mergeMethods={view.mergeMethods}
@@ -446,7 +447,11 @@ function TodoRow(props: {
     ? undefined
     : todo.result ?? (todo.status === "done" ? "Done" : "Dismissed");
   const route = describeRoute(todo, props.scope, props.projectKey);
-  const progress = threadTodoItemProgress(todo);
+  // A handoff's steps went to the new thread, so a resolved one has no
+  // progress of its own to report.
+  const progress = todo.status !== "open" && todo.action?.type === "start_thread"
+    ? undefined
+    : threadTodoItemProgress(todo);
   // Grouped by project, the thread is not in the heading: say it here.
   const threadName = props.scope === "all" && !props.current ? view.threadTitle(todo) : undefined;
   const main = (
@@ -543,6 +548,17 @@ function describeRoute(
       : `For ${target.label}`;
   }
   return source ? `${source.label} → ${target.label}` : `For ${target.label}`;
+}
+
+/** The thread on screen's open cards in a group: the ones drawn as cards. */
+function threadOpenCards(items: PanelItem[], threadKey: string): ThreadTodo[] {
+  return items.flatMap((item) => (
+    item.type !== "wait"
+    && item.todo.status === "open"
+    && threadTodoThreadKey(item.todo) === threadKey
+      ? [item.todo]
+      : []
+  ));
 }
 
 function groupItems(

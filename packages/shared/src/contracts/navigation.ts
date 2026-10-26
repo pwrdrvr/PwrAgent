@@ -139,6 +139,17 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   };
   /** Live worker owned by this thread; independent of the parent turn status. */
   hasActiveSubAgent?: boolean;
+  /**
+   * Background tasks the agent started are still running after its turn
+   * ended. The thread list shows it working; the composer stays open.
+   */
+  hasBackgroundTasks?: boolean;
+  /**
+   * Commands the agent started are still running, but the agent will not act
+   * again on its own when they exit (a Codex background terminal such as a
+   * dev server). The row shows a quiet mark; the thread is not working.
+   */
+  hasAgentCommands?: boolean;
   inbox: ThreadInboxState;
   /**
    * Normalized host/owner/repository identity resolved from the thread's
@@ -303,6 +314,13 @@ export type ThreadQueuedTurnSummary = {
   position: number;
   manualReleaseRequired?: boolean;
   holdReason?: string;
+  /** The operator paused it; dispatch passes over it until it is resumed. */
+  paused?: boolean;
+  /**
+   * The owner's count of pause changes to this entry. A reader keeps the
+   * `paused` it has when a read carries an older count.
+   */
+  pauseRevision?: number;
   /**
    * Generated display title for a message too long to show as typed. Absent
    * until the helper answers, and from owners that predate it; show
@@ -712,8 +730,11 @@ export type NavigationLaunchpadProviderSettings = {
   serviceTier?: string;
   fastMode?: boolean;
   acpRuntime?: BackendAcpSessionRuntimeState;
+  /** @deprecated Read only to migrate legacy provider-specific environment choices. */
   codexEnvironmentId?: string;
+  /** @deprecated Environment execution target now belongs to the launchpad. */
   codexEnvironmentExecutionTarget?: CodexEnvironmentExecutionTarget;
+  /** @deprecated Environment action now belongs to the launchpad. */
   codexEnvironmentActionId?: string;
 };
 
@@ -725,10 +746,26 @@ const NAVIGATION_LAUNCHPAD_PROVIDER_SETTING_KEYS = [
   "serviceTier",
   "fastMode",
   "acpRuntime",
-  "codexEnvironmentId",
-  "codexEnvironmentExecutionTarget",
-  "codexEnvironmentActionId",
 ] as const satisfies readonly (keyof NavigationLaunchpadProviderSettings)[];
+
+/** Lift the active legacy choice once, then discard inactive provider copies. */
+function normalizeNavigationLaunchpadEnvironment<T extends NavigationLaunchpadDefaults>(launchpad: T): T {
+  const active = launchpad.providerSettings?.[launchpad.backend];
+  const environment = !("codexEnvironmentId" in launchpad) && active?.codexEnvironmentId
+    ? {
+        codexEnvironmentId: active.codexEnvironmentId,
+        codexEnvironmentExecutionTarget: active.codexEnvironmentExecutionTarget,
+        codexEnvironmentActionId: active.codexEnvironmentActionId,
+      }
+    : {};
+  if (!launchpad.providerSettings) return launchpad;
+  const providerSettings = Object.fromEntries(
+    Object.entries(launchpad.providerSettings).map(([backend, settings]) => [
+      backend, settings ? extractNavigationLaunchpadProviderSettings(settings) : settings,
+    ]),
+  );
+  return { ...launchpad, ...environment, providerSettings };
+}
 
 export function extractNavigationLaunchpadProviderSettings(
   source: Partial<NavigationLaunchpadDefaults>,
@@ -884,15 +921,13 @@ function clearNavigationLaunchpadProviderFields<T extends NavigationLaunchpadDef
     serviceTier: undefined,
     fastMode: undefined,
     acpRuntime: undefined,
-    codexEnvironmentId: undefined,
-    codexEnvironmentExecutionTarget: undefined,
-    codexEnvironmentActionId: undefined,
   };
 }
 
 export function projectNavigationLaunchpadProviderSettings<
   T extends NavigationLaunchpadDefaults,
 >(launchpad: T): T {
+  launchpad = normalizeNavigationLaunchpadEnvironment(launchpad);
   const legacySettings = extractNavigationLaunchpadProviderSettings(launchpad);
   const providerSettings = launchpad.providerSettings?.[launchpad.backend];
   const settings = {
@@ -909,15 +944,13 @@ export function projectNavigationLaunchpadProviderSettings<
     serviceTier: settings.serviceTier,
     fastMode: settings.fastMode,
     acpRuntime: settings.acpRuntime,
-    codexEnvironmentId: settings.codexEnvironmentId,
-    codexEnvironmentExecutionTarget: settings.codexEnvironmentExecutionTarget,
-    codexEnvironmentActionId: settings.codexEnvironmentActionId,
   };
 }
 
 export function applyNavigationLaunchpadProviderSettingsPatch<
   T extends NavigationLaunchpadDefaults,
 >(launchpad: T, patch: Partial<T>): T {
+  launchpad = normalizeNavigationLaunchpadEnvironment(launchpad);
   const providerPatch = extractNavigationLaunchpadProviderSettings(patch);
   const backend = patch.backend ?? launchpad.backend;
   const providerSettings = seedNavigationLaunchpadProviderSettings(launchpad);
@@ -1330,7 +1363,18 @@ export type RefreshThreadGitWorkingStateRequest = {
   threadId: string;
   /** User inspection bypasses cache freshness; scheduled focus refreshes do not. */
   trigger: "scheduled" | "user";
+  /**
+   * Route the refresh to the instance that owns the thread's worktree. The
+   * owner's Git info store applies its own cache and user-refresh budget.
+   */
+  federationTarget?: FederationTarget;
 };
+
+/** What a viewer sends to the owner: no onward routing target. */
+export type RefreshOwnedThreadGitWorkingStateRequest = Omit<
+  RefreshThreadGitWorkingStateRequest,
+  "federationTarget"
+>;
 
 export type RefreshThreadGitWorkingStateResponse = {
   scheduled: boolean;
@@ -1861,6 +1905,12 @@ export type NavigationCounts = {
   unread: number;
   /** Unread and idle. Active and review are exclusive in sidebar counts. */
   review: number;
+  /**
+   * Distinct providers among the counted threads, sorted. Set only on the
+   * directory index and the whole-map Star Map page, which count every
+   * thread. Absent from older owners.
+   */
+  backends?: AppServerBackendKind[];
 };
 
 export type NavigationQueryCoverage = {
@@ -1907,6 +1957,10 @@ export type NavigationRow = {
   threadStatus?: AppServerThreadStatus;
   /** Owner-projected runtime activity, without loading worker history. */
   hasActiveSubAgent?: boolean;
+  /** Owner-projected background tasks that outlived their turn. */
+  hasBackgroundTasks?: boolean;
+  /** Owner-projected commands that outlived their turn without waking the agent. */
+  hasAgentCommands?: boolean;
   inbox: ThreadInboxState;
   projectKey?: string;
   linkedDirectories: LinkedDirectorySummary[];
@@ -2366,6 +2420,19 @@ export type SetThreadLockResponse = {
   lock?: ThreadLock;
   /** The lock an unlock removed, so a caller can put it back. */
   previousLock?: ThreadLock;
+};
+
+/**
+ * Short notes the operator saved in the lock dialog, newest first. Kept per
+ * profile on this machine, whichever instance owns the locked thread.
+ */
+export type RecentThreadLockNotesResponse = {
+  notes: string[];
+};
+
+/** Remembers or forgets one recent lock note. */
+export type ThreadLockNoteRequest = {
+  note: string;
 };
 
 export type SetThreadPinRequest = {
@@ -3098,8 +3165,12 @@ export type ThreadOverlayState = {
    * list is only durable delivery metadata.
    */
   pendingManagedReviewContextEntryIds?: string[];
-  /** Durable delegated sub-agent/task-monitor summaries for this thread. */
-  subAgents?: ThreadSubAgentSummary[];
+  /*
+   * Delegated sub-agent and task-monitor cards are not overlay state. They
+   * live one row per card in the desktop `thread_sub_agents` table, because a
+   * busy thread accumulates thousands of Token Miser gate cards and every
+   * overlay read and write used to carry all of them.
+   */
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /** Durable unborn-thread marker, cleared when the first action starts. */

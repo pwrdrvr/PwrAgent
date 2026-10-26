@@ -1927,6 +1927,38 @@ describe("StarMapChatCard start-turn queue handling", () => {
     ).toEqual([]);
   });
 
+  it("pauses a queued message through the owner and resumes it", async () => {
+    const setQueuedTurnPaused = vi.fn(async (request: { queueEntryId: string; paused: boolean }) => ({
+      queueEntryId: request.queueEntryId,
+      disposition: "updated" as const,
+      paused: request.paused,
+    }));
+    const { row, store } = await queueOne({ setQueuedTurnPaused } as Partial<DesktopApi>);
+    const scopeKey = buildThreadComposerScopeKey("codex", "t-local");
+
+    await act(async () => {
+      fireEvent.click(within(row).getByRole("button", { name: "Pause" }));
+    });
+
+    expect(setQueuedTurnPaused).toHaveBeenCalledWith(
+      expect.objectContaining({ queueEntryId: "queue-owner-1", paused: true }),
+    );
+    const paused = await screen.findByLabelText("Paused queued message");
+    expect(paused.classList.contains("composer__queued--paused")).toBe(true);
+    expect(paused.querySelector(".composer__queued-label")?.textContent).toBe("Paused");
+    expect(store.getQueuedTurns(scopeKey)[0]).toMatchObject({ paused: true });
+
+    await act(async () => {
+      fireEvent.click(within(paused).getByRole("button", { name: "Resume" }));
+    });
+
+    expect(setQueuedTurnPaused).toHaveBeenLastCalledWith(
+      expect.objectContaining({ queueEntryId: "queue-owner-1", paused: false }),
+    );
+    expect((await screen.findByLabelText("Queued message")).classList.contains("composer__queued--paused")).toBe(false);
+    expect(store.getQueuedTurns(scopeKey)[0]).not.toHaveProperty("paused");
+  });
+
   it("keeps a queued message the owner already started", async () => {
     const cancelQueuedTurn = vi.fn(async () => ({
       queueEntryId: "queue-owner-1",

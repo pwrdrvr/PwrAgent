@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import type {
   AppServerBackendKind,
@@ -32,6 +33,7 @@ import type {
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
 import {
+  anchorTurnUsageEntries,
   buildPendingRequestActions,
   buildPendingRequestApprovalContext,
   parseCodexAsyncQuestionReply,
@@ -40,6 +42,7 @@ import { injectMessagingBindingTransitions } from "./messaging-binding-transitio
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
 import { injectTurnFailures } from "./turn-failure-entries";
+import { capAtTurnAnswer } from "./turn-answer-placement";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
 import {
@@ -76,6 +79,18 @@ type TranscriptViewport = {
 };
 
 type TranscriptListProps = {
+  /**
+   * Rewind controls: the prompts a rewind can target, the stable opener, why
+   * the control is unavailable right now, and the confirmation to render
+   * under the prompt it is open on.
+   */
+  rewind?: {
+    disabledReason?: string;
+    messageIds: ReadonlySet<string>;
+    openMessageId?: string;
+    confirmation?: ReactNode;
+    onOpen: (message: AppServerThreadMessageEntry) => void;
+  };
   activeTurnId?: string;
   activeTurnStartedAt?: number;
   applications?: DesktopApplicationsSnapshot;
@@ -255,6 +270,8 @@ function insertPendingEntry(
     return;
   }
 
+  // A finished turn's work goes above its answer, however late its stamp or
+  // sequence, so each tier below is capped at that answer.
   const pendingSequence = readRendererSequence(pendingEntry);
   const sequencedIndex =
     typeof pendingSequence === "number"
@@ -267,7 +284,11 @@ function insertPendingEntry(
         })
       : -1;
   if (sequencedIndex !== -1) {
-    entries.splice(sequencedIndex, 0, pendingEntry);
+    entries.splice(
+      capAtTurnAnswer(entries, pendingEntry, sequencedIndex),
+      0,
+      pendingEntry,
+    );
     return;
   }
 
@@ -289,8 +310,9 @@ function insertPendingEntry(
           );
         })
       : -1;
-  if (timedIndex !== -1) {
-    entries.splice(timedIndex, 0, pendingEntry);
+  const placedIndex = capAtTurnAnswer(entries, pendingEntry, timedIndex);
+  if (placedIndex !== -1) {
+    entries.splice(placedIndex, 0, pendingEntry);
     return;
   }
 
@@ -658,7 +680,9 @@ export function TranscriptList(props: TranscriptListProps) {
   const bottomFollowFrameRef = useRef<number | undefined>(undefined);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
   const savedViewportsRef = useRef(new Map<string, TranscriptViewport>());
-  const appliedReglueRequestKeyRef = useRef(0);
+  // A remount can restore a reading position after an earlier send. Only a
+  // request issued while this transcript is mounted should override it.
+  const appliedReglueRequestKeyRef = useRef(props.reglueRequestKey);
   const olderPageRequestPendingRef = useRef(false);
   const olderPageRequestGenerationRef = useRef(0);
   const lastUnderflowHistoryRequestRef = useRef<string | undefined>(undefined);
@@ -836,15 +860,21 @@ export function TranscriptList(props: TranscriptListProps) {
     ])) {
       insertPendingEntry(entries, pendingEntry);
     }
-    return injectTurnFailures(
-      injectQuestionnaireActivities(
-        injectMessagingBindingTransitions(
-          injectPermissionTransitions(entries, props.permissionTransitions),
-          props.messagingBindingTransitions,
+    // Pending rows (a pending total included) and synthetic rows (transitions,
+    // questionnaires, turn failures) are placed by time. A row of a turn placed
+    // after that turn's total would leave the total mid-turn, so the rendered
+    // list ends with each total back at the end of its turn.
+    return anchorTurnUsageEntries(
+      injectTurnFailures(
+        injectQuestionnaireActivities(
+          injectMessagingBindingTransitions(
+            injectPermissionTransitions(entries, props.permissionTransitions),
+            props.messagingBindingTransitions,
+          ),
+          props.questionnaireActivities,
         ),
-        props.questionnaireActivities,
+        props.turnFailures,
       ),
-      props.turnFailures,
     );
   }, [
     props.entries,
@@ -1571,6 +1601,13 @@ export function TranscriptList(props: TranscriptListProps) {
                   asyncQuestionsDismissed={props.dismissedAsyncQuestionMessageIds?.has(item.entry.id)}
                   onAnswerAsyncQuestions={props.onAnswerAsyncQuestions}
                   onAsyncQuestionsDismissedChange={props.onAsyncQuestionsDismissedChange}
+                  onRewind={
+                    props.rewind?.messageIds.has(item.entry.id)
+                      ? props.rewind.onOpen
+                      : undefined
+                  }
+                  rewindDisabledReason={props.rewind?.disabledReason}
+                  rewindOpen={props.rewind?.openMessageId === item.entry.id}
                 />
               );
             return (
@@ -1593,6 +1630,10 @@ export function TranscriptList(props: TranscriptListProps) {
                 }
               >
                 {body}
+                {item.type !== "workPhaseGroup"
+                && item.entry.id === props.rewind?.openMessageId
+                  ? props.rewind.confirmation
+                  : null}
               </div>
             );
           })}

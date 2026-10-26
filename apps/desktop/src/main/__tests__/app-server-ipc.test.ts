@@ -22,14 +22,17 @@ import type {
   FederationPeerSummary,
   PrActivitySnapshot,
   PrSummary,
+  PullRequestTerminalDetails,
   RefreshThreadPullRequestsRequest,
   RenameThreadRequest,
   RestoreWorktreeRequest,
   RestoreThreadRequest,
   SetThreadParentRequest,
   ThreadGitWorkingState,
+  ThreadPullRequestWatchEvent,
   ThreadSearchResponse,
 } from "@pwragent/shared";
+import { buildPullRequestStatusKey } from "@pwragent/shared";
 import type { ThreadSearchService } from "../thread-search/thread-search-service";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import {
@@ -65,6 +68,7 @@ const federationMock = vi.hoisted(() => {
     setThreadAgent: vi.fn(),
     setThreadTokenMiser: vi.fn(),
     inspectTokenMiserOutput: vi.fn(async () => ({ available: false })),
+    readThreadFamilyPricing: vi.fn(),
     archiveThread: vi.fn(async (request: ArchiveThreadRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -105,6 +109,7 @@ const federationMock = vi.hoisted(() => {
       prs: [],
     })),
     refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
+    refreshThreadGitWorkingState: vi.fn(async () => ({ scheduled: true })),
     ensureDirectoryLaunchpad: vi.fn(),
     listRecentFileReferences: vi.fn(async () => ({
       files: [] as Array<{ label: string; path: string }>,
@@ -725,6 +730,7 @@ const setThreadDependencyToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
 const setThreadPullRequestRefreshHandler = vi.fn();
+const setThreadGitWorkingStateRefreshHandler = vi.fn();
 const setDirectoryGitStatusWriter = vi.fn();
 const setThreadPrAutoDispatchBatch = vi.fn(async () => undefined);
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
@@ -931,6 +937,10 @@ const finishThreadPrStatusWatch = vi.fn(async () => undefined);
 const supersedeThreadPrStatusWatches = vi.fn(async () => 0);
 const listActiveThreadPrStatusWatches = vi.fn(async () => []);
 const cancelThreadPrStatusWatchesForPr = vi.fn(async () => 0);
+const claimThreadPrTerminalWatches = vi.fn(async () => []);
+const finishThreadPrTerminalWatch = vi.fn(async () => undefined);
+const listPendingPrTerminalWatchPrKeys = vi.fn(async () => [] as string[]);
+const fetchPullRequestTerminalDetails = vi.fn(async (): Promise<PullRequestTerminalDetails | undefined> => undefined);
 const isGhAvailable = vi.fn(async () => true);
 const isProviderEnabled = vi.fn(() => true);
 const invalidateGhCaches = vi.fn();
@@ -1105,6 +1115,9 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     supersedeThreadPrStatusWatches,
     listActiveThreadPrStatusWatches,
     cancelThreadPrStatusWatchesForPr,
+    claimThreadPrTerminalWatches,
+    finishThreadPrTerminalWatch,
+    listPendingPrTerminalWatchPrKeys,
     readDirectoryGitStatusCache,
     writeDirectoryGitStatusCacheEntry,
     readThreadGitWorkingStateCache,
@@ -1171,6 +1184,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPrAutoDispatchHandler,
     setThreadPullRequestDetachHandler,
     setThreadPullRequestRefreshHandler,
+    setThreadGitWorkingStateRefreshHandler,
     setDirectoryGitStatusWriter,
     setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
@@ -1219,6 +1233,7 @@ vi.mock("../pr-status/forge-pr-fetcher", async () => ({
       getProviderAvailability: async () => [{ provider: "github.com", cli: "gh", available: await isGhAvailable() }],
       github: { invalidateGhCaches, getAuthStatus },
       fetchPullRequestByUrl,
+      fetchPullRequestTerminalDetails,
     };
   }),
 }));
@@ -1432,6 +1447,7 @@ describe("app server ipc", () => {
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPullRequestDetachHandler.mockClear();
     setThreadPullRequestRefreshHandler.mockClear();
+    setThreadGitWorkingStateRefreshHandler.mockClear();
     setDirectoryGitStatusWriter.mockClear();
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
@@ -2860,6 +2876,157 @@ describe("app server ipc", () => {
     expect(claimThreadPrStatusWatches).not.toHaveBeenCalled();
   });
 
+  async function requestWatchForAttachedPr(
+    attached: PrSummary,
+    notifyOn: ThreadPullRequestWatchEvent[],
+  ) {
+    readPrStatusCache.mockResolvedValueOnce({
+      [buildPullRequestStatusKey(attached)]: {
+        provider: "github.com",
+        prKey: buildPullRequestStatusKey(attached),
+        fetchedAt: Date.now() - 60_000,
+        pr: attached,
+      },
+    });
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "PR automation",
+        titleSource: "explicit",
+        source: "codex",
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        linkedDirectories: [
+          {
+            id: "directory:/repo/PwrAgent",
+            kind: "local",
+            label: "PwrAgent",
+            path: "/repo/PwrAgent",
+          },
+        ],
+        prs: [attached],
+        updatedAt: 2000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [attached],
+    });
+
+    registerAppServerIpcHandlers();
+    await refreshOwnerMetadata();
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(status?.backgroundPollingEnabled).toBe(true);
+    });
+    const watchHandler = setThreadPullRequestWatchToolHandler.mock.calls.at(-1)?.[0];
+    return await watchHandler?.({
+      backend: "codex",
+      threadId: "thread-1",
+      notifyOn,
+    });
+  }
+
+  it("returns merge details at once when the PR merged before the watch was requested", async () => {
+    const merged = githubPr({
+      number: 1131,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Already merged",
+      state: "passing",
+      lifecycleState: "merged",
+      baseRefName: "main",
+      mergedAt: Date.parse("2026-10-25T12:00:00.000Z"),
+      headSha: "b".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1131",
+    });
+    fetchPullRequestTerminalDetails.mockResolvedValueOnce({
+      outcome: "merged",
+      prKey: "github.com/pwrdrvr/pwragent#1131",
+      prUrl: merged.url,
+      prNumber: 1131,
+      baseBranch: "main",
+      mergeMethod: "squash",
+      mergeMethodEvidence: "The merge commit has one parent and is a new commit.",
+      mergeCommitSha: "c".repeat(40),
+      mergedBy: "octocat",
+      mergedAt: "2026-10-25T12:00:00.000Z",
+    });
+    registerThreadPrStatusWatch.mockClear();
+
+    const response = await requestWatchForAttachedPr(merged, ["merged", "closed"]);
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        pullRequestWatch: {
+          currentOutcome: "merged",
+          terminal: {
+            outcome: "merged",
+            mergeMethod: "squash",
+            mergeCommitSha: "c".repeat(40),
+            mergedBy: "octocat",
+            baseBranch: "main",
+          },
+        },
+      },
+    });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+  });
+
+  it("answers a merged PR with no recorded head instead of asking for one", async () => {
+    const merged = githubPr({
+      number: 1133,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Merged before any poll",
+      state: "passing",
+      lifecycleState: "merged",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1133",
+    });
+    registerThreadPrStatusWatch.mockClear();
+
+    const response = await requestWatchForAttachedPr(merged, ["success", "failure"]);
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: { pullRequestWatch: { currentOutcome: "success", terminal: { outcome: "merged" } } },
+    });
+    expect(registerThreadPrStatusWatch).not.toHaveBeenCalled();
+  });
+
+  it("registers a CI watch and a separate merge/close watch for one request", async () => {
+    const open = githubPr({
+      number: 1132,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: "Still open",
+      state: "pending",
+      headSha: "d".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1132",
+    });
+    registerThreadPrStatusWatch.mockClear();
+
+    const response = await requestWatchForAttachedPr(open, ["success", "merged", "closed"]);
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        pullRequestWatch: {
+          watch: { kind: "checks", notifyOn: ["success"], headSha: "d".repeat(40) },
+          terminalWatch: { kind: "terminal", notifyOn: ["merged", "closed"] },
+        },
+      },
+    });
+    expect(registerThreadPrStatusWatch).toHaveBeenCalledTimes(2);
+  });
+
   it("serves the last remote navigation snapshot during an expected disconnect", async () => {
     const { FederationPeerUnavailableError } = await import(
       "../federation/federation-peer-unavailable-error"
@@ -3429,6 +3596,45 @@ describe("app server ipc", () => {
         instanceId: "peer_navigation_broken",
       },
     })).rejects.toThrow("invalid remote navigation payload");
+  });
+
+  it("reads messaging bindings once for the whole navigation snapshot", async () => {
+    const messagingStoreModule = await import("../messaging/desktop-messaging-store");
+    const binding = (id: string, backend: string | undefined, createdAt: number) => ({
+      id, backend, threadId: "thread-1", authorizedActorIds: [], createdAt, updatedAt: 10 - createdAt,
+      channel: { channel: "telegram", conversation: { kind: "topic", id: `${id}:topic`, title: id } },
+    });
+    const store = {
+      // The store lists by updated_at DESC; chips stay in creation order.
+      findActiveBindings: vi.fn(async () => [
+        binding("grok-binding", "acp:grok", 3),
+        binding("legacy-binding", undefined, 2),
+        binding("codex-binding", "codex", 1),
+      ]),
+      findActiveBindingsForThread: vi.fn(async () => []),
+    };
+    messagingStoreModule.setDesktopMessagingStoreForTests(
+      store as unknown as Parameters<typeof messagingStoreModule.setDesktopMessagingStoreForTests>[0],
+    );
+    try {
+      registerAppServerIpcHandlers();
+      await readLegacyOwnerMaterialization?.({}, {} satisfies GetNavigationSnapshotRequest);
+
+      expect(store.findActiveBindings).toHaveBeenCalledTimes(1);
+      expect(store.findActiveBindingsForThread).not.toHaveBeenCalled();
+      const chipIds = (bindings: Array<{ bindingId: string }> | undefined) =>
+        bindings?.map((chip) => chip.bindingId);
+      const { messagingBindingsByThreadKey } = reconcileNavigationSnapshot.mock.lastCall![0] as {
+        messagingBindingsByThreadKey: Record<string, Array<{ bindingId: string }>>;
+      };
+      // Both threads share an id. A binding with no backend belongs to each.
+      expect(chipIds(messagingBindingsByThreadKey["codex:thread-1"]))
+        .toEqual(["codex-binding", "legacy-binding"]);
+      expect(chipIds(messagingBindingsByThreadKey["acp:grok:thread-1"]))
+        .toEqual(["legacy-binding", "grok-binding"]);
+    } finally {
+      messagingStoreModule.resetDesktopMessagingStoreForTests();
+    }
   });
 
   it("aggregates navigation snapshots across backends by default", async () => {
@@ -4859,6 +5065,57 @@ describe("app server ipc", () => {
     expect(getThreadTranscriptImageRoots).not.toHaveBeenCalled();
   });
 
+  it("revalidates a local display page against the viewer's known revision", async () => {
+    const { APP_SERVER_READ_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const page = {
+      backend: "codex",
+      fetchedAt: 1234,
+      threadId: "thread-1",
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: false },
+      },
+      display: { revision: "pricing-r1" },
+    };
+    readThread
+      .mockResolvedValueOnce(page as never)
+      .mockResolvedValueOnce(page as never)
+      .mockResolvedValueOnce({ ...page, display: { revision: "pricing-r2" } } as never);
+    registerAppServerIpcHandlers();
+    const read = async (knownRevision: string) => await handlers.get(APP_SERVER_READ_THREAD_CHANNEL)?.(
+      {},
+      {
+        backend: "codex",
+        display: { resource: "pricing", limit: 20 },
+        includeTurns: false,
+        knownRevision,
+        threadId: "thread-1",
+        viewOnly: true,
+      },
+    ) as AppServerReadThreadResponse;
+
+    // Read all three pages before asserting, so no queued response leaks.
+    const first = await read("");
+    const second = await read(first.replayRevision ?? "missing");
+    const third = await read(first.replayRevision ?? "missing");
+
+    // A first read gets the page and the revision that names it.
+    expect(first.unchanged).toBeUndefined();
+    expect(first.display).toEqual({ revision: "pricing-r1" });
+    expect(first.replayRevision).toMatch(/^[0-9a-f]{64}$/);
+
+    // The same page again: the viewer keeps the copy it holds.
+    expect(second).toMatchObject({ unchanged: true, replayRevision: first.replayRevision });
+    expect(second.display).toBeUndefined();
+    expect(second.replay.entries).toEqual([]);
+
+    // A changed page is sent in full under a new revision.
+    expect(third.unchanged).toBeUndefined();
+    expect(third.display).toEqual({ revision: "pricing-r2" });
+    expect(third.replayRevision).not.toBe(first.replayRevision);
+  });
+
   it("strips readThread file diffs behind fetchable refs before crossing IPC", async () => {
     const {
       APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
@@ -4970,6 +5227,31 @@ describe("app server ipc", () => {
     expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(target);
     expect(federationMock.remoteBackend.inspectTokenMiserOutput).toHaveBeenCalledWith(request);
     expect(backendRegistryLifecycle.get).not.toHaveBeenCalled();
+  });
+
+  it("routes family pricing IPC to the owner and propagates failure without a local fallback", async () => {
+    const { THREAD_FAMILY_PRICING_READ_CHANNEL } = await import("../../shared/ipc");
+    const target = { scope: "remote" as const, instanceId: "owner-one" };
+    const request = { backend: "codex" as const, threadId: "parent" };
+    const family = { readAt: 42, members: [
+      { backend: "codex", threadId: "parent", title: "Parent", self: true, active: false,
+        totalCostMicros: 1_000_000, usageLineCount: 1, unpricedUsageLineCount: 0 },
+      { backend: "codex", threadId: "child", title: "Child", self: false, active: true,
+        totalCostMicros: 2_000_000, usageLineCount: 2, unpricedUsageLineCount: 1 },
+    ] };
+    const readLocalIndex = vi.fn();
+    const readLocalSummaries = vi.fn();
+    overlayStoreFixture.stable = { readNavigationQueryIndex: readLocalIndex, readThreadPricingSummaries: readLocalSummaries };
+    federationMock.remoteBackend.readThreadFamilyPricing.mockReset().mockResolvedValueOnce(family)
+      .mockRejectedValueOnce(new Error("Owner disconnected"));
+    registerAppServerIpcHandlers();
+    const read = () => handlers.get(THREAD_FAMILY_PRICING_READ_CHANNEL)!({}, { ...request, federationTarget: target });
+    expect(await read()).toEqual(family);
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(target);
+    expect(federationMock.remoteBackend.readThreadFamilyPricing).toHaveBeenCalledExactlyOnceWith(request);
+    await expect(read()).rejects.toThrow("Owner disconnected");
+    expect(readLocalIndex).not.toHaveBeenCalled();
+    expect(readLocalSummaries).not.toHaveBeenCalled();
   });
 
   it("hydrates retained worktree snapshots when listing archived threads", async () => {
@@ -5690,6 +5972,79 @@ describe("app server ipc", () => {
     );
   });
 
+  it("routes remote working-state hover refreshes to the thread-owning instance", async () => {
+    const {
+      NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+    } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "pwr_owner" };
+    federationMock.runtime.connectedPeerTargets.mockReturnValue([
+      { target: federationTarget, label: "Owner", capabilities: ["thread_navigation"] },
+    ]);
+    registerAppServerIpcHandlers();
+
+    await expect(handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
+      { sender: { id: 999 } },
+      { backend: "claude", threadId: "thread-remote", trigger: "user", federationTarget },
+    )).resolves.toEqual({ scheduled: true });
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(federationTarget);
+    expect(
+      federationMock.remoteBackend.refreshThreadGitWorkingState,
+    ).toHaveBeenCalledExactlyOnceWith({
+      backend: "claude",
+      threadId: "thread-remote",
+      trigger: "user",
+    });
+    expect(scheduleWorktreeGitWorkingStateRefresh).not.toHaveBeenCalled();
+  });
+
+  it("refuses an untargeted working-state refresh from a remote window", async () => {
+    const {
+      NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+    } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+
+    await expect(handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
+      { sender: { id: 999 } },
+      { backend: "codex", threadId: "thread-remote", trigger: "user" },
+    )).rejects.toThrow(/owning instance/);
+    expect(federationMock.remoteBackend.refreshThreadGitWorkingState).not.toHaveBeenCalled();
+    expect(scheduleWorktreeGitWorkingStateRefresh).not.toHaveBeenCalled();
+  });
+
+  it("quietly skips remote working-state refreshes the owner cannot take", async () => {
+    const {
+      NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
+    } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "pwr_owner" };
+    const request = { backend: "codex", threadId: "thread-remote", trigger: "user", federationTarget };
+    registerAppServerIpcHandlers();
+    const refresh = () => handlers.get(NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL)?.(
+      { sender: { id: 999 } }, request,
+    );
+
+    // Disconnected owner.
+    await expect(refresh()).resolves.toEqual({ scheduled: false });
+    expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+
+    // An owner from before the method existed.
+    federationMock.runtime.connectedPeerTargets.mockReturnValue([
+      { target: federationTarget, label: "Owner", capabilities: ["thread_navigation"] },
+    ]);
+    federationMock.remoteBackend.refreshThreadGitWorkingState.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "method_not_found: No federation handler registered for backend.refreshThreadGitWorkingState",
+        ),
+        { code: "method_not_found" },
+      ),
+    );
+    await expect(refresh()).resolves.toEqual({ scheduled: false });
+    expect(scheduleWorktreeGitWorkingStateRefresh).not.toHaveBeenCalled();
+    expect(mockAppServerLog.warn).not.toHaveBeenCalled();
+    expect(mockAppServerLog.error).not.toHaveBeenCalled();
+  });
+
   it("resolves federated PR refresh inputs from the owner's thread state", async () => {
     listThreads.mockResolvedValueOnce([
       {
@@ -5732,6 +6087,36 @@ describe("app server ipc", () => {
         allowPrimedBranchLookup: false,
       });
     });
+  });
+
+  it("runs a viewer's working-state hover refresh through the owner's Git info store", async () => {
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-owner",
+        title: "Owner thread",
+        titleSource: "explicit",
+        source: "claude",
+        projectKey: "/owner/worktree",
+        linkedDirectories: [],
+        updatedAt: 2_000,
+      },
+    ] as never);
+    registerAppServerIpcHandlers();
+    await refreshOwnerMetadata();
+    scheduleWorktreeGitWorkingStateRefresh.mockClear();
+
+    const refreshFromViewer =
+      setThreadGitWorkingStateRefreshHandler.mock.calls.at(-1)?.[0];
+    await expect(refreshFromViewer({
+      backend: "claude",
+      threadId: "thread-owner",
+      trigger: "user",
+    })).resolves.toEqual({ scheduled: true });
+
+    expect(federationMock.runtime.remoteBackend).not.toHaveBeenCalled();
+    expect(scheduleWorktreeGitWorkingStateRefresh).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreePath: "/owner/worktree", userAction: true }),
+    );
   });
 
   it("publishes a successful provider while retaining failed-provider status and freshness", async () => {

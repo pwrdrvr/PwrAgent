@@ -175,6 +175,7 @@ export function ThreadTodoStack(props: ThreadTodoStackProps) {
             todo={todo}
             running={view.runningIds.has(todo.id)}
             threadRunning={props.threadRunning}
+            copyAllTodos={todos}
             pager={{
               position: selectedIndex + 1,
               total: todos.length,

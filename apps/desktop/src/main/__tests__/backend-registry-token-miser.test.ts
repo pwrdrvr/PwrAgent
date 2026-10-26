@@ -17,6 +17,7 @@ import type {
 import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { indexTokenMiserCachedReplays, indexTokenMiserPricingLines } from "../app-server/token-miser-ledger-index";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
@@ -114,12 +115,12 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     Object.assign(registry, { overlayStore: store });
     const internals = registry as unknown as {
       recordTokenMiserFocusedInference: NonNullable<TokenMiserServiceOptions["onFocusedInference"]>;
-      buildTokenMiserThreadSavings(params: { backend: "codex"; threadId: string; entries: TokenMiserObjectMetadata[]; invocations: never[] }): Promise<{ gateCostMicros: number; savingsMicros: number }>;
+      buildTokenMiserThreadSavings(params: { backend: "codex"; threadId: string; entries: TokenMiserObjectMetadata[]; replays: ReturnType<typeof indexTokenMiserCachedReplays> }): Promise<{ gateCostMicros: number; savingsMicros: number }>;
     };
     const tokenMiserStore = new TokenMiserStore(path.join(directory, "focused-store"));
     Object.assign(registry, { tokenMiserStore });
     const entry = { ...metadata(randomUUID(), "gate-helper"), parentModel: "gpt-6-astra" };
-    const savingsParams = { backend: "codex" as const, threadId: "thread-parent", entries: [entry], invocations: [] as never[] };
+    const savingsParams = { backend: "codex" as const, threadId: "thread-parent", entries: [entry], replays: indexTokenMiserCachedReplays([]) };
     const before = await internals.buildTokenMiserThreadSavings(savingsParams);
     const params = {
       threadId: "thread-parent", turnId: "turn-parent", inferenceId: "focused-inference",
@@ -334,12 +335,12 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
 
     expect(upsertSubAgents).toHaveBeenCalledTimes(1);
     expect(upsertUsageLines).toHaveBeenCalledTimes(1);
-    const overlay = await store.getThreadOverlayState({
+    const subAgents = await store.listThreadSubAgents({
       backend: "codex",
       threadId: "thread-parent",
     });
-    expect(overlay?.subAgents).toHaveLength(2);
-    expect(overlay?.subAgents?.[0]).toMatchObject({
+    expect(subAgents).toHaveLength(2);
+    expect(subAgents[0]).toMatchObject({
       agentName: "Token Miser",
       monitorId: "system:token-miser:gate-2",
       monitorThreadId: "helper-2",
@@ -360,7 +361,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         cachedRevealedTokens: 225,
       },
     });
-    const accounting = overlay?.subAgents?.[0]?.tokenMiserAccounting;
+    const accounting = subAgents[0]?.tokenMiserAccounting;
     expect(accounting?.cachedBaselineCostMicros).toBeGreaterThan(0);
     expect(accounting?.cachedRevealedCostMicros).toBeGreaterThan(0);
     expect(accounting?.savingsMicros).toBe(
@@ -405,11 +406,11 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       parentModel: "gpt-5.6-sol",
     }]);
 
-    const overlay = await store.getThreadOverlayState({
+    const subAgents = await store.listThreadSubAgents({
       backend: "codex",
       threadId: "thread-parent",
     });
-    expect(overlay?.subAgents?.[0]).toMatchObject({
+    expect(subAgents[0]).toMatchObject({
       task: "Evaluate commandExecution output",
       lastMessage:
         "Passed 24,000 characters from commandExecution through unchanged after evaluation.",
@@ -423,7 +424,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       },
     });
     expect(
-      overlay?.subAgents?.[0]?.tokenMiserAccounting?.savingsMicros,
+      subAgents[0]?.tokenMiserAccounting?.savingsMicros,
     ).toBeLessThan(0);
   });
 
@@ -446,11 +447,11 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       parentModel: "gpt-5.6-sol",
     }]);
 
-    const overlay = await store.getThreadOverlayState({
+    const subAgents = await store.listThreadSubAgents({
       backend: "codex",
       threadId: "thread-parent",
     });
-    expect(overlay?.subAgents?.[0]).toMatchObject({
+    expect(subAgents[0]).toMatchObject({
       task: "Pass through commandExecution output by policy",
       lastMessage:
         "Passed 24,000 characters from commandExecution through unchanged by deterministic policy.",
@@ -504,11 +505,11 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await persist([metadata("gate-1", "helper-1")]);
 
     expect(upsertSubAgents).toHaveBeenCalledTimes(1);
-    const overlay = await store.getThreadOverlayState({
+    const subAgents = await store.listThreadSubAgents({
       backend: "codex",
       threadId: "thread-parent",
     });
-    expect(overlay?.subAgents?.[0]?.parentTurnId).toBe("turn-parent");
+    expect(subAgents[0]?.parentTurnId).toBe("turn-parent");
 
     // And once the projection matches, a second reconcile is a no-op.
     await persist([metadata("gate-1", "helper-1")]);
@@ -532,11 +533,11 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       turnId: "review-inner-turn-with-no-usage-line",
     }]);
 
-    const overlay = await store.getThreadOverlayState({
+    const subAgents = await store.listThreadSubAgents({
       backend: "codex",
       threadId: "thread-parent",
     });
-    const accounting = overlay?.subAgents?.[0]?.tokenMiserAccounting;
+    const accounting = subAgents[0]?.tokenMiserAccounting;
     expect(accounting).toBeDefined();
     expect(accounting?.originalModel).toBe("gpt-5.6-sol");
     expect(accounting?.originalServiceTier).toBe("standard");
@@ -635,26 +636,27 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         usageLineCount: 2,
       }),
     ]);
-    const storedOverlay = await store.getThreadOverlayState({
+    expect(await store.listThreadSubAgents({
       backend: "codex",
       threadId: "thread-parent",
-    });
-    expect(storedOverlay?.subAgents ?? []).toEqual([]);
+    })).toEqual([]);
+    // The event only invalidates; readers take the live card from the registry.
     const subAgentEvent = events.find(
       (event) => event.notification.method === "thread/subAgents/updated",
     );
-    expect(subAgentEvent?.notification.params).toMatchObject({
+    expect(subAgentEvent?.notification.params).toEqual({
+      navigationChanged: false,
       threadId: "thread-parent",
-      subAgents: [
-        {
-          agentName: "Token Miser",
-          monitorId: "system:token-miser:gate-live",
-          tokenMiserAccounting: {
-            savingsMicros: 11_090,
-          },
-        },
-      ],
     });
+    expect(registry.listLiveTokenMiserSubAgents("thread-parent")).toMatchObject([
+      {
+        agentName: "Token Miser",
+        monitorId: "system:token-miser:gate-live",
+        tokenMiserAccounting: {
+          savingsMicros: 11_090,
+        },
+      },
+    ]);
     const pricingEvent = events.find(
       (event) => event.notification.method === "thread/pricing/updated",
     );
@@ -699,20 +701,21 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       ...liveEntry,
       retrievedCharacters: 4_000,
     };
-    await publish(retrieved);
-    const updatedSubAgentEvents = events.filter(
+    const subAgentEventsBefore = events.filter(
       (event) => event.notification.method === "thread/subAgents/updated",
-    );
-    expect(updatedSubAgentEvents.at(-1)?.notification.params).toMatchObject({
-      subAgents: [
-        {
-          tokenMiserAccounting: {
-            revealedParentTokens: 1_225,
-            savingsMicros: 9_090,
-          },
+    ).length;
+    await publish(retrieved);
+    expect(events.filter(
+      (event) => event.notification.method === "thread/subAgents/updated",
+    ).length).toBe(subAgentEventsBefore + 1);
+    expect(registry.listLiveTokenMiserSubAgents("thread-parent")).toMatchObject([
+      {
+        tokenMiserAccounting: {
+          revealedParentTokens: 1_225,
+          savingsMicros: 9_090,
         },
-      ],
-    });
+      },
+    ]);
     const updatedPricingEvents = events.filter(
       (event) => event.notification.method === "thread/pricing/updated",
     );
@@ -792,16 +795,14 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     registry.onEvent((event) => {
       events.push(event);
     });
-    const readAccounting = (event: AgentEvent | undefined) => {
-      const params = event?.notification.params as
-        | { subAgents?: ThreadSubAgentSummary[] }
-        | undefined;
-      return params?.subAgents?.[0]?.tokenMiserAccounting;
-    };
+    const readAccounting = () =>
+      registry.listLiveTokenMiserSubAgents("thread-parent")[0]
+        ?.tokenMiserAccounting;
     await internals.publishLiveTokenMiserLedgerEntry(entry);
-    const initialAccounting = readAccounting(events.find(
+    expect(events.some(
       (event) => event.notification.method === "thread/subAgents/updated",
-    ));
+    )).toBe(true);
+    const initialAccounting = readAccounting();
     expect(initialAccounting?.cachedReplayCount).toBe(0);
     events.length = 0;
 
@@ -834,10 +835,11 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       });
     }
 
-    const replayEvents = events.filter(
+    // Each accrual republishes the card, so a reader refreshes it.
+    expect(events.some(
       (event) => event.notification.method === "thread/subAgents/updated",
-    );
-    const replayAccounting = readAccounting(replayEvents.at(-1));
+    )).toBe(true);
+    const replayAccounting = readAccounting();
     expect(replayAccounting?.cachedReplayCount).toBe(1);
     expect(replayAccounting?.savingsMicros)
       .toBeGreaterThan(initialAccounting?.savingsMicros ?? 0);
@@ -848,7 +850,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     const entry = (await tokenMiserStore.readMetadata(objectId))!;
     const internals = registry as unknown as {
       withTokenMiserAccounting(params: { backend: "codex"; threadId: string; accounting: ThreadToolAccounting }): Promise<ThreadToolAccounting>;
-      buildTokenMiserLedgerArtifact(params: { entry: TokenMiserObjectMetadata; pricingLines: ThreadUsageLineRecord[] }): { subAgent: ThreadSubAgentSummary };
+      buildTokenMiserLedgerArtifact(params: { entry: TokenMiserObjectMetadata; indexes: { pricing: ReturnType<typeof indexTokenMiserPricingLines>; replays: ReturnType<typeof indexTokenMiserCachedReplays> } }): { subAgent: ThreadSubAgentSummary };
     };
     const readAccounting = async () => (await internals.withTokenMiserAccounting({
       backend: "codex", threadId: entry.threadId,
@@ -891,7 +893,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect((await tokenMiserStore.readMetadata(second.objectId))?.retrievalRequestCachedTokens ?? 0).toBe(0);
     const updated = (await tokenMiserStore.readMetadata(objectId))!;
     expect(updated.retrievalRequestCachedTokens).toBe(199_000);
-    const gate = internals.buildTokenMiserLedgerArtifact({ entry: updated, pricingLines: [] }).subAgent.tokenMiserAccounting;
+    const gate = internals.buildTokenMiserLedgerArtifact({ entry: updated, indexes: { pricing: indexTokenMiserPricingLines([]), replays: indexTokenMiserCachedReplays([]) } }).subAgent.tokenMiserAccounting;
     expect(buildTokenMiserSavingsSummary({ gateAccountings: [gate] })?.terms?.savingsMicros).toBe(after.savings!.savingsMicros);
     expect((await new TokenMiserStore(path.join(directory, "token-miser-objects")).readMetadata(objectId))?.retrievalRequestCachedTokens).toBe(199_000);
 

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
-import {
-  buildThreadIdentityKey,
-  isRemoteFederationTarget,
-} from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import {
+  buildThreadOwnerKey,
+  readRendererFederationTarget,
+  resolveThreadOwnerFederationTarget,
+} from "../../lib/federation-window";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 
 const SELECTED_REFRESH_INTERVAL_MS = 60_000;
@@ -15,37 +15,48 @@ const USER_REFRESH_COOLDOWN_MS = 10_000;
  * Keeps the selected thread's Git chips on a focused refresh tier and exposes
  * a user-triggered hover prefetch. The broad navigation refresh remains a
  * bounded slow lane; these requests target only the worktree being inspected.
+ *
+ * A remote thread's worktree lives on its owner, so the request goes there.
+ * The owner's Git info store decides whether anything probes, and its update
+ * event comes back only when the state changed.
  */
 export function useThreadGitWorkingStateRefresh(params: {
   desktopApi?: DesktopApi;
   selectedThread?: NavigationThreadSummary;
 }): { prefetch: (thread: NavigationThreadSummary) => void } {
   const desktopApi = params.desktopApi;
-  const isFederationWindow = Boolean(readRendererFederationTarget());
+  const federationWindowInstanceId =
+    readRendererFederationTarget()?.instanceId;
   const refresh = useCallback(
     (
       thread: NavigationThreadSummary,
       trigger: "scheduled" | "user",
     ): void => {
       if (!desktopApi?.refreshThreadGitWorkingState) return;
-      if (isFederationWindow || isRemoteFederatedThread(thread)) return;
       if (!resolveThreadWorkingStatePath(thread)) return;
+      const federationTarget = resolveThreadOwnerFederationTarget(
+        thread,
+        federationWindowInstanceId,
+      );
       void desktopApi.refreshThreadGitWorkingState({
         backend: thread.source,
         threadId: thread.id,
         trigger,
+        ...(federationTarget ? { federationTarget } : {}),
       }).catch(() => {
         // Logged in main — keep the renderer silent.
       });
     },
-    [desktopApi, isFederationWindow],
+    [desktopApi, federationWindowInstanceId],
   );
 
   const selected = params.selectedThread;
   const selectedRef = useRef<NavigationThreadSummary | undefined>(selected);
   const selectedRefreshKey = useMemo(
-    () => selected ? buildRefreshRequestKey(selected) : undefined,
-    [selected],
+    () => selected
+      ? buildRefreshRequestKey(selected, federationWindowInstanceId)
+      : undefined,
+    [federationWindowInstanceId, selected],
   );
   useEffect(() => {
     selectedRef.current = selected;
@@ -55,7 +66,10 @@ export function useThreadGitWorkingStateRefresh(params: {
     const refreshSelected = (): void => {
       const currentSelected = selectedRef.current;
       if (!currentSelected) return;
-      if (buildRefreshRequestKey(currentSelected) !== selectedRefreshKey) return;
+      if (
+        buildRefreshRequestKey(currentSelected, federationWindowInstanceId)
+        !== selectedRefreshKey
+      ) return;
       refresh(currentSelected, "scheduled");
     };
 
@@ -65,12 +79,12 @@ export function useThreadGitWorkingStateRefresh(params: {
       SELECTED_REFRESH_INTERVAL_MS,
     );
     return () => window.clearInterval(intervalId);
-  }, [refresh, selectedRefreshKey]);
+  }, [federationWindowInstanceId, refresh, selectedRefreshKey]);
 
   const lastUserRefreshAtByThreadKey = useRef(new Map<string, number>());
   const prefetch = useCallback(
     (thread: NavigationThreadSummary): void => {
-      const key = buildThreadIdentityKey(thread.source, thread.id);
+      const key = buildThreadOwnerKey(thread, federationWindowInstanceId);
       const now = Date.now();
       const lastRefreshAt = lastUserRefreshAtByThreadKey.current.get(key);
       if (
@@ -82,7 +96,7 @@ export function useThreadGitWorkingStateRefresh(params: {
       lastUserRefreshAtByThreadKey.current.set(key, now);
       refresh(thread, "user");
     },
-    [refresh],
+    [federationWindowInstanceId, refresh],
   );
 
   return { prefetch };
@@ -90,16 +104,12 @@ export function useThreadGitWorkingStateRefresh(params: {
 
 function buildRefreshRequestKey(
   thread: NavigationThreadSummary,
+  federationWindowInstanceId?: string,
 ): string | undefined {
   const worktreePath = resolveThreadWorkingStatePath(thread);
   if (!worktreePath) return undefined;
   return JSON.stringify({
-    threadKey: buildThreadIdentityKey(thread.source, thread.id),
+    threadKey: buildThreadOwnerKey(thread, federationWindowInstanceId),
     worktreePath,
   });
-}
-
-function isRemoteFederatedThread(thread: NavigationThreadSummary): boolean {
-  const target = thread.federation?.ref.target;
-  return Boolean(target && isRemoteFederationTarget(target));
 }

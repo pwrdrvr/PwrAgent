@@ -1,6 +1,7 @@
+import { automatedWorkStartedLabel, correspondenceNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import type { ReviewRunMode } from "@pwragent/shared";
-import { isThreadLockRefusal } from "@pwragent/shared";
+import { formatModelOptionLabel, isThreadLockRefusal, modelOptionsForThreadProvider } from "@pwragent/shared";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
 import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
@@ -42,6 +43,7 @@ import {
 import type {
   AgentEvent,
   AppServerTurnInputItem,
+  ThreadIncomingWorkSummary,
   AppServerBackendKind,
   AppServerThreadPlanEntry,
   AppServerThreadReviewEntry,
@@ -1020,6 +1022,8 @@ export class MessagingController {
   private readonly capabilityProfile: MessagingCapabilityProfile;
   private readonly statusRenderLock = new PerKeyAsyncLock();
   private readonly deliveredAssistantMessageKeys = new Set<string>();
+  /** Turns whose final assistant item already resolved its images, per binding. */
+  private readonly finalAssistantImageTurns = new Map<string, true>();
   private readonly assistantStreamBuffers = new Map<string, AssistantStreamBuffer>();
   private readonly assistantStreamDeliveryQueues = new Map<
     string,
@@ -1043,6 +1047,7 @@ export class MessagingController {
     Map<string, MessagingSurfaceRef>
   >();
   private readonly workingUpdateCancellationFailures = new Set<string>();
+  private readonly deliveredThreadNoticeKeys = new Set<string>();
   private readonly automationTurnsByTurnKey = new Map<
     string,
     AutomationTurnMessagingContext
@@ -1781,6 +1786,55 @@ export class MessagingController {
       eventTurnId,
       persistentBindings,
     );
+    // Supplemental delivery receipts are status, not final assistant answers.
+    // Their full body and attachments remain available in the desktop transcript.
+    const receipt = correspondenceNotice(event);
+    if (receipt) {
+      for (const binding of bindings) {
+        const turnId = eventTurnId ?? this.getActiveTurn(binding)?.turnId;
+        if (
+          this.isTerminalPrivateResponseTurn(event.backend, threadId, turnId)
+          || this.isPrivateResponseFallbackTurn(event.backend, threadId, turnId)
+          || this.isPrivateReplyCompletionTurn(event.backend, threadId, turnId)
+          || this.isAutomationTurn(event.backend, threadId, turnId)
+        ) continue;
+        const key = `${binding.id}\0${receipt.id}\0${receipt.state}`;
+        if (this.deliveredThreadNoticeKeys.has(key)) continue;
+        rememberBoundedKey(this.deliveredThreadNoticeKeys, key);
+        if (receipt.state === "failed" || receipt.state === "held") {
+          await this.deliver({
+            id: this.newIntentId("thread-delivery"),
+            kind: "message",
+            bindingId: binding.id,
+            createdAt: this.now(),
+            role: "system",
+            parts: [{ type: "text", text: receipt.text, markdown: "plain" }],
+          }, binding);
+          continue;
+        }
+        const mode = resolveMessagingToolUpdateMode(
+          binding,
+          await this.resolveToolUpdateDefaultMode(binding.targetKind ?? "thread"),
+        );
+        const activeTurn = this.getActiveTurn(binding);
+        const sourceTurnActive = activeTurn?.turnId === turnId
+          && (activeTurn?.status === "working" || activeTurn?.status === "waiting");
+        const deliveries = this.toolUpdatePolicy.processActivity({
+          ...(sourceTurnActive ? {} : { lifecycle: "window" as const }),
+          activity: { id: key, kind: "tool", status: "completed", title: receipt.text },
+          bindingId: binding.id,
+          mode,
+          turnId: turnId ?? receipt.id,
+        });
+        for (const delivery of deliveries) await this.deliverToolUpdateDelivery(delivery, binding);
+      }
+      return;
+    }
+    if (event.notification.method === "thread/incomingWork") {
+      const params = event.notification.params as { deliveryId: string; incomingWork: ThreadIncomingWorkSummary };
+      for (const binding of bindings) await this.deliverIncomingWork(binding, params.deliveryId, params.incomingWork);
+      return;
+    }
     // Monitor lifecycle notices are working activity, never parent turn
     // completions. Sharing the active turn also shares its Some allowance.
     const monitorLifecycle = taskMonitorLifecycleActivityForBackendEvent(event);
@@ -1863,12 +1917,21 @@ export class MessagingController {
       return;
     }
     if (turnQueueUpdate) {
+      const incomingWork = turnQueueUpdate.incomingWork ?? (turnQueueUpdate.messageOrigin?.kind === "agent"
+        ? { messages: [{ origin: turnQueueUpdate.messageOrigin, preview: "Full instructions are in the thread." }], omittedMessageCount: 0 }
+        : undefined);
+      if (turnQueueUpdate.status === "started" && incomingWork) {
+        for (const binding of bindings) await this.deliverIncomingWork(binding,
+          turnQueueUpdate.queueEntryId ?? turnQueueUpdate.turnId ?? "incoming-work", incomingWork);
+      }
       if (
         turnQueueUpdate.origin === "automation" &&
+        turnQueueUpdate.messageOrigin?.kind !== "agent" &&
         turnQueueUpdate.status === "started" &&
         turnQueueUpdate.turnId
       ) {
         await this.handleAutomationTurnStarted({
+          messageOrigin: turnQueueUpdate.messageOrigin,
           automationName: turnQueueUpdate.automationName,
           automationRunId: turnQueueUpdate.automationRunId,
           backend: event.backend,
@@ -1880,6 +1943,7 @@ export class MessagingController {
       }
       if (
         turnQueueUpdate.origin === "automation" &&
+        turnQueueUpdate.messageOrigin?.kind !== "agent" &&
         turnQueueUpdate.status === "terminal" &&
         turnQueueUpdate.turnId
       ) {
@@ -2029,6 +2093,12 @@ export class MessagingController {
       const assistantText = standaloneReviewAssistantText ?? (
         isFinalReviewAssistant ? undefined : rawAssistantText
       );
+      // A question waits on the operator, so it is delivered like a final
+      // reply whatever its phase, never through the Working Updates dial.
+      const asyncQuestions = readCodexAsyncQuestionsFromNotification(event.notification);
+      const deliversAsReply =
+        Boolean(asyncQuestions)
+        || !isNonFinalAssistantTextForBackendEvent(event);
       if (
         assistantText
         && privateResponseFallback
@@ -2067,12 +2137,9 @@ export class MessagingController {
       } else if (
         assistantText
         && !suppressSourceResponse
-        && (
-          !privateReplyCompletion
-          || !isNonFinalAssistantTextForBackendEvent(event)
-        )
+        && (!privateReplyCompletion || deliversAsReply)
       ) {
-        if (!isNonFinalAssistantTextForBackendEvent(event)) {
+        if (deliversAsReply) {
           // Claim the stable backend item before image resolution yields. A
           // nearly-simultaneous idle/terminal event may flush the same buffered
           // deltas while this lookup is in flight; both paths must contend for
@@ -2087,7 +2154,6 @@ export class MessagingController {
             event,
             binding,
           );
-          const asyncQuestions = readCodexAsyncQuestionsFromNotification(event.notification);
           if (!assistantMessageClaimed) {
             await this.deliverAssistantImages(assistantImages, event, binding);
           } else if (asyncQuestions) {
@@ -8143,14 +8209,31 @@ export class MessagingController {
     if (!resolveImages) {
       return [];
     }
+    const itemId = assistantItemIdForBackendEvent(event);
+    const turnId = turnIdForBackendEvent(event);
+    // Once per turn. The final item's lookup already covers the turn's images,
+    // so turn/completed only resolves a turn that finished without one, such
+    // as an ACP turn or a Codex turn whose only output was a tool screenshot.
+    const turnKey = turnId
+      ? [binding.id, binding.backend, binding.threadId, turnId].join("\0")
+      : undefined;
+    if (turnKey && itemId) {
+      rememberBoundedMap(this.finalAssistantImageTurns, turnKey, true, 256);
+    } else if (turnKey && this.finalAssistantImageTurns.has(turnKey)) {
+      return [];
+    }
+    const item = itemId
+      ? asPlainRecord((event.notification.params as { item?: unknown }).item)
+      : undefined;
     try {
       const images = await resolveImages({
         backend: binding.backend,
         federationTarget: federationTargetForBinding(binding),
-        itemId: assistantItemIdForBackendEvent(event),
+        ...(item ? { item } : {}),
+        itemId,
         text,
         threadId: binding.threadId,
-        turnId: turnIdForBackendEvent(event),
+        turnId,
       });
       return selectAssistantImagesForCapability(images, this.capabilityProfile);
     } catch (error) {
@@ -8162,6 +8245,10 @@ export class MessagingController {
         federated: federationTargetForBinding(binding) !== undefined,
         threadId: binding.threadId,
       });
+      // A failed item lookup leaves turn/completed to try the turn again.
+      if (turnKey && itemId) {
+        this.finalAssistantImageTurns.delete(turnKey);
+      }
       return [];
     }
   }
@@ -10412,7 +10499,7 @@ export class MessagingController {
       actions: [
         ...models.map((model, index) => ({
           id: "browse:new:set-model",
-          label: model.label ?? model.id,
+          label: formatModelOptionLabel(model),
           style: "secondary" as const,
           fallbackText: String(index + 1),
           priority: 10 + index,
@@ -13423,7 +13510,11 @@ export class MessagingController {
         binding,
         createdAt: this.now(),
         currentModelId,
-        models,
+        // A thread keeps its Codex model provider for life, so offer only
+        // that provider's models.
+        models: binding.backend === "codex" && thread
+          ? modelOptionsForThreadProvider(models, currentModelId)
+          : models,
       }),
       binding,
       event,
@@ -16210,6 +16301,7 @@ export class MessagingController {
   }
 
   private async handleAutomationTurnStarted(params: {
+    messageOrigin?: AppServerThreadMessageOrigin;
     automationName?: string;
     automationRunId?: string;
     backend: AppServerBackendKind;
@@ -16236,6 +16328,7 @@ export class MessagingController {
 
     for (const binding of params.bindings) {
       await this.deliverAutomationStartedMessage(binding, {
+        messageOrigin: params.messageOrigin,
         automationName: params.automationName,
         automationRunId: params.automationRunId,
         turnId: params.turnId,
@@ -16866,11 +16959,31 @@ export class MessagingController {
     );
   }
 
+  private async deliverIncomingWork(
+    binding: MessagingBindingRecord,
+    deliveryId: string,
+    summary: ThreadIncomingWorkSummary,
+  ): Promise<void> {
+    const key = `${binding.id}\0incoming\0${deliveryId}`;
+    if (this.deliveredThreadNoticeKeys.has(key)) return;
+    rememberBoundedKey(this.deliveredThreadNoticeKeys, key);
+    const recipientTitle = summary.recipientTitle ?? (await this.resolveBoundThreadSummary(binding))?.title;
+    await this.deliver({
+      id: this.newIntentId("incoming-thread-work"),
+      kind: "message",
+      bindingId: binding.id,
+      createdAt: this.now(),
+      role: "system",
+      parts: [{ type: "text", text: incomingWorkText({ ...summary, recipientTitle }, binding.threadId), markdown: "plain" }],
+    }, binding);
+  }
+
   private async deliverAutomationStartedMessage(
     binding: MessagingBindingRecord,
     params: {
       automationName?: string;
       automationRunId?: string;
+      messageOrigin?: AppServerThreadMessageOrigin;
       turnId: string;
     },
   ): Promise<void> {
@@ -16887,7 +17000,7 @@ export class MessagingController {
 
     const name = params.automationName?.trim();
     const text = [
-      name ? `Automation started: ${name}` : "Automation started.",
+      automatedWorkStartedLabel(params.messageOrigin, name),
       "I'll post the final response when it's done.",
     ].join("\n");
 
@@ -17852,7 +17965,7 @@ export class MessagingController {
       return;
     }
 
-    const intent = binding.channel.channel === "slack"
+    const intent = binding.channel.channel === "slack" && delivery.lifecycle !== "window"
       ? this.buildWorkingCardDeliveryIntent(delivery, binding.id, activities)
       : delivery.kind === "individual"
         ? buildToolUpdateMessageIntent({
@@ -17867,6 +17980,12 @@ export class MessagingController {
             createdAt: this.now(),
             id: this.newIntentId("tool-update-batch"),
           });
+    if (delivery.lifecycle === "window") {
+      // These receipts have no running turn to own a working card, cancellation
+      // surface or terminal cleanup. Their window owns only this delivery.
+      await this.deliver(intent, binding);
+      return;
+    }
     this.markProseActivitiesDelivered({ ...delivery, activities });
     const cancellation = this.ensureWorkingUpdateCancellationSignal(
       binding,
@@ -22291,6 +22410,8 @@ function managedConversationUnavailableMessage(
 }
 
 function turnQueueUpdateForBackendEvent(event: AgentEvent): {
+  messageOrigin?: AppServerThreadMessageOrigin;
+  incomingWork?: ThreadIncomingWorkSummary;
   automationName?: string;
   automationRunId?: string;
   errorMessage?: string;
@@ -22305,6 +22426,8 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
     return undefined;
   }
   const params = event.notification.params as {
+    messageOrigin?: AppServerThreadMessageOrigin;
+    incomingWork?: ThreadIncomingWorkSummary;
     automationName?: unknown;
     automationRunId?: unknown;
     errorMessage?: unknown;
@@ -22316,6 +22439,8 @@ function turnQueueUpdateForBackendEvent(event: AgentEvent): {
     turnId?: unknown;
   };
   return {
+    messageOrigin: params.messageOrigin,
+    incomingWork: params.incomingWork,
     automationName:
       typeof params.automationName === "string" ? params.automationName : undefined,
     automationRunId:

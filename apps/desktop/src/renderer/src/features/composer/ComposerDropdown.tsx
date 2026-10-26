@@ -20,8 +20,22 @@ export type ComposerDropdownOption = {
   /** One line under the label, for a choice whose name does not explain it. */
   description?: string;
   label: string;
+  /** What the closed trigger shows when this option is chosen. Defaults to `label`. */
+  selectedLabel?: string;
   tooltip?: string;
   value: string;
+};
+
+/**
+ * A titled section of the list, such as one Codex model provider's models.
+ * It is an ARIA group inside the same listbox, so arrow keys keep walking
+ * every option in order.
+ */
+export type ComposerDropdownGroup = {
+  label: string;
+  /** Muted text beside the title, such as the provider's host. */
+  detail?: string;
+  options: ComposerDropdownOption[];
 };
 
 export type ComposerDropdownIcon = (props: { size?: number }) => ReactNode;
@@ -74,6 +88,12 @@ export function ComposerDropdown(props: {
   busy?: boolean;
   compact?: boolean;
   disabled?: boolean;
+  /**
+   * A command drawn under the list, outside the listbox, such as the
+   * Environment chip's "Edit environments…". It is a button, not an option,
+   * so choosing it never changes the value.
+   */
+  footerAction?: { label: string; icon?: ComposerDropdownIcon; onSelect: () => void };
   icon?: ComposerDropdownIcon;
   /**
    * Draw the trigger as the icon alone, in a toggle-sized circle. The label
@@ -100,6 +120,12 @@ export function ComposerDropdown(props: {
   onOpenChange?: (open: boolean) => void;
   onPointerEnter?: () => void;
   options: ComposerDropdownOption[];
+  /** Title over `options`, drawn only when `groups` adds more sections. */
+  optionsLabel?: string;
+  /** Further titled sections after `options` and the Other submenu. */
+  groups?: ComposerDropdownGroup[];
+  /** A note under the list, such as why other models are missing. */
+  footnote?: string;
   otherOptions?: ComposerDropdownOption[];
   otherLabel?: string;
   tooltip?: string;
@@ -117,12 +143,15 @@ export function ComposerDropdown(props: {
   const otherButtonRef = useRef<HTMLButtonElement>(null);
   const firstOtherOptionRef = useRef<HTMLButtonElement>(null);
   const otherOptions = props.otherOptions ?? [];
+  const groups = (props.groups ?? []).filter((group) => group.options.length > 0);
+  const groupOptions = groups.flatMap((group) => group.options);
   const showingOther = showOther && otherOptions.length > 0;
   const selectedOption =
-    [...props.options, ...otherOptions].find((option) => option.value === props.value)
+    [...props.options, ...otherOptions, ...groupOptions].find((option) => option.value === props.value)
     ?? props.options[0]
-    ?? otherOptions[0];
-  const selectedLabel = selectedOption?.label ?? props.value;
+    ?? otherOptions[0]
+    ?? groupOptions[0];
+  const selectedLabel = selectedOption?.selectedLabel ?? selectedOption?.label ?? props.value;
   const showsSelectedLabel = !(props.iconOnly && props.icon);
   const accessibleName = showsSelectedLabel && props.ariaLabel !== selectedLabel
     ? `${props.ariaLabel}: ${selectedLabel}`
@@ -273,6 +302,50 @@ export function ComposerDropdown(props: {
     setShowOther(true);
   };
 
+  const listContent = (
+    <>
+      {groups.length > 0 && props.optionsLabel && props.options.length > 0 ? (
+        <div aria-hidden="true" className="composer-dropdown__group-label">
+          <span>{props.optionsLabel}</span>
+        </div>
+      ) : null}
+      {renderOptions(props.options, listboxId, false)}
+      {otherOptions.length > 0 ? (
+        <button
+          aria-controls={showingOther ? otherListboxId : undefined}
+          aria-expanded={showingOther}
+          aria-haspopup="listbox"
+          aria-selected={false}
+          className="composer-dropdown__option"
+          ref={otherButtonRef}
+          role="option"
+          type="button"
+          onClick={toggleOtherMenu}
+        >
+          <span aria-hidden="true" className="composer-dropdown__check" />
+          <span className="composer-dropdown__option-label">{props.otherLabel ?? "Other"}</span>
+          <span aria-hidden="true" className="composer-dropdown__option-chevron">›</span>
+        </button>
+      ) : null}
+      {groups.map((group, groupIndex) => (
+        <div
+          aria-label={group.label}
+          className="composer-dropdown__group"
+          key={group.label}
+          role="group"
+        >
+          <div aria-hidden="true" className="composer-dropdown__group-label">
+            <span>{group.label}</span>
+            {group.detail ? (
+              <span className="composer-dropdown__group-detail">{group.detail}</span>
+            ) : null}
+          </div>
+          {renderOptions(group.options, `${listboxId}-group-${groupIndex}`, false)}
+        </div>
+      ))}
+    </>
+  );
+
   return (
     <div
       className={[
@@ -311,7 +384,7 @@ export function ComposerDropdown(props: {
         disabled={
           props.disabled
           || props.busy
-          || props.options.length + otherOptions.length === 0
+          || props.options.length + otherOptions.length + groupOptions.length === 0
         }
         id={props.id}
         type="button"
@@ -351,7 +424,39 @@ export function ComposerDropdown(props: {
       {/* The listbox carries its own name: the trigger's label does not reach
           it through `aria-controls`, and an unnamed one is an axe
           `aria-input-field-name` failure on every dropdown in the app. */}
-      {open ? (
+      {open && (props.footerAction || props.footnote) ? (
+        <div
+          className={`composer-dropdown__menu composer-dropdown__menu--with-footer${
+            props.menuPlacement === "below" ? " composer-dropdown__menu--below" : ""
+          }`}
+          style={props.menuPlacement === "below" ? belowMenuPosition : undefined}
+        >
+          <div aria-label={props.ariaLabel} id={listboxId} role="listbox">
+            {listContent}
+          </div>
+          {props.footnote ? (
+            <p className="composer-dropdown__footnote">{props.footnote}</p>
+          ) : null}
+          {props.footerAction ? (
+            <div className="composer-dropdown__footer">
+              <button
+                className="composer-dropdown__option composer-dropdown__footer-action"
+                type="button"
+                onClick={() => {
+                  hide();
+                  closeMenu();
+                  props.footerAction?.onSelect();
+                }}
+              >
+                <span aria-hidden="true" className="composer-dropdown__check">
+                  {props.footerAction.icon ? <props.footerAction.icon size={12} /> : null}
+                </span>
+                <span className="composer-dropdown__option-label">{props.footerAction.label}</span>
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : open ? (
         <div
           aria-label={props.ariaLabel}
           className={`composer-dropdown__menu${
@@ -361,24 +466,7 @@ export function ComposerDropdown(props: {
           role="listbox"
           style={props.menuPlacement === "below" ? belowMenuPosition : undefined}
         >
-          {renderOptions(props.options, listboxId, false)}
-          {otherOptions.length > 0 ? (
-            <button
-              aria-controls={showingOther ? otherListboxId : undefined}
-              aria-expanded={showingOther}
-              aria-haspopup="listbox"
-              aria-selected={false}
-              className="composer-dropdown__option"
-              ref={otherButtonRef}
-              role="option"
-              type="button"
-              onClick={toggleOtherMenu}
-            >
-              <span aria-hidden="true" className="composer-dropdown__check" />
-              <span className="composer-dropdown__option-label">{props.otherLabel ?? "Other"}</span>
-              <span aria-hidden="true" className="composer-dropdown__option-chevron">›</span>
-            </button>
-          ) : null}
+          {listContent}
         </div>
       ) : null}
       {open && showingOther ? (

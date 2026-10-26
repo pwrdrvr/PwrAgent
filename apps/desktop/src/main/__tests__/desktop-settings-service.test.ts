@@ -3126,6 +3126,35 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("passes setup variables to agents by default and persists the opt-out", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettingsProjection()).general.passSetupVariablesToAgents).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(service.resolvePassSetupVariablesToAgents()).toBe(true);
+
+    await service.writeConfigPatchTargeted({
+      general: {
+        passSetupVariablesToAgents: false,
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain("pass_setup_variables_to_agents = false");
+    expect((await service.readSettingsProjection()).general.passSetupVariablesToAgents).toEqual({
+      value: false,
+      source: "config",
+    });
+    expect(service.resolvePassSetupVariablesToAgents()).toBe(false);
+  });
+
   it("defaults both interactive SVG preferences off and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

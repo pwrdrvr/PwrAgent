@@ -1320,6 +1320,15 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/revert") {
+      this.messageHandler(JSON.stringify({
+        jsonrpc: "2.0",
+        id: payload.id,
+        result: { turnsBackwardsCursor: null, itemsBackwardsCursor: null },
+      }));
+      return;
+    }
+
     if (payload.method === "turn/steer" || payload.method === "thread/compact/start") {
       this.messageHandler(JSON.stringify({
         jsonrpc: "2.0",
@@ -1478,6 +1487,58 @@ describe("CodexAppServerClient", () => {
       const methods = requests.map((request) => request.method);
       expect(methods.indexOf("thread/settings/update")).toBeLessThan(methods.indexOf("thread/compact/start"));
       expect(methods).not.toContain("turn/start");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("reverts a thread to before a turn after rejoining it", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    try {
+      await client.revertThread({ threadId: "thread-2", beforeTurnId: "turn-7" });
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+      const methods = requests.map((request) => request.method);
+      expect(methods.indexOf("thread/resume")).toBeLessThan(methods.indexOf("thread/revert"));
+      expect(requests.find((request) => request.method === "thread/revert")?.params).toEqual({
+        threadId: "thread-2", beforeTurnId: "turn-7",
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("refuses to revert on Codex releases without thread/revert", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverVersion = "0.144.0";
+    const client = new CodexAppServerClient();
+    try {
+      await expect(client.revertThread({ threadId: "thread-2", beforeTurnId: "turn-7" }))
+        .rejects.toThrow("Update Codex to rewind threads");
+      const requests = MockTransport.instances.flatMap((transport) =>
+        transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.some((request) => request.method === "thread/revert")).toBe(false);
+    } finally {
+      MockTransport.serverVersion = "1.0.0";
+      await client.close();
+    }
+  });
+
+  it("reports a Codex thread/reverted as a provider-neutral rewind", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient();
+    const notifications: AppServerNotification[] = [];
+    client.onNotification((notification) => { notifications.push(notification); });
+    try {
+      await client.readRateLimits();
+      MockTransport.instances.at(-1)!.emitInbound({
+        method: "thread/reverted", params: { threadId: "thread-2" },
+      });
+      await vi.waitFor(() => expect(notifications.some((n) => n.method === "thread/rewound")).toBe(true));
+      expect(notifications.find((n) => n.method === "thread/rewound")).toEqual({
+        method: "thread/rewound",
+        params: { threadId: "thread-2", updatedAt: expect.any(Number) },
+      });
     } finally {
       await client.close();
     }
@@ -10761,6 +10822,59 @@ describe("CodexAppServerClient", () => {
         "shell_environment_policy.set.ELECTRON_RENDERER_URL"
       ],
     ).toBeUndefined();
+
+    await client.close();
+  });
+
+  it("withholds setup variables from Codex when the profile turns them off", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    let passSetupVariables = false;
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+      passSetupVariablesToAgents: () => passSetupVariables,
+    });
+    const codexEnvironmentRuntime = {
+      environmentId: "pwragent",
+      environmentName: "PwrAgent",
+      executionTarget: "local" as const,
+      shellEnvironment: {
+        PATH: "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        NVM_DIR: "/Users/fixture-user/.nvm",
+      },
+    };
+    const configOf = (method: string) => {
+      const requests = MockTransport.instances[0]?.sentMessages
+        .map((message) => JSON.parse(message) as { method?: string; params?: { config?: Record<string, unknown> } })
+        .filter((payload) => payload.method === method) ?? [];
+      return requests.at(-1)?.params?.config ?? {};
+    };
+    const policyKeys = (config: Record<string, unknown>) =>
+      Object.keys(config).filter((key) => key.startsWith("shell_environment_policy.set."));
+
+    await client.startThread({ cwd: "/Users/fixture-user/pwrdrvr/PwrAgent", codexEnvironmentRuntime });
+    expect(policyKeys(configOf("thread/start"))).toEqual([]);
+
+    await client.forkThread({ threadId: "thread-2", cwd: "/Users/fixture-user/pwrdrvr/PwrAgent", codexEnvironmentRuntime });
+    expect(policyKeys(configOf("thread/fork"))).toEqual([]);
+
+    await client.startTurn({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "hello" }],
+      codexEnvironmentRuntime,
+    });
+    expect(policyKeys(configOf("thread/resume"))).toEqual([]);
+
+    passSetupVariables = true;
+    await client.startTurn({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "again" }],
+      codexEnvironmentRuntime,
+    });
+    expect(policyKeys(configOf("thread/resume"))).toEqual([
+      "shell_environment_policy.set.PATH",
+      "shell_environment_policy.set.NVM_DIR",
+    ]);
 
     await client.close();
   });

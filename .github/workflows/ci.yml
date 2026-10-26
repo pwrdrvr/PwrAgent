@@ -475,18 +475,34 @@ jobs:
     if: needs.changes.outputs.code_impacting == 'true'
     strategy:
       # Playwright shards by test COUNT, in file order, without regard to
-      # duration. `a11y.spec.ts` sorts first and is 66 tests (six surfaces in
-      # each of eleven color themes) at ~4.2s apiece against ~2.5s for the
-      # rest of the suite, so whichever lane holds it runs long. With two
-      # lanes that lane spent 495-519s of its 600s test step on main, and one
-      # PR run that was ~19% slower across every file timed it out.
+      # duration, and a shard boundary never splits a group: with
+      # `fullyParallel: false` each file is one group. `a11y.spec.ts` sorts
+      # first. At 66 tests (six surfaces in each of eleven color themes) and
+      # ~3.5s apiece on macOS against ~2.4s for the rest of the suite, it sat
+      # whole in lane 1 as one group. That lane ran 249s of tests on macOS
+      # against 145-184s for the other lanes, and set the end of the whole CI
+      # run. It is now 57 tests: five surfaces in each of eleven color
+      # themes, plus the composer autocomplete block in the two Tangerine
+      # themes.
       #
-      # Four lanes leave the a11y lane at ~340s (~57% of the step budget) and
-      # the others near ~220s. Splitting a11y into more files or running it
-      # in `parallel` mode would not help: its tests stay contiguous at the
-      # front of the count-based split, so it moves only once it outgrows a
-      # whole lane. Four also matches the macOS and Windows matrices, so a
-      # lane number names the same tests on every platform.
+      # Two settings move that work. `a11y.spec.ts` runs in `parallel` mode,
+      # so each of its tests is its own group (workers stay at 1, so this
+      # changes grouping only). PWTEST_SHARD_WEIGHTS on the test step then
+      # sizes the lanes 9:12:12:14 by test count. When they were fit, with
+      # 66 a11y tests, that was 54/71/71/82 of 278: lane 1 took 54 a11y
+      # tests and lane 2 the rest. The weights count
+      # tests, not seconds. They were fit to per-test times from CI runs on
+      # all three platforms: a11y is relatively slowest on Linux, and the
+      # late files are slowest on Windows, so one set of weights cannot even
+      # out every platform. This set minimizes the worst lane summed over
+      # the three, which models macOS at ~178-198s per lane (was 158-234s).
+      # Refit them when a11y's cost or the suite's size moves a lane well
+      # off the others. Each lane's test count is the `Running N tests using
+      # 1 worker, shard K of 4` log line.
+      #
+      # The Linux, macOS and Windows test steps set the same weights and all
+      # run four lanes, so a lane number names the same tests on every
+      # platform. Change all three together.
       #
       # GitHub-hosted Linux capacity can run every lane concurrently. Keep
       # the other shards running after a failure so their artifacts still
@@ -520,6 +536,9 @@ jobs:
 
       - name: Run desktop replay-backed Electron tests
         timeout-minutes: 10
+        env:
+          # Lane sizes by test count; see the strategy comment above.
+          PWTEST_SHARD_WEIGHTS: "9:12:12:14"
         # Wide-layout specs request 1440px windows. Keep the virtual desktop
         # larger so Openbox does not constrain them to Xvfb's default width.
         # Keep Xvfb from resetting while short-lived readiness probes disconnect
@@ -713,12 +732,27 @@ jobs:
         timeout-minutes: 5
         run: git lfs pull
 
+      - name: Locate the guest cache root
+        # One directory on the guest that only this repository uses. The
+        # install step keeps its pnpm store, Corepack home, and Electron
+        # caches here, and the out/ cache step keeps desktop-out/ beside them.
+        shell: bash
+        timeout-minutes: 1
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
       - name: Install Node.js and dependencies
-        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        # The guest keeps its disk between jobs, so the store and caches live
+        # outside the workspace, where checkout's clean cannot delete them. A
+        # warm store skips the ~50 s restore of the 750 MB dependency cache. A
+        # cold or expired (14-day) store restores and installs as default mode
+        # does, then moves onto the guest. Pinned to the head of
+        # pwrdrvr/configure-nodejs#14, which adds persistent-store-dir.
+        uses: pwrdrvr/configure-nodejs@2f9dc4bd6650829af1748bfd061ed0784c68d8bc # PR #14 head
         timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
 
       - name: Clear leftover Electron state from previous jobs
         # This runner is a persistent Tart guest, not a fresh VM per job, so a
@@ -738,6 +772,17 @@ jobs:
         timeout-minutes: 5
         run: bash ./scripts/ci/macos-e2e-pre-run-cleanup.sh
 
+      - name: Build or restore apps/desktop/out
+        # A guest usually runs two lanes of one commit, and a re-run repeats
+        # all four, so the electron-vite build is kept on the guest, keyed on
+        # the Git tree SHA plus a build-environment guard. A miss builds and
+        # saves; the test step's test:e2e:prebuilt then refuses an out/ that
+        # was not stamped for this tree. Local `pnpm test:desktop-e2e` still
+        # builds first.
+        shell: bash
+        timeout-minutes: 10
+        run: node scripts/ci/desktop-out-cache.mjs prepare
+
       - name: Run desktop replay-backed Electron tests
         # Tart's AppleParavirtGPU can reset under Electron load. The early
         # PWRAGENT_E2E_DISABLE_GPU gate selects software rendering before
@@ -748,8 +793,11 @@ jobs:
         env:
           PWRAGENT_E2E_DISABLE_GPU: "1"
           PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
+          # Same lane sizes as Linux and Windows; see the desktop-e2e
+          # strategy comment.
+          PWTEST_SHARD_WEIGHTS: "9:12:12:14"
         run: >-
-          pnpm --filter @pwragent/desktop test:e2e
+          pnpm --filter @pwragent/desktop test:e2e:prebuilt
           --shard=${{ matrix.lane }}/4
 
       - name: Upload macOS Playwright artifacts
@@ -807,11 +855,13 @@ jobs:
         # windows-latest provides an interactive desktop session, so unlike the
         # Linux lane this needs neither xvfb nor a window manager.
         #
-        # Sharding stays file-level, matching the macOS lane: the suite has no
-        # `beforeAll` and no serial describes, so `--fully-parallel` would be
-        # safe, but keeping both 4-lane matrices on identical semantics means a
-        # Windows-only failure is attributable to Windows and not to a
-        # different sharding mode.
+        # Sharding matches the Linux and macOS lanes exactly: the same
+        # grouping (file-level, except `a11y.spec.ts`, which runs in
+        # `parallel` mode) and the same weights. A Windows-only failure is
+        # then attributable to Windows and not to a different lane split.
+        # See the desktop-e2e strategy comment.
+        env:
+          PWTEST_SHARD_WEIGHTS: "9:12:12:14"
         run: >-
           pnpm --filter @pwragent/desktop test:e2e
           --shard=${{ matrix.lane }}/4

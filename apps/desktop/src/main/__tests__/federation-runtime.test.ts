@@ -19,6 +19,7 @@ import type {
   NavigationSnapshotTransportResponse,
   SetCelestialIconResponse,
   StarMapArrangementEntry,
+  ThreadPricingSummary,
 } from "@pwragent/shared";
 import {
   FEDERATION_PROTOCOL_VERSION,
@@ -310,6 +311,7 @@ describe("DesktopFederationRuntime", () => {
     (runtime as unknown as RuntimeHarness).localInstanceId = "service-owner";
     try {
       expect(DEFAULT_CAPABILITIES).toContain("service_forward_v1");
+      expect(DEFAULT_CAPABILITIES).toContain("service_forward_v2");
       expect(runtime.receiverPermissions().portForwarding).toBe(false);
       const services = runtime.threadServices();
       const thread = { backend: "codex" as const, threadId: "service-thread" };
@@ -371,6 +373,49 @@ describe("DesktopFederationRuntime", () => {
       await runtime.threadServiceAction(1, { ...watch, threadId: "different-thread" });
       expect(leave).toHaveBeenCalledTimes(3);
     } finally { await runtime.stop(); }
+  });
+
+  it("collates family pricing on the owner from its recursive membership and stored summaries", async () => {
+    const threads = [
+      { id: "parent", title: "Parent" },
+      { id: "child", title: "Child", parentThreadId: "parent", threadStatus: "active" as const },
+      { id: "grandchild", title: "Grandchild", parentThreadId: "child" },
+      { id: "native", title: "Native worker", parentThreadId: "parent", codexNativeSubAgent: { parentThreadId: "parent" } },
+      { id: "unrelated", title: "Unrelated" },
+    ].map((thread) => ({ ...thread, source: "codex" as const, titleSource: "derived" as const,
+      createdAt: 1, updatedAt: 1, linkedDirectories: [], inbox: { inInbox: false } }));
+    const source = vi.spyOn(navigationQuerySource, "loadLocalNavigationQueryIndex")
+      .mockResolvedValue({ directories: [], threads });
+    const summaries: ThreadPricingSummary[] = ["parent", "child", "grandchild"].map((threadId, index) => ({
+      backend: "codex", threadId, provider: "openai", currency: "USD", totalCostMicros: (index + 1) * 1_000_000,
+      usageLineCount: 1, pricedUsageLineCount: 1, unpricedUsageLineCount: 0, updatedAt: 1,
+      inputTokens: 0, cachedInputTokens: 0, uncachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0,
+    }));
+    const readSummaries = vi.fn(async (_threads: Array<{ backend: string; threadId: string }>) => summaries);
+    const registry = vi.spyOn(await import("../app-server/backend-registry"), "getDesktopBackendRegistry")
+      .mockReturnValue({} as never);
+    setDesktopOverlayStoreForTests({ readThreadPricingSummaries: readSummaries } as never);
+    try {
+      // An inbound routing field must not turn an owner read into another peer read.
+      const family = await new DesktopFederationRuntime().localBackend().readThreadFamilyPricing({
+        backend: "codex", threadId: "parent", federationTarget: { scope: "remote", instanceId: "another-peer" },
+      });
+      expect(source).toHaveBeenCalledExactlyOnceWith({ callerReason: "thread-family-pricing" });
+      expect(readSummaries).toHaveBeenCalledOnce();
+      expect(readSummaries.mock.calls[0]![0].map(({ backend, threadId }) => `${backend}:${threadId}`).sort())
+        .toEqual(["codex:child", "codex:grandchild", "codex:parent"]);
+      expect(family.members.map(({ threadId, self, active, totalCostMicros }) => ({ threadId, self, active, totalCostMicros })))
+        .toEqual([
+          { threadId: "parent", self: true, active: false, totalCostMicros: 1_000_000 },
+          { threadId: "grandchild", self: false, active: false, totalCostMicros: 3_000_000 },
+          { threadId: "child", self: false, active: true, totalCostMicros: 2_000_000 },
+        ]);
+      expect(family.readAt).toEqual(expect.any(Number));
+    } finally {
+      source.mockRestore();
+      registry.mockRestore();
+      resetDesktopOverlayStoreForTests();
+    }
   });
 
   it("detaches owner secondary repositories while preserving primary and last-directory guards", async () => {
@@ -1658,7 +1703,7 @@ describe("DesktopFederationRuntime", () => {
     expect(forwarded).toEqual([]);
   });
 
-  it("forwards only events matching a sparse thread subscription", () => {
+  it.each([false, true])("forwards only events matching a sparse thread subscription (transcript=%s)", (includeTranscript) => {
     const forwarded: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({ localInstanceId: "owner_one" });
     router.registerConnection(createConnection({
@@ -1667,6 +1712,7 @@ describe("DesktopFederationRuntime", () => {
         "thread_navigation",
         "navigation_snapshot_deltas",
         "event_subscriptions",
+        ...(includeTranscript ? ["thread_detail" as const] : []),
       ],
       sendEnvelope: (envelope) => forwarded.push(envelope),
     }));
@@ -1677,7 +1723,7 @@ describe("DesktopFederationRuntime", () => {
       runtime,
       sourceInstanceId: "owner_one",
       subscriberInstanceId: "viewer_one",
-      eventClasses: ["navigation"],
+      eventClasses: includeTranscript ? ["navigation", "transcript"] : ["navigation"],
       threadSelection: {
         kind: "threads",
         threads: [{ backend: "codex", threadId: "thread-1" }],
@@ -1697,6 +1743,15 @@ describe("DesktopFederationRuntime", () => {
         },
       } as AgentEvent);
     }
+    const incomingWork = {
+      recipientTitle: "Recipient", omittedMessageCount: 0,
+      messages: [{ origin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", title: "Sender", instanceId: "owner_one" } }, preview: "Check the evidence." }],
+    };
+    for (const threadId of ["thread-2", "thread-1"]) runtime.forwardLocalBackendEvent({
+      backend: "codex", notification: { method: "thread/incomingWork", params: {
+        threadId, turnId: "turn-1", deliveryId: "handoff-1", incomingWork,
+      } },
+    });
     runtime.forwardLocalBackendEvent({
       backend: "codex",
       notification: {
@@ -1705,13 +1760,19 @@ describe("DesktopFederationRuntime", () => {
       },
     } as AgentEvent);
 
-    expect(forwarded).toHaveLength(2);
+    expect(forwarded).toHaveLength(includeTranscript ? 4 : 2);
     expect(forwarded[0]).toMatchObject({
       params: {
         notification: { params: { threadId: "thread-1" } },
       },
     });
-    expect(forwarded[1]).toMatchObject({
+    const workEvents = forwarded.filter((envelope) =>
+      "params" in envelope && (envelope.params as { notification?: { method?: string } }).notification?.method === "thread/incomingWork");
+    if (includeTranscript) expect(workEvents).toMatchObject([{ params: { notification: {
+      method: "thread/incomingWork", params: { threadId: "thread-1", turnId: "turn-1", deliveryId: "handoff-1", incomingWork },
+    } } }]);
+    else expect(workEvents).toEqual([]);
+    expect(forwarded.at(-1)).toMatchObject({
       params: { notification: { method: "navigation/invalidated", params: { sourceMethod: "pullRequest/status/updated" } } },
     });
   });
@@ -4491,6 +4552,18 @@ describe("advertised capabilities", () => {
   it("advertises queue reordering, which viewers need before they offer a drag", () => {
     expect(DEFAULT_CAPABILITIES).toContain("turn_queue_reorder");
     expect(DEFAULT_CAPABILITIES).toContain("turn_control");
+  });
+
+  it("advertises queue pausing, which viewers need before they offer a pause", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("turn_queue_pause");
+  });
+
+  it("advertises bulk display reads, which viewers need before they refresh in one read", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("thread_display_bulk_reads");
+  });
+
+  it("advertises turn reply reads, which messaging gateways need before they skip the page", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("turn_assistant_reply");
   });
 });
 

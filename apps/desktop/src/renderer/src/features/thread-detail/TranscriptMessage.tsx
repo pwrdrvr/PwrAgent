@@ -12,7 +12,9 @@ import {
   hasDurableSubAgentTranscript,
   isCodexNativeSubAgent,
   parseCodexAsyncQuestionReply,
+  parseThreadCorrespondenceMessage,
   stripCodexGitActionDirectives,
+  summarizeThreadDependencyPrompt,
 } from "@pwragent/shared";
 import type {
   AppServerBackendKind,
@@ -24,9 +26,11 @@ import type {
   AppServerThreadMessageOrigin,
   AppServerThreadMessagePart,
   MarkdownFileViewerContext,
+  ThreadCorrespondenceState,
   ThreadSubAgentSummary,
   AppServerThreadTextPart,
 } from "@pwragent/shared";
+import { HistoryIcon } from "../../icons/HistoryIcon";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import {
@@ -47,9 +51,10 @@ import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { SubAgentDetailsModal } from "./context-panels/SubAgentDetailsModal";
-import { RailStatusChip } from "./context-panels/RailStatusChip";
+import { RailStatusChip, type RailChipTone } from "./context-panels/RailStatusChip";
 import { subAgentTone } from "./context-panels/subagent-format";
 import { parseVoiceRequest } from "./voice-request";
+import { asyncQuestionsOfEntry } from "./transcript-render-items";
 
 type TranscriptMessageProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -77,6 +82,16 @@ type TranscriptMessageProps = {
   asyncQuestionsDismissed?: boolean;
   onAnswerAsyncQuestions?: (text: string) => Promise<boolean>;
   onAsyncQuestionsDismissedChange?: (messageId: string, dismissed: boolean) => void;
+  /** Opens the rewind confirmation for this prompt; set only on prompts a rewind can target. */
+  onRewind?: (message: AppServerThreadMessageEntry) => void;
+  rewindDisabledReason?: string;
+  rewindOpen?: boolean;
+};
+
+type MessageRewindControl = {
+  disabledReason?: string;
+  open: boolean;
+  onActivate: () => void;
 };
 
 // Keep text-only markdown props referentially stable when protocol refreshes
@@ -100,6 +115,21 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
   const sourceThreadLink = hasDurableSourceThread
     ? threadLinks?.resolve(sourceThread)
     : undefined;
+  // Continue-after prompts and thread-delivery breadcrumbs are written for
+  // another model. They collapse to a summary, like monitor results.
+  const dependencyPrompt = useMemo(
+    () => origin?.kind === "pwragent" && origin.dependencyId
+      ? summarizeThreadDependencyPrompt(props.message.text ?? "")
+        ?? { summary: firstPreviewLine(props.message.text ?? "") ?? "Continue after" }
+      : undefined,
+    [origin?.dependencyId, origin?.kind, props.message.text],
+  );
+  const correspondence = useMemo(
+    () => origin?.systemReason === "thread-correspondence"
+      ? parseThreadCorrespondenceMessage(props.message.text ?? "")
+      : undefined,
+    [origin?.systemReason, props.message.text],
+  );
   const contentParts = useMemo(
     () => {
       const parts = props.message.parts && props.message.parts.length > 0
@@ -107,11 +137,22 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
         : props.message.text
           ? [{ type: "text", text: props.message.text } satisfies AppServerThreadMessagePart]
           : [];
+      if (correspondence) {
+        // The header and status chip show the heading line; the body is the
+        // message as sent.
+        return parts.flatMap((part) => {
+          if (part.type !== "text" || !part.text.startsWith(correspondence.heading)) {
+            return [part];
+          }
+          const text = part.text.slice(correspondence.heading.length).replace(/^\n+/, "");
+          return text ? [{ ...part, text }] : [];
+        });
+      }
       return props.message.role === "assistant"
         ? stripCodexGitActionDirectivesFromParts(parts)
         : parts;
     },
-    [props.message.parts, props.message.role, props.message.text],
+    [correspondence, props.message.parts, props.message.role, props.message.text],
   );
   const questionReplies = useMemo(
     () => props.message.role === "user"
@@ -167,6 +208,15 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     [monitorOrigin?.monitorId, props.subAgents, loadedMonitor],
   );
 
+  const onRewind = props.onRewind;
+  const rewind: MessageRewindControl | undefined = onRewind
+    ? {
+        disabledReason: props.rewindDisabledReason,
+        open: props.rewindOpen === true,
+        onActivate: () => onRewind(props.message),
+      }
+    : undefined;
+
   if (voiceRequest) {
     const parts = contentParts.map((part) => part.type === "text"
       ? { ...part, text: voiceRequest.request }
@@ -178,6 +228,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
           desktopApi: props.desktopApi,
           message: props.message,
           label: "Voice request",
+          rewind,
           sourceThreadLink,
           threadLinks,
           text: messageCopyText,
@@ -215,12 +266,120 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     );
   }
 
+  const renderCollapsedSystemMessage = (params: {
+    chip?: { alert?: boolean; label: string; tone: RailChipTone };
+    preview?: { label: string; text: string };
+    sourceThreadLink?: ResolvedThreadLink;
+    summary: string;
+    summaryIsQuote?: boolean;
+    threadTitle?: string;
+  }) => (
+    <article
+      className="transcript-message transcript-message--injected transcript-message--monitor-result transcript-message--system-collapsed"
+    >
+      {renderMessageHeader({
+        continuation: false,
+        desktopApi: props.desktopApi,
+        message: props.message,
+        sourceThreadLink: params.sourceThreadLink,
+        threadLinks,
+        threadTitle: params.threadTitle,
+        text: messageCopyText,
+      })}
+      <div className="transcript-monitor-result__summary">
+        <button
+          type="button"
+          className={[
+            "transcript-monitor-result__toggle",
+            params.summaryIsQuote ? "transcript-monitor-result__toggle--quote" : undefined,
+          ].filter(Boolean).join(" ")}
+          aria-expanded={monitorExpanded}
+          onClick={() => setMonitorExpanded((current) => !current)}
+        >
+          <span
+            aria-hidden="true"
+            className="transcript-monitor-result__chevron"
+          />
+          <span className="transcript-monitor-result__label">{params.summary}</span>
+        </button>
+        {params.chip ? (
+          <RailStatusChip alert={params.chip.alert} tone={params.chip.tone}>
+            {params.chip.label}
+          </RailStatusChip>
+        ) : null}
+      </div>
+      {params.preview && !monitorExpanded ? (
+        <p className="transcript-monitor-result__preview">
+          <span className="transcript-monitor-result__preview-label">
+            {params.preview.label}
+          </span>{" "}
+          {params.preview.text}
+        </p>
+      ) : null}
+      {monitorExpanded ? (
+        <div className="transcript-monitor-result__content">
+          <div className="transcript-message__text">
+            {messageSegments.map((segment, index) =>
+              renderMessageSegment({
+                segment,
+                index,
+                applications: props.applications,
+                desktopApi: props.desktopApi,
+                fileViewerContext: props.fileViewerContext,
+                imageParts,
+                onOpenImage: props.onOpenImage,
+                skills: props.skills,
+                threadLinkSource: props.threadLinkSource,
+              }),
+            )}
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+
+  if (dependencyPrompt) {
+    const failed = "outcome" in dependencyPrompt && dependencyPrompt.outcome === "failure";
+    return renderCollapsedSystemMessage({
+      chip: "outcome" in dependencyPrompt
+        ? failed
+          ? { alert: true, label: "Failed", tone: "error" }
+          : { label: "Met", tone: "ok" }
+        : undefined,
+      preview: "plan" in dependencyPrompt && dependencyPrompt.plan
+        ? { label: failed ? "Not started:" : "Next:", text: dependencyPrompt.plan }
+        : undefined,
+      sourceThreadLink,
+      summary: dependencyPrompt.summary,
+    });
+  }
+
+  if (correspondence) {
+    const destination = correspondence.destination;
+    const attachmentCount = contentParts.filter((part) => part.type !== "text").length;
+    return renderCollapsedSystemMessage({
+      chip: correspondence.state
+        ? CORRESPONDENCE_STATE_CHIPS[correspondence.state]
+        : undefined,
+      sourceThreadLink: destination ? threadLinks?.resolve(destination) : undefined,
+      summary: firstPreviewLine(correspondence.body)
+        ?? (attachmentCount === 0
+          ? "Empty message"
+          : attachmentCount === 1 ? "1 attachment" : `${attachmentCount} attachments`),
+      summaryIsQuote: true,
+      threadTitle: destination?.title,
+    });
+  }
+
   if (
     props.message.origin?.kind === "pwragent"
     && prAutomationOrigin
   ) {
-    const outcomeTone = prAutomationOrigin.kind === "watch"
-      ? prAutomationOrigin.outcome === "success" ? "ok" : "error"
+    const outcomeTone: RailChipTone = prAutomationOrigin.kind === "watch"
+      ? prAutomationOrigin.outcome === "success" ? "ok"
+        : prAutomationOrigin.outcome === "merged" ? "merged"
+        : prAutomationOrigin.outcome === "closed" ? "neutral"
+        : "error"
       : "error";
     return (
       <article
@@ -398,11 +557,8 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
     );
   }
 
-  const asyncQuestions = props.message.role === "assistant"
-    && props.message.delivery === "async"
-    ? props.message.questions
-    : undefined;
-  if (asyncQuestions?.length) {
+  const asyncQuestions = asyncQuestionsOfEntry(props.message);
+  if (asyncQuestions) {
     // Codex also writes the questions into the message text. The card shows
     // them once, with the controls to answer.
     const messageId = props.message.id;
@@ -482,6 +638,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
           continuation: false,
           desktopApi: props.desktopApi,
           message: props.message,
+          rewind,
           sourceThreadLink,
           threadLinks,
           text: messageCopyText,
@@ -511,6 +668,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
             continuation: index > 0,
             desktopApi: props.desktopApi,
             message: props.message,
+            rewind,
             segmentText:
               segment.type === "table" && messageSegments.length > 1
                 ? segment.text
@@ -1015,9 +1173,12 @@ function renderMessageHeader(params: {
   desktopApi?: Pick<DesktopApi, "copyText" | "copyRichText">;
   message: AppServerThreadMessageEntry;
   label?: string;
+  rewind?: MessageRewindControl;
   segmentText?: string;
   sourceThreadLink?: ResolvedThreadLink;
   threadLinks: ReturnType<typeof useThreadLinks>;
+  /** Thread chip label before the link resolves; defaults to the source thread title. */
+  threadTitle?: string;
   text: string;
 }): ReactNode {
   const segmentCopyButton = params.segmentText ? (
@@ -1047,6 +1208,7 @@ function renderMessageHeader(params: {
     ? "transcript-message__attribution transcript-message__attribution--stacked"
     : "transcript-message__attribution";
   const sourceThread = params.message.origin?.sourceThread;
+  const threadTitle = params.threadTitle ?? sourceThread?.title;
   const rendererFederationTarget = readRendererFederationTarget();
   const sourceInstanceChip =
     sourceThread?.instanceId
@@ -1069,13 +1231,13 @@ function renderMessageHeader(params: {
         </span>
         {params.sourceThreadLink && params.threadLinks ? (
           <ThreadChip
-            fallbackLabel={params.message.origin?.sourceThread?.title}
+            fallbackLabel={threadTitle}
             link={params.sourceThreadLink}
             onOpen={params.threadLinks.show}
           />
-        ) : params.message.origin?.sourceThread?.title ? (
+        ) : threadTitle ? (
           <span className="transcript-message__source">
-            {params.message.origin.sourceThread.title}
+            {threadTitle}
           </span>
         ) : params.message.origin?.prAutomation ? (
           <span className="transcript-message__source">
@@ -1090,6 +1252,7 @@ function renderMessageHeader(params: {
       </span>
       <span className="transcript-message__header-actions">
         {segmentCopyButton}
+        {params.rewind ? renderRewindButton(params.rewind) : null}
         {params.text ? (
           <TranscriptCopyButton
             className="transcript-copy-button--message"
@@ -1112,6 +1275,30 @@ function renderMessageHeader(params: {
         ) : null}
       </span>
     </header>
+  );
+}
+
+function renderRewindButton(rewind: MessageRewindControl): ReactNode {
+  const label = rewind.disabledReason ?? "Rewind to before this message";
+  return (
+    <button
+      aria-disabled={rewind.disabledReason ? true : undefined}
+      aria-expanded={rewind.open}
+      aria-haspopup="dialog"
+      aria-label={label}
+      className={`transcript-copy-button transcript-copy-button--message transcript-rewind-button${
+        rewind.disabledReason ? " is-disabled" : ""
+      }`}
+      title={label}
+      type="button"
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!rewind.disabledReason) rewind.onActivate();
+      }}
+    >
+      <HistoryIcon size={14} />
+    </button>
   );
 }
 
@@ -1293,6 +1480,30 @@ function formatMessagingOriginActor(
   };
 }
 
+const CORRESPONDENCE_STATE_CHIPS: Record<
+  ThreadCorrespondenceState,
+  { alert?: boolean; label: string; tone: RailChipTone }
+> = {
+  started: { label: "Started", tone: "ok" },
+  queued: { label: "Queued", tone: "active" },
+  sending: { label: "Outcome unknown", tone: "warning" },
+  held: { label: "Held for retry", tone: "warning" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+  failed: { alert: true, label: "Failed to send", tone: "error" },
+};
+
+/** First non-blank line, without leading Markdown block markers or emphasis. */
+function firstPreviewLine(text: string): string | undefined {
+  const line = text
+    .split("\n")
+    .map((candidate) => candidate
+      .replace(/^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)/, "")
+      .replace(/\*\*|`/g, "")
+      .trim())
+    .find(Boolean);
+  return line || undefined;
+}
+
 function messageToneClass(message: AppServerThreadMessageEntry): string {
   return message.origin
     ? "transcript-message--injected"
@@ -1358,6 +1569,8 @@ function prAutomationResultLabel(
   origin: NonNullable<AppServerThreadMessageOrigin["prAutomation"]>,
 ): string {
   if (origin.kind === "watch") {
+    if (origin.outcome === "merged") return "Merged";
+    if (origin.outcome === "closed") return "Closed";
     return origin.outcome === "success" ? "Success" : "Failed";
   }
   const eventKinds = origin.eventKinds ?? [];

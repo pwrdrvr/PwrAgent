@@ -36,6 +36,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const rpc = new ConnectionRpcClient(socketPath, token);
+  // Before anything can start a server for this grant, so no window exists
+  // in which a local command runs with no live bridge to own it.
+  await rpc.attach();
   const startupDeadlineAt = Date.now() + MCP_CONNECTION_TOOL_LIST_TIMEOUT_MS;
   const description = await rpc.request("describe", undefined, undefined, startupDeadlineAt) as BridgeDescription;
   const capabilities: ServerCapabilities = {

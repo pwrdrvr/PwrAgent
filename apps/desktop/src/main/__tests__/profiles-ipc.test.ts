@@ -22,6 +22,7 @@ import {
 const spawnMock = vi.fn(() => ({
   unref: vi.fn(),
 }));
+const spawnDetachedProcessMock = vi.fn();
 
 const safeStorageEncryptMock = vi.fn((value: string) => Buffer.from(`enc:${value}`));
 const safeStorageDecryptMock = vi.fn((buf: Buffer) =>
@@ -74,6 +75,10 @@ vi.mock("node:child_process", () => ({
   execFile: vi.fn(),
 }));
 
+vi.mock("../detached-launch", () => ({
+  spawnDetachedProcess: spawnDetachedProcessMock,
+}));
+
 const roots: string[] = [];
 
 afterEach(() => {
@@ -87,6 +92,7 @@ afterEach(() => {
   ipcMainRemoveHandlerMock.mockReset();
   vi.unstubAllEnvs();
   spawnMock.mockClear();
+  spawnDetachedProcessMock.mockClear();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -405,7 +411,7 @@ describe("profile IPC helpers", () => {
         profile: "scratch",
         reason: "focused",
       });
-      expect(spawnMock).not.toHaveBeenCalled();
+      expect(spawnDetachedProcessMock).not.toHaveBeenCalled();
     } finally {
       heartbeat.stop();
     }
@@ -490,16 +496,14 @@ describe("profile IPC helpers", () => {
     }
 
     expect(response).toEqual({ opened: true, profile: "my-work-profile" });
-    expect(spawnMock).toHaveBeenCalledWith(
+    expect(spawnDetachedProcessMock).toHaveBeenCalledWith(
       process.execPath,
       expect.arrayContaining(["/fixture/electron-bootstrap.mjs", "--profile", "my-work-profile"]),
       expect.objectContaining({
-        env: expect.objectContaining({
-          [PWRAGENT_PROFILE_ENV]: "my-work-profile",
-          [SECRET_STORAGE_DISABLED_ENV]: "1",
-          PWRAGENT_E2E: "1",
-          NODE_OPTIONS: '--require "/fixture/github-release-stubs.cjs"',
-        }),
+        [PWRAGENT_PROFILE_ENV]: "my-work-profile",
+        [SECRET_STORAGE_DISABLED_ENV]: "1",
+        PWRAGENT_E2E: "1",
+        NODE_OPTIONS: '--require "/fixture/github-release-stubs.cjs"',
       }),
     );
   });
@@ -519,13 +523,11 @@ describe("profile IPC helpers", () => {
     const response = openDesktopPwrAgentProfile({ profile: "test2" });
 
     expect(response).toEqual({ opened: true, profile: "test2" });
-    expect(spawnMock).toHaveBeenCalledWith(
+    expect(spawnDetachedProcessMock).toHaveBeenCalledWith(
       process.execPath,
       expect.arrayContaining(["--profile", "test2"]),
       expect.objectContaining({
-        env: expect.objectContaining({
-          [PWRAGENT_PROFILE_ENV]: "test2",
-        }),
+        [PWRAGENT_PROFILE_ENV]: "test2",
       }),
     );
   });

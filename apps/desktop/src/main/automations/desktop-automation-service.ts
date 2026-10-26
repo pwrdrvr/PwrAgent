@@ -906,17 +906,28 @@ export class DesktopAutomationService {
       | undefined;
     const lines = params?.pricing?.lines;
     if (!Array.isArray(lines)) return;
-    for (const line of lines) {
-      if (line.scope !== "turn" || typeof line.turnId !== "string") continue;
-      const run =
-        this.options.store.findRunningRunByBackendTurnId({
+    const turnLines = lines.filter((line): line is Record<string, unknown> & { turnId: string } =>
+      line.scope === "turn" && typeof line.turnId === "string");
+    // The event carries the thread's whole ledger. Resolve every turn in one
+    // query rather than two table scans per line.
+    const store = this.options.store;
+    const runs = typeof store.findRunsByBackendTurnIds === "function"
+      ? store.findRunsByBackendTurnIds({
           backend: event.backend,
-          backendTurnId: line.turnId,
+          backendTurnIds: [...new Set(turnLines.map((line) => line.turnId))],
         })
-        ?? this.options.store.findRunByBackendTurnId?.({
-          backend: event.backend,
-          backendTurnId: line.turnId,
-        });
+      : undefined;
+    for (const line of turnLines) {
+      const run = runs
+        ? runs.get(line.turnId)
+        : store.findRunningRunByBackendTurnId({
+            backend: event.backend,
+            backendTurnId: line.turnId,
+          })
+          ?? store.findRunByBackendTurnId?.({
+            backend: event.backend,
+            backendTurnId: line.turnId,
+          });
       if (!run) continue;
       const usage: AutomationRunUsage = {
         ...(typeof line.model === "string" ? { model: line.model } : {}),

@@ -71,6 +71,13 @@ describeGuard("agent CLI spawn guard", () => {
     ]);
   });
 
+  it("blocks the operator's absolute Sandboxer CLI before it can reach the account", async () => {
+    const command = "/usr/local/bin/sbx";
+    const error = await captureSpawnError(() => execFile(command, ["status", "--json"]));
+    expect(error.message).toContain(command);
+    expect(drainViolations().map((violation) => violation.file)).toEqual([command]);
+  });
+
   it("ignores executables that are not agent CLIs", async () => {
     const result = await execFile("/bin/echo", ["ok"]);
 

@@ -6,6 +6,8 @@ import type {
   TerminateBackgroundTerminalResponse,
 } from "@pwragent/shared";
 import type { ReadUsageActivityRequest, ReadUsageActivityResponse, AnalyzeUsageActivityRequest, AnalyzeUsageActivityResponse } from "@pwragent/shared";
+import type { ReadThreadFamilyPricingRequest, ReadThreadFamilyPricingResponse } from "@pwragent/shared";
+import type { AppServerThreadMessage } from "@pwragent/shared";
 import { projectFederationThreadRead, materializeFederationThreadRead, type FederationThreadReadResponse } from "./federation-thread-read";
 import type { NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
 import type { MarkNavigationDirectorySeenRequest, MarkNavigationDirectorySeenResponse } from "@pwragent/shared";
@@ -45,6 +47,8 @@ import type {
   ReleaseQueuedTurnResponse,
   MoveQueuedTurnRequest,
   MoveQueuedTurnResponse,
+  SetQueuedTurnPausedRequest,
+  SetQueuedTurnPausedResponse,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
   CelestialIconId,
@@ -52,6 +56,10 @@ import type {
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  PreviewThreadRewindRequest,
+  PreviewThreadRewindResponse,
+  RewindThreadRequest,
+  RewindThreadResponse,
   ControlActiveTurnRequest,
   ControlActiveTurnResponse,
   CreateScheduledThreadActionRequest,
@@ -79,6 +87,10 @@ import type {
   GetWorktreeUnpublishedCommitDiffResponse,
   HandoffThreadWorkspaceRequest,
   HandoffThreadWorkspaceResponse,
+  MoveThreadToMainCheckoutRequest,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   InterruptTurnRequest,
   InterruptTurnResponse,
   ListBackendsRequest,
@@ -141,7 +153,9 @@ import type {
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
+  RefreshOwnedThreadGitWorkingStateRequest,
   RefreshOwnedThreadPullRequestsRequest,
+  RefreshThreadGitWorkingStateResponse,
   RefreshThreadPullRequestsResponse,
   RecordModelSettingsRecentRequest,
   RecordRecentFileReferencesRequest,
@@ -205,7 +219,9 @@ import type {
   UpdateThreadExpectedBranchResponse,
 } from "@pwragent/shared";
 import {
+  isAppServerBackendKind,
   normalizeNavigationSnapshotThreadKeys,
+  qualifyThreadUrlsInText,
 } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import { hasFederationErrorCode } from "./federation-rpc";
@@ -254,6 +270,28 @@ export type FederationReadTranscriptImageRequest = {
 export type FederatedTranscriptImageResponse = {
   dataBase64: string;
   mimeType: string;
+};
+
+/**
+ * `backend.readTurnAssistantReply`: the reply one finished turn wrote, for a
+ * messaging gateway posting it. The owner reads that turn alone.
+ */
+export type FederationReadTurnAssistantReplyRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  turnId: string;
+  itemId?: string;
+  /**
+   * The reply text the gateway is posting. It picks the message when no item
+   * id is known. The owner only matches it against its own turn and never
+   * reads images from it.
+   */
+  text: string;
+};
+
+export type FederationReadTurnAssistantReplyResponse = {
+  /** Owner-local images are `pwragent-image://` URLs the owner serves. */
+  message: AppServerThreadMessage | null;
 };
 
 export type FederationStartTurnRequest = StartTurnRequest & {
@@ -334,6 +372,34 @@ async function resolveFederationTurnInput(
 }
 
 /** Durable v1 cannot verify owner-local references or rewrite hashed inputs. */
+/**
+ * A missing turn id would list the whole thread's items, which is what this
+ * request exists to avoid, so a malformed request is refused outright.
+ */
+function parseTurnAssistantReplyRequest(
+  params: unknown,
+): FederationReadTurnAssistantReplyRequest {
+  const request = params as Partial<FederationReadTurnAssistantReplyRequest> | undefined;
+  if (
+    !request
+    || typeof request.backend !== "string"
+    || !isAppServerBackendKind(request.backend)
+    || typeof request.threadId !== "string" || !request.threadId
+    || typeof request.turnId !== "string" || !request.turnId
+    || (request.itemId !== undefined && typeof request.itemId !== "string")
+    || typeof request.text !== "string"
+  ) {
+    throw new Error("Invalid turn reply request.");
+  }
+  return {
+    backend: request.backend,
+    threadId: request.threadId,
+    turnId: request.turnId,
+    ...(request.itemId ? { itemId: request.itemId } : {}),
+    text: request.text,
+  };
+}
+
 function assertDurableFederationTurnInput(input: unknown): void {
   if (!Array.isArray(input)) throw new DurableTurnRequestError("request_invalid");
   for (const item of input) {
@@ -361,6 +427,29 @@ function localizeRefreshThreadPullRequestsRequest(
     threadId: request.threadId,
     ...(request.provider ? { provider: request.provider } : {}),
     ...(request.trigger ? { trigger: request.trigger } : {}),
+  };
+}
+
+/**
+ * The owner refreshes its own worktree; a viewer cannot name a relay target,
+ * and a malformed thread reference never reaches the owner's thread lookups.
+ */
+function localizeRefreshThreadGitWorkingStateRequest(
+  request: RefreshOwnedThreadGitWorkingStateRequest,
+): RefreshOwnedThreadGitWorkingStateRequest {
+  if (
+    typeof request?.backend !== "string"
+    || typeof request.backend !== "string"
+    || !isAppServerBackendKind(request.backend)
+    || typeof request.threadId !== "string"
+    || !request.threadId.trim()
+  ) {
+    throw new Error("Git working-state refresh needs a valid thread reference.");
+  }
+  return {
+    backend: request.backend,
+    threadId: request.threadId,
+    trigger: request.trigger === "user" ? "user" : "scheduled",
   };
 }
 
@@ -455,6 +544,10 @@ function authenticateScheduledTurnOrigin<
 export const QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE =
   "Update PwrAgent on the owning instance to reorder its queued messages.";
 
+/** What a viewer hears when the owning instance cannot pause its queue. */
+export const QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE =
+  "Update PwrAgent on the owning instance to pause its queued messages.";
+
 export const FEDERATION_BACKEND_METHODS = {
   getNavigationQueryPage: "backend.getNavigationQueryPage",
   removeNavigationDirectory: "backend.removeNavigationDirectory",
@@ -478,7 +571,9 @@ export const FEDERATION_BACKEND_METHODS = {
   resolveThread: "backend.resolveThread",
   resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",
   readThread: "backend.readThread",
+  readTurnAssistantReply: "backend.readTurnAssistantReply",
   readUsageActivity: "backend.readUsageActivity",
+  readThreadFamilyPricing: "backend.readThreadFamilyPricing",
   analyzeUsageActivity: "backend.analyzeUsageActivity",
   inspectTokenMiserOutput: "backend.inspectTokenMiserOutput",
   analyzeThreadToolHistory: "backend.analyzeThreadToolHistory",
@@ -513,6 +608,7 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelQueuedTurn: "backend.cancelQueuedTurn",
   releaseQueuedTurn: "backend.releaseQueuedTurn",
   moveQueuedTurn: "backend.moveQueuedTurn",
+  setQueuedTurnPaused: "backend.setQueuedTurnPaused",
   startReview: "backend.startReview",
   startPullRequestReview: "backend.startPullRequestReview",
   listScheduledThreadActions: "backend.listScheduledThreadActions",
@@ -523,6 +619,8 @@ export const FEDERATION_BACKEND_METHODS = {
   cancelScheduledThreadAction: "backend.cancelScheduledThreadAction",
   sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
+  rewindThread: "backend.rewindThread",
+  previewThreadRewind: "backend.previewThreadRewind",
   listMcpConnections: "backend.listMcpConnections",
   readThreadMcpConnections: "backend.readThreadMcpConnections",
   setThreadMcpConnections: "backend.setThreadMcpConnections",
@@ -552,6 +650,7 @@ export const FEDERATION_BACKEND_METHODS = {
   setCodexThreadEnvironment: "backend.setCodexThreadEnvironment",
   refreshThreadPullRequests: "backend.refreshThreadPullRequests",
   refreshDirectoryGitStatuses: "backend.refreshDirectoryGitStatuses",
+  refreshThreadGitWorkingState: "backend.refreshThreadGitWorkingState",
   ensureDirectoryLaunchpad: "backend.ensureDirectoryLaunchpad",
   listRecentFileReferences: "backend.listRecentFileReferences",
   recordRecentFileReferences: "backend.recordRecentFileReferences",
@@ -563,6 +662,8 @@ export const FEDERATION_BACKEND_METHODS = {
   getWorktreeUnpublishedCommitDiff: "backend.getWorktreeUnpublishedCommitDiff",
   materializeDirectoryLaunchpad: "backend.materializeDirectoryLaunchpad",
   handoffThreadWorkspace: "backend.handoffThreadWorkspace",
+  recreateThreadWorktree: "backend.recreateThreadWorktree",
+  moveThreadToMainCheckout: "backend.moveThreadToMainCheckout",
   renameThread: "backend.renameThread",
   readApplications: "backend.readApplications",
   openApplication: "backend.openApplication",
@@ -616,9 +717,11 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.readTurnAssistantReply]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readForge]: "thread_detail",
   /* Reads the thread's own transcript history; same data class as reading it. */
   [FEDERATION_BACKEND_METHODS.readUsageActivity]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.readThreadFamilyPricing]: "thread_detail",
   // Starts a paid helper turn on the owner; transcript-read permission is insufficient.
   [FEDERATION_BACKEND_METHODS.analyzeUsageActivity]: "turn_control",
   [FEDERATION_BACKEND_METHODS.inspectTokenMiserOutput]: "thread_detail",
@@ -658,6 +761,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.releaseQueuedTurn]: "turn_control",
   [FEDERATION_BACKEND_METHODS.moveQueuedTurn]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.setQueuedTurnPaused]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startReview]: "turn_control",
   [FEDERATION_BACKEND_METHODS.startPullRequestReview]: "turn_control",
   [FEDERATION_BACKEND_METHODS.listScheduledThreadActions]: "scheduled_actions",
@@ -668,6 +772,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.cancelScheduledThreadAction]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.rewindThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.previewThreadRewind]: "turn_control",
   [FEDERATION_BACKEND_METHODS.listMcpConnections]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readThreadMcpConnections]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.setThreadMcpConnections]: "turn_control",
@@ -697,6 +803,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.refreshThreadPullRequests]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.refreshThreadGitWorkingState]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad]: "launchpad_metadata",
   [FEDERATION_BACKEND_METHODS.listRecentFileReferences]: "remote_window",
   [FEDERATION_BACKEND_METHODS.recordRecentFileReferences]: "remote_window",
@@ -710,6 +817,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.getWorktreeUnpublishedCommitDiff]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.handoffThreadWorkspace]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.recreateThreadWorktree]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout]: "turn_control",
   [FEDERATION_BACKEND_METHODS.renameThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.readApplications]: "remote_window",
   [FEDERATION_BACKEND_METHODS.openApplication]: "remote_window",
@@ -822,7 +931,15 @@ export type FederationBackendOperations = {
   readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse>;
+  /**
+   * Optional on owner adapters: an owner without it does not advertise
+   * `turn_assistant_reply`, and a gateway reads a transcript page instead.
+   */
+  readTurnAssistantReply?(
+    request: FederationReadTurnAssistantReplyRequest,
+  ): Promise<FederationReadTurnAssistantReplyResponse>;
   readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse>;
+  readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse>;
   analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse>;
   inspectTokenMiserOutput(request: InspectTokenMiserOutputRequest): Promise<InspectTokenMiserOutputResponse>;
   analyzeThreadToolHistory(
@@ -900,6 +1017,10 @@ export type FederationBackendOperations = {
   moveQueuedTurn?(
     request: MoveQueuedTurnRequest,
   ): Promise<MoveQueuedTurnResponse>;
+  /** Optional for the same reason as `moveQueuedTurn`. */
+  setQueuedTurnPaused?(
+    request: SetQueuedTurnPausedRequest,
+  ): Promise<SetQueuedTurnPausedResponse>;
   startReview(request: StartReviewRequest): Promise<StartReviewResponse>;
   listScheduledThreadActions(
     request?: ListScheduledThreadActionsRequest,
@@ -918,6 +1039,8 @@ export type FederationBackendOperations = {
     request: ScheduledThreadActionIdRequest,
   ): Promise<ScheduledThreadActionMutationResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
+  rewindThread(request: RewindThreadRequest): Promise<RewindThreadResponse>;
+  previewThreadRewind(request: PreviewThreadRewindRequest): Promise<PreviewThreadRewindResponse>;
   listMcpConnections(): Promise<ListMcpConnectionsResponse>;
   readThreadMcpConnections(
     request: ReadThreadMcpConnectionsRequest,
@@ -994,6 +1117,9 @@ export type FederationBackendOperations = {
   refreshDirectoryGitStatuses(
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse>;
+  refreshThreadGitWorkingState(
+    request: RefreshOwnedThreadGitWorkingStateRequest,
+  ): Promise<RefreshThreadGitWorkingStateResponse>;
   ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse>;
@@ -1028,6 +1154,12 @@ export type FederationBackendOperations = {
   handoffThreadWorkspace(
     request: HandoffThreadWorkspaceRequest,
   ): Promise<HandoffThreadWorkspaceResponse>;
+  recreateThreadWorktree?(
+    request: RecreateThreadWorktreeRequest,
+  ): Promise<RecreateThreadWorktreeResponse>;
+  moveThreadToMainCheckout?(
+    request: MoveThreadToMainCheckoutRequest,
+  ): Promise<MoveThreadToMainCheckoutResponse>;
   renameThread(request: RenameThreadRequest): Promise<RenameThreadResponse>;
   readApplications(): Promise<DesktopApplicationsSnapshot>;
   openApplication(
@@ -1268,6 +1400,8 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(FEDERATION_BACKEND_METHODS.readUsageActivity,
     async (envelope) => await params.backend.readUsageActivity(envelope.params as ReadUsageActivityRequest));
+  params.router.registerHandler(FEDERATION_BACKEND_METHODS.readThreadFamilyPricing,
+    async (envelope) => await params.backend.readThreadFamilyPricing(envelope.params as ReadThreadFamilyPricingRequest));
   params.router.registerHandler(FEDERATION_BACKEND_METHODS.analyzeUsageActivity,
     async (envelope) => await params.backend.analyzeUsageActivity(envelope.params as AnalyzeUsageActivityRequest));
   params.router.registerHandler(
@@ -1348,6 +1482,15 @@ export function registerFederationBackendHandlers(params: {
       return projectFederationThreadRead(conditionalThreadRead({ ...response, replay }, request.knownRevision));
     },
   );
+  if (params.backend.readTurnAssistantReply) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.readTurnAssistantReply,
+      async (envelope) =>
+        await params.backend.readTurnAssistantReply!(
+          parseTurnAssistantReplyRequest(envelope.params),
+        ),
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.readTranscriptImage,
     async (envelope) =>
@@ -1567,6 +1710,15 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as ReleaseQueuedTurnRequest,
       ),
   );
+  if (params.backend.setQueuedTurnPaused) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.setQueuedTurnPaused,
+      async (envelope) =>
+        await params.backend.setQueuedTurnPaused!(
+          envelope.params as SetQueuedTurnPausedRequest,
+        ),
+    );
+  }
   if (params.backend.moveQueuedTurn) {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.moveQueuedTurn,
@@ -1669,6 +1821,20 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.compactThread(
         envelope.params as CompactThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.rewindThread,
+    async (envelope) =>
+      await params.backend.rewindThread(
+        envelope.params as RewindThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.previewThreadRewind,
+    async (envelope) =>
+      await params.backend.previewThreadRewind(
+        envelope.params as PreviewThreadRewindRequest,
       ),
   );
   params.router.registerHandler(
@@ -1890,6 +2056,15 @@ export function registerFederationBackendHandlers(params: {
       ),
   );
   params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.refreshThreadGitWorkingState,
+    async (envelope) =>
+      await params.backend.refreshThreadGitWorkingState(
+        localizeRefreshThreadGitWorkingStateRequest(
+          envelope.params as RefreshOwnedThreadGitWorkingStateRequest,
+        ),
+      ),
+  );
+  params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad,
     async (envelope) =>
       await params.backend.ensureDirectoryLaunchpad(
@@ -1991,6 +2166,34 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as HandoffThreadWorkspaceRequest,
       ),
   );
+  if (params.backend.recreateThreadWorktree) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.recreateThreadWorktree,
+      async (envelope) => {
+        const request = envelope.params as RecreateThreadWorktreeRequest;
+        return await params.backend.recreateThreadWorktree!({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+          ...(request.skipCheckpoint === true ? { skipCheckpoint: true } : {}),
+          ...(request.detached === true ? { detached: true } : {}),
+        });
+      },
+    );
+  }
+  if (params.backend.moveThreadToMainCheckout) {
+    params.router.registerHandler(
+      FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout,
+      async (envelope) => {
+        const request = envelope.params as MoveThreadToMainCheckoutRequest;
+        return await params.backend.moveThreadToMainCheckout!({
+          backend: request.backend,
+          threadId: request.threadId,
+          worktreePath: request.worktreePath,
+        });
+      },
+    );
+  }
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.renameThread,
     async (envelope) =>
@@ -2091,7 +2294,22 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       | AppServerReadThreadResponse
       | Promise<AppServerReadThreadResponse> = (response) => response,
     private readonly prepareTurnInput?: PrepareOutgoingFederationTurnInput,
+    private readonly senderInstanceId?: () => FederationInstanceId,
   ) {}
+
+  /**
+   * A bare thread link means "a thread on the machine reading this", and the
+   * reader is the owner. Name this machine on every link the operator wrote
+   * here — `#` chips, pasted sidebar links, restored drafts — so the owner's
+   * agent opens our thread instead of looking for it among its own.
+   */
+  private qualifyThreadLinks(input: readonly AppServerTurnInputItem[]): AppServerTurnInputItem[] {
+    const instanceId = this.senderInstanceId?.();
+    if (!instanceId) return [...input];
+    return input.map((item) => item.type === "text"
+      ? { ...item, text: qualifyThreadUrlsInText(item.text, instanceId) }
+      : item);
+  }
 
   async getNavigationQueryPage(
     request: NavigationQueryRequest,
@@ -2285,8 +2503,37 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     }
   }
 
+  async readTurnAssistantReply(
+    request: FederationReadTurnAssistantReplyRequest,
+  ): Promise<FederationReadTurnAssistantReplyResponse> {
+    const response = await this.rpc.request<FederationReadTurnAssistantReplyResponse>({
+      method: FEDERATION_BACKEND_METHODS.readTurnAssistantReply,
+      params: request,
+    });
+    if (!response.message) {
+      return { message: null };
+    }
+    // The same transform a thread read gets, so the reply's images route
+    // through the owner exactly as they would from a transcript page.
+    const transformed = await this.transformReadThreadResponse({
+      backend: request.backend,
+      fetchedAt: Date.now(),
+      threadId: request.threadId,
+      replay: {
+        entries: [],
+        messages: [response.message],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    });
+    return { message: transformed.replay.messages[0] ?? null };
+  }
+
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
     return await this.rpc.request<ReadUsageActivityResponse>({ method: FEDERATION_BACKEND_METHODS.readUsageActivity, params: request });
+  }
+
+  async readThreadFamilyPricing(request: ReadThreadFamilyPricingRequest): Promise<ReadThreadFamilyPricingResponse> {
+    return await this.rpc.request<ReadThreadFamilyPricingResponse>({ method: FEDERATION_BACKEND_METHODS.readThreadFamilyPricing, params: request });
   }
 
   async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
@@ -2505,9 +2752,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async startTurn(
     request: FederationStartTurnRequest,
   ): Promise<StartTurnResponse> {
+    const qualified = this.qualifyThreadLinks(request.input);
     const input = this.prepareTurnInput
-      ? await this.prepareTurnInput(request.input)
-      : request.input;
+      ? await this.prepareTurnInput(qualified)
+      : qualified;
     return await this.rpc.request<StartTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.startTurn,
       params: { ...request, input },
@@ -2534,9 +2782,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async replaceQueuedMessage(
     request: FederationReplaceQueuedMessageRequest,
   ): Promise<StartTurnResponse> {
+    const qualified = this.qualifyThreadLinks(request.input);
     const input = this.prepareTurnInput
-      ? await this.prepareTurnInput(request.input)
-      : request.input;
+      ? await this.prepareTurnInput(qualified)
+      : qualified;
     return await this.rpc.request<StartTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.replaceQueuedMessage,
       params: { ...request, input },
@@ -2603,6 +2852,22 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     } catch (error) {
       if (hasFederationErrorCode(error, "method_not_found")) {
         throw new Error(QUEUED_TURN_REORDER_UNSUPPORTED_MESSAGE);
+      }
+      throw error;
+    }
+  }
+
+  async setQueuedTurnPaused(
+    request: SetQueuedTurnPausedRequest,
+  ): Promise<SetQueuedTurnPausedResponse> {
+    try {
+      return await this.rpc.request<SetQueuedTurnPausedResponse>({
+        method: FEDERATION_BACKEND_METHODS.setQueuedTurnPaused,
+        params: request,
+      });
+    } catch (error) {
+      if (hasFederationErrorCode(error, "method_not_found")) {
+        throw new Error(QUEUED_TURN_PAUSE_UNSUPPORTED_MESSAGE);
       }
       throw error;
     }
@@ -2687,6 +2952,24 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async rewindThread(
+    request: RewindThreadRequest,
+  ): Promise<RewindThreadResponse> {
+    return await this.rpc.request<RewindThreadResponse>({
+      method: FEDERATION_BACKEND_METHODS.rewindThread,
+      params: request,
+    });
+  }
+
+  async previewThreadRewind(
+    request: PreviewThreadRewindRequest,
+  ): Promise<PreviewThreadRewindResponse> {
+    return await this.rpc.request<PreviewThreadRewindResponse>({
+      method: FEDERATION_BACKEND_METHODS.previewThreadRewind,
+      params: request,
+    });
+  }
+
   async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
     return await this.rpc.request<ListMcpConnectionsResponse>({
       method: FEDERATION_BACKEND_METHODS.listMcpConnections,
@@ -2742,9 +3025,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async controlActiveTurn(
     request: ControlActiveTurnRequest,
   ): Promise<ControlActiveTurnResponse> {
-    const input = request.input && this.prepareTurnInput
-      ? await this.prepareTurnInput(request.input)
-      : request.input;
+    const qualified = request.input && this.qualifyThreadLinks(request.input);
+    const input = qualified && this.prepareTurnInput
+      ? await this.prepareTurnInput(qualified)
+      : qualified;
     return await this.rpc.request<ControlActiveTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.controlActiveTurn,
       params: { ...request, ...(input ? { input } : {}) },
@@ -2779,9 +3063,11 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   }
 
   async steerTurn(request: SteerTurnRequest): Promise<SteerTurnResponse> {
+    // The owner's steer handler resolves no attachment blobs, so steer input
+    // gets only the link pass, not `prepareTurnInput`.
     return await this.rpc.request<SteerTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.steerTurn,
-      params: request,
+      params: { ...request, input: this.qualifyThreadLinks(request.input) },
     });
   }
 
@@ -2974,6 +3260,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     });
   }
 
+  async refreshThreadGitWorkingState(
+    request: RefreshOwnedThreadGitWorkingStateRequest,
+  ): Promise<RefreshThreadGitWorkingStateResponse> {
+    return await this.rpc.request<RefreshThreadGitWorkingStateResponse>({
+      method: FEDERATION_BACKEND_METHODS.refreshThreadGitWorkingState,
+      params: request,
+    });
+  }
+
   async ensureDirectoryLaunchpad(
     request: EnsureDirectoryLaunchpadRequest,
   ): Promise<EnsureDirectoryLaunchpadResponse> {
@@ -3057,9 +3352,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
-    const input = request.input && this.prepareTurnInput
-      ? await this.prepareTurnInput(request.input)
-      : request.input;
+    const qualified = request.input && this.qualifyThreadLinks(request.input);
+    const input = qualified && this.prepareTurnInput
+      ? await this.prepareTurnInput(qualified)
+      : qualified;
     return await this.rpc.request<MaterializeDirectoryLaunchpadResponse>({
       method: FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
       timeoutMs: null,
@@ -3079,6 +3375,27 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     return await this.rpc.request<HandoffThreadWorkspaceResponse>({
       method: FEDERATION_BACKEND_METHODS.handoffThreadWorkspace,
       params: request,
+    });
+  }
+
+  // Both run Git on the owner, which can take a while on a large checkout.
+  async recreateThreadWorktree(
+    request: RecreateThreadWorktreeRequest,
+  ): Promise<RecreateThreadWorktreeResponse> {
+    return await this.rpc.request<RecreateThreadWorktreeResponse>({
+      method: FEDERATION_BACKEND_METHODS.recreateThreadWorktree,
+      params: request,
+      timeoutMs: 120_000,
+    });
+  }
+
+  async moveThreadToMainCheckout(
+    request: MoveThreadToMainCheckoutRequest,
+  ): Promise<MoveThreadToMainCheckoutResponse> {
+    return await this.rpc.request<MoveThreadToMainCheckoutResponse>({
+      method: FEDERATION_BACKEND_METHODS.moveThreadToMainCheckout,
+      params: request,
+      timeoutMs: 120_000,
     });
   }
 

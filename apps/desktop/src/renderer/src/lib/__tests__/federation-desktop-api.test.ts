@@ -3,6 +3,30 @@ import type { DesktopApi } from "../desktop-api";
 import { scopeDesktopApiToFederationTarget } from "../federation-desktop-api";
 
 describe("scopeDesktopApiToFederationTarget", () => {
+  it("scopes MCP inventory, selection, and verification to the thread owner", async () => {
+    const listMcpConnections = vi.fn();
+    const readThreadMcpConnections = vi.fn();
+    const setThreadMcpConnections = vi.fn();
+    const describeThreadMcpConnections = vi.fn();
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const api = scopeDesktopApiToFederationTarget({
+      listMcpConnections, readThreadMcpConnections,
+      setThreadMcpConnections, describeThreadMcpConnections,
+    }, target)!;
+    const thread = { backend: "codex" as const, threadId: "collision" };
+
+    await api.listMcpConnections!();
+    expect(listMcpConnections).toHaveBeenLastCalledWith({ federationTarget: target });
+    await api.listMcpConnections!({ sandboxerStatusMaxAgeMs: 2_000 });
+    expect(listMcpConnections).toHaveBeenLastCalledWith({ sandboxerStatusMaxAgeMs: 2_000, federationTarget: target });
+    await api.readThreadMcpConnections!(thread);
+    expect(readThreadMcpConnections).toHaveBeenCalledExactlyOnceWith({ ...thread, federationTarget: target });
+    await api.setThreadMcpConnections!({ ...thread, connectionIds: [], providerServersEnabled: false, federationTarget: { scope: "remote", instanceId: "viewer" } });
+    expect(setThreadMcpConnections).toHaveBeenCalledExactlyOnceWith({ ...thread, connectionIds: [], providerServersEnabled: false, federationTarget: target });
+    await api.describeThreadMcpConnections!(thread);
+    expect(describeThreadMcpConnections).toHaveBeenCalledExactlyOnceWith({ ...thread, federationTarget: target });
+  });
+
   it("scopes Agent and Token Miser mutations to the selected owner", async () => {
     const setThreadAgent = vi.fn();
     const setThreadTokenMiser = vi.fn();
@@ -12,6 +36,14 @@ describe("scopeDesktopApiToFederationTarget", () => {
     await api.setThreadTokenMiser!({ threadId: "collision", enabled: null, federationTarget: { scope: "local" } });
     expect(setThreadAgent).toHaveBeenCalledExactlyOnceWith({ threadId: "collision", agent: null, federationTarget: target });
     expect(setThreadTokenMiser).toHaveBeenCalledExactlyOnceWith({ threadId: "collision", enabled: null, federationTarget: target });
+  });
+
+  it("reads usage activity from the owner whose limits the rail describes", async () => {
+    const readUsageActivity = vi.fn();
+    const target = { scope: "remote" as const, instanceId: "owner" };
+    const api = scopeDesktopApiToFederationTarget({ readUsageActivity } as DesktopApi, target)!;
+    await api.readUsageActivity!({ from: 1, to: 2 });
+    expect(readUsageActivity).toHaveBeenCalledExactlyOnceWith({ from: 1, to: 2, federationTarget: target });
   });
 
   it("routes remote filesystem operations to the owning peer and removes local path helpers", async () => {

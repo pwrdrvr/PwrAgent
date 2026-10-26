@@ -19,7 +19,11 @@ import type {
   ThreadExecutionMode,
   ThreadIdentifier,
 } from "./normalized-app-server";
-import type { CodexEnvironmentStartupFailure } from "./agent";
+import type {
+  CodexEnvironmentStartupFailure,
+  CreatedThreadEnvironmentReport,
+} from "./agent";
+import type { BackendModelOption } from "./backend";
 import type { HandoffInstanceThreadToolArgs, HandoffInstanceThreadResult } from "./thread-instance-handoff";
 
 export const PWRAGENT_FEDERATION_OPERATION_NAMES = [
@@ -167,6 +171,12 @@ export type FederationInstanceBackendSummary = {
   backend: AppServerBackendKind;
   label: string;
   models: string[];
+  /**
+   * The same model options as the UI picker, including display labels and
+   * selectable IDs (which may be aliases). Pass the id, never the label, to
+   * thread creation. Optional for compatibility with older tool responses.
+   */
+  modelOptions?: BackendModelOption[];
   /** The model a new thread gets when none is named. */
   defaultModel?: string;
 };
@@ -210,6 +220,12 @@ export type CreateInstanceThreadToolArgs = {
    * threads live on different federation instances. Defaults to ungrouped.
    */
   groupingMode?: "none" | "subthread";
+  /**
+   * Environment id or name, resolved by the owning instance, or `none`.
+   * Omitted: a same-project local thread inherits the calling thread's
+   * environment; otherwise the project's preset applies.
+   */
+  environment?: string;
 };
 
 export type CreateInstanceThreadResult = {
@@ -232,6 +248,8 @@ export type CreateInstanceThreadResult = {
     phase: "turn" | "review";
   };
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
+  /** The thread's environment and its setup result. */
+  environment?: CreatedThreadEnvironmentReport;
 };
 
 export const FEDERATION_SEARCH_SCOPES = ["all", "local", "remote"] as const;

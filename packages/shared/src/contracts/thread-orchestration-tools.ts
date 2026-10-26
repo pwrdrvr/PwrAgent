@@ -11,6 +11,7 @@ import type {
 import type { FederationInstanceId } from "./federation";
 import type {
   CodexEnvironmentStartupFailure,
+  CreatedThreadEnvironmentReport,
   ReviewRunMode,
   ThreadAutoPinFailure,
 } from "./agent";
@@ -120,6 +121,11 @@ export type HandoffTaskToolArgs = {
    * This is not the delegated thread's new feature branch name.
    */
   branchName?: string;
+  /**
+   * Environment id or name from the project's `.codex/environments/`, or
+   * `none`. Omitted: a same-project child inherits the parent's environment.
+   */
+  environment?: string;
 };
 
 export type SendMessageToThreadToolArgs = {
@@ -413,6 +419,8 @@ export type HandoffTaskResult = {
   origin: ThreadHandoffOrigin;
   workspace: ThreadHandoffOriginWorkspace;
   messagingAttachment: HandoffTaskMessagingAttachment;
+  /** The child's environment and its setup result. */
+  environment?: CreatedThreadEnvironmentReport;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
   autoPinFailure?: ThreadAutoPinFailure;
   turnStartFailure?: {

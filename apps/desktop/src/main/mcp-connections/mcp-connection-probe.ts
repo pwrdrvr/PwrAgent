@@ -173,7 +173,7 @@ export async function probeMcpConnectionUrl(
       ok: false,
       problem: "looks_like_stdio",
       message:
-        "That looks like a command line, not a URL. Command-line (stdio) MCP servers are configured in the agent itself — PwrAgent's gateway holds credentials for remote servers.",
+        "That is a command, not a URL. Add it as a local command instead; a person sets those up in Settings → Plugins.",
     };
   }
   const url = parseProbeUrl(serverUrl);

@@ -508,7 +508,7 @@ Both screenshot pipelines honor two optional env vars that seed the
 launched profile's `[general.appearance]` block before Electron boots:
 
 - `PWRAGENT_SCREENSHOT_THEME` — `dark` (default), `light`, or `system`.
-- `PWRAGENT_SCREENSHOT_DENSITY` — `mission-control` (default) or `compact`.
+- `PWRAGENT_SCREENSHOT_DENSITY` — `mission-control` (default), `compact`, or `minimal`.
 
 Defaults match the committed PNGs (dark + mission-control), so omitting
 the variables leaves the existing pipeline pixel-stable. The pre-React
@@ -771,6 +771,29 @@ information. The JSONL output contains every protocol frame and can include
 account identity, local paths, prompts, and model output. Keep captures under
 `.local/`, which is gitignored; never commit a raw account capture.
 
+## Thread Row Density and X-ray
+
+Density is `<html data-density>`: absent for Mission Control, `compact`, or
+`minimal`. It lives in CSS only, so a density change re-renders no row.
+
+- **Compact** hides every `.thread-row__chip` without the
+  `thread-row__chip--persistent` marker. PR chips and reactions stay.
+- **Minimal** hides every flow chip without the `thread-row__chip--essential`
+  marker (held messages, approvals, questions). The title line instead shows,
+  each mounted only while `ThreadRowDensityContext` says `minimal`: a pencil
+  before the title for an unsent draft, the reactions, and `PrRollupChip`, one
+  chip that wears the least ready PR's state (`pr-rollup.ts`) with a hover list
+  of every PR. Add `--essential` only to a chip that is waiting on the
+  operator.
+- **X-ray** (`lib/xray-mode.ts`): holding ⌘ (Ctrl off macOS) sets
+  `<html data-xray>`, which every density rule excludes, so the rows show all
+  chips. A double press, or the badge's pin, keeps it on.
+- **Previews.** The Settings and onboarding density pickers render real
+  `ThreadRow`s, inert, inside `.density-preview--<density>`. Write each density
+  rule twice: the `:root[data-density="…"]:not([data-xray]) … :not(.density-preview *)`
+  half and the `.density-preview--… ` half.
+  `styles/__tests__/density-contract.test.ts` fails when a rule lacks either.
+
 ## Accessibility
 
 The renderer is audited against WCAG 2.0 / 2.1 / 2.2 Level AA via
@@ -802,11 +825,13 @@ Things to know when extending the audit:
   sub-agents strip only renders when a thread has a non-terminal sub-agent or
   an undismissed failure, and no replay fixture produces one — every producer
   persists a `ThreadSubAgentSummary` through `upsertThreadSubAgent` into the
-  `threads` payload. `e2e/fixtures/sub-agent-state-seeding.ts` writes that row
-  directly (seed after launch, then `window.reload()` — the renderer does not
-  re-poll on a direct sqlite mutation), the same shape the README capture
-  spec's seeders use. A hand-written `threads` row encodes assumptions about
-  the storage key and payload that the app can change underneath it, and a
+  `thread_sub_agents` table. `e2e/fixtures/sub-agent-state-seeding.ts` writes
+  the cards into the `threads` payload the way older builds did, and the
+  capture triggers move them into the table (seed after launch, then
+  `window.reload()` — the renderer does not re-poll on a direct sqlite
+  mutation), the same shape the README capture spec's seeders use. A
+  hand-written `threads` row encodes assumptions about the storage key, the
+  payload and those triggers that the app can change underneath it, and a
   seeder writing a row nothing reads would leave the audit green while it
   scanned an absent surface, so `src/main/__tests__/sub-agent-state-seeding.test.ts`
   pins the round-trip in vitest.
@@ -820,6 +845,15 @@ Things to know when extending the audit:
   gate ran dark-only for its whole life, which is how three token-level
   light-theme contrast failures shipped unnoticed. Add a new color theme to
   `AUDIT_DARK_THEMES` or `AUDIT_LIGHT_THEMES`.
+- **Work that reads no color runs once.** A color theme sets color tokens
+  only. Tangerine dark and light run the full WCAG AA tag set; the other
+  color themes run only `COLOR_RULES` (`color-contrast`,
+  `link-in-text-block`), through the loop's local `runAxe`. A block whose
+  colors a unit test already measures in every theme (the composer
+  autocomplete block, through `theme-contract.test.tsx`) runs outside the
+  loop in the Tangerine pair, and behavior checks with no scan run only when
+  `runsFunctionalChecks` is true (Tangerine dark). Put a new block like that
+  in the same place; each Electron launch in the loop costs eleven.
 - **`runAxe(window, { include })` narrows the scan to one subtree.** No
   block passes it today, and it is not a tool for silencing a failure —
   everything outside the scope stops being gated. Prefer a
@@ -1414,6 +1448,8 @@ Numbers to compare a new write path against, all measured with this harness:
 |---|---|
 | Streamed command output, per-chunk (pre-#1406) | 3,693 commits / 58 MB WAL for one `find /` |
 | Streamed command output, coalesced (today) | 34 commits / 0.54 MB for the same command |
+| Environment action output, row rewritten per 500 ms snapshot (former) | 122 commits / 2.9 MB for one minute of output |
+| Environment action output, in memory until a run boundary (today) | 2 commits / 74 KB per run, whatever its length |
 | Former 10-second runtime lease heartbeats | 720 commits / 2.7 MB per hour (~65 MB/day) |
 | PID-owned messaging + federation leases, idle hour | 0 commits / 0 MB WAL |
 | PID-owned lease lifecycle (register, acquire/release both, exit) | 6 commits / ~93 KB WAL |

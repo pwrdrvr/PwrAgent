@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppServerBackendKind } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
+import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
 import { ReplayClient } from "../testing/replay-client";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 
 function createOverlayStoreMock() {
   return {
+    ...mockSubAgentReads(() => undefined),
     getThreadOverlayState: async () => undefined,
     getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
       Object.fromEntries(threadIds.map((threadId) => [threadId, undefined])),
@@ -86,6 +88,87 @@ describe("DesktopBackendRegistry replay integration", () => {
         });
         expect(result.replay.entries.map((entry) => entry.id)).toEqual([
           `${id}-user`, `${id}-response`, `${id}-delivery`,
+        ]);
+      }
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("keeps a turn's total after correspondence sent inside that turn", async () => {
+    // Real clocks: the user message carries the turn start, commentary and
+    // tool rows no time, the final reply Codex's second-truncated completion,
+    // and the persisted total the millisecond the renderer minted it, before
+    // the final reply was written. Sends land later than all of them.
+    const source = { backend: "codex" as const, threadId: "sender" };
+    const turn = {
+      id: "turn-t",
+      status: "completed" as const,
+      startedAt: 1_792_852_051_000,
+      completedAt: 1_792_852_200_000,
+    };
+    const entries = [
+      { type: "message" as const, id: "t-user", role: "user" as const, text: "t prompt", createdAt: turn.startedAt, turn },
+      { type: "message" as const, id: "t-commentary", role: "assistant" as const, phase: "commentary" as const, text: "t commentary", turn },
+      { type: "activity" as const, id: "activity-exec-t", summary: "Ran 2 commands", status: "completed" as const, details: [], turn },
+      { type: "message" as const, id: "t-final", role: "assistant" as const, phase: "final" as const, text: "t answer", createdAt: turn.completedAt, turn },
+    ];
+    const correspondenceStore = new ThreadCorrespondenceStore();
+    correspondenceStore.record({
+      id: "correspondence:after-tools", source,
+      destination: { backend: "codex", threadId: "recipient" },
+      input: [{ type: "text", text: "Tools finished." }],
+      createdAt: turn.completedAt + 300, state: "started",
+      sourceTurnId: turn.id, sourceItemId: "activity-exec-t",
+    });
+    correspondenceStore.record({
+      id: "correspondence:late", source,
+      destination: { backend: "codex", threadId: "recipient" },
+      input: [{ type: "text", text: "Wrapping up." }],
+      createdAt: turn.completedAt + 700, state: "started",
+      sourceTurnId: turn.id,
+    });
+    const page = {
+      entries,
+      messages: entries.flatMap((entry) => entry.type === "message" ? [{ id: entry.id, role: entry.role, text: entry.text }] : []),
+      pagination: { supportsPagination: true, hasPreviousPage: false },
+    };
+    const replayClient = ReplayClient.fromFixture({
+      metadata: { backend: "codex", scenario: "correspondence-turn-usage" },
+      steps: [
+        { id: "initialize", kind: "response", method: "initialize", result: { methods: ["thread/read"] } },
+        { id: "read-display", kind: "response", method: "thread/read", result: page },
+        { id: "read-raw", kind: "response", method: "thread/read", result: page },
+      ],
+    });
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      getThreadOverlayState: async () => ({
+        backend: "codex",
+        threadId: "sender",
+        executionMode: "default",
+        extraLinkedDirectories: [],
+        immutableUsageActivities: [{
+          type: "activity",
+          id: "live-turn-usage-turn-t",
+          summary: "Turn usage: 26,512 uncached in",
+          status: "completed",
+          details: [],
+          createdAt: turn.completedAt - 600,
+          turn,
+        }],
+      }),
+      readThreadMessageOrigins: async () => ({}),
+      readThreadPricing: async () => ({ summaries: [], lines: [] }),
+      readThreadToolAccounting: async () => undefined,
+    } as unknown as OverlayStoreLike;
+    const registry = new DesktopBackendRegistry({ codexClient: replayClient, correspondenceStore, overlayStore, threadTitleGenerationService: null });
+    try {
+      for (const display of [{ resource: "transcript" as const }, undefined]) {
+        const result = await registry.readThread({ ...source, viewOnly: true, ...(display ? { display } : {}) });
+        expect(result.replay.entries.map((entry) => entry.id)).toEqual([
+          "t-user", "t-commentary", "activity-exec-t", "correspondence:after-tools",
+          "t-final", "correspondence:late", "live-turn-usage-turn-t",
         ]);
       }
     } finally {

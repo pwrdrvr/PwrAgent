@@ -2,7 +2,8 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildFederatedThreadRef, type NavigationThreadSummary } from "@pwragent/shared";
+import { buildFederatedThreadRef, type McpConnectionStatus, type NavigationThreadSummary } from "@pwragent/shared";
+import type { DesktopApi } from "../../../lib/desktop-api";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
 import {
   ThreadView as ThreadViewWithTerminals,
@@ -45,8 +46,20 @@ const remoteThread: NavigationThreadSummary = {
 
 describe("ThreadView remote MCP access", () => {
   it.each([false, true])("opens the owner's connections from a remote thread (remote window: %s)", async (remoteWindow) => {
-    const read = vi.fn(async () => ({ connectionIds: ["rovo"], providerServersEnabled: true }));
-    const list = vi.fn(async () => ({ connections: [] }));
+    const sandboxer: McpConnectionStatus = {
+      id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer",
+      authMode: "local_cli", serverUrl: "", enabled: true,
+      createdAt: 0, updatedAt: 0, configured: true, state: "ready",
+    };
+    const read: NonNullable<DesktopApi["readThreadMcpConnections"]> = vi.fn(async (request) => ({
+      connectionIds: request.federationTarget?.instanceId === target.instanceId ? [] : [sandboxer.id],
+      providerServersEnabled: true,
+    }));
+    const list: NonNullable<DesktopApi["listMcpConnections"]> = vi.fn(async (request) => ({
+      connections: [request?.federationTarget?.instanceId === target.instanceId
+        ? { ...sandboxer, configured: false, state: "disconnected" as const, detail: "Sandboxer is not set up on Studio." }
+        : sandboxer],
+    }));
     const openSettings = vi.fn();
     render(<ThreadView
       {...baseProps}
@@ -60,6 +73,9 @@ describe("ThreadView remote MCP access", () => {
     await waitFor(() => expect(screen.getByRole("complementary", { name: "MCP access" })).toBeInTheDocument());
     await waitFor(() => expect(list).toHaveBeenCalledWith({ federationTarget: target }));
     expect(read).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", federationTarget: target });
+    expect(await screen.findByText("Sandboxer is not set up on Studio.")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Use Sandboxer in this thread" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Set up in Settings" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Manage connections" })).not.toBeInTheDocument();
     expect(openSettings).not.toHaveBeenCalled();
   });

@@ -89,9 +89,13 @@ import type {
 } from "./core/messaging-adapter";
 import { MessagingFederatedThreadTargetError } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { buildMessageContent } from "../codex-app-server/client";
+import { getMainLogger } from "../log";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
+import { hasFederationErrorCode } from "../federation/federation-rpc";
+import { findAssistantMessageForText } from "./find-assistant-reply-message";
 import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import {
@@ -133,6 +137,12 @@ export type DesktopMessagingFederationBridge = {
     rpcOptions?: { deadlineAt?: number },
   ): Promise<NavigationSnapshot>;
 };
+
+const bridgeLog = getMainLogger("pwragent:messaging-backend-bridge");
+
+type AssistantImageRequest = Parameters<
+  NonNullable<MessagingBackendBridge["resolveAssistantMessageImages"]>
+>[0];
 
 export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   private readonly assistantImageResolutions = new Map<
@@ -710,14 +720,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return undefined;
   }
 
-  async resolveAssistantMessageImages(request: {
-    backend: AppServerBackendKind;
-    federationTarget?: FederationTarget;
-    itemId?: string;
-    text: string;
-    threadId: string;
-    turnId?: string;
-  }): Promise<MessagingImagePart[]> {
+  async resolveAssistantMessageImages(request: AssistantImageRequest): Promise<MessagingImagePart[]> {
     const target = request.federationTarget;
     const key = [
       target && isRemoteFederationTarget(target) ? target.instanceId : "",
@@ -750,14 +753,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     return await resolution;
   }
 
-  private async resolveAssistantMessageImagesOnce(request: {
-    backend: AppServerBackendKind;
-    federationTarget?: FederationTarget;
-    itemId?: string;
-    text: string;
-    threadId: string;
-    turnId?: string;
-  }): Promise<MessagingImagePart[]> {
+  private async resolveAssistantMessageImagesOnce(request: AssistantImageRequest): Promise<MessagingImagePart[]> {
     const target = request.federationTarget;
     if (target && isRemoteFederationTarget(target)) {
       const remote = this.remoteBackend(target);
@@ -767,32 +763,20 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
         ? await this.resolveRemoteAssistantMessageImages(request, target, remote)
         : [];
     }
-    const response = await this.registry.readThread({
-      backend: request.backend,
-      limit: 20,
-      threadId: request.threadId,
-    });
-    const message = findAssistantMessageForText(
-      response.replay,
-      request.text,
-      request.itemId,
-      request.turnId,
-    ) ?? {
-      id: request.itemId ?? `turn:${request.turnId ?? "unknown"}:assistant`,
-      role: "assistant" as const,
-      text: request.text,
-    };
-    const roots = await this.registry.getThreadTranscriptImageRoots({
-      backend: request.backend,
-      threadId: request.threadId,
-    });
+    const message = request.turnId || request.itemId
+      ? await this.readFinishedTurnAssistantMessage(request)
+      : await this.readLastPageAssistantMessage(request);
     const parts = await materializeTranscriptMessageImagesForMessaging(
-      response,
+      request,
       message,
       {},
       {
-        approvedLocalImageRoots: roots,
         includeTemporaryImageRoots: true,
+        resolveApprovedLocalImageRoots: async () =>
+          await this.registry.getThreadTranscriptImageRoots({
+            backend: request.backend,
+            threadId: request.threadId,
+          }),
       },
     );
     return parts.map((part) => ({
@@ -802,33 +786,86 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   }
 
   /**
-   * A peer-owned thread's images live on the peer. Its readThread already
-   * materializes them, Markdown-linked `/tmp` files included, so read the
-   * message from there and fetch each image's bytes from the owner. A local
-   * lookup would find neither the thread nor the files.
+   * The reply a bound turn just finished, from that turn alone. A transcript
+   * page here re-parsed up to 20 turns, the overlay, and the page merge on the
+   * main process at every turn end, which blocked long threads. One turn's
+   * replay carries the same parts a page would: Codex attaches the turn's
+   * tool screenshots to its final reply, which the event stream cannot show.
+   * Without that read, the completed item from the event is the message.
+   */
+  private async readFinishedTurnAssistantMessage(
+    request: AssistantImageRequest,
+  ): Promise<AppServerThreadMessage> {
+    let replay: AppServerThreadReplay | undefined;
+    if (request.turnId) {
+      try {
+        replay = await this.registry.readThreadTurnReplay({
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: request.turnId,
+        });
+      } catch (error) {
+        // The completed item below still carries the reply's own images, but
+        // not the turn's tool screenshots.
+        bridgeLog.warn("messaging reply turn read failed", {
+          backend: request.backend,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: request.threadId,
+          turnId: request.turnId,
+        });
+      }
+    }
+    const fromTurn = replay
+      ? findAssistantMessageForText(replay, request.text, request.itemId, request.turnId)
+      : undefined;
+    if (fromTurn) {
+      return fromTurn;
+    }
+    const id = request.itemId ?? `turn:${request.turnId ?? "unknown"}:assistant`;
+    if (request.item) {
+      const content = buildMessageContent(request.item);
+      return {
+        id,
+        role: "assistant",
+        text: content.text,
+        ...(content.parts ? { parts: content.parts } : {}),
+      };
+    }
+    return { id, role: "assistant", text: request.text };
+  }
+
+  /** The resume repost has no turn, so it finds its message in the last page. */
+  private async readLastPageAssistantMessage(request: {
+    backend: AppServerBackendKind;
+    text: string;
+    threadId: string;
+  }): Promise<AppServerThreadMessage> {
+    const response = await this.registry.readThread({
+      backend: request.backend,
+      includeAccounting: false,
+      limit: 20,
+      threadId: request.threadId,
+      viewOnly: true,
+    });
+    return findAssistantMessageForText(response.replay, request.text) ?? {
+      id: "turn:unknown:assistant",
+      role: "assistant",
+      text: request.text,
+    };
+  }
+
+  /**
+   * A peer-owned thread's images live on the peer. The owner materializes
+   * them, Markdown-linked `/tmp` files included, so read the message from
+   * there and fetch each image's bytes from the owner. A local lookup would
+   * find neither the thread nor the files.
    */
   private async resolveRemoteAssistantMessageImages(
-    request: {
-      backend: AppServerBackendKind;
-      itemId?: string;
-      text: string;
-      threadId: string;
-      turnId?: string;
-    },
+    request: AssistantImageRequest,
     target: FederationRemoteTarget,
     remote: FederationBackendOperations,
   ): Promise<MessagingImagePart[]> {
-    const response = await remote.readThread({
-      backend: request.backend,
-      limit: 20,
-      threadId: request.threadId,
-    });
-    const message = findAssistantMessageForText(
-      response.replay,
-      request.text,
-      request.itemId,
-      request.turnId,
-    );
+    const message = await this.readRemoteAssistantMessage(request, target, remote);
     if (!message) {
       return [];
     }
@@ -841,6 +878,60 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       ...part,
       source: "assistant" as const,
     }));
+  }
+
+  /**
+   * A finished turn's reply comes from that turn when the owner advertises
+   * `turn_assistant_reply`. An older owner, and the resume repost, which has
+   * no turn, still read the last transcript page.
+   */
+  private async readRemoteAssistantMessage(
+    request: AssistantImageRequest,
+    target: FederationRemoteTarget,
+    remote: FederationBackendOperations,
+  ): Promise<AppServerThreadMessage | undefined> {
+    if (
+      request.turnId
+      && remote.readTurnAssistantReply
+      && this.peerAdvertises(target, "turn_assistant_reply")
+    ) {
+      try {
+        const response = await remote.readTurnAssistantReply({
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: request.turnId,
+          ...(request.itemId ? { itemId: request.itemId } : {}),
+          text: request.text,
+        });
+        return response.message ?? undefined;
+      } catch (error) {
+        // A hop on the route can predate the method the owner advertises.
+        if (!hasFederationErrorCode(error, "method_not_found")) {
+          throw error;
+        }
+      }
+    }
+    const response = await remote.readThread({
+      backend: request.backend,
+      limit: 20,
+      threadId: request.threadId,
+    });
+    return findAssistantMessageForText(
+      response.replay,
+      request.text,
+      request.itemId,
+      request.turnId,
+    );
+  }
+
+  private peerAdvertises(
+    target: FederationRemoteTarget,
+    capability: FederationCapability,
+  ): boolean {
+    return this.federation
+      ?.connectedPeerTargets()
+      .find((peer) => peer.target.instanceId === target.instanceId)
+      ?.capabilities.includes(capability) ?? false;
   }
 
   async handoffThreadWorkspace(
@@ -1213,69 +1304,6 @@ function stripFederationTarget<T extends { federationTarget?: FederationTarget }
 ): Omit<T, "federationTarget"> {
   const { federationTarget: _federationTarget, ...localRequest } = request;
   return localRequest;
-}
-
-function findAssistantMessageForText(
-  replay: AppServerThreadReplay,
-  text: string,
-  itemId?: string,
-  turnId?: string,
-): AppServerThreadMessage | undefined {
-  if (itemId) {
-    for (let index = replay.messages.length - 1; index >= 0; index -= 1) {
-      const message = replay.messages[index];
-      if (message?.role === "assistant" && message.id === itemId) {
-        return message;
-      }
-    }
-    for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
-      const entry = replay.entries[index];
-      if (
-        entry?.type === "message"
-        && entry.role === "assistant"
-        && entry.id === itemId
-      ) {
-        return entry;
-      }
-    }
-  }
-  const expected = text.trim();
-  if (turnId) {
-    for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
-      const entry = replay.entries[index];
-      if (
-        entry?.type === "message"
-        && entry.role === "assistant"
-        && entry.turn?.id === turnId
-        && entry.text.trim() === expected
-      ) {
-        return entry;
-      }
-    }
-  }
-  // Empty assistant messages need an item or turn identity. Falling back to a
-  // text-only match here could pick an unrelated image-only result from an
-  // earlier turn when the current terminal event produced no assistant output.
-  if (!expected && (itemId || turnId)) {
-    return undefined;
-  }
-  for (let index = replay.messages.length - 1; index >= 0; index -= 1) {
-    const message = replay.messages[index];
-    if (message?.role === "assistant" && message.text.trim() === expected) {
-      return message;
-    }
-  }
-  for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
-    const entry = replay.entries[index];
-    if (
-      entry?.type === "message"
-      && entry.role === "assistant"
-      && entry.text.trim() === expected
-    ) {
-      return entry;
-    }
-  }
-  return undefined;
 }
 
 function findLastAssistantMessageReply(

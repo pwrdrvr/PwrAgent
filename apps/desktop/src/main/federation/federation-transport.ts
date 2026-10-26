@@ -147,12 +147,30 @@ export class FederationFrameTooLargeError extends Error {
   }
 }
 
+/**
+ * Binary envelope frame: magic, uint32 header length, the JSON envelope
+ * without `data`, then `data` raw. Carries every envelope kind with a byte
+ * payload. A build that predates a kind decodes its frame to nothing.
+ */
 const FEDERATION_BLOB_FRAME_MAGIC = Buffer.from("PWRBLOB1", "ascii");
 const FEDERATION_BLOB_FRAME_PREFIX_BYTES =
   FEDERATION_BLOB_FRAME_MAGIC.byteLength + 4;
 const FEDERATION_BLOB_FRAME_MAX_HEADER_BYTES = 64 * 1024;
+type FederationBinaryEnvelopeKind = Extract<FederationProtocolEnvelope, { data: Uint8Array }>["kind"];
+const FEDERATION_BINARY_ENVELOPE_KINDS: ReadonlySet<unknown> = new Set<FederationBinaryEnvelopeKind>([
+  "blob_chunk",
+  "service_data",
+]);
+
+/** Envelope kinds that travel in a binary envelope frame, never as JSON. */
+function isBinaryEnvelope<T extends { kind?: unknown }>(
+  envelope: T,
+): envelope is T & { kind: FederationBinaryEnvelopeKind } {
+  return FEDERATION_BINARY_ENVELOPE_KINDS.has(envelope.kind);
+}
 export const FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES = 2 * 1024 * 1024;
 const FEDERATION_SEND_BUFFER_POLL_MS = 5;
+const FEDERATION_SEND_BUFFER_DRAIN_GUARD_MS = 250;
 
 /**
  * The socket surface the keepalive watchdog needs. Structural (rather than
@@ -1649,18 +1667,59 @@ async function sendFrameWithBackpressure(
   return sendFrame(socket, message, transport, options, context);
 }
 
+/** The ws client's underlying TCP or TLS socket: ws keeps it on `_socket`. */
+type FederationRawSocket = {
+  once(event: "drain" | "close", listener: () => void): unknown;
+  off(event: "drain" | "close", listener: () => void): unknown;
+};
+
+/**
+ * Wait until the WebSocket buffer is below the high-water mark. Past that mark
+ * ws has written to a full TCP socket, so the socket emits `drain` as it
+ * empties; wait for that rather than polling. A socket without one (a test
+ * double) is polled.
+ */
 export async function waitForFederationSendCapacity(
-  socket: Pick<WebSocket, "bufferedAmount" | "readyState">,
+  socket: Pick<WebSocket, "bufferedAmount" | "readyState"> & { _socket?: FederationRawSocket | null },
 ): Promise<void> {
   while (
     socket.readyState === WebSocket.OPEN
     && socket.bufferedAmount > FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES
   ) {
+    const raw = socket._socket;
+    if (raw) {
+      await drainOf(raw);
+      continue;
+    }
     await new Promise<void>((resolve) => {
       const timer = setTimeout(resolve, FEDERATION_SEND_BUFFER_POLL_MS);
       timer.unref?.();
     });
   }
+}
+
+/** One wait per raw socket, so many waiting senders add no listeners of their own. */
+const pendingDrains = new WeakMap<FederationRawSocket, Promise<void>>();
+
+function drainOf(raw: FederationRawSocket): Promise<void> {
+  let pending = pendingDrains.get(raw);
+  if (pending) return pending;
+  pending = new Promise<void>((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      raw.off("drain", done);
+      raw.off("close", done);
+      pendingDrains.delete(raw);
+      resolve();
+    };
+    // Only a guard against a missed event.
+    const timer = setTimeout(done, FEDERATION_SEND_BUFFER_DRAIN_GUARD_MS);
+    timer.unref?.();
+    raw.once("drain", done);
+    raw.once("close", done);
+  });
+  pendingDrains.set(raw, pending);
+  return pending;
 }
 
 function closeAfterFrameAuthenticationFailure(socket: WebSocket): void {
@@ -1725,7 +1784,7 @@ function encodeRawFederationSocketPayload(
 ): Buffer {
   if (
     message.kind !== "envelope"
-    || message.envelope.kind !== "blob_chunk"
+    || !isBinaryEnvelope(message.envelope)
   ) {
     return Buffer.from(JSON.stringify(message), "utf8");
   }
@@ -1740,7 +1799,7 @@ function encodeRawFederationSocketPayload(
   const prefix = Buffer.allocUnsafe(FEDERATION_BLOB_FRAME_PREFIX_BYTES);
   FEDERATION_BLOB_FRAME_MAGIC.copy(prefix, 0);
   prefix.writeUInt32BE(header.byteLength, FEDERATION_BLOB_FRAME_MAGIC.byteLength);
-  return Buffer.concat([prefix, header, Buffer.from(data)]);
+  return Buffer.concat([prefix, header, data]);
 }
 
 function decodeFederationSocketPayload(payload: Buffer): FederationSocketMessage | undefined {
@@ -1778,7 +1837,7 @@ function decodeRawFederationSocketPayload(
     if (
       parsed.kind === "envelope"
       && parsed.envelope
-      && parsed.envelope.kind !== "blob_chunk"
+      && !isBinaryEnvelope(parsed.envelope)
     ) {
       return parsed as FederationSocketEnvelopeMessage;
     }
@@ -1813,7 +1872,7 @@ function decodeFederationBlobSocketPayload(
     if (
       header.kind !== "envelope"
       || !header.envelope
-      || header.envelope.kind !== "blob_chunk"
+      || !isBinaryEnvelope(header.envelope)
       || Object.hasOwn(header.envelope, "data")
     ) {
       return undefined;

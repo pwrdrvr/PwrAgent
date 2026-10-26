@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.3.3 - 2026-10-26
+
+- Codex Model Providers - Run Codex threads against additional OpenAI Responses-compatible endpoints, including other API accounts, hosted models, and local servers. Configure providers, model lists, connection tests, and pricing in Settings.
+- Claude Workspace Support - Add Plan mode and access to linked directories. Display file diffs, plan cards, targeted tool activity, and context-compaction events natively in the transcript.
+- Thread Rewind - Rewind Codex and Grok conversations from a prompt, including on remote threads, and return that prompt to the composer.
+- Environment Management - Edit project setup scripts, platform-specific commands, Run actions, and cleanup scripts in Settings. Agent handoffs can explicitly select an Environment.
+- Local MCP Servers - Configure command-line MCP servers through the managed gateway, with connection testing, secret storage, and per-thread access controls.
+- Cleaner Interface - Add Minimal information density, a combined PR-status chip, and X-ray mode to reveal hidden details. Settings sections are grouped by purpose.
+- Sandboxer Lifecycle - Enable Sandboxer from the New thread launchpad and automatically release a thread's sandboxes once all its attached PRs merge or close. PR watches can now wake threads on merge or closure.
+- Federation Performance - Improve forwarded-service throughput with windowed binary transfers, while retaining compatibility with older peers.
+- Usage and Responsiveness - Show Claude and Grok account limits in Usage Activity and remote usage pace from the owner. Reduce long-thread pricing work, sub-agent storage overhead, and repeated database writes from running Environment actions.
+- Approvals and To-dos - Surface pending approvals in persistent notice cards. Separate a handoff's prerequisites from the work its new thread will perform.
+- Thread Recovery - Recover threads whose worktree folder is missing by recreating the worktree, continuing in the main checkout, or archiving. Improve visibility of background work and outstanding work when quitting.
+- Messaging - Improve cross-thread delivery notices, expose binding controls consistently, and retrieve final-reply images without expensive transcript-page reads.
+
+Compatibility: Custom Codex endpoints must support the Responses API; existing threads retain their provider. Rewind currently supports conversation history for Codex and Grok, not Claude or file restoration.
+
+## v1.3.2 - 2026-10-24
+
+- Claude Background Work - Background commands and sub-agents keep running after a response finishes, with visible task status and stop controls. New messages reuse the live session, steering no longer aborts responses, and failed turns show clear errors.
+- Queue Controls - Pause individual queued messages without blocking later messages, then resume them when ready. Available in the composer and Star Map, with more reliable pause state, ordering, and held-message labels.
+- Sandboxer Remote Compute - Add an optional built-in MCP connection for remote Linux builds, tests, file operations, and hosted ports. Requires an installed, authenticated Sandboxer CLI; disabled by default.
+- Transcript Performance - Reduce repeated Markdown parsing during streaming and transcript refreshes. An optional Incremental Markdown Rendering experiment further reduces parsing work for long responses; off by default.
+- Transcript Clarity - Keep messages, tool activity, final answers, and usage summaries in their proper turns. Collapse interim replies, continuation notices, and delivery details to make completed work easier to scan.
+- Usage and Storage - Stop rewriting the usage ledger on every launch, reducing startup work and database writes while preserving recorded turn times. Show combined parent/sub-thread pricing for remote threads.
+- Federation Workflows - Refresh remote questions, To-dos, and Git information more reliably. Find the correct machine's threads in `#` references, preserve cross-machine links, and retain project Environment selections across providers and remote starts.
+- MCP Requests - Support MCP input and confirmation requests in Claude sessions, with clearer labels, form validation, and safer browser-link consent.
+- To-dos - Copy complete cards, individual steps, unfinished steps, or multiple cards as Markdown. Keep long cards compact and include projects beyond the first navigation page.
+- Grok Feedback - Show meaningful retry, sub-agent, compaction, and background-task updates instead of unknown ACP events.
+
+Important: MCP browser-link requests must now be reviewed in the desktop app; they cannot be approved directly from messaging.
+
 ## v1.3.1 - 2026-10-23
 
 - Federation Port Forwarding - Access development servers running beside remote threads through an explicit local forward. The Ports panel provides connection controls, browser links, forwarding status, and traffic counts. Supports HTTP, WebSockets, HTTPS pass-through, and TCP.

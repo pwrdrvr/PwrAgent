@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type {
   CreateInstanceThreadResult,
@@ -7,6 +10,7 @@ import type {
   ListAttentionThreadsResult,
   ListFederationInstancesResult,
   ListInstanceProjectsResult,
+  ListBackendsRequest,
   MaterializeDirectoryLaunchpadRequest,
   NavigationSnapshot,
   NavigationThreadSummary,
@@ -15,10 +19,19 @@ import type {
   NavigationQueryPage,
   SearchFederationThreadsResult,
 } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import { projectNavigationQuery } from "../app-server/navigation-query-projection";
-import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
+import { claudeModelOptions } from "../claude/claude-models";
+import {
+  FEDERATION_BACKEND_METHOD_CAPABILITIES,
+  FederationRemoteBackendClient,
+  registerFederationBackendHandlers,
+  type FederationBackendOperations,
+} from "../federation/federation-backend-bridge";
 import { createFederationAgentToolsHandler } from "../federation/federation-agent-tools-service";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
+import { FederationRouter } from "../federation/federation-router";
+import { FederationRpcEndpoint } from "../federation/federation-rpc";
 
 const localHostInfo: FederationHostInfo = {
   platform: "darwin",
@@ -91,6 +104,7 @@ function buildRuntime(overrides: Partial<DesktopFederationRuntime>): () =>
       const projected = projectNavigationQuery({ index: population, request });
       const offset = Number(request.cursor ?? 0);
       const limit = request.pageSize ?? 100;
+      expect(Number.isSafeInteger(limit) && limit >= 1 && limit <= NAVIGATION_QUERY_MAX_PAGE_ROWS).toBe(true);
       const directoryQuery = request.query.kind === "directory-index";
       const total = directoryQuery ? projected.directories.length : projected.entries.length;
       return { ...projected, protocol: 2, ownerEpoch: "owner", generation: "fixture", countsRevision: "revision",
@@ -119,6 +133,18 @@ function buildRuntime(overrides: Partial<DesktopFederationRuntime>): () =>
 }
 
 describe("federation agent tools service", () => {
+  describe.each(["list_instance_projects", "list_attention_threads", "list_federation_instances"] as const)("%s internal limits", (operation) => {
+    it.each([0, -1, 101, 500, 1.5, NaN, Infinity])("rejects limit %s before reading an owner", async (limit) => {
+      const runtime = vi.fn<() => DesktopFederationRuntime>();
+      const handler = createFederationAgentToolsHandler({ runtime });
+      const response = operation === "list_instance_projects"
+        ? await handler({ operation, context, args: { instanceId: "pwr_local", limit } })
+        : await handler({ operation, context, args: { limit } });
+      expect(response).toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+      expect(runtime).not.toHaveBeenCalled();
+    });
+  });
+
   it("lists just the local instance when federation is disabled", async () => {
     const handler = createFederationAgentToolsHandler({
       // Never let unit tests mint a machine-id in the real PwrAgent root.
@@ -599,9 +625,56 @@ describe("federation agent tools service", () => {
 
     expect(listBackends).toHaveBeenCalledWith({});
     expect((response as { ok: true; data: ListInstanceProjectsResult }).data.backends).toEqual([
-      { backend: "codex", label: "OpenAI", models: ["sample-codex-a", "sample-codex-b"], defaultModel: "sample-codex-a" },
-      { backend: "acp:grok", label: "Grok", models: ["sample-grok-a"] },
+      { backend: "codex", label: "OpenAI", models: ["sample-codex-a", "sample-codex-b"],
+        modelOptions: [{ id: "sample-codex-a", current: true }, { id: "sample-codex-b" }], defaultModel: "sample-codex-a" },
+      { backend: "acp:grok", label: "Grok", models: ["sample-grok-a"], modelOptions: [{ id: "sample-grok-a" }] },
     ]);
+  });
+
+  it.each(["local", "remote"])("preserves Claude picker labels and launch aliases in %s project discovery", async (location) => {
+    // Initialize metadata names the latest model through `opus`, while the
+    // explicit claude-opus-5 entry is an older, separately selectable version.
+    const models = claudeModelOptions([
+      { value: "default", displayName: "Default (recommended)", description: "", resolvedModel: "claude-opus-5-5" },
+      { value: "opus", displayName: "Opus 5.5", description: "", resolvedModel: "claude-opus-5-5",
+        supportsEffort: true, supportedEffortLevels: ["low", "high", "max"] },
+      { value: "claude-opus-5", displayName: "Opus 5", description: "", resolvedModel: "claude-opus-5" },
+      { value: "deployment-id", displayName: "Organization model", description: "" },
+    ]);
+    const listBackends = vi.fn(async () => ({ fetchedAt: 1, backends: [
+      { kind: "claude" as const, label: "Claude", available: true, launchpadOptions: { models } },
+    ] }));
+    const source = { readPopulation: async () => buildSnapshot({ directories: [] }), listBackends };
+    const router = new FederationRouter({ localInstanceId: "pwr_studio", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    let rpc: FederationRpcEndpoint;
+    router.registerConnection({ peerId: "pwr_local", capabilities: ["thread_detail"],
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(JSON.parse(JSON.stringify(envelope))); } });
+    registerFederationBackendHandlers({ router, backend: source as unknown as FederationBackendOperations });
+    rpc = new FederationRpcEndpoint({ localInstanceId: "pwr_local", remoteInstanceId: "pwr_studio",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope: JSON.parse(JSON.stringify(envelope)), sourcePeerId: "pwr_local" }); } });
+    const client = new FederationRemoteBackendClient(rpc);
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth({ peers: [
+          { id: "pwr_studio", label: "Studio Mac", role: "client", status: "connected", capabilities: ["thread_navigation", "thread_detail"] },
+        ] }),
+        localBackend: (() => source) as never,
+        remoteBackend: (() => ({ readPopulation: source.readPopulation,
+          listBackends: (request?: ListBackendsRequest) => client.listBackends(request) })) as never,
+      }),
+    });
+
+    const response = await handler({ operation: "list_instance_projects", context,
+      args: { instanceId: location === "local" ? "pwr_local" : "pwr_studio" } });
+    expect(response).toMatchObject({ ok: true, data: { backends: [{
+      backend: "claude", label: "Claude", defaultModel: "opus",
+      models: ["opus", "claude-opus-5", "deployment-id"],
+      modelOptions: models,
+    }] } });
+    expect(models.find((model) => model.label === "Opus 5.5")?.id).toBe("opus");
+    expect(models.find((model) => model.id === "claude-opus-5")?.other).toBe(true);
+    expect(listBackends).toHaveBeenCalledExactlyOnceWith({});
   });
 
   it("still lists projects when the instance cannot list its backends", async () => {
@@ -758,6 +831,20 @@ describe("federation agent tools service", () => {
             path: "/Users/op/pwragent",
             threadKeys: [],
             needsAttentionCount: 0,
+            launchpad: {
+              backend: "codex",
+              executionMode: "default",
+              workMode: "worktree",
+              directoryKey: "dir:/Users/op/pwragent",
+              directoryKind: "directory",
+              directoryLabel: "PwrAgent",
+              prompt: "Unsent operator draft",
+              codexEnvironmentId: "project",
+              codexEnvironmentExecutionTarget: "local",
+              codexEnvironmentActionId: "dev",
+              createdAt: 1,
+              updatedAt: 2,
+            },
           },
         ] as NavigationSnapshot["directories"],
       }),
@@ -804,6 +891,9 @@ describe("federation agent tools service", () => {
           directoryKey: "dir:/Users/op/pwragent",
           directoryLabel: "PwrAgent",
           prompt: "",
+          codexEnvironmentId: "project",
+          codexEnvironmentExecutionTarget: "local",
+          codexEnvironmentActionId: "dev",
         }),
         input: [
           { type: "text", text: "Fix the recorder crash" },
@@ -1184,6 +1274,9 @@ describe("federation agent tools service", () => {
             directoryKind: "directory",
             directoryLabel: "PwrSuiteLab",
             prompt: "Unsent operator draft",
+            codexEnvironmentId: "project",
+            codexEnvironmentExecutionTarget: "local",
+            codexEnvironmentActionId: "dev",
             createdAt: 1,
             updatedAt: 2,
           } } : {}),
@@ -1228,6 +1321,9 @@ describe("federation agent tools service", () => {
       expect(response).toMatchObject({ ok: true, data: { backend } });
       const draft = materializeDirectoryLaunchpad.mock.calls[0][0].launchpad!;
       expect(draft).toMatchObject({ backend, workMode: "local", prompt: "" });
+      expect(draft.codexEnvironmentId).toBe(source === "saved launchpad" ? "project" : undefined);
+      expect(draft.codexEnvironmentExecutionTarget).toBe(source === "saved launchpad" ? "local" : undefined);
+      expect(draft.codexEnvironmentActionId).toBe(source === "saved launchpad" ? "dev" : undefined);
       const expected = {
         model: undefined,
         reasoningEffort: undefined,
@@ -1721,6 +1817,20 @@ it("returns one bounded project page and requires an explicit continuation", asy
   expect(readPopulation).toHaveBeenCalledTimes(2);
 });
 
+it.each([1, NAVIGATION_QUERY_MAX_PAGE_ROWS])("honors a valid project page limit of %s without hiding continuation", async (limit) => {
+  const readPopulation = vi.fn(async () => buildSnapshot({ directories: Array.from({ length: 101 }, (_, index) => ({
+    key: `directory:${index}`, kind: "directory", label: `Project ${index}`, threadKeys: [], needsAttentionCount: 0,
+  })) }));
+  const handler = createFederationAgentToolsHandler({ collectHostInfo: async () => localHostInfo,
+    runtime: buildRuntime({ health: async () => buildHealth(), localBackend: (() => ({ readPopulation })) as never }) });
+  const response = await handler({ operation: "list_instance_projects", context, args: { instanceId: "pwr_local", limit } });
+  expect(response.ok).toBe(true);
+  const page = (response as { ok: true; data: ListInstanceProjectsResult }).data;
+  expect(page.projects).toHaveLength(limit);
+  expect(page.complete).toBe(false);
+  expect(page.nextCursor).toBe(String(limit));
+});
+
 
 describe("push_instance_file", () => {
   it("routes the local source path and returns the receiver's saved path", async () => {
@@ -1819,5 +1929,320 @@ describe("list_attention_threads", () => {
     expect(one.data.failures).toEqual([]);
     expect(await handler({ operation: "list_attention_threads", context, args: { instanceId: "pwr_missing" } }))
       .toMatchObject({ ok: false, error: { code: "not_found" } });
+  });
+});
+
+describe("create_instance_thread environments", () => {
+  const projectLaunchpad = {
+    backend: "codex",
+    executionMode: "default",
+    workMode: "worktree",
+    directoryKey: "dir:/repo",
+    directoryKind: "directory",
+    directoryLabel: "Repo",
+    prompt: "",
+    codexEnvironmentId: "project",
+    codexEnvironmentExecutionTarget: "local",
+    codexEnvironmentActionId: "dev",
+    createdAt: 1,
+    updatedAt: 2,
+  } as const;
+
+  function environmentSnapshot(params: {
+    launchpad?: boolean;
+    path?: string;
+    threads?: NavigationSnapshot["threads"];
+  } = {}) {
+    return buildSnapshot({
+      threads: params.threads ?? [],
+      directories: [{
+        key: "dir:/repo",
+        kind: "directory",
+        label: "Repo",
+        path: params.path ?? "/repo",
+        threadKeys: [],
+        needsAttentionCount: 0,
+        ...(params.launchpad === false ? {} : { launchpad: projectLaunchpad }),
+      }] as NavigationSnapshot["directories"],
+    });
+  }
+
+  function remoteHandler(
+    snapshot: NavigationSnapshot,
+    materializeDirectoryLaunchpad: (
+      request: MaterializeDirectoryLaunchpadRequest,
+    ) => Promise<unknown>,
+  ) {
+    return createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth({ peers: [{
+          id: "pwr_studio",
+          label: "Studio Mac",
+          role: "client",
+          status: "connected",
+          capabilities: ["thread_navigation"],
+        }] }),
+        remoteBackend: (() => ({
+          readPopulation: async () => snapshot,
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+  }
+
+  const created = (request: MaterializeDirectoryLaunchpadRequest) => ({
+    backend: request.launchpad!.backend,
+    threadId: "child",
+    executionMode: request.launchpad!.executionMode,
+    workMode: request.launchpad!.workMode!,
+  });
+
+  it("asks the owning peer to resolve and set up a named environment", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => ({
+      ...created(request),
+      codexEnvironmentRuntime: {
+        environmentId: "docs",
+        environmentName: "Docs Site",
+        executionTarget: "local" as const,
+        cwd: "/worktrees/abc/repo",
+        setupStatus: "completed" as const,
+        setupExitCode: 0,
+        setupDurationMs: 1200,
+      },
+    }));
+    const handler = remoteHandler(environmentSnapshot(), materializeDirectoryLaunchpad);
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo", environment: "Docs Site" },
+    });
+
+    const request = materializeDirectoryLaunchpad.mock.calls[0][0];
+    expect(request.codexEnvironmentSelector).toBe("Docs Site");
+    // An older owner reads only the draft, and matches it as an id.
+    expect(request.launchpad).toMatchObject({
+      codexEnvironmentId: "Docs Site",
+      codexEnvironmentExecutionTarget: "local",
+    });
+    // The preset's auto-started action belongs to the preset's environment.
+    expect(request.launchpad!.codexEnvironmentActionId).toBeUndefined();
+    expect((response as { ok: true; data: CreateInstanceThreadResult }).data.environment).toEqual({
+      source: "requested",
+      requested: "Docs Site",
+      environmentId: "docs",
+      environmentName: "Docs Site",
+      setup: "completed",
+      setupExitCode: 0,
+      setupDurationMs: 1200,
+      message: "Started with environment Docs Site (docs). Setup completed in the child's workspace.",
+    });
+  });
+
+  it("reports a named environment an older owner did not apply", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
+    const handler = remoteHandler(environmentSnapshot(), materializeDirectoryLaunchpad);
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo", environment: "Docs Site" },
+    });
+
+    expect(response).toMatchObject({ ok: true, data: { threadId: "child" } });
+    expect((response as { ok: true; data: CreateInstanceThreadResult }).data.environment).toEqual({
+      source: "requested",
+      requested: "Docs Site",
+      setup: "not_applied",
+      message:
+        'The thread started without environment "Docs Site". The owning instance may run an older PwrAgent that matches environments only by id.',
+    });
+  });
+
+  it("starts without the project's environment when environment is none", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
+    const handler = remoteHandler(environmentSnapshot(), materializeDirectoryLaunchpad);
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo", environment: "none" },
+    });
+
+    const request = materializeDirectoryLaunchpad.mock.calls[0][0];
+    expect(request.codexEnvironmentSelector).toBeUndefined();
+    expect(request.launchpad!.codexEnvironmentId).toBeUndefined();
+    expect(request.launchpad!.codexEnvironmentActionId).toBeUndefined();
+    expect((response as { ok: true; data: CreateInstanceThreadResult }).data.environment).toEqual({
+      source: "none",
+      requested: "none",
+      message: "Started with no environment.",
+    });
+  });
+
+  it("reports the project's environment preset when no environment is named", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => ({
+      ...created(request),
+      codexEnvironmentRuntime: {
+        environmentId: "project",
+        environmentName: "Project",
+        executionTarget: "local" as const,
+        setupStatus: "failed" as const,
+        setupExitCode: 2,
+        setupOutput: "x".repeat(3000) + "tail",
+      },
+      codexEnvironmentStartupFailure: {
+        message: "Codex environment command exited with 2",
+        phase: "setup" as const,
+        worktreeCleanupAvailable: true,
+      },
+    }));
+    const handler = remoteHandler(environmentSnapshot(), materializeDirectoryLaunchpad);
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo" },
+    });
+
+    expect(materializeDirectoryLaunchpad.mock.calls[0][0].launchpad).toMatchObject({
+      codexEnvironmentId: "project",
+      codexEnvironmentActionId: "dev",
+    });
+    const environment = (response as { ok: true; data: CreateInstanceThreadResult }).data.environment!;
+    expect(environment).toMatchObject({
+      source: "project",
+      environmentId: "project",
+      setup: "failed",
+      setupExitCode: 2,
+      message:
+        "Environment Project (project) setup failed (exit 2): Codex environment command exited with 2. The thread was created; see setupOutputTail.",
+    });
+    expect(environment.setupOutputTail).toHaveLength(2000);
+    expect(environment.setupOutputTail!.endsWith("tail")).toBe(true);
+  });
+
+  async function projectWithEnvironments(ids: string[]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-create-thread-env-"));
+    await mkdir(path.join(root, ".codex", "environments"), { recursive: true });
+    for (const id of ids) {
+      await writeFile(path.join(root, ".codex", "environments", `${id}.toml`), `version = 1\nname = "${id}"\n`, "utf8");
+    }
+    return root;
+  }
+
+  it.each([
+    { defined: true, expected: { codexEnvironmentId: "pwragent", codexEnvironmentActionId: undefined } },
+    // Config only the caller's worktree has: keep the preset rather than drop to nothing.
+    { defined: false, expected: { codexEnvironmentId: "project", codexEnvironmentActionId: "dev" } },
+  ])("inherits the calling thread's environment in its own local project (defined=$defined)", async ({ defined, expected }) => {
+    const projectPath = await projectWithEnvironments(defined ? ["project", "pwragent"] : ["project"]);
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
+    const snapshot = environmentSnapshot({
+      path: projectPath,
+      threads: [{
+        id: "thread-1",
+        source: "codex",
+        title: "Parent",
+        titleSource: "derived",
+        inbox: { inInbox: false },
+        linkedDirectories: [{ id: projectPath, kind: "worktree", label: "Repo", path: projectPath, worktreePath: "/worktrees/parent/repo" }],
+        codexEnvironmentRuntime: {
+          environmentId: "pwragent",
+          environmentName: "PwrAgent",
+          executionTarget: "local",
+          setupStatus: "completed",
+        },
+        updatedAt: 1,
+      }] as NavigationSnapshot["threads"],
+    });
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+        localBackend: (() => ({
+          readPopulation: async () => snapshot,
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+    try {
+      const response = await handler({
+        operation: "create_instance_thread",
+        context,
+        args: { instanceId: "pwr_local", projectKey: "dir:/repo" },
+      });
+
+      expect(response).toMatchObject({ ok: true });
+      const launchpad = materializeDirectoryLaunchpad.mock.calls[0][0].launchpad!;
+      expect({
+        codexEnvironmentId: launchpad.codexEnvironmentId,
+        codexEnvironmentActionId: launchpad.codexEnvironmentActionId,
+      }).toEqual(expected);
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the preset's action when the agent names the preset's environment", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
+    const handler = remoteHandler(environmentSnapshot(), materializeDirectoryLaunchpad);
+
+    await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_studio", projectKey: "dir:/repo", environment: "project" },
+    });
+
+    const request = materializeDirectoryLaunchpad.mock.calls[0][0];
+    expect(request.codexEnvironmentSelector).toBe("project");
+    expect(request.launchpad).toMatchObject({
+      codexEnvironmentId: "project",
+      codexEnvironmentActionId: "dev",
+    });
+  });
+
+  it("keeps the project's preset for a local thread in another project", async () => {
+    const materializeDirectoryLaunchpad = vi.fn(async (request: MaterializeDirectoryLaunchpadRequest) => created(request));
+    const snapshot = environmentSnapshot({
+      threads: [{
+        id: "thread-1",
+        source: "codex",
+        title: "Parent",
+        titleSource: "derived",
+        inbox: { inInbox: false },
+        linkedDirectories: [{ id: "/other", kind: "local", label: "Other", path: "/other" }],
+        codexEnvironmentRuntime: {
+          environmentId: "pwragent",
+          environmentName: "PwrAgent",
+          executionTarget: "local",
+        },
+        updatedAt: 1,
+      }] as NavigationSnapshot["threads"],
+    });
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+        localBackend: (() => ({
+          readPopulation: async () => snapshot,
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: { instanceId: "pwr_local", projectKey: "dir:/repo" },
+    });
+
+    expect(response).toMatchObject({ ok: true });
+
+    expect(materializeDirectoryLaunchpad.mock.calls[0][0].launchpad).toMatchObject({
+      codexEnvironmentId: "project",
+      codexEnvironmentActionId: "dev",
+    });
   });
 });

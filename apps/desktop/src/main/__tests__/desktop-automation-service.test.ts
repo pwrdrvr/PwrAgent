@@ -532,6 +532,13 @@ describe("DesktopAutomationService", () => {
     // The registry nests readThreadPricing's result under `pricing` — the
     // capture must read that real shape, not a flattened `lines` array.
     // Partial ThreadUsageLineRecord: only the fields the capture reads.
+    // Each event carries the whole thread's ledger, so a long thread's
+    // earlier turns ride along with the run's own.
+    const earlierTurns = Array.from({ length: 2_000 }, (_, index) => ({
+      scope: "turn",
+      turnId: `earlier-turn-${index}`,
+      totalCostMicros: 1,
+    }));
     const pricingEvent = (totalCostMicros: number): AgentEvent =>
       ({
         backend: "codex",
@@ -542,6 +549,7 @@ describe("DesktopAutomationService", () => {
             pricing: {
               summaries: [],
               lines: [
+                ...earlierTurns,
                 {
                   scope: "turn",
                   turnId: "turn-1",
@@ -563,11 +571,19 @@ describe("DesktopAutomationService", () => {
     // A streaming turn re-emits cumulative snapshots: two identical events,
     // then a newer total. Only the newest snapshot may reach sqlite, and only
     // after the flush window — the write must not scale with event count.
+    // Nor may the reads scale with the ledger: one run lookup per event.
+    const perTurnLookups = [
+      vi.spyOn(store, "findRunningRunByBackendTurnId"),
+      vi.spyOn(store, "findRunByBackendTurnId"),
+    ];
+    const batchedLookups = vi.spyOn(store, "findRunsByBackendTurnIds");
     for (const totalCostMicros of [100_000, 100_000, 123_456]) {
       await Promise.all(
         registryListeners.map((listener) => listener(pricingEvent(totalCostMicros))),
       );
     }
+    expect(batchedLookups).toHaveBeenCalledTimes(3);
+    expect(perTurnLookups.map((spy) => spy.mock.calls.length)).toEqual([0, 0]);
     expect(setRunUsage).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(setRunUsage).toHaveBeenCalledTimes(1);

@@ -42,6 +42,10 @@ import {
  * with executable-backed Kimi + Codex fakes (no Codex replay fixture).
  */
 
+// A model only the viewer's fake Codex offers. The owner's catalog is the
+// fake's default: gpt-5.5, then gpt-5.
+const VIEWER_ONLY_CODEX_MODEL = "gpt-viewer-only";
+
 async function createLocalControlFixture(options?: {
   threadId?: string;
   threadTitle?: string;
@@ -1793,6 +1797,14 @@ test.describe("federation remote window", () => {
     const protocolDir = path.join(fixtureRoot, "protocol");
     const requestLogPath = path.join(protocolDir, "fake-codex.protocol.jsonl");
     const launchMarkerPath = path.join(protocolDir, "fake-codex.launched");
+    const viewerRequestLogPath = path.join(
+      protocolDir,
+      "viewer-fake-codex.protocol.jsonl",
+    );
+    const viewerLaunchMarkerPath = path.join(
+      protocolDir,
+      "viewer-fake-codex.launched",
+    );
     await mkdir(protocolDir, { recursive: true });
 
     const navigationDiagnostics: string[] = [];
@@ -1891,9 +1903,35 @@ test.describe("federation remote window", () => {
         return (await api.generateFederationInvite()).invite;
       });
 
+      // The viewer has its own Codex, as an operator's machine does, with a
+      // catalog the owner does not share. Without one, discovery would find
+      // whatever Codex the host has installed (none on CI's runner), and the
+      // remote child would take a different path on each machine.
       viewer = await launchElectronApp({
         requiresReplayDriver: false,
         secretStorage: "memory",
+        preLaunchHook: async (homeRoot) => {
+          const { executablePath: viewerFakeCodexPath } =
+            await seedFakeCodexExecutable({
+              homeRoot,
+              requestLogPath: viewerRequestLogPath,
+              launchMarkerPath: viewerLaunchMarkerPath,
+              models: [VIEWER_ONLY_CODEX_MODEL],
+            });
+          const configPath = path.join(
+            homeRoot,
+            ".pwragent",
+            "profiles",
+            "default",
+            "config.toml",
+          );
+          await mkdir(path.dirname(configPath), { recursive: true });
+          await writeFile(
+            configPath,
+            `[models.codex]\npath = ${JSON.stringify(viewerFakeCodexPath)}\n`,
+            "utf8",
+          );
+        },
       });
       await expect
         .poll(
@@ -1910,6 +1948,19 @@ test.describe("federation remote window", () => {
           { timeout: 30_000 },
         )
         .toBe(false);
+      await expect
+        .poll(
+          async () => await viewer!.window.evaluate(async () => {
+            const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+            const { backends } = await api.listBackends!({ includeUnavailable: true });
+            const codex = backends.find((backend) => backend.kind === "codex");
+            return codex?.available
+              ? codex.launchpadOptions?.models?.map((model) => model.id)
+              : undefined;
+          }),
+          { timeout: 30_000 },
+        )
+        .toEqual([VIEWER_ONLY_CODEX_MODEL]);
       // The renderer can become ready while the fire-and-forget federation
       // startup restart is still unwinding. Importing during that narrow boot
       // window coalesces with the disabled-mode restart instead of dialing the
@@ -2107,6 +2158,15 @@ test.describe("federation remote window", () => {
       expect(reviewStart).toBeTruthy();
       expect(initialize!.at).toBeLessThanOrEqual(threadStart!.at);
       expect(threadStart!.at).toBeLessThanOrEqual(reviewStart!.at);
+      // The viewer composed the child against its own Codex catalog. The
+      // owner runs it, so the owner's catalog chooses the model.
+      expect(threadStart!.params).toMatchObject({ model: "gpt-5.5" });
+      expect(
+        findAllFakeCodexRequests(
+          await readFakeCodexRequestLog(viewerRequestLogPath),
+          "review/start",
+        ),
+      ).toEqual([]);
       completed = true;
     } finally {
       // testInfo.status still reads "passed" while the body unwinds, so it

@@ -1093,3 +1093,159 @@ describe("ThreadTurnQueue.moveEntry", () => {
     });
   });
 });
+
+describe("ThreadTurnQueue.setEntryPaused", () => {
+  const thread = { backend: "codex" as const, threadId: "thread-1" };
+  const ids = (queue: ThreadTurnQueue): string[] =>
+    queue.getQueuedEntries(thread).map((entry) => entry.id);
+  const pausedIds = (queue: ThreadTurnQueue): string[] =>
+    queue.getQueuedEntries(thread).filter((entry) => entry.paused).map((entry) => entry.id);
+  /** A queue whose thread is busy until `state.active` turns false. */
+  const busyQueue = async (
+    entryIds: string[],
+    startTurn?: ConstructorParameters<typeof ThreadTurnQueue>[0]["startTurn"],
+  ): Promise<{ queue: ThreadTurnQueue; started: string[]; state: { active: boolean } }> => {
+    const state = { active: true };
+    const started: string[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => state.active,
+      startTurn: startTurn ?? (async (entry) => {
+        started.push(entry.id);
+        return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+      }),
+    });
+    for (const id of entryIds) await queue.submit(buildEntry({ id }));
+    return { queue, started, state };
+  };
+
+  it("passes over a paused entry when the turn ends and keeps it in place", async () => {
+    const { queue, started, state } = await busyQueue(["a", "b", "c"]);
+
+    await expect(queue.setEntryPaused("a", true)).resolves.toMatchObject({
+      disposition: "updated",
+      entry: { id: "a", paused: true },
+    });
+    state.active = false;
+    await queue.releaseThread(thread);
+
+    expect(started).toEqual(["b"]);
+    expect(ids(queue)).toEqual(["a", "c"]);
+    expect(pausedIds(queue)).toEqual(["a"]);
+    queue.close();
+  });
+
+  it("starts a new message at once when everything queued is paused", async () => {
+    const { queue, started, state } = await busyQueue(["a"]);
+    await queue.setEntryPaused("a", true);
+    state.active = false;
+
+    await expect(queue.submit(buildEntry({ id: "b" }))).resolves.toMatchObject({ status: "started" });
+    expect(started).toEqual(["b"]);
+    expect(ids(queue)).toEqual(["a"]);
+    queue.close();
+  });
+
+  it("starts a resumed entry when the thread is idle", async () => {
+    const { queue, started, state } = await busyQueue(["a"]);
+    await queue.setEntryPaused("a", true);
+    state.active = false;
+    await queue.releaseThread(thread);
+    expect(started).toEqual([]);
+
+    await expect(queue.setEntryPaused("a", false)).resolves.toMatchObject({
+      disposition: "updated",
+      entry: { id: "a" },
+    });
+    await vi.waitFor(() => expect(started).toEqual(["a"]));
+    expect(ids(queue)).toEqual([]);
+    queue.close();
+  });
+
+  it("answers unchanged and not_found without touching the queue", async () => {
+    const { queue } = await busyQueue(["a"]);
+
+    await expect(queue.setEntryPaused("a", false)).resolves.toMatchObject({ disposition: "unchanged" });
+    await queue.setEntryPaused("a", true);
+    await expect(queue.setEntryPaused("a", true)).resolves.toMatchObject({ disposition: "unchanged" });
+    await expect(queue.setEntryPaused("gone", true)).resolves.toEqual({
+      disposition: "not_found",
+      entryId: "gone",
+    });
+    expect(pausedIds(queue)).toEqual(["a"]);
+  });
+
+  it("does not pause a held entry, but a paused entry a hold reached still resumes", async () => {
+    const { queue } = await busyQueue(["queued"]);
+    await queue.setEntryPaused("queued", true);
+    await queue.submitHeld(buildEntry({ id: "held" }), "The steer target ended.");
+
+    await expect(queue.setEntryPaused("held", true)).resolves.toMatchObject({ disposition: "held" });
+    await expect(queue.setEntryPaused("queued", false)).resolves.toMatchObject({ disposition: "updated" });
+    expect(pausedIds(queue)).toEqual([]);
+  });
+
+  it("keeps an entry that could not start behind the paused ones, and Retry answers it", async () => {
+    let fail = true;
+    const started: string[] = [];
+    const { queue, state } = await busyQueue(["a", "b"], async (entry) => {
+      if (fail) throw new Error("backend unavailable");
+      started.push(entry.id);
+      return { backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` };
+    });
+    await queue.setEntryPaused("a", true);
+    state.active = false;
+    await queue.releaseThread(thread);
+
+    expect(ids(queue)).toEqual(["a", "b"]);
+    expect(queue.getQueuedEntries(thread).every((entry) => entry.manualReleaseRequired)).toBe(true);
+    await expect(queue.releaseEntryWithDisposition("a")).resolves.toMatchObject({ disposition: "not_head" });
+
+    fail = false;
+    await expect(queue.releaseEntryWithDisposition("b")).resolves.toMatchObject({ disposition: "started" });
+    expect(started).toEqual(["b"]);
+    expect(ids(queue)).toEqual(["a"]);
+    queue.close();
+  });
+
+  it("counts each pause change on the entry", async () => {
+    const { queue } = await busyQueue(["a"]);
+
+    await expect(queue.setEntryPaused("a", true)).resolves.toMatchObject({ entry: { paused: true, pauseRevision: 1 } });
+    await queue.setEntryPaused("a", true);
+    await expect(queue.setEntryPaused("a", false)).resolves.toMatchObject({ entry: { pauseRevision: 2 } });
+    expect(queue.getQueuedEntries(thread)[0]).not.toHaveProperty("paused");
+  });
+
+  it("puts an entry that could not start back in its own place when one ahead resumed meanwhile", async () => {
+    let failStart!: (error: Error) => void;
+    const { queue, state } = await busyQueue(["a", "b", "c"], async () =>
+      await new Promise((_resolve, reject) => { failStart = reject; }));
+    await queue.setEntryPaused("a", true);
+    state.active = false;
+    const release = queue.releaseThread(thread);
+    await vi.waitFor(() => expect(failStart).toBeTypeOf("function"));
+    expect(ids(queue)).toEqual(["a", "c"]);
+
+    // The operator resumes a while b's start is in flight, then b fails.
+    await queue.setEntryPaused("a", false);
+    failStart(new Error("backend unavailable"));
+    await release;
+
+    expect(ids(queue)).toEqual(["a", "b", "c"]);
+    queue.close();
+  });
+
+  it("starts a new grouped steer beside a paused batch instead of joining it", async () => {
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => true,
+      startTurn: async (entry) => ({ backend: entry.backend, threadId: entry.threadId, turnId: `turn-${entry.id}` }),
+    });
+    await queue.submitGroupedSteer(buildEntry({ id: "first" }));
+    await queue.setEntryPaused("first", true);
+
+    await queue.submitGroupedSteer(buildEntry({ id: "second" }));
+
+    expect(ids(queue)).toEqual(["first", "second"]);
+    expect(queue.getQueuedEntries(thread)[0]?.agentMessages).toHaveLength(1);
+  });
+});

@@ -192,7 +192,7 @@ async function pastePng(input: Locator, name: string, color: string): Promise<vo
   }, { color, name });
 }
 
-test("launchpad send controls stay on screen under two connection cards and pasted images", async () => {
+test("launchpad send controls stay on screen under the connection cards and pasted images", async () => {
   const fixture = await createLaunchpadBoundsFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
@@ -208,8 +208,10 @@ test("launchpad send controls stay on screen under two connection cards and past
     const composerInput = app.window.getByRole("textbox", { name: "New thread" });
     await expect(composerInput).toBeVisible();
 
+    // PwrGit and PwrSnap, plus Sandboxer, whose tile shows in every local
+    // state: an ad while its CLI is missing, a switch once it is set up.
     const cards = app.window.locator(".mcp-connection");
-    await expect(cards).toHaveCount(2);
+    await expect(cards).toHaveCount(3);
 
     await pastePng(composerInput, "bounds-one.png", "#3478f6");
     await expect(app.window.getByAltText("bounds-one.png")).toBeVisible();
@@ -224,6 +226,33 @@ test("launchpad send controls stay on screen under two connection cards and past
 
     const startButton = app.window.getByRole("button", { name: "Start thread" });
     await expect(startButton).toBeVisible();
+
+    // Measure the layout the operator is left with, not a frame of one
+    // still moving. The composer's height depends on the column's width,
+    // because its controls wrap, so a measurement taken while the launchpad
+    // is still sliding into place is a different scene. The precondition
+    // below failed on the macOS lane at 615px, on the run and the retry. A
+    // Linux run reproduced that number when it measured with the layout's
+    // padding transition still running: the column was 279px instead of
+    // 252px, the controls wrapped into four rows instead of five, and the
+    // composer measured 442px instead of 497px. Settled, the same scene
+    // measures 669px. Infinite animations never finish, so wait only for
+    // finite ones.
+    await app.window.evaluate(async () => {
+      const view = document.querySelector(".thread-view--launchpad");
+      if (!view) return;
+      for (;;) {
+        const moving = view
+          .getAnimations({ subtree: true })
+          .filter((animation) =>
+            animation.playState === "running"
+            && animation.effect?.getComputedTiming().endTime !== Infinity);
+        if (moving.length === 0) return;
+        await Promise.all(
+          moving.map((animation) => animation.finished.catch(() => undefined)),
+        );
+      }
+    });
 
     const measured = await app.window.evaluate(() => {
       const clip = document.querySelector(".thread-view--launchpad");

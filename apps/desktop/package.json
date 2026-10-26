@@ -1,7 +1,7 @@
 {
   "name": "@pwragent/desktop",
   "productName": "PwrAgent",
-  "version": "1.3.1",
+  "version": "1.3.3",
   "private": true,
   "description": "Thread-centric coding agent desktop app",
   "homepage": "https://pwragent.ai",
@@ -14,7 +14,7 @@
     "analyze:codex-thread-protocol": "tsx ./scripts/analyze-codex-thread-protocol.ts",
     "analyze:protocol-capture": "tsx ./scripts/analyze-protocol-capture.ts",
     "analyze:startup-cpu-profile": "tsx ./scripts/analyze-startup-cpu-profile.ts",
-    "build": "electron-vite build",
+    "build": "node ./scripts/build.mjs",
     "build:native:dock": "node ./scripts/build-dock-tile-plugin.mjs",
     "capture:codex-usage": "tsx ./scripts/capture-codex-usage-protocol.ts",
     "postbuild": "node ./scripts/check-main-bundle-boundary.mjs",
@@ -47,6 +47,7 @@
     "preview": "node ../../scripts/linux-sandbox.mjs --warn && electron-vite preview",
     "probe:quit-reentry": "node scripts/ensure-electron-runtime.mjs && electron ./scripts/electron-quit-reentry-probe.mjs",
     "test:e2e": "playwright test -c playwright.config.ts",
+    "test:e2e:prebuilt": "node scripts/ensure-electron-runtime.mjs && node ../../scripts/ci/desktop-out-cache.mjs verify && playwright test -c playwright.config.ts",
     "inspect:e2e:branch-drift": "node scripts/ensure-electron-runtime.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.inspect.config.ts e2e/thread-branch-drift.inspect.spec.ts --headed --timeout=0",
     "inspect:e2e:workspace-handoff": "node scripts/ensure-electron-runtime.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.inspect.config.ts e2e/workspace-handoff-dialog.inspect.spec.ts --headed --timeout=0",
     "inspect:e2e:markdown-table": "node scripts/ensure-electron-runtime.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.inspect.config.ts e2e/markdown-findings-table.inspect.spec.ts --headed --timeout=0",
@@ -131,13 +132,13 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/ws": "8.18.2",
-    "@vitejs/plugin-react": "^5.2.0",
+    "@vitejs/plugin-react": "^6.1.2",
     "axe-core": "^4.11.4",
     "electron": "^44.9.3",
     "electron-builder": "26.17.0",
-    "electron-vite": "^5.0.0",
+    "electron-vite": "^6.0.0",
     "tsx": "^4.20.6",
-    "vite": "^7.3.2"
+    "vite": "^8.3.1"
   },
   "optionalDependencies": {
     "@napi-rs/canvas-darwin-arm64": "1.0.11",

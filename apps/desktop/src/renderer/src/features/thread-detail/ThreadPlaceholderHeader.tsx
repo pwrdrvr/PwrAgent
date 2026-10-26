@@ -1,4 +1,4 @@
-import type { MessagingChannelKind } from "@pwragent/shared";
+import type { AppServerBackendKind, MessagingChannelKind } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { paintsAppTitleBar } from "../../lib/window-chrome";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
@@ -12,6 +12,7 @@ import {
 import { FederationRemoteBadge } from "../chrome/FederationRemoteBadge";
 import { MastheadActions, type MastheadActionsProps } from "../chrome/MastheadActions";
 import { BrandLockup } from "../chrome/BrandLockup";
+import { useProviderChipNeeded } from "../navigation/provider-chip-visibility";
 
 type ThreadPlaceholderLayoutControls = {
   sidebarOpen: boolean;
@@ -23,6 +24,8 @@ type ThreadPlaceholderLayoutControls = {
 };
 
 type ThreadPlaceholderHeaderProps = {
+  /** The provider behind `backendLabel`; it decides whether the chip shows. */
+  backend?: AppServerBackendKind;
   backendLabel?: string;
   /**
    * The launchpad's machine chip portals into this slot, beside the
@@ -66,6 +69,8 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
   const sidebarHidden = props.layout ? !props.layout.sidebarOpen : false;
   const showMasthead =
     sidebarHidden && !hasAppTitleBar && Boolean(props.masthead);
+  const providerChipNeeded = useProviderChipNeeded(props.backend);
+  const showBackendLabel = Boolean(props.backendLabel) && providerChipNeeded;
 
   return (
     <header className="thread-header thread-header--placeholder">
@@ -99,7 +104,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
             {props.machineSlotRef ? (
               <span className="thread-header__machine" ref={props.machineSlotRef} />
             ) : null}
-            {props.backendLabel ? (
+            {showBackendLabel ? (
               <span className="chip chip--backend">{props.backendLabel}</span>
             ) : null}
           </div>

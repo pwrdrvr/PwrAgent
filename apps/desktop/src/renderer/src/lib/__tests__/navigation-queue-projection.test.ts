@@ -96,6 +96,37 @@ describe("independent complete FIFO projection", () => {
       .map((turn) => turn.id)).toEqual(["a", "b", "c"]);
   });
 
+  it("takes each entry's pause from the owner's queue", () => {
+    const entry = (queueEntryId: string, position: number, paused?: boolean) => ({
+      queueEntryId, createdAt: 1, displayText: queueEntryId, origin: "manual" as const, position,
+      ...(paused ? { paused } : {}),
+    });
+    const current = [queued("a"), { ...queued("b"), paused: true }];
+
+    const reconciled = reconcileCompleteNavigationQueue({
+      owner,
+      projection: projection({ entries: [entry("a", 0, true), entry("b", 1)] }),
+      atReadStart: current,
+      current,
+    });
+
+    expect(reconciled.map((turn) => [turn.id, Boolean(turn.paused)])).toEqual([["a", true], ["b", false]]);
+  });
+
+  it("keeps a pause the owner announced against a queue read that left before it", () => {
+    const entry = (paused?: boolean, pauseRevision?: number) => ({
+      queueEntryId: "a", createdAt: 1, displayText: "a", origin: "manual" as const, position: 0,
+      ...(paused ? { paused } : {}), ...(pauseRevision ? { pauseRevision } : {}),
+    });
+    const current = [{ ...queued("a"), paused: true, pauseRevision: 1 }];
+    const reconcile = (projected: ReturnType<typeof entry>) => reconcileCompleteNavigationQueue({
+      owner, projection: projection({ entries: [projected] }), atReadStart: current, current,
+    })[0];
+
+    expect(reconcile(entry())).toMatchObject({ paused: true, pauseRevision: 1 });
+    expect(reconcile(entry(false, 2))).not.toHaveProperty("paused");
+  });
+
   it("keeps a scheduled review that waits outside the turn FIFO", () => {
     const review: ComposerQueuedTurnSnapshot = {
       ...queued("pending-review:1"),

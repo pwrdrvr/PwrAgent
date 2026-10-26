@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
+import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
 
 const REPLAY_FIXTURE_PATH_ENV = "PWRAGENT_REPLAY_FIXTURE_PATH";
 
@@ -99,6 +100,7 @@ const tempDirs: string[] = [];
 
 function createOverlayStoreMock() {
   return {
+    ...mockSubAgentReads(() => undefined),
     getThreadOverlayState: async () => undefined,
     getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
       Object.fromEntries(threadIds.map((threadId) => [threadId, undefined])),

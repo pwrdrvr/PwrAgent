@@ -55,6 +55,7 @@ import {
   readRendererFederationTarget,
 } from "../../lib/federation-window";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
+import { countArchiveGroup } from "./archive-group-counts";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import {
@@ -474,6 +475,11 @@ type SidebarProps = {
     thread: NavigationThreadSummary,
     pr: PrSummary,
   ) => Promise<void>;
+  /**
+   * Copies the same report as Help → Copy Diagnostics Info, but for the
+   * thread the menu was opened on. It must not select that thread.
+   */
+  onCopyThreadDiagnostics?: (thread: NavigationThreadSummary) => void;
   /**
    * Called when the user unbinds a messaging conversation from a
    * thread via the binding chip. Receives the thread + binding so the
@@ -2347,14 +2353,31 @@ export function Sidebar(props: SidebarProps) {
         threadSummaryIdentityKey(contextMenu.thread),
       )?.count ?? 0
     : 0;
-  const contextMenuChildThreadCount = contextMenu && !contextMenuIsBulk
-    ? props.threads.filter(
-        (thread) =>
-          resolveThreadParentKey(thread, navigationThreadByKey)
-          === threadSummaryIdentityKey(contextMenu.thread),
-      ).length
-    : 0;
+  // A collapsed parent's sub-threads are not loaded; its row still reports
+  // how many it has, so the menu offers the same two archives either way.
+  // Count from the current row: the menu's copy is frozen at open.
+  const contextMenuArchiveThread = contextMenu && !contextMenuIsBulk
+    ? navigationThreadByKey.get(threadSummaryIdentityKey(contextMenu.thread))
+      ?? contextMenu.thread
+    : undefined;
+  const contextMenuArchiveGroup = useMemo(
+    () => contextMenuArchiveThread
+      ? countArchiveGroup(contextMenuArchiveThread, navigationThreads, navigationThreadByKey)
+      : undefined,
+    [contextMenuArchiveThread, navigationThreadByKey, navigationThreads],
+  );
+  const contextMenuChildThreadCount = contextMenuArchiveGroup?.childCount ?? 0;
   const contextMenuHasChildThreads = contextMenuChildThreadCount > 0;
+  const contextMenuUngroupLabel = `Ungroup ${
+    contextMenuChildThreadCount === 1
+      ? "1 sub-thread"
+      : `${contextMenuChildThreadCount} sub-threads`
+  }`;
+  const contextMenuArchiveGroupLabel = contextMenuArchiveGroup
+    ? `Archive ${contextMenuArchiveGroup.exact ? "" : "at least "}${
+        contextMenuArchiveGroup.threadCount
+      } threads`
+    : "";
   const contextMenuPrimaryDirectory = contextMenu
     ? getThreadPrimaryDirectory(contextMenu.thread)
     : undefined;
@@ -2718,6 +2741,7 @@ export function Sidebar(props: SidebarProps) {
     !contextMenuIsBulk &&
       contextMenu &&
       (contextMenu.thread.messagingBindings ?? []).length > 0 &&
+      contextMenu.thread.federation?.ref.target.scope !== "remote" &&
       props.onUnbindMessagingBinding,
   );
 
@@ -3658,11 +3682,7 @@ export function Sidebar(props: SidebarProps) {
                   {contextMenuCanArchive && contextMenuHasChildThreads ? (
                     <>
                       <button
-                        aria-label={`Archive Thread Only. Ungroup ${
-                          contextMenuChildThreadCount === 1
-                            ? "1 sub-thread"
-                            : `${contextMenuChildThreadCount} sub-threads`
-                        }`}
+                        aria-label={`Archive Thread Only. ${contextMenuUngroupLabel}`}
                         className="thread-context-menu__button--stacked"
                         role="menuitem"
                         type="button"
@@ -3674,16 +3694,11 @@ export function Sidebar(props: SidebarProps) {
                       >
                         <span>Archive Thread Only</span>
                         <span className="thread-context-menu__item-detail">
-                          Ungroup{" "}
-                          {contextMenuChildThreadCount === 1
-                            ? "1 sub-thread"
-                            : `${contextMenuChildThreadCount} sub-threads`}
+                          {contextMenuUngroupLabel}
                         </span>
                       </button>
                       <button
-                        aria-label={`Archive Thread and Sub-Threads. Archive ${
-                          contextMenuChildThreadCount + 1
-                        } threads`}
+                        aria-label={`Archive Thread and Sub-Threads. ${contextMenuArchiveGroupLabel}`}
                         className="thread-context-menu__button--stacked"
                         role="menuitem"
                         type="button"
@@ -3695,7 +3710,7 @@ export function Sidebar(props: SidebarProps) {
                       >
                         <span>Archive Thread + Sub-Threads</span>
                         <span className="thread-context-menu__item-detail">
-                          Archive {contextMenuChildThreadCount + 1} threads
+                          {contextMenuArchiveGroupLabel}
                         </span>
                       </button>
                     </>
@@ -3810,6 +3825,19 @@ export function Sidebar(props: SidebarProps) {
                     onClick={() => copyFromContextMenu(contextMenuBranchName)}
                   >
                     Copy Branch Name
+                  </button>
+                ) : null}
+                {props.onCopyThreadDiagnostics ? (
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      const thread = contextMenu.thread;
+                      setContextMenu(undefined);
+                      props.onCopyThreadDiagnostics?.(thread);
+                    }}
+                  >
+                    Copy Diagnostics Info
                   </button>
                 ) : null}
               </div>

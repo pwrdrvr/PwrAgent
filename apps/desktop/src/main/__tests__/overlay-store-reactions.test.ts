@@ -378,7 +378,7 @@ describe("SqliteOverlayStore — thread reactions", () => {
 
     const reopened = StateDb.open(dbPath);
     const reopenedStore = new SqliteOverlayStore(reopened);
-    const overlay = await reopenedStore.getThreadOverlayState({
+    const subAgents = await reopenedStore.listThreadSubAgents({
       backend: "codex",
       threadId: "thread-1",
     });
@@ -387,8 +387,9 @@ describe("SqliteOverlayStore — thread reactions", () => {
       fetchedAt: 4000,
       threads: [buildThreadSummary({ updatedAt: 2000 })],
     });
-    expect(overlay?.subAgents).toEqual([subAgent]);
-    expect(snapshot.threads[0]?.subAgents).toEqual([subAgent]);
+    expect(subAgents).toEqual([subAgent]);
+    // Cards are read by collection page, never carried on the snapshot row.
+    expect(snapshot.threads[0]?.subAgents ?? []).toEqual([]);
     reopened.close();
 
     stateDb = StateDb.open(dbPath);
@@ -449,9 +450,8 @@ describe("SqliteOverlayStore — orphaned sub-agents", () => {
       liveRuntimeInstanceIds: ["runtime-current"],
       sessionStartedAt: 2_000,
     });
-    await expect(store.getThreadOverlayState({ backend: "codex", threadId: "native-parent" })).resolves.toMatchObject({
-      subAgents: [expect.objectContaining({ status: "running" })],
-    });
+    await expect(store.listThreadSubAgents({ backend: "codex", threadId: "native-parent" }))
+      .resolves.toMatchObject([expect.objectContaining({ status: "running" })]);
   });
 
   it("repairs dead owners without touching another live instance or ambiguous legacy work", async () => {
@@ -500,48 +500,40 @@ describe("SqliteOverlayStore — orphaned sub-agents", () => {
       skippedOwnerlessWithOtherRuntimes: 1,
     });
 
-    await expect(store.getThreadOverlayState({
+    await expect(store.listThreadSubAgents({
       backend: "codex",
       threadId: "dead-owner",
-    })).resolves.toMatchObject({
-      subAgents: [
-        expect.objectContaining({
-          monitorId: "monitor-dead-owner",
-          status: "failure",
-          outcome: "failure",
-          completedAt: 1_500,
-          updatedAt: 1_500,
-          completionSource: expect.objectContaining({
-            type: "pwragent_fallback",
-            reason: "owner_runtime_stopped",
-          }),
+    })).resolves.toMatchObject([
+      expect.objectContaining({
+        monitorId: "monitor-dead-owner",
+        status: "failure",
+        outcome: "failure",
+        completedAt: 1_500,
+        updatedAt: 1_500,
+        completionSource: expect.objectContaining({
+          type: "pwragent_fallback",
+          reason: "owner_runtime_stopped",
         }),
-      ],
-    });
-    await expect(store.getThreadOverlayState({
+      }),
+    ]);
+    await expect(store.listThreadSubAgents({
       backend: "codex",
       threadId: "live-owner",
-    })).resolves.toMatchObject({
-      subAgents: [expect.objectContaining({ status: "running" })],
-    });
-    await expect(store.getThreadOverlayState({
+    })).resolves.toMatchObject([expect.objectContaining({ status: "running" })]);
+    await expect(store.listThreadSubAgents({
       backend: "codex",
       threadId: "legacy-ownerless",
-    })).resolves.toMatchObject({
-      subAgents: [expect.objectContaining({ status: "running" })],
-    });
-    await expect(store.getThreadOverlayState({
+    })).resolves.toMatchObject([expect.objectContaining({ status: "running" })]);
+    await expect(store.listThreadSubAgents({
       backend: "codex",
       threadId: "terminal-missing-time",
-    })).resolves.toMatchObject({
-      subAgents: [
-        expect.objectContaining({
-          status: "success",
-          outcome: "success",
-          completedAt: 1_600,
-        }),
-      ],
-    });
+    })).resolves.toMatchObject([
+      expect.objectContaining({
+        status: "success",
+        outcome: "success",
+        completedAt: 1_600,
+      }),
+    ]);
   });
 
   it("repairs a replaced registry without touching another live process", async () => {
@@ -585,34 +577,28 @@ describe("SqliteOverlayStore — orphaned sub-agents", () => {
       skippedOwnerlessWithOtherRuntimes: 0,
     });
 
-    await expect(store.getThreadOverlayState({
+    await expect(store.listThreadSubAgents({
       backend: "codex",
       threadId: "replaced-registry",
-    })).resolves.toMatchObject({
-      subAgents: [
-        expect.objectContaining({
-          status: "failure",
-          outcome: "failure",
-          ownerRuntimeInstanceId: "runtime-current",
-          ownerRegistrySessionId: "registry-replaced",
-          completionSource: expect.objectContaining({
-            reason: "owner_registry_replaced",
-          }),
+    })).resolves.toMatchObject([
+      expect.objectContaining({
+        status: "failure",
+        outcome: "failure",
+        ownerRuntimeInstanceId: "runtime-current",
+        ownerRegistrySessionId: "registry-replaced",
+        completionSource: expect.objectContaining({
+          reason: "owner_registry_replaced",
         }),
-      ],
-    });
-    await expect(store.getThreadOverlayState({
+      }),
+    ]);
+    await expect(store.listThreadSubAgents({
       backend: "codex",
       threadId: "current-registry",
-    })).resolves.toMatchObject({
-      subAgents: [expect.objectContaining({ status: "running" })],
-    });
-    await expect(store.getThreadOverlayState({
+    })).resolves.toMatchObject([expect.objectContaining({ status: "running" })]);
+    await expect(store.listThreadSubAgents({
       backend: "codex",
       threadId: "other-live-process",
-    })).resolves.toMatchObject({
-      subAgents: [expect.objectContaining({ status: "running" })],
-    });
+    })).resolves.toMatchObject([expect.objectContaining({ status: "running" })]);
   });
 
   it("repairs old ownerless work only when this is the sole runtime", async () => {
@@ -641,14 +627,14 @@ describe("SqliteOverlayStore — orphaned sub-agents", () => {
       repairedThreads: 1,
     });
 
-    const overlay = await store.getThreadOverlayState({
+    const subAgents = await store.listThreadSubAgents({
       backend: "codex",
       threadId: "thread-1",
     });
-    const oldSubAgent = overlay?.subAgents?.find(
+    const oldSubAgent = subAgents.find(
       (subAgent) => subAgent.monitorId === "monitor-old",
     );
-    const newSubAgent = overlay?.subAgents?.find(
+    const newSubAgent = subAgents.find(
       (subAgent) => subAgent.monitorId === "monitor-new",
     );
     expect(oldSubAgent).toMatchObject({

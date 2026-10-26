@@ -84,6 +84,23 @@ timeline notifications. Permission requests use the existing approval UI;
 request and removes it from the registry. Only explicit approval authorizes
 the tool; the bridge does not synthesize durable CLI permission rules.
 
+Claude Code's own tools get the rows other providers get. Read, Glob, Grep,
+WebSearch, and WebFetch rows name the file, pattern, query, or URL. A
+successful Edit, Write, or NotebookEdit row carries its unified diff, built
+from the tool result's structured patch; a new file with an empty patch diffs
+its content. Each edit also extends the turn's `turn/diff/updated`, which
+feeds the live Edited Files row and work rail. Diffs over 256 KB keep their
+line counts only. A TodoWrite call is the turn's plan: it emits
+`turn/plan/updated` and replaces one plan entry per turn instead of adding a
+tool row. Other tools keep a generic row with their input.
+
+Compaction is its own row with Claude's token counts and emits
+`thread/compacted`, the boundary Token Miser replay accounting uses.
+`/compact` itself runs in the CLI as a prompt. A model refusal is kept as a
+warning row. Compacting status, API retries, permission denials, and
+non-low-priority CLI notifications are activity-only warnings in the live
+transcript. Thinking blocks are not shown, matching the Codex transcript.
+
 | PwrAgent mode | SDK mode |
 | --- | --- |
 | Default | `default` |
@@ -93,9 +110,25 @@ the tool; the bridge does not synthesize durable CLI permission rules.
 The SDK may reject a mode that the installed CLI or selected model does not
 support. PwrAgent reports that error and retains the previous mode.
 
+The composer's **Plan** toggle runs one turn in Claude's `plan` permission
+mode, which keeps Claude read-only while it investigates; the next turn
+returns to the thread's mode. Claude ends a plan by calling `ExitPlanMode`
+with the plan as its input. PwrAgent shows that plan as the turn's plan card,
+as it shows a Codex plan, and declines the call without an approval card, so
+the turn ends with the plan in front of the operator, who replies to
+implement it.
+
+A thread's linked directories other than its working directory, including
+directories attached later with `attach_thread_directory`, are passed as
+`additionalDirectories`, so Claude can read and edit them without a
+per-file permission prompt. The set is fixed when the CLI starts: a change
+relaunches an idle session at the next message, and waits for the next
+relaunch while background tasks run.
+
 The adapter records metadata and append-only replay entries beneath the
 active profile's `state/claude/` directory. It does not inspect Claude-owned
-history files or store transcripts in SQLite. Normal desktop overlays continue
+history files or store transcripts in SQLite; rewind reads Claude's
+conversation only through the SDK's session API. Normal desktop overlays continue
 to use the existing registry persistence paths. Checked-in SQLite budgets
 measure three commits (49,440 WAL bytes) for thread creation and one commit
 (16,480 WAL bytes) for an operator permission change. One hundred duplicate
@@ -108,15 +141,133 @@ pagination are not advertised.
 
 Queue uses PwrAgent's shared FIFO and resumes the SDK session after the active
 turn finishes. Steer sends an additional native user message through the same
-open SDK input stream with `priority: "now"`. Claude chooses the delivery
-boundary; an input racing completion can become a subsequent native turn.
-PwrAgent keeps the query open until result UUIDs acknowledge every accepted
+open SDK input stream with `priority: "next"`. Claude adds it to the running
+turn at the next tool boundary, or starts a native turn with it once the
+current response ends. Do not use `"now"`: it aborts the in-flight response
+and ends that native turn with an `error_during_execution` result.
+PwrAgent keeps the turn open until result UUIDs acknowledge every accepted
 steer, and treats those results as one logical desktop turn. Usage is recorded
-once from the final cumulative result. Stop closes the stream and aborts the
-query, including pending input. Request IDs deduplicate retries; attachment
+once per desktop turn from the final cumulative result, less the totals when
+the turn began. Stop ends the turn and drops its pending input; see below for
+when it keeps the process. Request IDs deduplicate retries; attachment
 parts and message origins survive replay. A steer with an agent origin writes
 one SQLite commit (~12 KB, or ~1.24 MB/day at 100 steers/day); a duplicate
 request adds no write, and there are no idle writes.
+
+## Rewind
+
+A Claude thread can rewind to before any prompt that starts a turn: that
+turn and every later one leave the conversation, and the prompt returns to
+the composer. With Restore files, Claude also puts back the files its Edit,
+Write, and NotebookEdit tools changed since. Shell commands' changes are not
+restored. See [thread-rewind.md](thread-rewind.md) for the provider-neutral
+contract and the confirmation.
+
+- Every query sets `enableFileCheckpointing`, so the CLI checkpoints files at
+  each prompt.
+- Each prompt is sent with the desktop turn's id as its SDK `uuid`, including
+  the first prompt of a session. The prompt's transcript entry is
+  `user:<turnId>`, so the turn-to-prompt mapping needs no extra storage.
+  Prompts sent before this have provider-assigned UUIDs, and Claude compaction
+  can drop a prompt from the conversation it resumes. Neither can be rewound;
+  the confirmation says so.
+- The adapter finds the prompt with the SDK's `getSessionMessages`, the same
+  session API it uses for titles; it does not read Claude's files itself. The
+  entry just before the prompt is the point the next query resumes at
+  (`resume` with `resumeSessionAt`). Claude writes the next turn as a new
+  branch of the same session file, so prompt UUIDs and file checkpoints stay
+  valid for later rewinds. `forkSession` was not used: it gives every
+  forked entry a new UUID, which would orphan both.
+- Rewinding the first prompt leaves nothing to resume at. The next turn starts
+  a new SDK session with its own id; the thread id already named the first.
+- Files restore through a control-only query: `resume` the thread's session
+  with checkpointing, send no prompt, call `Query.rewindFiles`, and close.
+  The confirmation's file count comes from the same call with `dryRun`.
+  Files go first, so a refused restore leaves the conversation as it was.
+  A turn waits for a control query to close, so two CLI processes never
+  resume one session. The confirmation holds its button for the dry run, so
+  a dry run Claude does not answer in 30 seconds reports the files as
+  unavailable rather than holding it forever.
+- The rewind is refused while a turn starts or runs, or while a background
+  task runs. An idle session kept open for a task's follow-up is closed once
+  the prompt is confirmed rewindable, never for a rewind that is refused.
+  A message sent during the rewind waits in the queue, which drains after it.
+- The session metadata records each rewind: the turn it removed, the SDK
+  session, and the removed branch's last entry, which is where an undo would
+  resume. The append-only history gains a truncation line that drops the
+  removed entries on every read, so the rewind survives a restart.
+
+## Background tasks and sub-agents
+
+Claude runs shell commands and sub-agents as tasks. `Agent` calls run in the
+background by default, and `Bash` can too. A background call answers at once
+with a placeholder, and Claude emits the turn's `result` while the task keeps
+running. Closing the query kills the CLI process and every task with it, and
+closing its stdin makes the CLI hold results and sweep background shells after
+about five seconds. So the query is a per-thread live session that can outlive
+the desktop turn, as a Codex background terminal outlives its turn.
+
+A desktop turn ends at the `result` that acknowledges every steer, once Claude
+is idle, whether or not a task still runs. PwrAgent sets
+`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`; when the CLI reports
+`session_state_changed`, the turn also waits for `idle`, which follows
+Claude's own background-agent loop. The session stays open while a task runs.
+The task set comes from `background_tasks_changed`, which the CLI documents as
+authoritative, plus `task_*` edges for foreground tasks. A foreground task
+also settles with its tool result or its native result, since it cannot
+outlive either. Housekeeping tasks the CLI marks `ambient` are not shown and
+do not keep the session open.
+
+Claude answers a task notification with a native turn of its own
+(`session_state_changed: running`, then `init`). With no desktop turn open,
+PwrAgent opens one for it: `turn/started` with no user message, then the
+follow-up's items, then `turn/completed`. A follow-up that produces no text
+is not reported as a failed send. The session closes once no task runs,
+Claude is idle, and the last task notification has had its follow-up. If a
+task settles and Claude runs no follow-up within five seconds, the session
+closes without one.
+
+A message sent while the session is live goes into the same input stream with
+`priority: "next"`, and its turn ends at the result that acknowledges it. A
+changed model, effort, permission mode, or MCP server set is applied first
+through `setModel`, `applyFlagSettings({ effortLevel })`, `setPermissionMode`,
+and `setMcpServers`. New agent instructions change the system prompt, which
+only a new process takes. A relaunch would stop the session's tasks, so while
+a task runs the new instructions wait for the next launch; with none running,
+the turn closes the session and resumes in a new query. A control the CLI
+rejects relaunches the same way when no task runs, and otherwise fails the
+message, leaving the session and its settings as they were. MCP grants the
+registry issues for a turn are revoked when the session that uses them
+closes, not when the turn ends.
+
+Between turns the thread's status stays idle, so the composer sends instead of
+queueing. Its row still shows the working scanner and the thread stays in
+Attention, because a finished task wakes Claude for a follow-up turn. A Codex
+background terminal never wakes the agent, so a Codex row shows a quiet `>_`
+mark instead and its turn ends normally. The registry publishes a Codex
+thread's terminals as `thread/backgroundTasks/updated` when their membership
+changes, since Codex announces none. The quit prompt and auto-archive count
+both kinds as busy, and archiving refuses until the tasks are stopped. The tool row of a background call stays running until its
+notification, then shows the task's summary in the turn that made the call.
+A permission request or MCP elicitation from a task between turns belongs to
+the latest turn. Running tasks are published as
+`thread/backgroundTasks/updated` and listed in the Executions rail beside
+Codex background terminals, with the sub-agent type and the latest
+`task_progress` line. Stop on a row calls `Query.stopTask`.
+
+Stop on a turn keeps the session's tasks when it can. While a task runs and
+the CLI advertises `interrupt_cancel_queued_v1` at init, Stop sends
+`interrupt` with `cancelQueued: true`, which ends Claude's native turn and
+drops steers still queued for it. The desktop turn ends `cancelled` at the
+interrupted result, or after five seconds if Claude sends none. When the
+interrupt dropped a message Claude had not started and Claude is idle, no
+result will come, so the turn ends at once. The process and its tasks stay
+up either way. With no task running, or a CLI without that
+capability, Stop closes the query, since a plain interrupt would leave queued
+steers to run after the stop. Quitting stops turns by closing their queries,
+and closes every session and its tasks. A relaunch hands the old session's
+MCP grants to the new one, because the relaunching turn registered the same
+per-thread grants again.
 
 ## Usage, context, and MCP
 

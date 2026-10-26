@@ -323,6 +323,130 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("folds a finished Claude turn's phase-less replies between tool calls into one work group", () => {
+    // Claude's history carries no phase on any reply, so only the turn's
+    // shape says which reply was the answer: the one no tool work follows.
+    const turn = { id: "turn-1", status: "completed" as const, completedAt: 9_000 };
+    const first = reply("m1", "Checking the harness.", turn);
+    const firstTool = tool("tool-1", turn);
+    const second = reply("m2", "Dark theme looks right. Running axe:", turn);
+    const secondTool = tool("tool-2", turn);
+    const third = reply("m3", "Committing with explicit paths:", turn);
+    const thirdTool = tool("tool-3", turn);
+    const answer = reply("m4", "Pushed. The PR is ready for review.", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [first, firstTool, second, secondTool, third, thirdTool, answer],
+    });
+
+    expect(items).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:m1:complete",
+        collapsible: true,
+        entries: [first, firstTool, second, secondTool, third, thirdTool],
+        label: "Previous work · 3 tool updates",
+      },
+      { type: "entry", entry: answer },
+    ]);
+  });
+
+  it("folds a finished ACP turn's final-tagged replies that more tool work follows", () => {
+    // The ACP normalizer tags every agent message final, including the ones
+    // an agent writes between tool calls.
+    const turn = completedTurn("turn-1", 70_000);
+    const first = reply("m1", "Reading the config.", turn, "final");
+    const firstTool = tool("tool-1", turn);
+    const second = reply("m2", "Found it. Editing:", turn, "final");
+    const secondTool = tool("tool-2", turn);
+    const answer = reply("m3", "Done.", turn, "final");
+
+    expect(buildTranscriptRenderItems({
+      entries: [first, firstTool, second, secondTool, answer],
+    })).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:m1:complete",
+        collapsible: true,
+        entries: [first, firstTool, second, secondTool],
+        label: "Worked for 1m 10s · 2 tool updates",
+      },
+      { type: "entry", entry: answer },
+    ]);
+  });
+
+  it("keeps a finished turn's closing replies in view when only non-work entries follow them", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const first = reply("m1", "Running the suite:", turn);
+    const firstTool = tool("tool-1", turn);
+    const answer = reply("m2", "All green.", turn);
+    const postscript = reply("m3", "One caveat: the lab was offline.", turn);
+    const usage: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-turn-usage-turn-1",
+      summary: "Turn usage: 1,000 tokens",
+      details: [],
+      turn,
+    };
+
+    expect(buildTranscriptRenderItems({
+      entries: [first, firstTool, answer, postscript, usage],
+    })).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:m1:complete",
+        collapsible: true,
+        entries: [first, firstTool],
+        label: "Worked for 1m 10s",
+      },
+      { type: "entry", entry: answer },
+      { type: "entry", entry: postscript },
+      { type: "entry", entry: usage },
+    ]);
+  });
+
+  it("keeps a reply the operator answered in view though the turn worked on after it", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const question = reply("m1", "Should I also update the docs?", turn);
+    const operatorReply = steer("s1", "Yes, please.", turn);
+    const docsTool = tool("tool-1", turn);
+    const answer = reply("m2", "Docs updated.", turn);
+
+    expect(buildTranscriptRenderItems({
+      entries: [question, operatorReply, docsTool, answer],
+    })).toEqual([
+      { type: "entry", entry: question },
+      { type: "entry", entry: operatorReply },
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-1:complete",
+        collapsible: true,
+        entries: [docsTool],
+        label: "Worked for 1m 10s",
+      },
+      { type: "entry", entry: answer },
+    ]);
+  });
+
+  it("still shows a running Claude turn's replies between tool calls", () => {
+    const turn = { id: "turn-1", status: "in_progress" as const, startedAt: 1_000 };
+    const first = reply("m1", "Checking the harness.", turn);
+    const firstTool = tool("tool-1", turn);
+    const second = reply("m2", "Running axe:", turn);
+    const secondTool = tool("tool-2", turn);
+
+    expect(buildTranscriptRenderItems({
+      entries: [first, firstTool, second, secondTool],
+      activeTurnId: "turn-1",
+      now: 5_000,
+    })).toEqual([
+      { type: "entry", entry: first },
+      { type: "entry", entry: firstTool },
+      { type: "entry", entry: second },
+      { type: "entry", entry: secondTool },
+    ]);
+  });
+
   it("leaves legacy assistant messages alone", () => {
     const legacy: AppServerThreadMessageEntry = {
       type: "message",
@@ -346,7 +470,7 @@ describe("buildTranscriptRenderItems", () => {
       details: [],
       turn,
     };
-    const answer = final("f1", "Interim answer.", turn);
+    const steered = steer("s1", "Check the other file too.", turn);
     const secondActivity: AppServerThreadActivityEntry = {
       type: "activity",
       id: "tool-2",
@@ -356,7 +480,7 @@ describe("buildTranscriptRenderItems", () => {
     };
 
     const items = buildTranscriptRenderItems({
-      entries: [first, firstActivity, answer, secondActivity],
+      entries: [first, firstActivity, steered, secondActivity],
     });
 
     expect(items).toEqual([
@@ -367,7 +491,7 @@ describe("buildTranscriptRenderItems", () => {
         entries: [first, firstActivity],
         label: "Worked for 1m 10s",
       },
-      { type: "entry", entry: answer },
+      { type: "entry", entry: steered },
       {
         type: "workPhaseGroup",
         id: "work:turn-1:tool-2:complete",
@@ -417,6 +541,52 @@ describe("buildTranscriptRenderItems", () => {
         entries: [secondActivity],
         label: "Working for 1m 01s",
       },
+    ]);
+  });
+
+  it("keeps the active work group when the turn's total follows it", () => {
+    // A turn total always sits at the end of its own turn, including while
+    // the turn is still streaming; the live work above it is still bottom work.
+    const turn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 1_000,
+    };
+    const first = commentary("c1", "First scan.", turn);
+    const activity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "tool-1",
+      summary: "Read one file",
+      details: [],
+      turn,
+    };
+    const usage: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-turn-usage-turn-1",
+      summary: "Turn usage: 1,200 uncached in",
+      status: "completed",
+      details: [],
+      createdAt: 30_000,
+      turn,
+    };
+
+    const items = buildTranscriptRenderItems({
+      entries: [first, activity, usage],
+      activeTurnId: "turn-1",
+      now: 62_000,
+    });
+
+    expect(items).toEqual([
+      { type: "entry", entry: first },
+      {
+        type: "workPhaseGroup",
+        activeStartedAt: 1_000,
+        id: "work:turn-1:active",
+        collapsible: false,
+        entries: [activity],
+        label: "Working for 1m 01s",
+      },
+      { type: "entry", entry: usage },
     ]);
   });
 
@@ -704,7 +874,7 @@ describe("buildTranscriptRenderItems", () => {
       details: [],
       turn,
     };
-    const answer = final("f1", "Interim answer.", turn);
+    const steered = steer("s1", "Keep going.", turn);
     const secondActivity: AppServerThreadActivityEntry = {
       type: "activity",
       id: "live-warning-thread-1",
@@ -714,7 +884,7 @@ describe("buildTranscriptRenderItems", () => {
     };
 
     const items = buildTranscriptRenderItems({
-      entries: [firstActivity, answer, secondActivity],
+      entries: [firstActivity, steered, secondActivity],
     });
 
     expect(items).toEqual([
@@ -725,7 +895,7 @@ describe("buildTranscriptRenderItems", () => {
         entries: [firstActivity],
         label: "Worked for 1m 10s",
       },
-      { type: "entry", entry: answer },
+      { type: "entry", entry: steered },
       {
         type: "workPhaseGroup",
         id: "work:turn-1:live-warning-thread-1:complete:1",
@@ -792,7 +962,7 @@ describe("buildTranscriptRenderItems", () => {
       details: [],
       turn,
     };
-    const answer = final("f1", "Final answer.", turn);
+    const steered = steer("s1", "Update the binary too.", turn);
     const emptyDiffActivity: AppServerThreadActivityEntry = {
       type: "activity",
       id: "diff-empty",
@@ -814,7 +984,7 @@ describe("buildTranscriptRenderItems", () => {
     };
 
     const items = buildTranscriptRenderItems({
-      entries: [firstActivity, answer, emptyDiffActivity],
+      entries: [firstActivity, steered, emptyDiffActivity],
     });
 
     expect(items).toEqual([
@@ -825,7 +995,7 @@ describe("buildTranscriptRenderItems", () => {
         entries: [firstActivity],
         label: "Worked for 1m 10s",
       },
-      { type: "entry", entry: answer },
+      { type: "entry", entry: steered },
       {
         type: "workPhaseGroup",
         id: "work:turn-1:diff-empty:complete",
@@ -1062,7 +1232,87 @@ describe("buildTranscriptRenderItems", () => {
       { type: "entry", entry: answer },
     ]);
   });
+
+  it("keeps a completed turn's commentary question out of its work group", () => {
+    const turn = completedTurn("turn-1", 284_000);
+    const first = commentary("c1", "Checking the lab.", turn);
+    const lookup = tool("tool-1", turn);
+    const asked = question("q1", "What is the path to the lab config?", turn, "commentary");
+    const later = tool("tool-2", turn);
+    const answer = final("f1", "Blocked on the lab config.", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [first, lookup, asked, later, answer],
+    });
+
+    expect(items).toContainEqual({ type: "entry", entry: asked });
+    expect(groupedEntries(items)).not.toContain(asked);
+  });
+
+  it("keeps an interim question that more work follows out of its work group", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const asked = question("q1", "Which runner should I use?", turn);
+    const before = tool("tool-1", turn);
+    const after = tool("tool-2", turn);
+    const answer = final("f1", "Done.", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [before, asked, after, answer],
+    });
+
+    expect(items).toContainEqual({ type: "entry", entry: asked });
+    expect(groupedEntries(items)).not.toContain(asked);
+  });
+
+  it("keeps a question out of the live work group", () => {
+    const turn = { id: "turn-1", status: "in_progress" as const, startedAt: 1_000 };
+    const before = tool("tool-1", turn);
+    const asked = question("q1", "Which runner should I use?", turn, "commentary");
+    const after = tool("tool-2", turn);
+
+    const items = buildTranscriptRenderItems({
+      entries: [before, asked, after],
+      activeTurnId: "turn-1",
+      now: 1_000 + 5 * 60_000,
+    });
+
+    expect(items).toContainEqual({ type: "entry", entry: asked });
+    expect(groupedEntries(items)).not.toContain(asked);
+  });
+
+  it("keeps a commentary question out of a turnless commentary group", () => {
+    const first = commentary("c1", "First scan.");
+    const asked = question("q1", "Which runner should I use?", undefined, "commentary");
+    const answer = final("f1", "Final answer.");
+
+    const items = buildTranscriptRenderItems({ entries: [first, asked, answer] });
+
+    expect(items).toContainEqual({ type: "entry", entry: asked });
+    expect(groupedEntries(items)).not.toContain(asked);
+  });
 });
+
+function groupedEntries(items: ReturnType<typeof buildTranscriptRenderItems>): AppServerThreadEntry[] {
+  return items.flatMap((item) => item.type === "workPhaseGroup" ? item.entries : []);
+}
+
+function question(
+  id: string,
+  title: string,
+  turn?: AppServerThreadMessageEntry["turn"],
+  phase?: AppServerThreadMessageEntry["phase"],
+): AppServerThreadMessageEntry {
+  return {
+    type: "message",
+    id,
+    role: "assistant",
+    text: title,
+    delivery: "async",
+    questions: [{ title, options: null }],
+    ...(phase ? { phase } : {}),
+    ...(turn ? { turn } : {}),
+  };
+}
 
 function commentary(
   id: string,
@@ -1091,6 +1341,49 @@ function final(
     phase: "final",
     text,
     ...(turn ? { turn } : {}),
+  };
+}
+
+function reply(
+  id: string,
+  text: string,
+  turn: AppServerThreadMessageEntry["turn"],
+  phase?: AppServerThreadMessageEntry["phase"],
+): AppServerThreadMessageEntry {
+  return {
+    type: "message",
+    id,
+    role: "assistant",
+    text,
+    turn,
+    ...(phase ? { phase } : {}),
+  };
+}
+
+function steer(
+  id: string,
+  text: string,
+  turn: AppServerThreadMessageEntry["turn"],
+): AppServerThreadMessageEntry {
+  return {
+    type: "message",
+    id,
+    role: "user",
+    text,
+    turn,
+  };
+}
+
+function tool(
+  id: string,
+  turn: AppServerThreadMessageEntry["turn"],
+): AppServerThreadActivityEntry {
+  return {
+    type: "activity",
+    id,
+    summary: "Bash",
+    details: [],
+    turn,
   };
 }
 

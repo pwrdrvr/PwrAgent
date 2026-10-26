@@ -72,10 +72,11 @@ export function BackgroundTerminalsView(props: BackgroundTerminalsViewProps) {
             terminal.memoryKb !== undefined ? `${(terminal.memoryKb / 1024).toFixed(1)} MiB` : undefined,
           ].filter(Boolean).join(" · ");
           const preview = agentCommandPreview(terminal.command);
+          const kindLabel = terminal.kind === "agent" ? "Sub-agent" : terminal.kind === "task" ? "Task" : undefined;
           return (
             <details key={terminal.processId}
               className={`composer__queued composer__queued--env-action composer__queued--env-action-running env-action-run env-action-run--sidebar agent-command-run${stopping ? " agent-command-run--stopping" : ""}`}
-              aria-label={`Agent command: ${preview.text}`}>
+              aria-label={`${kindLabel ?? "Agent command"}: ${preview.text}`}>
               <summary className="composer__queued-env-action-summary">
                 <span className="composer__queued-env-action-chevron" aria-hidden="true" />
                 <span className="status-dot status-dot--active status-dot--blink" aria-hidden="true" />
@@ -83,6 +84,7 @@ export function BackgroundTerminalsView(props: BackgroundTerminalsViewProps) {
                   <span className="composer__queued-label">{stopping ? "Stopping" : "Running"}</span>
                   <code className="agent-command-run__command">{preview.text}</code>
                   <span className="agent-command-run__meta">
+                    {kindLabel ? `${[kindLabel, terminal.agentType].filter(Boolean).join(" · ")} · ` : null}
                     <span className="agent-command-run__directory" title={terminal.cwd}>
                       {agentCommandDirectoryLabel(terminal.cwd)}
                     </span>
@@ -108,7 +110,7 @@ export function BackgroundTerminalsView(props: BackgroundTerminalsViewProps) {
                 {preview.cut ? (
                   <div className="agent-command-run__full-command">
                     <div className="agent-command-run__output-head">
-                      <span>Command</span>
+                      <span>{kindLabel ? "Task" : "Command"}</span>
                     </div>
                     <pre className="agent-command-run__command-text"><code>{terminal.command}</code></pre>
                   </div>
@@ -122,8 +124,14 @@ export function BackgroundTerminalsView(props: BackgroundTerminalsViewProps) {
                       <dd>{usage}</dd>
                     </>
                   ) : null}
+                  {terminal.progress ? (
+                    <>
+                      <dt>Progress</dt>
+                      <dd>{terminal.progress}</dd>
+                    </>
+                  ) : null}
                 </dl>
-                <div className="agent-command-run__output">
+                {kindLabel ? null : <div className="agent-command-run__output">
                   <div className="agent-command-run__output-head">
                     <span>Output</span>
                     <span className="agent-command-run__output-scope">since this window opened</span>
@@ -133,7 +141,7 @@ export function BackgroundTerminalsView(props: BackgroundTerminalsViewProps) {
                   ) : (
                     <p className="composer__queued-env-action-hint">No output yet.</p>
                   )}
-                </div>
+                </div>}
               </div>
             </details>
           );

@@ -39,6 +39,7 @@ import {
   type MessagingBindingChannelMetadataUpdate,
   type MessagingManagedTopicObservationMerge,
 } from "../messaging/core/messaging-store-merge.js";
+import { isBindingForThread } from "../messaging/core/messaging-binding-thread-match.js";
 import { isAsyncQuestionnaireForThread } from "../messaging/core/messaging-store.js";
 
 const SECRET_KEY_PATTERN = /token|secret|password|authorization|api[_-]?key/i;
@@ -414,10 +415,10 @@ export class SqliteMessagingStore {
         "SELECT payload FROM bindings WHERE status = 'active' ORDER BY updated_at DESC, created_at DESC",
       )
       .all() as { payload: string }[];
+    // JSON.parse already returns fresh objects that no caller shares.
     return rows
       .map((row) => JSON.parse(row.payload) as MessagingBindingRecord)
-      .filter((binding) => !binding.revokedAt)
-      .map((binding) => structuredClone(binding));
+      .filter((binding) => !binding.revokedAt);
   }
 
   async findActiveBindingsForThread(params: {
@@ -431,18 +432,7 @@ export class SqliteMessagingStore {
       .all(params.threadId) as { payload: string }[];
     return rows
       .map((row) => JSON.parse(row.payload) as MessagingBindingRecord)
-      .filter((binding) => {
-        if (binding.revokedAt) return false;
-        // Backend-strict matching used to drop bindings whose stored
-        // backend disagreed with the thread's current source — a real
-        // problem when an older binding lacks a backend at all, or
-        // when a thread migrated between backends. Accept the row when
-        // the backends match OR when the binding has no backend
-        // recorded; trust thread_id otherwise (it's already PK-unique
-        // enough across the user's history).
-        if (!binding.backend) return true;
-        return binding.backend === params.backend;
-      });
+      .filter((binding) => !binding.revokedAt && isBindingForThread(binding, params));
   }
 
   async findActiveBindingsForFederatedThread(

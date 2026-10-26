@@ -512,6 +512,28 @@ export function normalizeRenamedTitleSource(
 
 export type AppServerThreadStatus = "active" | "idle" | "notLoaded" | "unknown";
 
+/**
+ * A live command owned by the agent backend, not a PwrAgent environment
+ * action. Codex reports background terminals; Claude reports its running
+ * tasks (shell commands and sub-agents) in the same shape.
+ */
+export type AppServerBackgroundTask = {
+  itemId: string;
+  /** Opaque backend handle (Codex session, Claude task id); never an OS PID. */
+  processId: string;
+  command: string;
+  cwd: string;
+  osPid?: number;
+  cpuPercent?: number;
+  memoryKb?: number;
+  /** Absent for a shell command. */
+  kind?: "command" | "agent" | "task";
+  /** A sub-agent's type, such as `general-purpose`. */
+  agentType?: string;
+  /** The task's latest progress line, as its backend reported it. */
+  progress?: string;
+};
+
 /** Provider provenance carried by a native Codex `spawn_agent` thread. */
 export type CodexNativeSubAgentProvenance = {
   parentThreadId: ThreadIdentifier;
@@ -613,6 +635,8 @@ export type AppServerThreadSummary = {
     available: boolean;
     unavailableReason?: string;
   };
+  /** Set by the owner's selected-detail read when the worktree folder is gone. */
+  workspaceMissing?: ThreadMissingWorkspace;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   worktreeSnapshots?: WorktreeSnapshotSummary[];
   /** Native Codex provenance when this summary itself is a spawned worker. */
@@ -634,6 +658,13 @@ export type AppServerThreadMessage = {
   parts?: AppServerThreadMessagePart[];
   origin?: AppServerThreadMessageOrigin;
   createdAt?: number;
+};
+
+/** Display-only metadata. Full instructions stay in the admitted input and transcript. */
+export type ThreadIncomingWorkSummary = {
+  recipientTitle?: string;
+  messages: { origin: AppServerThreadMessageOrigin; preview: string }[];
+  omittedMessageCount: number;
 };
 
 export type AppServerThreadMessageOriginKind =
@@ -693,7 +724,7 @@ export type AppServerThreadMessageOrigin = {
     failedCheckUrl?: string;
     headSha: string;
     eventKinds?: ThreadPrAutoDispatchEventKind[];
-    outcome?: "success" | "failure";
+    outcome?: "success" | "failure" | "merged" | "closed";
   };
 };
 
@@ -1138,6 +1169,119 @@ export type RestoreWorktreeResponse = {
   snapshot: WorktreeSnapshotSummary;
 };
 
+/**
+ * A thread whose recorded worktree folder no longer exists, as its owner saw
+ * it while serving the thread's detail. Computed per read and never stored.
+ */
+export type ThreadMissingWorkspace = {
+  /** The recorded worktree folder that is gone. */
+  worktreePath: string;
+  /** The main checkout the worktree belonged to. */
+  repositoryPath: string;
+  /** False when the main checkout is gone too. */
+  repositoryAvailable: boolean;
+  /** Branch the worktree last had checked out, when known. */
+  branch?: string;
+  /** Branch the main checkout is on now. Moving there leaves it on this branch. */
+  mainCheckoutBranch?: string;
+  /** Checkpoint PwrAgent kept when it archived this worktree. */
+  checkpoint?: {
+    snapshotRef: string;
+    snapshotCommit: string;
+    archivedAt?: number;
+  };
+};
+
+export type WorktreeRecoveryStepId =
+  | "check-path"
+  | "clear-record"
+  | "find-checkpoint"
+  | "add-worktree"
+  | "apply-checkpoint";
+
+export type WorktreeRecoveryStep = {
+  id: WorktreeRecoveryStepId;
+  status: "done" | "skipped" | "failed";
+  detail?: string;
+};
+
+export type WorktreeRecoveryFailureReason =
+  | "repository-missing"
+  | "path-occupied"
+  | "record-locked"
+  | "checkpoint-missing"
+  | "branch-missing"
+  | "branch-checked-out";
+
+export type RecreateThreadWorktreeRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  /** The missing folder the operator saw. The owner refuses any other. */
+  worktreePath: string;
+  /** Go ahead after the checkpoint turned out to be gone. */
+  skipCheckpoint?: boolean;
+  /** Add the worktree on a detached HEAD instead of its branch. */
+  detached?: boolean;
+};
+
+export type RecreateThreadWorktreeResponse =
+  | {
+      status: "recreated";
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      worktreePath: string;
+      /** Undefined when the worktree was added on a detached HEAD. */
+      branch?: string;
+      steps: WorktreeRecoveryStep[];
+      checkpoint?: {
+        snapshotCommit: string;
+        /** False when the checkpoint conflicted and nothing was applied. */
+        restored: boolean;
+        changedFileCount?: number;
+      };
+      warnings: string[];
+      completedAt: number;
+    }
+  | {
+      status: "failed";
+      backend: AppServerBackendKind;
+      threadId: ThreadIdentifier;
+      worktreePath: string;
+      reason: WorktreeRecoveryFailureReason;
+      message: string;
+      steps: WorktreeRecoveryStep[];
+      branch?: string;
+      /** Where the branch is checked out, for `branch-checked-out`. */
+      branchCheckedOutAt?: string;
+    };
+
+/**
+ * Move a worktree thread to its main checkout without switching that
+ * checkout's branch. A present, thread-owned worktree is archived with a
+ * checkpoint; a missing one only has Git's record of it cleared.
+ */
+export type MoveThreadToMainCheckoutRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  /** The worktree the thread is leaving. The owner refuses any other. */
+  worktreePath: string;
+};
+
+export type MoveThreadToMainCheckoutResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  repositoryPath: string;
+  /** The branch the main checkout is on, unchanged. */
+  branch?: string;
+  /** The thread's workspace now, as its selected detail will show it. */
+  linkedDirectory: LinkedDirectorySummary;
+  archivedWorktree?: WorktreeSnapshotSummary;
+  warnings: string[];
+  completedAt: number;
+};
+
 export type RenameThreadRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
@@ -1159,6 +1303,18 @@ export type RenameThreadResponse = {
   threadId: ThreadIdentifier;
   renamedAt: number;
 };
+
+/**
+ * Request bounds for display reads. Each read rebuilds the thread's whole
+ * display on the owner, so a viewer refresh asks for every loaded turn or row
+ * at once. Owners without the `thread_display_bulk_reads` federation
+ * capability accept only the legacy bounds; a larger `limit` is clamped there,
+ * and more than 256 accounting turns is rejected.
+ */
+export const THREAD_DISPLAY_MAX_ACCOUNTING_TURNS = 4_096;
+export const THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS = 256;
+export const THREAD_DISPLAY_MAX_PAGE_ROWS = 1_000;
+export const THREAD_DISPLAY_LEGACY_MAX_PAGE_ROWS = 50;
 
 /** Display resources have independent pages. Transcript loads never carry accounting ledgers. */
 export type ThreadDisplayRead = {
@@ -1217,6 +1373,13 @@ export type AppServerReadThreadRequest = {
    * native sub-agent transcript viewer.
    */
   viewOnly?: boolean;
+  /**
+   * `false` skips the pricing ledger and tool and Token Miser accounting; the
+   * response then has no `pricing` or `toolAccounting`. For callers that read
+   * transcript content only. Each part rescans the whole thread, so on a long
+   * thread it is most of a read's main-process time.
+   */
+  includeAccounting?: boolean;
 };
 
 export type AppServerReadThreadResponse = {
@@ -2207,7 +2370,8 @@ export type AppServerNotification =
       method: "thread/rewound";
       params: {
         threadId: string;
-        targetPromptIndex: number;
+        /** ACP prompt index the rewind removed from; absent for other providers. */
+        targetPromptIndex?: number;
         updatedAt: number;
       };
     }
@@ -2337,6 +2501,19 @@ export type AppServerNotification =
       };
     }
   | {
+      /**
+       * The full set of commands and sub-agents a backend reports running for
+       * the thread. Replaces the previous set. Claude publishes its task set.
+       * Codex has no such event, so the desktop registry publishes a Codex
+       * thread's background terminals whenever their membership changes.
+       */
+      method: "thread/backgroundTasks/updated";
+      params: {
+        threadId: string;
+        tasks: AppServerBackgroundTask[];
+      };
+    }
+  | {
       method: "thread/subAgents/updated";
       params: {
         threadId: string;
@@ -2371,12 +2548,23 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/incomingWork";
+      params: {
+        threadId: string;
+        turnId: string;
+        deliveryId: string;
+        incomingWork: ThreadIncomingWorkSummary;
+      };
+    }
+  | {
       method: "thread/turnQueue/updated";
       params: {
         threadId: string;
         queueEntryId: string;
         /** Owner-clock creation time for ordering against navigation snapshots. */
         queueEntryCreatedAt?: number;
+        messageOrigin?: AppServerThreadMessageOrigin;
+        incomingWork?: ThreadIncomingWorkSummary;
         origin: "manual" | "automation" | "messaging" | "scheduled";
         status:
           | "queued"
@@ -2405,6 +2593,13 @@ export type AppServerNotification =
         automationName?: string;
         errorMessage?: string;
         manualReleaseRequired?: boolean;
+        /**
+         * On "queued" and "held" events: the operator paused the entry.
+         * Owners that predate pausing never send it.
+         */
+        paused?: boolean;
+        /** See `ThreadQueuedTurnSummary.pauseRevision`. */
+        pauseRevision?: number;
         finalText?: string;
         terminalStatus?: string;
       };

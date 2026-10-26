@@ -129,6 +129,19 @@ function buildPathCommandNames(
   return [command, ...extensions.map((extension) => `${command}${extension}`)];
 }
 
+/**
+ * Resolve a bare program name against `env`'s PATH (and PATHEXT on Windows),
+ * the way a shell would but without one. A name containing a separator is
+ * returned unchanged. Returns the first candidate that exists.
+ */
+export async function resolveCommandOnPath(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): Promise<string | undefined> {
+  return await resolvePathCommand(command, env, platform);
+}
+
 async function resolvePathCommand(
   command: string,
   env: NodeJS.ProcessEnv,

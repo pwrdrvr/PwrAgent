@@ -4,10 +4,13 @@ import type {
   ThreadIdentifier,
 } from "./contracts/normalized-app-server";
 import type { ThreadPricingSummary } from "./token-usage-pricing";
+import type { FederationTarget } from "./contracts/federation";
 
 export type ReadThreadFamilyPricingRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** The owner collates membership and stored totals for the whole family. */
+  federationTarget?: FederationTarget;
 };
 
 /**

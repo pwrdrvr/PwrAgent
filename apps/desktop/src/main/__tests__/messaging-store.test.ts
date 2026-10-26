@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   MessagingBindingRecord,
   MessagingBrowseSessionRecord,
@@ -236,6 +236,116 @@ afterEach(async () => {
 });
 
 describe("MessagingStore", () => {
+  it("holds a write until a read in progress has finished with the file", async () => {
+    const { store } = await createStore();
+    await store.upsertBinding(buildBinding());
+    // Windows refuses to rename a temp file over a file another handle has
+    // open, so a write must not start while a read still holds the file.
+    const internals = MessagingStore.prototype as unknown as {
+      readData: () => Promise<unknown>;
+      writeData: (data: unknown) => Promise<void>;
+    };
+    const readData = internals.readData;
+    const reading = Promise.withResolvers<void>();
+    let holdNextRead = true;
+    const readSpy = vi.spyOn(internals, "readData").mockImplementation(async function (this: unknown) {
+      if (holdNextRead) {
+        holdNextRead = false;
+        await reading.promise;
+      }
+      return await readData.call(this);
+    });
+    const writeSpy = vi.spyOn(internals, "writeData");
+    try {
+      const read = store.getBinding("binding-1");
+      const write = store.upsertBinding(buildBinding({ id: "binding-2" }));
+      for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+      expect(readSpy).toHaveBeenCalledTimes(1);
+      expect(writeSpy).not.toHaveBeenCalled();
+
+      reading.resolve();
+      await expect(read).resolves.toMatchObject({ id: "binding-1" });
+      await write;
+      expect(writeSpy).toHaveBeenCalledOnce();
+      expect(await store.getBinding("binding-2")).toMatchObject({ id: "binding-2" });
+    } finally {
+      reading.resolve();
+      readSpy.mockRestore();
+      writeSpy.mockRestore();
+    }
+  });
+
+  it("waits in whenIdle for queued writes, including ones queued while it waits", async () => {
+    const { filePath, store } = await createStore();
+    // An owner that removes the store's directory waits here first. A write
+    // still queued would otherwise rename its temp file into a missing
+    // directory, which fails with ENOENT on Windows.
+    const internals = MessagingStore.prototype as unknown as {
+      writeData: (data: unknown) => Promise<void>;
+    };
+    const writeData = internals.writeData;
+    const writing = Promise.withResolvers<void>();
+    const firstWriteHeld = Promise.withResolvers<void>();
+    let holdNextWrite = true;
+    const writeSpy = vi.spyOn(internals, "writeData").mockImplementation(async function (this: unknown, data: unknown) {
+      if (holdNextWrite) {
+        holdNextWrite = false;
+        firstWriteHeld.resolve();
+        await writing.promise;
+      }
+      await writeData.call(this, data);
+    });
+    try {
+      const firstWrite = store.upsertBinding(buildBinding());
+      let idle = false;
+      const whenIdle = store.whenIdle().then(() => {
+        idle = true;
+      });
+      // A second store on the same file shares its queue.
+      const laterWrite = new MessagingStore(filePath).upsertBinding(buildBinding({ id: "binding-2" }));
+      // The first write reads the file before it writes, and that read is
+      // real I/O, so a fixed number of ticks can end before it gets here.
+      await firstWriteHeld.promise;
+      for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+      expect(writeSpy).toHaveBeenCalledOnce();
+      expect(idle).toBe(false);
+
+      writing.resolve();
+      await whenIdle;
+      expect(writeSpy).toHaveBeenCalledTimes(2);
+      await Promise.all([firstWrite, laterWrite]);
+      const stored = JSON.parse(await readFile(filePath, "utf8")) as {
+        bindings: Record<string, unknown>;
+      };
+      expect(Object.keys(stored.bindings).sort()).toEqual(["binding-1", "binding-2"]);
+    } finally {
+      writing.resolve();
+      // Drain before afterEach removes the directory, even when an assertion
+      // failed with writes still queued.
+      await store.whenIdle();
+      writeSpy.mockRestore();
+    }
+  });
+
+  it("matches a thread's bindings by the shared backend rule", async () => {
+    const { store } = await createStore();
+    // One conversation holds one binding, so each needs its own chat.
+    const inChat = (id: string, overrides: Partial<MessagingBindingRecord> = {}) => buildBinding({
+      id,
+      channel: { channel: "telegram", conversation: { id: `${id}:chat`, kind: "dm" } },
+      ...overrides,
+    });
+    // This store's loader drops a binding without a backend, so only the
+    // backend half of the rule can apply here.
+    await store.upsertBinding(inChat("codex-binding"));
+    await store.upsertBinding(inChat("grok-binding", { backend: "acp:grok" }));
+    await store.upsertBinding(inChat("other-thread", { threadId: "thread-2" }));
+
+    const bindings = await store.findActiveBindingsForThread({ backend: "codex", threadId: "thread-1" });
+
+    expect(bindings.map((binding) => binding.id)).toEqual(["codex-binding"]);
+  });
+
   it("persists bindings and pending intents across store instances", async () => {
     const { filePath, store } = await createStore();
     await store.upsertBinding(buildBinding());

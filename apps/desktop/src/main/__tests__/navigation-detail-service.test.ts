@@ -1,12 +1,18 @@
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES } from "@pwragent/shared";
 import type {
   NavigationThreadSummary,
   ThreadQueuedTurnSummary,
+  ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 
 const mocks = vi.hoisted(() => ({
+  /** The selected thread's stored cards, as the store's card reads see them. */
+  cards: [] as ThreadSubAgentSummary[],
   reconcileNavigationSnapshot: vi.fn(),
   projectNavigationThreadDetail: vi.fn(),
   getThreadOverlayState: vi.fn(),
@@ -22,13 +28,24 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     getThreadOverlayState: mocks.getThreadOverlayState,
     getLaunchpadDefaults: mocks.getLaunchpadDefaults,
     getDirectoryLaunchpad: mocks.getDirectoryLaunchpad,
+    listThreadSubAgents: async () => mocks.cards,
+    getThreadSubAgent: async ({ monitorId }: { monitorId: string }) =>
+      mocks.cards.find((card) => card.monitorId === monitorId),
+    listActiveThreadSubAgents: async () => mocks.cards.filter((card) =>
+      card.completedAt === undefined || card.status === "failed" || card.status === "failure"),
+    readThreadSubAgentRevision: async () => {
+      // Any card change moves it, as each write moves the store's counter.
+      let revision = 0;
+      for (const char of JSON.stringify(mocks.cards)) revision = (revision * 31 + char.charCodeAt(0)) >>> 0;
+      return { count: mocks.cards.length, revision };
+    },
   }),
 }));
 
 vi.mock("../app-server/codex-environment-config", () => ({ listCodexEnvironmentOptions: mocks.listCodexEnvironmentOptions }));
 
 vi.mock("../messaging/messaging-bindings-snapshot", () => ({
-  buildMessagingBindingsByThreadKey: vi.fn(async () => new Map()),
+  buildMessagingBindingsByThreadKey: vi.fn(async () => undefined),
 }));
 
 import { NavigationDetailService } from "../app-server/navigation-detail-service";
@@ -80,6 +97,7 @@ describe("NavigationDetailService", () => {
     mocks.reconcileNavigationSnapshot.mockReset();
     mocks.projectNavigationThreadDetail.mockReset();
     mocks.getThreadOverlayState.mockReset();
+    mocks.cards = [];
     mocks.getLaunchpadDefaults.mockReset().mockResolvedValue({ backend: "codex", executionMode: "default" });
     mocks.getDirectoryLaunchpad.mockReset().mockResolvedValue(undefined);
     mocks.listCodexEnvironmentOptions.mockReset().mockResolvedValue([]);
@@ -130,11 +148,11 @@ describe("NavigationDetailService", () => {
     const selected = thread("selected");
     selected.linkedDirectories = [{ id: "selected-repo", kind: "local", label: "Selected", path: "/repo/selected" }];
     selected.queuedTurns = [{ queueEntryId: "independent", origin: "manual", displayText: "Private FIFO", createdAt: 1, position: 0 }];
-    selected.subAgents = Array.from({ length: 738 }, (_, index) => ({
+    const cards = Array.from({ length: 738 }, (_, index) => ({
       monitorId: `monitor-${index}`, task: "Historical task", status: "success" as const,
       createdAt: index, updatedAt: index, lastMessage: "result".repeat(350),
     }));
-    mocks.getThreadOverlayState.mockResolvedValue({ subAgents: selected.subAgents });
+    mocks.cards = cards;
     selected.agent = {
       name: "Operator",
       instructions: "exact detail only",
@@ -152,6 +170,8 @@ describe("NavigationDetailService", () => {
       hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
       canonicalizeNavigationThreadPullRequests: vi.fn(async (threads) => threads),
       mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted ?? [],
+      listLiveTokenMiserSubAgents: () => [],
+      readLiveSubAgentRevisionSource: () => [],
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
     const first = await service.readSelectedDetail({
@@ -184,7 +204,7 @@ describe("NavigationDetailService", () => {
       cursor = response.collectionPage!.nextCursor;
       expect(response.collectionPage!.complete).toBe(!cursor);
     } while (cursor);
-    expect(monitors).toEqual(selected.subAgents.map((agent) => agent.monitorId));
+    expect(monitors).toEqual(cards.map((agent) => agent.monitorId));
     expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledTimes(hydratedBefore);
     expect(registry.getQueuedTurnsSnapshot).not.toHaveBeenCalled();
     await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" }, probeWorkingStates: true });
@@ -211,13 +231,12 @@ describe("NavigationDetailService", () => {
       monitorId: `historical-${index}`, task: "Historical helper", status: "success" as const,
       createdAt: index, updatedAt: index,
     }));
-    selected.subAgents = persisted;
     const live = {
       monitorId: "system:token-miser:live", task: "Evaluate output", status: "success" as const,
       createdAt: 200, updatedAt: 200, parentTurnId: "running-turn",
     };
     const liveAgents = new Map([[live.monitorId, live]]);
-    mocks.getThreadOverlayState.mockResolvedValue({ subAgents: persisted });
+    mocks.cards = persisted;
     mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const registry = {
       getCachedThreadSummary: () => selected,
@@ -227,6 +246,8 @@ describe("NavigationDetailService", () => {
       liveTokenMiserSubAgents: new Map([[selected.id, liveAgents]]),
       liveCodexNativeSubAgentUsage: new Map(),
       mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype["mergeLiveTokenMiserSubAgents"],
+      listLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.listLiveTokenMiserSubAgents,
+      readLiveSubAgentRevisionSource: DesktopBackendRegistry.prototype.readLiveSubAgentRevisionSource,
     } as unknown as DesktopBackendRegistry;
     const service = new NavigationDetailService(registry);
     const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
@@ -252,13 +273,14 @@ describe("NavigationDetailService", () => {
     const running = { monitorId: "running", task: "Watch the build", status: "running" as const,
       createdAt: 1, updatedAt: 2, monitorThreadId: "child", monitorTurnId: "turn" };
     const selected = thread("selected");
-    selected.subAgents = [
+    const cards: ThreadSubAgentSummary[] = [
       { ...running, lastMessage: "large result".repeat(100_000),
         monitorUsage: { summary: "Large accounting summary".repeat(10_000), tokenUsage: { totalTokens: 1234 } } },
       ...Array.from({ length: 10_000 }, (_, index) => ({
-        ...running, monitorId: `old-${index}`, status: "success" as const,
+        ...running, monitorId: `old-${index}`, status: "success" as const, completedAt: 2,
       })),
     ];
+    mocks.cards = cards;
     mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
     const service = new NavigationDetailService({
       getCachedThreadSummary: () => selected,
@@ -266,6 +288,8 @@ describe("NavigationDetailService", () => {
       canonicalizeNavigationThreadPullRequests: async (threads: unknown[]) => threads,
       hydrateThreadGitWorkingStates: async (threads: unknown[]) => threads,
       mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted,
+      listLiveTokenMiserSubAgents: () => [],
+      readLiveSubAgentRevisionSource: () => [],
     } as unknown as DesktopBackendRegistry);
     const request = { protocol: 2 as const, ref: { backend: "codex" as const, threadId: selected.id } };
     const first = await service.readSelectedDetail(request);
@@ -274,7 +298,7 @@ describe("NavigationDetailService", () => {
     expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThan(4000);
     expect(mocks.getThreadOverlayState).not.toHaveBeenCalled();
 
-    selected.subAgents[0] = { ...selected.subAgents[0]!, status: "success", completedAt: 3 };
+    cards[0] = { ...cards[0]!, status: "success", completedAt: 3 };
     const completed = await service.readSelectedDetail({ ...request, knownRevision: first.revision });
     expect(completed.unchanged).not.toBe(true);
     expect(completed.thread?.activeSubAgents).toEqual([]);
@@ -339,5 +363,47 @@ describe("NavigationDetailService", () => {
       ...request,
       cursor: second.nextCursor,
     })).toThrow("Queue changed while paging");
+  });
+
+  it("tells the selected thread its worktree folder is gone, with the main checkout's branch", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-detail-missing-"));
+    try {
+      const selected = {
+        ...thread("selected"),
+        gitBranch: "fix/retry-backoff",
+        linkedDirectories: [{
+          id: "wt", label: "atlas", kind: "worktree" as const,
+          path: root, worktreePath: path.join(root, "gone", "atlas"),
+        }],
+      };
+      mocks.projectNavigationThreadDetail.mockResolvedValue(selected);
+      const registry = {
+        readSelectedWorkspaceGitStatus: vi.fn(async () => ({ currentBranch: "main" })),
+        getCachedThreadSummary: vi.fn(() => selected),
+        getQueuedExecutionModeForThread: vi.fn(() => undefined),
+        hydrateThreadGitWorkingStates: vi.fn(async (threads) => threads),
+        canonicalizeNavigationThreadPullRequests: vi.fn(async (threads) => threads),
+        mergeLiveTokenMiserSubAgents: (_id: string, persisted: unknown[]) => persisted ?? [],
+        listLiveTokenMiserSubAgents: () => [],
+        readLiveSubAgentRevisionSource: () => [],
+      } as unknown as DesktopBackendRegistry;
+      const service = new NavigationDetailService(registry);
+
+      const missing = await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" } });
+      expect(missing.thread?.workspaceMissing).toEqual({
+        worktreePath: path.join(root, "gone", "atlas"),
+        repositoryPath: root,
+        repositoryAvailable: true,
+        branch: "fix/retry-backoff",
+        mainCheckoutBranch: "main",
+      });
+
+      mkdirSync(path.join(root, "gone", "atlas"), { recursive: true });
+      const present = await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" } });
+      expect(present.thread).not.toHaveProperty("workspaceMissing");
+      expect(present.revision).not.toBe(missing.revision);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

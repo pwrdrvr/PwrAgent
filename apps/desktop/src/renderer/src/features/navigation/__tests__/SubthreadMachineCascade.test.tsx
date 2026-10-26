@@ -77,15 +77,15 @@ describe("SubthreadMachineCascade, placement", () => {
   });
 
   it("moves up by its overflow at the window's bottom edge", () => {
-    // Top 594 + 300 runs 134px past 768 - 8.
+    // Top 596 + 300 runs 136px past 768 - 8.
     const flyout = renderAt({ left: 100, top: 600, width: 200, height: 34 });
-    expect(flyout.style.top).toBe(`${-6 - 134}px`);
+    expect(flyout.style.top).toBe(`${-4 - 136}px`);
   });
 
   it("never moves above the window's top margin", () => {
-    // Top 94 + 300 still overflows a short window, but only 86px are spare.
+    // Top 96 + 300 still overflows a short window, but only 88px are spare.
     vi.spyOn(window, "innerHeight", "get").mockReturnValue(300);
     const flyout = renderAt({ left: 100, top: 100, width: 200, height: 34 });
-    expect(flyout.style.top).toBe(`${-6 - 86}px`);
+    expect(flyout.style.top).toBe(`${-4 - 88}px`);
   });
 });

@@ -168,17 +168,36 @@ describe("describeInstalledAcpBackend", () => {
       registryId: "grok",
       name: "Grok",
       version,
-      // Older discovery records persisted the unconditional catalog entry.
+      // Older discovery records persisted the unconditional catalog entry,
+      // from before the catalog had `conversationRewind`.
       capabilities: {
         liveWorkspaceHandoff: false,
         managedReview: true,
         steerTurn: true,
-      },
+      } as AcpInstalledAgentRecord["capabilities"],
     });
     const gemini = describeInstalledAcpBackend(buildInstalledAgent());
 
     expect(grok.capabilities.steerTurn).toBe(false);
     expect(gemini.capabilities.steerTurn).toBe(false);
+  });
+
+  it("advertises conversation-only rewind for Grok, including older records", () => {
+    const grok = describeInstalledAcpBackend({
+      ...buildInstalledAgent(),
+      backendId: "acp:grok" as AcpBackendId,
+      registryId: "grok",
+      name: "Grok",
+      capabilities: {
+        liveWorkspaceHandoff: false,
+        managedReview: true,
+        steerTurn: false,
+      } as AcpInstalledAgentRecord["capabilities"],
+    });
+    const gemini = describeInstalledAcpBackend(buildInstalledAgent());
+
+    expect(grok.capabilities.threadRewind).toEqual({ files: false, undo: false });
+    expect(gemini.capabilities.threadRewind).toBeUndefined();
   });
 
   it("advertises ACP steering for a manually installed PwrAgent Grok build", () => {
@@ -3325,6 +3344,60 @@ describe("AcpBackendAdapter", () => {
     expect(summary?.kind).toBe(backendId);
     expect(summary?.account).toBeUndefined();
     expect(readProviderStatus).toHaveBeenCalledTimes(1);
+
+    await adapter.close();
+  });
+
+  it("reports Grok's billing limit as a Usage Activity reading while Grok is enabled", async () => {
+    const backendId = "acp:grok" as AcpBackendId;
+    const agent: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId,
+      registryId: "grok",
+      name: "Grok",
+    };
+    let enabled = true;
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      acpSessionStore: {
+        listSessions: () => [],
+        getSession: () => undefined,
+        upsertSession: vi.fn(),
+      },
+      captureStores: [],
+      createAcpClient: () =>
+        ({
+          initialize: vi.fn(async () => undefined),
+          readProviderStatus: vi.fn(async () => ({
+            account: { type: "provider", label: "Grok account", planType: "SuperGrok" },
+            rateLimits: [{ name: "Monthly limit", usedPercent: 18, resetAt: 1_800_000_000_000 }],
+          })),
+          dispose: vi.fn(async () => undefined),
+        }) as never,
+      discoverLocalAcpAgents: async () => [],
+      emit: vi.fn(async () => undefined),
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => enabled,
+    });
+
+    expect(adapter.limitObservation(backendId)).toBeUndefined();
+    const before = Date.now();
+    await adapter.getClient(backendId);
+    await adapter.describeInstalledBackends();
+    await vi.waitFor(() => expect(adapter.limitObservation(backendId)).toBeDefined());
+    const reading = adapter.limitObservation(backendId)!;
+    expect(reading).toEqual({
+      observedAt: expect.any(Number), provider: "xai", planType: "SuperGrok",
+      limits: [{ name: "Monthly limit", limitId: undefined, usedPercent: 18, resetAt: 1_800_000_000_000,
+        windowMinutes: undefined }],
+    });
+    expect(reading.observedAt).toBeGreaterThanOrEqual(before);
+    enabled = false;
+    expect(adapter.limitObservation(backendId)).toBeUndefined();
 
     await adapter.close();
   });

@@ -2,11 +2,11 @@ import { type MouseEvent as ReactMouseEvent, type ReactNode, useId, useState } f
 import type { ReadQueuedTurnResponse } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
-import { GripVerticalIcon } from "../../icons";
+import { GripVerticalIcon, PauseIcon } from "../../icons";
 import {
   queuedPositionLabel,
   type QueuedRowReorder,
-  useQueuedPreviewIndex,
+  useQueuedPreviewPlace,
 } from "./useQueuedRowReorder";
 import { TurnInputContent } from "../thread-detail/TurnInputContent";
 
@@ -104,6 +104,7 @@ export function QueuedMessageInspector(props: {
 /**
  * A plain queued row's Next / #n label. It reads the drag preview, so the
  * band renumbers while a row is dragged without its owner re-rendering.
+ * Paused rows take no number, so Next always names the row that sends next.
  */
 export function QueuedRowPositionLabel(props: {
   reorder: QueuedRowReorder;
@@ -111,7 +112,17 @@ export function QueuedRowPositionLabel(props: {
   index: number;
 }): ReactNode {
   return queuedPositionLabel(
-    useQueuedPreviewIndex(props.reorder, props.id, props.index),
+    useQueuedPreviewPlace(props.reorder, props.id, props.index),
+  );
+}
+
+/** A paused row's label, in the slot the position label otherwise holds. */
+export function QueuedRowPausedLabel(): ReactNode {
+  return (
+    <>
+      <PauseIcon className="composer__queued-pause-glyph" size={10} strokeWidth={2.5} />
+      Paused
+    </>
   );
 }
 

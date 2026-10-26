@@ -2,23 +2,44 @@ import { randomUUID } from "node:crypto";
 import { Socket } from "node:net";
 import type {
   AdvertiseServiceArgs, FederationCapability, ServiceThread, ThreadService,
-  ServiceExchange, ServiceExchangeResult,
+  ServiceExchange, ServiceExchangeResult, ServiceStreamData, ServiceStreamOpen, ServiceStreamOpened, ServiceStreamRenew,
 } from "@pwragent/shared";
-import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, isAppServerBackendKind } from "@pwragent/shared";
+import {
+  FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, FEDERATION_SERVICE_V2_CAPABILITY,
+  FEDERATION_SERVICE_V2_METHODS, FEDERATION_SERVICE_V2_NOTIFICATIONS, isAppServerBackendKind,
+} from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import {
-  decodeServiceData, readServiceData, waitServiceReadable, writeServiceData,
-  SERVICE_LEASE_MS, SERVICE_MAX_STREAMS, SERVICE_MAX_PEER_STREAMS,
+  decodeServiceData, readServiceData, waitServiceFlushed, waitServiceReadable, writeServiceData,
+  SERVICE_CHUNK_BYTES, SERVICE_LEASE_MS, SERVICE_MAX_STREAMS, SERVICE_MAX_PEER_STREAMS,
 } from "./federation-service-socket";
+import {
+  isServiceStreamSize, ServiceStreamBudget, ServiceStreamEndpoint, ServiceStreamScheduler,
+  SERVICE_STREAM_FRAME_BYTES, SERVICE_STREAM_MAX_FRAME_BYTES, SERVICE_STREAM_MAX_WINDOW_BYTES,
+} from "./federation-service-stream";
 
-export const SERVICE_METHOD_CAPABILITIES = Object.fromEntries(
-  Object.values(FEDERATION_SERVICE_METHODS).map((method) => [method, FEDERATION_SERVICE_CAPABILITY]),
-) as Record<string, FederationCapability>;
+export const SERVICE_METHOD_CAPABILITIES = {
+  ...Object.fromEntries(Object.values(FEDERATION_SERVICE_METHODS).map((method) => [method, FEDERATION_SERVICE_CAPABILITY])),
+  ...Object.fromEntries(Object.values(FEDERATION_SERVICE_V2_METHODS).map((method) => [method, FEDERATION_SERVICE_V2_CAPABILITY])),
+} as Record<string, FederationCapability>;
+
+/** One-way windowed-stream frames to a peer. A promise is transport backpressure. */
+export type ServiceStreamLink = {
+  notify(peerId: string, method: string, params: unknown): void | Promise<void>;
+  sendData(peerId: string, frame: ServiceStreamData): void | Promise<void>;
+};
+/** Receives windowed-stream frames; false when no stream of that peer has the id. */
+export type ServiceStreamReceiver = {
+  receiveNotification(peerId: string, method: string, params: unknown): boolean;
+  receiveData(peerId: string, frame: ServiceStreamData): boolean;
+};
 
 type Lease = { leaseId: string; peerId: string; service: ThreadService; expiresAt: number };
 type Stream = {
   streamId: string; lease: Lease; socket: Socket; seq: number; busy: boolean;
-  touchedAt: number; writing: boolean; error?: string;
+  touchedAt: number; writing: boolean; flushed?: Promise<void>; error?: string;
+  /** Windowed streams only; absent while the service connection opens. */
+  windowed?: boolean; endpoint?: ServiceStreamEndpoint;
 };
 
 export function serviceThread(value: unknown): ServiceThread {
@@ -62,6 +83,10 @@ export class FederationServices {
   private disposed = false;
   private checking = false;
   private nextThreadCheckAt = 0;
+  private link?: ServiceStreamLink;
+  /** One per viewer, so one viewer's transport backpressure never stalls another's streams. */
+  private readonly schedulers = new Map<string, ServiceStreamScheduler>();
+  private readonly budget: ServiceStreamBudget;
 
   constructor(private readonly options: {
     instanceId: string;
@@ -69,10 +94,18 @@ export class FederationServices {
     threadExists: (thread: ServiceThread) => Promise<boolean>;
     now?: () => number;
     blockedPorts?: () => readonly number[];
+    /** Windowed streams: per-stream receive window, total receive memory, frame size. */
+    streamWindow?: number;
+    streamBudgetBytes?: number;
+    streamFrameBytes?: number;
   }) {
+    this.budget = new ServiceStreamBudget(options.streamBudgetBytes);
     this.timer = setInterval(() => { void this.reap(); }, 1000);
     this.timer.unref();
   }
+
+  /** Enables windowed streams; frames to viewers leave through `link`. */
+  setStreamLink(link: ServiceStreamLink): void { this.link = link; }
 
   async advertise(threadInput: ServiceThread, argsInput: AdvertiseServiceArgs): Promise<ThreadService> {
     const thread = serviceThread(threadInput);
@@ -148,19 +181,115 @@ export class FederationServices {
     if (!lease) return;
     if (lease.peerId !== peerId) throw new Error("Service lease belongs to another viewer.");
     this.leases.delete(leaseId);
-    for (const stream of this.streams.values()) if (stream.lease === lease) this.close(peerId, stream.streamId);
+    for (const stream of this.streams.values()) {
+      if (stream.lease === lease) this.close(peerId, stream.streamId, "Service forwarding permission expired or was revoked.");
+    }
   }
 
   async open(peerId: string, leaseId: string): Promise<{ streamId: string }> {
     const lease = this.getLease(peerId, leaseId);
-    if (this.streams.size >= SERVICE_MAX_STREAMS
-      || [...this.streams.values()].filter((entry) => entry.lease.peerId === peerId).length >= SERVICE_MAX_PEER_STREAMS) {
-      throw new Error("Service stream limit reached.");
-    }
+    this.assertStreamCapacity(peerId);
     const socket = new Socket({ allowHalfOpen: true });
     const stream: Stream = { streamId: randomUUID(), lease, socket, seq: 0, busy: false, writing: false, touchedAt: this.now() };
     this.streams.set(stream.streamId, stream);
     socket.on("error", () => { stream.error = "Service connection failed or stopped."; });
+    await this.connect(peerId, stream);
+    return { streamId: stream.streamId };
+  }
+
+  /** Open a windowed stream under the viewer's stream id and start pushing service output. */
+  async openStream(peerId: string, input: ServiceStreamOpen): Promise<ServiceStreamOpened> {
+    const link = this.link;
+    if (!link) throw new Error("Windowed service streams are unavailable.");
+    const lease = this.getLease(peerId, id(input.leaseId));
+    const streamId = id(input.streamId);
+    if (!isServiceStreamSize(input.window, SERVICE_STREAM_MAX_WINDOW_BYTES)
+      || !isServiceStreamSize(input.frameBytes, SERVICE_STREAM_MAX_FRAME_BYTES) || input.frameBytes < 1024) {
+      throw new Error("Invalid service stream parameters.");
+    }
+    if (this.streams.has(streamId)) throw new Error("Service stream already exists.");
+    this.assertStreamCapacity(peerId);
+    const frameBytes = Math.min(this.options.streamFrameBytes ?? SERVICE_STREAM_FRAME_BYTES, SERVICE_STREAM_MAX_FRAME_BYTES);
+    const socket = new Socket({ allowHalfOpen: true });
+    const stream: Stream = { streamId, lease, socket, seq: 0, busy: false, writing: false, touchedAt: this.now(), windowed: true };
+    this.streams.set(streamId, stream);
+    socket.on("error", () => { stream.error = "Service connection failed or stopped."; });
+    await this.connect(peerId, stream);
+    const endpoint = new ServiceStreamEndpoint({
+      streamId, socket, scheduler: this.scheduler(peerId), budget: this.budget, frameBytes, window: this.options.streamWindow,
+      send: (method, params) => link.notify(peerId, method, params),
+      sendData: (frame) => link.sendData(peerId, frame),
+      authorize: () => { this.getLease(peerId, lease.leaseId); },
+      onClosed: () => { if (this.streams.get(streamId) === stream) this.streams.delete(streamId); },
+    });
+    stream.endpoint = endpoint;
+    endpoint.start(input.window, input.frameBytes);
+    return { window: endpoint.initialWindow, frameBytes: endpoint.frameBytes };
+  }
+
+  /** Renew the lease and keep its named windowed streams from idle reaping. */
+  renewStreams(peerId: string, input: ServiceStreamRenew): void {
+    const leaseId = id(input.leaseId);
+    if (!Array.isArray(input.streamIds) || input.streamIds.length > SERVICE_MAX_PEER_STREAMS * 16) throw new Error("Invalid service stream list.");
+    // Validate everything before the lease or any stream changes.
+    const streamIds = input.streamIds.map(id);
+    this.renew(peerId, leaseId);
+    for (const streamId of streamIds) {
+      const stream = this.streams.get(streamId);
+      if (stream?.lease.leaseId === leaseId) stream.touchedAt = this.now();
+    }
+  }
+
+  /**
+   * Route a windowed-stream frame from `peerId`. Returns false when no stream of
+   * that peer has the id, so a viewer-side receiver may claim it.
+   */
+  receiveNotification(peerId: string, method: string, params: unknown): boolean {
+    const endpoint = this.receivingEndpoint(peerId, params);
+    if (endpoint === false) return false;
+    const frame = params as Record<string, never>;
+    if (method === FEDERATION_SERVICE_V2_NOTIFICATIONS.window) endpoint?.receiveWindow(frame);
+    else if (method === FEDERATION_SERVICE_V2_NOTIFICATIONS.close) endpoint?.receiveClose(frame);
+    return true;
+  }
+
+  /** Route a windowed-stream data frame from `peerId`, as `receiveNotification` does. */
+  receiveData(peerId: string, frame: ServiceStreamData): boolean {
+    const endpoint = this.receivingEndpoint(peerId, frame);
+    if (endpoint === false) return false;
+    endpoint?.receiveData(frame);
+    return true;
+  }
+
+  /** False when the frame is not for this owner; undefined when it closed the stream. */
+  private receivingEndpoint(peerId: string, frame: unknown): ServiceStreamEndpoint | false | undefined {
+    const streamId = (frame as { streamId?: unknown } | undefined)?.streamId;
+    if (typeof streamId !== "string") return false;
+    const stream = this.streams.get(streamId);
+    if (!stream?.windowed || stream.lease.peerId !== peerId) return false;
+    try { this.getLease(peerId, stream.lease.leaseId); }
+    catch (error) { this.close(peerId, streamId, error instanceof Error ? error.message : undefined); return undefined; }
+    // Only a cancellation can precede the open result.
+    if (!stream.endpoint) { this.close(peerId, streamId); return undefined; }
+    stream.touchedAt = this.now();
+    return stream.endpoint;
+  }
+
+  private scheduler(peerId: string): ServiceStreamScheduler {
+    let scheduler = this.schedulers.get(peerId);
+    if (!scheduler) this.schedulers.set(peerId, scheduler = new ServiceStreamScheduler());
+    return scheduler;
+  }
+
+  private assertStreamCapacity(peerId: string): void {
+    if (this.streams.size >= SERVICE_MAX_STREAMS
+      || [...this.streams.values()].filter((entry) => entry.lease.peerId === peerId).length >= SERVICE_MAX_PEER_STREAMS) {
+      throw new Error("Service stream limit reached.");
+    }
+  }
+
+  private async connect(peerId: string, stream: Stream): Promise<void> {
+    const { lease, socket } = stream;
     try {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => { socket.destroy(); reject(new Error("Service connection timed out.")); }, 5000);
@@ -175,8 +304,8 @@ export class FederationServices {
         socket.once("connect", connected); socket.once("error", failed); socket.once("close", closed);
         socket.connect({ host: lease.service.address, port: lease.service.port, family: lease.service.address === "::1" ? 6 : 4 });
       });
-      this.getLease(peerId, leaseId);
-      return { streamId: stream.streamId };
+      this.getLease(peerId, lease.leaseId);
+      if (this.streams.get(stream.streamId) !== stream) throw new Error("Service connection cancelled.");
     } catch (error) {
       this.close(peerId, stream.streamId);
       throw error;
@@ -185,6 +314,7 @@ export class FederationServices {
 
   async exchange(peerId: string, input: ServiceExchange): Promise<ServiceExchangeResult> {
     const stream = this.getStream(peerId, input.streamId);
+    if (stream.windowed) throw new Error("Service stream uses windowed frames.");
     if (stream.busy) throw new Error("Concurrent service exchanges are forbidden.");
     stream.busy = true;
     try {
@@ -199,16 +329,24 @@ export class FederationServices {
       await new Promise<void>((resolve) => setTimeout(resolve, Math.max(1, at - Date.now())));
       this.getLease(peerId, stream.lease.leaseId);
       if (stream.error) throw new Error(stream.error);
-      if (bytes.length || (input.fin && !stream.socket.writableEnded)) {
+      const wrote = bytes.length > 0 || (input.fin && !stream.socket.writableEnded);
+      if (wrote) {
         if (stream.writing) throw new Error("Service write credit exceeded.");
         stream.writing = true;
         // Independent directional credit prevents full-duplex deadlocks: keep
         // draining the opposite direction while a socket write is blocked.
-        void writeServiceData(stream.socket, bytes, input.fin)
+        stream.flushed = writeServiceData(stream.socket, bytes, input.fin)
           .catch(() => { stream.error = "Service socket write failed or stalled."; })
-          .finally(() => { stream.writing = false; });
+          .finally(() => { stream.writing = false; stream.flushed = undefined; });
       }
-      if (input.receive) await waitServiceReadable(stream.socket);
+      // After a full chunk the viewer has more to send, and a poll during an earlier
+      // write is waiting for write credit: both return once the write flushes. A
+      // partial chunk or FIN drained the viewer's buffer: long-poll for the reply.
+      const flushWakes = bytes.length === SERVICE_CHUNK_BYTES || !wrote;
+      if (input.receive) await waitServiceReadable(stream.socket, 50, flushWakes ? stream.flushed : undefined);
+      // Without receive credit there is nothing to read, but a full chunk should
+      // still report its flush so the viewer can send the next one.
+      else if (flushWakes && stream.flushed) await waitServiceFlushed(stream.flushed);
       this.getLease(peerId, stream.lease.leaseId);
       if (stream.error) throw new Error(stream.error);
       const data = input.receive ? readServiceData(stream.socket) : Buffer.alloc(0);
@@ -222,16 +360,19 @@ export class FederationServices {
     } finally { stream.busy = false; }
   }
 
-  close(peerId: string, streamId: string): void {
+  close(peerId: string, streamId: string, error = "Service stream closed."): void {
     const stream = this.streams.get(id(streamId));
     if (!stream) return;
     if (stream.lease.peerId !== peerId) throw new Error("Service stream belongs to another viewer.");
     this.streams.delete(streamId);
-    stream.socket.destroy();
+    // A windowed stream tells its viewer why; a v1 viewer learns on its next exchange.
+    if (stream.endpoint) stream.endpoint.abort(error);
+    else stream.socket.destroy();
   }
 
   disconnect(peerId: string): void {
     for (const lease of this.leases.values()) if (lease.peerId === peerId) this.release(peerId, lease.leaseId);
+    this.schedulers.delete(peerId);
   }
 
   dispose(): void {
@@ -267,7 +408,9 @@ export class FederationServices {
     if (!this.options.allowForwarding()) this.revokeForwards();
     for (const service of this.services.values()) if (service.expiresAt <= this.now()) this.remove(service, service.serviceId);
     for (const lease of this.leases.values()) if (lease.expiresAt <= this.now()) this.release(lease.peerId, lease.leaseId);
-    for (const stream of this.streams.values()) if (stream.touchedAt + SERVICE_LEASE_MS <= this.now()) this.close(stream.lease.peerId, stream.streamId);
+    for (const stream of this.streams.values()) {
+      if (stream.touchedAt + SERVICE_LEASE_MS <= this.now()) this.close(stream.lease.peerId, stream.streamId, "Service stream was idle.");
+    }
   }
   private async reap(): Promise<void> {
     this.prune();
@@ -286,7 +429,36 @@ export class FederationServices {
   }
 }
 
-export function registerFederationServices(router: FederationRouter, service: FederationServices): void {
+/**
+ * Serve v1 always. With `link`, also serve windowed streams and route their
+ * frames: to this owner's streams first, then to `viewer`, this instance's
+ * forwarder, for streams it opened on other owners.
+ */
+export function registerFederationServices(router: FederationRouter, service: FederationServices, options: {
+  link?: ServiceStreamLink;
+  viewer?: ServiceStreamReceiver;
+} = {}): void {
+  if (options.link) {
+    service.setStreamLink(options.link);
+    router.registerHandler(FEDERATION_SERVICE_V2_METHODS.open, (envelope) =>
+      service.openStream(id(envelope.sourceInstanceId), envelope.params as ServiceStreamOpen));
+    router.registerHandler(FEDERATION_SERVICE_V2_METHODS.renew, (envelope) =>
+      service.renewStreams(id(envelope.sourceInstanceId), envelope.params as ServiceStreamRenew));
+  }
+  if (options.link || options.viewer) {
+    for (const method of Object.values(FEDERATION_SERVICE_V2_NOTIFICATIONS)) {
+      router.registerNotificationHandler(method, (envelope) => {
+        const peerId = envelope.sourceInstanceId;
+        if (typeof peerId !== "string") return;
+        if (!service.receiveNotification(peerId, method, envelope.params)) options.viewer?.receiveNotification(peerId, method, envelope.params);
+      });
+    }
+    router.registerServiceDataHandler((envelope) => {
+      const peerId = envelope.sourceInstanceId;
+      if (typeof peerId !== "string") return;
+      if (!service.receiveData(peerId, envelope)) options.viewer?.receiveData(peerId, envelope);
+    });
+  }
   for (const [action, method] of Object.entries(FEDERATION_SERVICE_METHODS)) {
     router.registerHandler(method, (envelope) => {
       const peerId = id(envelope.sourceInstanceId);

@@ -100,6 +100,19 @@ describe("UsagePaceCard", () => {
     expect(card.querySelector(".usage-pace-card__foot")).toHaveTextContent("This machine $0.0003 API-eq.");
   });
 
+  it("names the owning instance when the spend is a remote thread's", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+    const readUsageActivity = reader({
+      limitObservation: reading(53),
+      rows: [usageFixture({ createdAt: NOW - 2 * HOUR, startedAt: NOW - 2 * HOUR, completedAt: NOW - HOUR })],
+    });
+    render(<UsagePaceCard desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity }} ownerLabel="Studio / default" />);
+
+    const card = await screen.findByRole("button", { name: "Open Usage Activity. Weekly limit 53% used." });
+    expect(card.querySelector(".usage-pace-card__foot")).toHaveTextContent("Studio / default $0.0003 API-eq.");
+    expect(card.querySelector(".usage-pace-card__foot")).not.toHaveTextContent("This machine");
+  });
+
   it("stays quiet when the pace lands below 100% at the reset", async () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     render(<UsagePaceCard desktopApi={{ openUsageActivity: vi.fn(), readUsageActivity: reader({ limitObservation: reading(41) }) }} />);

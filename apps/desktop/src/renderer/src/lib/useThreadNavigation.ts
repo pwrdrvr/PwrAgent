@@ -31,6 +31,9 @@ import type {
   FederationTarget,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   NavigationBrowseMode,
   NavigationDirectoryGitStatus,
   NavigationDirectoryGitStatusUpdatedNotification,
@@ -962,6 +965,8 @@ function threadSummariesEqual(
     left.updatedAt === right.updatedAt &&
     left.threadStatus === right.threadStatus &&
     left.hasActiveSubAgent === right.hasActiveSubAgent &&
+    left.hasBackgroundTasks === right.hasBackgroundTasks &&
+    left.hasAgentCommands === right.hasAgentCommands &&
     left.gitBranch === right.gitBranch &&
     left.observedGitBranch === right.observedGitBranch &&
     left.primaryGitRepository === right.primaryGitRepository &&
@@ -2450,7 +2455,7 @@ function mergeLaunchpadUpdateResponse(
 
   const merged: NavigationLaunchpadDraft = { ...next };
   const backendChanged = "backend" in patch;
-  const environmentChanged = backendChanged || "codexEnvironmentId" in patch;
+  const environmentChanged = "codexEnvironmentId" in patch;
   const preserveSetting = <Key extends keyof NavigationLaunchpadDraft>(
     key: Key,
   ): void => {
@@ -3158,6 +3163,14 @@ export function useThreadNavigation(
     thread: NavigationThreadSummary,
     request: Omit<HandoffThreadWorkspaceRequest, "backend" | "threadId">
   ) => Promise<void>;
+  recreateThreadWorktree: (
+    thread: NavigationThreadSummary,
+    request: Pick<RecreateThreadWorktreeRequest, "worktreePath" | "skipCheckpoint" | "detached">
+  ) => Promise<RecreateThreadWorktreeResponse>;
+  moveThreadToMainCheckout: (
+    thread: NavigationThreadSummary,
+    worktreePath: string
+  ) => Promise<MoveThreadToMainCheckoutResponse>;
   renameThread: (thread: NavigationThreadSummary, name: string) => Promise<void>;
   setThreadReaction: (
     thread: NavigationThreadSummary,
@@ -3227,6 +3240,8 @@ export function useThreadNavigation(
   const archiveWorktreeRequest = desktopApi?.archiveWorktree;
   const restoreWorktreeRequest = desktopApi?.restoreWorktree;
   const handoffThreadWorkspaceRequest = desktopApi?.handoffThreadWorkspace;
+  const recreateThreadWorktreeRequest = desktopApi?.recreateThreadWorktree;
+  const moveThreadToMainCheckoutRequest = desktopApi?.moveThreadToMainCheckout;
   const renameThreadRequest = desktopApi?.renameThread;
   const setThreadExecutionMode = desktopApi?.setThreadExecutionMode;
   const setAcpSessionRuntimeOption = desktopApi?.setAcpSessionRuntimeOption;
@@ -7762,9 +7777,9 @@ export function useThreadNavigation(
             // Remote launchpads are composed and persisted on the viewer, then
             // sent in full to the owning instance for materialization. The owner
             // clears its overlay row as part of that operation, but it cannot
-            // clear the viewer's local copy. Remove that copy after success so
-            // reopening the launchpad cannot resurrect the submitted message.
-            await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+            // clear the viewer's local copy. Clear its submitted input after
+            // success while retaining the project's environment selection.
+            await desktopApi.resetDirectoryLaunchpad({ directoryKey, preserveEnvironment: true });
           } catch (error) {
             localDraftResetFailure =
               error instanceof Error ? error.message : String(error);
@@ -8421,6 +8436,18 @@ export function useThreadNavigation(
     [desktopApi, refresh, restoreWorktreeRequest]
   );
 
+  // The owner has committed the workspace change before it answers. Refresh
+  // the thread and, when selected, its detail; workspace actions stay gated
+  // until that detail shows the change.
+  const refreshAfterWorkspaceChange = useCallback((threadKey: string) => {
+    void Promise.all([
+      refresh(threadKey),
+      selectedItemKeyRef.current === threadKey ? refreshSelectedThreadConfiguration() : Promise.resolve(),
+    ]).catch((error: unknown) => {
+      setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
+    });
+  }, [refresh, refreshSelectedThreadConfiguration]);
+
   const handoffThreadWorkspace = useCallback(
     async (
       thread: NavigationThreadSummary,
@@ -8446,24 +8473,61 @@ export function useThreadNavigation(
         });
         const threadKey = threadSummaryIdentityKey(thread);
         setPendingWorkspaceHandoff({ threadKey, directory: response.linkedDirectory });
-        // The main process has committed the workspace change before its IPC
-        // response. Keep workspace actions gated until selected detail reflects
-        // that commit, while the dialog can close before Git-backed reads finish.
-        void (async () => {
-          await Promise.all([
-            refresh(threadKey),
-            selectedItemKeyRef.current === threadKey ? refreshSelectedThreadConfiguration() : Promise.resolve(),
-          ]);
-        })().catch((error) => {
-          setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
-        });
+        // The dialog can close before Git-backed reads finish.
+        refreshAfterWorkspaceChange(threadKey);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setWorktreeArchiveError(message);
         throw error;
       }
     },
-    [desktopApi, handoffThreadWorkspaceRequest, refresh, refreshSelectedThreadConfiguration]
+    [desktopApi, handoffThreadWorkspaceRequest, refreshAfterWorkspaceChange]
+  );
+
+  const recreateThreadWorktree = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      request: Pick<RecreateThreadWorktreeRequest, "worktreePath" | "skipCheckpoint" | "detached">
+    ): Promise<RecreateThreadWorktreeResponse> => {
+      if (!recreateThreadWorktreeRequest) {
+        throw new Error("Desktop bridge is missing recreateThreadWorktree().");
+      }
+      const response = await recreateThreadWorktreeRequest({
+        ...request,
+        backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+        threadId: thread.id,
+      });
+      if (response.status === "recreated") {
+        refreshAfterWorkspaceChange(threadSummaryIdentityKey(thread));
+      }
+      return response;
+    },
+    [recreateThreadWorktreeRequest, refreshAfterWorkspaceChange]
+  );
+
+  const moveThreadToMainCheckout = useCallback(
+    async (
+      thread: NavigationThreadSummary,
+      worktreePath: string
+    ): Promise<MoveThreadToMainCheckoutResponse> => {
+      if (!moveThreadToMainCheckoutRequest) {
+        throw new Error("Desktop bridge is missing moveThreadToMainCheckout().");
+      }
+      const response = await moveThreadToMainCheckoutRequest({
+        backend: thread.source,
+        federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
+        threadId: thread.id,
+        worktreePath,
+      });
+      const threadKey = threadSummaryIdentityKey(thread);
+      // As after a handoff: keep workspace actions gated until the selected
+      // detail shows the thread in the main checkout.
+      setPendingWorkspaceHandoff({ threadKey, directory: response.linkedDirectory });
+      refreshAfterWorkspaceChange(threadKey);
+      return response;
+    },
+    [moveThreadToMainCheckoutRequest, refreshAfterWorkspaceChange]
   );
 
   const renameThread = useCallback(
@@ -9501,6 +9565,8 @@ export function useThreadNavigation(
     archiveWorktree,
     restoreWorktree,
     handoffThreadWorkspace,
+    recreateThreadWorktree,
+    moveThreadToMainCheckout,
     renameThread,
     setThreadReaction,
     setThreadLock,

@@ -13,6 +13,11 @@ const LIMIT_LABELS: Record<string, string> = {
   // utilization and expiry; the SDK types and CLI never name it.
   iguana_necktie: "Cloud session credits",
 };
+/** Window lengths, so a 5-hour or weekly limit can anchor a usage window. */
+const LIMIT_WINDOW_MINUTES: Record<string, number> = {
+  five_hour: 300, seven_day: 10_080, seven_day_opus: 10_080, seven_day_sonnet: 10_080,
+  seven_day_oauth_apps: 10_080, seven_day_overage_included: 10_080,
+};
 /** Grants that end on their date instead of renewing. */
 const EXPIRING_LIMITS = new Set(["iguana_necktie"]);
 /** Handled on their own: a per-model array, and a credit balance that is not a limit. */
@@ -26,6 +31,7 @@ function limitRow(key: string, usedPercent: number, resetAt: number | undefined)
     ...(label ? {} : { limitName: key }),
     usedPercent,
     ...(resetAt !== undefined && Number.isFinite(resetAt) ? { resetAt } : {}),
+    ...(LIMIT_WINDOW_MINUTES[key] ? { windowMinutes: LIMIT_WINDOW_MINUTES[key] } : {}),
     ...(EXPIRING_LIMITS.has(key) ? { expires: true } : {}),
   };
 }
@@ -83,6 +89,7 @@ export function claudeRateLimits(usage: SDKControlGetUsageResponse): BackendRate
       limitId: `model_scoped:${entry.display_name.trim()}`,
       usedPercent: entry.utilization,
       ...(resetAt !== undefined && Number.isFinite(resetAt) ? { resetAt } : {}),
+      windowMinutes: 10_080,
     });
   }
   return windows;

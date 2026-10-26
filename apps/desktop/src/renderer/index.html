@@ -79,9 +79,9 @@
             document.documentElement.setAttribute("data-color-theme", colorTheme);
           }
           // Mission-control is also the default; only set the attribute
-          // when compact is selected.
-          if (density === "compact") {
-            document.documentElement.setAttribute("data-density", "compact");
+          // for the denser modes.
+          if (density === "compact" || density === "minimal") {
+            document.documentElement.setAttribute("data-density", density);
           }
           // Text-size axes: "md" is the default the bare :root carries;
           // any other bridged value sets the attribute. No notch allowlist

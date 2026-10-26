@@ -52,6 +52,13 @@ export function navigationAttentionIdentity(thread: NavigationThreadSummary): st
   ]);
 }
 
+/** A live turn, an owned worker, or background tasks that outlived the turn. */
+function isLive(thread: NavigationThreadSummary): boolean {
+  return thread.threadStatus === "active"
+    || thread.hasActiveSubAgent === true
+    || thread.hasBackgroundTasks === true;
+}
+
 /** Reconcile owner metadata, never a visible page; incomplete coverage cannot remove unseen members. */
 export function reconcileNavigationAttentionOrder(params: {
   previous?: NavigationAttentionOrder;
@@ -68,13 +75,13 @@ export function reconcileNavigationAttentionOrder(params: {
   for (const thread of params.threads) {
     const key = navigationAttentionIdentity(thread);
     const previous = params.previous?.members.get(key);
-    if (thread.codexNativeSubAgent || (thread.threadStatus !== "active" && !thread.hasActiveSubAgent && !thread.inbox.inInbox
+    if (thread.codexNativeSubAgent || (!isLive(thread) && !thread.inbox.inInbox
       && (!previous?.awaitingBaseline || !previous.active))) members.delete(key);
   }
   let nextRank = params.previous?.nextRank ?? 1;
   const eligible = params.threads
     .filter((thread) => !thread.codexNativeSubAgent
-      && (thread.threadStatus === "active" || thread.hasActiveSubAgent || thread.inbox.inInbox))
+      && (isLive(thread) || thread.inbox.inInbox))
     .sort((left, right) => (left.updatedAt ?? 0) - (right.updatedAt ?? 0)
       || navigationAttentionIdentity(right).localeCompare(navigationAttentionIdentity(left)));
   for (const thread of eligible) {

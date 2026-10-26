@@ -31,6 +31,7 @@ import {
   buildDefaultAgentScopeLookup,
   buildMessagingDefaultAgentScopeKey,
 } from "./messaging-default-agent.js";
+import { isBindingForThread } from "./messaging-binding-thread-match.js";
 import {
   mergeMessagingBindingChannelMetadata,
   mergeMessagingManagedTopicObservation,
@@ -267,12 +268,7 @@ export class MessagingStore {
   }): Promise<MessagingBindingRecord[]> {
     return await this.withReadData((data) =>
       Object.values(data.bindings)
-        .filter(
-          (binding) =>
-            !binding.revokedAt &&
-            binding.backend === params.backend &&
-            binding.threadId === params.threadId,
-        )
+        .filter((binding) => !binding.revokedAt && isBindingForThread(binding, params))
         .map((binding) => structuredClone(binding)),
     );
   }
@@ -838,16 +834,50 @@ export class MessagingStore {
     return await this.withReadData((data) => structuredClone(data));
   }
 
+  /**
+   * Resolves once every operation queued on this file has settled, including
+   * operations queued while it waits. Every store on the same path shares the
+   * queue, so an owner about to remove the file's directory waits here first;
+   * otherwise a write still in the queue renames its temp file into a
+   * directory that no longer exists.
+   */
+  async whenIdle(): Promise<void> {
+    let queue = MessagingStore.queues.get(this.filePath);
+    while (queue) {
+      await queue;
+      const next = MessagingStore.queues.get(this.filePath);
+      if (next === queue) {
+        return;
+      }
+      queue = next;
+    }
+  }
+
   private async withData<T>(
     operation: (data: MessagingStoreData) => Promise<T> | T,
   ): Promise<T> {
-    const currentQueue = MessagingStore.queues.get(this.filePath) ?? Promise.resolve();
-    const next = currentQueue.then(async () => {
+    return await this.enqueue(async () => {
       const data = await this.readData();
       const result = await operation(data);
       await this.writeData(data);
       return result;
     });
+  }
+
+  /**
+   * Reads take a place in the file's queue too. A read that only waited for
+   * the queue would still hold the file open when a later write renames its
+   * temp file over it, and Windows refuses to replace an open file (EPERM).
+   */
+  private async withReadData<T>(
+    operation: (data: MessagingStoreData) => Promise<T> | T,
+  ): Promise<T> {
+    return await this.enqueue(async () => await operation(await this.readData()));
+  }
+
+  private async enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const currentQueue = MessagingStore.queues.get(this.filePath) ?? Promise.resolve();
+    const next = currentQueue.then(work);
 
     MessagingStore.queues.set(
       this.filePath,
@@ -857,14 +887,7 @@ export class MessagingStore {
       ),
     );
 
-    return (await next) as T;
-  }
-
-  private async withReadData<T>(
-    operation: (data: MessagingStoreData) => Promise<T> | T,
-  ): Promise<T> {
-    await (MessagingStore.queues.get(this.filePath) ?? Promise.resolve());
-    return await operation(await this.readData());
+    return await next;
   }
 
   private async readData(): Promise<MessagingStoreData> {

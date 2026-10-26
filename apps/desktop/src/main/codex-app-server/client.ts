@@ -125,6 +125,7 @@ import type {
   ThreadSettingsUpdateParams as CodexThreadSettingsUpdateParams,
   ThreadStartParams as CodexThreadStartParams,
   ThreadTurnsListParams as CodexThreadTurnsListParams,
+  ThreadRevertParams as CodexThreadRevertParams,
   ThreadTurnsListResponse as CodexThreadTurnsListResponse,
   Turn as CodexTurn,
   TurnInterruptParams as CodexTurnInterruptParams,
@@ -147,6 +148,7 @@ import {
   type ThreadDirectoryEnrichment,
   type DirectoryEnrichmentCaller,
 } from "../app-server/thread-directory-enricher";
+import { withAgentSetupVariablePolicy } from "../app-server/agent-setup-variables";
 import {
   isCodexReviewPromptText,
   isPwrAgentInlineReviewPrompt,
@@ -188,6 +190,7 @@ import {
   type CompatibleApprovalPolicy,
   type CompatibleDynamicToolSpec,
 } from "./protocol-compatibility";
+import { CodexModelProviderTranslator } from "./codex-model-provider-translation";
 import { persistCodexFileInput } from "./codex-file-input-files";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
@@ -317,6 +320,8 @@ type CodexClientOptions = {
   readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
   /** Captures the profile's explicit group or current protocol account. */
   resolveUsageAccountKey?: () => Promise<string | undefined>;
+  /** Ids of the model providers PwrAgent configured, read per message. */
+  resolveModelProviderIds?: () => ReadonlySet<string>;
   command?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
@@ -324,6 +329,13 @@ type CodexClientOptions = {
   resolveCommand?: StdioJsonRpcTransportOptions["resolveCommand"];
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   bundledToolsDirectory?: StdioJsonRpcTransportOptions["bundledToolsDirectory"];
+  /**
+   * Whether a thread's agent gets the shell variables its environment's
+   * setup captured. Read at every thread start, fork, resume and turn. When
+   * it answers false, the variables stay out of Codex's config; setup and
+   * Run actions are unaffected.
+   */
+  passSetupVariablesToAgents?: () => boolean;
   directoryResolver?: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
@@ -526,6 +538,7 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "turn/diff/updated",
   "serverRequest/resolved",
   "thread/compacted",
+  "thread/reverted",
   "thread/archived",
   "thread/deleted",
   "thread/unarchived",
@@ -1389,6 +1402,14 @@ function normalizeServerNotification(
   }
 
   const record = asRecord(params) ?? {};
+  // A revert from any client replaces the thread's history. Downstream
+  // consumers already reload a thread on PwrAgent's provider-neutral rewind.
+  if (method === "thread/reverted" && typeof record.threadId === "string") {
+    return {
+      method: "thread/rewound",
+      params: { threadId: record.threadId, updatedAt: Date.now() },
+    };
+  }
   if (method === "guardianWarning" && typeof record.message === "string") {
     return { method: "warning", params: {
       ...(typeof record.threadId === "string" ? { threadId: record.threadId } : {}),
@@ -2518,7 +2539,8 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
   return [];
 }
 
-function buildMessageContent(record: Record<string, unknown>): {
+/** The text and parts a replay message gets from one raw message item. */
+export function buildMessageContent(record: Record<string, unknown>): {
   parts?: AppServerThreadMessagePart[];
   text: string;
 } {
@@ -7601,6 +7623,7 @@ export class CodexAppServerClient {
   // All ordinary RPCs, including continuations of multi-request operations,
   // pass through admission. Only lifecycle work uses the raw connection.
   private readonly connection: Pick<JsonRpcConnection, "request">;
+  private readonly modelProviderTranslator?: CodexModelProviderTranslator;
   private lifecycleBarrier: Promise<void> | null = null;
   private readonly activeRequests = new Set<Promise<unknown>>();
   private closeGeneration = 0;
@@ -7765,6 +7788,19 @@ export class CodexAppServerClient {
       createCodexObserverWithConfigReadRedaction(options.connectionObserver),
       { logContext: { backend: "codex" }, logger: getMainLogger("pwragent:json-rpc") },
     );
+    // Every request, admitted or lifecycle, reaches Codex through this one
+    // function, so qualified model ids are translated in one place.
+    const resolveModelProviderIds = options.resolveModelProviderIds;
+    if (resolveModelProviderIds) {
+      this.modelProviderTranslator = new CodexModelProviderTranslator(resolveModelProviderIds);
+      const translator = this.modelProviderTranslator;
+      const rawRequest = this.rawConnection.request.bind(this.rawConnection);
+      this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
+        const translated = translator.translateRequest(method, params);
+        const result = await rawRequest(method, translated, timeoutMs, diagnostics);
+        return translator.observeResponse(method, translated, result);
+      };
+    }
     this.connection = {
       request: (...args) => this.requestWhenAvailable(...args),
     };
@@ -7776,7 +7812,10 @@ export class CodexAppServerClient {
             linkedDirectories: await directoryResolver(projectKey),
           })
         : enrichThreadDirectory);
-    this.rawConnection.setNotificationHandler(async (method, params) => {
+    this.rawConnection.setNotificationHandler(async (method, rawParams) => {
+      const params = this.modelProviderTranslator
+        ? this.modelProviderTranslator.translateNotification(method, rawParams)
+        : rawParams;
       if (method === "deprecationNotice") {
         // Protocol migration guidance belongs in diagnostics, not thread UI.
         const notice = asRecord(params) ?? {};
@@ -9684,6 +9723,15 @@ export class CodexAppServerClient {
     });
   }
 
+  /**
+   * The PwrAgent-configured model provider a thread runs on, as Codex last
+   * reported it. Undefined for Codex's default provider and for threads this
+   * connection has not read yet.
+   */
+  modelProviderForThread(threadId: string): string | undefined {
+    return this.modelProviderTranslator?.providerForThread(threadId);
+  }
+
   async readThreadPricingSnapshot(threadId: string): Promise<ThreadPricingSnapshot> {
     await this.ensureInitialized();
     const existing = this.pricingSnapshotReads.get(threadId);
@@ -9746,11 +9794,15 @@ export class CodexAppServerClient {
     }
   }
 
-  async readThreadActivity(params: {
+  /**
+   * One turn's replay, normalized through the same adapter as a history page,
+   * so its messages carry the same parts: a turn's tool screenshots attach to
+   * its final reply. Reads only that turn's items, never a transcript page.
+   */
+  async readThreadTurn(params: {
     threadId: string;
     turnId: string;
-    entryId: string;
-  }): Promise<AppServerThreadActivityEntry> {
+  }): Promise<AppServerThreadReplay> {
     await this.ensureInitialized();
     const items = await listCodexThreadItems({
       client: this.connection,
@@ -9758,11 +9810,18 @@ export class CodexAppServerClient {
       turnId: params.turnId,
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
-    // Normalize exactly one turn through the same adapter as the history page.
-    // No transcript file, whole-thread replay, or accounting read is needed.
-    const replay = extractThreadReplayFromReadResult({ thread: {
+    return extractThreadReplayFromReadResult({ thread: {
       id: params.threadId, turns: [{ id: params.turnId, items }],
     } }, { threadId: params.threadId });
+  }
+
+  async readThreadActivity(params: {
+    threadId: string;
+    turnId: string;
+    entryId: string;
+  }): Promise<AppServerThreadActivityEntry> {
+    // No transcript file, whole-thread replay, or accounting read is needed.
+    const replay = await this.readThreadTurn(params);
     const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
     if (!entry || entry.type !== "activity") throw new Error("Activity details are no longer available. Reload the thread.");
     return entry;
@@ -9973,12 +10032,26 @@ export class CodexAppServerClient {
     };
   }
 
+  /** Drops the captured setup variables when the profile withholds them. */
+  private withAgentEnvironmentPolicy<
+    T extends { codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime },
+  >(params: T): T {
+    const runtime = withAgentSetupVariablePolicy(
+      params.codexEnvironmentRuntime,
+      this.options.passSetupVariablesToAgents?.() ?? true,
+    );
+    return runtime === params.codexEnvironmentRuntime
+      ? params
+      : { ...params, codexEnvironmentRuntime: runtime };
+  }
+
   /**
    * A stock runtime can reuse its acknowledged catalog across owned realtime
    * handoffs. First-turn rollout bookkeeping is separate from catalog proof.
    * Unknown turns, mutations and reset revoke admission; drift needs refresh.
    */
   async prepareFreshNativeVoiceThread(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
     const admitted = this.admittedNativeVoiceThreads.get(params.threadId);
     const fresh = admitted ?? this.freshNativeVoiceThreads.get(params.threadId);
@@ -10030,6 +10103,7 @@ export class CodexAppServerClient {
   }
 
   private async prepareIdleNativeVoiceThread(params: Parameters<typeof buildThreadResumePayloads>[0]): Promise<void> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
     this.freshNativeVoiceThreads.delete(params.threadId);
     this.admittedNativeVoiceThreads.delete(params.threadId);
@@ -10104,6 +10178,7 @@ export class CodexAppServerClient {
     threadSource?: CodexThreadStartParams["threadSource"];
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
   }): Promise<{ threadId: string }> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
 
     const startPayload = buildThreadStartPayload({
@@ -10153,6 +10228,7 @@ export class CodexAppServerClient {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadForkParams["config"];
   }): Promise<{ threadId: string }> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
 
     const result = await requestWithFallbacks({
@@ -10209,6 +10285,7 @@ export class CodexAppServerClient {
     threadId: string;
     turnId: string;
   }> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
     const connection = this.createThreadOperationConnection();
 
@@ -10797,6 +10874,7 @@ export class CodexAppServerClient {
     config?: CodexThreadStartParams["config"];
     dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
+    params = this.withAgentEnvironmentPolicy(params);
     await this.ensureInitialized();
     const connection = this.createThreadOperationConnection();
 
@@ -11114,6 +11192,44 @@ export class CodexAppServerClient {
         turnId: params.turnId,
       };
     }
+  }
+
+  /**
+   * Replaces the thread's history with the prefix before `beforeTurnId`.
+   * Codex leaves local files as they are. Readers hydrate the retained
+   * history through `thread/turns/list`.
+   */
+  async revertThread(params: {
+    threadId: string;
+    beforeTurnId: string;
+  }): Promise<void> {
+    await this.ensureInitialized();
+    if (!this.getProtocolCompatibility().supportsThreadRevert) {
+      throw new Error("Update Codex to rewind threads");
+    }
+    const connection = this.createThreadOperationConnection();
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/resume"],
+      payloads: buildThreadResumePayloads(
+        { threadId: params.threadId },
+        this.getProtocolCompatibility(),
+      ),
+      timeoutMs,
+    });
+    await requestWithFallbacks({
+      client: connection,
+      methods: ["thread/revert"],
+      payloads: [
+        {
+          threadId: params.threadId,
+          beforeTurnId: params.beforeTurnId,
+        } satisfies CodexThreadRevertParams,
+      ],
+      timeoutMs,
+    });
+    this.invalidateThreadListings();
   }
 
   async compactThread(params: {

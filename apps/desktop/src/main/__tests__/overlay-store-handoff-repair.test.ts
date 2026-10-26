@@ -5,6 +5,7 @@ import {
   CURRENT_STATE_DB_USER_VERSION,
   StateDb,
 } from "../state/state-db";
+import { THREAD_SUB_AGENTS_MOVED_META_KEY } from "../state/thread-sub-agents";
 import {
   createTempStateDb,
   removeTempStateDbDir,
@@ -68,6 +69,35 @@ async function seedMisclassifiedHandoff(
   });
 }
 
+const WATCHER_KEY = "codex:watcher-thread";
+
+function readWatcherPayload(db: Database.Database): Record<string, unknown> {
+  const payload = db.prepare("SELECT payload FROM threads WHERE thread_id = ?").pluck().get(WATCHER_KEY);
+  return typeof payload === "string"
+    ? JSON.parse(payload) as Record<string, unknown>
+    : { backend: "codex", threadId: "watcher-thread", executionMode: "default", extraLinkedDirectories: [] };
+}
+
+/**
+ * A v56 profile predates the card table: drop it, its triggers and the move
+ * marker, and put the watcher's cards back in its payload, where that schema
+ * kept them.
+ */
+function downgradeToV56(): void {
+  const raw = stateDb.raw;
+  const cards = (raw.prepare(
+    "SELECT card FROM thread_sub_agents WHERE thread_id = ? ORDER BY created_at DESC, monitor_id",
+  ).pluck().all(WATCHER_KEY) as string[]).map((card) => JSON.parse(card) as unknown);
+  raw.exec(`DROP TRIGGER thread_sub_agents_capture_insert;
+    DROP TRIGGER thread_sub_agents_capture_update;
+    DROP TABLE thread_sub_agents;
+    DROP TABLE thread_sub_agent_revisions;`);
+  raw.prepare("DELETE FROM meta WHERE key = ?").run(THREAD_SUB_AGENTS_MOVED_META_KEY);
+  raw.prepare("INSERT OR REPLACE INTO threads(thread_id, payload) VALUES (?, ?)")
+    .run(WATCHER_KEY, JSON.stringify({ ...readWatcherPayload(raw), subAgents: cards }));
+  raw.pragma("user_version = 56");
+}
+
 function reopenAndCountImmediateTransactions(): number {
   const originalTransaction = Database.prototype.transaction;
   let immediateTransactions = 0;
@@ -123,9 +153,10 @@ afterEach(() => {
 describe("StateDb — handoff navigation migration", () => {
   it("repairs a grouped handoff hidden by a native sub-agent card once during schema migration", async () => {
     await seedMisclassifiedHandoff(store);
-    stateDb.raw.pragma("user_version = 56");
-    // Handoff, relationships, v65 retention, v66 backend metadata, and v76 generation.
-    expect(reopenAndCountImmediateTransactions()).toBe(5);
+    downgradeToV56();
+    // Handoff, relationships, v65 retention, v66 backend metadata, v76
+    // generation, and the v79 card table.
+    expect(reopenAndCountImmediateTransactions()).toBe(6);
 
     expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
       CURRENT_STATE_DB_USER_VERSION,
@@ -165,26 +196,27 @@ describe("StateDb — handoff navigation migration", () => {
     ) as { knownThreadKeys: string[] };
     expect(backendState.knownThreadKeys).toContain("codex:handoff-child");
     await expect(
-      store.getThreadOverlayState({
+      store.listThreadSubAgents({
         backend: "codex",
         threadId: "watcher-thread",
       }),
-    ).resolves.toMatchObject({ subAgents: [] });
+    ).resolves.toEqual([]);
 
     expect(reopenAndCountImmediateTransactions()).toBe(0);
     await expect(
-      store.getThreadOverlayState({
+      store.listThreadSubAgents({
         backend: "codex",
         threadId: "watcher-thread",
       }),
-    ).resolves.toMatchObject({ subAgents: [] });
+    ).resolves.toEqual([]);
   });
 
   it("keeps a handoff visible when an older instance recreates the stale card", async () => {
     await seedMisclassifiedHandoff(store);
-    stateDb.raw.pragma("user_version = 56");
-    // Handoff, relationships, v65 retention, v66 backend metadata, and v76 generation.
-    expect(reopenAndCountImmediateTransactions()).toBe(5);
+    downgradeToV56();
+    // Handoff, relationships, v65 retention, v66 backend metadata, v76
+    // generation, and the v79 card table.
+    expect(reopenAndCountImmediateTransactions()).toBe(6);
 
     // Simulate a supported pre-v56 instance sharing the profile after the
     // migration has committed.
@@ -217,24 +249,21 @@ describe("StateDb — handoff navigation migration", () => {
       "handoff-child",
     ]);
     await expect(
-      store.getThreadOverlayState({
+      store.listThreadSubAgents({
         backend: "codex",
         threadId: "watcher-thread",
       }),
-    ).resolves.toMatchObject({
-      subAgents: [
-        expect.objectContaining({
-          monitorId: "codex-native:handoff-child",
-        }),
-      ],
-    });
+    ).resolves.toMatchObject([
+      expect.objectContaining({
+        monitorId: "codex-native:handoff-child",
+      }),
+    ]);
   });
 
   it("preserves a peer update committed before the serialized migration begins", async () => {
     await seedMisclassifiedHandoff(store);
-    stateDb.raw.pragma("user_version = 56");
+    downgradeToV56();
     const peerStateDb = stateDb;
-    const peerStore = store;
     const originalTransaction = Database.prototype.transaction;
     let injectedPeerUpdate = false;
     const transactionSpy = vi
@@ -246,10 +275,11 @@ describe("StateDb — handoff navigation migration", () => {
         const transaction = originalTransaction.call(this, callback);
         if (!injectedPeerUpdate) {
           injectedPeerUpdate = true;
-          void peerStore.upsertThreadSubAgent({
-            backend: "codex",
-            threadId: "watcher-thread",
-            subAgent: {
+          // A peer on the v56 schema writes its card into the payload.
+          const payload = readWatcherPayload(peerStateDb.raw);
+          peerStateDb.raw.prepare("UPDATE threads SET payload = ? WHERE thread_id = ?").run(JSON.stringify({
+            ...payload,
+            subAgents: [{
               monitorId: "monitor:concurrent-update",
               task: "Concurrent peer update",
               status: "running",
@@ -258,8 +288,8 @@ describe("StateDb — handoff navigation migration", () => {
               backend: "codex",
               monitorThreadId: "concurrent-child",
               monitorTurnId: "turn-concurrent",
-            },
-          });
+            }, ...(payload.subAgents as unknown[] ?? [])],
+          }), WATCHER_KEY);
         }
         return transaction;
       });
@@ -279,16 +309,14 @@ describe("StateDb — handoff navigation migration", () => {
     store = new SqliteOverlayStore(stateDb);
 
     await expect(
-      store.getThreadOverlayState({
+      store.listThreadSubAgents({
         backend: "codex",
         threadId: "watcher-thread",
       }),
-    ).resolves.toMatchObject({
-      subAgents: [
-        expect.objectContaining({
-          monitorId: "monitor:concurrent-update",
-        }),
-      ],
-    });
+    ).resolves.toMatchObject([
+      expect.objectContaining({
+        monitorId: "monitor:concurrent-update",
+      }),
+    ]);
   });
 });

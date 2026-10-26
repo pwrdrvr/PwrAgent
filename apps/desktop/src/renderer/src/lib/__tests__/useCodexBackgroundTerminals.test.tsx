@@ -212,4 +212,31 @@ describe("useCodexBackgroundTerminals", () => {
     });
     expect(result.current.byThread).toEqual({});
   });
+
+  it("lists a Claude thread's tasks, follows its published set, and stops a task by id", async () => {
+    let emit!: (event: AgentEvent) => void;
+    const agent = { itemId: "tool-agent", processId: "agent-1", command: "Audit the SDK", cwd: "/fixture/project", kind: "agent" as const };
+    const terminate = vi.fn(async () => ({ terminated: true }));
+    const desktopApi: DesktopApi = {
+      listBackgroundTerminals: vi.fn(async () => ({ supported: true, terminals: [] })),
+      terminateBackgroundTerminal: terminate,
+      onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+    };
+    const claudeThread: NavigationThreadSummary = { ...thread(), source: "claude" };
+    const onAuthoritativeList = vi.fn();
+    const { result } = renderHook(() => useCodexBackgroundTerminals({ desktopApi, thread: claudeThread, onAuthoritativeList }));
+    await waitFor(() => expect(desktopApi.listBackgroundTerminals).toHaveBeenCalledWith(expect.objectContaining({ backend: "claude" })));
+    // Claude's list names only its tasks, never every running tool call.
+    expect(onAuthoritativeList).not.toHaveBeenCalled();
+    act(() => emit({ backend: "claude", notification: {
+      method: "thread/backgroundTasks/updated", params: { threadId: "thread-1", tasks: [agent] },
+    } }));
+    expect(result.current.terminals).toEqual([{ ...agent, output: undefined }]);
+    await act(async () => { await result.current.stop(result.current.terminals[0]); });
+    expect(terminate).toHaveBeenCalledWith(expect.objectContaining({ backend: "claude", threadId: "thread-1", processId: "agent-1" }));
+    act(() => emit({ backend: "claude", notification: {
+      method: "thread/backgroundTasks/updated", params: { threadId: "thread-1", tasks: [] },
+    } }));
+    expect(result.current.terminals).toEqual([]);
+  });
 });

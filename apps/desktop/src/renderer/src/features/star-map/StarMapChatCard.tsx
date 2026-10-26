@@ -23,7 +23,7 @@ import {
   type ReadQueuedTurnResponse,
   type ThreadExecutionMode,
 } from "@pwragent/shared";
-import { CelestialIcon, PencilIcon, TrashIcon } from "../../icons";
+import { CelestialIcon, PauseIcon, PencilIcon, TrashIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
@@ -41,6 +41,7 @@ import {
   QueuedMessageInspector,
   QueuedRowGrip,
   QueuedRowIconButton,
+  QueuedRowPausedLabel,
   QueuedRowPositionLabel,
 } from "../composer/QueuedMessageInspector";
 import {
@@ -51,6 +52,13 @@ import {
   requestOwnerQueuedTurnMove,
   settleQueuedTurnMove,
 } from "../composer/queued-turn-move";
+import {
+  canPauseQueuedTurn,
+  canResumeQueuedTurn,
+  queuedTurnOwnerCanPause,
+  setQueuedTurnPausedIn,
+  withOwnerPause,
+} from "../composer/queued-turn-pause";
 import { useQueuedRowReorder } from "../composer/useQueuedRowReorder";
 import { restoreQueuedMessage } from "../composer/queued-message-content";
 import { useOwnedComposerDraftStore } from "../composer/useOwnedComposerDraftStore";
@@ -458,6 +466,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       id: queued.id,
       title: queued.title ?? queuedTurnPreview(queued),
       group: queuedReorderGroup(queued, Date.now(), queuedTurnOwnerCanMove(desktopApi, thread)),
+      ...(queued.paused ? { paused: true } : {}),
     })),
     onMove: (id, toIndex) => {
       const store = ownedComposerDraftStore;
@@ -494,6 +503,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const queuedBandHasMovableRow = queuedTurns.some((queued) =>
     queuedReorder.canMove(queued.id)
   );
+  const ownerCanPauseQueuedTurns = queuedTurnOwnerCanPause(desktopApi, thread);
   useEffect(() => {
     if (!desktopApi?.onAgentEvent || !ownedComposerDraftStore) {
       return;
@@ -505,6 +515,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       const notification = event.notification.params as {
         displayText?: unknown;
         inputUpdated?: unknown;
+        paused?: unknown;
+        pauseRevision?: unknown;
         queueEntryId?: unknown;
         status?: unknown;
         threadId?: unknown;
@@ -521,27 +533,42 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         composerScopeKey,
       ) ?? [];
       if (notification.status === "queued" || notification.status === "held") {
-        // A title or input refresh for a row already shown. The snapshot
-        // projection keeps a title it has when a snapshot has none (the
-        // snapshot may predate the title), so a cleared title clears here,
-        // as it does in the main composer.
+        // A title, input or pause refresh for a row already shown. The
+        // snapshot projection keeps a title it has when a snapshot has none
+        // (the snapshot may predate the title), so a cleared title clears
+        // here, as it does in the main composer. Every queued and held event
+        // carries the pause, so an absent flag is a row that is not paused.
         const title =
           typeof notification.title === "string" && notification.title
             ? notification.title
             : undefined;
         const inputUpdated = notification.inputUpdated === true;
-        if (!title && !inputUpdated) return;
+        const ownerPause = {
+          paused: notification.paused === true,
+          ...(typeof notification.pauseRevision === "number"
+            ? { pauseRevision: notification.pauseRevision }
+            : {}),
+        };
         let changed = false;
         const next = current.map((queued) => {
           if (queued.queueEntryId !== notification.queueEntryId) return queued;
-          changed = true;
-          return {
+          const retitled = Boolean(title) || inputUpdated;
+          const updated = withOwnerPause({
             ...queued,
             ...(inputUpdated && typeof notification.displayText === "string"
               ? { text: notification.displayText }
               : {}),
-            title,
-          };
+            ...(retitled ? { title } : {}),
+          }, ownerPause);
+          if (
+            !retitled
+            && Boolean(updated.paused) === Boolean(queued.paused)
+            && updated.pauseRevision === queued.pauseRevision
+          ) {
+            return queued;
+          }
+          changed = true;
+          return updated;
         });
         if (changed) {
           ownedComposerDraftStore?.setQueuedTurns(composerScopeKey, next);
@@ -1405,6 +1432,30 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     [],
   );
 
+  /** Pauses or resumes a row, as the main composer does; see `setQueuedTurnPausedIn`. */
+  const setQueuedTurnPaused = useCallback(
+    async (queued: ComposerQueuedTurnSnapshot, paused: boolean): Promise<void> => {
+      const store = ownedComposerDraftStore;
+      if (!store) return;
+      const scopeKey = composerScopeKey;
+      setSendError(undefined);
+      const run = async (): Promise<void> => {
+        const failure = await setQueuedTurnPausedIn({
+          queued,
+          paused,
+          read: () => store.getQueuedTurns(scopeKey),
+          write: (turns) => store.setQueuedTurns(scopeKey, turns),
+          desktopApi,
+          federationTarget,
+        });
+        if (failure) setSendError(failure);
+      };
+      // Only a request to the owner can be in flight.
+      await (queued.queueEntryId ? runQueuedRowAction(queued, run) : run());
+    },
+    [composerScopeKey, desktopApi, federationTarget, ownedComposerDraftStore, runQueuedRowAction],
+  );
+
   const deleteQueuedTurn = useCallback(
     (queued: ComposerQueuedTurnSnapshot) => runQueuedRowAction(queued, async () => {
       setSendError(undefined);
@@ -2048,10 +2099,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           {queuedTurns.map((queued, index) => (
             <div
               aria-label={
-                index === 0 ? "Queued message" : `Queued message ${index + 1}`
+                queued.paused
+                  ? index === 0 ? "Paused queued message" : `Paused queued message ${index + 1}`
+                  : index === 0 ? "Queued message" : `Queued message ${index + 1}`
               }
               className={[
                 "composer__queued composer__queued--message composer__queued--compact",
+                queued.paused ? "composer__queued--paused composer__queued--pinned-actions" : "",
                 queuedBandHasMovableRow ? "composer__queued--reorderable" : "",
                 queuedReorder.canMove(queued.id) ? "composer__queued--movable" : "",
               ].filter(Boolean).join(" ")}
@@ -2072,6 +2126,31 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                 ) : null}
                 actions={
                   <>
+                    {queued.paused ? (
+                      <button
+                        className="composer__secondary-action"
+                        disabled={
+                          !canResumeQueuedTurn(queued, ownerCanPauseQueuedTurns)
+                          || queuedRowActionIds.has(queued.id)
+                        }
+                        type="button"
+                        onClick={() => {
+                          void setQueuedTurnPaused(queued, false);
+                        }}
+                      >
+                        Resume
+                      </button>
+                    ) : canPauseQueuedTurn(queued, Date.now(), ownerCanPauseQueuedTurns) ? (
+                      <QueuedRowIconButton
+                        label="Pause"
+                        disabled={queuedRowActionIds.has(queued.id)}
+                        onClick={() => {
+                          void setQueuedTurnPaused(queued, true);
+                        }}
+                      >
+                        <PauseIcon size={14} />
+                      </QueuedRowIconButton>
+                    ) : null}
                     <QueuedRowIconButton
                       label="Edit"
                       disabled={
@@ -2104,6 +2183,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                 <span className="composer__queued-label">
                   {queued.backendQueuePending
                     ? "Sending…"
+                    : queued.paused
+                    ? <QueuedRowPausedLabel />
                     : (
                       <QueuedRowPositionLabel
                         reorder={queuedReorder}

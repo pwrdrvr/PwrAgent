@@ -2,6 +2,7 @@ import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { FederatedThreadTodoService, type ThreadTodoOperation } from "../federation/federation-thread-todos";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { readLocalNavigationDirectoryIndex } from "../app-server/navigation-directory-index";
 import { getMainLogger } from "../log";
 import { ipcMain } from "electron";
 import type { FederationRemoteTarget, ThreadTodosChangedEvent } from "@pwragent/shared";
@@ -24,35 +25,34 @@ import {
   installThreadTodoRuntime,
 } from "../thread-todos/thread-todo-runtime";
 import { federationTargetForChannelSubscriber, subscribersForChannel } from "../window-channels";
-import { appServerService } from "./app-server";
 
 let unsubscribeRemoteTodos: (() => void) | undefined;
 let unsubscribePeerStatus: (() => void) | undefined;
 const todoLog = getMainLogger("pwragent:thread-todos");
 
-function broadcastThreadTodosChanged(event: ThreadTodosChangedEvent): void {
+/**
+ * A federation viewer hears only its owner's changes. `everyWindow` is for
+ * reconnection, after which every window reloads its owner's state.
+ */
+function broadcastThreadTodosChanged(event: ThreadTodosChangedEvent, everyWindow = false): void {
   for (const webContents of subscribersForChannel(
     THREAD_TODOS_CHANGED_EVENT_CHANNEL,
   )) {
     const windowTarget = federationTargetForChannelSubscriber(webContents);
-    if (windowTarget && windowTarget.instanceId !== event.federationTarget?.instanceId
-      && (event.backend !== undefined || event.federationTarget !== undefined)) continue;
+    if (!everyWindow && windowTarget
+      && windowTarget.instanceId !== event.federationTarget?.instanceId) continue;
     if (!webContents.isDestroyed()) {
       webContents.send(THREAD_TODOS_CHANGED_EVENT_CHANNEL, event);
     }
   }
 }
 
-/** The local Directories lens rows, the projects a card can name. */
+/**
+ * The local Directories lens rows, the projects a card can name. Every
+ * page of them: a navigation page holds at most 100 rows.
+ */
 async function listLocalProjects(): Promise<ThreadTodoProjectCandidate[]> {
-  const page = await appServerService.getNavigationQueryPage({
-    protocol: 2,
-    inventory: "owner",
-    consumer: "agent-tool",
-    query: { kind: "directory-index" },
-    pageSize: 500,
-  });
-  return (page.directories ?? []).map((directory) => ({
+  return (await readLocalNavigationDirectoryIndex()).map((directory) => ({
     key: directory.key,
     label: directory.label,
     kind: directory.kind,
@@ -98,7 +98,7 @@ export function registerThreadTodoIpcHandlers(options: {
   });
   unsubscribePeerStatus?.();
   unsubscribePeerStatus = runtime.onPeerStatusChanged(() => {
-    broadcastThreadTodosChanged({ at: Date.now() });
+    broadcastThreadTodosChanged({ at: Date.now() }, true);
   });
   const channels = {
     listReviews: THREAD_REVIEWS_LIST_CHANNEL, updateReview: THREAD_REVIEWS_UPDATE_CHANNEL,

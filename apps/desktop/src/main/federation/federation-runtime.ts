@@ -8,9 +8,12 @@ import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, re
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type { ServiceThread, ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
-import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY } from "@pwragent/shared";
+import {
+  FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, FEDERATION_SERVICE_V2_CAPABILITY,
+} from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES, serviceThread } from "./federation-services";
 import { FederationServiceForwarder } from "./federation-service-forwarder";
+import { serviceDataEnvelope } from "./federation-service-stream";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -34,6 +37,7 @@ import { summarizeThreadAgentChange } from "@pwragent/shared";
 import { FederationShutdown } from "./federation-shutdown";
 import { FEDERATION_HEALTH_CHANGED_METHOD, FEDERATION_SHUTDOWN_CHANGED_METHOD } from "@pwragent/shared";
 import { NAVIGATION_DIRECTORY_SET_CHANGED_METHOD } from "@pwragent/shared";
+import { mcpConnectionsForPeer } from "@pwragent/shared";
 import { projectThreadDisplayEvent } from "../app-server/thread-display-events";
 import { federationTrafficCaptureUntil, setFederationTrafficCapture, saveFederationTrafficHistory } from "./federation-traffic-capture";
 import type { CloudflareClientConnection, NavigationAttentionViewReleaseRequest } from "@pwragent/shared";
@@ -67,11 +71,14 @@ import type {
   DetachDirectoryFromThreadResponse,
   CancelQueuedTurnResponse,
   MoveQueuedTurnResponse,
+  SetQueuedTurnPausedResponse,
   ReleaseQueuedTurnResponse,
   CancelThreadExecutionModeQueueResponse,
   CheckThreadBranchDriftResponse,
   CompactThreadResponse,
   ControlActiveTurnResponse,
+  RewindThreadResponse,
+  PreviewThreadRewindResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
@@ -88,6 +95,8 @@ import type {
   FederationInstanceId,
   FederationInstanceRole,
   FederationLoadStatus,
+  FederationNotificationEnvelope,
+  FederationServiceDataEnvelope,
   FederationPeerSummary,
   TodoUnavailableInstance,
   FederationPinDisposition,
@@ -95,6 +104,10 @@ import type {
   FederationSessionId,
   ForkThreadResponse,
   HandoffThreadWorkspaceResponse,
+  MoveThreadToMainCheckoutRequest,
+  MoveThreadToMainCheckoutResponse,
+  RecreateThreadWorktreeRequest,
+  RecreateThreadWorktreeResponse,
   InterruptTurnResponse,
   ListScheduledThreadActionsRequest,
   ListScheduledThreadActionsResponse,
@@ -111,6 +124,8 @@ import type {
   ReadFederationPinImpactRequest,
   ReadFederationPinImpactResponse,
   RefreshDirectoryGitStatusesResponse,
+  RefreshOwnedThreadGitWorkingStateRequest,
+  RefreshThreadGitWorkingStateResponse,
   RefreshThreadPullRequestsResponse,
   ResetFederationEnrollmentRequest,
   RetainThreadBranchDriftResponse,
@@ -171,6 +186,7 @@ import {
   type AttachDirectoryToThreadRequest,
   type CancelQueuedTurnRequest,
   type MoveQueuedTurnRequest,
+  type SetQueuedTurnPausedRequest,
   type ReleaseQueuedTurnRequest,
   type CancelThreadExecutionModeQueueRequest,
   type CelestialIconAssignment,
@@ -178,6 +194,8 @@ import {
   type CheckThreadBranchDriftRequest,
   type CompactThreadRequest,
   type ControlActiveTurnRequest,
+  type RewindThreadRequest,
+  type PreviewThreadRewindRequest,
   type ForkThreadRequest,
   type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
@@ -269,6 +287,7 @@ import {
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { registerDirectoryFromDisk } from "../app-server/directory-registration-service";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import { readThreadFamilyPricing } from "../app-server/thread-family-pricing";
 import { createScratchProjectDirectory, resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { spawnTerminalPty } from "../terminal/integrated-terminal-service";
@@ -276,9 +295,12 @@ import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import {
   readTranscriptImageProtocolRequest,
   rewriteFederatedTranscriptImageUrlsForRenderer,
-  materializeTranscriptImageUrlsForRenderer,
   toFederatedTranscriptImageProtocolUrl,
 } from "../transcript-image-protocol";
+import {
+  readThreadForPeer,
+  readTurnAssistantReplyForPeer,
+} from "./federation-owner-thread-reads";
 import { getMainLogger } from "../log";
 import {
   discoverDesktopApplications,
@@ -591,6 +613,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
   FEDERATION_SERVICE_CAPABILITY,
+  FEDERATION_SERVICE_V2_CAPABILITY,
   "file_push",
   "thread_handoff",
   "file_pull",
@@ -601,10 +624,13 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "shutdown_notice",
   "navigation_directory_set_events",
   "turn_queue_reorder",
+  "turn_queue_pause",
+  "turn_assistant_reply",
   "thread_mcp_connections",
   "thread_todos",
   "operator_questions",
   "operator_requests",
+  "thread_display_bulk_reads",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -697,6 +723,7 @@ const NAVIGATION_EVENT_METHODS = new Set<string>([
   "thread/agent/updated",
   "thread/archived",
   "thread/automations/updated",
+  "thread/backgroundTasks/updated",
   "thread/codexEnvironment/updated",
   "thread/codexInvalidIdRecovery/updated",
   "thread/executionMode/queueCleared",
@@ -2418,6 +2445,7 @@ export class DesktopFederationRuntime {
             ),
         });
       },
+      () => this.ensureLocalInstanceId(),
     );
   }
 
@@ -2667,7 +2695,10 @@ export class DesktopFederationRuntime {
       if (!rpc) throw new Error("This service already runs on this machine. Connect from a remote thread viewer.");
       const service = services.find((entry) => entry.serviceId === input.serviceId);
       if (!service) throw new Error("Service is no longer advertised.");
-      const forward = await this.serviceForwarder.connect(windowId, service, rpc);
+      // Windowed streams need both ends; an older gateway refuses the open and the forward falls back to v1.
+      const streams = this.viewerCapabilitiesFor(instanceId, this.visiblePeers().find((peer) => peer.id === instanceId))
+        .includes(FEDERATION_SERVICE_V2_CAPABILITY) ? 2 : 1;
+      const forward = await this.serviceForwarder.connect(windowId, service, rpc, { streams });
       try { assertViewing(); }
       catch (error) { this.serviceForwarder.disconnect(windowId, forward.forwardId); throw error; }
     }
@@ -2780,6 +2811,7 @@ export class DesktopFederationRuntime {
         sendEnvelope: (envelope) => {
           this.sendEnvelopeToTarget(target.instanceId, envelope);
         },
+        sendOneWay: (envelope) => this.sendServiceFrame(target.instanceId, envelope),
       });
       this.rpcByPeer.set(target.instanceId, rpc);
     }
@@ -3648,7 +3680,28 @@ export class DesktopFederationRuntime {
     });
     this.releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(this.ptyService);
     registerFederationPtyHandlers({ router, service: this.ptyService });
-    registerFederationServices(router, this.threadServices());
+    // One random prefix and a counter name every stream frame, as the RPC endpoint does.
+    const serviceFramePrefix = `federation-service:${randomUUID()}:`;
+    let serviceFrames = 0;
+    const serviceRoute = (peerId: FederationInstanceId) => ({
+      id: `${serviceFramePrefix}${(serviceFrames += 1)}`,
+      sourceInstanceId: this.ensureLocalInstanceId(),
+      targetInstanceId: peerId,
+      createdAt: Date.now(),
+    });
+    registerFederationServices(router, this.threadServices(), {
+      link: {
+        notify: (peerId, method, params) => this.sendServiceFrame(peerId, {
+          ...serviceRoute(peerId),
+          kind: "notification",
+          method,
+          params,
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        }),
+        sendData: (peerId, frame) => this.sendServiceFrame(peerId, serviceDataEnvelope(frame, serviceRoute(peerId))),
+      },
+      viewer: this.serviceForwarder,
+    });
     this.router = router;
     this.subscribeLocalBackendEvents();
 
@@ -4748,6 +4801,20 @@ export class DesktopFederationRuntime {
     }
 
     throw new FederationPeerUnavailableError(targetInstanceId);
+  }
+
+  /**
+   * Service stream data waits for transport capacity; its credit and close
+   * frames do not, because holding back credit stalls the other side.
+   */
+  private sendServiceFrame(
+    targetInstanceId: FederationInstanceId,
+    envelope: FederationNotificationEnvelope | FederationServiceDataEnvelope,
+  ): void | Promise<void> {
+    if (envelope.kind === "service_data") {
+      return this.sendEnvelopeToTargetWithBackpressure(targetInstanceId, envelope);
+    }
+    this.sendEnvelopeToTarget(targetInstanceId, envelope);
   }
 
   private async sendEnvelopeToTargetWithBackpressure(
@@ -6817,32 +6884,20 @@ function localBackendOperations(): FederationBackendOperations {
     async readThread(
       request: AppServerReadThreadRequest,
     ): Promise<AppServerReadThreadResponse> {
-      const backend = request.backend ?? "codex";
-      const response = await getDesktopBackendRegistry().readThread({
-        backend,
-        display: request.display,
-        threadId: request.threadId,
-        ...(request.includeTurns !== undefined
-          ? { includeTurns: request.includeTurns }
-          : {}),
-        ...(request.includeAllToolInvocations !== undefined
-          ? { includeAllToolInvocations: request.includeAllToolInvocations }
-          : {}),
-        before: request.before,
-        limit: request.limit,
-        ...(request.viewOnly !== undefined
-          ? { viewOnly: request.viewOnly }
-          : {}),
-      });
-      return await materializeTranscriptImageUrlsForRenderer(response, {}, {
-        includeTemporaryImageRoots: true,
-        resolveApprovedLocalImageRoots: () => getDesktopBackendRegistry().getThreadTranscriptImageRoots({
-          backend, threadId: request.threadId,
-        }),
-      });
+      return await readThreadForPeer(getDesktopBackendRegistry(), request);
+    },
+    async readTurnAssistantReply(request) {
+      return await readTurnAssistantReplyForPeer(getDesktopBackendRegistry(), request);
     },
     async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
       return await getDesktopBackendRegistry().readUsageActivity(request);
+    },
+    async readThreadFamilyPricing(request) {
+      return await readThreadFamilyPricing({
+        request: { backend: request.backend, threadId: request.threadId },
+        loadIndex: () => loadLocalNavigationQueryIndex({ callerReason: "thread-family-pricing" }),
+        readSummaries: (threads) => getDesktopOverlayStore().readThreadPricingSummaries(threads),
+      });
     },
     async analyzeUsageActivity(request: AnalyzeUsageActivityRequest): Promise<AnalyzeUsageActivityResponse> {
       return await getDesktopBackendRegistry().analyzeUsageActivity(request);
@@ -7218,6 +7273,11 @@ function localBackendOperations(): FederationBackendOperations {
     ): Promise<MoveQueuedTurnResponse> {
       return await getDesktopBackendRegistry().moveQueuedTurn(request);
     },
+    async setQueuedTurnPaused(
+      request: SetQueuedTurnPausedRequest,
+    ): Promise<SetQueuedTurnPausedResponse> {
+      return await getDesktopBackendRegistry().setQueuedTurnPaused(request);
+    },
     async listScheduledThreadActions(
       request: ListScheduledThreadActionsRequest = {},
       rpcOptions?: FederationRpcRequestOptions,
@@ -7273,8 +7333,22 @@ function localBackendOperations(): FederationBackendOperations {
     ): Promise<CompactThreadResponse> {
       return await getDesktopBackendRegistry().compactThread(request);
     },
+    async rewindThread(
+      request: RewindThreadRequest,
+    ): Promise<RewindThreadResponse> {
+      return await getDesktopBackendRegistry().rewindThread(request);
+    },
+    async previewThreadRewind(
+      request: PreviewThreadRewindRequest,
+    ): Promise<PreviewThreadRewindResponse> {
+      return await getDesktopBackendRegistry().previewThreadRewind(request);
+    },
     async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
-      return { connections: await getMcpConnectionGatewayService().listConnections() };
+      return {
+        connections: mcpConnectionsForPeer(
+          await getMcpConnectionGatewayService().listConnections(),
+        ),
+      };
     },
     async readThreadMcpConnections(
       request: ReadThreadMcpConnectionsRequest,
@@ -7428,6 +7502,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: FederationRefreshThreadPullRequestsRequest,
     ): Promise<RefreshThreadPullRequestsResponse> {
       return await getDesktopBackendRegistry().refreshOwnedThreadPullRequests(request);
+    },
+    async refreshThreadGitWorkingState(
+      request: RefreshOwnedThreadGitWorkingStateRequest,
+    ): Promise<RefreshThreadGitWorkingStateResponse> {
+      return await getDesktopBackendRegistry().refreshOwnedThreadGitWorkingState(request);
     },
     async ensureDirectoryLaunchpad(request: EnsureDirectoryLaunchpadRequest) {
       return await new DesktopMessagingBackendBridge()
@@ -7585,6 +7664,16 @@ function localBackendOperations(): FederationBackendOperations {
       request: HandoffThreadWorkspaceRequest,
     ): Promise<HandoffThreadWorkspaceResponse> {
       return await getDesktopBackendRegistry().handoffThreadWorkspace(request);
+    },
+    async recreateThreadWorktree(
+      request: RecreateThreadWorktreeRequest,
+    ): Promise<RecreateThreadWorktreeResponse> {
+      return await getDesktopBackendRegistry().recreateThreadWorktree(request);
+    },
+    async moveThreadToMainCheckout(
+      request: MoveThreadToMainCheckoutRequest,
+    ): Promise<MoveThreadToMainCheckoutResponse> {
+      return await getDesktopBackendRegistry().moveThreadToMainCheckout(request);
     },
     async renameThread(
       request: RenameThreadRequest,

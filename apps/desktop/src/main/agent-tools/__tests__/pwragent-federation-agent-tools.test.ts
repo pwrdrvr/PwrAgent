@@ -151,6 +151,15 @@ describe("pwragent federation agent tools", () => {
       },
     },
     {
+      name: "rejects a blank environment before dispatching create_instance_thread",
+      tool: "create_instance_thread",
+      arguments: {
+        instanceId: "pwr_studio",
+        projectKey: "dir:/repo",
+        environment: "  ",
+      },
+    },
+    {
       name: "rejects an unknown scope before dispatching search_federation_threads",
       tool: "search_federation_threads",
       arguments: { query: "recorder crash", scope: "nearby" },

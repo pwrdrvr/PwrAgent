@@ -99,7 +99,7 @@ describe("useThreadGitWorkingStateRefresh", () => {
     });
   });
 
-  it("does not refresh remote-owned threads from the viewer", async () => {
+  it("routes remote-owned refreshes to the thread-owning instance", async () => {
     const refreshThreadGitWorkingState = vi.fn(async () => ({ scheduled: true }));
     const desktopApi = {
       refreshThreadGitWorkingState,
@@ -122,9 +122,56 @@ describe("useThreadGitWorkingStateRefresh", () => {
       }),
     );
 
-    result.current.prefetch(remoteThread);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => {
+      expect(refreshThreadGitWorkingState).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "scheduled",
+        federationTarget: { scope: "remote", instanceId: "peer-laptop" },
+      });
+    });
 
-    expect(refreshThreadGitWorkingState).not.toHaveBeenCalled();
+    result.current.prefetch(remoteThread);
+
+    await waitFor(() => {
+      expect(refreshThreadGitWorkingState).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "user",
+        federationTarget: { scope: "remote", instanceId: "peer-laptop" },
+      });
+    });
+  });
+
+  it("targets the fronted instance from a federation window hover", async () => {
+    const refreshThreadGitWorkingState = vi.fn(async () => ({ scheduled: true }));
+    const desktopApi = {
+      refreshThreadGitWorkingState,
+    } satisfies DesktopApi;
+    const federationWindow = window as typeof window & {
+      __pwragentFederationTarget?: { scope: "remote"; instanceId: string };
+    };
+    federationWindow.__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "pwr_owner",
+    };
+    try {
+      const { result } = renderHook(() =>
+        useThreadGitWorkingStateRefresh({ desktopApi }),
+      );
+
+      result.current.prefetch(buildThread());
+
+      await waitFor(() => {
+        expect(refreshThreadGitWorkingState).toHaveBeenCalledWith({
+          backend: "codex",
+          threadId: "thread-1",
+          trigger: "user",
+          federationTarget: { scope: "remote", instanceId: "pwr_owner" },
+        });
+      });
+    } finally {
+      delete federationWindow.__pwragentFederationTarget;
+    }
   });
 });

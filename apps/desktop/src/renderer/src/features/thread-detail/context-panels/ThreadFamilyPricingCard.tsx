@@ -1,6 +1,7 @@
 import {
   formatTokenUsageMicrosAsUsd,
   type AppServerBackendKind,
+  type FederationRemoteTarget,
   type ReadThreadFamilyPricingResponse,
   type ThreadFamilyPricingMember,
 } from "@pwragent/shared";
@@ -12,6 +13,7 @@ type ThreadFamilyPricingCardProps = {
   desktopApi?: Pick<DesktopApi, "readThreadFamilyPricing">;
   backend: AppServerBackendKind;
   threadId: string;
+  federationTarget?: FederationRemoteTarget;
   /** Ordinary sub-threads directly under this one; zero renders nothing. */
   subThreadCount: number;
 };
@@ -41,18 +43,21 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
   const [refreshes, setRefreshes] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const threadLinks = useThreadLinks();
+  const ownerInstanceId = props.federationTarget?.instanceId;
 
   useEffect(() => {
     if (!enabled || !read) return;
     let current = true;
     // A re-read keeps the last totals on screen until the new ones land.
     setResult((previous) => previous.state === "ready" ? previous : { state: "loading" });
-    read({ backend: props.backend, threadId: props.threadId }).then(
+    read({ backend: props.backend, threadId: props.threadId,
+      ...(ownerInstanceId ? { federationTarget: { scope: "remote", instanceId: ownerInstanceId } as const } : {}),
+    }).then(
       (family) => { if (current) setResult({ state: "ready", family }); },
       () => { if (current) setResult({ state: "failed" }); },
     );
     return () => { current = false; };
-  }, [enabled, read, props.backend, props.threadId, props.subThreadCount, refreshes]);
+  }, [enabled, read, props.backend, props.threadId, props.subThreadCount, ownerInstanceId, refreshes]);
 
   if (!enabled) return null;
 
@@ -106,6 +111,7 @@ export const ThreadFamilyPricingCard = memo(function ThreadFamilyPricingCard(pro
         backend: member.backend,
         threadId: member.threadId,
         title: member.title,
+        ...(ownerInstanceId ? { instanceId: ownerInstanceId } : {}),
       })
     : undefined;
 

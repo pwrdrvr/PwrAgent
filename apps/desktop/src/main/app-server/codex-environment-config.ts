@@ -4,6 +4,7 @@ import type {
   CodexEnvironmentOption,
   NavigationLaunchpadDraft,
 } from "@pwragent/shared";
+import { tokenizeCodexEnvironmentToml } from "./codex-environment-toml";
 
 type RawAction = {
   name?: string;
@@ -30,10 +31,6 @@ type ParserContext =
   | "cleanup"
   | "action"
   | `${"setup" | "cleanup"}.${EnvironmentPlatform}`;
-
-const KEY_LINE = /^\s*([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*(.*)$/;
-const SECTION_LINE = /^\s*\[\s*([^[\]]+?)\s*\]\s*(?:#.*)?$/;
-const ARRAY_SECTION_LINE = /^\s*\[\[\s*([^[\]]+?)\s*\]\]\s*(?:#.*)?$/;
 
 export async function listCodexEnvironmentOptions(
   directoryPath?: string,
@@ -125,6 +122,55 @@ export function withCodexEnvironmentOptions(
   };
 }
 
+export type CodexEnvironmentSelectorResolution =
+  | { kind: "found"; environment: CodexEnvironmentOption }
+  | { kind: "missing"; message: string };
+
+/**
+ * Resolve an agent's environment selector. An exact id wins, then an id or
+ * a name compared without case. A name two environments share is refused,
+ * because picking one would run the wrong setup.
+ */
+export function resolveCodexEnvironmentSelector(
+  selector: string,
+  options: CodexEnvironmentOption[],
+  projectLabel = "this project",
+): CodexEnvironmentSelectorResolution {
+  const wanted = selector.trim();
+  const exact = options.find((option) => option.id === wanted);
+  if (exact) {
+    return { kind: "found", environment: exact };
+  }
+  const folded = wanted.toLowerCase();
+  const byId = options.find((option) => option.id.toLowerCase() === folded);
+  if (byId) {
+    return { kind: "found", environment: byId };
+  }
+  const byName = options.filter(
+    (option) => option.name.trim().toLowerCase() === folded,
+  );
+  if (byName.length === 1) {
+    return { kind: "found", environment: byName[0] };
+  }
+  if (byName.length > 1) {
+    return {
+      kind: "missing",
+      message: `Environment "${wanted}" matches more than one environment: ${describeEnvironmentOptions(byName)}. Pass an id.`,
+    };
+  }
+  const available = options.length > 0
+    ? `Available environments: ${describeEnvironmentOptions(options)}.`
+    : "The project has no .codex/environments/*.toml files.";
+  return {
+    kind: "missing",
+    message: `Environment "${wanted}" is not defined in ${projectLabel}. ${available} Pass environment="none" to start without one.`,
+  };
+}
+
+function describeEnvironmentOptions(options: CodexEnvironmentOption[]): string {
+  return options.map((option) => `${option.name} (${option.id})`).join(", ");
+}
+
 export function pruneCodexEnvironmentActionMap(
   map: Record<string, string> | undefined,
   options: CodexEnvironmentOption[],
@@ -172,55 +218,23 @@ export function parseCodexEnvironmentToml(
   filePath = "<inline>",
 ): RawEnvironmentConfig {
   const config: RawEnvironmentConfig = { actions: [] };
-  const lines = source.replace(/^\uFEFF/, "").split(/\r?\n/);
-  let context: ParserContext = "";
-  let currentAction: RawAction | undefined;
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = stripComment(line).trim();
-    if (!trimmed) {
-      i += 1;
-      continue;
-    }
-
-    const arraySection = ARRAY_SECTION_LINE.exec(line);
-    if (arraySection) {
-      const name = arraySection[1]?.trim();
-      if (name !== "actions") {
-        context = "";
-        currentAction = undefined;
-      } else {
+  for (const block of tokenizeCodexEnvironmentToml(source, filePath).blocks) {
+    let context: ParserContext = "";
+    let currentAction: RawAction | undefined;
+    if (block.header?.kind === "array") {
+      if (block.header.name === "actions") {
         currentAction = {};
         config.actions.push(currentAction);
         context = "action";
       }
-      i += 1;
-      continue;
-    }
-
-    const section = SECTION_LINE.exec(line);
-    if (section) {
-      const name = section[1]?.trim();
-      context = /^(setup|cleanup)(\.(darwin|linux|win32))?$/.test(name ?? "")
-        ? name as ParserContext
+    } else if (block.header) {
+      context = /^(setup|cleanup)(\.(darwin|linux|win32))?$/.test(block.header.name)
+        ? block.header.name as ParserContext
         : "";
-      currentAction = undefined;
-      i += 1;
-      continue;
     }
-
-    const keyMatch = KEY_LINE.exec(line);
-    if (!keyMatch) {
-      throw new Error(`Invalid Codex environment TOML line ${i + 1} in ${filePath}`);
+    for (const entry of block.entries) {
+      assignValue(config, context, currentAction, entry.key, entry.value);
     }
-
-    const key = keyMatch[1]!;
-    const valueStart = keyMatch[2]!;
-    const parsed = parseTomlScalar(lines, i, valueStart, filePath);
-    assignValue(config, context, currentAction, key, parsed.value);
-    i = parsed.nextLine;
   }
 
   return config;
@@ -262,83 +276,6 @@ function assignValue(
   if (key === "name") {
     config.name = value;
   }
-}
-
-function parseTomlScalar(
-  lines: string[],
-  startLine: number,
-  rawValue: string,
-  filePath: string,
-): { value: string | number | boolean; nextLine: number } {
-  const value = rawValue.trimStart();
-  if (value.startsWith("'''") || value.startsWith('"""')) {
-    return parseMultilineString(lines, startLine, value, filePath);
-  }
-
-  const stripped = stripComment(value).trim();
-  if (stripped.startsWith('"')) {
-    return { value: JSON.parse(stripped), nextLine: startLine + 1 };
-  }
-  if (stripped.startsWith("'") && stripped.endsWith("'")) {
-    return { value: stripped.slice(1, -1), nextLine: startLine + 1 };
-  }
-  if (stripped === "true" || stripped === "false") {
-    return { value: stripped === "true", nextLine: startLine + 1 };
-  }
-  if (/^-?\d+(?:\.\d+)?$/.test(stripped)) {
-    return { value: Number(stripped), nextLine: startLine + 1 };
-  }
-
-  throw new Error(
-    `Unsupported Codex environment TOML value on line ${startLine + 1} in ${filePath}`,
-  );
-}
-
-function parseMultilineString(
-  lines: string[],
-  startLine: number,
-  rawValue: string,
-  filePath: string,
-): { value: string; nextLine: number } {
-  const delimiter = rawValue.startsWith("'''") ? "'''" : '"""';
-  const remainder = rawValue.slice(3);
-  const sameLineEnd = remainder.indexOf(delimiter);
-  if (sameLineEnd >= 0) {
-    return {
-      value: decodeTomlString(remainder.slice(0, sameLineEnd), delimiter),
-      nextLine: startLine + 1,
-    };
-  }
-
-  const parts = [remainder];
-  for (let i = startLine + 1; i < lines.length; i += 1) {
-    const line = lines[i]!;
-    const end = line.indexOf(delimiter);
-    if (end >= 0) {
-      parts.push(line.slice(0, end));
-      const raw = parts.join("\n").replace(/^\n/, "");
-      return {
-        value: decodeTomlString(raw, delimiter),
-        nextLine: i + 1,
-      };
-    }
-    parts.push(line);
-  }
-
-  throw new Error(
-    `Unterminated Codex environment TOML multiline string on line ${startLine + 1} in ${filePath}`,
-  );
-}
-
-function decodeTomlString(value: string, delimiter: "'''" | '"""'): string {
-  if (delimiter === "'''") {
-    return value;
-  }
-  return value
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t")
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, "\\");
 }
 
 function normalizeScript(script?: string): string | undefined {
@@ -436,19 +373,4 @@ function slugify(value: string): string {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
-}
-
-function stripComment(value: string): string {
-  let quote: "'" | '"' | undefined;
-  for (let i = 0; i < value.length; i += 1) {
-    const char = value[i];
-    if ((char === "'" || char === '"') && value[i - 1] !== "\\") {
-      quote = quote === char ? undefined : quote ?? char;
-      continue;
-    }
-    if (char === "#" && !quote) {
-      return value.slice(0, i);
-    }
-  }
-  return value;
 }

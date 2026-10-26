@@ -25,6 +25,27 @@
 - Exclude `apps/desktop/.local/protocol-captures/` from broad searches.
   - Search that directory only for captured E2E protocol work.
 
+### Deferred work
+
+- The operator does not read notes in PR descriptions about work that was left out.
+- When you find work that should be done but you are not doing it in this change, raise a PwrAgent to-do card with the `add_todo` tool.
+- Do not write it up in the PR body, a commit message, or a code comment instead.
+- This rule covers:
+  - Out-of-scope gaps.
+  - Deferred follow-ups.
+  - Code-review findings that you are not fixing but that are still worth doing.
+- Give the card a `start_thread` action.
+  - Its prompt must stand alone. The new thread does not see the original thread.
+  - The operator can then track the item and spawn a thread when ready.
+- A finding that is not worth doing needs no card.
+  - Say so in your reply to the operator instead.
+- Settle every tracked review finding with `update_review_item`:
+  - `addressed`: you fixed it. Note what changed.
+  - `declined`: it is not worth doing. Note the reason.
+  - `deferred`: it is worth doing later. Raise the card first, then pass its id as `todoId`.
+  - Claude Code's `skipped` outcome is recorded as `declined` with no reason. Defer a skipped finding that is still worth doing.
+  - [docs/thread-reviews.md](docs/thread-reviews.md#finding-outcomes) defines the outcomes.
+
 ### Command output
 
 - Keep model-visible command output bounded.
@@ -79,6 +100,28 @@
   supply package-local links; sharing package `node_modules` can bind workspace
   imports to donor source and make installs/native staging mutate shared files.
   A symlink to a repaired helper inherits permissions but is not a complete fix.
+
+### Verification on Sandboxer
+
+- When the thread has the Sandboxer MCP (`create_sandbox` and `exec` tools),
+  do not run these checks on the local machine:
+  - Unit tests: `pnpm test`, focused or full.
+  - Lint: `pnpm lint` or any of its parts, such as `pnpm lint:oxlint`.
+  - Type check: `pnpm typecheck`.
+  - Desktop E2E: `pnpm test:desktop-e2e` or Playwright directly.
+- Run them in a sandbox with the
+  [Sandboxer verification skill](.agents/skills/sandboxer-verification/SKILL.md).
+  This rule applies wherever repository guidance says to run one of them.
+- Sandboxer is Ubuntu x64. It verifies Linux behavior only.
+  macOS-specific and Windows-specific changes still need CI or the PwrSuiteLab
+  skills below.
+- Verify a commit, not a dirty tree. Use one sandbox per thread, started from
+  the `pwragent-base` snapshot. Stop it after each run.
+- Attach the thread's PR and watch it with `notifyOn: ["merged", "closed"]`.
+  PwrAgent releases the thread's sandboxes when its PRs merge or close.
+- Use only the Sandboxer MCP tools. Do not run the `sbx` CLI.
+- Report the sandbox ID, the commit, and each check's exit status.
+- Without the Sandboxer MCP, run the checks locally as this file describes.
 
 ### Desktop test operations
 

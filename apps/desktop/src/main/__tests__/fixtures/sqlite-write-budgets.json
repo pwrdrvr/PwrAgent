@@ -41,6 +41,7 @@
     "rowsChanged": 140,
     "statements": 140
   },
+  "agent-thread-named-environment-start": {"commits": 5, "note": "One agent-created thread with a named environment: thread start bookkeeping, setup hydration and runtime persistence; no per-event writes. ~74 KB per thread: ~7.4 MB/day at 100 agent-created threads/day, 0 MB/day idle.", "observedWalBytes": 74160, "rowsChanged": 5, "statements": 5},
   "archive-cleanup-130-checkpoint-recover-drain": {"commits": 3, "note": "130 jobs: one quit checkpoint, one recovery claim, one drained checkpoint deletion; 3 commits per quit/restart cycle, no per-item or timer writes. At 10 cycles/day and 32 KiB/commit, about 0.94 MB/day; idle is 0 MB/day.", "observedWalBytes": 90640, "rowsChanged": 4, "statements": 4},
   "archive-cleanup-read-only-inventory": {
     "commits": 0,
@@ -58,10 +59,10 @@
   },
   "archive-retention-delete-batch": {
     "commits": 1,
-    "note": "One transaction releases 100 overlays after permanent provider deletion.",
+    "note": "One transaction releases 100 overlays after permanent provider deletion, plus one statement each clearing their sub-agent cards and card counters.",
     "observedWalBytes": 41200,
     "rowsChanged": 100,
-    "statements": 100
+    "statements": 102
   },
   "archive-retention-idle-day": {
     "commits": 0,
@@ -143,6 +144,27 @@
     "observedWalBytes": 45320,
     "rowsChanged": 49,
     "statements": 45
+  },
+  "codex-environment-action-output": {
+    "commits": 2,
+    "note": "one environment action run: start, 120 output snapshots (one minute at the 500 ms throttle, each a full 32,000-character tail) and exit. Live output stays in memory; commits do not scale with snapshots. ~74 KB per run whatever its length: ~1.5 MB/day at 20 runs/day (was 122 commits / ~2.9 MB per minute of output, ~1.4 GB/day for 8 hours of output)",
+    "observedWalBytes": 74160,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "codex-environment-action-output-shutdown": {
+    "commits": 1,
+    "note": "120 output snapshots from a running environment action, then app shutdown: one transaction persists every running tail (was 120 commits / ~2.9 MB)",
+    "observedWalBytes": 57680,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "codex-turn-end-with-token-miser-gates": {
+    "commits": 3,
+    "note": "one Codex turn end on a 2,000-turn thread with 2,000 stored gate cards and 5 new gates: the final usage line, 5 keyed gate-card rows, and the gate usage lines; the overlay row is not rewritten. ~206 KB WAL, ~21 MB/day at 100 such turn ends (was ~3.6 MB and ~360 MB/day while the cards lived in the overlay row)",
+    "observedWalBytes": 206000,
+    "rowsChanged": 19,
+    "statements": 19
   },
   "codex-ultrafast-profile-reset": {
     "commits": 3,
@@ -457,18 +479,18 @@
     "statements": 1
   },
   "managed-relationships-lifecycle": {
-    "commits": 5,
-    "note": "5 overlay writes: add/replace parent child, group/ungroup child, clear parent; projection and generation share those commits",
-    "observedWalBytes": 140080,
-    "rowsChanged": 5,
-    "statements": 5
+    "commits": 7,
+    "note": "add a parent's card, redirect it, group/ungroup the child, forget the parent: each overlay or card write is one commit, and the projection, revision and generation rows share it",
+    "observedWalBytes": 197760,
+    "rowsChanged": 9,
+    "statements": 9
   },
   "managed-subagent-metadata-writes": {
-    "commits": 60,
-    "note": "20 parent metadata, 20 ordinary overlay, 20 grouped-child metadata updates and navigation reads; no relationship mutations or additional commits",
-    "observedWalBytes": 988800,
-    "rowsChanged": 60,
-    "statements": 60
+    "commits": 80,
+    "note": "20 rounds of parent metadata with two changed cards, an ordinary overlay and a grouped-child update, with navigation reads; no relationship mutations",
+    "observedWalBytes": 1400800,
+    "rowsChanged": 100,
+    "statements": 100
   },
   "managed-subagent-navigation-reads": {
     "commits": 0,
@@ -774,6 +796,13 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "overlay-scalar-write-flat": {
+    "commits": 1,
+    "note": "one overlay scalar write (a reaction) on a thread holding 2,000 gate cards: the small overlay row only, ~16 KB WAL. It rewrote the ~3.5 MB row while the cards lived there",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "owner-content-search": {"commits": 1, "note": "First owner query with one known thread: one batched metadata commit (~37 KB); 20 equivalent cold batches/day project ~0.74 MB/day per owner, unchanged repeats and idle add 0 MB/day. No transcript index.", "observedWalBytes": 37080, "rowsChanged": 2, "statements": 3},
   "owner-content-search-cold-usage": {"commits": 1, "note": "Real registry and SQLite: one metadata batch for three cold candidates with 60 usage lines, including two nonmatches; no usage/pricing/directory hydration. Transcript persistence adds 0 MB/day.", "observedWalBytes": 37080, "rowsChanged": 6, "statements": 9},
   "owner-content-search-cold-usage-repeated": {"commits": 0, "note": "20 real owner searches of unchanged metadata and unhydrated usage-bearing transcripts: 0 commits and 0 MB/day at 20 queries/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
@@ -828,6 +857,27 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "pr-terminal-watch-deliver": {
+    "commits": 2,
+    "note": "claim and finish one merge/close wake: 2 commits/~24.7 KB WAL per merged PR; ~1.2 MB/day at 50 merges/day, zero idle writes",
+    "observedWalBytes": 24720,
+    "rowsChanged": 2,
+    "statements": 3
+  },
+  "pr-terminal-watch-open-polls": {
+    "commits": 10,
+    "note": "ten polls of an open PR that has a merge/close watch: 0 rows and 0 WAL; the 10 commits are the pre-existing per-poll supersede statement, which changes no row, so the watch adds 0 MB/day",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 10
+  },
+  "pr-terminal-watch-register": {
+    "commits": 1,
+    "note": "one merge/close watch requested by an agent tool call: 1 commit/~16.5 KB WAL; ~0.8 MB/day at 50 requests/day, zero idle writes",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "profile-model-default-launchpads": {
     "commits": 1,
     "note": "One profile model change updates 100 directory launchpads and learned defaults in one transaction.",
@@ -875,6 +925,14 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "recent-thread-lock-notes": {
+    "commits": 5,
+    "note": "five list changes (four saved notes, one removed chip) and five no-ops (repeats, unofferable notes, absent removals): one commit per change, none per no-op; a few locks a day is well under 1 MB/day of WAL",
+    "observedWalBytes": 41200,
+    "rowsChanged": 5,
+    "statements": 5
+  },
+  "remote-launchpad-environment-reset": {"commits": 2, "note": "Clear one submitted viewer draft and retain its environment at the submission boundary. Two commits, approximately 1.7 MB/day at 100 threads/day, with no idle or streamed-event writes.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "registered-project-launchpad-submit": {
     "commits": 1,
     "note": "One registered project draft reset per new thread: one replacement commit, no delete/insert pair; at 100 starts/day the measured WAL is approximately 0.8 MB/day; no idle writes",
@@ -921,6 +979,13 @@
     "commits": 2,
     "note": "one config publication and one discovery publication per explicit Codex path save; no idle writes",
     "observedWalBytes": 8240,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "shared-worktree-working-state-round": {
+    "commits": 2,
+    "note": "One automatic working-state round over 24 threads in one checkout plus 1 in another: one cache-row commit per probed worktree (2), never per thread (25). ~12.4 KB/commit; every probe commits even when unchanged, so the selected checkout's 60 s refresh is ~17.8 MB/day and the 30 s automatic floor caps a continuously browsed checkout at ~35.6 MB/day, the same for 1 or 24 threads sharing it",
+    "observedWalBytes": 24720,
     "rowsChanged": 2,
     "statements": 2
   },
@@ -1026,8 +1091,22 @@
     "rowsChanged": 3,
     "statements": 3
   },
-  "thread-review-reported-outcomes": {"commits": 1, "note": "One re-report settling two of three findings, then 99 identical re-reports. One commit for the whole report; repeats and skipped findings write nothing. ~8 KB per report: ~0.8 MB/day at 100 reports/day, 0 MB/day idle.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "thread-review-reported-outcomes": {"commits": 1, "note": "One re-report settling three findings (fixed, no_change_needed, skipped), then 99 identical re-reports. One commit for the whole report; repeats write nothing. ~8 KB per report: ~0.8 MB/day at 100 reports/day, 0 MB/day idle.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "thread-review-tracking-start": {"commits": 1, "note": "One profile tracking boundary; 100 service starts and reads. No repeated initialization or idle commits.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "thread-sandbox-cleanup-two": {
+    "commits": 2,
+    "note": "stop two sandboxes after a thread's PRs closed: 1 commit/~8 KB WAL per sandbox; ~0.4 MB/day at 50 sandboxes/day, zero idle writes",
+    "observedWalBytes": 16480,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "thread-sandbox-record-created": {
+    "commits": 1,
+    "note": "one observed create_sandbox result: 1 commit/~12.4 KB WAL per sandbox; ~0.6 MB/day at 50 sandboxes/day, zero idle writes",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "thread-self-rename": {
     "commits": 0,
     "note": "One ordinary-thread self-rename: zero commits/WAL bytes, projecting 0 MB/day. Notification and Undo state remain in memory, with no idle writes.",
@@ -1048,6 +1127,27 @@
     "observedWalBytes": 32960,
     "rowsChanged": 2,
     "statements": 2
+  },
+  "thread-sub-agent-upsert-flat": {
+    "commits": 1,
+    "note": "one changed gate card on a thread holding 2,000 cards: its own row and the revision counter, never the parent overlay row, and equal to the same write on a thread with no cards. ~12 KB WAL: ~25 MB/day at 2,000 card writes/day, where each one rewrote the ~3.5 MB overlay row before",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "thread-sub-agents-move": {
+    "commits": 5,
+    "note": "one-time move of 12 legacy payloads holding 40 cards each, in 36 KB slices: one commit per slice, the last one setting the marker. Runs once per profile; the 2,043-card production copy moved in 25 slices (p50 89 ms, ~195 MB WAL once)",
+    "observedWalBytes": 45320,
+    "rowsChanged": 13,
+    "statements": 13
+  },
+  "thread-sub-agents-move-repeat": {
+    "commits": 0,
+    "note": "the move and a read after it on a profile already marked moved: no writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
   },
   "thread-todo-add-update-resolve": {
     "commits": 3,
@@ -1170,10 +1270,10 @@
   },
   "token-miser-turn-ledger": {
     "commits": 2,
-    "note": "nine finalized Token Miser helper lines persisted during the active turn, plus one batched parent overlay write at completion",
-    "observedWalBytes": 82400,
-    "rowsChanged": 20,
-    "statements": 20
+    "note": "nine finalized Token Miser helper lines persisted during the active turn, plus one batched write of their nine gate-card rows at completion",
+    "observedWalBytes": 86520,
+    "rowsChanged": 28,
+    "statements": 28
   },
   "tool-output-history-analysis": {
     "commits": 1,
@@ -1209,6 +1309,13 @@
     "observedWalBytes": 8240,
     "rowsChanged": 2,
     "statements": 2
+  },
+  "usage-turn-time-repair": {
+    "commits": 1,
+    "note": "One-time repair of seven recovered ledger turn times plus a sweep clearing two implausible starts: one transaction however many turns, run once per profile",
+    "observedWalBytes": 4120,
+    "rowsChanged": 10,
+    "statements": 9
   },
   "usage-turn-startup-repair": {
     "commits": 1,

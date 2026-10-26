@@ -1,4 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
+import { sandboxerStub } from "./helpers/sandboxer-stub";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -127,11 +129,111 @@ describe("backend MCP gateway dispatch", () => {
     return events;
   }
 
+  it.each(["disabled", "cold", "expired"] as const)(
+    "keeps unrelated new-thread defaults when Sandboxer status is slow (%s)",
+    async (cache) => {
+      await registry.close();
+      const connections = new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") });
+      const remote = connections.create({ displayName: "Remote", serverUrl: "https://fixture.example/mcp" });
+      for (const id of ["pwrsnap", "pwrgit", remote.id, "builtin:sandboxer"]) {
+        connections.setSelectForNewThreads(id, true);
+      }
+      connections.setEnabled("builtin:sandboxer", cache !== "disabled");
+      let finishProbe!: (output: string) => void;
+      const probe = vi.fn(() => new Promise<string>((resolve) => { finishProbe = resolve; }));
+      const sandboxer = new SandboxerConnection(probe);
+      if (cache === "expired") {
+        probe.mockResolvedValueOnce('{"signedIn":true}');
+        await sandboxer.readStatus();
+      }
+      const credentials = JSON.stringify({ version: 1, credentials: Object.fromEntries(
+        connections.list().filter((connection) => connection.authMode === "oauth").map((connection) => [connection.id, {
+          resourceUrl: connection.serverUrl, tokens: { access_token: "fixture", token_type: "bearer" },
+        }]),
+      ) });
+      const broker = new McpConnectionGatewayService({
+        registry: connections, sandboxer, leaseManager: null,
+        settings: {
+          resolveMcpConnectionCredentials: async () => credentials,
+          resolvePwrSnapMcpCredential: async () => undefined,
+          resolvePwrGitMcpCredential: async () => undefined,
+          clearMcpConnectionCredentials: async () => {}, clearPwrSnapMcpCredential: async () => {},
+          clearPwrGitMcpCredential: async () => {}, saveMcpConnectionCredentials: async () => {},
+          savePwrSnapMcpCredential: async () => {},
+        },
+      });
+      brokers.push(broker);
+      await broker.start();
+      createRegistry(broker);
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(Date.now() + 16_000);
+        const defaults = (registry as unknown as {
+          resolveNewThreadMcpConnectionIds: () => Promise<string[] | undefined>;
+        }).resolveNewThreadMcpConnectionIds();
+        await vi.advanceTimersByTimeAsync(2_001);
+        expect(await defaults).toEqual(cache === "expired"
+          ? ["pwrsnap", "pwrgit", "builtin:sandboxer", remote.id]
+          : ["pwrsnap", "pwrgit", remote.id]);
+        expect(probe).toHaveBeenCalledTimes(cache === "disabled" ? 0 : cache === "expired" ? 2 : 1);
+      } finally {
+        if (finishProbe) {
+          finishProbe('{"signedIn":false}');
+          await sandboxer.readStatus();
+        }
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("keeps legacy sandboxer credentials and existing thread selection on the remote connection", async () => {
+    await registry.close();
+    const configPath = path.join(directory, "config.toml");
+    writeFileSync(configPath, `[[mcp_connections.connections]]
+id = "sandboxer"
+display_name = "Sandboxer"
+server_url = "https://legacy.example/mcp"
+select_for_new_threads = true
+`);
+    const connections = new McpConnectionRegistry({ configPath });
+    await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["sandboxer"] });
+    const sandboxer = sandboxerStub();
+    const probe = vi.spyOn(sandboxer, "readStatus");
+    const credentialRead = vi.fn(async () => JSON.stringify({ version: 1, credentials: {
+      sandboxer: { resourceUrl: "https://legacy.example/mcp", tokens: { access_token: "legacy-token", token_type: "bearer" } },
+    } }));
+    const broker = new McpConnectionGatewayService({
+      registry: connections, sandboxer, leaseManager: null,
+      settings: {
+        resolveMcpConnectionCredentials: credentialRead,
+        resolvePwrSnapMcpCredential: async () => undefined, resolvePwrGitMcpCredential: async () => undefined,
+        clearMcpConnectionCredentials: async () => {}, clearPwrSnapMcpCredential: async () => {},
+        clearPwrGitMcpCredential: async () => {}, saveMcpConnectionCredentials: async () => {},
+        savePwrSnapMcpCredential: async () => {},
+      },
+    });
+    brokers.push(broker);
+    createRegistry(broker);
+    expect((await broker.listConnections({ cachedLocalStatus: true })).find((connection) => connection.id === "sandboxer"))
+      .toMatchObject({ kind: "remote", configured: true, serverUrl: "https://legacy.example/mcp" });
+    expect(await (registry as unknown as {
+      resolveNewThreadMcpConnectionIds: () => Promise<string[] | undefined>;
+    }).resolveNewThreadMcpConnectionIds()).toEqual(["sandboxer"]);
+    const selection = (await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))!.mcpConnectionIds!;
+    expect(selection).toEqual(["sandboxer"]);
+    const bridge = await broker.registerBridge(selection[0]!, "thread-1");
+    expect(bridge.server.env.PWRAGENT_MCP_CONNECTION_NAME).toBe("sandboxer");
+    expect(probe).not.toHaveBeenCalled();
+    expect(credentialRead).toHaveBeenCalled();
+    bridge.revoke();
+  });
+
   async function brokerFixture() {
     await registry.close();
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["pwrsnap"] });
     let credentials: string | undefined;
     const broker = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
       registry: new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") }),
       leaseManager: null,
       readGatewaySelection: async (context) => (await store.getThreadOverlayState(context))?.mcpConnectionIds ?? [],
@@ -753,6 +855,33 @@ describe("backend MCP gateway dispatch", () => {
     await registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: ["one"] });
     expect((await internals.handleServerRequest("codex", request("call_mcp_tool", args, "call-3"))).success).toBe(true);
     expect(events).toHaveLength(2);
+  });
+
+  it("stops a thread's sessions for the connections it turned off, and only those", async () => {
+    await registry.close();
+    const closeThreadSessions = vi.fn(async () => undefined);
+    registry = new DesktopBackendRegistry({
+      codexClient: {
+        close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
+        onNotification: () => () => {}, onPendingRequest: () => () => {},
+        readConfiguredMcpServerNames: async () => [], startThread: async () => ({ threadId: "headless-1" }),
+        startTurn,
+      } as never,
+      overlayStore: store, isBootstrapMode: () => false,
+      mcpConnectionService: { registerBridge, requestGatewayToolOperation: operation, closeThreadSessions },
+    });
+
+    await registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: ["one", "two"] });
+    expect(closeThreadSessions).not.toHaveBeenCalled();
+    await registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: ["two"] });
+    expect(closeThreadSessions).toHaveBeenCalledExactlyOnceWith("thread-1", ["one"]);
+
+    // A failed release is logged; the operator's selection still lands.
+    closeThreadSessions.mockRejectedValueOnce(new Error("owner went away"));
+    await expect(registry.setThreadMcpConnections({ backend: "codex", threadId: "thread-1", connectionIds: [] }))
+      .resolves.toBeDefined();
+    expect(closeThreadSessions).toHaveBeenLastCalledWith("thread-1", ["two"]);
+    expect((await store.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.mcpConnectionIds ?? []).toEqual([]);
   });
 
   it.each([
