@@ -746,7 +746,27 @@ const MarkdownDocument = memo(function MarkdownDocument(props: {
   text: string;
   mathRuntime?: MarkdownMathRuntime;
 }) {
-  const IncrementalRenderer = useIncrementalMarkdownRenderer();
+  const availableRenderer = useIncrementalMarkdownRenderer();
+  const [selection, setSelection] = useState(() => ({
+    text: props.text,
+    renderer: availableRenderer,
+  }));
+  // Loading or enabling the experiment must not reparse settled messages or
+  // replace their DOM (and selection). Adopt it on the next text change;
+  // disabling still takes effect immediately. State keeps aborted renders
+  // from changing the renderer chosen by the committed document.
+  if (props.text !== selection.text || (!availableRenderer && selection.renderer)) {
+    setSelection({ text: props.text, renderer: availableRenderer });
+  }
+  return <MarkdownDocumentContent {...props} IncrementalRenderer={selection.renderer} />;
+});
+
+const MarkdownDocumentContent = memo(function MarkdownDocumentContent(props: {
+  text: string;
+  mathRuntime?: MarkdownMathRuntime;
+  IncrementalRenderer: ReturnType<typeof useIncrementalMarkdownRenderer>;
+}) {
+  const { IncrementalRenderer } = props;
   const remarkPlugins = useMemo<Options["remarkPlugins"]>(() => [
     ...(props.mathRuntime?.remarkPlugins ?? []),
     remarkBreaks,
