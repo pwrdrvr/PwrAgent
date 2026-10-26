@@ -321,7 +321,7 @@ describe("windowed stream lifecycle", () => {
     const server = createServer((socket) => { socket.on("error", () => undefined); });
     const port = await listen(server);
     const service = owner();
-    service.setNotifier(() => undefined);
+    service.setStreamLink({ notify: () => undefined, sendData: () => undefined });
     const declaration = await service.advertise(thread, { port, name: "limits", protocol: "tcp" });
     const { leaseId } = await service.lease("viewer", thread, declaration.serviceId);
     await service.openStream("viewer", { leaseId, streamId: "taken", window: 65_536, frameBytes: 16_384 });
