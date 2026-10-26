@@ -9,7 +9,7 @@ import {
   operatorTodoItemKey,
   parseCodexAsyncQuestionReply,
 } from "@pwragent/shared";
-import { copyText } from "../../../lib/copy-text";
+import { copyTextWithHtml } from "../../../lib/copy-text";
 import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
@@ -20,13 +20,14 @@ import { OperatorWaitsContext } from "../../operator-requests/useOperatorRequest
 
 vi.mock("../../../lib/copy-text", () => ({
   copyText: vi.fn(async () => undefined),
+  copyTextWithHtml: vi.fn(async () => undefined),
 }));
 
 afterEach(() => {
   cleanup();
   delete (window as unknown as { pwragent?: unknown }).pwragent;
   vi.useRealTimers();
-  vi.mocked(copyText).mockClear();
+  vi.mocked(copyTextWithHtml).mockClear();
 });
 
 const AGENT: ThreadTodoProject = { key: "directory:/src/pwragent", label: "PwrAgent", path: "/src/pwragent" };
@@ -472,7 +473,7 @@ describe("ThreadTodoStack", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Copy prompt" }));
     });
-    expect(copyText).toHaveBeenCalledWith("Port the parser");
+    expect(copyTextWithHtml).toHaveBeenCalledWith("Port the parser", "<p>Port the parser</p>");
     expect(screen.getByRole("button", { name: "Prompt copied" })).toBeTruthy();
   });
 
