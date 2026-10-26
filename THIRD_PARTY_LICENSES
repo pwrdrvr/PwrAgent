@@ -1282,15 +1282,15 @@ Python-2.0
 
 SEE LICENSE IN README.md
 ~~~~~~~~~~~~~~~~~~~~~~~~
-- @anthropic-ai/claude-agent-sdk@0.3.301 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.301 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-darwin-x64@0.3.301 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-linux-arm64@0.3.301 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.301 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-linux-x64@0.3.301 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.301 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-win32-arm64@0.3.301 | https://github.com/anthropics/claude-agent-sdk-typescript
-- @anthropic-ai/claude-agent-sdk-win32-x64@0.3.301 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-darwin-x64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-arm64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-x64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-win32-arm64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
+- @anthropic-ai/claude-agent-sdk-win32-x64@0.3.303 | https://github.com/anthropics/claude-agent-sdk-typescript
 
 Unlicense
 ~~~~~~~~~
@@ -1672,21 +1672,21 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@anthropic-ai/claude-agent-sdk@0.3.301 (SEE LICENSE IN README.md)
+@anthropic-ai/claude-agent-sdk@0.3.303 (SEE LICENSE IN README.md)
 -----------------------------------------------------------------
 
 Applies to:
-- @anthropic-ai/claude-agent-sdk@0.3.301 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.301 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-darwin-x64@0.3.301 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-linux-arm64@0.3.301 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.301 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-linux-x64@0.3.301 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.301 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-win32-arm64@0.3.301 (SEE LICENSE IN README.md)
-- @anthropic-ai/claude-agent-sdk-win32-x64@0.3.301 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk@0.3.303 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.303 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-darwin-x64@0.3.303 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-arm64@0.3.303 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.303 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-x64@0.3.303 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.303 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-win32-arm64@0.3.303 (SEE LICENSE IN README.md)
+- @anthropic-ai/claude-agent-sdk-win32-x64@0.3.303 (SEE LICENSE IN README.md)
 
-Representative file: @anthropic-ai/claude-agent-sdk@0.3.301/LICENSE.md
+Representative file: @anthropic-ai/claude-agent-sdk@0.3.303/LICENSE.md
 
 © Anthropic PBC. All rights reserved. Use is subject to the Legal Agreements outlined here: https://code.claude.com/docs/en/legal-and-compliance.
 
