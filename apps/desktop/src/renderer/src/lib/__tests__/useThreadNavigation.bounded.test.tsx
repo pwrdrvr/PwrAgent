@@ -40,6 +40,33 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+it("retains unchanged row projections while still publishing changed titles", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  let title: string | undefined;
+  f.read.mockImplementation(async (request, consumer) => {
+    const page = await originalRead(request, consumer);
+    return title ? { ...page, entries: page.entries.map((entry) => entry.row.id === "thread-1"
+      ? { ...entry, row: { ...entry.row, title } } : entry) } : page;
+  });
+  const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  const threads = result.current.threads;
+  const directories = result.current.directories;
+
+  await act(async () => { await result.current.pagedNavigation.refresh(); });
+
+  expect(result.current.threads).toBe(threads);
+  expect(result.current.directories).toBe(directories);
+
+  title = "Updated title";
+  await act(async () => { await result.current.pagedNavigation.refresh(); });
+
+  expect(result.current.threads).not.toBe(threads);
+  expect(result.current.threads.find((thread) => thread.id === "thread-1")?.title).toBe(title);
+  unmount();
+});
+
 it("returns to the loaded lens range without a loading or missing-row frame", async () => {
   const f = fixture();
   const originalRead = f.read.getMockImplementation()!;

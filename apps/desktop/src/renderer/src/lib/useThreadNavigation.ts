@@ -1085,17 +1085,29 @@ function reconcileLoadedNavigationRows(
     };
   });
 
+  const directories = sortNavigationDirectories(reconciledDirectories);
+  const threads = loadedThreadRows(next).map((thread) => {
+    const previousThread = previousByThreadKey.get(
+      threadSummaryIdentityKey(thread)
+    );
+    return previousThread && threadSummariesEqual(previousThread, thread)
+      ? previousThread
+      : thread;
+  });
+  const previousThreads = loadedThreadRows(previous);
+  const previousDirectories = loadedDirectoryRows(previous);
+  // Resource readiness can advance without changing a presented row. Keep
+  // the baseline identity so all downstream projections do not run again.
+  if (previousThreads.length === threads.length
+    && previousThreads.every((thread, index) => thread === threads[index])
+    && previousDirectories.length === directories.length
+    && previousDirectories.every((directory, index) => JSON.stringify(directory) === JSON.stringify(directories[index]))
+    && JSON.stringify(previous.launchpadDefaults) === JSON.stringify(next.launchpadDefaults)
+    && JSON.stringify(previous.federationTarget) === JSON.stringify(next.federationTarget)) return previous;
   return {
     ...next,
-    directoryRows: indexLoadedDirectoryRows(sortNavigationDirectories(reconciledDirectories)),
-    threadRows: indexLoadedThreadRows(loadedThreadRows(next).map((thread) => {
-      const previousThread = previousByThreadKey.get(
-        threadSummaryIdentityKey(thread)
-      );
-      return previousThread && threadSummariesEqual(previousThread, thread)
-        ? previousThread
-        : thread;
-    })),
+    directoryRows: indexLoadedDirectoryRows(directories),
+    threadRows: indexLoadedThreadRows(threads),
   };
 }
 
@@ -3797,11 +3809,14 @@ export function useThreadNavigation(
         if (!prChipLocationIndexRef.current || !samePrChipMembership(prChipLocationIndexRef.current.snapshot, reconciled)) {
           prChipLocationIndexRef.current = buildPrChipLocationIndex(reconciled);
         }
-        return { loading, refreshing, error, rows: reconciled,
-          startupSelectionSettled: primary.length > 0 && primary.every((resource) => pages.get(resource.id)?.coverage.state === "complete") };
+        const startupSelectionSettled = primary.length > 0 && primary.every((resource) => pages.get(resource.id)?.coverage.state === "complete");
+        if (current.rows === reconciled && current.loading === loading && current.refreshing === refreshing
+          && current.error === error && current.startupSelectionSettled === startupSelectionSettled) return current;
+        return { loading, refreshing, error, rows: reconciled, startupSelectionSettled };
       });
     } else {
-      setState((current) => ({ ...current, loading, refreshing, error }));
+      setState((current) => current.loading === loading && current.refreshing === refreshing && current.error === error
+        ? current : { ...current, loading, refreshing, error });
     }
   }, [boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
   // The effect above folds a landed page into the rows, so a render in which
