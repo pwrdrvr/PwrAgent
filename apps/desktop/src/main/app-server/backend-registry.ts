@@ -1038,6 +1038,7 @@ type BackendClient = {
   readThreadSummary?(threadId: string): Promise<AppServerThreadSummary>;
   readThreadName?(threadId: string): Promise<string | undefined>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
+  readThreadTurn?(params: { threadId: string; turnId: string }): Promise<AppServerThreadReplay>;
   prepareFreshNativeVoiceThread?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean>;
   resumeNativeVoiceThread?(params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]): Promise<void>;
   refreshThreadTools?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<void>;
@@ -17610,6 +17611,33 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
     });
     return { accounting, coverage: analysis.coverage };
+  }
+
+  /**
+   * One finished turn's replay, for work that needs only that turn, such as a
+   * messaging reply's images. It reads no transcript page, overlay, or
+   * accounting. Answers undefined when the backend cannot read one turn.
+   */
+  async readThreadTurnReplay(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): Promise<AppServerThreadReplay | undefined> {
+    if (params.backend !== "codex") {
+      return undefined;
+    }
+    this.assertNotBootstrap("readThreadTurnReplay");
+    // A read does not depend on the execution mode; naming one skips the
+    // overlay parse that would otherwise pick it.
+    return await this.withCodexThreadClient(
+      params.threadId,
+      async (client) => await client.readThreadTurn?.({
+        threadId: params.threadId,
+        turnId: params.turnId,
+      }),
+      "default",
+      false,
+    );
   }
 
   async getThreadTranscriptImageRoots(params: {

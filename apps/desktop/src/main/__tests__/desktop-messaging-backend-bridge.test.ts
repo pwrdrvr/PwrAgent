@@ -1115,9 +1115,11 @@ describe("DesktopMessagingBackendBridge", () => {
       },
     };
     const readThread = vi.fn(async () => response);
+    const readThreadTurnReplay = vi.fn(async () => response.replay);
     const bridge = new DesktopMessagingBackendBridge({
       getThreadTranscriptImageRoots: vi.fn(async () => []),
       readThread,
+      readThreadTurnReplay,
     } as unknown as DesktopBackendRegistry);
     const request = {
       backend: "codex" as const,
@@ -1147,7 +1149,9 @@ describe("DesktopMessagingBackendBridge", () => {
         },
       ],
     ]);
-    expect(readThread).toHaveBeenCalledTimes(1);
+    // A turn end reads only its own turn, once for both controllers.
+    expect(readThreadTurnReplay).toHaveBeenCalledTimes(1);
+    expect(readThread).not.toHaveBeenCalled();
   });
 
   it("resolves the exact image-only assistant replay message by item id", async () => {
@@ -1179,7 +1183,7 @@ describe("DesktopMessagingBackendBridge", () => {
     };
     const bridge = new DesktopMessagingBackendBridge({
       getThreadTranscriptImageRoots: vi.fn(async () => []),
-      readThread: vi.fn(async () => response),
+      readThreadTurnReplay: vi.fn(async () => response.replay),
     } as unknown as DesktopBackendRegistry);
 
     await expect(bridge.resolveAssistantMessageImages({
@@ -1221,7 +1225,7 @@ describe("DesktopMessagingBackendBridge", () => {
     };
     const bridge = new DesktopMessagingBackendBridge({
       getThreadTranscriptImageRoots: vi.fn(async () => []),
-      readThread: vi.fn(async () => response),
+      readThreadTurnReplay: vi.fn(async () => response.replay),
     } as unknown as DesktopBackendRegistry);
 
     await expect(bridge.resolveAssistantMessageImages({
@@ -1257,7 +1261,7 @@ describe("DesktopMessagingBackendBridge", () => {
     };
     const bridge = new DesktopMessagingBackendBridge({
       getThreadTranscriptImageRoots: vi.fn(async () => []),
-      readThread: vi.fn(async () => response),
+      readThreadTurnReplay: vi.fn(async () => response.replay),
     } as unknown as DesktopBackendRegistry);
 
     await expect(bridge.resolveAssistantMessageImages({
@@ -1271,6 +1275,41 @@ describe("DesktopMessagingBackendBridge", () => {
         url: "https://example.com/current.png",
       }),
     ]);
+  });
+
+  it.each([
+    { label: "fails", readThreadTurnReplay: vi.fn(async () => { throw new Error("items list unavailable"); }) },
+    { label: "is unsupported", readThreadTurnReplay: vi.fn(async () => undefined) },
+  ])("resolves the reply from its completed item when the turn read $label", async ({ readThreadTurnReplay }) => {
+    const readThread = vi.fn();
+    const bridge = new DesktopMessagingBackendBridge({
+      getThreadTranscriptImageRoots: vi.fn(async () => []),
+      readThread,
+      readThreadTurnReplay,
+    } as unknown as DesktopBackendRegistry);
+
+    await expect(bridge.resolveAssistantMessageImages({
+      backend: "codex",
+      item: {
+        id: "assistant-image-only",
+        type: "agentMessage",
+        text: "",
+        content: [{ type: "output_image", image_url: "https://example.com/item.png", alt: "Item image" }],
+      },
+      itemId: "assistant-image-only",
+      text: "",
+      threadId: "thread-1",
+      turnId: "turn-current",
+    })).resolves.toEqual([
+      expect.objectContaining({
+        type: "image",
+        url: "https://example.com/item.png",
+        alt: "Item image",
+      }),
+    ]);
+    expect(readThreadTurnReplay).toHaveBeenCalledTimes(1);
+    // The fallback never reaches for a transcript page.
+    expect(readThread).not.toHaveBeenCalled();
   });
 
   it("fetches a peer-owned thread's assistant images from the owning peer", async () => {

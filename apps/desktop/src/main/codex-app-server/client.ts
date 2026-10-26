@@ -2536,7 +2536,8 @@ function extractStructuredMessageParts(value: unknown): AppServerThreadMessagePa
   return [];
 }
 
-function buildMessageContent(record: Record<string, unknown>): {
+/** The text and parts a replay message gets from one raw message item. */
+export function buildMessageContent(record: Record<string, unknown>): {
   parts?: AppServerThreadMessagePart[];
   text: string;
 } {
@@ -9764,11 +9765,15 @@ export class CodexAppServerClient {
     }
   }
 
-  async readThreadActivity(params: {
+  /**
+   * One turn's replay, normalized through the same adapter as a history page,
+   * so its messages carry the same parts: a turn's tool screenshots attach to
+   * its final reply. Reads only that turn's items, never a transcript page.
+   */
+  async readThreadTurn(params: {
     threadId: string;
     turnId: string;
-    entryId: string;
-  }): Promise<AppServerThreadActivityEntry> {
+  }): Promise<AppServerThreadReplay> {
     await this.ensureInitialized();
     const items = await listCodexThreadItems({
       client: this.connection,
@@ -9776,11 +9781,18 @@ export class CodexAppServerClient {
       turnId: params.turnId,
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
-    // Normalize exactly one turn through the same adapter as the history page.
-    // No transcript file, whole-thread replay, or accounting read is needed.
-    const replay = extractThreadReplayFromReadResult({ thread: {
+    return extractThreadReplayFromReadResult({ thread: {
       id: params.threadId, turns: [{ id: params.turnId, items }],
     } }, { threadId: params.threadId });
+  }
+
+  async readThreadActivity(params: {
+    threadId: string;
+    turnId: string;
+    entryId: string;
+  }): Promise<AppServerThreadActivityEntry> {
+    // No transcript file, whole-thread replay, or accounting read is needed.
+    const replay = await this.readThreadTurn(params);
     const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
     if (!entry || entry.type !== "activity") throw new Error("Activity details are no longer available. Reload the thread.");
     return entry;

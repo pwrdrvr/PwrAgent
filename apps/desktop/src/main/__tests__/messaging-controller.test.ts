@@ -17421,6 +17421,7 @@ describe("MessagingController", () => {
 
     expect(resolveAssistantMessageImages).toHaveBeenCalledWith({
       backend: "codex",
+      item: expect.objectContaining({ id: "assistant-message-1", type: "agentMessage" }),
       itemId: "assistant-message-1",
       text: "Screenshots attached.",
       threadId: "thread-1",
@@ -17500,6 +17501,7 @@ describe("MessagingController", () => {
     expect(resolveAssistantMessageImages).toHaveBeenCalledWith({
       backend: "codex",
       federationTarget,
+      item: expect.objectContaining({ id: "assistant-message-1", type: "agentMessage" }),
       itemId: "assistant-message-1",
       text: "![Session chart](/tmp/charts/session.png)",
       threadId: "thread-1",
@@ -17549,6 +17551,7 @@ describe("MessagingController", () => {
 
     expect(resolveAssistantMessageImages).toHaveBeenCalledWith({
       backend: "codex",
+      item: expect.objectContaining({ id: "assistant-image-only", type: "agentMessage" }),
       itemId: "assistant-image-only",
       text: "",
       threadId: "thread-1",
@@ -17622,14 +17625,14 @@ describe("MessagingController", () => {
     ]));
   });
 
-  it("delivers images discovered on the terminal event after final text was deduped", async () => {
-    const resolveAssistantMessageImages = vi.fn()
-      .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{
-        type: "image",
-        url: "data:image/png;base64,AQID",
-        alt: "Late replay image",
-      }]);
+  it("resolves a turn's images once, from its final item, not again at turn/completed", async () => {
+    // The final item's lookup reads its whole turn, so turn/completed has
+    // nothing left to find. A second lookup was a second transcript read.
+    const resolveAssistantMessageImages = vi.fn(async () => [{
+      type: "image" as const,
+      url: "data:image/png;base64,AQID",
+      alt: "Final item image",
+    }]);
     const harness = await createHarness({ resolveAssistantMessageImages });
     await bindThread(harness);
     harness.delivered.length = 0;
@@ -17666,14 +17669,65 @@ describe("MessagingController", () => {
       },
     } satisfies AgentEvent);
 
+    expect(resolveAssistantMessageImages).toHaveBeenCalledTimes(1);
+    expect(resolveAssistantMessageImages).toHaveBeenCalledWith(expect.objectContaining({
+      itemId: "assistant-message-1",
+      turnId: "turn-1",
+    }));
     expect(harness.delivered.filter((intent) => intent.kind === "message")).toEqual([
       expect.objectContaining({
-        parts: [expect.objectContaining({ type: "text", text: "Done." })],
-      }),
-      expect.objectContaining({
-        parts: [expect.objectContaining({ type: "image", alt: "Late replay image" })],
+        parts: [
+          expect.objectContaining({ type: "text", text: "Done." }),
+          expect.objectContaining({ type: "image", alt: "Final item image" }),
+        ],
       }),
     ]);
+  });
+
+  it("resolves again at turn/completed when the final item's lookup failed", async () => {
+    const resolveAssistantMessageImages = vi.fn()
+      .mockRejectedValueOnce(new Error("materialize failed"))
+      .mockResolvedValueOnce([{
+        type: "image",
+        url: "data:image/png;base64,AQID",
+        alt: "Retried image",
+      }]);
+    const harness = await createHarness({ resolveAssistantMessageImages });
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-message-1",
+            type: "agentMessage",
+            phase: "final",
+            text: "Done.",
+          },
+        },
+      },
+    } satisfies AgentEvent);
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", output: [] },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(resolveAssistantMessageImages).toHaveBeenCalledTimes(2);
+    expect(harness.delivered.flatMap((intent) =>
+      intent.kind === "message" ? intent.parts.filter((part) => part.type === "image") : [],
+    )).toEqual([expect.objectContaining({ alt: "Retried image" })]);
   });
 
   it("delivers resolved assistant images once when terminal resolution wins the race", async () => {
