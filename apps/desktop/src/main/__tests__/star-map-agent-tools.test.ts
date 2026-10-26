@@ -758,11 +758,14 @@ describe("open_thread", () => {
     expect(openThread).not.toHaveBeenCalled();
   });
 
-  it("tells agents it moves the operator's window and belongs to the Voice manager", () => {
+  it("tells agents it focuses the user's window on request and is no way to read a thread", () => {
     const { description } = openThreadDefinition({});
-    expect(description).toMatch(/Voice manager/);
-    expect(description).toMatch(/raises PwrAgent/);
+    expect(description).toMatch(/only when the user asks/);
+    expect(description).toMatch(/replaces the thread the user is working in/);
+    expect(description).toMatch(/does not read a thread or make one available to you/);
     expect(description).toMatch(/read_thread/);
+    expect(description).toMatch(/Voice manager only/);
+    expect(description).not.toMatch(/mount/i);
   });
 
   it("does not pretend that a missing graphical handler opened a thread", async () => {

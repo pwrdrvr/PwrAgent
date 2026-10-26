@@ -46,9 +46,11 @@ describe("PwrAgent tool discovery", () => {
         .toEqual(["tool_search", ...eager].sort());
       expect(tools).toHaveLength(names.length + 1);
       // Each eager schema is sent on every turn. Character budget, not tokens.
+      // Raised from 20,000 for open_thread's warning that it moves the
+      // operator's window, which other threads must read before calling it.
       const eagerCharacters = tools.filter((tool) => eager.has(tool.name))
         .reduce((total, tool) => total + JSON.stringify(tool).length, 0);
-      expect(eagerCharacters).toBeLessThan(20_000);
+      expect(eagerCharacters).toBeLessThan(20_500);
     }
   });
 

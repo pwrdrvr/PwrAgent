@@ -108,8 +108,10 @@ Only the Voice manager may call it. Every other thread can discover the tool,
 but a call returns `forbidden` before anything moves, because the window
 raise and the selection change land on the operator mid-task. A coding thread
 once opened an unrelated, unpinned peer thread twice while looking for that
-peer's terminal. Other threads read a thread with `read_thread` and give the
-operator its `threadLink`. The policy fails closed: a call with no caller, or
+peer's terminal. The tool is not a way to read a thread or make one
+available to a model, and its description says so: other threads use
+`read_thread`, `get_thread_status`, or `search_threads`, and give the operator
+a `threadLink` to open. The policy fails closed: a call with no caller, or
 with no policy wired, is refused.
 
 Existing Codex manager threads receive added tools through the negotiated

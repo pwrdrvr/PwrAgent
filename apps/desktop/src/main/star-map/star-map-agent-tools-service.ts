@@ -28,7 +28,7 @@ const FOCUS_NOT_PUBLISHED_MESSAGE =
   "No main PwrAgent window has reported what the operator is looking at. Ask the operator which thread they mean.";
 
 const OPEN_THREAD_FORBIDDEN_MESSAGE =
-  "open_thread belongs to the Voice manager: it brings PwrAgent to the front and replaces the operator's selection. Read the thread with read_thread or get_thread_status, and give the operator its threadLink to open it.";
+  "open_thread belongs to the Voice manager. It focuses the operator's window on a thread when the user asks, and replaces the thread they are working in. It does not read a thread or make one available to you: use read_thread, get_thread_status, or search_threads, and give the operator a threadLink when they should open one.";
 
 const NOT_OPEN_MESSAGE =
   "No Star Map surface is open, so there is nothing on screen to read. Ask the operator to open the Star Map (View → Star Map, or the map button in the sidebar).";
