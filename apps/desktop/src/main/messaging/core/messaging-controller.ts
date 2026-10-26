@@ -1,7 +1,7 @@
 import { automatedWorkStartedLabel, correspondenceNotice, incomingWorkText } from "./messaging-thread-notifications";
 import { codexSpeedOptions, codexSpeedSettings, nextCodexSpeed, selectedCodexSpeed } from "@pwragent/shared";
 import type { ReviewRunMode } from "@pwragent/shared";
-import { isThreadLockRefusal } from "@pwragent/shared";
+import { formatModelOptionLabel, isThreadLockRefusal, modelOptionsForThreadProvider } from "@pwragent/shared";
 import { MessagingBrowseQueryPool } from "./messaging-browse-query-pool";
 import type { NavigationQuery } from "@pwragent/shared";
 import { readMessagingLaunchpadContext, isMessagingLaunchpadContext, type MessagingLaunchpadDirectory, type MessagingLaunchpadContext, type MessagingNewThreadNavigation } from "./messaging-launchpad-context";
@@ -10476,7 +10476,7 @@ export class MessagingController {
       actions: [
         ...models.map((model, index) => ({
           id: "browse:new:set-model",
-          label: model.label ?? model.id,
+          label: formatModelOptionLabel(model),
           style: "secondary" as const,
           fallbackText: String(index + 1),
           priority: 10 + index,
@@ -13487,7 +13487,11 @@ export class MessagingController {
         binding,
         createdAt: this.now(),
         currentModelId,
-        models,
+        // A thread keeps its Codex model provider for life, so offer only
+        // that provider's models.
+        models: binding.backend === "codex" && thread
+          ? modelOptionsForThreadProvider(models, currentModelId)
+          : models,
       }),
       binding,
       event,

@@ -6,7 +6,14 @@ const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI", xai: "xAI", anthropic: "Anthropic", google: "Google", moonshot: "Moonshot", qwen: "Qwen",
 };
 
-export const usageProviderLabel = (provider: string) => PROVIDER_LABELS[provider] ?? provider;
+/**
+ * A Codex model provider records its configured id (`refuseless`), which is
+ * the same on every instance that reports it, so the label is derived from
+ * the id rather than from this machine's settings.
+ */
+export const usageProviderLabel = (provider: string) => PROVIDER_LABELS[provider]
+  ?? (provider.split(/[-_]+/u).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ")
+    || provider);
 
 export type UsageAccount = {
   key: string;

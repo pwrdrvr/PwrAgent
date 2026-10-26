@@ -759,6 +759,10 @@ export const SETTINGS_READ_FULL_ACCESS_POLICY_CHANNEL =
 export const SETTINGS_WRITE_CONFIG_CHANNEL = "settings:write-config";
 export const SETTINGS_REPLACE_SECRET_CHANNEL = "settings:replace-secret";
 export const SETTINGS_CLEAR_SECRET_CHANNEL = "settings:clear-secret";
+export const SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL =
+  "settings:set-codex-model-provider-key";
+export const SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL =
+  "settings:test-codex-model-provider";
 export const SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL =
   "settings:refresh-codex-discovery";
 export const SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL =

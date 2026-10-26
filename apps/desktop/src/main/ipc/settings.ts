@@ -2,6 +2,8 @@ import { codexAuthState } from "../codex-auth-state";
 import { registerReceivingFolderIpc } from "./receiving-folder";
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { validateGlabCommand } from "../settings/glab-discovery";
+import { validateCodexModelProviders } from "@pwragent/shared";
+import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import type {
@@ -45,6 +47,10 @@ import type {
   PickGhCommandResponse,
   PickGitCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
+  SetCodexModelProviderApiKeyRequest,
+  SetCodexModelProviderApiKeyResponse,
+  TestCodexModelProviderRequest,
+  CodexModelProviderTestResult,
   ReplaceDesktopSettingsSecretRequest,
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
@@ -76,6 +82,8 @@ import {
   PROVIDER_CATALOG_REFRESH_START_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
+  SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL,
+  SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
@@ -1837,6 +1845,40 @@ export function registerSettingsIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL,
+    async (
+      _event,
+      request: SetCodexModelProviderApiKeyRequest,
+    ): Promise<SetCodexModelProviderApiKeyResponse> => {
+      const activeService = getService(service);
+      await activeService.setCodexModelProviderApiKey(request.providerId, request.apiKey);
+      const keys = await activeService.resolveCodexModelProviderKeys();
+      return { providerId: request.providerId, hasApiKey: Boolean(keys[request.providerId]) };
+    },
+  );
+
+  ipcMain.removeHandler(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL,
+    async (
+      _event,
+      request: TestCodexModelProviderRequest,
+    ): Promise<CodexModelProviderTestResult> => {
+      const activeService = getService(service);
+      // Validate the draft exactly as a save would, so a test cannot reach a
+      // URL that Settings would refuse to store.
+      const [provider] = validateCodexModelProviders([request.provider]);
+      const apiKey = request.apiKey?.trim()
+        || (await activeService.resolveCodexModelProviderKeys())[provider.id];
+      return await new CodexModelProviderCatalog({
+        resolveProviders: () => [provider],
+        resolveKeys: async () => (apiKey ? { [provider.id]: apiKey } : {}),
+      }).test(provider, apiKey);
+    },
+  );
+
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.handle(
     SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
@@ -2365,6 +2407,8 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REPLACE_SECRET_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CLEAR_SECRET_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_START_CODEX_AUTH_PROFILE_LOGIN_CHANNEL);

@@ -4,6 +4,10 @@ import type { AppServerBackendKind, ThreadExecutionMode } from "./normalized-app
 import type { FederationTarget } from "./federation";
 import type { DesktopHelperModelSettings } from "../helper-models";
 import type { DesktopDecisionModelSettings } from "../decision-models";
+import type {
+  CodexModelProviderSettings,
+  DesktopCodexModelProvider,
+} from "../codex-model-providers";
 import type { ThreadTodoMergeMethod } from "./thread-todos";
 import {
   TOOL_OUTPUT_WARNING_INVOCATIONS,
@@ -696,7 +700,9 @@ export type DesktopSettingsSecretName =
   | "pwrsnapMcpCredential"
   | "pwrgitMcpCredential"
   | "decisionLocalApiKey"
-  | "typesafeJevApiKey";
+  | "typesafeJevApiKey"
+  /** Codex model provider API keys, one JSON object keyed by provider id. */
+  | "codexModelProviderKeys";
 
 /**
  * Predicate: does writing or clearing this secret affect the
@@ -742,6 +748,7 @@ export function isMessagingRuntimeSecret(
     case "pwrgitMcpCredential":
     case "decisionLocalApiKey":
     case "typesafeJevApiKey":
+    case "codexModelProviderKeys":
       return false;
   }
 }
@@ -1491,6 +1498,8 @@ export type DesktopSettingsSnapshot = {
       versionAdvisory?: DesktopCodexVersionAdvisory;
       configOverrides?: DesktopSettingsValue<string[]>;
       localModelIds?: DesktopSettingsValue<string[]>;
+      /** Endpoints Codex can run threads on besides its default provider. */
+      providers?: DesktopCodexModelProvider[];
       discovery: DesktopCodexDiscoverySnapshot;
       profiles: DesktopCodexAuthProfileDiscoverySnapshot;
     };
@@ -1808,6 +1817,11 @@ export type DesktopSettingsConfigPatch = {
       configOverrides?: string[];
       /** Exact model IDs explicitly declared to have zero local API cost. */
       localModelIds?: string[];
+      /**
+       * Replaces every model provider. API keys are not here: they are
+       * saved with `setCodexModelProviderApiKey`.
+       */
+      providers?: CodexModelProviderSettings[];
     };
   };
   acpAgents?: {
@@ -1952,6 +1966,23 @@ export type ClearDesktopSettingsSecretRequest = {
 
 export type RefreshDesktopCodexDiscoveryRequest = {
   discoveryIntent: "settings-user-action" | "setup-user-action";
+};
+
+export type SetCodexModelProviderApiKeyRequest = {
+  providerId: string;
+  /** Omit or leave blank to remove the stored key. */
+  apiKey?: string;
+};
+
+export type SetCodexModelProviderApiKeyResponse = {
+  providerId: string;
+  hasApiKey: boolean;
+};
+
+export type TestCodexModelProviderRequest = {
+  provider: CodexModelProviderSettings;
+  /** A key typed but not saved yet. Without it, the stored key is used. */
+  apiKey?: string;
 };
 
 export type CreateDesktopCodexAuthProfileRequest = {

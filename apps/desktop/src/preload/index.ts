@@ -556,6 +556,10 @@ import type {
   ReadDesktopFullAccessPolicyResponse,
   ReadDesktopMessagingSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
+  SetCodexModelProviderApiKeyRequest,
+  SetCodexModelProviderApiKeyResponse,
+  TestCodexModelProviderRequest,
+  CodexModelProviderTestResult,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
   RecordComposerDraftHistoryResponse,
@@ -1032,6 +1036,8 @@ import {
   LAUNCHPAD_ACCESS_NOTICE_READ_CHANNEL,
   SETTINGS_CHECK_CODEX_AUTH_PROFILE_STATUS_CHANNEL,
   SETTINGS_CLEAR_SECRET_CHANNEL,
+  SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL,
+  SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
@@ -1843,6 +1849,14 @@ const desktopApi = Object.freeze({
     request: RefreshDesktopCodexDiscoveryRequest,
   ): Promise<ReadDesktopSettingsResponse> =>
     await ipcRenderer.invoke(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL, request),
+  setCodexModelProviderApiKey: async (
+    request: SetCodexModelProviderApiKeyRequest,
+  ): Promise<SetCodexModelProviderApiKeyResponse> =>
+    await ipcRenderer.invoke(SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL, request),
+  testCodexModelProvider: async (
+    request: TestCodexModelProviderRequest,
+  ): Promise<CodexModelProviderTestResult> =>
+    await ipcRenderer.invoke(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL, request),
   createCodexAuthProfile: async (
     request: CreateDesktopCodexAuthProfileRequest,
   ): Promise<CreateDesktopCodexAuthProfileResponse> =>
