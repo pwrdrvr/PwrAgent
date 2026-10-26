@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.3.3 - 2026-10-26
+
+- Codex Model Providers - Run Codex threads against additional OpenAI Responses-compatible endpoints, including other API accounts, hosted models, and local servers. Configure providers, model lists, connection tests, and pricing in Settings.
+- Claude Workspace Support - Add Plan mode and access to linked directories. Display file diffs, plan cards, targeted tool activity, and context-compaction events natively in the transcript.
+- Thread Rewind - Rewind Codex and Grok conversations from a prompt, including on remote threads, and return that prompt to the composer.
+- Environment Management - Edit project setup scripts, platform-specific commands, Run actions, and cleanup scripts in Settings. Agent handoffs can explicitly select an Environment.
+- Local MCP Servers - Configure command-line MCP servers through the managed gateway, with connection testing, secret storage, and per-thread access controls.
+- Cleaner Interface - Add Minimal information density, a combined PR-status chip, and X-ray mode to reveal hidden details. Settings sections are grouped by purpose.
+- Sandboxer Lifecycle - Enable Sandboxer from the New thread launchpad and automatically release a thread's sandboxes once all its attached PRs merge or close. PR watches can now wake threads on merge or closure.
+- Federation Performance - Improve forwarded-service throughput with windowed binary transfers, while retaining compatibility with older peers.
+- Usage and Responsiveness - Show Claude and Grok account limits in Usage Activity and remote usage pace from the owner. Reduce long-thread pricing work, sub-agent storage overhead, and repeated database writes from running Environment actions.
+- Approvals and To-dos - Surface pending approvals in persistent notice cards. Separate a handoff's prerequisites from the work its new thread will perform.
+- Thread Recovery - Recover threads whose worktree folder is missing by recreating the worktree, continuing in the main checkout, or archiving. Improve visibility of background work and outstanding work when quitting.
+- Messaging - Improve cross-thread delivery notices, expose binding controls consistently, and retrieve final-reply images without expensive transcript-page reads.
+
+Compatibility: Custom Codex endpoints must support the Responses API; existing threads retain their provider. Rewind currently supports conversation history for Codex and Grok, not Claude or file restoration.
+
 ## v1.3.2 - 2026-10-24
 
 - Claude Background Work - Background commands and sub-agents keep running after a response finishes, with visible task status and stop controls. New messages reuse the live session, steering no longer aborts responses, and failed turns show clear errors.
