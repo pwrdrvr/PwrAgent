@@ -1,3 +1,4 @@
+import { probe } from "../../test-setup/phase-probes";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -48,7 +49,7 @@ describe("Federation push files", () => {
     await fs.writeFile(source, content);
     await fs.mkdir(downloads);
     await fs.writeFile(path.join(downloads, "report.txt"), "existing");
-    const result = await pushFederationFile(rpc, source);
+    const result = await probe("push-file", () => pushFederationFile(rpc, source));
     expect(result.path).toBe(path.join(downloads, "report (1).txt"));
     expect(await fs.readFile(result.path)).toEqual(content);
     expect(await fs.readFile(path.join(downloads, "report.txt"), "utf8")).toBe("existing");
