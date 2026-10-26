@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "../../test/phase-probes";
 import { afterEach, expect, it, vi } from "vitest";
 import type { BackendSummary, DesktopSettingsConfigPatch, DesktopSettingsWriteResponse, ListBackendsResponse,
   ReadDesktopSettingsResponse, ReadFederationActivityResponse, UsageLimitObservation } from "@pwragent/shared";

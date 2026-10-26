@@ -1,7 +1,7 @@
 import { navigationQueryFixture } from "../../test/navigation-query-fixture";
 import { threadSummaryIdentityKey } from "../federated-thread-events";
 import "@testing-library/jest-dom/vitest";
-import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "../../test/phase-probes";
 import { StrictMode } from "react";
 import { DirectoriesList } from "../../features/navigation/DirectoriesList";
 import {

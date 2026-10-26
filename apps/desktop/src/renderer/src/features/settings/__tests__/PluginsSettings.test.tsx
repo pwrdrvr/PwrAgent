@@ -7,7 +7,7 @@ import {
   screen,
   waitFor,
   within,
-} from "@testing-library/react";
+} from "../../../test/phase-probes";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AuthorizeMcpConnectionResponse,

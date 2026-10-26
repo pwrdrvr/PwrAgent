@@ -1,4 +1,4 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "../../test/phase-probes";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { NavigationQueryPage, NavigationRow, NavigationSelectedDetailResponse, PrSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";

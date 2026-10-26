@@ -4,7 +4,7 @@ import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import { hydrateComposerDraft } from "../composer-draft-hydration";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "../../../test/phase-probes";
 import userEvent from "@testing-library/user-event";
 import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
