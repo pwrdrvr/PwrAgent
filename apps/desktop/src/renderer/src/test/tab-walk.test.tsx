@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { documentTabStops, pressTab } from "./tab-walk";
+import { documentTabStops, pressTab, walkTab } from "./tab-walk";
 
 afterEach(() => {
   cleanup();
@@ -59,4 +59,29 @@ it("wraps in both directions and starts from a negative-tabindex container", () 
   container.focus();
   pressTab();
   expect(last).toHaveFocus();
+});
+
+it("invalidates visibility during a synchronous walk when an ancestor changes", () => {
+  render(<>
+    <div data-testid="first-parent"><button>First</button></div>
+    <button>Second</button>
+  </>);
+  const first = screen.getByRole("button", { name: "First" });
+  const parent = screen.getByTestId("first-parent");
+  first.focus();
+  const focusFirst = vi.spyOn(first, "focus").mockImplementation(() => {});
+  let steps = 0;
+  const changeVisibility = () => {
+    steps += 1;
+    if (steps === 2) parent.style.visibility = "hidden";
+    if (steps === 3) parent.style.visibility = "";
+  };
+  document.addEventListener("keydown", changeVisibility);
+  try {
+    walkTab(3);
+    // Step 2 skips the hidden ancestor; only step 3 may return to First.
+    expect(focusFirst).toHaveBeenCalledTimes(1);
+  } finally {
+    document.removeEventListener("keydown", changeVisibility);
+  }
 });
