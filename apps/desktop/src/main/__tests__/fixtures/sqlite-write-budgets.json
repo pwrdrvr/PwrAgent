@@ -59,10 +59,10 @@
   },
   "archive-retention-delete-batch": {
     "commits": 1,
-    "note": "One transaction releases 100 overlays after permanent provider deletion.",
+    "note": "One transaction releases 100 overlays after permanent provider deletion, plus one statement each clearing their sub-agent cards and card counters.",
     "observedWalBytes": 41200,
     "rowsChanged": 100,
-    "statements": 100
+    "statements": 102
   },
   "archive-retention-idle-day": {
     "commits": 0,
@@ -147,10 +147,10 @@
   },
   "codex-turn-end-with-token-miser-gates": {
     "commits": 3,
-    "note": "one Codex turn end on a 2,000-turn thread with 2,000 stored gate cards and 5 new gates: the final usage line, the gate cards, and the gate usage lines; unchanged by reading the ledger once. ~3.6 MB WAL, almost all from rewriting the whole overlay row for the new cards: ~360 MB/day at 100 such turn ends. Excessive; reported to the operator, and owned by moving gate cards out of the overlay row",
-    "observedWalBytes": 3576160,
-    "rowsChanged": 15,
-    "statements": 15
+    "note": "one Codex turn end on a 2,000-turn thread with 2,000 stored gate cards and 5 new gates: the final usage line, 5 keyed gate-card rows, and the gate usage lines; the overlay row is not rewritten. ~206 KB WAL, ~21 MB/day at 100 such turn ends (was ~3.6 MB and ~360 MB/day while the cards lived in the overlay row)",
+    "observedWalBytes": 206000,
+    "rowsChanged": 19,
+    "statements": 19
   },
   "codex-ultrafast-profile-reset": {
     "commits": 3,
@@ -465,18 +465,18 @@
     "statements": 1
   },
   "managed-relationships-lifecycle": {
-    "commits": 5,
-    "note": "5 overlay writes: add/replace parent child, group/ungroup child, clear parent; projection and generation share those commits",
-    "observedWalBytes": 140080,
-    "rowsChanged": 5,
-    "statements": 5
+    "commits": 7,
+    "note": "add a parent's card, redirect it, group/ungroup the child, forget the parent: each overlay or card write is one commit, and the projection, revision and generation rows share it",
+    "observedWalBytes": 197760,
+    "rowsChanged": 9,
+    "statements": 9
   },
   "managed-subagent-metadata-writes": {
-    "commits": 60,
-    "note": "20 parent metadata, 20 ordinary overlay, 20 grouped-child metadata updates and navigation reads; no relationship mutations or additional commits",
-    "observedWalBytes": 988800,
-    "rowsChanged": 60,
-    "statements": 60
+    "commits": 80,
+    "note": "20 rounds of parent metadata with two changed cards, an ordinary overlay and a grouped-child update, with navigation reads; no relationship mutations",
+    "observedWalBytes": 1400800,
+    "rowsChanged": 100,
+    "statements": 100
   },
   "managed-subagent-navigation-reads": {
     "commits": 0,
@@ -781,6 +781,13 @@
     "observedWalBytes": 28840,
     "rowsChanged": 5,
     "statements": 5
+  },
+  "overlay-scalar-write-flat": {
+    "commits": 1,
+    "note": "one overlay scalar write (a reaction) on a thread holding 2,000 gate cards: the small overlay row only, ~16 KB WAL. It rewrote the ~3.5 MB row while the cards lived there",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
   },
   "owner-content-search": {"commits": 1, "note": "First owner query with one known thread: one batched metadata commit (~37 KB); 20 equivalent cold batches/day project ~0.74 MB/day per owner, unchanged repeats and idle add 0 MB/day. No transcript index.", "observedWalBytes": 37080, "rowsChanged": 2, "statements": 3},
   "owner-content-search-cold-usage": {"commits": 1, "note": "Real registry and SQLite: one metadata batch for three cold candidates with 60 usage lines, including two nonmatches; no usage/pricing/directory hydration. Transcript persistence adds 0 MB/day.", "observedWalBytes": 37080, "rowsChanged": 6, "statements": 9},
@@ -1107,6 +1114,27 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "thread-sub-agent-upsert-flat": {
+    "commits": 1,
+    "note": "one changed gate card on a thread holding 2,000 cards: its own row and the revision counter, never the parent overlay row, and equal to the same write on a thread with no cards. ~12 KB WAL: ~25 MB/day at 2,000 card writes/day, where each one rewrote the ~3.5 MB overlay row before",
+    "observedWalBytes": 12360,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "thread-sub-agents-move": {
+    "commits": 5,
+    "note": "one-time move of 12 legacy payloads holding 40 cards each, in 36 KB slices: one commit per slice, the last one setting the marker. Runs once per profile; the 2,043-card production copy moved in 25 slices (p50 89 ms, ~195 MB WAL once)",
+    "observedWalBytes": 45320,
+    "rowsChanged": 13,
+    "statements": 13
+  },
+  "thread-sub-agents-move-repeat": {
+    "commits": 0,
+    "note": "the move and a read after it on a profile already marked moved: no writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "thread-todo-add-update-resolve": {
     "commits": 3,
     "note": "one card raised, updated in place by key, then resolved: one commit each (~11 KB), none per turn or event; ~0.55 MB/day at 50 card operations",
@@ -1228,10 +1256,10 @@
   },
   "token-miser-turn-ledger": {
     "commits": 2,
-    "note": "nine finalized Token Miser helper lines persisted during the active turn, plus one batched parent overlay write at completion",
-    "observedWalBytes": 82400,
-    "rowsChanged": 20,
-    "statements": 20
+    "note": "nine finalized Token Miser helper lines persisted during the active turn, plus one batched write of their nine gate-card rows at completion",
+    "observedWalBytes": 86520,
+    "rowsChanged": 28,
+    "statements": 28
   },
   "tool-output-history-analysis": {
     "commits": 1,

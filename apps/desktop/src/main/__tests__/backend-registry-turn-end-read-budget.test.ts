@@ -52,6 +52,8 @@ type TurnEndCounts = {
   followUpLedgerReads: number;
   /** Thread overlay payload parses during the turn end. */
   overlayParses: number;
+  /** Serialized size of the overlay state those parses produced. */
+  overlayParseBytes: number;
   /** `thread/pricing/updated` events for the finished thread. */
   pricingEmits: number;
   /** Token Miser thread accounting builds during the turn end. */
@@ -206,15 +208,18 @@ describe("turn end read budget", () => {
 
     const ledger = countWholeLedgerReads(stateDb, THREAD_ID);
     let overlayParses = 0;
+    let overlayParseBytes = 0;
     const overlayStore = store as unknown as {
       getThread(threadKey: string): unknown;
     };
     const getThread = overlayStore.getThread.bind(store);
     vi.spyOn(overlayStore, "getThread").mockImplementation((threadKey) => {
+      const overlay = getThread(threadKey);
       if (threadKey.endsWith(THREAD_ID)) {
         overlayParses += 1;
+        overlayParseBytes += JSON.stringify(overlay ?? null).length;
       }
-      return getThread(threadKey);
+      return overlay;
     });
     const accountingInternals = registry as unknown as {
       buildTokenMiserThreadSavings(...args: unknown[]): unknown;
@@ -238,6 +243,7 @@ describe("turn end read budget", () => {
     const turnEnd = {
       ledgerReads: ledger.reads,
       ledgerRows: ledger.rows,
+      overlayParseBytes,
       overlayParses,
       tokenMiserAccountingBuilds: accountingBuilds.reduce(
         (total, spy) => total + spy.mock.calls.length,
@@ -269,14 +275,17 @@ describe("turn end read budget", () => {
       line.turnId === FINAL_TURN_ID && line.parentThreadId === undefined);
     expect(finalLine?.completedAt).toBeDefined();
     expect(pricing.lines.length).toBe(ledgerSize + 1 + FINAL_TURN_GATES);
-    const overlay = await store.getThreadOverlayState({ backend: "codex", threadId: THREAD_ID });
-    expect(overlay?.subAgents?.length).toBe(historicalTurns + FINAL_TURN_GATES);
+    expect((await store.readThreadSubAgentRevision({
+      backend: "codex",
+      threadId: THREAD_ID,
+    })).count).toBe(historicalTurns + FINAL_TURN_GATES);
     expect(internals.pendingTokenMiserInterceptions.size).toBe(0);
 
     return {
       followUpLedgerReads,
       ledgerReads: turnEnd.ledgerReads,
       ledgerRowsPerLedger: Number((turnEnd.ledgerRows / pricing.lines.length).toFixed(2)),
+      overlayParseBytes: turnEnd.overlayParseBytes,
       overlayParses: turnEnd.overlayParses,
       pricingEmits,
       tokenMiserAccountingBuilds: turnEnd.tokenMiserAccountingBuilds,
@@ -289,7 +298,7 @@ describe("turn end read budget", () => {
     // One ledger read serves the turn end's one pricing publish, and the
     // renderer's follow-up reads reuse it. The Token Miser persist looks up
     // only its own gates' lines.
-    const { overlayParses, ...rest } = small;
+    const { overlayParseBytes: _smallBytes, overlayParses, ...rest } = small;
     expect(rest).toEqual({
       followUpLedgerReads: 0,
       ledgerReads: 1,
@@ -297,10 +306,14 @@ describe("turn end read budget", () => {
       pricingEmits: 1,
       tokenMiserAccountingBuilds: 0,
     });
-    expect(large).toEqual(small);
-    // Each parse reads the whole overlay row, which holds every gate card.
-    // Moving the cards to their own table makes these cheap, not fewer.
-    expect(overlayParses).toMatchInlineSnapshot(`8`);
+    const { overlayParseBytes, ...largeRest } = large;
+    expect(largeRest).toEqual({ ...rest, overlayParses });
+    // Gate cards live in their own table, so the overlay row a turn end
+    // parses does not grow with the thread's 2,005 cards: each parse read
+    // ~3.5 MB when they were in the row. Bytes are bounded rather than
+    // compared, because the large thread also carries a pending spend alert.
+    expect(overlayParses).toMatchInlineSnapshot(`5`);
+    expect(overlayParseBytes).toBeLessThan(overlayParses * 1_024);
   }, 60_000);
 
   function countPricingEmits(registry: DesktopBackendRegistry): Map<string, number> {
@@ -397,7 +410,7 @@ describe("turn end read budget", () => {
     });
 
     expectSqliteWriteBudget({
-      note: "one Codex turn end on a 2,000-turn thread with 2,000 persisted gate cards and 5 new gates: final usage line, gate cards (rewrites the whole overlay row), gate usage lines",
+      note: "one Codex turn end on a 2,000-turn thread with 2,000 persisted gate cards and 5 new gates: final usage line, 5 keyed gate-card rows (the overlay row is not rewritten), gate usage lines",
       scenario: "codex-turn-end-with-token-miser-gates",
       writes,
     });

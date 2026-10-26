@@ -16,7 +16,12 @@ export const THREAD_ARCHIVE_SWEEP_START_DELAY_MS = 60_000;
 export type ThreadArchiveCandidate = {
   thread: AppServerThreadSummary;
   overlay?: ThreadOverlayState;
+  /** A sub-agent card on the thread is still pending, running or blocked. */
+  activeSubAgent?: boolean;
 };
+
+/** Card statuses that keep housekeeping away from a thread. */
+export const ARCHIVE_ACTIVE_SUB_AGENT_STATUSES: readonly string[] = ["running", "pending", "cancelling", "blocked"];
 
 type SweeperDeps = {
   getPolicy?: () => DesktopThreadArchivePolicy;
@@ -81,7 +86,7 @@ export function archiveCandidateLastActivity({ thread, overlay }: ThreadArchiveC
     ...(overlay?.worktreeSnapshots ?? []).map((snapshot) => snapshot.restoredAt ?? 0));
 }
 
-export function archiveCandidateProtectionReason({ thread, overlay }: ThreadArchiveCandidate): string | undefined {
+export function archiveCandidateProtectionReason({ thread, overlay, activeSubAgent }: ThreadArchiveCandidate): string | undefined {
   if (thread.isPinned || overlay?.pinnedRank !== undefined) return "Pinned thread";
   if (overlay?.agent) return "Agent thread";
   if (overlay?.queuedAgentChange || overlay?.prAutoDispatchPending) return "Pending work";
@@ -89,7 +94,7 @@ export function archiveCandidateProtectionReason({ thread, overlay }: ThreadArch
   if ((overlay?.codexEnvironmentRuntime ?? thread.codexEnvironmentRuntime)?.executionTarget === "remote") return "Remote execution";
   // The Codex app owns its chat folders' threads; housekeeping leaves them alone.
   if ([...thread.linkedDirectories, ...overlay?.extraLinkedDirectories ?? []].some(isCodexChatsDirectory)) return "Codex chat folder";
-  if (overlay?.subAgents?.some((agent) => ["running", "pending", "cancelling", "blocked"].includes(agent.status))) return "Active subagent";
+  if (activeSubAgent) return "Active subagent";
   if (thread.threadStatus !== "idle" && thread.threadStatus !== "notLoaded") {
     return thread.threadStatus === undefined ? "Provider status unavailable" : "Active or blocked chat";
   }

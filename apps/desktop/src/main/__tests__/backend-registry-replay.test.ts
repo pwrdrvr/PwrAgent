@@ -2,11 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppServerBackendKind } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
+import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
 import { ReplayClient } from "../testing/replay-client";
 import { ThreadCorrespondenceStore } from "../app-server/thread-correspondence-store";
 
 function createOverlayStoreMock() {
   return {
+    ...mockSubAgentReads(() => undefined),
     getThreadOverlayState: async () => undefined,
     getThreadOverlayStates: async ({ threadIds }: { threadIds: string[] }) =>
       Object.fromEntries(threadIds.map((threadId) => [threadId, undefined])),

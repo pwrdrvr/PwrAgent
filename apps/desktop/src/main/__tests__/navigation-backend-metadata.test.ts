@@ -123,7 +123,8 @@ describe("bounded backend navigation metadata", () => {
     const file = useFile();
     store["putBackend"]("codex", { knownThreadKeys: ["codex:selected"], lastSnapshotHash: "initialized" });
     store["putThread"]("codex:selected", { backend: "codex", threadId: "selected",
-      executionMode: "default", extraLinkedDirectories: [], pinnedRank: "a",
+      executionMode: "default", extraLinkedDirectories: [], pinnedRank: "a" });
+    await store.upsertThreadSubAgents({ backend: "codex", threadId: "selected",
       subAgents: [{ monitorId: "monitor", monitorThreadId: "child", task: "Worker",
         status: "running", createdAt: 1, updatedAt: 1 }] });
     stateDb.raw.prepare("INSERT INTO token_miser_objects VALUES (?,?,?,?)").run("expired-detail", thread.id, 0, "old detail");
@@ -191,8 +192,9 @@ describe("bounded backend navigation metadata", () => {
 
   it("allows an explicit managed-child detail without changing navigation membership", async () => {
     store["putThread"]("codex:parent", { backend: "codex", threadId: "parent",
-      executionMode: "default", extraLinkedDirectories: [], subAgents: [{ monitorId: "monitor",
-        monitorThreadId: thread.id, task: "Worker", status: "running", createdAt: 1, updatedAt: 1 }] });
+      executionMode: "default", extraLinkedDirectories: [] });
+    await store.upsertThreadSubAgents({ backend: "codex", threadId: "parent", subAgents: [{ monitorId: "monitor",
+      monitorThreadId: thread.id, task: "Worker", status: "running", createdAt: 1, updatedAt: 1 }] });
     expect((await store.reconcileNavigationSnapshot({ backend: "codex", fetchedAt: 1, partial: true, threads: [thread] })).threads).toEqual([]);
     expect((await store.projectNavigationThreadDetail({ thread })).id).toBe(thread.id);
   });

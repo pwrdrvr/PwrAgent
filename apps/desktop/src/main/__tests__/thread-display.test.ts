@@ -341,7 +341,8 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
   const registry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
     automaticArchiveReservations: new Map(),
     overlayStore: {
-      getThreadOverlayState: async () => ({ subAgents: [] }),
+      getThreadOverlayState: async () => undefined,
+      listThreadSubAgents: async () => [],
       readThreadPricing: async () => data.pricing,
       readThreadToolAccounting: async () => undefined,
     },

@@ -683,7 +683,7 @@ import { MissingArchiveWorktreeError, WorktreeArchiveService } from "./worktree-
 import { WorktreeRecoveryService } from "./worktree-recovery-service";
 import { detectMissingThreadWorkspace } from "./missing-thread-workspace";
 import { WorktreeContainerService, type WorktreeContainerCleanup } from "./worktree-container-service";
-import { ThreadArchiveSweeper, archiveCandidateLastActivity, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
+import { ARCHIVE_ACTIVE_SUB_AGENT_STATUSES, ThreadArchiveSweeper, archiveCandidateLastActivity, isStaleArchiveCandidate, type ThreadArchiveCandidate } from "./thread-archive-sweeper";
 import { getDesktopMessagingStore } from "../messaging/desktop-messaging-store";
 import { compareBindingsByCreation } from "../messaging/core/messaging-binding-thread-match";
 import { toMessagingThreadBindingSummary } from "../messaging/messaging-bindings-snapshot";
@@ -3274,8 +3274,10 @@ function isCodexNativeSubAgentTool(tool: string): tool is CodexNativeSubAgentToo
   return CODEX_NATIVE_SUBAGENT_TOOLS.has(tool as CodexNativeSubAgentTool);
 }
 
+const CODEX_NATIVE_MONITOR_ID_PREFIX = "codex-native:";
+
 function codexNativeSubAgentId(threadId: string): string {
-  return `codex-native:${threadId}`;
+  return `${CODEX_NATIVE_MONITOR_ID_PREFIX}${threadId}`;
 }
 
 /**
@@ -13995,10 +13997,17 @@ export class DesktopBackendRegistry {
             messageIds,
           })
         : {};
+    // Review and task-monitor cards only. Gate cards are most of a busy
+    // thread's history and neither helper below can match one.
+    const transcriptCards = await this.overlayStore.listThreadSubAgents({
+      backend,
+      threadId: request.threadId,
+      excludeTokenMiser: true,
+    });
     const messageOrigins = inferLegacyTaskMonitorMessageOrigins({
       origins: persistedMessageOrigins,
       replay: replayWithTranscriptOverlays,
-      subAgents: overlay?.subAgents,
+      subAgents: transcriptCards,
     });
     const replayWithMessageOrigins = mergeThreadMessageOrigins(
       replayWithTranscriptOverlays,
@@ -14006,7 +14015,7 @@ export class DesktopBackendRegistry {
     );
     const replayWithReviewMetadata = attachReviewEntryMetadata({
       replay: replayWithMessageOrigins,
-      subAgents: overlay?.subAgents,
+      subAgents: transcriptCards,
     });
     const includeAccounting = request.includeAccounting !== false;
     const pricing = includeAccounting
@@ -14868,7 +14877,12 @@ export class DesktopBackendRegistry {
           const overlays = await this.overlayStore.getThreadOverlayStates({
             backend, threadIds: backendThreads.map((thread) => thread.id),
           });
-          candidates.push(...backendThreads.map((thread) => ({ thread, overlay: overlays[thread.id] })));
+          for (const thread of backendThreads) {
+            candidates.push({
+              thread, overlay: overlays[thread.id],
+              activeSubAgent: await this.hasArchiveActiveSubAgent(backend, thread.id),
+            });
+          }
         }
         return candidates;
       },
@@ -15122,7 +15136,14 @@ export class DesktopBackendRegistry {
         linkedDirectories: thread.linkedDirectories.length > 0 ? thread.linkedDirectories : candidate.thread.linkedDirectories,
       },
       overlay: await this.overlayStore.getThreadOverlayState({ backend, threadId }),
+      activeSubAgent: await this.hasArchiveActiveSubAgent(backend, threadId),
     };
+  }
+
+  /** One partial-index read; finished cards, including every gate card, are not scanned. */
+  private async hasArchiveActiveSubAgent(backend: AppServerBackendKind, threadId: string): Promise<boolean> {
+    const active = await this.overlayStore.listActiveThreadSubAgents({ backend, threadId });
+    return active.some((agent) => ARCHIVE_ACTIVE_SUB_AGENT_STATUSES.includes(agent.status));
   }
 
   private autoArchiveCandidateIsBusy({ thread }: ThreadArchiveCandidate): boolean {
@@ -17062,10 +17083,16 @@ export class DesktopBackendRegistry {
       };
     }
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
+    // Pricing groups gates by their cards, so the display still reads every
+    // card; it no longer parses them as part of the overlay.
+    const persistedSubAgents = await this.overlayStore.listThreadSubAgents({ backend, threadId: request.threadId });
+    const subAgents = backend === "codex"
+      ? this.mergeLiveTokenMiserSubAgents(request.threadId, persistedSubAgents)
+      : persistedSubAgents;
     if (request.display.resource === "transcript") {
       return projectThreadDisplay(await this.readThreadData(request), request, {
         ...overlay,
-        subAgents: backend === "codex" ? this.mergeLiveTokenMiserSubAgents(request.threadId, overlay?.subAgents) : overlay?.subAgents,
+        subAgents,
         activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
       });
     }
@@ -17093,7 +17120,7 @@ export class DesktopBackendRegistry {
       ...overlay,
       // Pricing includes in-memory gates; their parent links and accounting
       // must come from the same live view before grouping and pagination.
-      subAgents: backend === "codex" ? this.mergeLiveTokenMiserSubAgents(request.threadId, overlay?.subAgents) : overlay?.subAgents,
+      subAgents,
       activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
     });
   }
@@ -17258,10 +17285,17 @@ export class DesktopBackendRegistry {
         },
       };
     }
+    // Review and task-monitor cards only. Gate cards are most of a busy
+    // thread's history and neither helper below can match one.
+    const transcriptCards = await this.overlayStore.listThreadSubAgents({
+      backend,
+      threadId: request.threadId,
+      excludeTokenMiser: true,
+    });
     messageOrigins = inferLegacyTaskMonitorMessageOrigins({
       origins: messageOrigins,
       replay: replayWithImmutableUsage,
-      subAgents: overlay?.subAgents,
+      subAgents: transcriptCards,
     });
     const replayWithMessageOrigins = mergeThreadMessageOrigins(
       replayWithImmutableUsage,
@@ -17269,7 +17303,7 @@ export class DesktopBackendRegistry {
     );
     const replayWithReviewMetadata = attachReviewEntryMetadata({
       replay: replayWithMessageOrigins,
-      subAgents: overlay?.subAgents,
+      subAgents: transcriptCards,
     });
     this.threadTodoHandler?.importReviews?.({ backend, threadId: request.threadId },
       replayWithReviewMetadata.entries.filter((entry): entry is AppServerThreadReviewEntry => entry.type === "review"));
@@ -17689,6 +17723,22 @@ export class DesktopBackendRegistry {
       };
     });
     return changed ? { ...snapshot, threads, unchanged: false } : snapshot;
+  }
+
+  /** Gate cards not yet persisted; at most one turn's worth. */
+  listLiveTokenMiserSubAgents(threadId: string): ThreadSubAgentSummary[] {
+    return [...this.liveTokenMiserSubAgents.get(threadId)?.values() ?? []];
+  }
+
+  /**
+   * Everything `mergeLiveTokenMiserSubAgents` overlays on stored cards, for a
+   * revision that changes with live state without hashing stored cards.
+   */
+  readLiveSubAgentRevisionSource(threadId: string): unknown {
+    return [
+      this.listLiveTokenMiserSubAgents(threadId),
+      [...this.liveCodexNativeSubAgentUsage.get(threadId) ?? []],
+    ];
   }
 
   mergeLiveTokenMiserSubAgents(
@@ -19647,13 +19697,11 @@ export class DesktopBackendRegistry {
       request.backend,
       request.threadId,
     );
-    const overlay = await this.overlayStore.getThreadOverlayState({
+    const existing = await this.overlayStore.getThreadSubAgent({
       backend: request.backend,
       threadId: request.threadId,
+      monitorId,
     });
-    const existing = overlay?.subAgents?.find(
-      (subAgent) => subAgent.monitorId === monitorId,
-    );
     const ok = result.status === "ok" ? result : undefined;
     const runUsage = ok?.tokenUsage
       ? buildTaskMonitorUsageSnapshot({
@@ -22681,13 +22729,11 @@ export class DesktopBackendRegistry {
     params: StopSubAgentRequest,
   ): Promise<StopSubAgentResponse> {
     await this.subAgentStartupReconciliation;
-    const overlay = await this.overlayStore.getThreadOverlayState({
+    const subAgent = await this.overlayStore.getThreadSubAgent({
       backend: params.backend,
       threadId: params.threadId,
+      monitorId: params.monitorId,
     });
-    const subAgent = overlay?.subAgents?.find(
-      (candidate) => candidate.monitorId === params.monitorId,
-    );
     if (!subAgent) {
       throw new Error("Sub-agent was not found on this thread.");
     }
@@ -30003,12 +30049,20 @@ export class DesktopBackendRegistry {
         }));
       }
     }
+    // Native-worker cards only: a primary-key range per parent that never
+    // reads the parent's Token Miser gate history.
+    const nativeCardsByThreadId = await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
+      backend: "codex",
+      threadIds: threadsWithPending.map((thread) => thread.id),
+      monitorIdPrefix: CODEX_NATIVE_MONITOR_ID_PREFIX,
+    });
     await this.reconcileDiscoveredCodexNativeSubAgents({
+      nativeCardsByThreadId,
       nativeThreads: nativeSubAgentThreads,
       overlaysByThreadId,
       parentThreads: threadsWithPending,
     });
-    await this.reconcilePersistedCodexNativeSubAgents(threadsWithPending, overlaysByThreadId);
+    await this.reconcilePersistedCodexNativeSubAgents(threadsWithPending, nativeCardsByThreadId);
     const visibleThreads = threadsWithPending.filter(
       (thread) => overlaysByThreadId[thread.id]?.archiveTombstonedAt === undefined,
     );
@@ -30056,7 +30110,7 @@ export class DesktopBackendRegistry {
         const overlay = overlaysByThreadId[thread.id];
         return {
           ...thread,
-          ...this.persistedCodexNativeSubAgentDisclosure(thread, overlay),
+          ...this.persistedCodexNativeSubAgentDisclosure(thread, nativeCardsByThreadId[thread.id]),
           executionMode: overlay?.executionMode ?? thread.executionMode,
           model: overlay?.model ?? thread.model,
           reasoningEffort: overlay?.reasoningEffort ?? thread.reasoningEffort,
@@ -30090,11 +30144,11 @@ export class DesktopBackendRegistry {
 
   private async reconcilePersistedCodexNativeSubAgents(
     threads: AppServerThreadSummary[],
-    overlays: Record<string, ThreadOverlayState | undefined>,
+    nativeCardsByThreadId: Record<string, ThreadSubAgentSummary[]>,
   ): Promise<void> {
     for (const parent of threads) {
       const probes: Promise<void>[] = [];
-      for (const card of overlays[parent.id]?.subAgents ?? []) {
+      for (const card of nativeCardsByThreadId[parent.id] ?? []) {
         if (
           !card.monitorId.startsWith("codex-native:")
           || !card.monitorThreadId
@@ -30117,22 +30171,24 @@ export class DesktopBackendRegistry {
       }
       if (probes.length > 0) {
         await Promise.all(probes);
-        overlays[parent.id] = await this.overlayStore.getThreadOverlayState({
+        const refreshed = await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
           backend: "codex",
-          threadId: parent.id,
+          threadIds: [parent.id],
+          monitorIdPrefix: CODEX_NATIVE_MONITOR_ID_PREFIX,
         });
+        nativeCardsByThreadId[parent.id] = refreshed[parent.id] ?? [];
       }
     }
   }
 
   private persistedCodexNativeSubAgentDisclosure(
     thread: AppServerThreadSummary,
-    overlay: ThreadOverlayState | undefined,
+    nativeCards: readonly ThreadSubAgentSummary[] | undefined,
   ): Pick<AppServerThreadSummary, "codexNativeSubAgents"> {
     const agents = new Map(
       (thread.codexNativeSubAgents ?? []).map((agent) => [agent.threadId, agent]),
     );
-    for (const card of overlay?.subAgents ?? []) {
+    for (const card of nativeCards ?? []) {
       if (
         !card.monitorId.startsWith("codex-native:")
         || !card.monitorThreadId
@@ -30188,16 +30244,17 @@ export class DesktopBackendRegistry {
     if (observed.size === 0) {
       return;
     }
-    const parentOverlay = await this.overlayStore.getThreadOverlayState({
+    const nativeCards = (await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
       backend: "codex",
-      threadId,
-    });
+      threadIds: [threadId],
+      monitorIdPrefix: CODEX_NATIVE_MONITOR_ID_PREFIX,
+    }))[threadId] ?? [];
     const pending = [...observed.keys()].filter((id) => {
       const activity = observed.get(id)!;
       const terminal = ["completed", "interrupted", "errored", "shutdown"].includes(activity.agent.status ?? "");
       const recent = !activity.observedAt
         || activity.observedAt >= Date.now() - CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS;
-      const existing = parentOverlay?.subAgents?.find((card) => card.monitorId === codexNativeSubAgentId(id));
+      const existing = nativeCards.find((card) => card.monitorId === codexNativeSubAgentId(id));
       const replayStatus = mapCodexNativeSubAgentStatus({
         agentState: activity.agent.status,
         itemStatus: "completed",
@@ -30211,7 +30268,7 @@ export class DesktopBackendRegistry {
     // stays unpriced until discovery reads one. Global discovery is one page
     // and can miss a fresh worker; this parent-scoped read cannot.
     const needsDiscovery = [...observed.keys()].some((id) => {
-      const existing = parentOverlay?.subAgents?.find(
+      const existing = nativeCards.find(
         (card) => card.monitorId === codexNativeSubAgentId(id),
       );
       return existing !== undefined && !existing.preferredModel;
@@ -30269,6 +30326,11 @@ export class DesktopBackendRegistry {
       threadIds: [threadId, ...nativeThreads.map((thread) => thread.id)],
     });
     await this.reconcileDiscoveredCodexNativeSubAgents({
+      nativeCardsByThreadId: await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
+        backend: "codex",
+        threadIds: grouped.map((parent) => parent.id),
+        monitorIdPrefix: CODEX_NATIVE_MONITOR_ID_PREFIX,
+      }),
       nativeThreads,
       overlaysByThreadId: overlays,
       parentThreads: grouped,
@@ -30276,6 +30338,7 @@ export class DesktopBackendRegistry {
   }
 
   private async reconcileDiscoveredCodexNativeSubAgents(params: {
+    nativeCardsByThreadId: Record<string, ThreadSubAgentSummary[]>;
     nativeThreads: AppServerThreadSummary[];
     overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
     parentThreads: AppServerThreadSummary[];
@@ -30327,8 +30390,7 @@ export class DesktopBackendRegistry {
         // this ordinary parent; usage must follow the same visible owner.
         this.codexNativeSubAgentParents.set(nativeThread.id, parent.id);
         const monitorId = codexNativeSubAgentId(nativeThread.id);
-        const parentOverlay = params.overlaysByThreadId[parent.id];
-        const existing = parentOverlay?.subAgents?.find(
+        const existing = params.nativeCardsByThreadId[parent.id]?.find(
           (subAgent) => subAgent.monitorId === monitorId,
         );
         // The worker's own model and effort, or none. A worker can run on a
@@ -30559,12 +30621,17 @@ export class DesktopBackendRegistry {
           }
 
           if (needsCardWrite) {
-            params.overlaysByThreadId[parent.id] =
-              await this.overlayStore.upsertThreadSubAgent({
-                backend: "codex",
-                threadId: parent.id,
-                subAgent,
-              });
+            await this.overlayStore.upsertThreadSubAgent({
+              backend: "codex",
+              threadId: parent.id,
+              subAgent,
+            });
+            params.nativeCardsByThreadId[parent.id] = [
+              subAgent,
+              ...(params.nativeCardsByThreadId[parent.id] ?? []).filter(
+                (card) => card.monitorId !== subAgent.monitorId,
+              ),
+            ];
           }
           if (!codexNativeSubAgentIsTerminal(status)) {
             this.scheduleCodexNativeSubAgentReconciliation({
@@ -32584,14 +32651,15 @@ export class DesktopBackendRegistry {
         if (lines.length > 0 && typeof this.overlayStore.upsertThreadUsageLines === "function") {
           await this.overlayStore.upsertThreadUsageLines({ lines });
         }
-        const overlay = await this.overlayStore.getThreadOverlayState({
-          backend: "codex",
-          threadId: parentThreadId,
-        });
-        const cards = pending.flatMap(([monitorId, live]) => {
-          const card = overlay?.subAgents?.find((subAgent) => subAgent.monitorId === monitorId);
-          return card ? [withLiveCodexNativeSubAgentUsage(card, live)] : [];
-        });
+        const cards: ThreadSubAgentSummary[] = [];
+        for (const [monitorId, live] of pending) {
+          const card = await this.overlayStore.getThreadSubAgent({
+            backend: "codex",
+            threadId: parentThreadId,
+            monitorId,
+          });
+          if (card) cards.push(withLiveCodexNativeSubAgentUsage(card, live));
+        }
         if (cards.length > 0) {
           if (typeof this.overlayStore.upsertThreadSubAgents === "function") {
             await this.overlayStore.upsertThreadSubAgents({
@@ -32649,10 +32717,11 @@ export class DesktopBackendRegistry {
     }
     const monitorId = codexNativeSubAgentId(event.notification.params.threadId);
     const readCard = async (): Promise<ThreadSubAgentSummary | undefined> =>
-      (await this.overlayStore.getThreadOverlayState({
+      await this.overlayStore.getThreadSubAgent({
         backend: "codex",
         threadId: parentThreadId,
-      }))?.subAgents?.find((subAgent) => subAgent.monitorId === monitorId);
+        monitorId,
+      });
     let existing = await readCard();
     if (!existing) {
       backendRegistryLog.warn("codex native subagent usage had no matching card", {
@@ -32816,16 +32885,21 @@ export class DesktopBackendRegistry {
     turnId: string;
     usage: ThreadSubAgentSummary["monitorUsage"];
   }): Promise<boolean> {
-    const overlay = await this.overlayStore.getThreadOverlayState({
+    const monitorId = reviewSubAgentId(params.turnId);
+    // The keyed card first; otherwise a review card that names this child
+    // turn. Gate cards are never review cards, so they are not read.
+    const existing = await this.overlayStore.getThreadSubAgent({
       backend: params.backend,
       threadId: params.parentThreadId,
-    });
-    const monitorId = reviewSubAgentId(params.turnId);
-    const existing = overlay?.subAgents?.find(
+      monitorId,
+    }) ?? (await this.overlayStore.listThreadSubAgents({
+      backend: params.backend,
+      threadId: params.parentThreadId,
+      excludeTokenMiser: true,
+    })).find(
       (subAgent) =>
-        subAgent.monitorId === monitorId ||
-        (subAgent.monitorThreadId === params.reviewThreadId &&
-          subAgent.monitorTurnId === params.turnId),
+        subAgent.monitorThreadId === params.reviewThreadId &&
+        subAgent.monitorTurnId === params.turnId,
     );
     if (!existing) {
       return false;
@@ -32924,14 +32998,14 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    const overlay = await this.overlayStore.getThreadOverlayState({
+    const nativeCards = (await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
       backend: "codex",
-      threadId: parentThreadId,
-    });
-    const candidates = (overlay?.subAgents ?? [])
+      threadIds: [parentThreadId],
+      monitorIdPrefix: CODEX_NATIVE_MONITOR_ID_PREFIX,
+    }))[parentThreadId] ?? [];
+    const candidates = nativeCards
       .filter(
         (subAgent) =>
-          subAgent.monitorId.startsWith("codex-native:") &&
           subAgent.monitorTurnId === turnId &&
           !subAgent.agentName,
       )
@@ -32994,14 +33068,12 @@ export class DesktopBackendRegistry {
       if (!parentThreadId) {
         continue;
       }
-      const overlay = await this.overlayStore.getThreadOverlayState({
+      const monitorId = codexNativeSubAgentId(notification.receiverThreadId);
+      const existing = await this.overlayStore.getThreadSubAgent({
         backend: "codex",
         threadId: parentThreadId,
+        monitorId,
       });
-      const monitorId = codexNativeSubAgentId(notification.receiverThreadId);
-      const existing = overlay?.subAgents?.find(
-        (subAgent) => subAgent.monitorId === monitorId,
-      );
       if (!existing) {
         continue;
       }
@@ -33063,14 +33135,12 @@ export class DesktopBackendRegistry {
 
     const now = params.observedAt ?? Date.now();
     this.codexNativeSubAgentParents.set(params.receiverThreadId, params.parentThreadId);
-    const overlay = await this.overlayStore.getThreadOverlayState({
+    const monitorId = codexNativeSubAgentId(params.receiverThreadId);
+    const existing = await this.overlayStore.getThreadSubAgent({
       backend: "codex",
       threadId: params.parentThreadId,
+      monitorId,
     });
-    const monitorId = codexNativeSubAgentId(params.receiverThreadId);
-    const existing = overlay?.subAgents?.find(
-      (subAgent) => subAgent.monitorId === monitorId,
-    );
     const prompt = readOptionalString(params.call.item, ["prompt"]);
     const itemStatus = readOptionalString(params.call.item, ["status"]);
     const agentState = readCodexNativeAgentState(
@@ -33245,14 +33315,12 @@ export class DesktopBackendRegistry {
       return;
     }
 
-    const overlay = await this.overlayStore.getThreadOverlayState({
+    const monitorId = codexNativeSubAgentId(receiverThreadId);
+    const existing = await this.overlayStore.getThreadSubAgent({
       backend: "codex",
       threadId: reconciliation.parentThreadId,
+      monitorId,
     });
-    const monitorId = codexNativeSubAgentId(receiverThreadId);
-    const existing = overlay?.subAgents?.find(
-      (subAgent) => subAgent.monitorId === monitorId,
-    );
     if (!existing || codexNativeSubAgentIsTerminal(existing.status)) {
       this.clearCodexNativeSubAgentReconciliation(receiverThreadId);
       return;
@@ -33354,13 +33422,13 @@ export class DesktopBackendRegistry {
       return false;
     }
 
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: "codex",
-      threadId: params.parentThreadId,
-    });
     const monitorId = codexNativeSubAgentId(params.receiverThreadId);
     const existing =
-      overlay?.subAgents?.find((subAgent) => subAgent.monitorId === monitorId) ??
+      await this.overlayStore.getThreadSubAgent({
+        backend: "codex",
+        threadId: params.parentThreadId,
+        monitorId,
+      }) ??
       params.existing;
     if (codexNativeSubAgentIsTerminal(existing.status)) {
       return true;
@@ -33411,13 +33479,11 @@ export class DesktopBackendRegistry {
       >
     > = {},
   ): Promise<void> {
-    const overlay = await this.overlayStore.getThreadOverlayState({
+    const existing = await this.overlayStore.getThreadSubAgent({
       backend: record.parentBackend,
       threadId: record.parentThreadId,
+      monitorId: record.monitorId,
     });
-    const existing = overlay?.subAgents?.find(
-      (subAgent) => subAgent.monitorId === record.monitorId,
-    );
     const subAgent: ThreadSubAgentSummary = {
       monitorId: record.monitorId,
       task: record.task,
@@ -33490,14 +33556,12 @@ export class DesktopBackendRegistry {
       >
     > = {},
   ): Promise<void> {
-    const existingOverlay = await this.overlayStore.getThreadOverlayState({
+    const monitorId = reviewSubAgentId(record.turnId);
+    const existing = await this.overlayStore.getThreadSubAgent({
       backend: record.parentBackend,
       threadId: record.parentThreadId,
+      monitorId,
     });
-    const monitorId = reviewSubAgentId(record.turnId);
-    const existing = existingOverlay?.subAgents?.find(
-      (subAgent) => subAgent.monitorId === monitorId,
-    );
     const subAgent: ThreadSubAgentSummary = {
       monitorId,
       task: record.task,
@@ -36791,12 +36855,12 @@ export class DesktopBackendRegistry {
     reason?: string;
   }): Promise<void> {
     try {
-      const overlay = await this.overlayStore.getThreadOverlayState({
+      const monitorId = titleHelperSubAgentId(params.backend, params.threadId);
+      if (!await this.overlayStore.getThreadSubAgent({
         backend: params.backend,
         threadId: params.threadId,
-      });
-      const monitorId = titleHelperSubAgentId(params.backend, params.threadId);
-      if (!overlay?.subAgents?.some((subAgent) => subAgent.monitorId === monitorId)) {
+        monitorId,
+      })) {
         return;
       }
     } catch (error) {
@@ -36855,13 +36919,11 @@ export class DesktopBackendRegistry {
   }): Promise<void> {
     const now = Date.now();
     const monitorId = titleHelperSubAgentId(params.backend, params.threadId);
-    const overlay = await this.overlayStore.getThreadOverlayState({
+    const existing = await this.overlayStore.getThreadSubAgent({
       backend: params.backend,
       threadId: params.threadId,
+      monitorId,
     });
-    const existing = overlay?.subAgents?.find(
-      (subAgent) => subAgent.monitorId === monitorId,
-    );
     const usageSnapshot = params.result?.tokenUsage
       ? buildTaskMonitorUsageSnapshot({
           model: params.result.model,
@@ -37922,10 +37984,10 @@ export class DesktopBackendRegistry {
       );
       this.liveTokenMiserUsageLines.set(entry.threadId, liveUsageLines);
     }
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: "codex",
-      threadId: entry.threadId,
-    });
+    // An invalidation, like every other card change: each listener refetches
+    // the page it shows, and the event is stripped to its thread id before
+    // the renderer or a peer sees it, so a card array here would be read in
+    // full and then dropped.
     await this.emit({
       backend: "codex",
       notification: {
@@ -37933,10 +37995,6 @@ export class DesktopBackendRegistry {
         params: {
           navigationChanged: false,
           threadId: entry.threadId,
-          subAgents: this.mergeLiveTokenMiserSubAgents(
-            entry.threadId,
-            overlay?.subAgents,
-          ),
         },
       },
     });
@@ -37989,10 +38047,6 @@ export class DesktopBackendRegistry {
     }
     this.liveTokenMiserSubAgents.set(threadId, liveSubAgents);
     this.liveTokenMiserUsageLines.set(threadId, liveUsageLines);
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: "codex",
-      threadId,
-    });
     await this.emit({
       backend: "codex",
       notification: {
@@ -38000,10 +38054,6 @@ export class DesktopBackendRegistry {
         params: {
           navigationChanged: false,
           threadId,
-          subAgents: this.mergeLiveTokenMiserSubAgents(
-            threadId,
-            overlay?.subAgents,
-          ),
         },
       },
     });
@@ -38072,10 +38122,6 @@ export class DesktopBackendRegistry {
 
     const pricingChanged: string[] = [];
     for (const [threadId, entries] of byThread) {
-      const overlay = await this.overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId,
-      });
       // Only the gates' own lines and their turns' parent lines can price
       // them; a long thread's other lines are not read.
       const pricingLines =
@@ -38102,10 +38148,6 @@ export class DesktopBackendRegistry {
               threadId,
             })
           : undefined;
-      const existingSubAgents = new Map(
-        overlay?.subAgents?.map((subAgent) => [subAgent.monitorId, subAgent])
-          ?? [],
-      );
       // A gate's stored line names the gate as its source item, so the
       // narrow read finds any line a gate could otherwise insert twice.
       const knownUsageLineIds = new Set(
@@ -38120,9 +38162,12 @@ export class DesktopBackendRegistry {
 
       for (const entry of entries) {
         const artifact = this.buildTokenMiserLedgerArtifact({ entry, indexes });
-        const existingSubAgent = existingSubAgents.get(
-          artifact.subAgent.monitorId,
-        );
+        // One keyed read per gate in this batch, not the thread's whole history.
+        const existingSubAgent = await this.overlayStore.getThreadSubAgent({
+          backend: "codex",
+          threadId,
+          monitorId: artifact.subAgent.monitorId,
+        });
         // Compare the fields the rail actually renders, not the whole record:
         // owner ids change every process, so a whole-record compare would
         // rewrite every gate on every launch. But comparing accounting alone
@@ -38182,10 +38227,6 @@ export class DesktopBackendRegistry {
         this.pendingTokenMiserInterceptions.delete(entry.objectId);
       }
       if (subAgents.length > 0 || clearedLive) {
-        const updatedOverlay = await this.overlayStore.getThreadOverlayState({
-          backend: "codex",
-          threadId,
-        });
         await this.emit({
           backend: "codex",
           notification: {
@@ -38193,10 +38234,6 @@ export class DesktopBackendRegistry {
             params: {
               navigationChanged: false,
               threadId,
-              subAgents: this.mergeLiveTokenMiserSubAgents(
-                threadId,
-                updatedOverlay?.subAgents,
-              ),
             },
           },
         });
@@ -42653,16 +42690,15 @@ export class DesktopBackendRegistry {
 
     const record = this.taskMonitorDelegations.get(monitorId);
     if (!record) {
-      const overlay = await this.overlayStore.getThreadOverlayState({
+      const card = await this.overlayStore.getThreadSubAgent({
         backend: context.backend,
         threadId: context.threadId,
+        monitorId,
       });
-      const completedCancellation = overlay?.subAgents?.find(
-        (subAgent) =>
-          subAgent.monitorId === monitorId
-          && subAgent.outcome === "cancelled"
-          && subAgent.completionSource?.type === "parent_cancel",
-      );
+      const completedCancellation = card
+        && card.outcome === "cancelled"
+        && card.completionSource?.type === "parent_cancel"
+        ? card : undefined;
       if (completedCancellation) {
         return {
           ok: true,

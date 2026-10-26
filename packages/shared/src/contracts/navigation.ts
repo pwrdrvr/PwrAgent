@@ -3151,8 +3151,12 @@ export type ThreadOverlayState = {
    * list is only durable delivery metadata.
    */
   pendingManagedReviewContextEntryIds?: string[];
-  /** Durable delegated sub-agent/task-monitor summaries for this thread. */
-  subAgents?: ThreadSubAgentSummary[];
+  /*
+   * Delegated sub-agent and task-monitor cards are not overlay state. They
+   * live one row per card in the desktop `thread_sub_agents` table, because a
+   * busy thread accumulates thousands of Token Miser gate cards and every
+   * overlay read and write used to carry all of them.
+   */
   /** Durable origin metadata for threads created by an Agent handoff tool. */
   handoffOrigin?: ThreadHandoffOrigin;
   /** Durable unborn-thread marker, cleared when the first action starts. */
