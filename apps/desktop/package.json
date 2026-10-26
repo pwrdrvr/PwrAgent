@@ -94,7 +94,7 @@
     "better-sqlite3": "^13.0.3",
     "dugite": "3.2.3",
     "electron-log": "^5.4.3",
-    "electron-updater": "6.8.9",
+    "electron-updater": "6.8.10",
     "fflate": "^0.8.3",
     "hast-util-to-jsx-runtime": "2.3.6",
     "katex": "^0.19.0",
