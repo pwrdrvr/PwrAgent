@@ -56,6 +56,7 @@ import {
 } from "./electron-shutdown-policy";
 import { removeTempRoot } from "./temp-root-cleanup";
 import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
+import { reportWindowsCloseSurvivors } from "./windows-close-survivors";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1248,6 +1249,16 @@ export async function closeElectronApplication(
       ELECTRON_CLOSE_TIMEOUT_MS,
     ),
     forceKillTree: async () => {
+      if (process.platform === "win32") {
+        // Record who still holds the launcher's pipes before the kill
+        // removes the evidence.
+        await reportWindowsCloseSurvivors({
+          launchId: options.launchId,
+          launcherPid: child.pid,
+          mainProcess,
+          quitStartedAt,
+        });
+      }
       await killProcessTree(child, mainProcess, quitStartedAt);
     },
     waitForPostKillClose: async (closePromise) => await waitForClose(
