@@ -22,8 +22,19 @@ import type { PwrSuiteInstaller } from "./usePwrSuiteInstaller";
 
 export type PwrSuiteTileLineTone = "pitch" | "state" | "error";
 
+/** The paragraph behind a tile's Info button. */
+export type PwrSuiteTileAbout = {
+  title: string;
+  body: string;
+  /** Defaults to the PwrSuite line; a third-party service says what it is. */
+  eyebrow?: string;
+  note?: string;
+};
+
 /**
  * One launchpad tile for a sister app: icon, name, one line, one action.
+ * A third-party service that PwrAgent integrates (Sandboxer) uses the same
+ * tile, passing its own site instead of a PwrSuite app id.
  *
  * The tiles are ads for the other PwrSuite apps, so they stay one line tall.
  * Everything the old cards said in a paragraph now sits behind the Info
@@ -31,15 +42,17 @@ export type PwrSuiteTileLineTone = "pitch" | "state" | "error";
  * stays the root class because the launchpad's layout, its bounds test, and
  * the E2E specs all find the tiles by it.
  */
-export function PwrSuiteTile(props: {
-  app: PwrSuiteAppId;
+export function PwrSuiteTile(props: (
+  | { app: PwrSuiteAppId; siteUrl?: never }
+  | { app?: never; siteUrl: string }
+) & {
   name: string;
   icon: string;
   ariaLabel: string;
   line: ReactNode;
   lineTone?: PwrSuiteTileLineTone;
   /** The paragraph behind the Info button. Omitted on a remote tile. */
-  about?: { title: string; body: string };
+  about?: PwrSuiteTileAbout;
   /** A remote thread's owner, shown as a tag beside the name. */
   tag?: string;
   connected?: boolean;
@@ -47,7 +60,7 @@ export function PwrSuiteTile(props: {
 }) {
   const tone = props.lineTone ?? "pitch";
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const siteUrl = PWRSUITE_PRODUCT_URLS[props.app];
+  const siteUrl = props.siteUrl ?? PWRSUITE_PRODUCT_URLS[props.app];
   // "Visit", not "Open": Playwright matches names by substring, and
   // "Open pwrgit.com" would also answer to the tile's "Open PwrGit".
   const siteLabel = `Visit ${new URL(siteUrl).host}`;
@@ -81,7 +94,6 @@ export function PwrSuiteTile(props: {
           {props.about ? (
             <>
               <PwrSuiteAboutButton
-                app={props.app}
                 name={props.name}
                 about={props.about}
                 siteUrl={siteUrl}
@@ -122,9 +134,8 @@ const ABOUT_GAP = 8;
 const VIEWPORT_MARGIN = 16;
 
 function PwrSuiteAboutButton(props: {
-  app: PwrSuiteAppId;
   name: string;
-  about: { title: string; body: string };
+  about: PwrSuiteTileAbout;
   siteUrl: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -217,12 +228,14 @@ function PwrSuiteAboutButton(props: {
                   : { top: 0, left: 0, visibility: "hidden" }
               }
             >
-              <p className="pwrsuite-about__eyebrow">PwrSuite · open source</p>
+              <p className="pwrsuite-about__eyebrow">
+                {props.about.eyebrow ?? "PwrSuite · open source"}
+              </p>
               <h3 className="pwrsuite-about__title">{props.about.title}</h3>
               <p className="pwrsuite-about__body">{props.about.body}</p>
               <p className="pwrsuite-about__note">
-                Each thread opts in with its own switch. Codex’s and other
-                agents’ own MCP connections are separate.
+                {props.about.note
+                  ?? "Each thread opts in with its own switch. Codex’s and other agents’ own MCP connections are separate."}
               </p>
               <div className="pwrsuite-about__foot">
                 <span>{props.name}</span>

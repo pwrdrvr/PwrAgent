@@ -1,4 +1,5 @@
 import { sandboxerStub } from "./helpers/sandboxer-stub";
+import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -604,6 +605,36 @@ describe("McpConnectionGatewayService", () => {
     await retryFailure;
   });
 
+  it("announces a sign-in that failed, as it would one that succeeded", async () => {
+    const registry = temporaryRegistry();
+    const connection = registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/mcp",
+    });
+    const service = new McpConnectionGatewayService({
+      sandboxer: sandboxerStub(),
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+    Object.assign(service, {
+      openAuthorizationUrl: async () => undefined,
+      coordinatorFor: () => ({
+        abandonAuthorization: () => {},
+        configured: async () => false,
+        authorize: async () => {
+          throw new Error("The provider refused the sign-in.");
+        },
+      }),
+    });
+    const changes: string[][] = [];
+    service.onConnectionsChanged((event) => changes.push(event.connectionIds));
+
+    await expect(service.authorizeConnection(connection.id)).rejects.toThrow("refused");
+    expect(changes).toEqual([[connection.id]]);
+  });
+
   /**
    * The coordinator's own attempt counter stops a superseded flow from
    * committing tokens. It does not close that flow's listener, so without this
@@ -971,6 +1002,54 @@ describe("McpConnectionGatewayService", () => {
     await expect(
       broker.dispatchBrokerOperation("broker/set-sandboxer-cleanup-on-pr-close", {}),
     ).rejects.toThrow("Invalid Sandboxer cleanup on PR close request.");
+  });
+
+  it("announces each change to this instance's windows, including a Sandboxer answer that changed", async () => {
+    const registry = temporaryRegistry();
+    const connection = registry.create({
+      displayName: "Datadog",
+      serverUrl: "https://mcp.datadoghq.com/mcp",
+    });
+    const sbxStatus = vi.fn(async () => '{"signedIn":false}');
+    const service = new McpConnectionGatewayService({
+      sandboxer: new SandboxerConnection(sbxStatus),
+      registry,
+      settings: createSettings(),
+      leaseManager: null,
+    });
+    services.push(service);
+    const broker = service as unknown as {
+      dispatchBrokerOperation: (op: unknown, params: unknown) => Promise<unknown>;
+    };
+    const changes: string[][] = [];
+    const stop = service.onConnectionsChanged((event) => changes.push(event.connectionIds));
+
+    // The first answer is news; the same answer again is not.
+    await service.listConnections({ sandboxerStatusMaxAgeMs: 0 });
+    await service.listConnections({ sandboxerStatusMaxAgeMs: 0 });
+    expect(sbxStatus).toHaveBeenCalledTimes(2);
+    expect(changes).toEqual([["builtin:sandboxer"]]);
+    // A list without a max age keeps the ordinary cache.
+    await service.listConnections();
+    expect(sbxStatus).toHaveBeenCalledTimes(2);
+    sbxStatus.mockResolvedValue('{"signedIn":true,"apiReachable":true}');
+    await broker.dispatchBrokerOperation("broker/list", { sandboxerStatusMaxAgeMs: 0 });
+    expect(changes).toEqual([["builtin:sandboxer"], ["builtin:sandboxer"]]);
+
+    // Mutations, whether made here or forwarded by another instance. A
+    // failed one announces nothing.
+    changes.length = 0;
+    await service.setSandboxerCleanupOnPrClose(false);
+    await broker.dispatchBrokerOperation("broker/set-enabled", {
+      connectionId: connection.id,
+      enabled: false,
+    });
+    await expect(service.setConnectionEnabled("ghost", true)).rejects.toThrow();
+    expect(changes).toEqual([["builtin:sandboxer"], [connection.id]]);
+
+    stop();
+    await service.setSandboxerCleanupOnPrClose(true);
+    expect(changes).toHaveLength(2);
   });
 
   it("sets a connection's tool approval through the owner broker and rejects an unknown mode", async () => {

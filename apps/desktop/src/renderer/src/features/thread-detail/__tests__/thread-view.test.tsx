@@ -19,6 +19,7 @@ import type {
   ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
+import { SANDBOXER_MCP_CONNECTION_ID } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
@@ -2585,7 +2586,7 @@ describe("ThreadView", () => {
     })).toHaveTextContent("#Bob's Best Thread 3000");
   });
 
-  it("offers both PwrSuite apps on a local launchpad, whichever is connected", async () => {
+  it("offers both PwrSuite apps and Sandboxer on a local launchpad, whichever is connected", async () => {
     // Only PwrGit rendered here once PwrSnap's card moved into MCP access,
     // so a connected PwrGit read as having replaced PwrSnap for good.
     const selectedDirectory = {
@@ -2609,6 +2610,8 @@ describe("ThreadView", () => {
       workMode: "local",
     } satisfies NavigationLaunchpadDraft;
 
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
     render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
@@ -2616,6 +2619,23 @@ describe("ThreadView", () => {
         clearPendingRequest={() => undefined}
         composerDisabled={false}
         desktopApi={{
+          listMcpConnections: async () => ({
+            connections: [{
+              id: SANDBOXER_MCP_CONNECTION_ID,
+              displayName: "Sandboxer",
+              kind: "sandboxer" as const,
+              authMode: "local_cli" as const,
+              serverUrl: "sandboxer:compute",
+              enabled: true,
+              selectForNewThreads: false,
+              toolApproval: "prompt" as const,
+              configured: true,
+              state: "ready" as const,
+              sandboxerCliState: "signed_in" as const,
+              createdAt: 0,
+              updatedAt: 0,
+            }],
+          }),
           readPwrGitConnectionStatus: async () => ({
             connectionId: "pwrgit" as const,
             displayName: "PwrGit" as const,
@@ -2637,6 +2657,7 @@ describe("ThreadView", () => {
         skills={[]}
         transcriptEntries={[]}
         onLoadOlder={async () => undefined}
+        onUpdateLaunchpad={onUpdateLaunchpad}
         removeOptimisticMessage={(_id) => undefined}
       />,
     );
@@ -2647,6 +2668,14 @@ describe("ThreadView", () => {
     expect(
       await screen.findByRole("button", { name: "Get PwrSnap" }),
     ).toBeInTheDocument();
+    fireEvent.click(
+      await screen.findByRole("switch", { name: "Use Sandboxer in this thread" }),
+    );
+    await waitFor(() => {
+      expect(onUpdateLaunchpad).toHaveBeenCalledWith("directory:/repo", {
+        mcpConnectionIds: [SANDBOXER_MCP_CONNECTION_ID],
+      });
+    });
   });
 
   it("treats a main-window launchpad as remote from the active federation target", async () => {
@@ -2676,6 +2705,7 @@ describe("ThreadView", () => {
       availability: "running" as const,
       configured: false,
     }));
+    const listMcpConnections = vi.fn(async () => ({ connections: [] }));
 
     render(
       <ThreadView
@@ -2688,7 +2718,7 @@ describe("ThreadView", () => {
         backends={[]}
         clearPendingRequest={() => undefined}
         composerDisabled={false}
-        desktopApi={{ readPwrSnapConnectionStatus }}
+        desktopApi={{ listMcpConnections, readPwrSnapConnectionStatus }}
         loading={false}
         loadingMore={false}
         messageCount={0}
@@ -2708,6 +2738,9 @@ describe("ThreadView", () => {
     expect(
       screen.queryByRole("button", { name: "Connect to PwrSnap" }),
     ).not.toBeInTheDocument();
+    // The owner's Sandboxer CLI is invisible here, so nothing is read.
+    expect(listMcpConnections).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Sandboxer connection")).not.toBeInTheDocument();
   });
 
   it("shows environment setup details from config even when the deprecated setup flag is false", async () => {

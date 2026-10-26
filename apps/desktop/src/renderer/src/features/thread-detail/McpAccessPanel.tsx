@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import {
   canIsolateMcpProviderServers,
-  isAcpBackendId,
+  backendLoadsMcpConnections,
   mcpSelectionApplyTiming,
   type AppServerBackendKind,
   type DescribeThreadMcpConnectionsResponse,
@@ -76,8 +76,7 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
   const [error, setError] = useState<string>();
   const [busyId, setBusyId] = useState<string>();
   const bodyId = useId();
-  const backendSupported =
-    props.backend === "codex" || props.backend === "claude" || isAcpBackendId(props.backend);
+  const backendSupported = backendLoadsMcpConnections(props.backend);
   // Only Codex can suppress the servers the agent loads for itself, so the
   // control is offered only where it can be honored. The main-process writer
   // reads the same predicate, so it cannot store a value this hides.

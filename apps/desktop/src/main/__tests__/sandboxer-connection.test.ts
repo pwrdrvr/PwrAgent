@@ -136,6 +136,46 @@ describe("SandboxerConnection", () => {
     expect((await connection.readStatus(true)).configured).toBe(true);
   });
 
+  it("serves a recent answer to a max-age read and checks again once it is older", async () => {
+    vi.useFakeTimers();
+    try {
+      const status = vi.fn(async () => '{"signedIn":true,"apiReachable":true}');
+      const connection = new SandboxerConnection(status);
+      await connection.readStatus();
+      await connection.readStatus({ maxAgeMs: 2_000 });
+      expect(status).toHaveBeenCalledOnce();
+      vi.advanceTimersByTime(2_000);
+      await connection.readStatus({ maxAgeMs: 2_000 });
+      expect(status).toHaveBeenCalledTimes(2);
+      // A max age never stretches the ordinary cache.
+      vi.advanceTimersByTime(15_000);
+      await connection.readStatus({ maxAgeMs: 60_000 });
+      expect(status).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("tells listeners when a check answers differently, and only then", async () => {
+    const answers = [
+      '{"signedIn":false}',
+      '{"signedIn":false}',
+      '{"signedIn":true,"apiReachable":true}',
+    ];
+    const connection = new SandboxerConnection(async () => answers.shift() ?? "{}");
+    const changed = vi.fn();
+    const stop = connection.onStatusChanged(changed);
+    await connection.readStatus(true);
+    expect(changed).toHaveBeenCalledTimes(1);
+    await connection.readStatus(true);
+    expect(changed).toHaveBeenCalledTimes(1);
+    await connection.readStatus(true);
+    expect(changed).toHaveBeenCalledTimes(2);
+    stop();
+    await connection.readStatus(true);
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
+
   it("spawns only official MCP with finite small defaults and a limited environment", () => {
     vi.stubEnv("SANDBOXER_API_KEY", "fixture-key");
     vi.stubEnv("SANDBOXER_ORG", "fixture-org");

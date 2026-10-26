@@ -1,6 +1,6 @@
 import { useState } from "react";
 import {
-  isAcpBackendId,
+  backendLoadsMcpConnections,
   type AppServerBackendKind,
   type PwrGitConnectionStatus,
   type PwrSnapConnectionStatus,
@@ -57,8 +57,7 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
   const [error, setError] = useState<string>();
   const { status, setStatus, refresh, unreachable, readError } =
     usePwrSuiteConnectionStatus(config.readStatus, () => setError(undefined));
-  const backendSupported =
-    props.backend === "codex" || isAcpBackendId(props.backend);
+  const backendSupported = backendLoadsMcpConnections(props.backend);
   const configured = status?.configured === true;
   const running = status?.availability === "running";
   const installed = status?.availability === "installed" || running;
@@ -123,7 +122,7 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
                 Runs on <b>{remoteOwnerLabel}</b>, where this thread runs
               </>
             ) : (
-              "Choose Codex or an ACP agent to use it here"
+              "Choose Codex, Claude, or an ACP agent to use it here"
             )
           )
         }
@@ -165,7 +164,7 @@ export function PwrSuiteConnectionTile<Status extends PwrSuiteConnectionStatus>(
   } else if (installLine) {
     [line, tone] = [installLine.text, installLine.tone];
   } else if (configured && !backendSupported) {
-    [line, tone] = ["Choose Codex or an ACP agent to use it here", "state"];
+    [line, tone] = ["Choose Codex, Claude, or an ACP agent to use it here", "state"];
   } else if (status?.detail) {
     [line, tone] = [status.detail, "state"];
   } else if (configured && installed && !running) {

@@ -296,6 +296,7 @@ export const PWRSUITE_INSTALLER_OPEN_CHANNEL = "pwrsuite-installer:open";
 export const PWRSUITE_INSTALLER_REVEAL_CHANNEL = "pwrsuite-installer:reveal";
 export const PWRSUITE_INSTALLER_EVENT_CHANNEL = "pwrsuite-installer:event";
 export const MCP_CONNECTION_LIST_CHANNEL = "mcp-connection:list";
+export const MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL = "mcp-connections:changed";
 export const MCP_CONNECTION_CREATE_CHANNEL = "mcp-connection:create";
 export const MCP_CONNECTION_AUTHORIZE_CHANNEL = "mcp-connection:authorize";
 export const MCP_CONNECTION_CANCEL_AUTHORIZE_CHANNEL =

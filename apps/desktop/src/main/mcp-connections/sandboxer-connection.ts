@@ -4,7 +4,9 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { shell } from "electron";
 import {
   SANDBOXER_CLI_PATH,
+  SANDBOXER_LINKS,
   SANDBOXER_MCP_LAUNCH_ARGS,
+  SANDBOXER_ORIGIN,
   SANDBOXER_SETUP_COMMAND,
   type McpConnectionStatus,
   type OpenSandboxerLinkResponse,
@@ -13,19 +15,12 @@ import {
   type SandboxerLinkTarget,
 } from "@pwragent/shared";
 
-export { SANDBOXER_CLI_PATH, SANDBOXER_MCP_ARGS, SANDBOXER_SETUP_COMMAND } from "@pwragent/shared";
-
-const SANDBOXER_ORIGIN = "https://sandboxer.com";
-
-/** Every page Settings opens. The dashboard link comes from the CLI. */
-export const SANDBOXER_LINKS: Record<Exclude<SandboxerLinkTarget, "dashboard">, string> = {
-  home: `${SANDBOXER_ORIGIN}/`,
-  pricing: `${SANDBOXER_ORIGIN}/pricing`,
-  quickstart: `${SANDBOXER_ORIGIN}/docs/quickstart`,
-  docs_mcp: `${SANDBOXER_ORIGIN}/docs/mcp`,
-  docs_machines: `${SANDBOXER_ORIGIN}/docs/machines`,
-  docs_billing: `${SANDBOXER_ORIGIN}/docs/billing`,
-};
+export {
+  SANDBOXER_CLI_PATH,
+  SANDBOXER_LINKS,
+  SANDBOXER_MCP_ARGS,
+  SANDBOXER_SETUP_COMMAND,
+} from "@pwragent/shared";
 
 type CliStatus = Pick<
   McpConnectionStatus,
@@ -130,6 +125,9 @@ function accountSummary(status: CliStatusJson): SandboxerAccountSummary | undefi
   return Object.keys(account).length > 0 ? account : undefined;
 }
 
+/** How long a status answer serves ordinary reads before `sbx status` runs again. */
+const STATUS_CACHE_MS = 15_000;
+
 export type SandboxerConnectionOptions = {
   dashboardCommand?: RunCli;
   openExternal?: (url: string) => Promise<void>;
@@ -139,6 +137,7 @@ export type SandboxerConnectionOptions = {
 export class SandboxerConnection {
   private cached?: { at: number } & Probe;
   private pending?: Promise<Probe>;
+  private readonly statusListeners = new Set<() => void>();
 
   private readonly dashboardCommand: RunCli;
   private readonly openExternal: (url: string) => Promise<void>;
@@ -160,8 +159,23 @@ export class SandboxerConnection {
     };
   }
 
-  async readStatus(refresh = false): Promise<CliStatus> {
-    return (await this.read(refresh)).value;
+  /**
+   * `true` always runs `sbx status`. `maxAgeMs` accepts a cached answer only
+   * that recent: a window coming back from a terminal where the operator
+   * just ran `sbx onboard` should not be told about the login it replaced.
+   * Concurrent reads share one run either way.
+   */
+  async readStatus(refresh: boolean | { maxAgeMs: number } = false): Promise<CliStatus> {
+    const maxAgeMs = refresh === true
+      ? 0
+      : refresh === false ? STATUS_CACHE_MS : Math.min(refresh.maxAgeMs, STATUS_CACHE_MS);
+    return (await this.read(maxAgeMs)).value;
+  }
+
+  /** Called when a run of `sbx status` answers differently from the last one. */
+  onStatusChanged(listener: () => void): () => void {
+    this.statusListeners.add(listener);
+    return () => this.statusListeners.delete(listener);
   }
 
   /**
@@ -173,7 +187,7 @@ export class SandboxerConnection {
    */
   async refreshStatus(): Promise<{ status: CliStatus; accountChanged: boolean }> {
     const before = this.cached;
-    const after = await this.read(true);
+    const after = await this.read(0);
     const accountChanged =
       !before?.value.configured
       || !after.value.configured
@@ -182,13 +196,17 @@ export class SandboxerConnection {
     return { status: after.value, accountChanged };
   }
 
-  private async read(refresh: boolean): Promise<Probe> {
-    if (!refresh && this.cached && Date.now() - this.cached.at < 15_000) {
+  private async read(maxAgeMs: number): Promise<Probe> {
+    if (this.cached && Date.now() - this.cached.at < maxAgeMs) {
       return this.cached;
     }
     if (this.pending) return await this.pending;
     const pending = this.probe().then((probe) => {
+      const changed = JSON.stringify(this.cached?.value) !== JSON.stringify(probe.value);
       this.cached = { at: Date.now(), ...probe };
+      if (changed) {
+        for (const listener of this.statusListeners) listener();
+      }
       return probe;
     }).finally(() => {
       if (this.pending === pending) this.pending = undefined;

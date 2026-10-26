@@ -46,6 +46,7 @@ import {
   type UpdateMcpConnectionRequest,
   type McpConnectionRecord,
   type McpConnectionStatus,
+  type McpConnectionsChangedEvent,
   type McpConnectionToolApproval,
   type McpStdioLaunch,
   type McpStdioLaunchInput,
@@ -563,6 +564,7 @@ export class McpConnectionGatewayService {
   private nonOwnerHolder?: RuntimeLeaseHolder;
 
   private readonly sandboxer: SandboxerConnection;
+  private readonly changeListeners = new Set<(event: McpConnectionsChangedEvent) => void>();
   private readonly stdioSecrets: McpStdioSecretVault;
   private readonly stdioSpawn?: StdioSpawn;
   private readonly resolveStdioSearchEnv: () => Promise<NodeJS.ProcessEnv>;
@@ -599,6 +601,7 @@ export class McpConnectionGatewayService {
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url));
     this.sandboxer = options.sandboxer
       ?? new SandboxerConnection(undefined, { openExternal: this.openExternal });
+    this.sandboxer.onStatusChanged(() => this.announceChanged([SANDBOXER_MCP_CONNECTION_ID]));
     this.openPath = options.openPath ?? ((path) => shell.openPath(path));
     this.resolveInstallPaths =
       options.resolveInstallPaths ?? resolveDefaultPwrSnapInstallPaths;
@@ -706,8 +709,38 @@ export class McpConnectionGatewayService {
     return await this.connectPromise;
   }
 
+  /**
+   * Hear when a connection's status may have changed through this instance:
+   * a mutation it made (or forwarded to the owner broker), or a Sandboxer
+   * CLI answer that differs from the last. See `McpConnectionsChangedEvent`.
+   */
+  onConnectionsChanged(
+    listener: (event: McpConnectionsChangedEvent) => void,
+  ): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  /** Announces a mutation's result, so each return point stays one line. */
+  private announced<T extends { id: string }>(status: T): T {
+    this.announceChanged([status.id]);
+    return status;
+  }
+
+  private announceChanged(connectionIds: readonly string[]): void {
+    const event: McpConnectionsChangedEvent = { connectionIds: [...connectionIds] };
+    for (const listener of this.changeListeners) {
+      try {
+        listener(event);
+      } catch (error) {
+        // A window that cannot hear the change must not fail the mutation.
+        connectionLog.warn("MCP connection change listener failed", { error });
+      }
+    }
+  }
+
   async listConnections(
-    options: { cachedLocalStatus?: boolean } = {},
+    options: { cachedLocalStatus?: boolean; sandboxerStatusMaxAgeMs?: number } = {},
   ): Promise<McpConnectionStatus[]> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
@@ -719,7 +752,11 @@ export class McpConnectionGatewayService {
     }
     return await Promise.all(
       this.registry.list().map(async (connection) =>
-        await this.connectionStatus(connection, options.cachedLocalStatus),
+        await this.connectionStatus(
+          connection,
+          options.cachedLocalStatus,
+          options.sandboxerStatusMaxAgeMs,
+        ),
       ),
     );
   }
@@ -729,11 +766,11 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/create",
         request,
-      );
+      ));
     }
     if (request.stdio !== undefined) {
       if (request.serverUrl !== undefined) {
@@ -748,7 +785,7 @@ export class McpConnectionGatewayService {
         this.registry.remove(connection.id);
         throw error;
       }
-      return await this.connectionStatus(connection);
+      return this.announced(await this.connectionStatus(connection));
     }
     if (typeof request.serverUrl !== "string") {
       throw new Error("Enter a remote MCP URL or a local command.");
@@ -757,7 +794,7 @@ export class McpConnectionGatewayService {
       displayName: request.displayName,
       serverUrl: request.serverUrl,
     });
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   /**
@@ -965,11 +1002,11 @@ export class McpConnectionGatewayService {
   async authorizeConnection(connectionId: string): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/authorize",
         { connectionId },
-      );
+      ));
     }
     const connection = this.requireConnection(connectionId);
     if (connection.kind === "stdio") {
@@ -985,7 +1022,7 @@ export class McpConnectionGatewayService {
         await this.closeConnectionSessions(connectionId);
         this.invalidateConnectionTools(connectionId);
       }
-      return await this.connectionStatus(connection);
+      return this.announced(await this.connectionStatus(connection));
     }
     // Restore the first attempt's state before its callback rejection runs.
     this.coordinatorFor(connection).abandonAuthorization();
@@ -1018,7 +1055,7 @@ export class McpConnectionGatewayService {
         "connected",
         `PwrAgent can now offer ${connection.displayName} to the agents and threads you choose.`,
       );
-      return await this.connectionStatus(connection);
+      return this.announced(await this.connectionStatus(connection));
     } catch (cause) {
       callback.complete(
         "failed",
@@ -1026,6 +1063,9 @@ export class McpConnectionGatewayService {
           ? cause.message
           : "The secure connection could not be completed.",
       );
+      // Its sessions are already closed and its state moved; other windows
+      // must hear it as they would a success.
+      this.announceChanged([connectionId]);
       throw cause;
     } finally {
       if (this.pendingAuthorizations.get(connectionId)?.abandon === callback.abandon) {
@@ -1048,14 +1088,14 @@ export class McpConnectionGatewayService {
   async cancelAuthorization(connectionId: string): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/cancel-authorize",
         { connectionId },
-      );
+      ));
     }
     const connection = this.requireConnection(connectionId);
-    if (connection.kind === "sandboxer" || connection.kind === "stdio") return await this.connectionStatus(connection);
+    if (connection.kind === "sandboxer" || connection.kind === "stdio") return this.announced(await this.connectionStatus(connection));
     // Retire the attempt in the coordinator *before* ending its wait, so the
     // rejection that follows lands on a stale attempt and cannot report a
     // called-off authorization as `reauthorization_required`. Doing it the
@@ -1067,7 +1107,7 @@ export class McpConnectionGatewayService {
       connectionId,
       `${connection.displayName} authorization was cancelled.`,
     );
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   private abandonPendingAuthorization(connectionId: string, reason: string): void {
@@ -1089,15 +1129,15 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/update",
         request,
-      );
+      ));
     }
     const existing = this.requireConnection(request.connectionId);
     if (existing.kind === "stdio") {
-      return await this.updateStdioConnection(existing, request);
+      return this.announced(await this.updateStdioConnection(existing, request));
     }
     if (request.stdio !== undefined) {
       throw new Error("A remote server has no command. Remove it and add a local command instead.");
@@ -1113,7 +1153,7 @@ export class McpConnectionGatewayService {
       this.coordinators.delete(request.connectionId);
       this.invalidateConnectionTools(request.connectionId);
     }
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   /**
@@ -1220,27 +1260,27 @@ export class McpConnectionGatewayService {
   async disconnectConnection(connectionId: string): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/disconnect",
         { connectionId },
-      );
+      ));
     }
     const connection = this.requireConnection(connectionId);
     await this.closeConnectionSessions(connectionId);
     if (connection.kind === "sandboxer") {
-      return await this.connectionStatus(this.registry.setEnabled(connectionId, false));
+      return this.announced(await this.connectionStatus(this.registry.setEnabled(connectionId, false)));
     }
     // A local command holds no credentials to discard; stopping its running
     // copies is all a disconnect can mean.
-    if (connection.kind === "stdio") return await this.connectionStatus(connection);
+    if (connection.kind === "stdio") return this.announced(await this.connectionStatus(connection));
     await this.coordinatorFor(connection).disconnect();
     this.invalidateConnectionTools(connectionId);
     if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
       this.sessionRevoked = false;
       await this.settings.clearPwrSnapMcpCredential();
     }
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   /**
@@ -1256,18 +1296,18 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/set-enabled",
         { connectionId, enabled },
-      );
+      ));
     }
     this.requireConnection(connectionId);
     const connection = this.registry.setEnabled(connectionId, enabled);
     if (!enabled) {
       await this.closeConnectionSessions(connectionId);
     }
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   /**
@@ -1284,18 +1324,18 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/set-select-for-new-threads",
         { connectionId, selectForNewThreads },
-      );
+      ));
     }
     this.requireConnection(connectionId);
     const connection = this.registry.setSelectForNewThreads(
       connectionId,
       selectForNewThreads,
     );
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   /**
@@ -1310,14 +1350,14 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/set-sandboxer-cleanup-on-pr-close",
         { enabled },
-      );
+      ));
     }
     const connection = this.registry.setSandboxerCleanupOnPrClose(enabled);
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   /**
@@ -1345,15 +1385,15 @@ export class McpConnectionGatewayService {
   ): Promise<McpConnectionStatus> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<McpConnectionStatus>(
+      return this.announced(await this.requestOwnerBroker<McpConnectionStatus>(
         ownership.holder,
         "broker/set-tool-approval",
         { connectionId, toolApproval },
-      );
+      ));
     }
     this.requireConnection(connectionId);
     const connection = this.registry.setToolApproval(connectionId, toolApproval);
-    return await this.connectionStatus(connection);
+    return this.announced(await this.connectionStatus(connection));
   }
 
   /**
@@ -1462,11 +1502,13 @@ export class McpConnectionGatewayService {
   async removeConnection(connectionId: string): Promise<boolean> {
     const ownership = await this.ensureOwnerBroker();
     if (!ownership.owned) {
-      return await this.requestOwnerBroker<boolean>(
+      const removed = await this.requestOwnerBroker<boolean>(
         ownership.holder,
         "broker/remove",
         { connectionId },
       );
+      this.announceChanged([connectionId]);
+      return removed;
     }
     if (isBuiltInMcpConnectionId(connectionId)) {
       throw new Error("Built-in MCP connections cannot be removed.");
@@ -1479,12 +1521,16 @@ export class McpConnectionGatewayService {
       // Secrets first: if storage refuses, the row stays and Remove can be
       // tried again, rather than leaving a token with no row to reach it.
       await this.stdioSecrets.delete(connectionId);
-      return this.registry.remove(connectionId);
+      const removed = this.registry.remove(connectionId);
+      this.announceChanged([connectionId]);
+      return removed;
     }
     await this.coordinatorFor(connection).disconnect();
     this.coordinators.delete(connectionId);
     this.invalidateConnectionTools(connectionId);
-    return this.registry.remove(connectionId);
+    const removed = this.registry.remove(connectionId);
+    this.announceChanged([connectionId]);
+    return removed;
   }
 
   async registerBridge(
@@ -2209,6 +2255,7 @@ export class McpConnectionGatewayService {
   private async connectionStatus(
     connection: McpConnectionRecord,
     cachedLocalStatus = false,
+    sandboxerStatusMaxAgeMs?: number,
   ): Promise<McpConnectionStatus> {
     if (connection.kind === "sandboxer") {
       // New-thread defaults have a two-second total budget. Refresh enabled
@@ -2219,7 +2266,11 @@ export class McpConnectionGatewayService {
       }
       const status = cachedLocalStatus
         ? this.sandboxer.cachedStatus()
-        : await this.sandboxer.readStatus();
+        : await this.sandboxer.readStatus(
+          sandboxerStatusMaxAgeMs === undefined
+            ? false
+            : { maxAgeMs: sandboxerStatusMaxAgeMs },
+        );
       return {
         ...connection,
         ...status,
@@ -2771,7 +2822,13 @@ export class McpConnectionGatewayService {
       ? params as Record<string, unknown>
       : {};
     if (operation === "broker/list") {
-      return await this.listConnections({ cachedLocalStatus: values.cachedLocalStatus === true });
+      return await this.listConnections({
+        cachedLocalStatus: values.cachedLocalStatus === true,
+        ...(typeof values.sandboxerStatusMaxAgeMs === "number"
+          && Number.isFinite(values.sandboxerStatusMaxAgeMs)
+          ? { sandboxerStatusMaxAgeMs: values.sandboxerStatusMaxAgeMs }
+          : {}),
+      });
     }
     if (operation === "broker/pwrsnap-status") {
       return await this.readStatus();

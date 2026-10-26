@@ -22690,8 +22690,10 @@ a.button {
   flex: 0 0 auto;
 }
 
-/* A remote launchpad can show one tile alone; it takes the row. */
-.pwrsuite-tiles > .mcp-connection:only-child {
+/* A lone tile (a remote launchpad can show one), or the odd one out on the
+   last row (Sandboxer, after the two PwrSuite tiles), takes the full width
+   rather than leaving half a row empty. */
+.pwrsuite-tiles > .mcp-connection:last-child:nth-child(odd) {
   grid-column: 1 / -1;
 }
 

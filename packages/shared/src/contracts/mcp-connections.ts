@@ -1,5 +1,6 @@
 import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationRemoteTarget } from "./federation";
+import { isAcpBackendId } from "./navigation";
 
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
 export const PWRGIT_MCP_CONNECTION_ID = "pwrgit" as const;
@@ -71,6 +72,21 @@ export type SandboxerLinkTarget = (typeof SANDBOXER_LINK_TARGETS)[number];
 export function isSandboxerLinkTarget(value: unknown): value is SandboxerLinkTarget {
   return SANDBOXER_LINK_TARGETS.some((target) => target === value);
 }
+
+export const SANDBOXER_ORIGIN = "https://sandboxer.com";
+
+/**
+ * Every fixed Sandboxer page, for main's link handler and the launchpad
+ * tile. The dashboard link comes from the CLI.
+ */
+export const SANDBOXER_LINKS: Readonly<Record<Exclude<SandboxerLinkTarget, "dashboard">, string>> = {
+  home: `${SANDBOXER_ORIGIN}/`,
+  pricing: `${SANDBOXER_ORIGIN}/pricing`,
+  quickstart: `${SANDBOXER_ORIGIN}/docs/quickstart`,
+  docs_mcp: `${SANDBOXER_ORIGIN}/docs/mcp`,
+  docs_machines: `${SANDBOXER_ORIGIN}/docs/machines`,
+  docs_billing: `${SANDBOXER_ORIGIN}/docs/billing`,
+};
 
 export type OpenSandboxerLinkRequest = { target: SandboxerLinkTarget };
 export type OpenSandboxerLinkResponse = { opened: boolean; error?: string };
@@ -281,10 +297,27 @@ export function mcpConnectionsForPeer(connections: McpConnectionStatus[]): McpCo
 
 export type ListMcpConnectionsRequest = {
   federationTarget?: FederationRemoteTarget;
+  /**
+   * Accept a cached Sandboxer status only this recent, in milliseconds.
+   * Absent uses the ordinary cache. An owner broker from an older build
+   * ignores it.
+   */
+  sandboxerStatusMaxAgeMs?: number;
 };
 
 export type ListMcpConnectionsResponse = {
   connections: McpConnectionStatus[];
+};
+
+/**
+ * Pushed to this instance's windows when a connection's status may have
+ * changed: a setting, a sign-in, a removal, or a Sandboxer CLI answer that
+ * differs from the last one. Carries ids only; re-read the list for status.
+ * A change made from another PwrAgent instance on the same profile is not
+ * announced here, so status reads still happen on window focus.
+ */
+export type McpConnectionsChangedEvent = {
+  connectionIds: McpConnectionId[];
 };
 
 /**
@@ -568,6 +601,15 @@ export function mcpSelectionApplyTiming(
  * nothing keeps. Both the renderer control and the main-process writer read
  * this, so a thread cannot end up holding a flag its backend ignores.
  */
+/**
+ * Whether a thread on this backend loads the gateway connections it selects.
+ * Codex, Claude, and ACP agents all do; the launchpad tiles and the MCP access
+ * panel ask this one question so they cannot disagree.
+ */
+export function backendLoadsMcpConnections(backend: AppServerBackendKind): boolean {
+  return backend === "codex" || backend === "claude" || isAcpBackendId(backend);
+}
+
 export function canIsolateMcpProviderServers(
   backend: AppServerBackendKind,
 ): boolean {
