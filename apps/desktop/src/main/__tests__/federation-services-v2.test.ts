@@ -15,7 +15,7 @@ import {
   ServiceStreamBudget, ServiceStreamEndpoint, ServiceStreamScheduler,
   SERVICE_STREAM_FRAME_BYTES, SERVICE_STREAM_MAX_WINDOW_BYTES,
 } from "../federation/federation-service-stream";
-import { serviceLink } from "./helpers/federation-service-link";
+import { ServiceLinkGate, serviceData, serviceLink, serviceNotification } from "./helpers/federation-service-link";
 
 const thread: ServiceThread = { backend: "codex", threadId: "fixture-thread" };
 const cleanups: Array<() => void | Promise<void>> = [];
@@ -143,6 +143,43 @@ describe("windowed flow control", () => {
   const window = 256 * 1024;
   const frameBytes = 16 * 1024;
 
+  it("waits for fragmented held data and starts a fresh byte count after flushing", async () => {
+    const gate = new ServiceLinkGate();
+    const controller = new AbortController();
+    cleanups.push(() => controller.abort());
+    gate.hold();
+    let ready = false;
+    const full = gate.waitForBytes(4, controller.signal).then(() => { ready = true; });
+    const pass = (bytes: number) => gate.pass(serviceData("viewer", "owner", {
+      streamId: "fixture", seq: 0, data: new Uint8Array(bytes),
+    }), () => undefined);
+    pass(2);
+    gate.pass(serviceNotification("viewer", "owner", FRAMES.window, {}), () => undefined);
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    pass(2);
+    await full;
+    expect(gate.bytes).toBe(4);
+    await gate.waitForBytes(4, controller.signal);
+    gate.flush();
+    const next = gate.waitForBytes(4, controller.signal);
+    pass(5);
+    await next;
+    // Overshoot must reach the exact-window assertion rather than hang the wait.
+    expect(gate.bytes).toBe(5);
+  });
+
+  it("cancels a pending held-byte wait when its test owner finishes", async () => {
+    const gate = new ServiceLinkGate();
+    const controller = new AbortController();
+    gate.hold();
+    const pending = gate.waitForBytes(4, controller.signal);
+    const reason = new Error("fixture finished");
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    await expect(gate.waitForBytes(4, controller.signal)).rejects.toBe(reason);
+  });
+
   it("keeps one window of downloads in flight per round trip, whatever the round trip", async () => {
     const payload = randomBytes(4 * window + 12_345);
     const server = createServer({ allowHalfOpen: true }, (socket) => { socket.resume(); socket.end(payload); });
@@ -186,8 +223,10 @@ describe("windowed flow control", () => {
     link.up.hold();
     const local = client(forward.localPort);
     local.socket.end(payload);
+    const controller = new AbortController();
+    cleanups.push(() => controller.abort());
     for (let round = 0; round < 3; round += 1) {
-      await vi.waitFor(() => expect(link.up.bytes).toBe(window));
+      await link.up.waitForBytes(window, controller.signal);
       await settle();
       expect(link.up.bytes).toBe(window);
       link.up.flush();
