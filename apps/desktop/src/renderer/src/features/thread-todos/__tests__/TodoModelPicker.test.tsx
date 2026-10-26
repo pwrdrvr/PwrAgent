@@ -131,6 +131,29 @@ describe("to-do dispatch model picker", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it("uses one owner catalog for a remote card's chip and provenance", async () => {
+    const federationTarget = { scope: "remote" as const, instanceId: "owner" };
+    const todo = { ...base, federationTarget, dispatchDefaults: {
+      thread: { ...thread, model: "owner-opus" }, lastDispatch: codex,
+    } };
+    const ownerBackends = backends.map((backend) => backend.kind === "claude" ? {
+      ...backend, launchpadOptions: { models: [{ id: "owner-opus", label: "Opus owner", reasoningEfforts: ["high"] }] },
+    } : backend);
+    const api = {
+      listBackends: vi.fn(async () => ({ backends: ownerBackends })),
+      listModelSettingsRecents: vi.fn(async () => ({ recents: [codex] })),
+    };
+    render(<TodoDispatchProvider api={api} backends={backends} todos={[todo]}>
+      <ThreadTodoCard todo={todo} running={false} onRun={vi.fn()} onResolve={vi.fn()}
+        onStartReview={vi.fn()} onSetItemChecked={vi.fn()} />
+    </TodoDispatchProvider>);
+    expect(await screen.findByRole("button", { name: "↺ Claude · Opus owner · high" })).toBeTruthy();
+    expect(api.listBackends).toHaveBeenCalledExactlyOnceWith({ federationTarget });
+    const menu = await openPicker();
+    expect(within(menu).getByRole("menuitemradio", { name: /Claude · Opus owner · high/ })).toBeTruthy();
+    expect(api.listModelSettingsRecents).toHaveBeenCalledWith({ scope: "todo-dispatch", federationTarget });
+  });
+
   it("freezes a failed attempt for Retry even if another dispatch changes memory", () => {
     const { rerender, tree, onRun } = setup();
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));

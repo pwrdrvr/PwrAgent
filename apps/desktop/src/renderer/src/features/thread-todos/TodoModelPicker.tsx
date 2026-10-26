@@ -1,12 +1,12 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { BackendSummary, ModelSettingsRecent, ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared";
+import type { ModelSettingsRecent, ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared";
 import { resolveThreadTodoModelSettings, sameThreadTodoModelSettings } from "@pwragent/shared";
 import { CheckIcon, ChevronDownIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
-import { useTodoDispatchContext } from "./TodoDispatchProvider";
+import { useTodoDispatchBackends, useTodoDispatchContext } from "./TodoDispatchProvider";
 import { customTodoDispatchSettings, formatTodoDispatchSettings, todoDispatchRecentResolves } from "./todo-dispatch-model";
 
 type PickerProps = {
@@ -20,14 +20,13 @@ export function TodoModelPicker(props: PickerProps) {
   const { todo, selection } = props;
   const context = useTodoDispatchContext();
   const [open, setOpen] = useState(false);
-  const [ownerBackends, setOwnerBackends] = useState<BackendSummary[]>();
   const [recents, setRecents] = useState<ModelSettingsRecent[]>([]);
   const [error, setError] = useState<string>();
   const [position, setPosition] = useState({ left: 0, top: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const id = useId();
-  const backends = todo.federationTarget ? ownerBackends ?? [] : context.backends;
+  const backends = useTodoDispatchBackends(todo, open);
   const thread = todo.dispatchDefaults?.thread ?? { backend: todo.backend };
   const suggested = resolveThreadTodoModelSettings({ thread, action: todo.action }).settings;
   const hasSuggestion = !sameThreadTodoModelSettings(suggested, thread);
@@ -35,16 +34,6 @@ export function TodoModelPicker(props: PickerProps) {
   const label = formatTodoDispatchSettings(selection.settings, backends);
   const close = () => setOpen(false);
   useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
-
-  // A remote card's catalog and recents belong to the card's owner.
-  useEffect(() => {
-    if (!todo.federationTarget || !context.api?.listBackends) return;
-    let cancelled = false;
-    void context.api.listBackends({ federationTarget: todo.federationTarget }).then((response) => {
-      if (!cancelled) setOwnerBackends(response.backends);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [context.api, todo.federationTarget]);
 
   useEffect(() => {
     if (!open) return;
@@ -136,7 +125,7 @@ export function TodoModelPicker(props: PickerProps) {
 
 export function TodoModelProvenance(props: PickerProps) {
   const { todo, selection } = props;
-  const { backends } = useTodoDispatchContext();
+  const backends = useTodoDispatchBackends(todo);
   const thread = todo.dispatchDefaults?.thread ?? { backend: todo.backend };
   const suggested = resolveThreadTodoModelSettings({ thread, action: todo.action }).settings;
   const hasSuggestion = !sameThreadTodoModelSettings(suggested, thread);
