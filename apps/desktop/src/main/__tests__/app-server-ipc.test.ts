@@ -1179,6 +1179,7 @@ vi.mock("../app-server/backend-registry", () => {
     setForgeReadHandlers,
     setGithubToolHandler,
     setForgeToolPolicyResolver,
+    getLocalFilePrivateStorageRoots: () => [],
     setThreadPullRequestStatusToolHandler,
     setThreadPullRequestCanonicalizer,
     setThreadPrimaryGitRepositoryReader: vi.fn(),
