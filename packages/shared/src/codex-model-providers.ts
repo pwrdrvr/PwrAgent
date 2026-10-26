@@ -213,10 +213,18 @@ export function codexModelProviderApiKeyEnv(providerId: string): string {
   return `PWRAGENT_CODEX_PROVIDER_${providerId.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_API_KEY`;
 }
 
+/** A trimmed upstream model id a provider may list. */
+export function isValidCodexProviderModelId(model: string): boolean {
+  return Boolean(model)
+    && model.length <= MAX_MODEL_ID_LENGTH
+    && !/[\0\r\n]/.test(model)
+    && !model.startsWith("@");
+}
+
 function validateModelId(value: unknown, field: string): string {
   if (typeof value !== "string") throw new Error(`${field} must be a string.`);
   const model = value.trim();
-  if (!model || model.length > MAX_MODEL_ID_LENGTH || /[\0\r\n]/.test(model) || model.startsWith("@")) {
+  if (!isValidCodexProviderModelId(model)) {
     throw new Error(`${field} must be a nonempty model id that does not start with @.`);
   }
   return model;

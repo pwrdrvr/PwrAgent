@@ -96,6 +96,16 @@ describe("codexModelProviderImportsFromConfig", () => {
     ]);
   });
 
+  it("asks for a key when env_key is not a plain variable name", () => {
+    const [candidate] = importsFrom([
+      "[model_providers.odd]",
+      "base_url = \"https://odd.example/v1\"",
+      "env_key = \"odd-api-key\"",
+    ].join("\n"));
+    expect(candidate).toMatchObject({ sourceId: "odd", needsApiKey: true });
+    expect(candidate).not.toHaveProperty("apiKeyEnv");
+  });
+
   it("treats an absent wire_api as responses", () => {
     const [candidate] = importsFrom("[model_providers.gpu]\nbase_url = \"http://gpu.lan:8000/v1\"\n");
     expect(candidate).toMatchObject({ sourceId: "gpu", local: false, needsApiKey: false });
@@ -166,6 +176,24 @@ describe("scanCodexModelProviderImports", () => {
 });
 
 describe("codexConfigHomesFromProfiles", () => {
+  it("reads one directory once however its path is spelled", () => {
+    const snapshot: DesktopCodexAuthProfileDiscoverySnapshot = {
+      profileRoot: "/home/me/.codex/profiles",
+      effectiveCodexHome: "/home/me/.codex",
+      profiles: [{
+        name: "default",
+        displayName: "Default",
+        codexHome: "/home/me/.codex/",
+        source: "default",
+        exists: true,
+        selected: true,
+        hasAuthFile: true,
+        hasConfigFile: true,
+      }],
+    };
+    expect(codexConfigHomesFromProfiles(snapshot)).toEqual([{ codexHome: "/home/me/.codex", label: "Default" }]);
+  });
+
   it("lists the active home first and each existing profile once", () => {
     const snapshot: DesktopCodexAuthProfileDiscoverySnapshot = {
       profileRoot: "/home/me/.codex/profiles",

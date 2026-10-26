@@ -14,6 +14,7 @@ import path from "node:path";
 import {
   CODEX_MODEL_PROVIDER_MODEL_LIMIT,
   isLoopbackCodexBaseUrl,
+  isValidCodexProviderModelId,
   validateCodexBaseUrl,
   type CodexModelProviderImportCandidate,
   type CodexModelProviderImportScan,
@@ -43,12 +44,18 @@ export function codexConfigHomesFromProfiles(
   snapshot: DesktopCodexAuthProfileDiscoverySnapshot,
 ): CodexConfigHome[] {
   const homes: CodexConfigHome[] = [];
+  // One directory can be spelled two ways, such as with a trailing slash.
+  const seen = new Set<string>();
   const add = (codexHome: string, label: string) => {
-    if (codexHome && !homes.some((home) => home.codexHome === codexHome)) {
+    const key = codexHome ? path.resolve(codexHome) : "";
+    if (key && !seen.has(key)) {
+      seen.add(key);
       homes.push({ codexHome, label });
     }
   };
-  const active = snapshot.profiles.find((profile) => profile.codexHome === snapshot.effectiveCodexHome);
+  const activeKey = snapshot.effectiveCodexHome ? path.resolve(snapshot.effectiveCodexHome) : "";
+  const active = snapshot.profiles.find((profile) =>
+    profile.codexHome && path.resolve(profile.codexHome) === activeKey);
   add(snapshot.effectiveCodexHome, active?.displayName || "Codex home");
   for (const profile of snapshot.profiles) {
     if (profile.exists) add(profile.codexHome, profile.displayName || profile.name);
@@ -71,9 +78,12 @@ export async function scanCodexModelProviderImports(
       skipped.set(key, skip);
     }
   };
-  for (const home of homes) {
+  const reads = await Promise.all(homes.map(async (home) => {
     const source = { label: home.label, configPath: path.join(home.codexHome, "config.toml") };
-    const read = await readConfig(source.configPath);
+    return { source, read: await readConfig(source.configPath) };
+  }));
+  // Merge in home order, so the active home names a shared endpoint.
+  for (const { source, read } of reads) {
     if (read.kind === "missing") continue;
     if (read.kind === "error") {
       addSkip({ reason: read.reason, sources: [source] });
@@ -175,8 +185,10 @@ export function codexModelProviderImportsFromConfig(
     if (entry.gateway_oauth !== undefined) {
       return skip("It signs in with gateway OAuth, which a PwrAgent provider cannot do.", name);
     }
-    const envKey = typeof entry.env_key === "string" && ENV_NAME.test(entry.env_key.trim())
-      ? entry.env_key.trim()
+    const hasEnvKey = typeof entry.env_key === "string" && entry.env_key.trim() !== "";
+    // Only a plain variable name is shown; anything else is still a key.
+    const envKey = hasEnvKey && ENV_NAME.test(String(entry.env_key).trim())
+      ? String(entry.env_key).trim()
       : undefined;
     const hasBearerToken = entry.experimental_bearer_token !== undefined;
     const usesOpenAiAuth = entry.requires_openai_auth === true;
@@ -194,7 +206,7 @@ export function codexModelProviderImportsFromConfig(
       baseUrl,
       models: modelsByProvider.get(sourceId) ?? [],
       local: isLoopbackCodexBaseUrl(baseUrl),
-      needsApiKey: Boolean(envKey) || hasBearerToken || usesOpenAiAuth || usesAuthCommand,
+      needsApiKey: hasEnvKey || hasBearerToken || usesOpenAiAuth || usesAuthCommand,
       ...(envKey ? { apiKeyEnv: envKey } : {}),
       notes,
       sources: [source],
@@ -222,7 +234,7 @@ function profileModelsByProvider(config: CodexTomlTable): Map<string, string[]> 
   const add = (provider: unknown, model: unknown) => {
     if (typeof provider !== "string" || typeof model !== "string") return;
     const id = model.trim();
-    if (!id || id.length > 256 || /[\0\r\n]/u.test(id) || id.startsWith("@")) return;
+    if (!isValidCodexProviderModelId(id)) return;
     const list = models.get(provider) ?? [];
     if (!list.includes(id) && list.length < CODEX_MODEL_PROVIDER_MODEL_LIMIT) list.push(id);
     models.set(provider, list);

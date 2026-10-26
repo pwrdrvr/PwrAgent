@@ -457,6 +457,54 @@ describe("settings ipc", () => {
     expect(handlers.has(SETTINGS_READ_BOOTSTRAP_CHANNEL)).toBe(false);
   });
 
+  it("scans only the Codex homes main lists for providers to import", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
+    tempRoots.push(tempRoot);
+    const codexHome = path.join(tempRoot, "codex");
+    const elsewhere = path.join(tempRoot, "elsewhere");
+    fs.mkdirSync(codexHome);
+    fs.mkdirSync(elsewhere);
+    fs.writeFileSync(
+      path.join(codexHome, "config.toml"),
+      "[model_providers.bonsai]\nbase_url = \"http://127.0.0.1:18080/v1\"\nexperimental_bearer_token = \"sk-file-token\"\n",
+    );
+    fs.writeFileSync(
+      path.join(elsewhere, "config.toml"),
+      "[model_providers.other]\nbase_url = \"https://other.example/v1\"\n",
+    );
+    const stateDb = openInMemoryStateDb();
+    stateDbs.push(stateDb);
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      tokenMiserStore: new TokenMiserStore(path.join(tempRoot, "token-miser"), { stateDb }),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+    vi.spyOn(service, "readCodexProfiles").mockReturnValue({
+      profileRoot: path.join(tempRoot, "profiles"),
+      effectiveCodexHome: codexHome,
+      profiles: [],
+    });
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../ipc/settings");
+    const { SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL } = await import("../../shared/ipc");
+    registerSettingsIpcHandlers(service);
+
+    // A renderer cannot point the scan at another directory.
+    const scan = await handlers.get(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL)?.(
+      {},
+      { codexHome: elsewhere, configPath: path.join(elsewhere, "config.toml") },
+    );
+    expect(scan).toMatchObject({
+      candidates: [{ sourceId: "bonsai", baseUrl: "http://127.0.0.1:18080/v1", local: true, needsApiKey: true }],
+      skipped: [],
+    });
+    expect(JSON.stringify(scan)).not.toMatch(/other\.example|sk-file-token/u);
+
+    disposeSettingsIpcHandlers();
+    expect(handlers.has(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL)).toBe(false);
+  });
+
   it("downloads and selects the PwrAgent Codex build through Settings, then restores local discovery when disabled", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-settings-ipc-"));
     tempRoots.push(tempRoot);
