@@ -124,7 +124,7 @@ export function navigationQueryFixture(
     }
     threads = [...selected.values()];
   }
-  const descriptors = (population.directories ?? [])
+  const descriptors = (query.kind === "directory-index" || query.kind === "star-map-geometry" ? population.directories ?? [] : [])
     .filter((directory) => query.kind !== "directory-index" || ((!query.keys || query.keys.includes(directory.key))
       && (!query.filter || `${directory.label}\n${directory.path ?? ""}`.toLowerCase().includes(query.filter.toLowerCase()))))
     .map((directory) => {

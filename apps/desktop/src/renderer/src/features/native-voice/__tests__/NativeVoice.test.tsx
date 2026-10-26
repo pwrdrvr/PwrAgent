@@ -545,20 +545,25 @@ it("draws the director panel's tooltips above the panel", async () => {
   styles.textContent = ["../../../styles/app.css", "../native-voice.css"]
     .map((file) => cssWithOnlyProperties(readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8"), ["z-index"]))
     .join("\n");
-  document.head.append(styles);
   try {
     const f = voiceFixture();
     // The masthead mic's hover card can drop over the panel too.
     render(<><DirectorVoiceButton api={f.api} /><DirectorVoicePanel api={f.api} /></>);
     await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
     await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
-    const panelLayer = Number(getComputedStyle(directorPanel()!).zIndex);
+    const panel = directorPanel()!;
+    const controls = ["Director voice", "Mute microphone", "Copy transcript", "End director voice", "Resize director voice"]
+      .map((name) => ({ name, button: screen.getByRole("button", { name }) }));
+    // Find the controls before loading the full cascade. Only the panel and
+    // its portalled tooltip need style resolution for this layer contract.
+    document.head.append(styles);
+    const panelLayer = Number(getComputedStyle(panel).zIndex);
     expect(panelLayer).toBeGreaterThan(0);
-    for (const name of ["Director voice", "Mute microphone", "Copy transcript", "End director voice", "Resize director voice"]) {
-      fireEvent.mouseEnter(screen.getByRole("button", { name }));
+    for (const { name, button } of controls) {
+      fireEvent.mouseEnter(button);
       const tooltip = await screen.findByRole("tooltip");
       expect(Number(getComputedStyle(tooltip).zIndex), name).toBeGreaterThan(panelLayer);
-      fireEvent.mouseLeave(screen.getByRole("button", { name }));
+      fireEvent.mouseLeave(button);
       await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
     }
   } finally {

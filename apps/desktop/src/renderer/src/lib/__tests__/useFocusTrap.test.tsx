@@ -126,6 +126,23 @@ describe("useFocusTrap", () => {
     expect(focusedLabel()).toBe("First");
   });
 
+  it("reads shared ancestor styles once per Tab scan", () => {
+    render(<Dialog open />);
+    button("Last").focus();
+    const readStyle = vi.spyOn(window, "getComputedStyle");
+
+    expect(pressTab().defaultPrevented).toBe(true);
+
+    expect(focusedLabel()).toBe("First");
+    expect(readStyle.mock.calls.filter(([el]) => el === document.body)).toHaveLength(1);
+    readStyle.mockClear();
+
+    expect(pressTab({ shift: true }).defaultPrevented).toBe(true);
+
+    expect(focusedLabel()).toBe("Last");
+    expect(readStyle.mock.calls.filter(([el]) => el === document.body)).toHaveLength(1);
+  });
+
   it("uses current visibility when a control appears between Tab presses", () => {
     const { rerender } = render(<Dialog open hideMiddle />);
     button("Last").focus();

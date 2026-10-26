@@ -24,7 +24,7 @@ import type {
 import { useMemo } from "react";
 import { useComposerDraftStore } from "../../features/composer/useComposerDraftStore";
 import { navigationOwnerApiFixture, type NavigationOwnerFixtureApi as DesktopApi } from "../../test/navigation-owner-api-fixture";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   beginNativeDragInteraction,
   endNativeDragInteraction,
@@ -11954,6 +11954,8 @@ describe("useThreadNavigation", () => {
   });
 
   it("applies pull request update notification payloads before unchanged refreshes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => vi.useRealTimers());
     const listeners = new Set<(event: AgentEvent) => void>();
     const initialPr: PrSummary = {
       provider: "github.com",
@@ -12017,10 +12019,9 @@ describe("useThreadNavigation", () => {
 
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
-    await waitFor(() => {
-      expect(result.current.selectedThreadConfigurationReady).toBe(true);
-      expect(result.current.selectedThread?.prs).toEqual([initialPr]);
-    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(result.current.selectedThreadConfigurationReady).toBe(true);
+    expect(result.current.selectedThread?.prs).toEqual([initialPr]);
 
     await act(async () => {
       for (const listener of listeners) {
@@ -12037,12 +12038,20 @@ describe("useThreadNavigation", () => {
       }
     });
 
-    await waitFor(() => {
-      expect(result.current.selectedThread?.prs).toEqual([updatedPr]);
-    });
+    expect(result.current.selectedThread?.prs).toEqual([updatedPr]);
+    // The event patches immediately; both the zero-delay page refresh and
+    // the 250ms selected-detail refresh still belong to this test.
+    expect(readPopulation).toHaveBeenCalledTimes(1);
+    expect(result.current.selectedThreadConfigurationReady).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(readPopulation).toHaveBeenCalledTimes(2);
+    expect(result.current.selectedThreadConfigurationReady).toBe(true);
+    expect(result.current.selectedThread?.prs).toEqual([updatedPr]);
   });
 
   it("fans out pull request status updates to every visible matching PR key", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => vi.useRealTimers());
     const listeners = new Set<(event: AgentEvent) => void>();
     const initialPr: PrSummary = {
       provider: "github.com",
@@ -12137,10 +12146,13 @@ describe("useThreadNavigation", () => {
 
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
-    await waitFor(() => {
-      expect(result.current.threads).toHaveLength(3);
-    });
+    // Row presence precedes the independent selected-detail read. Finish
+    // bootstrap before measuring which PRs the event dispatcher visits.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(result.current.threads).toHaveLength(3);
+    expect(result.current.selectedThreadConfigurationReady).toBe(true);
 
+    const provider = Object.getOwnPropertyDescriptor(unrelatedPr, "provider")!;
     Object.defineProperty(unrelatedPr, "provider", {
       configurable: true,
       get: () => {
@@ -12148,32 +12160,36 @@ describe("useThreadNavigation", () => {
       },
     });
 
-    await act(async () => {
-      for (const listener of listeners) {
-        listener({
-          backend: "codex",
-          notification: {
-            method: "pullRequest/status/updated",
-            params: {
-              prKey: buildPullRequestStatusKey(updatedPr),
-              pr: updatedPr,
+    try {
+      await act(async () => {
+        for (const listener of listeners) {
+          listener({
+            backend: "codex",
+            notification: {
+              method: "pullRequest/status/updated",
+              params: {
+                prKey: buildPullRequestStatusKey(updatedPr),
+                pr: updatedPr,
+              },
             },
-          },
-        });
-      }
-    });
+          });
+        }
+      });
 
-    await waitFor(() => {
       expect(result.current.threads.find((thread) => thread.id === "thread-1")?.prs)
         .toEqual([updatedPr]);
       expect(result.current.threads.find((thread) => thread.id === "thread-2")?.prs)
         .toEqual([updatedPr]);
       expect(result.current.threads.find((thread) => thread.id === "thread-3")?.prs?.[0])
         .toBe(unrelatedPr);
-    });
-    await waitFor(() => {
-      expect(readPopulation).toHaveBeenCalledTimes(2);
-    });
+    } finally {
+      // Canonical detail reads may inspect their own PRs. Only the status
+      // dispatch above promises not to scan unrelated chips.
+      Object.defineProperty(unrelatedPr, "provider", provider);
+    }
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(result.current.selectedThreadConfigurationReady).toBe(true);
+    expect(readPopulation).toHaveBeenCalledTimes(2);
   });
 
   it("patches the snapshot for thread/executionMode/queued and queueCleared", async () => {

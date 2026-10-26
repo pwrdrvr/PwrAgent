@@ -28,9 +28,7 @@ const OPEN_POPUP_TRIGGER =
  * excluded it. `opacity` is left out on purpose: a control faded to 0
  * mid-transition is still a real control.
  */
-type VisibilityStyles = Map<HTMLElement, CSSStyleDeclaration>;
-
-function visible(el: HTMLElement, styles: VisibilityStyles): boolean {
+function visible(el: HTMLElement, styles: Map<HTMLElement, CSSStyleDeclaration>): boolean {
   if (typeof el.checkVisibility === "function") {
     return el.checkVisibility({ visibilityProperty: true });
   }
@@ -40,7 +38,7 @@ function visible(el: HTMLElement, styles: VisibilityStyles): boolean {
     node = node.parentElement
   ) {
     let style = styles.get(node);
-    if (style === undefined) {
+    if (!style) {
       style = getComputedStyle(node);
       styles.set(node, style);
     }
@@ -49,7 +47,7 @@ function visible(el: HTMLElement, styles: VisibilityStyles): boolean {
   return true;
 }
 
-function isStop(el: HTMLElement, styles: VisibilityStyles): boolean {
+function isStop(el: HTMLElement, styles: Map<HTMLElement, CSSStyleDeclaration>): boolean {
   if (el.hasAttribute("disabled") || el.getAttribute("aria-hidden") === "true") {
     return false;
   }
@@ -97,9 +95,9 @@ function tabbable(
   { scrollers = true }: { scrollers?: boolean } = {},
 ): HTMLElement[] {
   if (root === null) return [];
-  // Sibling controls share ancestors. Read each ancestor's cascade once per
-  // scan, and discard it before the next Tab so dynamic visibility stays live.
-  const styles: VisibilityStyles = new Map();
+  // Sibling controls share ancestors. Resolve each ancestor's cascade once
+  // during this scan, then discard it so the next Tab sees current styles.
+  const styles = new Map<HTMLElement, CSSStyleDeclaration>();
   if (!scrollers) {
     return [...root.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => isStop(el, styles));
   }
