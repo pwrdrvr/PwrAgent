@@ -21,10 +21,15 @@ export type PrBranchDrift = {
  * that checkout, so a PR on another branch or repository, or one that has
  * finished, gets none. `isThreadRepository` says whether a PR belongs to the
  * thread's own repository or the fork it pushes to.
+ *
+ * `baseBranch` is Git's best guess at the branch's base. When the PR names a
+ * different base, the counts measure the wrong thing (behind `main` for a PR
+ * into `release/1.0`), so that PR gets none either.
  */
 export function findBranchDriftPr(params: {
   prs: readonly PrSummary[];
   branch: string | undefined;
+  baseBranch: string | undefined;
   isThreadRepository: (pr: PrSummary) => boolean;
 }): PrSummary | undefined {
   const branch = params.branch?.trim();
@@ -35,7 +40,22 @@ export function findBranchDriftPr(params: {
   return params.prs.find((pr) =>
     pr.headRefName?.trim() === branch
     && resolveLifecycleState(pr) === "open"
+    && isSameBase(params.baseBranch, pr.baseRefName)
     && params.isThreadRepository(pr));
+}
+
+/**
+ * Git reports the base as a local or remote-tracking ref (`main`,
+ * `origin/main`); the PR names the branch alone. An unknown side cannot
+ * disagree.
+ */
+function isSameBase(gitBase: string | undefined, prBase: string | undefined): boolean {
+  const git = gitBase?.trim();
+  const pr = prBase?.trim();
+  if (!git || !pr) {
+    return true;
+  }
+  return git === pr || git.endsWith(`/${pr}`);
 }
 
 /**

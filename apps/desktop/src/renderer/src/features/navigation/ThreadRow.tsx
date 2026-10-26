@@ -316,12 +316,14 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // place the counts appear. Built from scalars so the memoized chips see one
   // object until a count moves.
   const gitWorking = props.thread.gitWorkingState;
+  const driftBaseBranch = gitWorking?.baseBranch;
+  const threadRepositoryKey = primaryRepositoryKey(props.thread);
   const branchDriftPrUrl = findBranchDriftPr({
     prs,
     branch: props.thread.observedGitBranch?.trim() || props.thread.gitBranch,
-    isThreadRepository: (pr) => isThreadRepositoryPr(props.thread, pr),
+    baseBranch: driftBaseBranch,
+    isThreadRepository: (pr) => isThreadRepositoryPr(threadRepositoryKey, pr),
   })?.url;
-  const driftBaseBranch = gitWorking?.baseBranch;
   const driftBehind = gitWorking?.baseBehindCommitCount;
   const driftAhead = gitWorking?.baseAheadCommitCount;
   const branchDrift = useMemo<PrBranchDrift | undefined>(
@@ -1274,20 +1276,23 @@ function needsRepoPrefix(
   return prs.some((pr) => `${pr.org}/${pr.repo}` !== firstKey);
 }
 
+function primaryRepositoryKey(thread: NavigationThreadSummary): string | undefined {
+  const primaryRepository = parseRepositoryIdentity(thread.gitOriginUrl);
+  return primaryRepository ? repositoryIdentityKey(primaryRepository) : undefined;
+}
+
 /**
  * Whether a PR belongs to the thread's checkout: its repository, or the fork
  * it pushes to. Without a parseable origin, the head-branch match alone
  * decides.
  */
 function isThreadRepositoryPr(
-  thread: NavigationThreadSummary,
+  primaryKey: string | undefined,
   pr: PrSummary,
 ): boolean {
-  const primaryRepository = parseRepositoryIdentity(thread.gitOriginUrl);
-  if (!primaryRepository) {
+  if (primaryKey === undefined) {
     return true;
   }
-  const primaryKey = repositoryIdentityKey(primaryRepository);
   return repositoryIdentityKey(pr) === primaryKey
     || (pr.sourceRepository !== undefined
       && repositoryIdentityKey(pr.sourceRepository) === primaryKey);

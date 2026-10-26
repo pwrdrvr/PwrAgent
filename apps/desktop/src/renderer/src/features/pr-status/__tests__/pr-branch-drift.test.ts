@@ -30,6 +30,7 @@ describe("findBranchDriftPr", () => {
     expect(findBranchDriftPr({
       prs: [other, onBranch],
       branch: " feat/drift ",
+      baseBranch: "origin/main",
       isThreadRepository: anyRepository,
     })).toBe(onBranch);
   });
@@ -40,18 +41,37 @@ describe("findBranchDriftPr", () => {
     expect(findBranchDriftPr({
       prs: [merged, upstream],
       branch: "feat/drift",
+      baseBranch: "main",
       isThreadRepository: (candidate) => candidate.org === "acme",
     })).toBeUndefined();
     expect(findBranchDriftPr({
       prs: [pr(5, { headRefName: "HEAD" })],
       branch: "HEAD",
+      baseBranch: "main",
       isThreadRepository: anyRepository,
     })).toBeUndefined();
     expect(findBranchDriftPr({
       prs: [pr(6, { headRefName: undefined })],
       branch: undefined,
+      baseBranch: undefined,
       isThreadRepository: anyRepository,
     })).toBeUndefined();
+  });
+
+  it("skips a PR into a different base than the one Git measured", () => {
+    const intoRelease = pr(7, { headRefName: "feat/drift", baseRefName: "release/1.0" });
+    const intoMain = pr(8, { headRefName: "feat/drift", baseRefName: "main" });
+    const find = (baseBranch: string | undefined, prs: PrSummary[]) => findBranchDriftPr({
+      prs,
+      branch: "feat/drift",
+      baseBranch,
+      isThreadRepository: anyRepository,
+    });
+    expect(find("origin/main", [intoRelease])).toBeUndefined();
+    expect(find("origin/main", [intoRelease, intoMain])).toBe(intoMain);
+    // An unknown side cannot disagree.
+    expect(find(undefined, [intoRelease])).toBe(intoRelease);
+    expect(find("main", [pr(9, { headRefName: "feat/drift" })])?.number).toBe(9);
   });
 });
 
