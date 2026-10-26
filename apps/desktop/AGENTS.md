@@ -779,11 +779,12 @@ Density is `<html data-density>`: absent for Mission Control, `compact`, or
 - **Compact** hides every `.thread-row__chip` without the
   `thread-row__chip--persistent` marker. PR chips and reactions stay.
 - **Minimal** hides every flow chip without the `thread-row__chip--essential`
-  marker (held or unsent messages, approvals, questions). The title line shows
-  `PrRollupChip` instead, mounted only while `ThreadRowDensityContext` says
-  `minimal`: one chip that wears the least ready PR's state
-  (`pr-rollup.ts`), with a hover list of every PR. Add `--essential` only to a
-  chip that is waiting on the operator.
+  marker (held messages, approvals, questions). The title line instead shows,
+  each mounted only while `ThreadRowDensityContext` says `minimal`: a pencil
+  before the title for an unsent draft, the reactions, and `PrRollupChip`, one
+  chip that wears the least ready PR's state (`pr-rollup.ts`) with a hover list
+  of every PR. Add `--essential` only to a chip that is waiting on the
+  operator.
 - **X-ray** (`lib/xray-mode.ts`): holding ⌘ (Ctrl off macOS) sets
   `<html data-xray>`, which every density rule excludes, so the rows show all
   chips. A double press, or the badge's pin, keeps it on.

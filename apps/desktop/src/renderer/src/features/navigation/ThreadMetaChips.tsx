@@ -342,7 +342,7 @@ export function ThreadMetaChips({
           // never be heard. Same reason the pin and terminal markers below
           // carry one.
           role="img"
-          className="thread-row__chip thread-row__chip--draft thread-row__chip--persistent thread-row__chip--essential"
+          className="thread-row__chip thread-row__chip--draft thread-row__chip--persistent"
           data-thread-draft="unsent"
           onMouseEnter={(event) =>
             draftTooltip.show(

@@ -16,7 +16,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { isKeptAtTopThread } from "@pwragent/shared";
-import { LockIcon, MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
+import { DraftIcon, LockIcon, MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
   formatMessagingPlatformName,
@@ -231,6 +231,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       : pinAction;
   const pinTooltipController = useViewportTooltip({ className: "viewport-tooltip" });
   const lockTooltipController = useViewportTooltip({ className: "viewport-tooltip" });
+  const hasUnsentDraft = props.draftThreadKeys?.[threadKey] === true;
   const threadLock = props.thread.lock;
   const lockLabel = threadLock
     ? threadLock.note ? `Locked: ${threadLock.note}` : "Locked"
@@ -523,6 +524,20 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
               remoteWork={isThreadRemoteWorkHere(props.thread)}
               status={status}
             />
+            {/* Minimal density's unsent-draft mark: the Draft chip's pencil
+                alone, before the title, so a draft costs no second line. CSS
+                hides it while X-ray is held, when the chip comes back. The
+                label avoids "reply"; see the Draft chip in ThreadMetaChips. */}
+            {density === "minimal" && hasUnsentDraft ? (
+              <span
+                aria-label="Unsent draft"
+                className="thread-row__title-draft tooltip-target"
+                data-tooltip="Unsent draft in this thread"
+                role="img"
+              >
+                <DraftIcon size={12} aria-hidden="true" />
+              </span>
+            ) : null}
             {props.renaming && props.onCommitRename ? (
               <InlineRenameInput
                 ariaLabel="Thread name"
@@ -580,6 +595,22 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 open={pickerOpen}
                 onToggle={toggleReactionPicker}
               />
+            ) : null}
+
+            {/* Minimal density's reactions ride the title line, beside the
+                add-reaction control, and the title gives up the room. CSS
+                hides them while X-ray is held, when the chip flow's own
+                reaction chips come back. */}
+            {density === "minimal" && reactions.length > 0 ? (
+              <span className="thread-row__title-reactions">
+                {reactions.map((emoji) => (
+                  <ReactionChip
+                    key={emoji}
+                    emoji={emoji}
+                    onToggle={() => toggleReaction(emoji)}
+                  />
+                ))}
+              </span>
             ) : null}
 
             {/* A pinned row, and the dashed pin on a selection-retained
@@ -731,7 +762,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             hasIntegratedTerminal={props.terminalThreadKeys?.[threadKey] === true}
             hasInputRequest={props.inputRequestThreadKeys?.[threadKey] === true}
             queuedMessageState={props.queuedMessageThreadKeys?.[threadKey]}
-            hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
+            hasUnsentDraft={hasUnsentDraft}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
             prChips={prs.map((pr) => (

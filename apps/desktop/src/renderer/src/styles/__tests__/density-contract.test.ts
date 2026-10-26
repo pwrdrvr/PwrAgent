@@ -44,18 +44,23 @@ describe("density rules", () => {
     });
   }
 
-  it("keeps only essential chips in Minimal's flow and shows its PR rollup", () => {
+  it("keeps only essential chips in Minimal's flow", () => {
     const flow = rulesMentioning(".thread-row__chips:not(.density-preview *) > :not(.thread-row__chip--essential)");
     expect(flow).toHaveLength(1);
     expect(flow[0]!.body).toMatch(/display:\s*none/);
-
-    const rollup = rulesMentioning(".thread-row__pr-rollup");
-    const base = rollup.find((rule) => rule.selectors.length === 1 && rule.selectors[0] === ".thread-row__pr-rollup");
-    expect(base?.body).toMatch(/display:\s*none/);
-    const shown = rollup.find((rule) =>
-      rule.selectors.some((selector) => selector.startsWith(':root[data-density="minimal"]')));
-    expect(shown?.body).toMatch(/display:\s*inline-flex/);
   });
+
+  for (const titleLine of [".thread-row__pr-rollup", ".thread-row__title-reactions", ".thread-row__title-draft"]) {
+    it(`shows ${titleLine} on Minimal's title line only`, () => {
+      const rules = rulesMentioning(titleLine);
+      const base = rules.find((rule) => rule.selectors.includes(titleLine));
+      expect(base?.body).toMatch(/display:\s*none/);
+      const shown = rules.find((rule) =>
+        rule.selectors.some((selector) =>
+          selector.startsWith(':root[data-density="minimal"]') && selector.includes(titleLine)));
+      expect(shown?.body).toMatch(/display:\s*inline-flex/);
+    });
+  }
 
   it("lets the title-line rollup hold no chip row open in Compact", () => {
     const gapless = rulesMentioning('[data-density="compact"]').find((rule) => /gap:\s*0/.test(rule.body));
