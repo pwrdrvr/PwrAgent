@@ -32,11 +32,20 @@ export function useBoundedNavigationWindow(params: Demand & {
   const targetKey = JSON.stringify(params.target ?? { scope: "local" });
   const connected = connection?.target !== targetKey || connection.connected;
   const directories = useMemo(() => {
-    const descriptors = new Map<string, NavigationDirectoryRow>();
+    // Later sources replace earlier ones, except that a page awaiting its
+    // re-read never replaces a descriptor from a page that has re-read.
+    // Pages re-read in any order after one change: a selection read still
+    // waiting would otherwise restore a pin the index has just removed.
+    const descriptors = new Map<string, { directory: NavigationDirectoryRow; stale: boolean }>();
+    const offer = (directory: NavigationDirectoryRow, stale: boolean): void => {
+      const current = descriptors.get(directory.key);
+      if (current && stale && !current.stale) return;
+      descriptors.set(directory.key, { directory, stale });
+    };
     for (const id of ["directory-index", "selected-directories"]) {
       const resource = state.resources.get(id);
       if (!federationTargetsEqual(resource?.state.request.federationTarget, params.target)) continue;
-      for (const directory of resource?.state.page?.directories ?? []) descriptors.set(directory.key, directory);
+      for (const directory of resource?.state.page?.directories ?? []) offer(directory, Boolean(resource?.state.stale));
     }
     for (const id of ["selected-context", "selected-viewer-mount"]) {
       const resource = state.resources.get(id);
@@ -45,9 +54,9 @@ export function useBoundedNavigationWindow(params: Demand & {
       // owner-local activity into viewer-local activity.
       if (!federationTargetsEqual(resource?.state.request.federationTarget, params.target)) continue;
       const directory = resource?.state.page?.selectionDirectory;
-      if (directory) descriptors.set(directory.key, directory);
+      if (directory) offer(directory, Boolean(resource?.state.stale));
     }
-    return [...descriptors.values()];
+    return [...descriptors.values()].map(({ directory }) => directory);
   }, [state.resources, params.target]);
   const selectedResource = state.resources.get("selected-context");
   const selectedQuery = selectedResource?.state.request.query;

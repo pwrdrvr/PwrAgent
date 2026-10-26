@@ -1,6 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationRow, NavigationSelectedDetailResponse, PrSummary } from "@pwragent/shared";
+import type { AgentEvent, NavigationQueryPage, NavigationRow, NavigationSelectedDetailResponse, PrSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
@@ -179,6 +179,100 @@ it("uses viewer directory disclosure for page demand across owner refresh and pr
   expect(result.current.pagedNavigation.resources.get(`directory-pins:${key}`)?.state.request.query).toMatchObject({ roots: "pinned" });
   expect(result.current.pagedNavigation.resources.has(`directory:${key}`)).toBe(false);
   expect(f.legacy).not.toHaveBeenCalled();
+});
+
+/**
+ * An owner with one pinned directory. Each index read serves the pin as it
+ * was when the read began, and waits on `hold` while one is set.
+ */
+function pinnedDirectoryOwner() {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  const key = "directory:/project";
+  const owner: { rank?: string; hold?: Promise<void> } = { rank: "1024" };
+  f.read.mockImplementation(async (request) => {
+    const pinnedRank = owner.rank;
+    if (owner.hold && request.query.kind === "directory-index") await owner.hold;
+    const page = await originalRead(request);
+    return request.query.kind === "directory-index" ? { ...page, directories: [{ key, kind: "directory", label: "Project",
+      path: "/project", counts, pinnedRootCount: 1, unpinnedRootCount: 999, launchpadPresent: false, pinnedRank }] } : page;
+  });
+  const setDirectoryPin = vi.fn<NonNullable<DesktopApi["setDirectoryPin"]>>(async () => {
+    owner.rank = undefined;
+    return { directoryKey: key, pinnedRank: undefined };
+  });
+  /** Hold every directory index read until the returned release runs. */
+  const holdIndexReads = (): (() => void) => {
+    let release!: () => void;
+    owner.hold = new Promise<void>((resolve) => { release = resolve; });
+    return release;
+  };
+  return { f, key, setDirectoryPin, holdIndexReads };
+}
+
+it("keeps an unpinned directory unpinned while another page lands before the index re-read", async () => {
+  const { f, key, setDirectoryPin, holdIndexReads } = pinnedDirectoryOwner();
+  let finish: (() => void) | undefined;
+  let listener: ((event: AgentEvent) => void) | undefined;
+  const api = { ...f.api, setDirectoryPin,
+    onAgentEvent: (callback: (event: AgentEvent) => void) => { listener = callback; return () => { listener = undefined; }; } };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const rank = () => result.current.directories.find((directory) => directory.key === key)?.pinnedRank;
+  try {
+    await waitFor(() => expect(rank()).toBe("1024"));
+    act(() => {
+      result.current.setBrowseMode("directories");
+      result.current.directoryDisclosure.setExpandedByKey({ [key]: true });
+    });
+    await waitFor(() => expect(result.current.pagedNavigation.resources.get(`directory-pins:${key}`)?.state.page).toBeDefined());
+
+    finish = holdIndexReads();
+    await act(() => result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false));
+    expect(rank()).toBeUndefined();
+    // The owner's event invalidates every page. The directory index reads
+    // are held, so the other pages land first.
+    act(() => listener?.({ backend: "codex", notification: { method: "directory/pin/removed",
+      params: { directoryKey: key } } } as AgentEvent));
+    const resources = () => [...result.current.pagedNavigation.resources.values()];
+    const indexes = () => resources().filter((resource) => resource.state.request.query.kind === "directory-index");
+    await waitFor(() => expect(resources().filter((resource) => !indexes().includes(resource))
+      .every((resource) => !resource.state.stale && !resource.loading)).toBe(true));
+    expect(indexes().every((resource) => resource.state.stale)).toBe(true);
+    expect(rank()).toBeUndefined();
+
+    await act(async () => finish?.());
+    await waitFor(() => expect(indexes().some((resource) => resource.state.stale)).toBe(false));
+    expect(rank()).toBeUndefined();
+  } finally {
+    finish?.();
+    unmount();
+  }
+});
+
+it("keeps an unpinned directory unpinned when an index read from before the unpin lands", async () => {
+  const { f, key, setDirectoryPin, holdIndexReads } = pinnedDirectoryOwner();
+  let finish: (() => void) | undefined;
+  const api = { ...f.api, setDirectoryPin };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const rank = () => result.current.directories.find((directory) => directory.key === key)?.pinnedRank;
+  try {
+    await waitFor(() => expect(rank()).toBe("1024"));
+    act(() => result.current.setBrowseMode("directories"));
+    // A background refresh reads the index before the operator unpins.
+    finish = holdIndexReads();
+    act(() => { void result.current.pagedNavigation.refresh(); });
+    await waitFor(() => expect(result.current.pagedNavigation.resources.get("directory-index")?.loading).toBe(true));
+    await act(() => result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false));
+    expect(rank()).toBeUndefined();
+
+    // The owner's event has not arrived, so nothing fences the earlier read.
+    act(() => finish?.());
+    await waitFor(() => expect(result.current.pagedNavigation.resources.get("directory-index")?.loading).toBe(false));
+    expect(rank()).toBeUndefined();
+  } finally {
+    finish?.();
+    unmount();
+  }
 });
 
 it("loads one owner lens page and exact selection, preserving complete counts independently", async () => {

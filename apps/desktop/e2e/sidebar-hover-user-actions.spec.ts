@@ -121,6 +121,35 @@ async function stopChurn(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Record whether `label` is pinned on every frame, so a pin that flickers
+ * back for a frame or two is seen even though no poll would land on it.
+ */
+async function recordDirectoryPinFrames(page: Page, label: string): Promise<void> {
+  await page.evaluate((target) => {
+    const frames: string[] = [];
+    const sampler = { frames, running: true };
+    (window as unknown as { __pinFrames: typeof sampler }).__pinFrames = sampler;
+    const sample = () => {
+      if (!sampler.running) return;
+      const row = [...document.querySelectorAll(".directory-row")].find((candidate) =>
+        candidate.querySelector(".directory-row__title")?.textContent?.trim() === target);
+      const state = row?.getAttribute("data-directory-pinned") === "true" ? "pinned" : "unpinned";
+      if (frames[frames.length - 1] !== state) frames.push(state);
+      window.requestAnimationFrame(sample);
+    };
+    sample();
+  }, label);
+}
+
+async function stopRecordingDirectoryPinFrames(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const sampler = (window as unknown as { __pinFrames: { frames: string[]; running: boolean } }).__pinFrames;
+    sampler.running = false;
+    return sampler.frames;
+  });
+}
+
 test.describe("sidebar commands under a resting pointer", () => {
   let fixture: Awaited<ReturnType<typeof createFixture>>;
   let app: Awaited<ReturnType<typeof launchElectronApp>>;
@@ -170,6 +199,34 @@ test.describe("sidebar commands under a resting pointer", () => {
           "[Bproject]*", "[Aproject]", "[Cproject]", "Cproject thread 1", "Cproject thread 2",
         ]);
         await movePointerOffSidebar(page);
+        await chooseDirectoryMenuItem(page, "Cproject", "Pin Directory", restOn);
+      }
+    } finally {
+      await stopChurn(page);
+    }
+  });
+
+  test("an unpinned selected directory does not flash back to pinned under churn", async () => {
+    const page = app.window;
+    const restOn = page.getByRole("button", { name: "Bproject", exact: true });
+    await chooseDirectoryMenuItem(page, "Bproject", "Pin Directory", restOn);
+    await chooseDirectoryMenuItem(page, "Cproject", "Pin Directory", restOn);
+    await page.getByRole("button", { name: "Cproject", exact: true }).click();
+    await page.getByRole("button", { name: /^Cproject thread 1/ }).click();
+    await startChurn(page);
+    try {
+      // The race this guards is timing-dependent; each round is a fresh try.
+      for (let round = 0; round < 5; round += 1) {
+        await movePointerOffSidebar(page);
+        await expect(directoryRow(page, "Cproject")).toHaveAttribute("data-directory-pinned", "true");
+        await page.getByRole("button", { name: "Cproject", exact: true })
+          .click({ button: "right", position: { x: 12, y: 8 } });
+        await recordDirectoryPinFrames(page, "Cproject");
+        await page.getByRole("menuitem", { name: "Unpin Directory" }).click();
+        // No pointer rests on the list, so nothing holds what it shows.
+        await movePointerOffSidebar(page);
+        await page.waitForTimeout(1_000);
+        expect(await stopRecordingDirectoryPinFrames(page)).toEqual(["pinned", "unpinned"]);
         await chooseDirectoryMenuItem(page, "Cproject", "Pin Directory", restOn);
       }
     } finally {
