@@ -13,6 +13,7 @@ import {
 } from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES, serviceThread } from "./federation-services";
 import { FederationServiceForwarder } from "./federation-service-forwarder";
+import { serviceDataEnvelope } from "./federation-service-stream";
 import type {
   ListBackgroundTerminalsRequest,
   ListBackgroundTerminalsResponse,
@@ -3672,30 +3673,25 @@ export class DesktopFederationRuntime {
     });
     this.releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(this.ptyService);
     registerFederationPtyHandlers({ router, service: this.ptyService });
+    // One random prefix and a counter name every stream frame, as the RPC endpoint does.
+    const serviceFramePrefix = `federation-service:${randomUUID()}:`;
+    let serviceFrames = 0;
+    const serviceRoute = (peerId: FederationInstanceId) => ({
+      id: `${serviceFramePrefix}${(serviceFrames += 1)}`,
+      sourceInstanceId: this.ensureLocalInstanceId(),
+      targetInstanceId: peerId,
+      createdAt: Date.now(),
+    });
     registerFederationServices(router, this.threadServices(), {
       link: {
         notify: (peerId, method, params) => this.sendServiceFrame(peerId, {
-          id: `federation-service:${randomUUID()}`,
+          ...serviceRoute(peerId),
           kind: "notification",
           method,
           params,
           protocolVersion: FEDERATION_PROTOCOL_VERSION,
-          sourceInstanceId: this.ensureLocalInstanceId(),
-          targetInstanceId: peerId,
-          createdAt: Date.now(),
         }),
-        sendData: (peerId, frame) => this.sendServiceFrame(peerId, {
-          id: `federation-service:${randomUUID()}`,
-          kind: "service_data",
-          streamId: frame.streamId,
-          seq: frame.seq,
-          ...(frame.fin ? { fin: true } : {}),
-          data: frame.data,
-          protocolVersion: FEDERATION_PROTOCOL_VERSION,
-          sourceInstanceId: this.ensureLocalInstanceId(),
-          targetInstanceId: peerId,
-          createdAt: Date.now(),
-        }),
+        sendData: (peerId, frame) => this.sendServiceFrame(peerId, serviceDataEnvelope(frame, serviceRoute(peerId))),
       },
       viewer: this.serviceForwarder,
     });

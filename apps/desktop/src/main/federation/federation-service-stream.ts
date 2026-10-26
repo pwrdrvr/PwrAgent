@@ -1,6 +1,8 @@
 import type { Socket } from "node:net";
-import type { ServiceStreamClose, ServiceStreamData, ServiceStreamWindow } from "@pwragent/shared";
-import { FEDERATION_SERVICE_V2_NOTIFICATIONS as FRAMES } from "@pwragent/shared";
+import type {
+  FederationServiceDataEnvelope, ServiceStreamClose, ServiceStreamData, ServiceStreamWindow,
+} from "@pwragent/shared";
+import { FEDERATION_PROTOCOL_VERSION, FEDERATION_SERVICE_V2_NOTIFICATIONS as FRAMES } from "@pwragent/shared";
 
 const MiB = 1024 * 1024;
 const EMPTY = new Uint8Array(0);
@@ -24,6 +26,17 @@ export type ServiceStreamSendData = (frame: ServiceStreamData) => void | Promise
 
 function message(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
+}
+
+/** The binary `service_data` envelope that carries `frame`; `route` names it and its ends. */
+export function serviceDataEnvelope(
+  frame: ServiceStreamData,
+  route: Pick<FederationServiceDataEnvelope, "id" | "sourceInstanceId" | "targetInstanceId" | "createdAt">,
+): FederationServiceDataEnvelope {
+  return {
+    ...route, kind: "service_data", protocolVersion: FEDERATION_PROTOCOL_VERSION,
+    streamId: frame.streamId, seq: frame.seq, ...(frame.fin ? { fin: true } : {}), data: frame.data,
+  };
 }
 
 /** The frame's bytes, unless it is not binary or exceeds `maxBytes`. */
@@ -161,6 +174,8 @@ export class ServiceStreamEndpoint {
   private drained = 0;
   private started = false;
   private finSent = false;
+  /** The FIN frame has left; until then a close must wait behind it. */
+  private finDelivered = false;
   private remoteFin = false;
   /** The local socket closed after EOF: send FIN, then close. */
   private closeAfterFin = false;
@@ -303,6 +318,7 @@ export class ServiceStreamEndpoint {
     catch { this.cleanup("Service stream peer is unavailable."); return false; }
     if (this.closed) return false;
     if (bytes) this.options.onTransfer?.(bytes, 0);
+    this.finDelivered = fin;
     if (fin && this.closeAfterFin) { this.finishLocalClose(); return false; }
     return this.ready();
   }
@@ -354,8 +370,9 @@ export class ServiceStreamEndpoint {
       this.cleanup(this.localError);
       return;
     }
-    // Every byte was read before EOF; only the FIN may still be queued.
-    if (this.finSent) this.finishLocalClose();
+    // Every byte was read before EOF; only the FIN may still be queued or
+    // waiting for transport capacity, and the close must follow it.
+    if (this.finDelivered) this.finishLocalClose();
     else {
       this.closeAfterFin = true;
       // Before open completes there is no FIN to order behind.

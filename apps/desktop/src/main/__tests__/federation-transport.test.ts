@@ -2041,6 +2041,24 @@ describe("federation send backpressure", () => {
     expect(raw.listenerCount("drain")).toBe(0);
     expect(raw.listenerCount("close")).toBe(0);
   });
+
+  it("shares one drain wait among every sender waiting on a socket", async () => {
+    const raw = new EventEmitter();
+    const socket = {
+      bufferedAmount: FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES + 1,
+      readyState: WebSocket.OPEN,
+      _socket: raw,
+    };
+    // More waiters than EventEmitter's default listener limit.
+    const waiting = Array.from({ length: 16 }, () => waitForFederationSendCapacity(socket));
+    expect(raw.listenerCount("drain")).toBe(1);
+    expect(raw.listenerCount("close")).toBe(1);
+    socket.bufferedAmount = 0;
+    raw.emit("drain");
+    await Promise.all(waiting);
+    expect(raw.listenerCount("drain")).toBe(0);
+    expect(raw.listenerCount("close")).toBe(0);
+  });
 });
 
 /**

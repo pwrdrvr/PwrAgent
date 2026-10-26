@@ -18,6 +18,7 @@ import type {
 } from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES } from "../federation/federation-services";
 import { FederationServiceForwarder } from "../federation/federation-service-forwarder";
+import { serviceDataEnvelope } from "../federation/federation-service-stream";
 import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import {
@@ -60,8 +61,7 @@ function notification(source: string, target: string, method: string, params: un
 }
 
 function serviceData(source: string, target: string, frame: ServiceStreamData): FederationServiceDataEnvelope {
-  return { id: `bench:${Math.random()}`, kind: "service_data", streamId: frame.streamId, seq: frame.seq, ...(frame.fin ? { fin: true } : {}),
-    data: frame.data, protocolVersion: 1, sourceInstanceId: source, targetInstanceId: target, createdAt: Date.now() };
+  return serviceDataEnvelope(frame, { id: `bench:${Math.random()}`, sourceInstanceId: source, targetInstanceId: target, createdAt: Date.now() });
 }
 
 /** Owner-to-viewer delivery: windowed frames to the forwarder, the rest to the RPC endpoint. */

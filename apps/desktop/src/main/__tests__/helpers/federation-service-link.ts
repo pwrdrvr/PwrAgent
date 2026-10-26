@@ -7,6 +7,7 @@ import { registerFederationServices, SERVICE_METHOD_CAPABILITIES, type Federatio
 import type { FederationServiceForwarder } from "../../federation/federation-service-forwarder";
 import { FederationRouter } from "../../federation/federation-router";
 import { FederationRpcEndpoint } from "../../federation/federation-rpc";
+import { serviceDataEnvelope } from "../../federation/federation-service-stream";
 
 /**
  * One direction of the link. While held, data frames queue instead of
@@ -44,11 +45,9 @@ export function serviceNotification(source: string, target: string, method: stri
 }
 
 export function serviceData(source: string, target: string, frame: ServiceStreamData): FederationServiceDataEnvelope {
-  return {
-    id: `fixture-data:${Math.random()}`, kind: "service_data", streamId: frame.streamId, seq: frame.seq,
-    ...(frame.fin ? { fin: true } : {}), data: frame.data,
-    protocolVersion: FEDERATION_PROTOCOL_VERSION, sourceInstanceId: source, targetInstanceId: target, createdAt: Date.now(),
-  };
+  return serviceDataEnvelope(frame, {
+    id: `fixture-data:${Math.random()}`, sourceInstanceId: source, targetInstanceId: target, createdAt: Date.now(),
+  });
 }
 
 /**

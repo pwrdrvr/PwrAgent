@@ -229,11 +229,14 @@ export class FederationServices {
 
   /** Renew the lease and keep its named windowed streams from idle reaping. */
   renewStreams(peerId: string, input: ServiceStreamRenew): void {
-    this.renew(peerId, id(input.leaseId));
+    const leaseId = id(input.leaseId);
     if (!Array.isArray(input.streamIds) || input.streamIds.length > SERVICE_MAX_PEER_STREAMS * 16) throw new Error("Invalid service stream list.");
-    for (const streamId of input.streamIds) {
-      const stream = this.streams.get(id(streamId));
-      if (stream?.lease.leaseId === input.leaseId) stream.touchedAt = this.now();
+    // Validate everything before the lease or any stream changes.
+    const streamIds = input.streamIds.map(id);
+    this.renew(peerId, leaseId);
+    for (const streamId of streamIds) {
+      const stream = this.streams.get(streamId);
+      if (stream?.lease.leaseId === leaseId) stream.touchedAt = this.now();
     }
   }
 

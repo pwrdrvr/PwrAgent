@@ -156,10 +156,18 @@ const FEDERATION_BLOB_FRAME_MAGIC = Buffer.from("PWRBLOB1", "ascii");
 const FEDERATION_BLOB_FRAME_PREFIX_BYTES =
   FEDERATION_BLOB_FRAME_MAGIC.byteLength + 4;
 const FEDERATION_BLOB_FRAME_MAX_HEADER_BYTES = 64 * 1024;
-const FEDERATION_BINARY_ENVELOPE_KINDS: ReadonlySet<string> = new Set<FederationProtocolEnvelope["kind"]>([
+type FederationBinaryEnvelopeKind = Extract<FederationProtocolEnvelope, { data: Uint8Array }>["kind"];
+const FEDERATION_BINARY_ENVELOPE_KINDS: ReadonlySet<unknown> = new Set<FederationBinaryEnvelopeKind>([
   "blob_chunk",
   "service_data",
 ]);
+
+/** Envelope kinds that travel in a binary envelope frame, never as JSON. */
+function isBinaryEnvelope<T extends { kind?: unknown }>(
+  envelope: T,
+): envelope is T & { kind: FederationBinaryEnvelopeKind } {
+  return FEDERATION_BINARY_ENVELOPE_KINDS.has(envelope.kind);
+}
 export const FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES = 2 * 1024 * 1024;
 const FEDERATION_SEND_BUFFER_POLL_MS = 5;
 const FEDERATION_SEND_BUFFER_DRAIN_GUARD_MS = 250;
@@ -1679,20 +1687,39 @@ export async function waitForFederationSendCapacity(
     && socket.bufferedAmount > FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES
   ) {
     const raw = socket._socket;
+    if (raw) {
+      await drainOf(raw);
+      continue;
+    }
     await new Promise<void>((resolve) => {
-      const done = (): void => {
-        clearTimeout(timer);
-        raw?.off("drain", done);
-        raw?.off("close", done);
-        resolve();
-      };
-      // With a raw socket this is only a guard against a missed event.
-      const timer = setTimeout(done, raw ? FEDERATION_SEND_BUFFER_DRAIN_GUARD_MS : FEDERATION_SEND_BUFFER_POLL_MS);
+      const timer = setTimeout(resolve, FEDERATION_SEND_BUFFER_POLL_MS);
       timer.unref?.();
-      raw?.once("drain", done);
-      raw?.once("close", done);
     });
   }
+}
+
+/** One wait per raw socket, so many waiting senders add no listeners of their own. */
+const pendingDrains = new WeakMap<FederationRawSocket, Promise<void>>();
+
+function drainOf(raw: FederationRawSocket): Promise<void> {
+  let pending = pendingDrains.get(raw);
+  if (pending) return pending;
+  pending = new Promise<void>((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      raw.off("drain", done);
+      raw.off("close", done);
+      pendingDrains.delete(raw);
+      resolve();
+    };
+    // Only a guard against a missed event.
+    const timer = setTimeout(done, FEDERATION_SEND_BUFFER_DRAIN_GUARD_MS);
+    timer.unref?.();
+    raw.once("drain", done);
+    raw.once("close", done);
+  });
+  pendingDrains.set(raw, pending);
+  return pending;
 }
 
 function closeAfterFrameAuthenticationFailure(socket: WebSocket): void {
@@ -1757,8 +1784,7 @@ function encodeRawFederationSocketPayload(
 ): Buffer {
   if (
     message.kind !== "envelope"
-    || (message.envelope.kind !== "blob_chunk"
-      && message.envelope.kind !== "service_data")
+    || !isBinaryEnvelope(message.envelope)
   ) {
     return Buffer.from(JSON.stringify(message), "utf8");
   }
@@ -1811,7 +1837,7 @@ function decodeRawFederationSocketPayload(
     if (
       parsed.kind === "envelope"
       && parsed.envelope
-      && !FEDERATION_BINARY_ENVELOPE_KINDS.has(parsed.envelope.kind)
+      && !isBinaryEnvelope(parsed.envelope)
     ) {
       return parsed as FederationSocketEnvelopeMessage;
     }
@@ -1846,7 +1872,7 @@ function decodeFederationBlobSocketPayload(
     if (
       header.kind !== "envelope"
       || !header.envelope
-      || !FEDERATION_BINARY_ENVELOPE_KINDS.has(header.envelope.kind)
+      || !isBinaryEnvelope(header.envelope)
       || Object.hasOwn(header.envelope, "data")
     ) {
       return undefined;

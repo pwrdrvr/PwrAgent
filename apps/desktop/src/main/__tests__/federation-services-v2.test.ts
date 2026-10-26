@@ -293,6 +293,21 @@ describe("windowed stream lifecycle", () => {
     expect(forwarder.list(1, "owner", thread)[0]?.error).toContain("revoked");
   });
 
+  it("leaves the lease unrenewed when a renewal names an invalid stream", async () => {
+    let now = 1000;
+    const server = createServer((socket) => { socket.on("error", () => undefined); });
+    const port = await listen(server);
+    const service = owner({ now: () => now });
+    const declaration = await service.advertise(thread, { port, name: "renewal", protocol: "tcp" });
+    const { leaseId } = await service.lease("viewer", thread, declaration.serviceId);
+    now += 20_000;
+    expect(() => service.renewStreams("viewer", { leaseId, streamIds: ["stream-ok", 7 as never] })).toThrow("Invalid service identifier");
+    expect(() => service.renewStreams("viewer", { leaseId, streamIds: "stream-ok" as never })).toThrow("Invalid service stream list");
+    now += 11_000;
+    // Neither refused renewal extended the lease.
+    expect(() => service.renew("viewer", leaseId)).toThrow("expired or was revoked");
+  });
+
   it("reaps windowed streams that renewals stop naming", async () => {
     let now = 1000;
     const server = createServer((socket) => { socket.on("error", () => undefined); });
@@ -396,6 +411,31 @@ describe("windowed stream endpoint", () => {
     await ended;
     expect(received).toBe(window);
     await vi.waitFor(() => expect(stream.isClosed).toBe(true));
+  });
+
+  it("holds the close behind a FIN frame that is waiting for transport capacity", async () => {
+    const server = createServer((socket) => { socket.on("error", () => undefined); socket.end("last bytes"); });
+    const port = await listen(server);
+    const socket = connect({ host: "127.0.0.1", port });
+    socket.on("error", () => undefined);
+    const order: string[] = [];
+    let releaseFin!: () => void;
+    const stream = new ServiceStreamEndpoint({ streamId: "s", socket, scheduler: new ServiceStreamScheduler(),
+      budget: new ServiceStreamBudget(), window: 65_536,
+      send: (method) => { order.push(method); },
+      sendData: (frame) => {
+        order.push(frame.fin ? "fin-queued" : "data");
+        // The transport is congested for the FIN frame.
+        if (frame.fin) return new Promise<void>((resolve) => { releaseFin = () => { order.push("fin-sent"); resolve(); }; });
+      } });
+    stream.start(65_536, 16_384);
+    // The service ended, so the socket closes while the FIN still waits.
+    await once(socket, "close");
+    await vi.waitFor(() => expect(order).toContain("fin-queued"));
+    expect(order).not.toContain(FRAMES.close);
+    releaseFin();
+    await vi.waitFor(() => expect(stream.isClosed).toBe(true));
+    expect(order.slice(order.indexOf("fin-queued"))).toEqual(["fin-queued", "fin-sent", FRAMES.close]);
   });
 
   it("grants credit back as the local socket drains, in batches", async () => {

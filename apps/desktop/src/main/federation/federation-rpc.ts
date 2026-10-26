@@ -10,6 +10,7 @@ import type {
   ServiceStreamData,
 } from "@pwragent/shared";
 import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
+import { serviceDataEnvelope } from "./federation-service-stream";
 
 type PendingRequest = {
   cleanupAbort: () => void;
@@ -156,18 +157,12 @@ export class FederationRpcEndpoint {
 
   /** One binary service stream frame. A returned promise is transport backpressure. */
   sendServiceData(frame: ServiceStreamData): void | Promise<void> {
-    const envelope: FederationServiceDataEnvelope = {
+    const envelope = serviceDataEnvelope(frame, {
       id: `${this.notificationPrefix}${(this.notificationCount += 1)}`,
-      kind: "service_data",
-      streamId: frame.streamId,
-      seq: frame.seq,
-      ...(frame.fin ? { fin: true } : {}),
-      data: frame.data,
-      protocolVersion: FEDERATION_PROTOCOL_VERSION,
       sourceInstanceId: this.options.localInstanceId,
       targetInstanceId: this.options.remoteInstanceId,
       createdAt: this.now(),
-    };
+    });
     return (this.options.sendOneWay ?? this.options.sendEnvelope)(envelope);
   }
 
