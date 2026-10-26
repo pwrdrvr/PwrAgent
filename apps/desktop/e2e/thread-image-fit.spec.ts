@@ -359,7 +359,10 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
   const read = replay.steps.find((step: { method?: string }) => step.method === "thread/read");
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160" viewBox="0 0 320 160" onload="init(evt)">
     <script><![CDATA[
-      function init() { document.getElementById("state").textContent = "Ready"; }
+      function init() {
+        document.getElementById("state").textContent = "Ready";
+        document.getElementById("frame").setAttribute("fill", "lime");
+      }
       window.addEventListener("mouseover", function(event) {
         if (event.target.id === "frame") document.getElementById("details").textContent = "Function: frame";
       });
@@ -414,8 +417,9 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
     const frame = app.window.frameLocator('iframe[title="Interactive SVG: Interactive flamegraph"]');
     await expect(frame.locator("#state")).toHaveText("Ready");
     // A child document's paint entry can precede embedding its surface in
-    // the window compositor. Read back the orange frame at its actual hover
-    // point before sending the single pointer move into the isolated frame.
+    // the window compositor. Only the running SVG turns the frame green, so
+    // read back its hover point to distinguish it from the orange preview
+    // before sending the single pointer move into the isolated frame.
     const frameBox = await frame.locator("#frame").boundingBox();
     if (!frameBox) throw new Error("Interactive SVG frame has no bounds");
     const nativeWindow = await app.electronApp.browserWindow(app.window);
@@ -427,7 +431,7 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
       const image = await window.webContents.capturePage({ ...point, width: 1, height: 1 });
       return [...image.toBitmap().subarray(0, 4)];
     }, hoverPoint), { message: "Window compositor has presented the SVG hover target" })
-      .toEqual([0, 165, 255, 255]); // Native bitmap BGRA for the fixture's orange rectangle.
+      .toEqual([0, 255, 0, 255]); // Opaque lime, in either RGBA or BGRA byte order.
     await frame.locator("#frame").hover();
     await expect(frame.locator("#details")).toHaveText("Function: frame");
     await frame.locator("#frame").click();
