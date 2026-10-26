@@ -26346,28 +26346,27 @@ command = "pnpm dev"
     });
 
     it.each([
-      // Codex reports the thread idle just before turn/completed.
-      ["its turn has not ended", { turnStarted: true, status: "idle" }],
-      // A main-process reload can miss turn/started for a turn still running.
-      ["Codex reports the thread active", { turnStarted: false, status: "active" }],
-    ])("keeps a command the list omits while %s", async (_case, { turnStarted, status }) => {
+      // Accepting the turn registers it before Codex reports the thread active.
+      ["its turn is active", { startTurn: true }],
+      // A main-process reload can miss the start of a turn that is still running.
+      ["Codex reports the thread active", { startTurn: false }],
+    ])("keeps a command the list omits while %s", async (_case, { startTurn }) => {
       const listBackgroundTerminals = vi.fn()
         .mockResolvedValueOnce({ supported: true, terminals: [] })
         // A runtime without the list after the turn proves nothing either way.
         .mockResolvedValue({ supported: false, terminals: [] });
       const { codexClient, registry } = setup(listBackgroundTerminals);
 
-      if (turnStarted) {
-        await codexClient.emit({ method: "turn/started", params: {
-          threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1" },
+      if (startTurn) {
+        await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Start the dev server" }] });
+      } else {
+        await codexClient.emit({ method: "thread/status/changed", params: {
+          threadId: "thread-1", status: { type: "active" },
         } });
       }
       await codexClient.emit({ method: "item/started", params: {
         threadId: "thread-1", turnId: "turn-1",
         item: { id: "command-1", type: "commandExecution", status: "inProgress", command: "pnpm dev" },
-      } });
-      await codexClient.emit({ method: "thread/status/changed", params: {
-        threadId: "thread-1", status: { type: status },
       } });
       // The session may not exist yet while its turn runs.
       await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
