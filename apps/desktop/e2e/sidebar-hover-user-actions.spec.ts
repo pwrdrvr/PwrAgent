@@ -84,6 +84,8 @@ async function chooseDirectoryMenuItem(page: Page, label: string, item: string, 
   await page.getByRole("button", { name: label, exact: true })
     .click({ button: "right", position: { x: 12, y: 8 } });
   await page.getByRole("menuitem", { name: item }).click();
+  // A row that changed section remounts; measure the one that settled.
+  await restOn.waitFor({ state: "visible" });
   const box = await restOn.boundingBox();
   if (!box) throw new Error("Expected a row for the pointer to rest on");
   await page.mouse.move(box.x + 40, box.y + box.height / 2);
