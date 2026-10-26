@@ -8,7 +8,7 @@ import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, re
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type { ServiceThread, ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
-import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY } from "@pwragent/shared";
+import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, FEDERATION_SERVICE_V2_CAPABILITY } from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES, serviceThread } from "./federation-services";
 import { FederationServiceForwarder } from "./federation-service-forwarder";
 import type {
@@ -603,6 +603,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
   FEDERATION_SERVICE_CAPABILITY,
+  FEDERATION_SERVICE_V2_CAPABILITY,
   "file_push",
   "thread_handoff",
   "file_pull",
@@ -2682,7 +2683,10 @@ export class DesktopFederationRuntime {
       if (!rpc) throw new Error("This service already runs on this machine. Connect from a remote thread viewer.");
       const service = services.find((entry) => entry.serviceId === input.serviceId);
       if (!service) throw new Error("Service is no longer advertised.");
-      const forward = await this.serviceForwarder.connect(windowId, service, rpc);
+      // Windowed streams need both ends; an older gateway refuses the open and the forward falls back to v1.
+      const streams = this.viewerCapabilitiesFor(instanceId, this.visiblePeers().find((peer) => peer.id === instanceId))
+        .includes(FEDERATION_SERVICE_V2_CAPABILITY) ? 2 : 1;
+      const forward = await this.serviceForwarder.connect(windowId, service, rpc, { streams });
       try { assertViewing(); }
       catch (error) { this.serviceForwarder.disconnect(windowId, forward.forwardId); throw error; }
     }
@@ -2795,6 +2799,8 @@ export class DesktopFederationRuntime {
         sendEnvelope: (envelope) => {
           this.sendEnvelopeToTarget(target.instanceId, envelope);
         },
+        sendNotification: (envelope) =>
+          this.sendEnvelopeToTargetWithBackpressure(target.instanceId, envelope),
       });
       this.rpcByPeer.set(target.instanceId, rpc);
     }
@@ -3663,7 +3669,19 @@ export class DesktopFederationRuntime {
     });
     this.releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(this.ptyService);
     registerFederationPtyHandlers({ router, service: this.ptyService });
-    registerFederationServices(router, this.threadServices());
+    registerFederationServices(router, this.threadServices(), {
+      notify: (peerId, method, params) => this.sendEnvelopeToTargetWithBackpressure(peerId, {
+        id: `federation-service:${randomUUID()}`,
+        kind: "notification",
+        method,
+        params,
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: this.ensureLocalInstanceId(),
+        targetInstanceId: peerId,
+        createdAt: Date.now(),
+      }),
+      viewer: this.serviceForwarder,
+    });
     this.router = router;
     this.subscribeLocalBackendEvents();
 

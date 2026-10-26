@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   FederationErrorEnvelope,
   FederationInstanceId,
+  FederationNotificationEnvelope,
   FederationProtocolEnvelope,
   FederationRequestEnvelope,
   FederationResponseEnvelope,
@@ -46,12 +47,16 @@ export function hasFederationErrorCode(
 
 export class FederationRpcEndpoint {
   private readonly pending = new Map<string, PendingRequest>();
+  private readonly notificationPrefix = `federation-notification:${randomUUID()}:`;
+  private notificationCount = 0;
 
   constructor(
     private readonly options: {
       localInstanceId: FederationInstanceId;
       remoteInstanceId: FederationInstanceId;
       sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
+      /** Notification path that may wait for transport capacity. Defaults to `sendEnvelope`. */
+      sendNotification?: (envelope: FederationNotificationEnvelope) => void | Promise<void>;
       now?: () => number;
       defaultTimeoutMs?: number;
     },
@@ -128,6 +133,21 @@ export class FederationRpcEndpoint {
       }
     }
     return promise;
+  }
+
+  /** One-way message to the remote instance. A returned promise is transport backpressure. */
+  notify(method: string, params: unknown): void | Promise<void> {
+    const envelope: FederationNotificationEnvelope = {
+      id: `${this.notificationPrefix}${(this.notificationCount += 1)}`,
+      kind: "notification",
+      method,
+      params,
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: this.options.localInstanceId,
+      targetInstanceId: this.options.remoteInstanceId,
+      createdAt: this.now(),
+    };
+    return (this.options.sendNotification ?? this.options.sendEnvelope)(envelope);
   }
 
   receiveEnvelope(envelope: FederationProtocolEnvelope): boolean {

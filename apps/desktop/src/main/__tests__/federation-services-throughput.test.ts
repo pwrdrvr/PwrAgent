@@ -11,7 +11,7 @@ import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } 
 import { randomBytes } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import type { FederationCapability, FederationProtocolEnvelope, ServiceThread } from "@pwragent/shared";
+import type { FederationCapability, FederationNotificationEnvelope, FederationProtocolEnvelope, ServiceThread } from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES } from "../federation/federation-services";
 import { FederationServiceForwarder } from "../federation/federation-service-forwarder";
 import { FederationRouter } from "../federation/federation-router";
@@ -34,7 +34,7 @@ const cleanups: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
 type Direction = "upload" | "download" | "duplex";
-type Path = "routed" | "gateway";
+type Path = "routed" | "gateway" | "gateway-plain";
 type Fixture = { rpc: FederationRpcEndpoint; frames: () => number };
 
 function report(line: Record<string, unknown>): void {
@@ -47,38 +47,53 @@ function delayed(rttMs: number, deliver: () => void): void {
   else setTimeout(deliver, rttMs / 2);
 }
 
+function notification(source: string, target: string, method: string, params: unknown): FederationNotificationEnvelope {
+  return { id: `bench:${Math.random()}`, kind: "notification", method, params, protocolVersion: 1, sourceInstanceId: source, targetInstanceId: target, createdAt: Date.now() };
+}
+
+/** Owner-to-viewer delivery: windowed frames to the forwarder, the rest to the RPC endpoint. */
+function viewerReceiver(rpc: FederationRpcEndpoint, forwarder: FederationServiceForwarder) {
+  return (envelope: FederationProtocolEnvelope): void => {
+    if (envelope.kind === "notification") forwarder.receiveNotification(envelope.sourceInstanceId, envelope.method, envelope.params);
+    else rpc.receiveEnvelope(envelope);
+  };
+}
+
+const CAPABILITIES: FederationCapability[] = ["service_forward_v1", "service_forward_v2", "gateway_relay"];
+
 /** The viewer's RPC endpoint, owner router, and a relaying gateway router, in process. */
-function routedFixture(service: FederationServices, rttMs: number): Fixture {
-  const capabilities: FederationCapability[] = ["service_forward_v1", "gateway_relay"];
+function routedFixture(service: FederationServices, forwarder: FederationServiceForwarder, rttMs: number): Fixture {
+  const capabilities = CAPABILITIES;
   const owner = new FederationRouter({ localInstanceId: "owner", methodCapabilities: SERVICE_METHOD_CAPABILITIES, trustedRelayPeerId: "gateway" });
   const gateway = new FederationRouter({ localInstanceId: "gateway", methodCapabilities: SERVICE_METHOD_CAPABILITIES });
   let frames = 0;
   const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner", defaultTimeoutMs: 30_000,
     sendEnvelope: (envelope) => { frames += 1; delayed(rttMs, () => { void gateway.routeEnvelope({ envelope, sourcePeerId: "viewer" }); }); } });
+  const toViewer = viewerReceiver(rpc, forwarder);
   owner.registerConnection({ peerId: "gateway", capabilities,
     sendEnvelope: (envelope) => { frames += 1; void gateway.routeEnvelope({ envelope, sourcePeerId: "owner" }); } });
   gateway.registerConnection({ peerId: "owner", capabilities, sendEnvelope: (envelope) => { void owner.routeEnvelope({ envelope, sourcePeerId: "gateway" }); } });
-  gateway.registerConnection({ peerId: "viewer", capabilities,
-    sendEnvelope: (envelope) => delayed(rttMs, () => { rpc.receiveEnvelope(envelope); }) });
-  registerFederationServices(owner, service);
+  gateway.registerConnection({ peerId: "viewer", capabilities, sendEnvelope: (envelope) => delayed(rttMs, () => toViewer(envelope)) });
+  registerFederationServices(owner, service, {
+    notify: (peerId, method, params) => { owner.sendToPeer("gateway", notification("owner", peerId, method, params)); },
+  });
   cleanups.push(() => rpc.rejectAll(new Error("Bench complete")));
   return { rpc, frames: () => frames };
 }
 
-/** Two signed, Noise-encrypted, brotli-capable clients through a real gateway. */
-async function gatewayFixture(service: FederationServices, rttMs: number): Promise<Fixture> {
+/** Two signed, Noise-encrypted clients through a real gateway, with or without brotli. */
+async function gatewayFixture(service: FederationServices, forwarder: FederationServiceForwarder, rttMs: number, compression: boolean): Promise<Fixture> {
   const db = openInMemoryStateDb();
   cleanups.push(() => db.close());
   const store = new FederationStore(db);
   const keys = generateFederationIdentityKeyPair();
   const noise = generateNoiseStaticKeyPair();
-  const capabilities: FederationCapability[] = ["gateway_relay", "service_forward_v1", "transport_brotli"];
+  const capabilities: FederationCapability[] = [...CAPABILITIES, ...(compression ? ["transport_brotli" as const] : [])];
   const gateway = new FederationRouter({ localInstanceId: "gateway", methodCapabilities: SERVICE_METHOD_CAPABILITIES });
   const owner = new FederationRouter({ localInstanceId: "owner", trustedRelayPeerId: "gateway", methodCapabilities: SERVICE_METHOD_CAPABILITIES });
-  registerFederationServices(owner, service);
   const server = new FederationGatewayWebSocketServer({
     gatewayInstanceId: "gateway", gatewayPrivateKeyPem: keys.privateKeyPem, gatewayPublicKeyPem: keys.publicKeyPem,
-    host: "127.0.0.1", port: 0, store, noiseStatic: noise, compressionEnabled: true,
+    host: "127.0.0.1", port: 0, store, noiseStatic: noise, compressionEnabled: compression,
     onConnection: (connection) => gateway.registerConnection(connection),
     onDisconnect: (connection) => { gateway.unregisterConnection(connection.peerId); },
     onEnvelope: (envelope, connection) => { void gateway.routeEnvelope({ envelope, sourcePeerId: connection.peerId }); },
@@ -87,8 +102,15 @@ async function gatewayFixture(service: FederationServices, rttMs: number): Promi
   cleanups.push(() => server.stop());
   const clients = new Map<string, Awaited<ReturnType<typeof connectFederationClient>>>();
   let frames = 0;
+  const viewerSend = (envelope: FederationProtocolEnvelope): void | Promise<void> => {
+    frames += 1;
+    const client = clients.get("viewer")!;
+    if (rttMs <= 0) return client.sendEnvelopeWithBackpressure!(envelope);
+    delayed(rttMs, () => client.sendEnvelope(envelope));
+  };
   const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner", defaultTimeoutMs: 30_000,
-    sendEnvelope: (envelope) => { frames += 1; delayed(rttMs, () => clients.get("viewer")!.sendEnvelope(envelope)); } });
+    sendEnvelope: (envelope) => { void viewerSend(envelope); }, sendNotification: viewerSend });
+  const toViewer = viewerReceiver(rpc, forwarder);
   cleanups.push(() => rpc.rejectAll(new Error("Bench complete")));
   for (const peerId of ["owner", "viewer"]) {
     const identity = generateFederationIdentityKeyPair();
@@ -100,7 +122,7 @@ async function gatewayFixture(service: FederationServices, rttMs: number): Promi
       role: "client", capabilities, inviteToken: invite.token, noiseStatic: generateNoiseStaticKeyPair(), gatewayNoisePublicKey: noise.publicKeyRaw,
       onEnvelope: (envelope: FederationProtocolEnvelope) => {
         if (peerId === "owner") void owner.routeEnvelope({ envelope, sourcePeerId: "gateway" });
-        else delayed(rttMs, () => { rpc.receiveEnvelope(envelope); });
+        else delayed(rttMs, () => toViewer(envelope));
       },
     });
     clients.set(peerId, client);
@@ -108,9 +130,11 @@ async function gatewayFixture(service: FederationServices, rttMs: number): Promi
   }
   owner.registerConnection({ peerId: "gateway", capabilities,
     sendEnvelope: (envelope) => { frames += 1; clients.get("owner")!.sendEnvelope(envelope); } });
+  registerFederationServices(owner, service, {
+    notify: (peerId, method, params) => { frames += 1; return clients.get("owner")!.sendEnvelopeWithBackpressure!(notification("owner", peerId, method, params)); },
+  });
   return { rpc, frames: () => frames };
 }
-
 /** Write until stopped, honoring the socket's own backpressure. */
 function flood(socket: Socket, chunk: Buffer): () => void {
   let stopped = false;
@@ -130,7 +154,7 @@ async function listen(server: Server): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
-async function measure(params: { path: Path; rttMs: number; direction: Direction; seconds: number }): Promise<Record<string, unknown>> {
+async function measure(params: { path: Path; protocol: 1 | 2; rttMs: number; direction: Direction; seconds: number }): Promise<Record<string, unknown>> {
   const chunk = randomBytes(64 * 1024);
   const counts = { up: 0, down: 0 };
   const serverSockets = new Set<Socket>();
@@ -146,10 +170,11 @@ async function measure(params: { path: Path; rttMs: number; direction: Direction
   const service = new FederationServices({ instanceId: "owner", allowForwarding: () => true, threadExists: async () => true });
   cleanups.push(() => service.dispose());
   const declaration = await service.advertise(thread, { port, name: "bench", protocol: "tcp" });
-  const fixture = params.path === "routed" ? routedFixture(service, params.rttMs) : await gatewayFixture(service, params.rttMs);
   const forwarder = new FederationServiceForwarder();
   cleanups.push(() => forwarder.dispose());
-  const forward = await forwarder.connect(1, declaration, fixture.rpc);
+  const fixture = params.path === "routed" ? routedFixture(service, forwarder, params.rttMs)
+    : await gatewayFixture(service, forwarder, params.rttMs, params.path === "gateway");
+  const forward = await forwarder.connect(1, declaration, fixture.rpc, { streams: params.protocol });
   const client = connect({ host: "127.0.0.1", port: forward.localPort, allowHalfOpen: true });
   cleanups.push(() => { client.destroy(); });
   client.on("error", () => undefined);
@@ -177,7 +202,7 @@ async function measure(params: { path: Path; rttMs: number; direction: Direction
     downMiBps: +(down / MiB / elapsed).toFixed(3),
     cpuMsPerMiB: movedMiB > 0 ? +(((cpu.user + cpu.system) / 1000) / movedMiB).toFixed(2) : null,
     cpuShare: +(((cpu.user + cpu.system) / 1e6) / elapsed).toFixed(3),
-    viewerFramesPerMiB: movedMiB > 0 ? +((fixture.frames() - start.frames) / movedMiB).toFixed(1) : null,
+    framesPerMiB: movedMiB > 0 ? +((fixture.frames() - start.frames) / movedMiB).toFixed(1) : null,
     ...(hot ? { hot } : {}),
     ...(threads ? { threads } : {}),
   };
@@ -272,17 +297,19 @@ describe.skipIf(!BENCH)("service tunnel throughput (measurement only)", () => {
   const matrix: Array<{ path: Path; rttMs: number }> = [
     { path: "routed", rttMs: 0 }, { path: "routed", rttMs: 1 }, { path: "routed", rttMs: 20 },
     { path: "routed", rttMs: 50 }, { path: "routed", rttMs: 200 },
-    { path: "gateway", rttMs: 0 }, { path: "gateway", rttMs: 20 },
+    { path: "gateway", rttMs: 0 }, { path: "gateway", rttMs: 20 }, { path: "gateway-plain", rttMs: 0 },
   ];
-  for (const { path, rttMs } of matrix) {
-    for (const direction of ["upload", "download", "duplex"] as const) {
-      const scenario = `${path} v1 rtt=${rttMs}ms ${direction}`;
-      it.skipIf(FILTER !== "" && !scenario.includes(FILTER))(scenario, async () => {
-        const seconds = rttMs >= 50 ? 4 : 2;
-        const line = await measure({ path, rttMs, direction, seconds });
-        report({ scenario, path, protocol: 1, rttMs, direction, seconds, ...line });
-        expect(line).toBeDefined();
-      }, 60_000);
+  for (const protocol of [1, 2] as const) {
+    for (const { path, rttMs } of matrix) {
+      for (const direction of ["upload", "download", "duplex"] as const) {
+        const scenario = `${path} v${protocol} rtt=${rttMs}ms ${direction}`;
+        it.skipIf(FILTER !== "" && !scenario.includes(FILTER))(scenario, async () => {
+          const seconds = rttMs >= 50 ? 4 : 2;
+          const line = await measure({ path, protocol, rttMs, direction, seconds });
+          report({ scenario, path, protocol, rttMs, direction, seconds, ...line });
+          expect(line).toBeDefined();
+        }, 60_000);
+      }
     }
   }
 });

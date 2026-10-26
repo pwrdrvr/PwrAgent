@@ -1878,6 +1878,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   gateway_relay: "reach sibling instances",
   remote_pty: "remote terminal protocol",
   service_forward_v1: "port forwarding",
+  service_forward_v2: "fast port forwarding",
   file_push: "file push protocol",
   thread_handoff: "transfer existing threads",
   file_pull: "File pull",

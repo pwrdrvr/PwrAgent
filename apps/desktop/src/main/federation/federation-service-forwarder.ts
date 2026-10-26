@@ -1,25 +1,66 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
 import type {
-  ServiceForward, ServiceThread, ThreadService, ServiceExchangeResult,
+  ServiceForward, ServiceThread, ThreadService, ServiceExchangeResult, ServiceStreamOpen, ServiceStreamOpened,
 } from "@pwragent/shared";
-import { FEDERATION_SERVICE_METHODS as METHODS } from "@pwragent/shared";
+import {
+  FEDERATION_SERVICE_METHODS as METHODS, FEDERATION_SERVICE_V2_METHODS as V2,
+  FEDERATION_SERVICE_V2_NOTIFICATIONS as FRAMES,
+} from "@pwragent/shared";
 import {
   decodeServiceData, readServiceData, waitServiceReadable, writeServiceData, SERVICE_MAX_PEER_STREAMS,
 } from "./federation-service-socket";
+import {
+  ServiceStreamBudget, ServiceStreamEndpoint, ServiceStreamScheduler, SERVICE_STREAM_FRAME_BYTES,
+} from "./federation-service-stream";
 
 export type ServiceRpc = {
   request<T>(params: { method: string; params: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<T>;
+  /** One-way frames for windowed streams. Without it the forward uses v1 exchanges. */
+  notify?(method: string, params: unknown): void | Promise<void>;
 };
 type Forward = {
   windowId: number; view: ServiceForward; rpc: ServiceRpc; server: Server;
   abort: AbortController; sockets: Set<Socket>; leaseId?: string;
   renewal?: ReturnType<typeof setInterval>; renewing: boolean;
+  /** 2 while the owner accepts windowed streams; drops to 1 for good on refusal. */
+  version: 1 | 2;
+  streams: Set<string>;
 };
+type WindowedStream = { forward: Forward; endpoint: ServiceStreamEndpoint };
+
+function unsupported(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code;
+  return code === "method_not_found" || code === "capability_denied";
+}
 
 /** Viewer-owned listeners; never binds any interface except literal IPv4 loopback. */
 export class FederationServiceForwarder {
   private readonly forwards = new Map<string, Forward>();
+  private readonly streams = new Map<string, WindowedStream>();
+  private readonly scheduler = new ServiceStreamScheduler();
+  private readonly budget: ServiceStreamBudget;
+
+  constructor(private readonly options: {
+    /** Windowed streams: per-stream receive window, total receive memory, frame size. */
+    streamWindow?: number;
+    streamBudgetBytes?: number;
+    streamFrameBytes?: number;
+  } = {}) {
+    this.budget = new ServiceStreamBudget(options.streamBudgetBytes);
+  }
+
+  /** Route a windowed-stream frame from owner `peerId`. False when no stream claims it. */
+  receiveNotification(peerId: string, method: string, params: unknown): boolean {
+    const streamId = (params as { streamId?: unknown } | undefined)?.streamId;
+    const stream = typeof streamId === "string" ? this.streams.get(streamId) : undefined;
+    if (!stream || stream.forward.view.service.ownerInstanceId !== peerId) return false;
+    const frame = params as Record<string, never>;
+    if (method === FRAMES.data) stream.endpoint.receiveData(frame);
+    else if (method === FRAMES.window) stream.endpoint.receiveWindow(frame);
+    else if (method === FRAMES.close) stream.endpoint.receiveClose(frame);
+    return true;
+  }
 
   list(windowId: number, instanceId: string, thread: ServiceThread): ServiceForward[] {
     return [...this.forwards.values()].filter((entry) => entry.windowId === windowId
@@ -28,15 +69,18 @@ export class FederationServiceForwarder {
       .map((entry) => ({ ...entry.view, service: { ...entry.view.service } }));
   }
 
-  async connect(windowId: number, service: ThreadService, rpc: ServiceRpc): Promise<ServiceForward> {
+  /** `streams: 2` asks the owner for windowed streams and falls back to v1 when refused. */
+  async connect(windowId: number, service: ThreadService, rpc: ServiceRpc, options: { streams?: 1 | 2 } = {}): Promise<ServiceForward> {
     const existing = this.list(windowId, service.ownerInstanceId, service).find((entry) => entry.service.serviceId === service.serviceId);
     if (existing?.localPort === 0) throw new Error("Service connection is already pending.");
     if (existing) return existing;
     if (this.forwards.size >= 16) throw new Error("Local forwarding limit reached.");
-    const server = createServer({ allowHalfOpen: true, highWaterMark: 32 * 1024, pauseOnConnect: true });
+    const version = options.streams === 2 && rpc.notify ? 2 : 1;
+    const frameBytes = this.options.streamFrameBytes ?? SERVICE_STREAM_FRAME_BYTES;
+    const server = createServer({ allowHalfOpen: true, highWaterMark: version === 2 ? 2 * frameBytes : 32 * 1024, pauseOnConnect: true });
     const forward: Forward = {
       windowId, view: { forwardId: randomUUID(), service, localPort: 0, sentBytes: 0, receivedBytes: 0 },
-      rpc, server, abort: new AbortController(), sockets: new Set(), renewing: false,
+      rpc, server, abort: new AbortController(), sockets: new Set(), renewing: false, version, streams: new Set(),
     };
     this.forwards.set(forward.view.forwardId, forward);
     server.maxConnections = SERVICE_MAX_PEER_STREAMS;
@@ -44,7 +88,7 @@ export class FederationServiceForwarder {
       socket.on("error", () => { /* pump owns the surfaced error and cleanup */ });
       if (forward.abort.signal.aborted || forward.sockets.size >= SERVICE_MAX_PEER_STREAMS) { socket.destroy(); return; }
       forward.sockets.add(socket);
-      void this.pump(forward, socket);
+      void (forward.version === 2 ? this.pumpWindowed(forward, socket) : this.pump(forward, socket));
     });
     try {
       // Do not abort this request locally: a late lease result must be explicitly
@@ -117,9 +161,64 @@ export class FederationServiceForwarder {
     if (forward.renewing || forward.abort.signal.aborted) return;
     forward.renewing = true;
     try {
+      if (forward.version === 2) {
+        try {
+          // Naming the live streams keeps idle ones open and lets the owner reap leaks.
+          await forward.rpc.request({ method: V2.renew, params: { leaseId: forward.leaseId, streamIds: [...forward.streams] },
+            timeoutMs: 5000, signal: forward.abort.signal });
+          return;
+        } catch (error) {
+          if (!unsupported(error)) throw error;
+        }
+      }
       await forward.rpc.request({ method: METHODS.renew, params: { leaseId: forward.leaseId }, timeoutMs: 5000, signal: forward.abort.signal });
     } catch { this.cleanup(forward); }
     finally { forward.renewing = false; }
+  }
+
+  /** Windowed stream: frames flow as credit allows, with no exchange per chunk. */
+  private async pumpWindowed(forward: Forward, socket: Socket): Promise<void> {
+    const streamId = randomUUID();
+    const notify = forward.rpc.notify!.bind(forward.rpc);
+    const endpoint = new ServiceStreamEndpoint({
+      streamId, socket, scheduler: this.scheduler, budget: this.budget,
+      window: this.options.streamWindow, frameBytes: this.options.streamFrameBytes,
+      send: notify,
+      onTransfer: (sent, received) => {
+        forward.view.sentBytes += sent;
+        forward.view.receivedBytes += received;
+        if (received) forward.view.error = undefined;
+      },
+      onClosed: (error) => {
+        this.streams.delete(streamId);
+        forward.streams.delete(streamId);
+        forward.sockets.delete(socket);
+        if (error && !forward.abort.signal.aborted) forward.view.error = error;
+      },
+    });
+    // Register first: the owner may push data before its open result arrives.
+    this.streams.set(streamId, { forward, endpoint });
+    forward.streams.add(streamId);
+    try {
+      const params: ServiceStreamOpen = { leaseId: forward.leaseId!, streamId, window: endpoint.initialWindow, frameBytes: endpoint.frameBytes };
+      const opened = await forward.rpc.request<ServiceStreamOpened>({ method: V2.open, params, timeoutMs: 6000 });
+      if (!opened || typeof opened !== "object") throw new Error("Invalid service stream response.");
+      endpoint.start(opened.window, opened.frameBytes);
+    } catch (error) {
+      if (unsupported(error) && !endpoint.isClosed && !forward.abort.signal.aborted) {
+        // An older owner or gateway: carry this socket and every later one on v1.
+        forward.version = 1;
+        endpoint.detach();
+        this.streams.delete(streamId);
+        forward.streams.delete(streamId);
+        await this.pump(forward, socket);
+        return;
+      }
+      if (!endpoint.isClosed && !forward.abort.signal.aborted) {
+        forward.view.error = error instanceof Error ? error.message : "Service connection failed.";
+      }
+      endpoint.abort(forward.view.error ?? "Service connection cancelled.");
+    }
   }
 
   private async pump(forward: Forward, socket: Socket): Promise<void> {

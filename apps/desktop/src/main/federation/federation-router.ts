@@ -3,6 +3,7 @@ import type {
   FederationCapability,
   FederationErrorEnvelope,
   FederationInstanceId,
+  FederationNotificationEnvelope,
   FederationProtocolEnvelope,
   FederationRequestEnvelope,
   FederationResponseEnvelope,
@@ -33,6 +34,15 @@ export type FederationRequestHandler = (
   sourcePeerId?: FederationInstanceId,
 ) => Promise<unknown> | unknown;
 
+/**
+ * Runs synchronously while the envelope is routed, so notifications from one
+ * peer reach it in arrival order. An authenticated origin is already checked.
+ */
+export type FederationNotificationHandler = (
+  envelope: FederationNotificationEnvelope,
+  sourcePeerId?: FederationInstanceId,
+) => void;
+
 export type FederationBlobChunkHandler = (
   envelope: FederationBlobChunkEnvelope,
   sourcePeerId?: FederationInstanceId,
@@ -46,6 +56,7 @@ export type FederationRouteResult =
 export class FederationRouter {
   private readonly connections = new Map<FederationInstanceId, FederationRouterConnection>();
   private readonly handlers = new Map<string, FederationRequestHandler>();
+  private readonly notificationHandlers = new Map<string, FederationNotificationHandler>();
   private blobChunkHandler?: FederationBlobChunkHandler;
 
   constructor(
@@ -108,6 +119,10 @@ export class FederationRouter {
 
   registerHandler(method: string, handler: FederationRequestHandler): void {
     this.handlers.set(method, handler);
+  }
+
+  registerNotificationHandler(method: string, handler: FederationNotificationHandler): void {
+    this.notificationHandlers.set(method, handler);
   }
 
   registerBlobChunkHandler(handler: FederationBlobChunkHandler): void {
@@ -215,6 +230,20 @@ export class FederationRouter {
           message: error instanceof Error ? error.message : String(error),
         };
       }
+    }
+
+    if (params.envelope.kind === "notification") {
+      const handler = this.notificationHandlers.get(params.envelope.method);
+      try {
+        handler?.(params.envelope, params.sourcePeerId);
+      } catch (error) {
+        return {
+          status: "rejected",
+          code: "handler_failed",
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
+      return { status: "handled" };
     }
 
     if (params.envelope.kind !== "request") {

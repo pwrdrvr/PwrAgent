@@ -30,6 +30,8 @@ export const FEDERATION_CAPABILITIES = [
   "gateway_relay",
   "remote_pty",
   "service_forward_v1",
+  /** Windowed, owner-pushed service streams; see `FEDERATION_SERVICE_V2_CAPABILITY`. */
+  "service_forward_v2",
   "file_push",
   "thread_handoff",
   "file_pull",

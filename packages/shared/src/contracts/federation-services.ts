@@ -61,3 +61,44 @@ export const FEDERATION_SERVICE_METHODS = {
 } as const;
 export type ServiceExchange = { streamId: string; seq: number; data: string; fin: boolean; receive: boolean };
 export type ServiceExchangeResult = { seq: number; data: string; fin: boolean; writable: boolean };
+
+/**
+ * Windowed service streams. A v2 peer also serves every v1 method: leases,
+ * inventory, and release stay on v1, and only the data path changes.
+ *
+ * Each direction has its own credit window, as SSH channels do. The receiver
+ * advertises an initial window at open and grants more with
+ * `services.v2.window` as its local socket drains. The sender may have that
+ * many bytes in flight across many `services.v2.data` frames. Data frames
+ * are one-way notifications, so the owner pushes as bytes arrive instead of
+ * waiting to be polled.
+ */
+export const FEDERATION_SERVICE_V2_CAPABILITY = "service_forward_v2" as const;
+/** Requests: capability-gated by the router, so an older owner answers
+ * `method_not_found` or `capability_denied` and the viewer falls back to v1. */
+export const FEDERATION_SERVICE_V2_METHODS = {
+  open: "services.v2.open",
+  renew: "services.v2.renew",
+} as const;
+/** Notifications in both directions. Older peers drop them silently. */
+export const FEDERATION_SERVICE_V2_NOTIFICATIONS = {
+  data: "services.v2.data",
+  window: "services.v2.window",
+  close: "services.v2.close",
+} as const;
+/** Viewer to owner. The viewer names the stream, so frames that race the
+ * response still find it. `window` is the viewer's receive credit. */
+export type ServiceStreamOpen = { leaseId: string; streamId: string; window: number; frameBytes: number };
+/** The owner's receive credit and largest accepted frame. */
+export type ServiceStreamOpened = { window: number; frameBytes: number };
+/** Keeps the lease and the named streams alive; unnamed streams are reaped. */
+export type ServiceStreamRenew = { leaseId: string; streamIds: string[] };
+/** `seq` counts data frames per direction from 0. `fin` half-closes after `data`. */
+export type ServiceStreamData = { streamId: string; seq: number; data: string; fin?: boolean };
+/** Grants `bytes` more send credit. */
+export type ServiceStreamWindow = { streamId: string; bytes: number };
+/**
+ * The sender neither sends nor accepts more on the stream. After the
+ * sender's FIN and without an error, pending local writes still flush.
+ */
+export type ServiceStreamClose = { streamId: string; error?: string };
