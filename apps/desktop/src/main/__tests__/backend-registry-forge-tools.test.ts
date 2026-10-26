@@ -122,7 +122,7 @@ describe("backend forge tool dispatch", () => {
     await answer(notification, "accept");
     const result = await pending;
     expect(result.success).toBe(true);
-    expect(text(result)).toContain('"attachedToThread":true');
+    expect(text(result)).toMatch(/"attachedToThread":\s*true/);
     expect(attach).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", url: "https://github.com/fixture/project/pull/9" });
   });
 
