@@ -669,6 +669,15 @@ function ApprovalDiffDisclosures(props: {
   );
 }
 
+/**
+ * The element to scroll to or measure for a `.transcript-list__item`. The
+ * item is `display: contents` and has no box, so Chromium ignores
+ * scrollIntoView on it and its rect is empty. The entry it holds has one.
+ */
+export function transcriptItemBox(item: Element): Element {
+  return item.firstElementChild ?? item;
+}
+
 export function TranscriptList(props: TranscriptListProps) {
   const pendingAssistantPreview = usePendingMarkdownPreview(props.threadId, props.pendingAssistantMessage);
   const skills = props.skills ?? EMPTY_SKILLS;
@@ -1210,9 +1219,7 @@ export function TranscriptList(props: TranscriptListProps) {
       handledLinkedMessageRequestRef.current = requestKey;
       linkedMessageHistoryRequestRef.current = undefined;
       disableBottomGlue();
-      // The list item is `display: contents`: it has no box, so Chromium
-      // ignores scrollIntoView on it. Scroll the entry it holds instead.
-      (target.firstElementChild ?? target).scrollIntoView({ behavior: "smooth", block: "center" });
+      transcriptItemBox(target).scrollIntoView({ behavior: "smooth", block: "center" });
       setHighlightedMessageId(messageId);
       onLinkedMessageHandled?.();
       return;

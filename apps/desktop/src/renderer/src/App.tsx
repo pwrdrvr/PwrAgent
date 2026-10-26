@@ -2624,9 +2624,11 @@ function DesktopAppShell(props: {
     // A question opens on its card, as a message link does.
     const messageId = wait.question?.messageId;
     if (messageId && wait.threadKey === selectedThreadKeyRef.current) {
-      // Already on screen: scroll only. Selecting it again would refresh
-      // its git status and clear its errors for nothing.
+      // Already selected: scroll only. Selecting it again would refresh
+      // its git status and clear its errors for nothing. The chip is
+      // reachable from Search, so bring the thread view back too.
       queueMessageLinkRequest({ backend: wait.backend, threadId: wait.threadId, messageId, instanceId: wait.federationTarget?.instanceId });
+      setMainView("thread");
       return;
     }
     showThreadFromLink({
@@ -2635,7 +2637,7 @@ function DesktopAppShell(props: {
       ...(messageId ? { messageId } : {}),
       ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
     });
-  }, [queueMessageLinkRequest, showThreadFromLink]);
+  }, [queueMessageLinkRequest, setMainView, showThreadFromLink]);
   const operatorWaitsContext = useMemo(
     () => operatorRequests.ready ? {
       waitsByThreadKey: operatorRequests.waitsByThreadKey,

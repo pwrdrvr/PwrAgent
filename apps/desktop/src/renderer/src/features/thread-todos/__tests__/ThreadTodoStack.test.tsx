@@ -1131,6 +1131,12 @@ describe("thread row to-do chip", () => {
     );
 
     const chip = screen.getByRole("button", { name: "Question: Which region?" });
+    // Keyboard focus shows what a hover shows, hint included.
+    fireEvent.focus(chip);
+    expect(screen.getByText(/Click to show the latest question/)).toBeTruthy();
+    fireEvent.blur(chip);
+    expect(screen.queryByText(/Click to show the latest question/)).toBeNull();
+
     fireEvent.click(chip);
     expect(openWait).toHaveBeenCalledTimes(1);
     expect(openWait.mock.calls[0]![0]).toMatchObject({ kind: "question", question: { messageId: "msg-2" } });
