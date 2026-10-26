@@ -210,7 +210,8 @@ export class GitLabPrFetcher {
       const file = path.join(dir, "body.json");
       await fs.writeFile(file, JSON.stringify(body ?? {}), { encoding: "utf8", mode: 0o600 });
       const args = ["api", "--hostname", host, "--method", method, "--include", "--header", "Content-Type: application/json", "--input", file, endpoint];
-      let stdout: string;
+      let stdout = "";
+      let answered = true;
       try {
         stdout = this.options.run
           ? await this.options.run(command, args)
@@ -221,8 +222,10 @@ export class GitLabPrFetcher {
       } catch (error) {
         // glab exits nonzero on an HTTP error but still prints the response.
         stdout = error && typeof error === "object" && "stdout" in error && typeof error.stdout === "string" ? error.stdout : "";
-        if (!/^HTTP\//i.test(stdout)) throw new Error(`GitLab request failed on ${host}. Check glab login, api permission, project access, and connectivity.`);
+        answered = /^HTTP\//i.test(stdout);
       }
+      // Raw CLI output can carry credentials, so a failure without a response is reported without it.
+      if (!answered) throw new Error(`GitLab request failed on ${host}. Check glab login, api permission, project access, and connectivity.`);
       const status = stdout.match(/^HTTP\/[\d.]+ (\d{3})[^\r\n]*\r?\n/i);
       const boundary = stdout.match(/\r?\n\r?\n/);
       const responseBody = boundary ? stdout.slice(boundary.index! + boundary[0].length) : stdout;
@@ -256,7 +259,7 @@ export class GitLabPrFetcher {
         return error && typeof error === "object" && "stderr" in error && typeof error.stderr === "string" ? error.stderr : "";
       }
     };
-    let token = (await run(["config", "get", "token", "--host", host])).trim().split(/\s+/)[0];
+    let token: string | undefined = (await run(["config", "get", "token", "--host", host])).trim().split(/\s+/)[0];
     if (!token) token = (await run(["auth", "status", "--hostname", host, "--show-token"])).match(/Token:\s*(\S+)/i)?.[1];
     if (!token || /[^\w.-]/.test(token)) return undefined;
     this.tokens.set(host, { at: Date.now(), token });

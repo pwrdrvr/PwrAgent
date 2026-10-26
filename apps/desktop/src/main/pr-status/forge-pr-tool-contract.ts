@@ -148,7 +148,9 @@ function names(args: Record<string, unknown>, key: string): void {
 }
 /** Branch names travel in URLs and gh arguments; refuse anything git itself would refuse. */
 export function isSafeRefName(value: string): boolean {
-  return value.length <= 255 && !/[\s~^:?*[\\\x00-\x1f\x7f]|\.\.|@\{|^[-/.]|[/.]$|\/\/|\.lock$/.test(value);
+  return value.length <= 255
+    && ![...value].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)
+    && !/[\s~^:?*[\\]|\.\.|@\{|^[-/.]|[/.]$|\/\/|\.lock$/.test(value);
 }
 
 export function validateForgePrToolArgs(operation: string, value: unknown): asserts value is ForgePrToolArgs {
