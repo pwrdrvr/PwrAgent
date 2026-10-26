@@ -178,7 +178,7 @@ export class McpConnectionRegistry {
   /**
    * Choose when a gateway call to this connection asks first.
    *
-   * The default is stored as absence: `auto` except for Sandboxer's `prompt`.
+   * The default is stored as absence: `auto` except for Sandboxer's `approve`.
    * Older rows and a connection reset to its default therefore read the same.
    */
   setToolApproval(
@@ -188,7 +188,7 @@ export class McpConnectionRegistry {
     if (isBuiltInMcpConnectionId(connectionId)) {
       const path = ["mcp_connections", BUILT_IN_TOOL_APPROVAL_KEYS[connectionId]];
       this.writeConfig((source) =>
-        applyTomlEdits(source, [toolApproval === (connectionId === SANDBOXER_MCP_CONNECTION_ID ? "prompt" : "auto")
+        applyTomlEdits(source, [toolApproval === (connectionId === SANDBOXER_MCP_CONNECTION_ID ? "approve" : "auto")
           ? { op: "delete", path }
           : { op: "set", path, value: toolApproval }]),
       );
@@ -262,7 +262,7 @@ export class McpConnectionRegistry {
       enabled: table?.sandboxer_enabled === true,
       selectForNewThreads: table?.sandboxer_select_for_new_threads === true,
       toolApproval: isMcpConnectionToolApproval(table?.sandboxer_tool_approval)
-        ? table.sandboxer_tool_approval : "prompt",
+        ? table.sandboxer_tool_approval : "approve",
       sandboxerCleanupOnPrClose: table?.sandboxer_cleanup_on_pr_close !== false,
       createdAt: 0,
       updatedAt: 0,

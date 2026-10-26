@@ -18,6 +18,14 @@ false. Profile TOML scalars `sandboxer_enabled`,
 `sandboxer_cleanup_on_pr_close` (default true) live under
 `[mcp_connections]`. No SQLite persistence is added.
 
+The built-in connection defaults `sandboxer_tool_approval` to `approve`.
+Enabling and selecting sandbox compute authorizes its tools, including shell
+commands and file writes, in Default and Auto access. An explicitly configured
+`auto` or `prompt` policy overrides that default. The default is stored as an
+absent scalar; `prompt` is stored explicitly. The upstream annotations remain
+unchanged: approval policy recognizes the authorized sandbox environment
+instead of rewriting tool metadata to describe commands as read-only.
+
 The gateway launches only `/usr/local/bin/sbx mcp --type small --ttl 1800
 --no-update`, through the MCP SDK's stdio transport. This absolute path avoids
 Docker's unrelated `sbx`. The initial integration expects the official CLI at

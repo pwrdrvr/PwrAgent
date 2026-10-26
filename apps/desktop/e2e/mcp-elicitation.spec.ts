@@ -146,7 +146,7 @@ test("accepts a gateway conversation approval through the thread UI", async () =
     });
     await expect(pendingMcp.getByRole("button", { name: "Always allow" })).toHaveCount(0);
     await expect(pendingMcp.getByRole("button", { name: "Allow once" })).toBeVisible();
-    await pendingMcp.getByRole("button", { name: "Allow this conversation" }).click();
+    await pendingMcp.getByRole("button", { name: "Allow this tool for this conversation", exact: true }).click();
     await expect(pendingMcp).toHaveCount(0);
     await expect(app.window.getByRole("status")).toContainText("Thinking");
     await expect.poll(async () => await app.getPendingRequest()).toBeUndefined();
@@ -164,7 +164,7 @@ test("preserves one-time gateway approval through the thread UI", async () => {
 
   try {
     const pendingMcp = app.window.getByRole("group", { name: "Pending MCP interaction" });
-    await expect(pendingMcp.getByRole("button", { name: "Allow this conversation" })).toBeVisible();
+    await expect(pendingMcp.getByRole("button", { name: "Allow this tool for this conversation", exact: true })).toBeVisible();
     await pendingMcp.getByRole("button", { name: "Allow once" }).click();
     await expect(pendingMcp).toHaveCount(0);
     await expect.poll(async () => await app.getPendingRequest()).toBeUndefined();

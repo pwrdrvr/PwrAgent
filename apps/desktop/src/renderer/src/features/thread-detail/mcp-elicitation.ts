@@ -121,7 +121,7 @@ export type PendingMcpInteractionState = {
 
 type FieldValue = string | number | boolean | string[] | null;
 
-export type McpApprovalPersistence = "session" | "always";
+export type McpApprovalPersistence = "session" | "always" | "server-session";
 
 // The request's owner (Codex, the gateway or the upstream server) holds the
 // grant. Only offer advertised scopes; forms and login flows need input.
@@ -131,7 +131,8 @@ export function readMcpApprovalPersistence(state: PendingMcpInteractionState): M
   }
   const meta = state._meta;
   const modes = Array.isArray(meta?.persist) ? meta.persist : [meta?.persist];
-  if (modes.length === 0 || modes.some((mode) => mode !== "session" && mode !== "always")) {
+  if (modes.length === 0 || modes.some((mode) => mode !== "session" && mode !== "always"
+    && !(mode === "server-session" && meta?.pwragent_approval_kind === "mcp_tool_call"))) {
     return [];
   }
   return [...new Set(modes)] as McpApprovalPersistence[];

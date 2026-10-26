@@ -18,6 +18,7 @@ import {
 import {
   buildMcpElicitationResponse,
   readMcpApprovalPersistence,
+  type McpApprovalPersistence,
 } from "../thread-detail/mcp-elicitation";
 import { formatTodoAge } from "../thread-todos/ThreadTodoCard";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
@@ -251,7 +252,7 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
     const answer = (
       label: string,
       action: "accept" | "decline" | "cancel",
-      persist?: "session" | "always",
+      persist?: McpApprovalPersistence,
     ): void => {
       void run(label, () => props.respond(wait, buildMcpElicitationResponse(mcp, action, persist)));
     };
@@ -278,11 +279,20 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
       );
     }
     const entries: TodoSplitMenuEntry[] = [
+      ...(persistence.includes("server-session")
+        ? [{
+            kind: "item" as const,
+            id: "server-session",
+            label: `Allow ${mcp.serverName} for this conversation`,
+            onSelect: () => answer("Allowing…", "accept", "server-session"),
+          }]
+        : []),
       ...(persistence.includes("session")
         ? [{
             kind: "item" as const,
             id: "session",
-            label: "Allow this conversation",
+            label: mcp._meta?.pwragent_approval_kind === "mcp_tool_call"
+              ? "Allow this tool for this conversation" : "Allow this conversation",
             onSelect: () => answer("Allowing…", "accept", "session"),
           }]
         : []),
