@@ -26507,7 +26507,7 @@ command = "pnpm dev"
         const { codexClient, registry } = setup(listBackgroundTerminals);
         await codexClient.emit({ method: "item/started", params: {
           threadId: "thread-1", turnId: "turn-1",
-          item: { id: "tool-1", type, status: "inProgress", arguments: "private tool input" },
+          item: { id: "tool-1", type, status: "inProgress", arguments: { query: "private tool input" } },
         } });
         await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
         // The terminal list cannot settle a non-command while its turn runs.
@@ -26576,9 +26576,20 @@ command = "pnpm dev"
             } });
           }
         }
-        await codexClient.emit({ method, params: {
-          threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
-        } });
+        const params = { threadId: "thread-1", turnId: "turn-1" };
+        if (method === "turn/failed") {
+          await codexClient.emit({ method, params: {
+            ...params, turn: { id: "turn-1", status: "failed", error: { message: "Fixture turn failed" } },
+          } });
+        } else if (method === "turn/cancelled") {
+          await codexClient.emit({ method, params: {
+            ...params, turn: { id: "turn-1", status: "cancelled" },
+          } });
+        } else {
+          await codexClient.emit({ method, params: {
+            ...params, turn: { id: "turn-1", status: "completed", output: [] },
+          } });
+        }
         expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(1);
         // The newer command has not yet acquired a background session.
         await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
@@ -26766,7 +26777,7 @@ command = "pnpm dev"
       for (let i = 0; i < 30; i += 1) {
         await codexClient.emit({ method: "item/started", params: {
           threadId: `thread-${i}`, turnId: "turn-1", item: {
-            id: `mcp-${i}`, type: "mcpToolCall", status: "inProgress", arguments: "private tool input",
+            id: `mcp-${i}`, type: "mcpToolCall", status: "inProgress", arguments: { query: "private tool input" },
           },
         } });
       }
