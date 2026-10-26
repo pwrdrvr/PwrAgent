@@ -40,7 +40,12 @@ function operatorReviewNote(
       return "Marked addressed by operator.";
     case "handled":
       return "Marked handled by operator.";
+    case "declined":
+      return "Declined by operator.";
+    case "deferred":
+      return "Deferred by operator.";
     case "dismissed":
+      // A finding's older name for declined, from a viewer that predates it.
       return request.itemId ? "Declined by operator." : "Dismissed by operator.";
   }
 }

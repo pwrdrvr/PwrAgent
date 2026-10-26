@@ -5,7 +5,9 @@ import type BetterSqlite3 from "better-sqlite3";
 import {
   encodeLegacyThreadIdentityKey,
   estimateTokenUsageCost,
+  normalizeThreadReview,
   resolveTokenUsagePriceUnavailableReason,
+  type ThreadReview,
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadata.js";
@@ -2857,6 +2859,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     // other's table. Both are idempotent.
     db.exec(DURABLE_TURN_REQUEST_SCHEMA);
     db.exec(THREAD_REVIEW_SCHEMA);
+    ensureThreadReviewFindingStatusNames(db);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
@@ -2869,6 +2872,32 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
 CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
   ON app_runtime_instances(profile_name, cwd_hash, heartbeat_at DESC);
 `);
+}
+
+/**
+ * A finding declined before `declined` had its name was stored `dismissed`.
+ * This renames each in place, in the open's one transaction. A profile with
+ * none left writes nothing; the prefilter also reads dismissed reviews, which
+ * keep that name, and leaves them as they are.
+ */
+function ensureThreadReviewFindingStatusNames(db: BetterSqlite3.Database): void {
+  const rows = db.prepare(
+    `SELECT review_id, payload FROM thread_reviews
+       WHERE payload LIKE '%"status":"dismissed"%'`,
+  ).all() as Array<{ review_id: string; payload: string }>;
+  if (rows.length === 0) return;
+  const update = db.prepare("UPDATE thread_reviews SET payload = ? WHERE review_id = ?");
+  for (const row of rows) {
+    let stored: ThreadReview;
+    try {
+      stored = JSON.parse(row.payload) as ThreadReview;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(stored.items)) continue;
+    const renamed = normalizeThreadReview(stored);
+    if (renamed !== stored) update.run(JSON.stringify(renamed), row.review_id);
+  }
 }
 
 function ensureThreadToolIncidentExplorerSchema(

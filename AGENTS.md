@@ -33,12 +33,18 @@
 - This rule covers:
   - Out-of-scope gaps.
   - Deferred follow-ups.
-  - Code-review findings that you skipped but that are still worth doing.
+  - Code-review findings that you are not fixing but that are still worth doing.
 - Give the card a `start_thread` action.
   - Its prompt must stand alone. The new thread does not see the original thread.
   - The operator can then track the item and spawn a thread when ready.
 - A finding that is not worth doing needs no card.
   - Say so in your reply to the operator instead.
+- Settle every tracked review finding with `update_review_item`:
+  - `addressed`: you fixed it. Note what changed.
+  - `declined`: it is not worth doing. Note the reason.
+  - `deferred`: it is worth doing later. Raise the card first, then pass its id as `todoId`.
+  - Claude Code's `skipped` outcome settles nothing. The finding stays open on the operator's To-do list.
+  - [docs/thread-reviews.md](docs/thread-reviews.md#finding-outcomes) defines the outcomes.
 
 ### Command output
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentEvent, AppServerThreadReviewEntry, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { threadReviewTodo } from "@pwragent/shared";
 import {
+  ALL_FINDINGS_SETTLED_NOTE,
   REPORTED_FIXED_NOTE,
   REPORTED_NO_CHANGE_NOTE,
   THREAD_REVIEW_MAX_FINDINGS,
@@ -44,15 +45,16 @@ describe("persistent thread reviews", () => {
     else process.env[SQLITE_WRITE_METRICS_ENV] = previousMetrics;
   });
 
-  it("keeps findings waiting until each is addressed or dismissed, then records the final outcome", () => {
+  it("keeps findings waiting until each is addressed or declined, then records the final outcome", () => {
     const review = service.record(THREAD, INPUT);
     expect(threadReviewTodo(review)).toMatchObject({ reviewId: review.id, status: "open", detail: "2 open findings · Two correctness findings." });
     expect(() => service.update({ id: review.id, status: "handled", note: "Done" }, "agent", THREAD)).toThrow("each open finding");
     const addressed = service.update({ id: review.id, itemId: review.items[0]!.id, status: "addressed", note: "Fixed in the cancellation handler.", url: "https://github.com/example/repo/commit/abc" }, "agent", THREAD);
     expect(addressed.status).toBe("open");
     expect(addressed.items[0]!.resolution).toMatchObject({ actor: "agent", note: "Fixed in the cancellation handler.", url: "https://github.com/example/repo/commit/abc" });
-    const settled = service.update({ id: review.id, itemId: review.items[1]!.id, status: "dismissed", note: "The caller owns the connection." }, "user");
+    const settled = service.update({ id: review.id, itemId: review.items[1]!.id, status: "declined", note: "The caller owns the connection." }, "user");
     expect(settled.status).toBe("handled");
+    expect(settled.resolution).toMatchObject({ actor: "system", note: ALL_FINDINGS_SETTLED_NOTE });
     expect(service.list()).toEqual([]);
     expect(threadReviewTodo(settled).status).toBe("done");
     const documented = service.update({ id: review.id, status: "handled", note: "Review addressed; the ownership finding was dismissed.", url: "https://github.com/example/repo/pull/1#discussion_r123" }, "agent", THREAD);
@@ -95,9 +97,79 @@ describe("persistent thread reviews", () => {
 
   it("requires documented outcomes and rejects invalid statuses and unsafe links", () => {
     const review = service.record(THREAD, INPUT);
-    expect(() => service.update({ id: review.id, status: "dismissed" }, "agent", THREAD)).toThrow("Document why");
+    expect(() => service.update({ id: review.id, status: "dismissed" }, "agent", THREAD)).toThrow("Add a note");
+    expect(() => service.update({ id: review.id, itemId: review.items[0]!.id, status: "declined" }, "agent", THREAD))
+      .toThrow("the reason for declined");
     expect(() => service.update({ id: review.id, status: "dismissed", note: "Ignore", url: "javascript:alert(1)" }, "agent", THREAD)).toThrow("HTTP or HTTPS");
-    expect(() => service.update({ id: review.id, status: "addressed", note: "Fixed" }, "user")).toThrow("Invalid review status");
+    expect(() => service.update({ id: review.id, status: "addressed", note: "Fixed" }, "user")).toThrow("A review's status");
+    // A whole review keeps its own names; `declined` is a finding's.
+    expect(() => service.update({ id: review.id, status: "declined", note: "No" }, "user")).toThrow("A review's status");
+  });
+
+  it("accepts a finding's older names and refuses skipped", () => {
+    const review = service.record(THREAD, INPUT);
+    const [first, second] = review.items;
+    const declined = service.update({ id: review.id, itemId: first!.id, status: "dismissed", note: "Intended." }, "agent", THREAD);
+    expect(declined.items[0]!.status).toBe("declined");
+    // The same outcome under its older name is no change.
+    expect(service.update({ id: review.id, itemId: first!.id, status: "dismissed" }, "agent", THREAD)).toEqual(declined);
+    const fixed = service.update({ id: review.id, itemId: second!.id, status: "fixed" as never, note: "Done." }, "agent", THREAD);
+    expect(fixed.items[1]!.status).toBe("addressed");
+    expect(() => service.update({ id: review.id, itemId: second!.id, status: "skipped" as never, note: "Later." }, "agent", THREAD))
+      .toThrow("`skipped` leaves a finding open");
+    expect(() => service.update({ id: review.id, itemId: second!.id, status: "handled", note: "Done." }, "agent", THREAD))
+      .toThrow("A finding's status is open, addressed, declined, or deferred.");
+  });
+
+  it("defers a finding only to the to-do card that tracks it", () => {
+    const review = service.record(THREAD, INPUT);
+    const itemId = review.items[0]!.id;
+    const todo = { id: "todo-1", title: "Handle cancellation in the export queue" };
+    expect(() => service.update({ id: review.id, itemId, status: "deferred", note: "Needs a design pass." }, "agent", THREAD))
+      .toThrow("create one with add_todo");
+    expect(() => service.update({ id: review.id, itemId, status: "deferred", note: "Later.", todoId: "todo-2" }, "agent", THREAD, todo))
+      .toThrow("create one with add_todo");
+    expect(() => service.update({ id: review.id, itemId, status: "declined", note: "No.", todoId: todo.id }, "agent", THREAD, todo))
+      .toThrow("Only a deferred finding takes a todoId.");
+    const deferred = service.update({
+      id: review.id, itemId, status: "deferred", note: "Needs a design pass.", todoId: todo.id,
+    }, "agent", THREAD, todo);
+    expect(deferred.items[0]).toMatchObject({
+      status: "deferred", resolution: { actor: "agent", note: "Needs a design pass.", todo },
+    });
+    expect(threadReviewTodo(deferred).detail).toBe("1 open finding · Two correctness findings.");
+    const eventsBefore = events.length;
+    expect(service.update({ id: review.id, itemId, status: "deferred", todoId: todo.id }, "agent", THREAD, todo)).toEqual(deferred);
+    expect(events).toHaveLength(eventsBefore);
+    const settled = service.update({ id: review.id, itemId: review.items[1]!.id, status: "addressed", note: "Fixed." }, "agent", THREAD);
+    expect(settled.status).toBe("handled");
+    // Reopening a deferred finding drops the card from its resolution.
+    const reopened = service.update({ id: review.id, itemId, status: "open" }, "agent", THREAD);
+    expect(reopened.items[0]).toMatchObject({ status: "open" });
+    expect(reopened.items[0]!.resolution).toBeUndefined();
+  });
+
+  it("reads a finding an older build stored as dismissed as declined, and renames it on the next open", () => {
+    const review = service.record(THREAD, INPUT);
+    service.update({ id: review.id, itemId: review.items[0]!.id, status: "declined", note: "Intended." }, "agent", THREAD);
+    const other = service.record(THREAD, { ...INPUT, sourceKey: "other-artifact" });
+    service.update({ id: other.id, status: "dismissed", note: "Superseded." }, "user");
+    const legacy = (db.raw.prepare("SELECT payload FROM thread_reviews WHERE review_id = ?").get(review.id) as { payload: string })
+      .payload.replace('"status":"declined"', '"status":"dismissed"');
+    db.raw.prepare("UPDATE thread_reviews SET payload = ? WHERE review_id = ?").run(legacy, review.id);
+    const dismissedPayload = () => (db.raw.prepare("SELECT payload FROM thread_reviews WHERE review_id = ?")
+      .get(other.id) as { payload: string }).payload;
+    const untouched = dismissedPayload();
+    expect(service.get(review.id)?.items[0]?.status).toBe("declined");
+    expect(service.list({ status: "all" }).find((entry) => entry.id === review.id)?.items[0]?.status).toBe("declined");
+
+    db.close();
+    db = StateDb.open(temp.dbPath);
+    const stored = JSON.parse((db.raw.prepare("SELECT payload FROM thread_reviews WHERE review_id = ?")
+      .get(review.id) as { payload: string }).payload) as { items: Array<{ status: string }> };
+    expect(stored.items.map((item) => item.status)).toEqual(["declined", "open"]);
+    // A dismissed review keeps its name, and its payload is not rewritten.
+    expect(dismissedPayload()).toBe(untouched);
   });
 
   it("imports completed structured reviews and skips running review entries", () => {
@@ -284,7 +356,7 @@ describe("persistent thread reviews", () => {
     expect(partial.items[1]?.status).toBe("open");
     service = new ThreadReviewService(db);
     expect(service.list({ ...THREAD, status: "all" })).toEqual([partial]);
-    const settled = service.update({ id: partial.id, itemId: partial.items[1]!.id, status: "dismissed", note: "Caller owns the connection." }, "user");
+    const settled = service.update({ id: partial.id, itemId: partial.items[1]!.id, status: "declined", note: "Caller owns the connection." }, "user");
     expect(settled.status).toBe("handled");
     expect(service.list({ ...THREAD, status: "all" })[0]?.items[0]?.resolution).toEqual(partial.items[0]?.resolution);
   });
@@ -330,7 +402,7 @@ describe("persistent thread reviews", () => {
       const partial = service.applyReportedOutcomes(CLAUDE, THREE.sourceKey, [
         { index: 0, outcome: "fixed" }, { index: 1, outcome: "skipped" }, { index: 2, outcome: "no_change_needed" },
       ])!;
-      expect(partial.items.map((item) => item.status)).toEqual(["addressed", "open", "dismissed"]);
+      expect(partial.items.map((item) => item.status)).toEqual(["addressed", "open", "declined"]);
       expect(partial.items[0]!.resolution).toEqual({ note: REPORTED_FIXED_NOTE, actor: "agent", at: expect.any(Number) });
       expect(partial.items[2]!.resolution).toEqual({ note: REPORTED_NO_CHANGE_NOTE, actor: "agent", at: expect.any(Number) });
       expect(partial.items[1]!.resolution).toBeUndefined();
@@ -340,15 +412,15 @@ describe("persistent thread reviews", () => {
 
       const settled = service.applyReportedOutcomes(CLAUDE, THREE.sourceKey, [{ index: 1, outcome: "fixed" }])!;
       expect(settled.status).toBe("handled");
-      expect(settled.resolution).toMatchObject({ actor: "system", note: "All findings addressed or declined." });
+      expect(settled.resolution).toMatchObject({ actor: "system", note: ALL_FINDINGS_SETTLED_NOTE });
       expect(service.get(review.id)?.status).toBe("handled");
     });
 
     it("never overrides an outcome already recorded for a finding", () => {
       const review = service.record(CLAUDE, INPUT, "automatic");
-      service.update({ id: review.id, itemId: review.items[0]!.id, status: "dismissed", note: "Intended behavior." }, "user", CLAUDE);
+      service.update({ id: review.id, itemId: review.items[0]!.id, status: "declined", note: "Intended behavior." }, "user", CLAUDE);
       const after = service.applyReportedOutcomes(CLAUDE, INPUT.sourceKey, [{ index: 0, outcome: "fixed" }])!;
-      expect(after.items[0]).toMatchObject({ status: "dismissed", resolution: { actor: "user", note: "Intended behavior." } });
+      expect(after.items[0]).toMatchObject({ status: "declined", resolution: { actor: "user", note: "Intended behavior." } });
       expect(events).toHaveLength(2);
     });
 

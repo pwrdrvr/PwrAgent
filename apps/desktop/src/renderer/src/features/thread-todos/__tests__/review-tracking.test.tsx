@@ -74,28 +74,43 @@ describe("review status controls", () => {
 
   it("documents an addressed finding and keeps the original review visible", async () => {
     const api = installApi({
-      ...review, status: "handled", resolution: { note: "All findings addressed or declined.", actor: "system", at: 2 },
+      ...review, status: "handled", resolution: { note: "Every finding is addressed, declined, or deferred.", actor: "system", at: 2 },
       items: [{ ...review.items[0]!, status: "addressed", resolution: { note: "Added the abort handler.", url: "https://example.com/atlas/commit/1a2b3c4d5e", actor: "agent", at: 2 } }],
     });
     render(<TranscriptReview entry={entry} parentThreadId="owner" parentThreadBackend="codex" />);
     fireEvent.click(await screen.findByRole("button", { name: "Mark addressed: Abort pending exports" }));
     await waitFor(() => expect(api.updateThreadReview).toHaveBeenCalledWith({ id: "review", itemId: "finding", status: "addressed" }));
-    await screen.findByText("All findings addressed or declined.");
+    await screen.findByText("Every finding is addressed, declined, or deferred.");
     expect(screen.getByText("Abort pending exports")).toBeVisible();
     expect(screen.getByRole("link", { name: "Commit 1a2b3c4" })).toHaveAttribute("href", "https://example.com/atlas/commit/1a2b3c4d5e");
     expect(screen.getByText("Addressed by the agent · Added the abort handler.")).toBeVisible();
     expect(screen.getByRole("button", { name: "Reopen finding: Abort pending exports" })).toBeVisible();
   });
 
-  it("labels the whole review and its findings Did not address after dismissal", async () => {
+  it("labels the whole review and its findings Dismissed after dismissal", async () => {
     const api = installApi({ ...review, status: "dismissed", resolution: { note: "Dismissed by operator.", actor: "user", at: 2 } });
     render(<TranscriptReview entry={entry} parentThreadId="owner" />);
     fireEvent.click(await screen.findByRole("button", { name: "Dismiss review" }));
-    await waitFor(() => expect(screen.getAllByText("Did not address", { exact: true })).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByText("Dismissed", { exact: true })).toHaveLength(2));
+    expect(screen.queryByText("Did not address")).not.toBeInTheDocument();
     expect(screen.getByText("Stop the export when its owner closes.")).toBeVisible();
     expect(screen.queryByRole("button", { name: /^Mark addressed:/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Reopen review" }));
     await waitFor(() => expect(api.updateThreadReview).toHaveBeenLastCalledWith({ id: "review", status: "open" }));
+  });
+
+  it.each([
+    ["declined", "Declined", "Declined by the agent · The caller owns the connection.", undefined],
+    ["deferred", "Deferred", "Deferred by the agent · Needs a design pass.", { id: "todo-1", title: "Design the abort path" }],
+  ] as const)("labels a %s finding in the transcript with its outcome and reason", async (status, label, line, todo) => {
+    const note = status === "declined" ? "The caller owns the connection." : "Needs a design pass.";
+    installApi(review, { ...review, status: "handled", items: [{ ...review.items[0]!, status,
+      resolution: { note, actor: "agent", at: 2, ...(todo ? { todo } : {}) } }] });
+    render(<TranscriptReview entry={entry} parentThreadId="owner" />);
+    expect(await screen.findByText(label, { exact: true })).toBeVisible();
+    expect(screen.getByText(line)).toBeVisible();
+    if (todo) expect(screen.getByText(todo.title)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Reopen finding: Abort pending exports" })).toBeVisible();
   });
 
   it("renders what a finding says from the transcript and reads only its state from the record", async () => {
@@ -118,7 +133,7 @@ describe("review status controls", () => {
   });
 });
 
-const finding = (id: string, title: string, priority: number, status: "open" | "addressed" | "dismissed" = "open") => ({
+const finding = (id: string, title: string, priority: number, status: ThreadReview["items"][number]["status"] = "open") => ({
   id, title, priority, status, createdAt: 1, updatedAt: 1,
   body: `Why ${title.toLowerCase()} matters.`,
   codeLocation: { absolute_file_path: "/example/atlas/src/export-queue.ts", line_range: { start: 42, end: 46 } },
@@ -145,7 +160,7 @@ describe("review To-do card", () => {
         finding("done", "Drop the stale cursor", 1, "addressed"),
         finding("format", "Keep the selected output format", 2),
         finding("abort", "Abort pending exports", 1),
-        finding("retry", "Name the retry budget", 3, "dismissed"),
+        finding("retry", "Name the retry budget", 3, "declined"),
       ],
     };
     const { handlers, todo } = renderCard(current);
@@ -161,7 +176,7 @@ describe("review To-do card", () => {
     // Nothing on a row reads as a step's checkbox.
     expect(screen.queryAllByRole("checkbox")).toEqual([]);
     expect(within(rows[2]!).getByText("Addressed")).toBeInTheDocument();
-    expect(within(rows[3]!).getByText("Did not address")).toBeInTheDocument();
+    expect(within(rows[3]!).getByText("Declined")).toBeInTheDocument();
     expect(within(rows[3]!).getByRole("button", { name: "Reopen finding: Name the retry budget" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Fix all" }));
@@ -307,7 +322,22 @@ describe("review To-do card", () => {
     const current: ThreadReview = { ...review, items: [finding("abort", "Abort pending exports", 1)] };
     const { api } = renderCard(current);
     fireEvent.click(await screen.findByRole("button", { name: "Decline finding: Abort pending exports" }));
-    await waitFor(() => expect(api.updateThreadReview).toHaveBeenCalledWith({ id: "review", itemId: "abort", status: "dismissed" }));
+    await waitFor(() => expect(api.updateThreadReview).toHaveBeenCalledWith({ id: "review", itemId: "abort", status: "declined" }));
+  });
+
+  it("labels a deferred finding Deferred and keeps it unstruck", async () => {
+    const current: ThreadReview = { ...review, items: [
+      finding("abort", "Abort pending exports", 1),
+      { ...finding("retry", "Name the retry budget", 2, "deferred"), resolution: {
+        note: "Needs a design pass.", todo: { id: "todo-1", title: "Design the retry budget" }, actor: "agent", at: 2,
+      } },
+    ] };
+    renderCard(current);
+    await screen.findByText("1 of 2");
+    const row = screen.getAllByRole("listitem")[1]!;
+    expect(row).toHaveAttribute("data-status", "deferred");
+    expect(within(row).getByText("Deferred")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Reopen finding: Name the retry budget" })).toBeInTheDocument();
   });
 
   it("offers Mark handled once nothing is left open", async () => {

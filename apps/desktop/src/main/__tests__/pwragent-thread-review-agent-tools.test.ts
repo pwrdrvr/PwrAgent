@@ -55,6 +55,46 @@ describe("review tools", () => {
     expect((settled as { data: object }).data).not.toHaveProperty("guidance");
   });
 
+  it("names every way to settle a finding in its schema and guidance", () => {
+    const tool = buildPwrAgentThreadReviewToolDefinitions(handler).find((entry) => entry.name === "update_review_item")!;
+    const properties = tool.inputSchema.properties as Record<string, { enum?: string[] }>;
+    expect(properties.status!.enum).toEqual(["open", "addressed", "declined", "deferred", "dismissed", "fixed"]);
+    expect(properties).toHaveProperty("todoId");
+    for (const word of ["addressed", "declined", "deferred", "add_todo", "todoId"]) {
+      expect(OPEN_FINDINGS_GUIDANCE).toContain(word);
+      expect(tool.description).toContain(word);
+    }
+    expect(tool.description).toContain("skipped");
+  });
+
+  it("settles findings through their older names and passes a deferral's todoId to the handler", async () => {
+    const owner = { backend: "codex" as const, threadId: "owner" };
+    const review = service.record(owner, {
+      sourceKey: "aliases", title: "Review", items: [{ title: "One" }, { title: "Two" }, { title: "Three" }],
+    });
+    const deferring: PwrAgentThreadReviewHandler = {
+      ...handler,
+      update: (identity, request) => service.update(request, "agent", identity,
+        request.todoId === "todo-1" ? { id: "todo-1", title: "Follow up" } : undefined),
+    };
+    const tool = buildPwrAgentThreadReviewToolDefinitions(deferring).find((entry) => entry.name === "update_review_item")!;
+    const [one, two, three] = review.items;
+    expect(await tool.dispatch({ id: review.id, itemId: one!.id, status: "dismissed", note: "Intended." }, context))
+      .toMatchObject({ ok: true });
+    expect(await tool.dispatch({ id: review.id, itemId: two!.id, status: "fixed", note: "Done." }, context))
+      .toMatchObject({ ok: true });
+    expect(await tool.dispatch({ id: review.id, itemId: three!.id, status: "skipped", note: "Later." }, context))
+      .toMatchObject({ ok: false, code: "invalid_arguments", message: expect.stringContaining("leaves a finding open") });
+    expect(await tool.dispatch({ id: review.id, itemId: three!.id, status: "deferred", note: "Later." }, context))
+      .toMatchObject({ ok: false, code: "invalid_arguments", message: expect.stringContaining("todoId") });
+    expect(await tool.dispatch({ id: review.id, itemId: three!.id, status: "deferred", note: "Later.", todoId: "todo-1" }, context))
+      .toMatchObject({ ok: true });
+    expect(service.get(review.id)).toMatchObject({
+      status: "handled",
+      items: [{ status: "declined" }, { status: "addressed" }, { status: "deferred", resolution: { todo: { id: "todo-1", title: "Follow up" } } }],
+    });
+  });
+
   it("rejects guessed review ids from another calling thread even with spoofed arguments", async () => {
     const review = service.record({ backend: "codex", threadId: "other" }, { sourceKey: "artifact", title: "Review", items: [] });
     const tool = buildPwrAgentThreadReviewToolDefinitions(handler).find((entry) => entry.name === "update_review")!;

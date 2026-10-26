@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { HookCallbackMatcher, HookEvent } from "@anthropic-ai/claude-agent-sdk";
 import type {
   AppServerReviewFinding,
   AppServerReviewFindingOutcome,
@@ -61,6 +62,51 @@ export function parseClaudeFindingsReport(input: unknown): ClaudeFindingsReport 
     });
   }
   return { ...(text(record.level) ? { level: text(record.level) } : {}), findings };
+}
+
+/** Titles the skipped-findings guidance lists before it summarizes the rest. */
+const SKIPPED_TITLES_SHOWN = 10;
+
+/**
+ * What the agent is told when its report leaves findings `skipped`. Claude
+ * Code's word reads like a settled outcome, but PwrAgent cannot know why a
+ * finding was skipped, so it stays open on the operator's To-do list. The
+ * agent must decline it with a reason or defer it to a to-do card.
+ */
+export function claudeSkippedFindingsGuidance(report: ClaudeFindingsReport): string | undefined {
+  const skipped = report.findings.filter((finding) => finding.outcome === "skipped");
+  if (skipped.length === 0) return undefined;
+  const titles = skipped.slice(0, SKIPPED_TITLES_SHOWN).map((finding) =>
+    `- ${finding.file}${finding.line ? `:${finding.line}` : ""} ${findingTitle(finding)}`);
+  if (skipped.length > SKIPPED_TITLES_SHOWN) titles.push(`- and ${skipped.length - SKIPPED_TITLES_SHOWN} more`);
+  return [
+    `PwrAgent tracks this review on the operator's To-do list. \`skipped\` does not settle a finding: ${skipped.length === 1
+      ? "this one stays" : `these ${skipped.length} stay`} open there until you settle ${skipped.length === 1 ? "it" : "each one"}.`,
+    ...titles,
+    "Use PwrAgent's update_review_item for each: status declined, with a note giving the reason, or status deferred,"
+      + " with the todoId of an add_todo card (a start_thread action whose prompt stands alone) and a note on why it waits."
+      + " list_reviews gives the review and finding ids.",
+    "PwrAgent records `fixed` findings as addressed and `no_change_needed` findings as declined.",
+  ].join("\n");
+}
+
+/**
+ * Hands the skipped-findings guidance to the agent as context on the
+ * `ReportFindings` result, the moment it reports, rather than leaving it to
+ * find the findings still open later.
+ */
+export function claudeReportFindingsHooks(): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
+  return {
+    PostToolUse: [{
+      matcher: CLAUDE_REPORT_FINDINGS_TOOL,
+      hooks: [async (input) => {
+        if (input.hook_event_name !== "PostToolUse" || input.tool_name !== CLAUDE_REPORT_FINDINGS_TOOL) return {};
+        const report = parseClaudeFindingsReport(input.tool_input);
+        const guidance = report ? claudeSkippedFindingsGuidance(report) : undefined;
+        return guidance ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: guidance } } : {};
+      }],
+    }],
+  };
 }
 
 /** A re-report after fixes; the first report of a review carries no outcomes. */

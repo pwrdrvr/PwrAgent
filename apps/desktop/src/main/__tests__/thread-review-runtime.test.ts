@@ -4,7 +4,11 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { PwrAgentThreadTodoHandler } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import { StateDb } from "../state/state-db";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
-import { installThreadTodoRuntime, resetThreadTodoServiceForTests } from "../thread-todos/thread-todo-runtime";
+import {
+  getThreadTodoService,
+  installThreadTodoRuntime,
+  resetThreadTodoServiceForTests,
+} from "../thread-todos/thread-todo-runtime";
 import { claudeReviewOutput } from "../claude/claude-review-findings";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
@@ -117,6 +121,29 @@ describe("review tracking runtime eligibility", () => {
     onEvent({ backend: "claude", notification: { method: "thread/review/outcomesReported", params: outcomes } });
     expect(getThreadReviewService().list()[0]!.items.map((item) => item.status)).toEqual(["open", "addressed"]);
     expect(broadcast).toHaveBeenCalledTimes(2);
+  });
+
+  it("defers an agent's finding only to a to-do card its own thread raised", () => {
+    install();
+    const review = getThreadReviewService().record(THREAD, {
+      sourceKey: "artifact", title: "Code review", items: [{ title: "Handle cancellation" }],
+    });
+    const itemId = review.items[0]!.id;
+    const { todo } = getThreadTodoService().add({ ...THREAD, input: { title: "Handle cancellation in the export queue" } });
+    const { todo: elsewhere } = getThreadTodoService().add({
+      backend: THREAD.backend, threadId: "other-thread", input: { title: "Another thread's card" },
+    });
+    expect(() => handler.reviews!.update(THREAD, {
+      id: review.id, itemId, status: "deferred", note: "Later.", todoId: elsewhere.id,
+    })).toThrow("No to-do card with that todoId belongs to this thread.");
+    const deferred = handler.reviews!.update(THREAD, {
+      id: review.id, itemId, status: "deferred", note: "Needs a design pass.", todoId: todo.id,
+    });
+    expect(deferred.items[0]).toMatchObject({
+      status: "deferred",
+      resolution: { actor: "agent", note: "Needs a design pass.", todo: { id: todo.id, title: todo.title } },
+    });
+    expect(deferred.status).toBe("handled");
   });
 
   it("refreshes all local To-dos when provider discovery or authentication recovery finishes", () => {

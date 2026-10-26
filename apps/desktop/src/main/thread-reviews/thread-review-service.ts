@@ -10,7 +10,12 @@ import type {
   ThreadTodosChangedEvent,
   UpdateThreadReviewRequest,
 } from "@pwragent/shared";
-import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared";
+import {
+  THREAD_REVIEW_ITEM_STATUSES,
+  buildLegacyEncodedThreadIdentityKey,
+  normalizeThreadReview,
+  normalizeThreadReviewItemStatus,
+} from "@pwragent/shared";
 import type { StateDb } from "../state/state-db";
 import { normalizeReviewCategory, parseReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
 
@@ -26,9 +31,15 @@ export const THREAD_REVIEW_MAX_FINDINGS = 200;
 /** Rows one list returns, as the to-do store caps the cards it is merged with. */
 const THREAD_REVIEW_LIST_LIMIT = 500;
 const TRACKING_STARTED_KEY = "thread_review_tracking_started_at";
-/** Resolution notes for outcomes the reviewer reported about its own findings. */
-export const REPORTED_FIXED_NOTE = "The reviewer reported this fixed.";
-export const REPORTED_NO_CHANGE_NOTE = "The reviewer reported that no change was needed.";
+/**
+ * Resolution notes for outcomes the reviewer reported about its own findings.
+ * Each names the reviewer's own word, so the agent reading `list_reviews` can
+ * tell an automatic outcome from one it recorded.
+ */
+export const REPORTED_FIXED_NOTE = "Addressed automatically: the code review reported it `fixed`.";
+export const REPORTED_NO_CHANGE_NOTE = "Declined automatically: the code review reported `no_change_needed`.";
+/** A review's note once nothing in it is open. */
+export const ALL_FINDINGS_SETTLED_NOTE = "Every finding is addressed, declined, or deferred.";
 
 function excerpt(text: string, limit: number): string {
   return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
@@ -78,7 +89,7 @@ export class ThreadReviewService {
       request.threadId ?? null, request.threadId ?? null,
     ) as Iterable<{ payload: string }>;
     for (const row of rows) {
-      const review = JSON.parse(row.payload) as ThreadReview;
+      const review = parseReview(row.payload);
       if (this.isUntriagedLegacyImport(review)) continue;
       // Queue reads follow the current attachment list. Full status reads
       // also serve the transcript, whose resolutions survive PR detachment.
@@ -117,7 +128,7 @@ export class ThreadReviewService {
   get(id: string): ThreadReview | undefined {
     const row = this.db.raw.prepare("SELECT payload FROM thread_reviews WHERE review_id = ?")
       .get(id) as { payload: string } | undefined;
-    return row ? JSON.parse(row.payload) as ThreadReview : undefined;
+    return row ? parseReview(row.payload) : undefined;
   }
 
   record(identity: ThreadReviewIdentity, input: RecordThreadReviewInput, origin: ThreadReview["origin"] = "explicit"): ThreadReview {
@@ -214,19 +225,30 @@ export class ThreadReviewService {
     }, "automatic");
   }
 
+  /**
+   * `todo` is the card a deferral names, which the caller has already found
+   * on this thread: the service owns reviews, not to-dos.
+   */
   update(
-    request: UpdateThreadReviewRequest,
+    input: UpdateThreadReviewRequest,
     actor: ThreadReviewResolution["actor"],
     identity?: ThreadReviewIdentity,
+    todo?: { id: string; title: string },
   ): ThreadReview {
+    // A finding takes its older names too; a review keeps its own statuses.
+    const request = input.itemId
+      ? { ...input, status: normalizeThreadReviewItemStatus(input.status) ?? input.status }
+      : input;
+    const unchanged = (target: { status: string; resolution?: ThreadReviewResolution } | undefined): boolean =>
+      target?.status === request.status
+      && (request.note === undefined || request.note === target.resolution?.note)
+      && (request.url === undefined || request.url === target.resolution?.url)
+      && (request.todoId === undefined || request.todoId === target.resolution?.todo?.id);
     const snapshot = this.get(request.id);
     if (!snapshot || (identity && (snapshot.backend !== identity.backend || snapshot.threadId !== identity.threadId))) {
       throw new ThreadReviewError("not_found", "Review not found on this thread.");
     }
-    const target = request.itemId ? snapshot.items.find((item) => item.id === request.itemId) : snapshot;
-    if (target?.status === request.status
-      && (request.note === undefined || request.note === target.resolution?.note)
-      && (request.url === undefined || request.url === target.resolution?.url)) return snapshot;
+    if (unchanged(request.itemId ? snapshot.items.find((item) => item.id === request.itemId) : snapshot)) return snapshot;
     let changed = false;
     const review = this.db.raw.transaction(() => {
       const review = this.get(request.id);
@@ -235,20 +257,34 @@ export class ThreadReviewService {
       }
       const item = request.itemId ? review.items.find((entry) => entry.id === request.itemId) : undefined;
       if (request.itemId && !item) throw new ThreadReviewError("not_found", "Review finding not found.");
-      const statuses = item ? ["open", "addressed", "dismissed"] : ["open", "handled", "dismissed"];
-      if (!statuses.includes(request.status)) throw new ThreadReviewError("invalid_arguments", "Invalid review status.");
-      const target = item ?? review;
-      if (target.status === request.status
-        && (request.note === undefined || request.note === target.resolution?.note)
-        && (request.url === undefined || request.url === target.resolution?.url)) return review;
+      if (item && (request.status as string) === "skipped") {
+        throw new ThreadReviewError("invalid_arguments", SKIPPED_IS_NOT_AN_OUTCOME);
+      }
+      const statuses: readonly string[] = item ? THREAD_REVIEW_ITEM_STATUSES : ["open", "handled", "dismissed"];
+      if (!statuses.includes(request.status)) {
+        throw new ThreadReviewError("invalid_arguments", item
+          ? "A finding's status is open, addressed, declined, or deferred."
+          : "A review's status is open, handled, or dismissed.");
+      }
+      if (unchanged(item ?? review)) return review;
       if (request.status !== "open" && !request.note?.trim()) {
-        throw new ThreadReviewError("invalid_arguments", "Document why this finding or review is addressed or dismissed.");
+        throw new ThreadReviewError("invalid_arguments", item
+          ? "Add a note: what changed for addressed, or the reason for declined or deferred."
+          : "Add a note on how the review was handled or why it is dismissed.");
       }
       if (request.url && !/^https?:\/\/[^\s]+$/i.test(request.url)) {
         throw new ThreadReviewError("invalid_arguments", "Resolution links must be HTTP or HTTPS URLs.");
       }
+      if (request.status === "deferred" && (!request.todoId || todo?.id !== request.todoId)) {
+        throw new ThreadReviewError("invalid_arguments",
+          "Deferring a finding needs the to-do card that tracks it: create one with add_todo, then pass its id as todoId.");
+      }
+      if (request.status !== "deferred" && request.todoId !== undefined) {
+        throw new ThreadReviewError("invalid_arguments", "Only a deferred finding takes a todoId.");
+      }
       if (!item && request.status === "handled" && review.items.some((entry) => entry.status === "open")) {
-        throw new ThreadReviewError("conflict", "Address or dismiss each open finding before marking the review handled.");
+        throw new ThreadReviewError("conflict",
+          "Settle each open finding before marking the review handled: addressed, declined, or deferred.");
       }
       const now = this.now();
       // An explicit action on a legacy record establishes that it is tracked;
@@ -258,7 +294,9 @@ export class ThreadReviewService {
           ? "automatic" : "explicit";
       }
       const resolution: ThreadReviewResolution | undefined = request.status === "open" ? undefined : {
-        note: request.note!.trim(), ...(request.url ? { url: request.url } : {}), actor, at: now,
+        note: request.note!.trim(), ...(request.url ? { url: request.url } : {}),
+        ...(request.status === "deferred" && todo ? { todo: { id: todo.id, title: todo.title } } : {}),
+        actor, at: now,
       };
       if (item) {
         item.status = request.status as typeof item.status;
@@ -269,7 +307,7 @@ export class ThreadReviewService {
           review.resolution = undefined;
         } else if (review.status === "open" && review.items.every((entry) => entry.status !== "open")) {
           review.status = "handled";
-          review.resolution = { note: "All findings addressed or declined.", actor: "system", at: now };
+          review.resolution = { note: ALL_FINDINGS_SETTLED_NOTE, actor: "system", at: now };
         }
       } else {
         review.status = request.status as typeof review.status;
@@ -290,8 +328,10 @@ export class ThreadReviewService {
   /**
    * Records what the reviewer later reported about its own findings, in one
    * commit. Only open findings change: a reviewer's later report never
-   * overrides an outcome the operator or an agent already recorded. A skipped
-   * finding stays open, because it is real and still unaddressed.
+   * overrides an outcome the operator or an agent already recorded. `fixed`
+   * becomes addressed and `no_change_needed` declined. A `skipped` finding
+   * stays open, because it is real and still unaddressed: the agent is told
+   * to decline or defer it (`claudeSkippedFindingsGuidance`).
    */
   applyReportedOutcomes(
     identity: ThreadReviewIdentity,
@@ -311,7 +351,7 @@ export class ThreadReviewService {
       for (const { index, outcome } of outcomes) {
         const item = review.items[index];
         if (outcome === "skipped" || item?.status !== "open") continue;
-        item.status = outcome === "fixed" ? "addressed" : "dismissed";
+        item.status = outcome === "fixed" ? "addressed" : "declined";
         item.updatedAt = now;
         item.resolution = {
           note: outcome === "fixed" ? REPORTED_FIXED_NOTE : REPORTED_NO_CHANGE_NOTE,
@@ -320,7 +360,7 @@ export class ThreadReviewService {
       }
       if (review.status === "open" && review.items.every((entry) => entry.status !== "open")) {
         review.status = "handled";
-        review.resolution = { note: "All findings addressed or declined.", actor: "system", at: now };
+        review.resolution = { note: ALL_FINDINGS_SETTLED_NOTE, actor: "system", at: now };
       }
       review.updatedAt = now;
       this.db.raw.prepare("UPDATE thread_reviews SET status = ?, updated_at = ?, payload = ? WHERE review_id = ?")
@@ -335,4 +375,13 @@ export class ThreadReviewService {
   private emit(review: ThreadReview): void {
     this.onChanged({ backend: review.backend, threadId: review.threadId, at: this.now() });
   }
+}
+
+/** Why `skipped` cannot settle a finding, wherever an agent tries it. */
+export const SKIPPED_IS_NOT_AN_OUTCOME =
+  "`skipped` leaves a finding open. Settle it as declined, with the reason, or as deferred, with the to-do card that tracks it.";
+
+function parseReview(payload: string): ThreadReview {
+  // An older build sharing this profile can still write `dismissed`.
+  return normalizeThreadReview(JSON.parse(payload) as ThreadReview);
 }

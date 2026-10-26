@@ -12,13 +12,30 @@ export const PWRAGENT_THREAD_REVIEW_OPERATION_NAMES = [
 ] as const;
 
 export type ThreadReviewStatus = "open" | "handled" | "dismissed";
-export type ThreadReviewItemStatus = "open" | "addressed" | "dismissed";
+/**
+ * Where one finding stands. Each name says what was done: `addressed` (fixed,
+ * with a note on what changed), `declined` (will not be fixed, with the
+ * reason), or `deferred` (left for later, with the to-do card that tracks it).
+ * See "Finding outcomes" in docs/thread-reviews.md.
+ */
+export type ThreadReviewItemStatus = "open" | "addressed" | "declined" | "deferred";
+export const THREAD_REVIEW_ITEM_STATUSES: readonly ThreadReviewItemStatus[] = ["open", "addressed", "declined", "deferred"];
+/**
+ * Older names a finding update still accepts. Records and peers written
+ * before `declined` store `dismissed`; `fixed` is Claude Code's word.
+ */
+export const THREAD_REVIEW_ITEM_STATUS_ALIASES: Readonly<Record<string, ThreadReviewItemStatus>> = {
+  dismissed: "declined",
+  fixed: "addressed",
+};
 export type ThreadReviewIdentity = { backend: AppServerBackendKind; threadId: string; federationTarget?: FederationRemoteTarget };
 
 export type ThreadReviewResolution = {
   note: string;
   /** A commit, PR comment, dismissal discussion, or other supporting URL. */
   url?: string;
+  /** The to-do card a deferred finding waits on, as it was titled then. */
+  todo?: { id: string; title: string };
   actor: "agent" | "user" | "system";
   at: number;
 };
@@ -64,14 +81,40 @@ export type UpdateThreadReviewRequest = {
   federationTarget?: FederationRemoteTarget;
   id: string;
   itemId?: string;
+  /** A finding also accepts a name in `THREAD_REVIEW_ITEM_STATUS_ALIASES`. */
   status: ThreadReviewStatus | ThreadReviewItemStatus;
   note?: string;
   url?: string;
+  /** Required to defer a finding: the id of the to-do card that tracks it. */
+  todoId?: string;
 };
 
 export type ListThreadReviewsRequest = Partial<ThreadReviewIdentity> & {
   status?: ThreadReviewStatus | "all";
 };
+
+/** A finding status by its current name, or undefined when it names none. */
+export function normalizeThreadReviewItemStatus(value: unknown): ThreadReviewItemStatus | undefined {
+  if (typeof value !== "string") return undefined;
+  if ((THREAD_REVIEW_ITEM_STATUSES as readonly string[]).includes(value)) return value as ThreadReviewItemStatus;
+  return Object.hasOwn(THREAD_REVIEW_ITEM_STATUS_ALIASES, value) ? THREAD_REVIEW_ITEM_STATUS_ALIASES[value] : undefined;
+}
+
+/**
+ * A review with each finding under its current status name. A record from an
+ * older build, or from a peer that runs one, can still say `dismissed`.
+ * Returns the same object when nothing needed renaming.
+ */
+export function normalizeThreadReview<T extends Pick<ThreadReview, "items">>(review: T): T {
+  if (review.items.every((item) => (THREAD_REVIEW_ITEM_STATUSES as readonly string[]).includes(item.status))) return review;
+  return {
+    ...review,
+    items: review.items.map((item) => {
+      const status = normalizeThreadReviewItemStatus(item.status);
+      return status && status !== item.status ? { ...item, status } : item;
+    }),
+  };
+}
 
 /**
  * What a review card is called. Stored titles are generic ("Code review"), so
