@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  BackendSummary,
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -72,7 +73,18 @@ const directory: NavigationDirectorySummary = {
   latestUpdatedAt: 2,
 };
 
+/** A backend that offers Archive Thread in the row menu. */
+const archivingBackend = {
+  kind: "codex",
+  label: "Codex app server",
+  available: true,
+  methods: [],
+  capabilities: { archiveThread: true },
+  executionModes: [],
+} as unknown as BackendSummary;
+
 function renderSidebar(params: {
+  backends?: BackendSummary[];
   browseMode: BrowseMode;
   directories?: NavigationDirectorySummary[];
   draftThreadKeys?: Record<string, boolean>;
@@ -98,7 +110,7 @@ function renderSidebar(params: {
 }) {
   return (
     <Sidebar
-      backends={[]}
+      backends={params.backends ?? []}
       browseMode={params.browseMode}
       directories={params.directories ?? []}
       draftThreadKeys={params.draftThreadKeys}
@@ -963,6 +975,7 @@ describe("Sidebar commands under a resting pointer", () => {
     const archive = deferred();
     const onArchiveThread = vi.fn(() => archive.promise);
     const view = render(renderSidebar({
+      backends: [archivingBackend],
       browseMode: "inbox",
       pinnedThreadsOnTop: false,
       threads: [charlie, alpha, bravo],
@@ -980,6 +993,7 @@ describe("Sidebar commands under a resting pointer", () => {
     expect(onArchiveThread).toHaveBeenCalledWith(alpha);
 
     view.rerender(renderSidebar({
+      backends: [archivingBackend],
       browseMode: "inbox",
       pinnedThreadsOnTop: false,
       threads: [charlie, bravo],
@@ -1003,6 +1017,7 @@ describe("Sidebar commands under a resting pointer", () => {
     const view = render(renderSidebar({
       browseMode: "directories",
       directories: [repo],
+      selectedItemKey: "codex:charlie",
       threads: [alpha, bravo, charlie],
       onSetThreadPin,
     }));
@@ -1021,6 +1036,7 @@ describe("Sidebar commands under a resting pointer", () => {
     view.rerender(renderSidebar({
       browseMode: "directories",
       directories: [repo],
+      selectedItemKey: "codex:charlie",
       threads: [pinnedAlpha, bravo, charlie],
       onSetThreadPin,
     }));
@@ -1030,6 +1046,7 @@ describe("Sidebar commands under a resting pointer", () => {
     view.rerender(renderSidebar({
       browseMode: "directories",
       directories: [repo],
+      selectedItemKey: "codex:charlie",
       threads: [pinnedAlpha, pinnedBravo, charlie],
       onSetThreadPin,
     }));
