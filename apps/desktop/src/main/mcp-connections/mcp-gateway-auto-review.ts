@@ -19,10 +19,12 @@ export const MCP_GATEWAY_REVIEW_SCHEMA = {
   required: ["decision", "risk", "authorizationQuote", "rationale"],
 };
 
-export function parseMcpGatewayReview(value: Record<string, unknown>, userMessages: string[]): {
+export function parseMcpGatewayReview(input: unknown, userMessages: string[]): {
   decision: "approve" | "ask" | "deny";
   rationale: string;
 } | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return undefined;
+  const value = input as Record<string, unknown>;
   if (!["approve", "ask", "deny"].includes(String(value.decision))
     || !["low", "medium", "high"].includes(String(value.risk))
     || typeof value.authorizationQuote !== "string"
