@@ -122,6 +122,17 @@ function getComposerValueHost(textbox: HTMLElement): HTMLElement {
   );
 }
 
+// Settle immediate fixture IPC promises before starting DOM polling. Role
+// queries over a half-mounted shell otherwise compete with the work that
+// makes the heading/composer ready, especially under CPU pressure.
+async function renderApp(): Promise<ReturnType<typeof render>> {
+  let view!: ReturnType<typeof render>;
+  await probe("setup-render", () => act(async () => {
+    view = render(<App />);
+  }));
+  return view;
+}
+
 async function clickButton(name: string | RegExp): Promise<void> {
   const button = await waitFor(() => {
     const button = screen.getByRole("button", { name });
@@ -359,7 +370,7 @@ describe("App", () => {
         }),
       }),
     });
-    render(<App />);
+    await renderApp();
     fireEvent.click(await screen.findByRole("link", { name: "report" }));
     await screen.findByRole("heading", { name: "Stable report" });
     const dialog = screen.getByRole("dialog", { name: "Markdown document: report" });
@@ -435,7 +446,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(screen.queryByText("Exit Settings")).not.toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
@@ -475,7 +486,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     fireEvent.keyDown(window, {
       metaKey: true,
@@ -556,7 +567,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     const jumpTo = async (label: string): Promise<void> => {
       fireEvent.keyDown(window, {
@@ -656,7 +667,7 @@ describe("App", () => {
       }),
     });
 
-    const { container } = render(<App />);
+    const { container } = await renderApp();
     const opener = await screen.findByRole("button", { name: "Open automations" });
     act(() => opener.focus());
     fireEvent.click(opener);
@@ -712,7 +723,7 @@ describe("App", () => {
     });
 
     try {
-      render(<App />);
+      await renderApp();
 
       fireEvent.click(
         await screen.findByRole("button", { name: "Open Star Map" }),
@@ -839,7 +850,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
 
     const button = screen.getByRole("button", { name: "New thread" });
@@ -1018,7 +1029,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(windowFocusListeners.size).toBeGreaterThan(0));
     act(() => {
       for (const listener of windowFocusListeners) {
@@ -1143,7 +1154,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
     await clickButton("New thread");
     const chip = await screen.findByRole("button", { name: /^Machine(?::|$)/ });
@@ -1253,7 +1264,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(samlListener).toBeDefined());
     act(() => {
       samlListener?.({
@@ -1341,7 +1352,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     expect(await screen.findByText("New threads start on Auto")).toBeInTheDocument();
     expect(dismissLaunchpadAccessNotice).not.toHaveBeenCalled();
 
@@ -1445,7 +1456,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(getNavigationSnapshot).toHaveBeenCalled());
 
     if (!expected) {
@@ -1566,7 +1577,7 @@ describe("App", () => {
       (window as typeof window & { pwragent: DesktopApi }).pwragent,
       "getNavigationSelectedDetail",
     );
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
     await flushReactUpdates();
 
@@ -1763,7 +1774,7 @@ describe("App", () => {
         readSettings: async () => await new Promise<never>(() => {}),
       }),
     });
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(listeners.size).toBeGreaterThan(0));
     const emit = (notification: AgentEvent["notification"]) => act(() => {
       for (const listener of listeners) listener({ backend: "codex", notification });
@@ -1820,7 +1831,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
 
     act(() => {
@@ -1930,7 +1941,7 @@ describe("App", () => {
           }),
       }),
     });
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
 
     act(() => {
@@ -2026,7 +2037,7 @@ describe("App", () => {
       }),
     });
 
-    const { container } = render(<App />);
+    const { container } = await renderApp();
     await act(async () => {
       backendSummaries.resolve({ fetchedAt: Date.now(), backends: [] });
     });
@@ -2139,7 +2150,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => {
       expect(agentEventListeners.size).toBeGreaterThan(0);
@@ -2196,7 +2207,7 @@ describe("App", () => {
       value: ownerApi({ readSettings, getLatestCodexConfigWarning }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(readSettings).toHaveBeenCalledOnce());
     await flushReactUpdates();
     expect(getLatestCodexConfigWarning).not.toHaveBeenCalled();
@@ -2251,7 +2262,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Codex config warning"
@@ -2657,7 +2668,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(await screen.findByText("Settings config did not load")).toBeInTheDocument();
     expect(screen.getByText(/line 3: expected a key/)).toBeInTheDocument();
@@ -2714,7 +2725,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
@@ -2823,7 +2834,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", { level: 2, name: "Rail tab thread" });
     const context = screen.getByRole("complementary", { name: "Thread context" });
@@ -3149,7 +3160,7 @@ describe("App", () => {
       })
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { level: 1, name: "Threads" })).not.toBeInTheDocument();
@@ -3406,7 +3417,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole(
       "heading",
@@ -3739,7 +3750,7 @@ describe("App", () => {
       })
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -3920,7 +3931,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("textbox", { name: "New thread" }),
@@ -4059,7 +4070,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => {
       expect(
@@ -4198,7 +4209,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("button", { name: "Restored remote thread" }),
@@ -4319,7 +4330,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("button", { name: "Existing replay thread" }),
@@ -4412,7 +4423,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     // `[onboarding] completed = true` says this operator already answered every
     // question the wizard asks. A missing provider is a health problem to point
@@ -4541,7 +4552,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("button", { name: "Existing thread" }),
@@ -4647,7 +4658,7 @@ describe("App", () => {
         }),
       });
 
-      const { container } = render(<App />);
+      const { container } = await renderApp();
       await waitFor(() => expect(screen.getByRole("button", { name: /^Access mode(?::|$)/ })).toHaveTextContent("Full Access"));
       if (entryPoint === "Cmd+N") {
         expect(openNewThreadListener).toBeDefined();
@@ -4758,7 +4769,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(await screen.findByRole("heading", { level: 2, name: "Select a thread" }))
       .toBeInTheDocument();
@@ -4861,7 +4872,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("heading", {
@@ -5080,7 +5091,7 @@ describe("App", () => {
       })
     });
 
-    const { unmount } = render(<App />);
+    const { unmount } = await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -5299,7 +5310,7 @@ describe("App", () => {
       })
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("heading", {
@@ -5451,7 +5462,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("heading", {
@@ -5703,7 +5714,7 @@ describe("App", () => {
       })
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -5998,7 +6009,7 @@ describe("App", () => {
       })
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -6286,7 +6297,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await screen.findByRole("heading", { level: 2, name: localThread.title });
 
     fireEvent.click(screen.getByRole("button", {
@@ -6485,7 +6496,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -6609,7 +6620,7 @@ describe("App", () => {
       }
       return response;
     };
-    render(<App />);
+    await renderApp();
     await screen.findByRole("heading", { level: 2, name: "First thread" });
     const row = screen.getByRole("button", { name: rapid ? "First thread" : "Double-click thread" });
     const card = row.closest(".thread-row")!;
@@ -6838,7 +6849,7 @@ describe("App", () => {
       }
       return response;
     };
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -7179,7 +7190,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -7414,7 +7425,7 @@ describe("App", () => {
   it("renames the selected thread from the sidebar actions menu", async () => {
     const { renameThread } = installRenamableThreadFixture();
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -7517,7 +7528,7 @@ describe("App", () => {
   it("opens another thread on its question from the sidebar Question chip", async () => {
     const { scrollIntoView } = installQuestionThreadFixture("thread-2");
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", { level: 2, name: "Build Codex client" });
     const browseSection = screen.getByRole("region", { name: "Thread browser" });
@@ -7532,7 +7543,7 @@ describe("App", () => {
   it("brings the selected thread back from Search on its question", async () => {
     const { scrollIntoView } = installQuestionThreadFixture("thread-1");
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", { level: 2, name: "Build Codex client" });
     fireEvent.keyDown(window, {
@@ -7556,7 +7567,7 @@ describe("App", () => {
   it("renames the open thread from its title strip on double-click", async () => {
     const { renameThread } = installRenamableThreadFixture();
 
-    render(<App />);
+    await renderApp();
 
     const title = await screen.findByRole("heading", {
       level: 2,

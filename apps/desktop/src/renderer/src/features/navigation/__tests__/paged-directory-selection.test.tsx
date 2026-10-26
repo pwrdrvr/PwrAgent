@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "../../../test/phase-probes";
 import { afterEach, expect, it } from "vitest";
 import type { NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryRequest, NavigationRow } from "@pwragent/shared";
 import { createNavigationPageState, navigationIdentityKey } from "../../../lib/navigation-query-state";

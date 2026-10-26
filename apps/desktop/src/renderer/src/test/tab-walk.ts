@@ -113,12 +113,16 @@ export function pressKey(key: string): KeyboardEvent {
  */
 export function walkTab(
   count = 60,
-  { shift = false }: { shift?: boolean } = {},
+  { shift = false, stopAtCycle = false }: { shift?: boolean; stopAtCycle?: boolean } = {},
 ): Element[] {
   const visited: Element[] = [];
+  const seen = stopAtCycle ? new Set([document.activeElement ?? document.body]) : undefined;
   for (let i = 0; i < count; i++) {
     pressTab({ shift });
-    visited.push(document.activeElement ?? document.body);
+    const active = document.activeElement ?? document.body;
+    visited.push(active);
+    if (seen?.has(active)) break;
+    seen?.add(active);
   }
   return visited;
 }
@@ -155,9 +159,10 @@ function describeStop(el: Element): string {
 }
 
 /**
- * Walks `count` Tabs forward from the current focus, then `count` back, with
+ * Walks a complete focus cycle in each direction, up to `count` Tabs, with
  * sentinels around the page, and names every stop outside `dialog` that focus
- * reached. A trapped dialog answers `{ forward: [], backward: [] }`.
+ * reached. Repeating an already visited cycle adds no coverage. A trapped
+ * dialog answers `{ forward: [], backward: [] }`.
  */
 export function tabEscapes(
   dialog: Element,
@@ -167,8 +172,8 @@ export function tabEscapes(
   try {
     const outside = (visited: Element[]) =>
       visited.filter((el) => !dialog.contains(el)).map(describeStop);
-    const forward = outside(walkTab(count));
-    const backward = outside(walkTab(count, { shift: true }));
+    const forward = outside(walkTab(count, { stopAtCycle: true }));
+    const backward = outside(walkTab(count, { shift: true, stopAtCycle: true }));
     return { forward, backward };
   } finally {
     sentinels.remove();
