@@ -1365,7 +1365,7 @@ function hasExited(child: ElectronChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
-async function killProcessTree(
+export async function killProcessTree(
   child: ElectronChildProcess,
   mainProcess?: { pid: number; startedAt: number },
   quitStartedAt?: number,

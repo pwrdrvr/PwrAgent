@@ -1,9 +1,9 @@
 import * as childProcess from "node:child_process";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { runInNewContext } from "node:vm";
 import type { ElectronApplication } from "@playwright/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureElectronMainProcess, closeElectronApplication } from "../../../e2e/fixtures/electron-app";
+import { captureElectronMainProcess, closeElectronApplication, killProcessTree } from "../../../e2e/fixtures/electron-app";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
@@ -14,6 +14,45 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   vi.mocked(childProcess.execFile).mockReset();
+});
+
+describe.skipIf(process.platform === "win32")("Electron POSIX process-group cleanup", () => {
+  it.each(["running", "exited", "signalled"] as const)("closes inherited stdio with a %s launcher", async (state) => {
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: ["ignore", 1, 2] });',
+      `process.stdout.write(String(descendant.pid) + "\\n", () => { ${state === "exited" ? "process.exit(0);" : ""} });`,
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    // Match Playwright's POSIX launch contract: a dedicated process group,
+    // with stdout/stderr held open by a descendant after the launcher exits.
+    const launcher = childProcess.spawn(process.execPath, ["-e", script], {
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const exited = once(launcher, "exit");
+    const closed = once(launcher, "close");
+    try {
+      const [line] = await once(launcher.stdout!, "data");
+      expect(Number(String(line).trim())).toBeGreaterThan(0);
+      if (state === "signalled") launcher.kill("SIGKILL");
+      if (state !== "running") await exited;
+      expect(launcher.stdout!.destroyed).toBe(false);
+
+      const completion = once(launcher, "close", { signal: AbortSignal.timeout(1_000) });
+      await killProcessTree(launcher);
+      await expect(completion).resolves.toBeDefined();
+      expect(launcher.stdout!.destroyed).toBe(true);
+      expect(launcher.stderr!.destroyed).toBe(true);
+    } finally {
+      try {
+        process.kill(-launcher.pid!, "SIGKILL");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+      await closed;
+    }
+  });
 });
 
 describe("closeElectronApplication", () => {
