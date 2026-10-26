@@ -1,9 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ThreadTodo } from "@pwragent/shared";
+import type { ThreadReviewItem, ThreadTodo } from "@pwragent/shared";
 import { ComposerTiptapInput } from "../../composer/ComposerTiptapInput";
 import { ThreadTodoCard } from "../ThreadTodoCard";
+import { copyTodoMarkdown, threadTodoMarkdown } from "../thread-todo-copy";
 
 const prompt = [
   "## Goal",
@@ -38,8 +39,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderCard() {
-  return render(<ThreadTodoCard todo={todo} running={false} now={0}
+function renderCard(card = todo) {
+  return render(<ThreadTodoCard todo={card} running={false} now={0}
     onRun={vi.fn()} onStartReview={vi.fn()} onResolve={vi.fn()} onSetItemChecked={vi.fn()} />);
 }
 
@@ -47,6 +48,13 @@ function Composer() {
   const [value, setValue] = useState("");
   return <ComposerTiptapInput id="paste-target" label="Paste target" value={value} markdownConversion
     onChange={setValue} skillTokens={[]} placeholder="Ask anything" />;
+}
+
+function pasteClipboard(textbox: HTMLElement, clipboard: { text: string; html: string }) {
+  fireEvent.paste(textbox, { clipboardData: {
+    files: [], items: [], types: ["text/plain", "text/html"],
+    getData: (type: string) => type === "text/html" ? clipboard.html : type === "text/plain" ? clipboard.text : "",
+  } });
 }
 
 describe("to-do prompt Markdown", () => {
@@ -122,5 +130,54 @@ describe("to-do prompt Markdown", () => {
     expect(clipboard.html).toContain("<h2>Goal</h2>");
     expect(clipboard.html).toContain("<strong>heap usage</strong>");
     expect(screen.getByRole("button", { name: "Prompt copied" })).toBeTruthy();
+  });
+
+  it("retains checked and unchecked steps when pasting a rich copied card", async () => {
+    let clipboard = { text: "", html: "" };
+    vi.stubGlobal("pwragent", { copyRichText: vi.fn(async (payload: typeof clipboard) => { clipboard = payload; }) });
+    renderCard({ ...todo, items: [
+      { id: "done", text: "Record the peak", checked: true },
+      { id: "open", text: "Compare the results", checked: false },
+    ] });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy to-do" })); });
+    expect(clipboard.html).toContain('type="checkbox"');
+    render(<Composer />);
+    const textbox = screen.getByRole("textbox", { name: "Paste target" });
+    pasteClipboard(textbox, clipboard);
+    await waitFor(() => expect(textbox.textContent).toContain("[x] Record the peak"));
+    expect(textbox.textContent).toContain("[ ] Compare the results");
+    expect(screen.getByTestId("composer-tiptap-input").getAttribute("data-value"))
+      .toContain("- [x] Record the peak\n- [ ] Compare the results");
+  });
+
+  it("retains review finding state when pasting rich copied findings", async () => {
+    let clipboard = { text: "", html: "" };
+    vi.stubGlobal("pwragent", { copyRichText: vi.fn(async (payload: typeof clipboard) => { clipboard = payload; }) });
+    const findings: ThreadReviewItem[] = ["addressed", "open"].map((status, index) => ({
+      id: `finding-${index}`, title: `Finding ${index}`, status: status as ThreadReviewItem["status"], createdAt: 0, updatedAt: 0,
+    }));
+    await copyTodoMarkdown(threadTodoMarkdown({ ...todo, action: undefined, kind: "review" }, findings));
+    render(<Composer />);
+    const textbox = screen.getByRole("textbox", { name: "Paste target" });
+    pasteClipboard(textbox, clipboard);
+    await waitFor(() => expect(textbox.textContent).toContain("[x] Finding 0"));
+    expect(textbox.textContent).toContain("[ ] Finding 1");
+  });
+
+  it.each(["", "> "])("retains table source inside a copied quoted prompt (inner prefix %j)", async (innerPrefix) => {
+    let clipboard = { text: "", html: "" };
+    vi.stubGlobal("pwragent", { copyRichText: vi.fn(async (payload: typeof clipboard) => { clipboard = payload; }) });
+    const table = ["| Name | Value |", "| -- | -- |", "| alpha | `42` |"].map((line) => innerPrefix + line).join("\n");
+    renderCard({ ...todo, action: { type: "start_thread", prompt: table } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Copy to-do" })); });
+    expect(clipboard.html).toContain("<table>");
+    render(<Composer />);
+    const textbox = screen.getByRole("textbox", { name: "Paste target" });
+    pasteClipboard(textbox, clipboard);
+    const expected = table.split("\n").map((line) => `> ${line}`).join("\n");
+    await waitFor(() => expect(screen.getByTestId("composer-tiptap-input").getAttribute("data-value")).toContain(expected));
+    expect(textbox.querySelector("table")).toBeNull();
+    const quote = innerPrefix ? "blockquote blockquote" : "blockquote";
+    expect(textbox.querySelector(quote)?.textContent).toContain("| -- | -- |");
   });
 });

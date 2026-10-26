@@ -49,6 +49,24 @@ function renderTiptapInput(props?: {
   return { ...result, onChange };
 }
 
+it.each(["\u00a0", "\u2003", "\v", "\f"])("keeps non-heading whitespace %j literal when loading and pasting Markdown", async (separator) => {
+  const markdown = `#${separator}Title`;
+  const { container, onChange } = renderTiptapInput({ value: markdown });
+  const textbox = screen.getByRole("textbox", { name: "Reply" });
+  expect(container.querySelector("h1")).toBeNull();
+  expect(textbox.textContent).toBe(markdown);
+  act(() => {
+    const editor = (textbox as HTMLElement & { editor: Editor }).editor;
+    editor.commands.clearContent();
+  });
+  fireEvent.paste(textbox, { clipboardData: {
+    files: [], items: [], types: ["text/plain"],
+    getData: (type: string) => type === "text/plain" ? markdown : "",
+  } });
+  await waitFor(() => expect(onChange).toHaveBeenLastCalledWith(markdown, []));
+  expect(container.querySelector("h1")).toBeNull();
+});
+
 it("records native typing and external synchronization without recording draft contents", () => {
   let replaceValue: (value: string) => void = () => { throw new Error("Editor not mounted"); };
   function Wrapper() {
