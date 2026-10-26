@@ -2718,14 +2718,16 @@ describe("StarMapChatCard sending into a live turn", () => {
     const queue = admittingQueue(threadId, "queue-owner-live");
     return {
       startTurn: queue.startTurn,
-      getNavigationQueueProjection: queue.getNavigationQueueProjection,
+      api: {
+        startTurn: queue.startTurn,
+        getNavigationQueueProjection: queue.getNavigationQueueProjection,
+      } as unknown as Partial<DesktopApi>,
     };
   }
 
   it("queues behind the running turn on Enter", async () => {
-    const owner = queuingOwner();
-    const { startTurn } = owner;
-    const desktopApi = busyApi(owner);
+    const { startTurn, api } = queuingOwner();
+    const desktopApi = busyApi(api);
     const onUserRepliedToThread = vi.fn();
     const thread = localThread(BUSY);
     const { result } = renderHook(() => useComposerDraftStore());
@@ -2768,7 +2770,7 @@ describe("StarMapChatCard sending into a live turn", () => {
   it("keeps a queued copy apart from a running prompt with the same text", async () => {
     // The running turn's own prompt is "continue". Queueing "continue" again
     // is a second message, not that one, so it keeps its own transcript copy.
-    const owner = queuingOwner();
+    const { api } = queuingOwner();
     const desktopApi = busyApi({
       readThread: vi.fn(async () => ({
         backend: "codex",
@@ -2799,7 +2801,7 @@ describe("StarMapChatCard sending into a live turn", () => {
           pagination: { supportsPagination: false, hasPreviousPage: false },
         },
       })),
-      ...owner,
+      ...api,
     } as unknown as Partial<DesktopApi>);
     const { result } = renderHook(() => useComposerDraftStore());
     renderCard({
@@ -2820,9 +2822,8 @@ describe("StarMapChatCard sending into a live turn", () => {
   });
 
   it("queues from the Queue button too", async () => {
-    const owner = queuingOwner();
-    const { startTurn } = owner;
-    const desktopApi = busyApi(owner);
+    const { startTurn, api } = queuingOwner();
+    const desktopApi = busyApi(api);
     const { result } = renderHook(() => useComposerDraftStore());
     renderCard({
       composerDraftStore: result.current,
@@ -2847,8 +2848,7 @@ describe("StarMapChatCard sending into a live turn", () => {
   it("queues before the running turn is identified", async () => {
     // Unlike a steer, Queue never aims at a turn id: the owner decides what
     // the message waits behind.
-    const owner = queuingOwner();
-    const { startTurn } = owner;
+    const { startTurn, api } = queuingOwner();
     const desktopApi = busyApi({
       readThread: vi.fn(async () => ({
         backend: "codex",
@@ -2859,7 +2859,7 @@ describe("StarMapChatCard sending into a live turn", () => {
           pagination: { supportsPagination: false, hasPreviousPage: false },
         },
       })),
-      ...owner,
+      ...api,
     } as unknown as Partial<DesktopApi>);
     const { result } = renderHook(() => useComposerDraftStore());
     renderCard({
@@ -2892,9 +2892,8 @@ describe("StarMapChatCard sending into a live turn", () => {
   });
 
   it("queues a peer's message with that peer", async () => {
-    const owner = queuingOwner("t-remote");
-    const { startTurn } = owner;
-    const desktopApi = busyApi(owner);
+    const { startTurn, api } = queuingOwner("t-remote");
+    const desktopApi = busyApi(api);
     const { result } = renderHook(() => useComposerDraftStore());
     renderCard({
       composerDraftStore: result.current,
