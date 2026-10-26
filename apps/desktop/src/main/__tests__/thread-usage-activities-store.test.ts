@@ -389,8 +389,26 @@ describe("thread usage activity table", () => {
         executionMode: "full-access",
         executionModeUpdatedAt: 1_000,
         lastSeenAt: 1_000_000,
-        prsFetchedAt: 1_000_000,
+        // The unwritten lookup's time, as if it had been stored.
+        prsFetchedAt: 1_060_000,
       });
+      expect(stateDb.raw.prepare("SELECT json_extract(payload, '$.prsFetchedAt') AS stamp FROM threads").get())
+        .toEqual({ stamp: 1_000_000 });
+    });
+
+    it("refuse an older PR lookup that resolves after an unwritten newer one", async () => {
+      const { stateDb, store } = openStore();
+      await seedThread(store, stateDb);
+      // The newer lookup found the stored list, so nothing was written.
+      await store.setThreadPullRequests({ ...thread, prs: [pr], fetchedAt: 1_060_000, refreshKey: "fixture-key" });
+
+      const stale = await store.setThreadPullRequests({ ...thread, prs: [], fetchedAt: 1_030_000, refreshKey: "fixture-key" });
+
+      expect(stale).toMatchObject({ prs: [pr], prsFetchedAt: 1_060_000 });
+      expect(await store.getThreadOverlayState(thread)).toMatchObject({ prs: [pr], prsFetchedAt: 1_060_000 });
+      // A newer change still lands, and the stored stamp is current again.
+      await store.setThreadPullRequests({ ...thread, prs: [], fetchedAt: 1_090_000, refreshKey: "fixture-key" });
+      expect(await store.getThreadOverlayState(thread)).toMatchObject({ prs: [], prsFetchedAt: 1_090_000 });
     });
 
     it("still write a changed value or a stale stamp", async () => {

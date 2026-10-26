@@ -30883,10 +30883,15 @@ export class DesktopBackendRegistry {
         },
       });
     }
-    const overlays = await this.overlayStore.getThreadOverlayStates({
-      backend: "codex",
+    // The reconcile reads listing metadata only (a worker's handoff origin);
+    // usage activities are read from their own table below.
+    const overlayRequest = {
+      backend: "codex" as const,
       threadIds: [threadId, ...nativeThreads.map((thread) => thread.id)],
-    });
+    };
+    const overlays = this.overlayStore.getThreadListingOverlayStates
+      ? await this.overlayStore.getThreadListingOverlayStates(overlayRequest)
+      : await this.overlayStore.getThreadOverlayStates(overlayRequest);
     await this.reconcileDiscoveredCodexNativeSubAgents({
       nativeCardsByThreadId: await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
         backend: "codex",

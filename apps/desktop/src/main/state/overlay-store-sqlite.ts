@@ -771,6 +771,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   private transactionNavigationRead = 0;
   private readonly subAgentTable: ThreadSubAgentTable;
   private readonly usageActivityTable: ThreadUsageActivityTable;
+  /**
+   * The newest PR lookup time per thread key whose unchanged result was not
+   * written (see `setThreadPullRequests`). Reads and the stale-observation
+   * check treat it as the stored `prsFetchedAt`, as if it had been written.
+   */
+  private readonly unwrittenPrsFetchedAt = new Map<string, number>();
   constructor(private readonly stateDb: StateDb) {
     const meta = {
       get: (key: string) => stateDb.getMeta(key),
@@ -1635,7 +1641,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threadId: string;
   }): Promise<ThreadOverlayState | undefined> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
-    return this.getThread(threadKey);
+    return this.withUnwrittenPrsFetchedAt(threadKey, this.getThread(threadKey));
+  }
+
+  private withUnwrittenPrsFetchedAt(
+    threadKey: string,
+    overlay: ThreadOverlayState | undefined,
+  ): ThreadOverlayState | undefined {
+    const unwritten = this.unwrittenPrsFetchedAt.get(threadKey);
+    return overlay && unwritten !== undefined && unwritten > (overlay.prsFetchedAt ?? -Infinity)
+      ? { ...overlay, prsFetchedAt: unwritten }
+      : overlay;
   }
 
   /**
@@ -5840,11 +5856,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       extraLinkedDirectories: [],
     };
     const fetchedAt = params.fetchedAt ?? Date.now();
+    // An unchanged lookup that was not written still counts as the newest
+    // observation, so a slower, older lookup cannot overwrite its result.
+    const observed = this.withUnwrittenPrsFetchedAt(threadKey, current) ?? current;
     if (
-      current.prsFetchedAt !== undefined
-      && current.prsFetchedAt > fetchedAt
+      observed.prsFetchedAt !== undefined
+      && observed.prsFetchedAt > fetchedAt
     ) {
-      return current;
+      return observed;
     }
     const detachedPrKeys = normalizeDetachedPrKeys(current.detachedPrKeys);
     const detachedPrs = mergePrSummariesByStatusKey(
@@ -5866,8 +5885,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       prsRefreshKey: params.refreshKey,
     };
     // A lookup that found what is stored refreshes only its stamp, at most
-    // once per stamp interval. The in-memory lookup registry carries the exact
-    // time; the stored stamp only seeds it after a restart.
+    // once per stamp interval. Until then this process keeps the exact time in
+    // memory; the stored stamp only seeds the lookup registry after a restart.
     if (
       stored
       && stored.prsRefreshKey === nextState.prsRefreshKey
@@ -5876,9 +5895,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       && sameJson(stored.detachedPrKeys, nextState.detachedPrKeys)
       && sameJson(stored.detachedPrs, nextState.detachedPrs)
     ) {
-      return stored;
+      this.unwrittenPrsFetchedAt.set(threadKey, fetchedAt);
+      return nextState;
     }
     this.putThread(threadKey, nextState);
+    this.unwrittenPrsFetchedAt.delete(threadKey);
     return nextState;
   }
 
@@ -6532,17 +6553,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       fastMode: params.fastMode,
     };
     // Every turn start re-asserts the thread's settings; unchanged ones
-    // write nothing.
-    if (
-      stored
-      && stored.model === nextState.model
-      && stored.reasoningEffort === nextState.reasoningEffort
-      && stored.serviceTier === nextState.serviceTier
-      && stored.fastMode === nextState.fastMode
-      && stored.modelMigrationRevision === nextState.modelMigrationRevision
-      && stored.modelSettingsManuallyUpdatedAt === nextState.modelSettingsManuallyUpdatedAt
-      && sameJson(stored.reasoningEffortsByModel, nextState.reasoningEffortsByModel)
-    ) {
+    // write nothing. Compared whole, so a field added above is covered.
+    if (stored && sameJson(stored, nextState)) {
       return stored;
     }
     this.putThread(threadKey, nextState);

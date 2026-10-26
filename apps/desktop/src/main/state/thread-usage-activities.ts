@@ -145,21 +145,29 @@ export class ThreadUsageActivityTable {
     return true;
   }
 
-  /** The newest `MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES` per thread, oldest first, keyed by storage key. */
+  /**
+   * The newest `MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES` per thread, oldest
+   * first, keyed by storage key. One statement for the whole batch.
+   */
   list(storageKeys: readonly string[]): Map<string, AppServerThreadActivityEntry[]> {
     const result = new Map<string, AppServerThreadActivityEntry[]>();
     if (storageKeys.length === 0) return result;
-    const statement = this.db.prepare(`SELECT activity FROM (
-        SELECT activity, rowid AS id FROM thread_usage_activities
-        WHERE thread_id = ? ORDER BY rowid DESC LIMIT ?)
-      ORDER BY id`);
-    for (const key of new Set(storageKeys)) {
-      const activities = (statement.all(key, MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES) as Array<{ activity: string }>)
-        .flatMap((row) => {
-          const activity = parseActivity(row.activity);
-          return activity ? [activity] : [];
-        });
-      if (activities.length > 0) result.set(key, activities);
+    const rows = this.db.prepare(`SELECT thread_id, activity FROM (
+        SELECT thread_id, activity, rowid AS id,
+          row_number() OVER (PARTITION BY thread_id ORDER BY rowid DESC) AS newest
+        FROM thread_usage_activities
+        WHERE thread_id IN (SELECT value FROM json_each(?)))
+      WHERE newest <= ?
+      ORDER BY thread_id, id`).all(
+      JSON.stringify([...new Set(storageKeys)]),
+      MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
+    ) as Array<{ thread_id: string; activity: string }>;
+    for (const row of rows) {
+      const activity = parseActivity(row.activity);
+      if (!activity) continue;
+      const activities = result.get(row.thread_id);
+      if (activities) activities.push(activity);
+      else result.set(row.thread_id, [activity]);
     }
     return result;
   }

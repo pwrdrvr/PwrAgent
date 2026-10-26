@@ -35,8 +35,14 @@ export class LegacyPayloadArrayMove {
   moveRow(storageKey: string): void {
     if (this.isComplete()) return;
     // Read first, so a row with nothing to move costs no write lock or commit.
+    // The `instr` scan spares a row without the field a full JSON parse.
     const legacy = this.db.prepare(`SELECT 1 FROM threads WHERE thread_id = ?
-      AND CASE WHEN json_valid(payload) THEN json_type(payload, ?) = 'array' ELSE 0 END`).get(storageKey, this.path);
+      AND instr(payload, ?) > 0
+      AND CASE WHEN json_valid(payload) THEN json_type(payload, ?) = 'array' ELSE 0 END`).get(
+      storageKey,
+      this.needle,
+      this.path,
+    );
     if (!legacy) return;
     this.db.prepare("UPDATE threads SET payload = payload WHERE thread_id = ?").run(storageKey);
   }
