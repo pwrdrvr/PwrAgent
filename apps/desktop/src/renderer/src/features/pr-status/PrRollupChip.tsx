@@ -15,6 +15,7 @@ import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../lib/useViewportTooltip";
 import { PrChip } from "./PrChip";
+import { PrStatusCard } from "./PrStatusCard";
 import {
   prChipModifierClasses,
   prStatusLabel,
@@ -49,6 +50,9 @@ type OpenMode = "hover" | "pinned";
 
 const POPOVER_GAP = 6;
 const VIEWPORT_MARGIN = 8;
+
+/** The row whose PR card shows beside the list, and the row it lines up with. */
+type RowCard = { url: string; row: HTMLElement };
 
 /**
  * The Minimal density's single PR chip, on the row's title line.
@@ -97,6 +101,15 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const [openMode, setOpenMode] = useState<OpenMode | null>(null);
   const [position, setPosition] = useState<{ top: number; left: number }>();
   const open = openMode !== null;
+  const cardRef = useRef<HTMLDivElement>(null);
+  const cardTimerRef = useRef<number | null>(null);
+  const cardId = useId();
+  const [rowCard, setRowCard] = useState<RowCard>();
+  const [cardPosition, setCardPosition] = useState<{ top: number; left: number }>();
+  // Read from the live list, so a status update reaches an open card.
+  const cardPr = rowCard
+    ? rollup.ordered.find((pr) => pr.url === rowCard.url)
+    : undefined;
 
   const clearHoverTimer = (): void => {
     if (hoverTimerRef.current !== null) {
@@ -104,14 +117,46 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       hoverTimerRef.current = null;
     }
   };
+  const clearCardTimer = (): void => {
+    if (cardTimerRef.current !== null) {
+      window.clearTimeout(cardTimerRef.current);
+      cardTimerRef.current = null;
+    }
+  };
+  const hideRowCard = useCallback((): void => {
+    if (cardTimerRef.current !== null) {
+      window.clearTimeout(cardTimerRef.current);
+      cardTimerRef.current = null;
+    }
+    setRowCard(undefined);
+    setCardPosition(undefined);
+  }, []);
+  // The first card waits out the tooltip delay, so a pointer crossing the
+  // list on its way elsewhere opens none. Once one shows, moving to another
+  // row swaps it at once. Focus shows it at once too.
+  const showRowCard = (url: string, row: HTMLElement, immediate: boolean): void => {
+    clearCardTimer();
+    if (immediate || rowCard) {
+      setRowCard({ url, row });
+      return;
+    }
+    cardTimerRef.current = window.setTimeout(() => {
+      cardTimerRef.current = null;
+      setRowCard({ url, row });
+    }, TOOLTIP_HOVER_DELAY_MS);
+  };
   const close = useCallback((): void => {
     setOpenMode(null);
     setPosition(undefined);
-  }, []);
+    hideRowCard();
+  }, [hideRowCard]);
   const { cancelHoverDismiss, dismissAfterGrace, dismissImmediately } =
     useHoverTransitionGrace(close);
 
-  useEffect(() => () => clearHoverTimer(), []);
+  useEffect(() => () => {
+    clearHoverTimer();
+    clearCardTimer();
+  }, []);
 
   useDismissableLayer({
     open,
@@ -143,6 +188,33 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         ? current
         : { top, left });
   }, [open, rollup.ordered.length]);
+
+  // The row's PR card sits beside the list, top-aligned with the row, so it
+  // covers no other row: right of the list, or left when the window has no
+  // room there. No dependency list: the card's height follows its content,
+  // and the guarded update settles in one pass.
+  useLayoutEffect(() => {
+    if (!rowCard) return;
+    const popover = popoverRef.current;
+    const card = cardRef.current;
+    if (!popover || !card) return;
+    const list = popover.getBoundingClientRect();
+    const row = rowCard.row.getBoundingClientRect();
+    const width = card.offsetWidth;
+    const height = card.offsetHeight;
+    const right = list.right + POPOVER_GAP;
+    const left = right + width <= window.innerWidth - VIEWPORT_MARGIN
+      ? right
+      : Math.max(VIEWPORT_MARGIN, list.left - POPOVER_GAP - width);
+    const top = Math.max(
+      VIEWPORT_MARGIN,
+      Math.min(row.top, window.innerHeight - VIEWPORT_MARGIN - height),
+    );
+    setCardPosition((current) =>
+      current && current.top === top && current.left === left
+        ? current
+        : { top, left });
+  });
 
   // An outside press or a scroll elsewhere closes it: the popover is fixed
   // to where the chip was, and a scrolled sidebar would leave it stranded.
@@ -295,6 +367,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
               : { top: 0, left: 0, visibility: "hidden" }}
             onMouseEnter={cancelHoverDismiss}
             onMouseLeave={() => {
+              hideRowCard();
               if (openMode === "hover") dismissAfterGrace();
             }}
           >
@@ -304,7 +377,8 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
               </span>
               <span className="pr-rollup-popover__summary">{rollup.summary}</span>
             </div>
-            <ul className="pr-rollup-popover__list">
+            {/* A scrolled list moves the row out from under its card. */}
+            <ul className="pr-rollup-popover__list" onScroll={hideRowCard}>
               {rollup.ordered.map((pr, index) => {
                 const label = prNumberLabel(pr, repoPrefixed.has(pr.url));
                 const behind = props.branchDrift?.url === pr.url
@@ -321,6 +395,12 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                       aria-label={`Open ${pr.org}/${pr.repo}#${pr.number}${
                         pr.title ? `, ${pr.title}` : ""
                       } (${status}) in browser`}
+                      aria-describedby={
+                        rowCard?.url === pr.url && cardPosition ? cardId : undefined
+                      }
+                      onMouseEnter={(event) => showRowCard(pr.url, event.currentTarget, false)}
+                      onFocus={(event) => showRowCard(pr.url, event.currentTarget, true)}
+                      onBlur={hideRowCard}
                       onClick={() => {
                         dismissImmediately();
                         props.onOpen(pr.url);
@@ -359,6 +439,25 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 );
               })}
             </ul>
+          </div>,
+          document.body,
+        )
+        : null}
+      {open && cardPr
+        ? createPortal(
+          <div
+            ref={cardRef}
+            id={cardId}
+            role="tooltip"
+            className="pr-status-card"
+            style={cardPosition
+              ? { top: cardPosition.top, left: cardPosition.left }
+              : { top: 0, left: 0, visibility: "hidden" }}
+          >
+            <PrStatusCard
+              pr={cardPr}
+              branchDrift={props.branchDrift?.url === cardPr.url ? props.branchDrift : undefined}
+            />
           </div>,
           document.body,
         )

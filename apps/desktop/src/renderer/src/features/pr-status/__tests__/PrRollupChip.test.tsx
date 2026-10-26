@@ -150,6 +150,54 @@ describe("PrRollupChip", () => {
     );
   });
 
+  it("shows a row's PR card beside the list on hover, and swaps it between rows", () => {
+    vi.useFakeTimers();
+    const { container } = renderRollup([passing, merged, failing]);
+    fireEvent.click(container.querySelector<HTMLElement>("[data-pr-rollup]")!);
+    const list = screen.getByRole("group");
+    const rows = within(list).getAllByRole("button");
+
+    // The first card waits out the tooltip delay.
+    fireEvent.mouseEnter(rows[0]!);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    const card = screen.getByRole("tooltip");
+    expect(card).toHaveClass("pr-status-card");
+    expect(card).toHaveTextContent("Change 11");
+    expect(card).toHaveTextContent("acme/orbit#11");
+    expect(rows[0]).toHaveAttribute("aria-describedby", card.id);
+
+    // Another row swaps the card at once.
+    fireEvent.mouseEnter(rows[2]!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#12");
+    expect(rows[0]).not.toHaveAttribute("aria-describedby");
+
+    fireEvent.mouseLeave(list);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("shows a focused row's card at once, with the branch drift for its PR", () => {
+    const { container } = render(
+      <PrRollupChip
+        prs={[passing, failing]}
+        repoPrefixedUrls=""
+        threadTitle="Orbit refactor"
+        branchDrift={{ url: failing.url, baseBranch: "main", behind: 4, ahead: 2 }}
+        onOpen={vi.fn()}
+      />,
+    );
+    fireEvent.keyDown(container.querySelector<HTMLElement>("[data-pr-rollup]")!, { key: "Enter" });
+    const rows = within(screen.getByRole("group")).getAllByRole("button");
+    fireEvent.focus(rows[0]!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Behind main4 commits");
+    fireEvent.blur(rows[0]!);
+    fireEvent.focus(rows[1]!);
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent("Local branch");
+
+    fireEvent.keyDown(rows[1]!, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
   it("peeks on hover and closes after the pointer leaves both chip and list", () => {
     vi.useFakeTimers();
     const { container } = renderRollup([passing, failing]);
