@@ -1441,15 +1441,31 @@
    the suppression rule above) plus `.pr-chip` are the only things that
    survive, so two :has() checks decide it without JS. The `.pr-chip`
    check reads the flow only: the Minimal rollup on the title line is a
-   `.pr-chip` too, and must not hold a chip row open. */
-:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *),
-.density-preview--compact .thread-row {
+   `.pr-chip` too, and must not hold a chip row open.
+
+   The title line tightens too. The pin is a 24px target around a 12px
+   glyph, so it carries 6px of air on each side already; Mission
+   Control's 12px header gap and 4px action margins stacked on top of
+   that cost a long title two characters to blank space. The two custom
+   properties narrow both (read by `.thread-row__header` and the action
+   margins); every control keeps its 24px box, and 2px rather than 0
+   keeps the pin's hover box off the bordered PR chip beside it.
+
+   `:not(.directory-row__summary)`: the Directories header and the
+   Pinned group header are `.thread-row` buttons too (for the title
+   type), with their own 4px left inset and 8px gap. Without the
+   exclusion these rules moved their caret 8px right in Compact and
+   Minimal, and X-ray, which drops the rules, moved it back. */
+:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *):not(.directory-row__summary),
+.density-preview--compact .thread-row:not(.directory-row__summary) {
+  --thread-row-header-gap: 4px;
+  --thread-row-action-gap: 2px;
   gap: 4px;
   padding-left: 12px;
 }
 
-:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)),
-.density-preview--compact .thread-row:not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)) {
+:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *):not(.directory-row__summary):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)),
+.density-preview--compact .thread-row:not(.directory-row__summary):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)) {
   gap: 0;
 }
 
@@ -1495,7 +1511,7 @@
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
-  margin-right: 4px;
+  margin-right: var(--thread-row-action-gap, 4px);
   pointer-events: auto;
 }
 
@@ -1512,14 +1528,17 @@
   display: none;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *),
-.density-preview--minimal .thread-row {
+/* Same title-line spacing and header exclusion as Compact; see there. */
+:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *):not(.directory-row__summary),
+.density-preview--minimal .thread-row:not(.directory-row__summary) {
+  --thread-row-header-gap: 4px;
+  --thread-row-action-gap: 2px;
   gap: 4px;
   padding-left: 12px;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *):not(:has(.thread-row__chip--essential)),
-.density-preview--minimal .thread-row:not(:has(.thread-row__chip--essential)) {
+:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *):not(.directory-row__summary):not(:has(.thread-row__chip--essential)),
+.density-preview--minimal .thread-row:not(.directory-row__summary):not(:has(.thread-row__chip--essential)) {
   gap: 0;
 }
 
@@ -6725,7 +6744,7 @@ a.button {
 .thread-row__chip--add-reaction:focus-visible,
 .thread-row__chip--add-reaction.is-open {
   width: 30px;
-  margin-right: 4px;
+  margin-right: var(--thread-row-action-gap, 4px);
   opacity: 1;
   pointer-events: auto;
 }
@@ -6870,7 +6889,7 @@ a.button {
   z-index: 1;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--thread-row-header-gap, 12px);
   pointer-events: none;
 }
 
@@ -6974,7 +6993,7 @@ a.button {
   height: 24px;
   flex: 0 0 auto;
   place-items: center;
-  margin-right: 4px;
+  margin-right: var(--thread-row-action-gap, 4px);
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -7393,7 +7412,7 @@ a.button {
 .thread-row-shell:hover .thread-row__pin-button,
 .thread-row__pin-button:focus-visible {
   width: 24px;
-  margin-right: 4px;
+  margin-right: var(--thread-row-action-gap, 4px);
   border-width: 1px;
 }
 
