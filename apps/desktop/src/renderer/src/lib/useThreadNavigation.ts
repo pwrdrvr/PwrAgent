@@ -3709,6 +3709,10 @@ export function useThreadNavigation(
               imageAttachments: draftStore?.get(`launchpad:${directory.key}`)?.imageAttachments,
               fileAttachments: draftStore?.get(`launchpad:${directory.key}`)?.fileAttachments } : undefined } : {}),
       })));
+      // A directory that left the list needs no record of its last patch.
+      for (const key of directoryPatchReadsRef.current.keys()) {
+        if (!directoryRows.has(key)) directoryPatchReadsRef.current.delete(key);
+      }
       setState((current) => {
         // Unchanged resource pages must not roll back canonical row events or
         // resurrect tombstones when another resource finishes loading.
