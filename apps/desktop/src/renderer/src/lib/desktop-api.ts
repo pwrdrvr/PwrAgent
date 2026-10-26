@@ -567,6 +567,7 @@ import type {
   SetCodexModelProviderApiKeyResponse,
   TestCodexModelProviderRequest,
   CodexModelProviderTestResult,
+  CodexModelProviderImportScan,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
   RecordComposerDraftHistoryResponse,
@@ -1296,6 +1297,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   testCodexModelProvider?: (
     request: TestCodexModelProviderRequest
   ) => Promise<CodexModelProviderTestResult>;
+  /** Providers the Codex config files Settings lists already define. */
+  scanCodexModelProviderImports?: () => Promise<CodexModelProviderImportScan>;
   createCodexAuthProfile?: (
     request: CreateDesktopCodexAuthProfileRequest,
   ) => Promise<CreateDesktopCodexAuthProfileResponse>;

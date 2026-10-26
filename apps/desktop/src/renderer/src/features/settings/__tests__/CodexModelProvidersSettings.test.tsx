@@ -1,7 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DesktopCodexModelProvider } from "@pwragent/shared";
+import type { CodexModelProviderImportScan, DesktopCodexModelProvider } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { CodexModelProvidersSettings, slugifyProviderId } from "../CodexModelProvidersSettings";
 
@@ -16,7 +16,10 @@ const refuseless: DesktopCodexModelProvider = {
   hasApiKey: true,
 };
 
-function renderSettings(providers: DesktopCodexModelProvider[] = []) {
+function renderSettings(
+  providers: DesktopCodexModelProvider[] = [],
+  scan?: CodexModelProviderImportScan,
+) {
   const onSave = vi.fn(async () => true);
   const onRefresh = vi.fn(async () => undefined);
   const setCodexModelProviderApiKey = vi.fn(async ({ providerId }: { providerId: string }) => ({ providerId, hasApiKey: true }));
@@ -25,7 +28,12 @@ function renderSettings(providers: DesktopCodexModelProvider[] = []) {
     responses: { ok: false, model: "glm-5.3-abliterated", error: "HTTP 404" },
     latencyMs: 120,
   }));
-  const desktopApi = { setCodexModelProviderApiKey, testCodexModelProvider } as unknown as DesktopApi;
+  const scanCodexModelProviderImports = vi.fn(async () => scan ?? { candidates: [], skipped: [] });
+  const desktopApi = {
+    setCodexModelProviderApiKey,
+    testCodexModelProvider,
+    ...(scan ? { scanCodexModelProviderImports } : {}),
+  } as unknown as DesktopApi;
   render(
     <CodexModelProvidersSettings
       desktopApi={desktopApi}
@@ -35,8 +43,42 @@ function renderSettings(providers: DesktopCodexModelProvider[] = []) {
       onSave={onSave}
     />,
   );
-  return { onSave, onRefresh, setCodexModelProviderApiKey, testCodexModelProvider };
+  return { onSave, onRefresh, setCodexModelProviderApiKey, testCodexModelProvider, scanCodexModelProviderImports };
 }
+
+const bonsaiSource = { label: "bonsai", configPath: "/home/me/.codex/profiles/bonsai/config.toml" };
+
+const importScan: CodexModelProviderImportScan = {
+  candidates: [
+    {
+      sourceId: "bonsai",
+      name: "PrismML Bonsai (local)",
+      baseUrl: "http://127.0.0.1:18080/v1",
+      models: ["/models/Ternary-Bonsai-2-27B.gguf"],
+      local: true,
+      needsApiKey: false,
+      notes: [],
+      sources: [bonsaiSource],
+    },
+    {
+      sourceId: "refuseless",
+      name: "Refuseless",
+      baseUrl: "https://api.refuseless.example/v1",
+      models: [],
+      local: false,
+      needsApiKey: true,
+      apiKeyEnv: "REFUSELESS_API_KEY",
+      notes: [],
+      sources: [{ label: "Codex home", configPath: "/home/me/.codex/config.toml" }],
+    },
+  ],
+  skipped: [{
+    sourceId: "legacy",
+    name: "Legacy chat",
+    reason: "It uses wire_api = \"chat\". Codex 0.164 and later speak only the Responses API.",
+    sources: [bonsaiSource],
+  }],
+};
 
 describe("CodexModelProvidersSettings", () => {
   it("adds a provider with a key, models and rates, storing the key first", async () => {
@@ -109,6 +151,59 @@ describe("CodexModelProvidersSettings", () => {
     await waitFor(() => expect(testCodexModelProvider).toHaveBeenCalled());
     expect(await screen.findByText(/4 models · 120 ms/u)).toBeInTheDocument();
     expect(screen.getByText(/Codex needs the Responses API/u)).toBeInTheDocument();
+  });
+
+  it("offers the providers Codex config files define and imports one into the form", async () => {
+    const { onSave, setCodexModelProviderApiKey } = renderSettings([], importScan);
+    const imports = await screen.findByRole("group", { name: "Providers in Codex config files" });
+    expect(within(imports).getByText("PrismML Bonsai (local)")).toBeInTheDocument();
+    expect(within(imports).getByText(/Legacy chat/u)).toBeInTheDocument();
+    expect(within(imports).getByText(/wire_api = "chat"/u)).toBeInTheDocument();
+    fireEvent.click(within(imports).getByRole("button", { name: "Import PrismML Bonsai (local)" }));
+    expect(screen.queryByRole("group", { name: "Providers in Codex config files" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Provider name" })).toHaveValue("PrismML Bonsai (local)");
+    expect(screen.getByRole("textbox", { name: "Provider ID" })).toHaveValue("bonsai");
+    expect(screen.getByRole("textbox", { name: "Base URL" })).toHaveValue("http://127.0.0.1:18080/v1");
+    expect(screen.getByRole("textbox", { name: "Model ids" })).toHaveValue("/models/Ternary-Bonsai-2-27B.gguf");
+    expect(screen.getByRole("switch", { name: "Runs locally" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByLabelText("API key")).toHaveValue("");
+    expect(screen.getByText(/Imported from \/home\/me\/\.codex\/profiles\/bonsai\/config\.toml/u)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(onSave).toHaveBeenCalledWith([{
+      id: "bonsai",
+      name: "PrismML Bonsai (local)",
+      baseUrl: "http://127.0.0.1:18080/v1",
+      models: ["/models/Ternary-Bonsai-2-27B.gguf"],
+      local: true,
+    }]);
+    expect(setCodexModelProviderApiKey).not.toHaveBeenCalled();
+  });
+
+  it("asks for the key an imported provider needs and stores it in the keychain", async () => {
+    const { onSave, setCodexModelProviderApiKey } = renderSettings([], importScan);
+    fireEvent.click(await screen.findByRole("button", { name: "Import Refuseless" }));
+    expect(screen.getByText(/Codex read it from \$REFUSELESS_API_KEY\. Keys are not copied from files/u))
+      .toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Runs locally" })).toHaveAttribute("aria-checked", "false");
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "sk-pasted" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(setCodexModelProviderApiKey).toHaveBeenCalledWith({ providerId: "refuseless", apiKey: "sk-pasted" });
+  });
+
+  it("hides an endpoint that is already a provider and picks a free id", async () => {
+    const taken: DesktopCodexModelProvider = {
+      id: "bonsai",
+      name: "Other Bonsai",
+      baseUrl: "http://gpu.lan:8000/v1",
+      hasApiKey: false,
+    };
+    renderSettings([refuseless, taken], importScan);
+    const imports = await screen.findByRole("group", { name: "Providers in Codex config files" });
+    expect(within(imports).queryByRole("button", { name: "Import Refuseless" })).not.toBeInTheDocument();
+    fireEvent.click(within(imports).getByRole("button", { name: "Import PrismML Bonsai (local)" }));
+    expect(screen.getByRole("textbox", { name: "Provider ID" })).toHaveValue("bonsai-2");
   });
 
   it("derives an id from a name", () => {

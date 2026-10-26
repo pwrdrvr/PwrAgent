@@ -16278,6 +16278,38 @@ a.button {
   color: var(--text-muted);
 }
 
+/* Settings -> Codex -> Model providers: what Codex config files define. */
+.settings-section__body > .codex-provider-imports {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.codex-provider-imports__title {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.codex-provider-imports__skipped {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+  list-style: none;
+}
+
+.codex-provider-imports__skipped strong {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
 .settings-pathrow__action {
   flex: 0 0 auto;
 }

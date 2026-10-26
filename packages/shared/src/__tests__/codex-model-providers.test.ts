@@ -7,10 +7,12 @@ import {
   codexProviderIdOfModel,
   formatCodexProviderModelId,
   formatModelOptionLabel,
+  isLoopbackCodexBaseUrl,
   isValidCodexModelProviderId,
   modelOptionsForThreadProvider,
   parseCodexProviderModelId,
   resolveModelOptionReference,
+  suggestCodexModelProviderId,
   validateCodexBaseUrl,
   validateCodexModelProviders,
   type CodexModelProviderSettings,
@@ -223,5 +225,49 @@ describe("model option references", () => {
     expect(modelOptionsForThreadProvider(options, "gpt-5.5").map((option) => option.id)).toEqual(["gpt-5.5"]);
     expect(modelOptionsForThreadProvider(options, "@refuseless/glm-5.3-flash").map((option) => option.id))
       .toEqual(["@refuseless/glm-5.3-abliterated", "@refuseless/glm-5.3-flash"]);
+  });
+});
+
+describe("suggestCodexModelProviderId", () => {
+  it("keeps a valid free Codex key", () => {
+    expect(suggestCodexModelProviderId("bonsai", new Set())).toBe("bonsai");
+  });
+
+  it("makes a Codex key valid", () => {
+    expect(suggestCodexModelProviderId("My.Local Server!", new Set())).toBe("my-local-server");
+    expect(suggestCodexModelProviderId("42-gpu", new Set())).toBe("gpu");
+    expect(suggestCodexModelProviderId("---", new Set())).toBe("provider");
+  });
+
+  it("adds a suffix for a taken or reserved id", () => {
+    expect(suggestCodexModelProviderId("bonsai", new Set(["bonsai", "bonsai-2"]))).toBe("bonsai-3");
+    expect(suggestCodexModelProviderId("ollama", new Set())).toBe("ollama-2");
+    const long = "a".repeat(40);
+    const id = suggestCodexModelProviderId(long, new Set(["a".repeat(32)]));
+    expect(id).toBe(`${"a".repeat(30)}-2`);
+    expect(isValidCodexModelProviderId(id)).toBe(true);
+  });
+});
+
+describe("isLoopbackCodexBaseUrl", () => {
+  it.each([
+    "http://127.0.0.1:18080/v1",
+    "http://127.1.2.3/v1",
+    "http://localhost:8080/v1",
+    "http://gpu.localhost/v1",
+    "http://[::1]:8080/v1",
+    "http://[::ffff:127.0.0.1]/v1",
+  ])("treats %s as this machine", (url) => {
+    expect(isLoopbackCodexBaseUrl(url)).toBe(true);
+  });
+
+  it.each([
+    "https://api.example.com/v1",
+    "http://192.168.1.20:8080/v1",
+    "http://localhost.example.com/v1",
+    "http://128.0.0.1/v1",
+    "not a url",
+  ])("does not treat %s as this machine", (url) => {
+    expect(isLoopbackCodexBaseUrl(url)).toBe(false);
   });
 });

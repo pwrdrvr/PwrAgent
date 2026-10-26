@@ -564,6 +564,7 @@ import type {
   SetCodexModelProviderApiKeyResponse,
   TestCodexModelProviderRequest,
   CodexModelProviderTestResult,
+  CodexModelProviderImportScan,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
   RecordComposerDraftHistoryResponse,
@@ -1044,6 +1045,7 @@ import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL,
   SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL,
+  SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
@@ -1875,6 +1877,8 @@ const desktopApi = Object.freeze({
     request: TestCodexModelProviderRequest,
   ): Promise<CodexModelProviderTestResult> =>
     await ipcRenderer.invoke(SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL, request),
+  scanCodexModelProviderImports: async (): Promise<CodexModelProviderImportScan> =>
+    await ipcRenderer.invoke(SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL),
   createCodexAuthProfile: async (
     request: CreateDesktopCodexAuthProfileRequest,
   ): Promise<CreateDesktopCodexAuthProfileResponse> =>
