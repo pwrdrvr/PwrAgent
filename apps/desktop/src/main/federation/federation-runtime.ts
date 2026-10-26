@@ -293,9 +293,9 @@ import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import {
   readTranscriptImageProtocolRequest,
   rewriteFederatedTranscriptImageUrlsForRenderer,
-  materializeTranscriptImageUrlsForRenderer,
   toFederatedTranscriptImageProtocolUrl,
 } from "../transcript-image-protocol";
+import { readThreadForPeer } from "./federation-owner-thread-reads";
 import { getMainLogger } from "../log";
 import {
   discoverDesktopApplications,
@@ -6877,29 +6877,7 @@ function localBackendOperations(): FederationBackendOperations {
     async readThread(
       request: AppServerReadThreadRequest,
     ): Promise<AppServerReadThreadResponse> {
-      const backend = request.backend ?? "codex";
-      const response = await getDesktopBackendRegistry().readThread({
-        backend,
-        display: request.display,
-        threadId: request.threadId,
-        ...(request.includeTurns !== undefined
-          ? { includeTurns: request.includeTurns }
-          : {}),
-        ...(request.includeAllToolInvocations !== undefined
-          ? { includeAllToolInvocations: request.includeAllToolInvocations }
-          : {}),
-        before: request.before,
-        limit: request.limit,
-        ...(request.viewOnly !== undefined
-          ? { viewOnly: request.viewOnly }
-          : {}),
-      });
-      return await materializeTranscriptImageUrlsForRenderer(response, {}, {
-        includeTemporaryImageRoots: true,
-        resolveApprovedLocalImageRoots: () => getDesktopBackendRegistry().getThreadTranscriptImageRoots({
-          backend, threadId: request.threadId,
-        }),
-      });
+      return await readThreadForPeer(getDesktopBackendRegistry(), request);
     },
     async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
       return await getDesktopBackendRegistry().readUsageActivity(request);
