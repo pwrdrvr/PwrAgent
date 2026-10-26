@@ -181,11 +181,12 @@ function sameRepositoryName(left: string | undefined, right: string): boolean {
 }
 
 /**
- * The attached pull request a review command named, or, for a target given by
- * URL, the identity the URL spells out. A bare number that several of the
- * thread's repositories carry resolves the way a branch match does: this
- * workspace's own pull request, then the one in its Git remotes. Still
- * ambiguous, it names nothing rather than picking one.
+ * The attached pull request a review command named. A bare number that
+ * several of the thread's repositories carry resolves the way a branch match
+ * does: this workspace's own pull request, then the one in its Git remotes.
+ * Still ambiguous, it names nothing rather than picking one. A pull request
+ * the thread has not attached is named by its URL, or in the workspace's one
+ * repository.
  */
 async function resolveNamedPullRequest(params: {
   cwd: string;
@@ -216,7 +217,10 @@ async function resolveNamedPullRequest(params: {
   if (candidates.length === 1) {
     return toReviewPullRequest(candidates[0]);
   }
-  if (candidates.length === 0 && named.provider && named.org && named.repo && named.url) {
+  if (candidates.length > 0) {
+    return undefined;
+  }
+  if (named.provider && named.org && named.repo && named.url) {
     return {
       provider: named.provider,
       org: named.org,
@@ -225,7 +229,69 @@ async function resolveNamedPullRequest(params: {
       url: named.url,
     };
   }
-  return undefined;
+  return await resolveUnattachedPullRequest(params);
+}
+
+const PULL_REQUEST_URL_NUMBER = /\/(?:pull|-\/merge_requests)\/[1-9][0-9]*$/;
+
+/**
+ * A pull request the thread has not attached, named in the one repository
+ * this workspace's work lives in: the repository its attached pull requests
+ * share, else its only GitHub remote. A fork beside its upstream could own
+ * either number, so more than one candidate names nothing.
+ */
+async function resolveUnattachedPullRequest(params: {
+  cwd: string;
+  named: NamedReviewPullRequest;
+  prs: PrSummary[];
+  resolveGitHubRepos: (cwd: string) => Promise<GitHubRepoRef[]>;
+}): Promise<AppServerReviewPullRequest | undefined> {
+  const { named } = params;
+  const scoped = params.prs.filter((pr) => prBelongsToWorkspace(pr, params.cwd));
+  const workspacePrs = (scoped.length > 0
+    ? scoped
+    : params.prs.filter((pr) => !pr.linkedDirectoryPaths?.length)
+  ).filter((pr) =>
+    sameRepositoryName(named.provider, pr.provider)
+    && sameRepositoryName(named.org, pr.org)
+    && sameRepositoryName(named.repo, pr.repo)
+    && PULL_REQUEST_URL_NUMBER.test(pr.url.replace(/\/$/, ""))
+  );
+  const attachedRepositories = new Map(workspacePrs.map((pr) => [
+    `${pr.provider}/${pr.org}/${pr.repo}`.toLowerCase(),
+    pr,
+  ]));
+  if (attachedRepositories.size === 1) {
+    const [sibling] = attachedRepositories.values();
+    return {
+      provider: sibling.provider,
+      org: sibling.org,
+      repo: sibling.repo,
+      number: named.number,
+      url: sibling.url.replace(/\/$/, "").replace(/[0-9]+$/, String(named.number)),
+    };
+  }
+  if (attachedRepositories.size > 1) {
+    return undefined;
+  }
+  const remotes = (await params.resolveGitHubRepos(params.cwd).catch(
+    () => [] as GitHubRepoRef[],
+  )).filter((remote) =>
+    sameRepositoryName(named.provider, remote.host)
+    && sameRepositoryName(named.org, remote.owner)
+    && sameRepositoryName(named.repo, remote.repo)
+  );
+  if (remotes.length !== 1) {
+    return undefined;
+  }
+  const [remote] = remotes;
+  return {
+    provider: remote.host,
+    org: remote.owner,
+    repo: remote.repo,
+    number: named.number,
+    url: `https://${remote.host}/${remote.owner}/${remote.repo}/pull/${named.number}`,
+  };
 }
 
 function samePullRequest(

@@ -556,19 +556,66 @@ describe("resolveReviewProvenance for a review that named its pull requests", ()
     });
   });
 
-  it("makes no pull-request or branch claim when the named pull request is unknown", async () => {
+  it("names an unattached pull request in the repository the thread's pull requests belong to", async () => {
+    // `/code-review 97` from a worktree on #96's branch, with only #96 attached.
     const context = await resolveReviewProvenance({
       cwd: WORKSPACE,
       linkedDirectories: [directory()],
-      namedPullRequests: [{ number: 4242 }],
+      namedPullRequests: [{ number: 1921 }],
       prs: [CHECKED_OUT],
       resolveGitHubRepos: noRepos,
       runGit: gitRunner(CHECKED_OUT.headRefName, { head: HEAD_COMMIT }),
       target: claudeTarget,
     });
 
-    // The checked-out branch's pull request is the one thing known not to be
-    // what was reviewed.
+    expect(context).toEqual({
+      workspacePath: WORKSPACE,
+      projectLabel: "PwrAgent",
+      pullRequest: {
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 1921,
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/1921",
+      },
+    });
+  });
+
+  it("names an unattached pull request in the workspace's only GitHub repository", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{ number: 97 }],
+      prs: [],
+      resolveGitHubRepos: async () => [{ host: "github.com", owner: "pwrdrvr", repo: "PwrRoute" }],
+      runGit: gitRunner("feat/first-run-profile-access"),
+      target: claudeTarget,
+    });
+
+    expect(context?.pullRequest).toEqual({
+      provider: "github.com",
+      org: "pwrdrvr",
+      repo: "PwrRoute",
+      number: 97,
+      url: "https://github.com/pwrdrvr/PwrRoute/pull/97",
+    });
+  });
+
+  it("makes no pull-request or branch claim when the named pull request's repository is ambiguous", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      namedPullRequests: [{ number: 4242 }],
+      prs: [],
+      // A fork and its upstream: either could own #4242.
+      resolveGitHubRepos: async () => [
+        { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+        { host: "github.com", owner: "contributor", repo: "PwrAgent" },
+      ],
+      runGit: gitRunner("feat/elsewhere", { head: HEAD_COMMIT }),
+      target: claudeTarget,
+    });
+
+    // The checked-out branch is not evidence about what was reviewed.
     expect(context).toEqual({ workspacePath: WORKSPACE, projectLabel: "PwrAgent" });
   });
 });
