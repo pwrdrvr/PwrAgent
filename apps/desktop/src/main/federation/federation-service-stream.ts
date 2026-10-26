@@ -43,20 +43,31 @@ export function isServiceStreamSize(value: unknown, max: number): value is numbe
 /**
  * Receive memory shared by every stream on one side. A stream holds what it
  * granted and has not yet flushed to its local socket. A stream that cannot
- * reach its window waits here and is topped up as others drain.
+ * reach its window waits here, and waiting streams are served in turn as
+ * memory frees, so a busy stream cannot take back what it just drained ahead
+ * of one that is starved.
  */
 export class ServiceStreamBudget {
   private used = 0;
   private readonly waiting = new Set<ServiceStreamEndpoint>();
+  private serving?: ServiceStreamEndpoint;
   private refilling = false;
 
   constructor(readonly limit = SERVICE_STREAM_BUDGET_BYTES) {}
 
   get inUse(): number { return this.used; }
 
-  take(bytes: number): number {
+  /** Up to `bytes`; less, and a place in line, when memory is short or others wait. */
+  take(endpoint: ServiceStreamEndpoint, bytes: number): number {
+    const first = this.waiting.values().next().value;
+    if (first !== undefined && first !== endpoint && this.serving !== endpoint) {
+      this.waiting.add(endpoint);
+      return 0;
+    }
     const granted = Math.max(0, Math.min(bytes, this.limit - this.used));
     this.used += granted;
+    if (granted < bytes) this.waiting.add(endpoint);
+    else this.waiting.delete(endpoint);
     return granted;
   }
 
@@ -67,13 +78,14 @@ export class ServiceStreamBudget {
     queueMicrotask(() => {
       this.refilling = false;
       for (const endpoint of [...this.waiting]) {
+        if (this.used >= this.limit) break;
         this.waiting.delete(endpoint);
-        endpoint.grant();
+        this.serving = endpoint;
+        try { endpoint.grant(); } finally { this.serving = undefined; }
       }
     });
   }
 
-  wait(endpoint: ServiceStreamEndpoint): void { this.waiting.add(endpoint); }
   forget(endpoint: ServiceStreamEndpoint): void { this.waiting.delete(endpoint); }
 }
 
@@ -165,9 +177,8 @@ export class ServiceStreamEndpoint {
     this.socket = options.socket;
     this.window = options.window ?? SERVICE_STREAM_WINDOW_BYTES;
     this.frameBytes = options.frameBytes ?? SERVICE_STREAM_FRAME_BYTES;
-    this.granted = options.budget.take(this.window);
+    this.granted = options.budget.take(this, this.window);
     this.initialWindow = this.granted;
-    if (this.granted < this.window) options.budget.wait(this);
     this.socket.on("readable", this.readable);
     this.socket.on("end", this.wake);
     this.socket.on("error", this.failed);
@@ -265,8 +276,7 @@ export class ServiceStreamEndpoint {
     if (this.closed || this.remoteFin || this.peerClosed) return;
     const deficit = this.window - (this.granted - this.drained);
     if (deficit < this.window / GRANT_FRACTION) return;
-    const bytes = this.options.budget.take(deficit);
-    if (bytes < deficit) this.options.budget.wait(this);
+    const bytes = this.options.budget.take(this, deficit);
     if (!bytes) return;
     this.granted += bytes;
     this.notify(FRAMES.window, { streamId: this.streamId, bytes } satisfies ServiceStreamWindow);

@@ -109,7 +109,8 @@ async function gatewayFixture(service: FederationServices, forwarder: Federation
     delayed(rttMs, () => client.sendEnvelope(envelope));
   };
   const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner", defaultTimeoutMs: 30_000,
-    sendEnvelope: (envelope) => { void viewerSend(envelope); }, sendNotification: viewerSend });
+    sendEnvelope: (envelope) => { frames += 1; delayed(rttMs, () => clients.get("viewer")!.sendEnvelope(envelope)); },
+    sendNotification: viewerSend });
   const toViewer = viewerReceiver(rpc, forwarder);
   cleanups.push(() => rpc.rejectAll(new Error("Bench complete")));
   for (const peerId of ["owner", "viewer"]) {
