@@ -37,12 +37,32 @@ export function XrayMode(props: {
     const region = document.querySelector(".sidebar__scroll-region")
       ?? document.querySelector(".sidebar");
     if (!region) return;
-    const rect = region.getBoundingClientRect();
-    setAnchor({
-      left: rect.left,
-      width: rect.width,
-      bottom: window.innerHeight - rect.bottom,
-    });
+    // A pinned badge outlives sidebar and window resizes; follow them.
+    const measure = (): void => {
+      const rect = region.getBoundingClientRect();
+      const next = {
+        left: rect.left,
+        width: rect.width,
+        bottom: window.innerHeight - rect.bottom,
+      };
+      setAnchor((current) =>
+        current
+        && current.left === next.left
+        && current.width === next.width
+        && current.bottom === next.bottom
+          ? current
+          : next);
+    };
+    measure();
+    const observer = typeof ResizeObserver === "undefined"
+      ? undefined
+      : new ResizeObserver(measure);
+    observer?.observe(region);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
   }, [xray.active]);
 
   if (!xray.active || !anchor) return null;
@@ -50,13 +70,15 @@ export function XrayMode(props: {
   return createPortal(
     <div
       className="xray-badge"
-      role="status"
       style={{ left: anchor.left, width: anchor.width, bottom: anchor.bottom + 12 }}
     >
       <span className="xray-badge__pill">
-        <span className="xray-badge__label">X-ray</span>
-        <span className="xray-badge__hint">
-          {xray.pinned ? `Pinned · press ${key} twice to unpin` : `Release ${key} to hide`}
+        {/* The live region holds the words only, not the pin's name. */}
+        <span className="xray-badge__status" role="status">
+          <span className="xray-badge__label">X-ray</span>
+          <span className="xray-badge__hint">
+            {xray.pinned ? `Pinned · press ${key} twice to unpin` : `Release ${key} to hide`}
+          </span>
         </span>
         <button
           type="button"

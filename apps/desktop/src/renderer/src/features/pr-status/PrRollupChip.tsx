@@ -188,6 +188,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       event.preventDefault();
       focusRow(event.key === "Home" ? 0 : rollup.ordered.length - 1);
     } else if (event.key === "Tab") {
+      // Hand focus to the chip before the rows unmount. Tab then moves on
+      // from the chip; Shift+Tab stops on it.
+      triggerRef.current?.focus();
+      if (event.shiftKey) event.preventDefault();
       dismissImmediately();
     }
   };

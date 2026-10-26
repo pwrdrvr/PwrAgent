@@ -60,7 +60,10 @@ describe("PrRollupChip", () => {
     const chip = container.querySelector("[data-pr-rollup]")!;
     expect(chip).toHaveTextContent("3 PRs");
     expect(chip).toHaveClass("pr-chip", "pr-chip--failing");
-    expect(chip).toHaveAttribute("aria-label", "3 pull requests, checks failing");
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      "3 pull requests, ready for review · checks failing",
+    );
     expect(chip).toHaveAttribute("aria-expanded", "false");
   });
 
@@ -118,6 +121,29 @@ describe("PrRollupChip", () => {
 
     fireEvent.keyDown(rows[2]!, { key: "Escape" });
     expect(screen.queryByRole("group")).toBeNull();
+    expect(chip).toHaveFocus();
+  });
+
+  it("hands focus back to the chip when Tab leaves the list", () => {
+    vi.useFakeTimers();
+    const { container } = renderRollup([passing, failing]);
+    const chip = container.querySelector<HTMLElement>("[data-pr-rollup]")!;
+    chip.focus();
+    fireEvent.keyDown(chip, { key: "Enter" });
+    act(() => vi.advanceTimersToNextFrame());
+    const rows = within(screen.getByRole("group")).getAllByRole("button");
+
+    // Tab continues from the chip, not from <body> after the list unmounts.
+    const tab = fireEvent.keyDown(rows[1]!, { key: "Tab" });
+    expect(tab).toBe(true);
+    expect(screen.queryByRole("group")).toBeNull();
+    expect(chip).toHaveFocus();
+
+    fireEvent.keyDown(chip, { key: "Enter" });
+    act(() => vi.advanceTimersToNextFrame());
+    const first = within(screen.getByRole("group")).getAllByRole("button")[0]!;
+    // Shift+Tab stops on the chip itself.
+    expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
     expect(chip).toHaveFocus();
   });
 });

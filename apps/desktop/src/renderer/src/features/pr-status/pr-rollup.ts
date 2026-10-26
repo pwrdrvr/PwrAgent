@@ -1,6 +1,7 @@
 import type { PrSummary } from "@pwragent/shared";
 import {
   isPrStatusUnknown,
+  prStatusLabel,
   resolveCheckState,
   resolveLifecycleState,
 } from "./pr-chip-state";
@@ -77,12 +78,13 @@ export function resolvePrRollup(prs: readonly PrSummary[]): PrRollup | undefined
   open.sort((a, b) => openSortKey(a) - openSortKey(b));
   finished.sort((a, b) => finishedSortKey(a) - finishedSortKey(b));
   const ordered = [...open, ...finished];
+  const mergedCount = finished.filter((pr) => finishedSortKey(pr) === 0).length;
   const representative = ordered[0]!;
   return {
     representative,
     ordered,
     openCount: open.length,
-    summary: rollupSummary(representative, open.length, prs.length),
+    summary: rollupSummary(representative, open.length, prs.length, mergedCount),
   };
 }
 
@@ -90,30 +92,16 @@ function rollupSummary(
   representative: PrSummary,
   openCount: number,
   total: number,
+  mergedCount: number,
 ): string {
-  if (openCount === 0) {
-    const lifecycle = resolveLifecycleState(representative);
-    return total === 1
-      ? lifecycle === "merged" ? "merged" : "closed without merge"
-      : lifecycle === "merged" ? "all merged or closed" : "all closed";
+  if (openCount > 0 || total === 1) {
+    // The popover's rows say each PR's state with the same sentence.
+    return prStatusLabel(representative);
   }
-  const rank = openReadinessRank(representative);
-  switch (rank) {
-    case 0:
-      return "merge conflict";
-    case 1:
-      return "checks failing";
-    case 2:
-      return "checks failing · checks still running";
-    case 3:
-      return "checks running";
-    case 4:
-      return representative.reviewState === "draft"
-        ? "draft · checks passing"
-        : "ready · checks passing";
-    default:
-      return "status unknown";
+  if (mergedCount === total) {
+    return "all merged";
   }
+  return mergedCount > 0 ? "all merged or closed" : "all closed";
 }
 
 /** The rollup chip's visible label: the PR number alone, or the count. */

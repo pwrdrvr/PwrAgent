@@ -52,32 +52,40 @@ describe("resolvePrRollup", () => {
     ])!;
     expect(rollup.representative).toBe(conflict);
     expect(numbers(rollup.ordered)).toEqual([1, 2, 3, 4, 5]);
-    expect(rollup.summary).toBe("merge conflict");
+    expect(rollup.summary).toBe("ready for review · merge conflict · checks passing");
   });
 
   it("ranks a settled failure above one whose checks are still running", () => {
     expect(resolvePrRollup([failingRunning, failed])!.representative).toBe(failed);
     expect(resolvePrRollup([running, failingRunning])!.summary).toBe(
-      "checks failing · checks still running",
+      "ready for review · checks failing · checks still running",
     );
   });
 
   it("ranks running checks above passing ones", () => {
     const rollup = resolvePrRollup([ready, running])!;
     expect(rollup.representative).toBe(running);
-    expect(rollup.summary).toBe("checks running");
+    expect(rollup.summary).toBe("ready for review · checks pending");
   });
 
   it("shows a draft before a ready PR when both pass", () => {
     const rollup = resolvePrRollup([ready, draft])!;
     expect(rollup.representative).toBe(draft);
     expect(rollup.summary).toBe("draft · checks passing");
-    expect(resolvePrRollup([ready])!.summary).toBe("ready · checks passing");
+    expect(resolvePrRollup([ready])!.summary).toBe("ready for review · checks passing");
   });
 
   it("lets a known status outrank an unpolled attachment", () => {
     expect(resolvePrRollup([unknown, ready])!.representative).toBe(ready);
     expect(resolvePrRollup([unknown])!.summary).toBe("status unknown");
+  });
+
+  it("summarizes the representative in the popover rows' words", () => {
+    // Polled, but no checks reported: still a known, open PR.
+    const noChecks = pr(11, { checkState: "unknown", state: "unknown" });
+    expect(resolvePrRollup([noChecks, merged])!.summary).toBe(
+      "ready for review · status unknown",
+    );
   });
 
   it("ignores closed and merged PRs while any PR is open", () => {
@@ -93,6 +101,8 @@ describe("resolvePrRollup", () => {
     expect(rollup.representative).toBe(merged);
     expect(rollup.summary).toBe("all merged or closed");
     expect(resolvePrRollup([merged])!.summary).toBe("merged");
+    expect(resolvePrRollup([merged, pr(12, { lifecycleState: "merged" })])!.summary)
+      .toBe("all merged");
   });
 
   it("reports closed when every PR closed without merging", () => {

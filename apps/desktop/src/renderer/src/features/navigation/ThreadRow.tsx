@@ -298,11 +298,14 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
     ) => props.onOpenPullRequestContextMenu?.(props.thread, targetPr, position),
   );
   // A string, not a callback or a Set: the memoized rollup chip compares it
-  // by value, and it is read during that chip's render.
-  const repoPrefixedPrUrls = prs
-    .filter((pr) => needsRepoPrefix(props.thread, pr, prs))
-    .map((pr) => pr.url)
-    .join("\n");
+  // by value, and it is read during that chip's render. Only Minimal mounts
+  // the chip.
+  const repoPrefixedPrUrls = density === "minimal"
+    ? prs
+      .filter((pr) => needsRepoPrefix(props.thread, pr, prs))
+      .map((pr) => pr.url)
+      .join("\n")
+    : "";
   const detachPr = useEventCallback((targetPr: PrSummary) =>
     props.onDetachPullRequest?.(props.thread, targetPr));
   const toggleReactionPicker = useCallback(

@@ -1549,6 +1549,12 @@
   pointer-events: auto;
 }
 
+.xray-badge__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .xray-badge__label {
   color: var(--accent-bright);
   font-weight: 600;
