@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { disposeMcpConnectionIpcHandlers, registerMcpConnectionIpcHandlers } from "../ipc/mcp-connections";
 import type {
   PwrGitConnectionStatus,
   McpConnectionStatus,
@@ -158,9 +159,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("reads status from the remote owner without consulting local PwrSnap", async () => {
-    const { registerMcpConnectionIpcHandlers } = await import(
-      "../ipc/mcp-connections"
-    );
     const { MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL } = await import(
       "../../shared/ipc"
     );
@@ -195,7 +193,6 @@ describe("MCP connection IPC", () => {
     ["MCP_CONNECTION_SET_THREAD_CHANNEL", "setThreadMcpConnections", { backend: "codex", threadId: "thread-1", connectionIds: ["rovo"], providerServersEnabled: false }],
     ["MCP_CONNECTION_DESCRIBE_THREAD_CHANNEL", "describeThreadMcpConnections", { backend: "codex", threadId: "thread-1" }],
   ] as const)("routes %s to the owner for mounted and remote windows", async (channel, method, request) => {
-    const { registerMcpConnectionIpcHandlers } = await import("../ipc/mcp-connections");
     const channels = await import("../../shared/ipc");
     registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
     const handler = mocks.handlers.get(channels[channel])!;
@@ -220,10 +217,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("sends this machine's connection changes to subscribed windows until disposed", async () => {
-    const {
-      disposeMcpConnectionIpcHandlers,
-      registerMcpConnectionIpcHandlers,
-    } = await import("../ipc/mcp-connections");
     const { MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL } = await import("../../shared/ipc");
     const live = { isDestroyed: () => false, send: vi.fn() };
     const closed = { isDestroyed: () => true, send: vi.fn() };
@@ -247,7 +240,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("passes a local list's Sandboxer max age through, never fresher than a second", async () => {
-    const { registerMcpConnectionIpcHandlers } = await import("../ipc/mcp-connections");
     const { MCP_CONNECTION_LIST_CHANNEL } = await import("../../shared/ipc");
     registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
     const list = mocks.handlers.get(MCP_CONNECTION_LIST_CHANNEL)!;
@@ -261,7 +253,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("surfaces an unavailable owner without falling back to local connections", async () => {
-    const { registerMcpConnectionIpcHandlers } = await import("../ipc/mcp-connections");
     const { MCP_CONNECTION_LIST_CHANNEL } = await import("../../shared/ipc");
     registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
     mocks.listMcpConnections.mockRejectedValueOnce(new Error("Owner disconnected"));
@@ -273,10 +264,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("removes every handler it registered", async () => {
-    const {
-      disposeMcpConnectionIpcHandlers,
-      registerMcpConnectionIpcHandlers,
-    } = await import("../ipc/mcp-connections");
     registerMcpConnectionIpcHandlers(
       service as never,
       pwrGit as never,
@@ -290,9 +277,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("preserves local PwrSnap status and pairing behavior", async () => {
-    const { registerMcpConnectionIpcHandlers } = await import(
-      "../ipc/mcp-connections"
-    );
     const {
       MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL,
       MCP_CONNECTION_PWRSNAP_STATUS_CHANNEL,
@@ -321,9 +305,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("blocks every local PwrSnap pairing or launch action in a remote window", async () => {
-    const { registerMcpConnectionIpcHandlers } = await import(
-      "../ipc/mcp-connections"
-    );
     const {
       MCP_CONNECTION_PWRSNAP_CONNECT_CHANNEL,
       MCP_CONNECTION_PWRSNAP_DOWNLOAD_CHANNEL,
@@ -352,9 +333,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("serves local PwrGit status and blocks every PwrGit action in a remote window", async () => {
-    const { registerMcpConnectionIpcHandlers } = await import(
-      "../ipc/mcp-connections"
-    );
     const {
       MCP_CONNECTION_PWRGIT_CONNECT_CHANNEL,
       MCP_CONNECTION_PWRGIT_DOWNLOAD_CHANNEL,
@@ -394,9 +372,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("routes managed connection lifecycle actions only on the local owner", async () => {
-    const { registerMcpConnectionIpcHandlers } = await import(
-      "../ipc/mcp-connections"
-    );
     const {
       MCP_CONNECTION_AUTHORIZE_CHANNEL,
       MCP_CONNECTION_CREATE_CHANNEL,
@@ -448,9 +423,6 @@ describe("MCP connection IPC", () => {
     }
   });
   it("tests a local command only for a window on the machine that would run it", async () => {
-    const { registerMcpConnectionIpcHandlers } = await import(
-      "../ipc/mcp-connections"
-    );
     const { MCP_CONNECTION_TEST_STDIO_CHANNEL } = await import("../../shared/ipc");
     registerMcpConnectionIpcHandlers(
       service as never,
@@ -476,9 +448,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("opens Sandboxer pages only from a local window, and only known ones", async () => {
-    const { registerMcpConnectionIpcHandlers } = await import(
-      "../ipc/mcp-connections"
-    );
     const { MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL } = await import("../../shared/ipc");
     service.openSandboxerLink.mockClear();
     registerMcpConnectionIpcHandlers(
@@ -503,9 +472,6 @@ describe("MCP connection IPC", () => {
   });
 
   it("refuses installer downloads from a remote window and unknown apps", async () => {
-    const { registerMcpConnectionIpcHandlers } = await import(
-      "../ipc/mcp-connections"
-    );
     const { PWRSUITE_INSTALLER_START_CHANNEL } = await import("../../shared/ipc");
     installer.start.mockClear();
     registerMcpConnectionIpcHandlers(

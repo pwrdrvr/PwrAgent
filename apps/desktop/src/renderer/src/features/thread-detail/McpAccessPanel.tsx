@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import {
   canIsolateMcpProviderServers,
   backendLoadsMcpConnections,
@@ -82,26 +82,30 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
   // reads the same predicate, so it cannot store a value this hides.
   const canIsolate = canIsolateMcpProviderServers(props.backend);
 
-  const refresh = useCallback(async () => {
-    if (!props.desktopApi?.listMcpConnections) {
+  useEffect(() => {
+    let cancelled = false;
+    // A previous owner's rows cannot stand in for an inventory still loading.
+    setConnections(undefined);
+    setError(undefined);
+    const list = props.desktopApi?.listMcpConnections;
+    if (!list) {
       setConnections([]);
       return;
     }
-    try {
-      const response = await props.desktopApi.listMcpConnections(
-        props.federationTarget ? { federationTarget: props.federationTarget } : undefined,
-      );
-      setConnections(response.connections);
-      setError(undefined);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setConnections([]);
-    }
+    void (async () => {
+      try {
+        const response = await list(
+          props.federationTarget ? { federationTarget: props.federationTarget } : undefined,
+        );
+        if (!cancelled) setConnections(response.connections);
+      } catch (cause) {
+        if (cancelled) return;
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setConnections([]);
+      }
+    })();
+    return () => { cancelled = true; };
   }, [props.desktopApi, props.federationTarget]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
 
   // The caller owns the selection and refreshes it only once its write
   // resolves, so every control has to be inert while one is in flight. A
