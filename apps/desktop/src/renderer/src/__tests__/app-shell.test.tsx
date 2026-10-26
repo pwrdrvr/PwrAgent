@@ -7254,6 +7254,62 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: /sub-thread draft/ })).not.toBeInTheDocument();
   });
 
+  // The desktop API a mounted thread shell needs: Codex threads in the
+  // Inbox, seen marks echoed back, and no live events. `api` adds what a
+  // test drives; `threads` is read on every snapshot, so a rename shows.
+  function installCodexThreadShell(params: {
+    threads: () => Array<{ id: string; title: string; summary?: string; updatedAt: number }>;
+    api: object;
+  }): void {
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        copyText: async () => undefined,
+        ping: () => "pong",
+        getNavigationSnapshot: async () => {
+          const threads = params.threads();
+          return {
+            backend: "all" as const,
+            fetchedAt: Date.now(),
+            unchanged: false,
+            inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
+            threads: threads.map((thread) => ({
+              ...thread,
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              executionMode: "default" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+            })),
+            directories: [],
+            launchpadDefaults: {
+              backend: "codex" as const,
+              executionMode: "default" as const,
+            },
+          };
+        },
+        markThreadSeen: async ({
+          backend,
+          threadId,
+        }: {
+          backend: AppServerBackendKind;
+          threadId: string;
+        }) => ({
+          backend,
+          threadId,
+          seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        platform: "darwin",
+        ...params.api,
+      }),
+    });
+  }
+
   // One Codex thread whose backend renames, reflected by the next snapshot.
   function installRenamableThreadFixture() {
     let threadTitle = "Build Codex client";
@@ -7281,11 +7337,14 @@ describe("App", () => {
       },
     }));
 
-    Object.defineProperty(window, "pwragent", {
-      configurable: true,
-      value: ownerApi({
-        copyText: async () => undefined,
-        ping: () => "pong",
+    installCodexThreadShell({
+      threads: () => [{
+        id: "thread-1",
+        title: threadTitle,
+        summary: "Wire the app-server transport and list threads",
+        updatedAt: 2_000,
+      }],
+      api: {
         listSkills: async () => ({
           backend: "codex" as const,
           fetchedAt: Date.now(),
@@ -7324,50 +7383,9 @@ describe("App", () => {
             },
           ],
         }),
-        getNavigationSnapshot: async () => ({
-          backend: "all" as const,
-          fetchedAt: Date.now(),
-          unchanged: false,
-          inboxThreadKeys: ["codex:thread-1"],
-          threads: [
-            {
-              id: "thread-1",
-              title: threadTitle,
-              titleSource: "explicit" as const,
-              summary: "Wire the app-server transport and list threads",
-              source: "codex" as const,
-              executionMode: "default" as const,
-              linkedDirectories: [],
-              inbox: {
-                inInbox: true,
-                reason: "new-thread" as const,
-              },
-              updatedAt: 2_000,
-            },
-          ],
-          directories: [],
-          launchpadDefaults: {
-            backend: "codex" as const,
-            executionMode: "default" as const,
-          },
-        }),
-        markThreadSeen: async ({
-          backend,
-          threadId,
-        }: {
-          backend: AppServerBackendKind;
-          threadId: string;
-        }) => ({
-          backend,
-          threadId,
-          seenAt: Date.now(),
-        }),
-        onAgentEvent: () => () => undefined,
-        onWindowFocus: () => () => undefined,
-        platform: "darwin",
         readThread,
         renameThread,
-      }),
+      },
     });
     return { renameThread };
   }
@@ -7401,6 +7419,117 @@ describe("App", () => {
       level: 2,
       name: "Renamed Codex client",
     });
+  });
+
+  function installQuestionThreadFixture(questionThreadId: "thread-1" | "thread-2") {
+    const question = {
+      type: "message" as const,
+      id: "call-question",
+      role: "assistant" as const,
+      text: "Which region should we deploy to?",
+      delivery: "async" as const,
+      questions: [{ title: "Which region should we deploy to?", options: null }],
+    };
+    const readThread = vi.fn(async ({ threadId }: { threadId: string }) => ({
+      backend: "codex" as const,
+      fetchedAt: Date.now(),
+      threadId,
+      replay: {
+        entries: [
+          { type: "message" as const, id: `${threadId}-ask`, role: "user" as const, text: "Ship it." },
+          ...(threadId === questionThreadId ? [question] : []),
+          { type: "message" as const, id: `${threadId}-done`, role: "assistant" as const, text: "Waiting on you." },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    }));
+
+    installCodexThreadShell({
+      threads: () => [
+        { id: "thread-1", title: "Build Codex client", updatedAt: 2_000 },
+        { id: "thread-2", title: "Deploy the gateway", updatedAt: 1_000 },
+      ],
+      api: {
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        listOperatorRequests: async () => ({
+          serverRequests: [],
+          questions: [{
+            backend: "codex" as const,
+            threadId: questionThreadId,
+            messageId: question.id,
+            questions: [{ title: "Which region should we deploy to?", options: [] }],
+            createdAt: 1_500,
+          }],
+          seenKeys: [],
+        }),
+        readThread,
+      },
+    });
+
+    // jsdom has no scrollIntoView. Record what the jump scrolls.
+    const scrollIntoView = vi.fn<(this: HTMLElement) => void>();
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    onTestFinished(() => {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", descriptor);
+      else delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    });
+    return { scrollIntoView };
+  }
+
+  async function expectQuestionRevealed(scrollIntoView: { mock: { contexts: unknown[] } }): Promise<void> {
+    await waitFor(() => {
+      expect(document.querySelector("[data-entry-id=\"call-question\"]"))
+        .toHaveAttribute("data-linked-message", "true");
+    });
+    const item = document.querySelector("[data-entry-id=\"call-question\"]");
+    expect(scrollIntoView.mock.contexts).toContain(item?.firstElementChild);
+  }
+
+  it("opens another thread on its question from the sidebar Question chip", async () => {
+    const { scrollIntoView } = installQuestionThreadFixture("thread-2");
+
+    render(<App />);
+
+    await screen.findByRole("heading", { level: 2, name: "Build Codex client" });
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    fireEvent.click(await within(browseSection).findByRole("button", {
+      name: "Question: Which region should we deploy to?",
+    }));
+
+    await screen.findByRole("heading", { level: 2, name: "Deploy the gateway" });
+    await expectQuestionRevealed(scrollIntoView);
+  });
+
+  it("brings the selected thread back from Search on its question", async () => {
+    const { scrollIntoView } = installQuestionThreadFixture("thread-1");
+
+    render(<App />);
+
+    await screen.findByRole("heading", { level: 2, name: "Build Codex client" });
+    fireEvent.keyDown(window, {
+      metaKey: true,
+      shiftKey: true,
+      code: "KeyF",
+      key: "F",
+    });
+    await screen.findByRole("heading", { level: 2, name: "Search" });
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    fireEvent.click(await within(browseSection).findByRole("button", {
+      name: "Question: Which region should we deploy to?",
+    }));
+
+    await screen.findByRole("heading", { level: 2, name: "Build Codex client" });
+    expect(screen.queryByRole("heading", { level: 2, name: "Search" })).not.toBeInTheDocument();
+    await expectQuestionRevealed(scrollIntoView);
   });
 
   it("renames the open thread from its title strip on double-click", async () => {
