@@ -87,6 +87,7 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await expect.poll(() => app.getLastStartTurn()).toMatchObject({ model: "gpt-5.5", reasoningEffort: "xhigh" });
     await expect(stack).toContainText("Last used in this thread");
     await app.window.reload();
+    await app.window.getByRole("button", { name: /Webhook delivery hardening/ }).first().click();
     await expect(app.window.getByRole("region", { name: "To-dos for this thread" })).toContainText("Last used in this thread");
     const cards = await app.window.evaluate(async () => {
       const api = (window as unknown as { pwragent: DesktopApi }).pwragent;

@@ -187,7 +187,8 @@ export function installThreadTodoRuntime(params: {
     }
     if (event.notification.method === "thread/pullRequests/updated"
       || event.notification.method === "thread/unarchived"
-      || event.notification.method === "thread/name/updated") {
+      || event.notification.method === "thread/name/updated"
+      || event.notification.method === "thread/modelSettings/updated") {
       params.broadcast({ backend: event.backend, threadId: event.notification.params.threadId, at: Date.now() });
     }
     if (event.notification.method !== "thread/archived") return;
