@@ -26,6 +26,7 @@ import {
   DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopAppearanceDensity,
   isDesktopDarkTheme,
   isDesktopLightTheme,
   isDesktopTextSize,
@@ -132,7 +133,7 @@ export function parseBootstrapAppearanceArg(
           : DESKTOP_LIGHT_THEME_DEFAULT;
       const density =
         raw && typeof raw.density === "string"
-          && (raw.density === "mission-control" || raw.density === "compact")
+          && isDesktopAppearanceDensity(raw.density)
           ? (raw.density as DesktopAppearanceDensity)
           : DESKTOP_APPEARANCE_DENSITY_DEFAULT;
       const sidebarTextSize =

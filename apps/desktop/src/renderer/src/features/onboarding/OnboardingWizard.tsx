@@ -38,6 +38,7 @@ import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connec
 import { slackCredentialProblem } from "../messaging/slack-token-shape";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
+import { DensityPicker, densityLabel } from "../settings/DensityPicker";
 import { filterBufferedSecrets } from "./filterBufferedSecrets";
 import {
   isValidProfileName,
@@ -51,7 +52,6 @@ import {
   LineIcon,
   MattermostIcon,
   OpenAIIcon,
-  PinIcon,
   PwrAgentIcon,
   SlackIcon,
   TelegramIcon,
@@ -2433,7 +2433,8 @@ function WelcomeStep() {
               Thread presentation
             </div>
             <div className="onboarding-wizard__welcome-row-sub">
-              Compact rows or Mission Control chips. Light, dark, or follow OS.
+              Mission Control, Compact, or Minimal rows. Light, dark, or follow
+              OS.
             </div>
           </div>
         </li>
@@ -2478,7 +2479,7 @@ function WelcomeStep() {
   );
 }
 
-function ThreadPresentationStep(props: {
+export function ThreadPresentationStep(props: {
   theme: DesktopAppearanceTheme;
   density: DesktopAppearanceDensity;
   onThemeChange: (value: DesktopAppearanceTheme) => void;
@@ -2526,28 +2527,12 @@ function ThreadPresentationStep(props: {
         </div>
       </div>
 
-      <div className="onboarding-wizard__choices onboarding-wizard__choices--2">
-        <ChoiceCard
-          eyebrow="Compact"
-          title="Just the title — you know what it is"
-          desc="You can remember that this thread is for PR #123 on branch feat/fix-feature-foo and that it's bound to topic SledgeHammer in the Hunters group on Telegram. You don't want all that clutter reminding you of it."
-          hint="Best for: muscle memory, density, many open threads."
-          badge={props.density === "compact" ? "Selected" : undefined}
-          selected={props.density === "compact"}
-          onSelect={() => props.onDensityChange("compact")}
-          preview={<DensityCompactPreview />}
-        />
-        <ChoiceCard
-          eyebrow="Mission control"
-          title="Every row, every signal, all visible"
-          desc="It's the 60s and you're at a beautiful console with a custom indicator for every system you're monitoring. All the info you need is right there — without having to remember the temperature at which a rocket engine burns itself as fuel."
-          hint="Best for: at-a-glance scanning across many parallel states."
-          badge={props.density === "mission-control" ? "Selected" : undefined}
-          selected={props.density === "mission-control"}
-          onSelect={() => props.onDensityChange("mission-control")}
-          preview={<DensityMissionControlPreview />}
-        />
-      </div>
+      <DensityPicker
+        platform={document.documentElement.getAttribute("data-platform") ?? undefined}
+        value={props.density}
+        variant="wizard"
+        onChange={props.onDensityChange}
+      />
     </div>
   );
 }
@@ -3009,155 +2994,6 @@ function ChoiceCard(props: {
       <p className="onboarding-wizard__choice-desc">{props.desc}</p>
       <p className="onboarding-wizard__choice-hint">{props.hint}</p>
     </button>
-  );
-}
-
-/* ----------------------------------------------------------------
-   Embedded mini-previews for Step 1
-   ---------------------------------------------------------------- */
-
-/* Mini ThreadRow chips — composed to mirror the live ThreadRow primitive:
-   - .mini-pin renders the in-title pin marker (the live sidebar stopped
-     spending a chip on pinned state in the 2026-08 density pass)
-   - .mini-chip-pr renders the "#123" PR pill (dot + number)
-   - .mini-chip-meta renders the gray-fill chips (OpenAI / PwrAgnt / branch)
-   Compact mode keeps the pin marker + PR + emoji; Mission Control adds
-   the meta row. */
-function MiniPinChip() {
-  return (
-    <span aria-hidden="true" className="onboarding-wizard__mini-pin">
-      <PinIcon size={9} />
-    </span>
-  );
-}
-function MiniPrChip(props: { num: string; status: "ok" | "draft" | "merged" }) {
-  return (
-    <span className="onboarding-wizard__mini-chip onboarding-wizard__mini-chip--pr">
-      <span
-        className={`onboarding-wizard__mini-pr-dot is-${props.status}`}
-        aria-hidden
-      />
-      #{props.num}
-    </span>
-  );
-}
-function MiniMetaChip(props: { children: ReactNode }) {
-  return (
-    <span className="onboarding-wizard__mini-chip onboarding-wizard__mini-chip--meta">
-      {props.children}
-    </span>
-  );
-}
-
-function DensityCompactPreview() {
-  return (
-    <div className="onboarding-wizard__mini">
-      <div className="onboarding-wizard__mini-row is-active">
-        <span className="onboarding-wizard__mini-title">PwrAgent - Release</span>
-        <MiniPinChip />
-        <span className="onboarding-wizard__mini-time">2h</span>
-      </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-title">PwrSnap - Release</span>
-        <MiniPinChip />
-        <span className="onboarding-wizard__mini-time">May 7</span>
-      </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-title">Text Mode for Button Platforms</span>
-        <MiniPinChip />
-        <MiniPrChip num="352" status="ok" />
-        <span className="onboarding-wizard__mini-emoji">👀</span>
-        <span className="onboarding-wizard__mini-time">2d</span>
-      </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">Automation scheduling system</span>
-        <MiniPinChip />
-        <MiniPrChip num="376" status="ok" />
-        <span className="onboarding-wizard__mini-emoji">🏃</span>
-        <span className="onboarding-wizard__mini-time">2d</span>
-      </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">OCR image tags and descriptions</span>
-        <MiniPinChip />
-        <MiniPrChip num="30" status="merged" />
-        <span className="onboarding-wizard__mini-emoji">🙏</span>
-        <span className="onboarding-wizard__mini-time">3h</span>
-      </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-title">App image cache disk usage</span>
-        <MiniPinChip />
-        <MiniPrChip num="46" status="draft" />
-        <span className="onboarding-wizard__mini-emoji">👀</span>
-        <span className="onboarding-wizard__mini-time">4h</span>
-      </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">Pass PDFs through directly</span>
-        <MiniPinChip />
-        <MiniPrChip num="386" status="ok" />
-        <span className="onboarding-wizard__mini-time">2d</span>
-      </div>
-      <div className="onboarding-wizard__mini-row">
-        <span className="onboarding-wizard__mini-title">Knock Knock Rock</span>
-        <MiniPinChip />
-        <MiniPrChip num="173" status="draft" />
-        <span className="onboarding-wizard__mini-time">May 10</span>
-      </div>
-    </div>
-  );
-}
-
-function DensityMissionControlPreview() {
-  return (
-    <div className="onboarding-wizard__mini">
-      <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc is-active">
-        <span className="onboarding-wizard__mini-title">PwrAgent - Release</span>
-        <MiniPinChip />
-        <span className="onboarding-wizard__mini-time">2h</span>
-        <div className="onboarding-wizard__mini-meta">
-          <MiniMetaChip>OpenAI</MiniMetaChip>
-          <MiniMetaChip>📁 PwrAgnt</MiniMetaChip>
-          <MiniMetaChip>⌥ main</MiniMetaChip>
-        </div>
-      </div>
-      <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
-        <span className="onboarding-wizard__mini-title">PwrSnap - Release</span>
-        <MiniPinChip />
-        <span className="onboarding-wizard__mini-time">May 7</span>
-        <div className="onboarding-wizard__mini-meta">
-          <MiniMetaChip>OpenAI</MiniMetaChip>
-          <MiniMetaChip>📁 PwrSnap</MiniMetaChip>
-          <MiniMetaChip>⌥ main</MiniMetaChip>
-        </div>
-      </div>
-      <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
-        <span className="onboarding-wizard__mini-title">Text Mode for Button Platforms</span>
-        <MiniPinChip />
-        <span className="onboarding-wizard__mini-time">2d</span>
-        <div className="onboarding-wizard__mini-meta">
-          <MiniMetaChip>OpenAI</MiniMetaChip>
-          <MiniMetaChip>⌥ PwrAgnt</MiniMetaChip>
-          <MiniMetaChip>⌥ feat/messaging-text-mode</MiniMetaChip>
-          <MiniPrChip num="352" status="ok" />
-          <span className="onboarding-wizard__mini-emoji">👀</span>
-        </div>
-      </div>
-      <div className="onboarding-wizard__mini-row onboarding-wizard__mini-row--mc">
-        <span className="onboarding-wizard__mini-cookie" />
-        <span className="onboarding-wizard__mini-title">Automation scheduling system</span>
-        <MiniPinChip />
-        <span className="onboarding-wizard__mini-time">2d</span>
-        <div className="onboarding-wizard__mini-meta">
-          <MiniMetaChip>OpenAI</MiniMetaChip>
-          <MiniMetaChip>⌥ PwrAgnt</MiniMetaChip>
-          <MiniMetaChip>⌥ feat/automation</MiniMetaChip>
-          <MiniPrChip num="376" status="ok" />
-          <span className="onboarding-wizard__mini-emoji">🏃</span>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -5519,10 +5355,6 @@ function CheckIcon() {
 /* ----------------------------------------------------------------
    Label helpers
    ---------------------------------------------------------------- */
-
-function densityLabel(value: DesktopAppearanceDensity): string {
-  return value === "compact" ? "Compact" : "Mission control";
-}
 
 function codexProfileLabel(value: DesktopCodexProfileModel): string {
   switch (value) {

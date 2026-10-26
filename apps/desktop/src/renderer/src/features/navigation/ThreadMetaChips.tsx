@@ -301,7 +301,7 @@ export function ThreadMetaChips({
         <span
           aria-label="A message is held"
           role="img"
-          className="thread-row__chip thread-row__chip--held thread-row__chip--persistent"
+          className="thread-row__chip thread-row__chip--held thread-row__chip--persistent thread-row__chip--essential"
           title="A message is held. Open the thread to retry or delete it."
         >
           <PauseIcon size={11} strokeWidth={2.5} />
@@ -364,7 +364,7 @@ export function ThreadMetaChips({
         <span
           aria-label={`${operatorWaitLabel(leadWait)}: ${leadWait.title}`}
           role="img"
-          className={`thread-row__chip ${
+          className={`thread-row__chip thread-row__chip--essential ${
             isBlockingWait(leadWait) ? "thread-row__chip--approval" : "thread-row__chip--question"
           }`}
           data-thread-wait={leadWait.kind}
@@ -448,7 +448,7 @@ export function ThreadMetaChips({
       {!leadWait && hasApprovalRequest ? (
         <span
           aria-label="Waiting for approval"
-          className="thread-row__chip thread-row__chip--approval"
+          className="thread-row__chip thread-row__chip--approval thread-row__chip--essential"
           title="Waiting for approval"
         >
           Waiting for approval
@@ -458,7 +458,7 @@ export function ThreadMetaChips({
       {!leadWait && hasInputRequest ? (
         <span
           aria-label="Input needed"
-          className="thread-row__chip thread-row__chip--input"
+          className="thread-row__chip thread-row__chip--input thread-row__chip--essential"
           title="Input needed"
         >
           Input needed

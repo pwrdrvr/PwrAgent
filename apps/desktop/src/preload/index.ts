@@ -74,6 +74,7 @@ import {
   DESKTOP_DARK_THEME_DEFAULT,
   DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopAppearanceDensity,
   isDesktopDarkTheme,
   isDesktopLightTheme,
   isDesktopTextSize,
@@ -3429,7 +3430,7 @@ function readBootstrapAppearance(): {
   theme: "system" | "dark" | "light";
   darkTheme: DesktopDarkTheme;
   lightTheme: DesktopLightTheme;
-  density: "mission-control" | "compact";
+  density: DesktopAppearanceDensity;
   sidebarTextSize: DesktopTextSize;
   transcriptTextSize: DesktopTextSize;
 } {
@@ -3451,13 +3452,14 @@ function readBootstrapAppearance(): {
           && isDesktopLightTheme(raw.lightTheme)
           ? raw.lightTheme
           : DESKTOP_LIGHT_THEME_DEFAULT;
+      // Shared guards, not hand-copied literal lists: a density or notch
+      // added to the shared lists must not silently coerce to the default
+      // on first paint only (the flash this bootstrap exists to prevent).
       const density =
-        raw && (raw.density === "mission-control" || raw.density === "compact")
+        raw && typeof raw.density === "string"
+          && isDesktopAppearanceDensity(raw.density)
           ? raw.density
           : "mission-control";
-      // Shared guard, not a hand-copied literal list: a notch added to
-      // DESKTOP_TEXT_SIZES must not silently coerce to "md" on
-      // first paint only (the flash this bootstrap exists to prevent).
       const sidebarTextSize =
         raw && typeof raw.sidebarTextSize === "string"
           && isDesktopTextSize(raw.sidebarTextSize)

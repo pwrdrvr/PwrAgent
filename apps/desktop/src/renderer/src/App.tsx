@@ -3,6 +3,8 @@ import { FederationShutdownNotices } from "./features/notifications/FederationSh
 import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRenameNotice";
 import { CloudflareSignInNotice, CLOUDFLARE_SIGN_IN_NOTICE_ID } from "./features/notifications/CloudflareSignInNotice";
 import { CodexAuthProfileLoginDialog } from "./features/settings/CodexAuthProfileSelect";
+import { XrayMode } from "./features/navigation/XrayBadge";
+import { ThreadRowDensityContext } from "./features/navigation/thread-row-density";
 import { navigationIdentityFromThreadKey } from "./lib/navigation-query-state";
 import { ensureWindowThreadMounted } from "./lib/ensure-window-thread-mounted";
 import { formatBackendLabel } from "./lib/backend-label";
@@ -404,12 +406,14 @@ export function App() {
   }
 
   return (
-    <DesktopAppShell
-      appearanceController={appearanceController}
-      bootstrapConfig={bootstrapConfig}
-      desktopApi={desktopApi}
-      settings={settings}
-    />
+    <ThreadRowDensityContext.Provider value={appearanceController.appearance.density}>
+      <DesktopAppShell
+        appearanceController={appearanceController}
+        bootstrapConfig={bootstrapConfig}
+        desktopApi={desktopApi}
+        settings={settings}
+      />
+    </ThreadRowDensityContext.Provider>
   );
 }
 
@@ -4309,6 +4313,11 @@ function DesktopAppShell(props: {
           onCopyThreadDiagnostics={
             desktopApi?.readAppMetadata ? copyThreadDiagnosticsInfo : undefined
           }
+        />
+        <XrayMode
+          density={props.appearanceController.appearance.density}
+          enabled={!sidebarHidden && layerView === undefined}
+          platform={desktopApi?.platform}
         />
         {/* Sibling of the sidebar, not a child: the seam straddles the
             sidebar's border, which the aside's overflow clip would cut off. */}

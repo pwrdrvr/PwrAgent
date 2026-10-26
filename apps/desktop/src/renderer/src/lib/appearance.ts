@@ -33,6 +33,7 @@ import {
   DESKTOP_LIGHT_THEME_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  isDesktopAppearanceDensity,
   isDesktopDarkTheme,
   isDesktopLightTheme,
   isDesktopTextSize,
@@ -120,8 +121,10 @@ export function applyAppearanceAttributes(
   } else {
     root.removeAttribute("data-color-theme");
   }
-  if (density === "compact") {
-    root.setAttribute("data-density", "compact");
+  // Mission control is the bare :root; every other density sets the
+  // attribute its CSS overrides key on.
+  if (density !== "mission-control") {
+    root.setAttribute("data-density", density);
   } else {
     root.removeAttribute("data-density");
   }
@@ -178,7 +181,7 @@ function normalizeLightTheme(value: unknown): LightThemePreference {
 }
 
 function normalizeDensity(value: unknown): DensityPreference {
-  return value === "compact" || value === "mission-control"
+  return typeof value === "string" && isDesktopAppearanceDensity(value)
     ? value
     : DEFAULT_APPEARANCE.density;
 }

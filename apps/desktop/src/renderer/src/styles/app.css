@@ -1411,12 +1411,21 @@
    carry a `.thread-row__chip--*` variant (e.g. the questionnaire's mode
    chip in the transcript) don't get collapsed when compact density is
    on. The skill chip in the composer and the standalone SkillChip use
-   `.chip` directly and aren't affected by this rule. */
-:root[data-density="compact"] .thread-row__chips .thread-row__chip:not(.thread-row__chip--persistent) {
+   `.chip` directly and aren't affected by this rule.
+
+   Every density rule has two halves. The `:root` half applies the operator's
+   density to the live list, except while X-ray is held (`data-xray`, see
+   lib/xray-mode.ts) and except inside a `.density-preview`, which shows its
+   own density whatever the app's is. The `.density-preview--*` half is that
+   preview: the Settings and onboarding density pickers render real thread
+   rows, so their previews cannot drift from the list. */
+:root[data-density="compact"]:not([data-xray]) .thread-row__chips:not(.density-preview *) .thread-row__chip:not(.thread-row__chip--persistent),
+.density-preview--compact .thread-row__chips .thread-row__chip:not(.thread-row__chip--persistent) {
   display: none;
 }
 
-:root[data-density="compact"] .thread-row__chips {
+:root[data-density="compact"]:not([data-xray]) .thread-row__chips:not(.density-preview *),
+.density-preview--compact .thread-row__chips {
   /* Tighter inter-chip gap when only reactions + PRs remain visible. */
   gap: 4px;
 }
@@ -1430,14 +1439,268 @@
    hidden-chips selector zeroes the column gap for rows where every chip
    is suppressed — the `--persistent` marker (same source of truth as
    the suppression rule above) plus `.pr-chip` are the only things that
-   survive, so two :has() checks decide it without JS. */
-:root[data-density="compact"] .thread-row {
+   survive, so two :has() checks decide it without JS. The `.pr-chip`
+   check reads the flow only: the Minimal rollup on the title line is a
+   `.pr-chip` too, and must not hold a chip row open. */
+:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *),
+.density-preview--compact .thread-row {
   gap: 4px;
   padding-left: 12px;
 }
 
-:root[data-density="compact"] .thread-row:not(:has(.thread-row__chip--persistent)):not(:has(.pr-chip)) {
+:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)),
+.density-preview--compact .thread-row:not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)) {
   gap: 0;
+}
+
+/* MINIMAL — one line per thread.
+
+   The chip flow keeps only what is waiting on the operator: a held or
+   unsent message and an approval or question (`--essential` in
+   ThreadMetaChips). Everything else, PR chips included, leaves the flow, and
+   the title line gains one PR chip (`.thread-row__pr-rollup`) that wears the
+   least ready PR's state. Reactions move to the title line too
+   (`.thread-row__title-reactions`); there are rarely more than two, and the
+   title ellipsizes to make room. An unsent draft becomes the Draft chip's
+   pencil before the title (`.thread-row__title-draft`). Holding the X-ray
+   key brings the full Mission Control rows back; the title-line copies hide
+   again because the chips they stand for are back in the flow. */
+.thread-row__pr-rollup,
+.thread-row__title-reactions,
+.thread-row__title-draft {
+  display: none;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row__title-draft:not(.density-preview *),
+.density-preview--minimal .thread-row__title-draft {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-right: 4px;
+  color: var(--text-secondary);
+  pointer-events: auto;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row__pr-rollup:not(.density-preview *),
+.density-preview--minimal .thread-row__pr-rollup {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+  pointer-events: auto;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row__title-reactions:not(.density-preview *),
+.density-preview--minimal .thread-row__title-reactions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-right: 4px;
+  pointer-events: auto;
+}
+
+.thread-row__pr-rollup .pr-chip {
+  height: 20px;
+}
+
+.thread-row__title-reactions .thread-row__chip--reaction {
+  height: 20px;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row__chips:not(.density-preview *) > :not(.thread-row__chip--essential),
+.density-preview--minimal .thread-row__chips > :not(.thread-row__chip--essential) {
+  display: none;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *),
+.density-preview--minimal .thread-row {
+  gap: 4px;
+  padding-left: 12px;
+}
+
+:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *):not(:has(.thread-row__chip--essential)),
+.density-preview--minimal .thread-row:not(:has(.thread-row__chip--essential)) {
+  gap: 0;
+}
+
+/* The X-ray badge: a pill over the foot of the sidebar while X-ray is on
+   (features/navigation/XrayBadge.tsx). The wrapper spans the sidebar so
+   the pill centres in it; only the pill takes the pointer. */
+.xray-badge {
+  position: fixed;
+  z-index: 95;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.xray-badge__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 4px 0 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--popover-bg);
+  box-shadow: 0 8px 20px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  font-size: 11px;
+  pointer-events: auto;
+}
+
+.xray-badge__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.xray-badge__label {
+  color: var(--accent-bright);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.xray-badge__hint {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.xray-badge__pin {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.xray-badge__pin:hover,
+.xray-badge__pin:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.xray-badge__pin:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.xray-badge__pin.is-pinned {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+/* The rollup's list of PRs: a portal on <body>, at the PR status card's
+   layer so it also clears the Settings overlay (see `.pr-status-card`). */
+.pr-rollup-popover {
+  position: fixed;
+  z-index: 140;
+  display: flex;
+  width: 340px;
+  max-width: calc(100vw - 16px);
+  max-height: min(320px, calc(100vh - 16px));
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  /* Opaque, as the thread menu is: a list read over busy rows. */
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.pr-rollup-popover__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px 6px;
+}
+
+.pr-rollup-popover__eyebrow {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pr-rollup-popover__summary {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-rollup-popover__list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0 4px 4px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.pr-rollup-popover__row {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pr-rollup-popover__row:hover,
+.pr-rollup-popover__row:focus-visible {
+  background: var(--accent-soft);
+}
+
+.pr-rollup-popover__row:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.pr-rollup-popover__row .pr-chip {
+  height: 20px;
+  flex: none;
+  pointer-events: none;
+}
+
+.pr-rollup-popover__text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.pr-rollup-popover__title {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-rollup-popover__status {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 14px;
 }
 
 /* (No compact-specific list gap anymore: the base `.sidebar-list` /
@@ -45453,135 +45716,143 @@ button.composer__subthread-source-parent:hover {
   margin: 0;
 }
 
-/* Embedded mini thread-list previews */
-.onboarding-wizard__mini {
-  background: var(--bg-app);
+/* Density picker (features/settings/DensityPicker.tsx): Settings →
+   General → Info density and the onboarding appearance step. Each card
+   previews real thread rows (`.density-preview--*` above), so the preview
+   pane borrows the sidebar's surface, and the card's radio is stretched
+   over the whole card, since the inert preview takes no pointer. */
+.density-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.density-picker--wizard {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.density-picker__card {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 12px 14px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  padding: 8px;
-  height: 200px;
-  overflow: hidden;
-}
-.onboarding-wizard__mini-section {
-  font: 600 9px/1 var(--font-mono);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  padding: 6px 6px 4px;
-}
-.onboarding-wizard__mini-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border-radius: 6px;
-  background: var(--bg-panel);
-  margin-bottom: 4px;
-}
-.onboarding-wizard__mini-row.is-active {
-  background: var(--bg-row-active);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-.onboarding-wizard__mini-cookie {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-}
-.onboarding-wizard__mini-cookie--off {
-  background: transparent;
-}
-.onboarding-wizard__mini-title {
-  font: 600 11px/1.2 var(--font-sans, sans-serif);
-  color: var(--text-primary);
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.onboarding-wizard__mini-chip {
-  font: 600 9px/1 var(--font-sans, sans-serif);
-  color: var(--text-secondary);
   background: var(--bg-panel-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  padding: 3px 5px;
-}
-.onboarding-wizard__mini-chip--accent {
-  color: var(--accent);
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-}
-.onboarding-wizard__mini-chip--ok {
-  color: var(--success-text);
-  border-color: var(--success-border);
-  background: var(--success-soft);
+  transition: border-color 140ms ease, background 140ms ease;
 }
 
-/* Real-app-mimic chips used in the preview cards. The visual contract
-   mirrors the live ThreadRow primitive — the pin is the title line's
-   accent marker (`.thread-row__pin` in the live sidebar), PR chip uses
-   a small status dot + #number, Meta chips are gray-on-near-black for
-   OpenAI / directory / branch slots. */
-.onboarding-wizard__mini-pin {
-  display: inline-flex;
-  flex: 0 0 auto;
+.density-picker__card:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.density-picker__card.is-selected {
+  border-color: var(--accent);
+  background: var(--bg-row-active);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
+.density-picker__card:has(.density-picker__choose:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.density-picker__choose {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.density-picker__choose::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+}
+
+.density-picker__choose:focus-visible {
+  outline: none;
+}
+
+.density-picker__eyebrow {
+  color: var(--text-muted);
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.density-picker__card.is-selected .density-picker__eyebrow {
   color: var(--accent-bright);
 }
-.onboarding-wizard__mini-chip--pr {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--text-secondary);
-  background: var(--bg-app);
-  border-color: var(--border-strong);
-}
-.onboarding-wizard__mini-pr-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-}
-.onboarding-wizard__mini-pr-dot.is-ok {
-  background: var(--status-ok);
-}
-.onboarding-wizard__mini-pr-dot.is-draft {
-  background: var(--text-subtle);
-}
-.onboarding-wizard__mini-pr-dot.is-merged {
-  background: var(--brand-purple, var(--text-muted));
-}
-.onboarding-wizard__mini-chip--meta {
-  color: var(--text-secondary);
-  background: var(--bg-app);
-  border-color: var(--border-strong);
-}
-.onboarding-wizard__mini-time {
-  font: 500 9px/1 var(--font-mono);
-  color: var(--text-muted);
-  margin-left: auto;
-  flex-shrink: 0;
-}
-.onboarding-wizard__mini-emoji {
-  font-size: 11px;
-  line-height: 1;
+
+.density-picker__title {
+  color: var(--text-primary);
+  font: 650 14px/1.25 var(--font-sans, sans-serif);
 }
 
-/* Mission-Control rows use a two-line layout: title + time on row 1,
-   chip cluster on row 2. Compact stays single-row (`.mini-row` default). */
-.onboarding-wizard__mini-row--mc {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 4px 8px;
-  padding: 8px 8px 9px;
+.density-picker--wizard .density-picker__title {
+  font-size: 15px;
 }
-.onboarding-wizard__mini-row--mc .onboarding-wizard__mini-meta {
-  grid-column: 1 / -1;
+
+.density-picker__badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 3px 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font: 600 10px/1 var(--font-sans, sans-serif);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Fixed height so the three cards line up; the fade says the list goes
+   on, which Minimal's shorter rows show by fitting more of it. */
+.density-picker__preview {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
+  height: 184px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 2px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-sidebar);
+  /* A mask reads only alpha; any opaque token serves. */
+  -webkit-mask-image: linear-gradient(to bottom, var(--text-primary) 78%, transparent);
+  mask-image: linear-gradient(to bottom, var(--text-primary) 78%, transparent);
+}
+
+.density-picker--wizard .density-picker__preview {
+  height: 220px;
+}
+
+.density-picker__desc {
+  margin: 0;
+  color: var(--text-secondary);
+  font: 400 13px/1.5 var(--font-sans, sans-serif);
+}
+
+.density-picker__hint {
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-subtle);
+  color: var(--text-muted);
+  font: 500 12px/1.4 var(--font-sans, sans-serif);
 }
 
 /* Codex profile diagrams */

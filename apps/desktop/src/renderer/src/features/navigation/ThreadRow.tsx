@@ -1,6 +1,7 @@
 import {
   memo,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -15,7 +16,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { isKeptAtTopThread } from "@pwragent/shared";
-import { LockIcon, MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
+import { DraftIcon, LockIcon, MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
   formatMessagingPlatformName,
@@ -27,6 +28,8 @@ import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { PrChip } from "../pr-status/PrChip";
+import { PrRollupChip } from "../pr-status/PrRollupChip";
+import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import {
@@ -228,6 +231,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       : pinAction;
   const pinTooltipController = useViewportTooltip({ className: "viewport-tooltip" });
   const lockTooltipController = useViewportTooltip({ className: "viewport-tooltip" });
+  const hasUnsentDraft = props.draftThreadKeys?.[threadKey] === true;
   const threadLock = props.thread.lock;
   const lockLabel = threadLock
     ? threadLock.note ? `Locked: ${threadLock.note}` : "Locked"
@@ -266,6 +270,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   // chips render instantly on app launch and stay in sync without any
   // renderer-side cache.
   const prs = props.thread.prs ?? [];
+  const density = useContext(ThreadRowDensityContext);
   // What this row reports back to the list that owns it, so the list can keep
   // one handler for every row instead of a closure per row. See `ThreadRowRef`.
   const rowIdentity: ThreadRowRef = {
@@ -292,6 +297,15 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       position: { x: number; y: number; anchorTop?: number },
     ) => props.onOpenPullRequestContextMenu?.(props.thread, targetPr, position),
   );
+  // A string, not a callback or a Set: the memoized rollup chip compares it
+  // by value, and it is read during that chip's render. Only Minimal mounts
+  // the chip.
+  const repoPrefixedPrUrls = density === "minimal"
+    ? prs
+      .filter((pr) => needsRepoPrefix(props.thread, pr, prs))
+      .map((pr) => pr.url)
+      .join("\n")
+    : "";
   const detachPr = useEventCallback((targetPr: PrSummary) =>
     props.onDetachPullRequest?.(props.thread, targetPr));
   const toggleReactionPicker = useCallback(
@@ -513,6 +527,20 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
               remoteWork={isThreadRemoteWorkHere(props.thread)}
               status={status}
             />
+            {/* Minimal density's unsent-draft mark: the Draft chip's pencil
+                alone, before the title, so a draft costs no second line. CSS
+                hides it while X-ray is held, when the chip comes back. The
+                label avoids "reply"; see the Draft chip in ThreadMetaChips. */}
+            {density === "minimal" && hasUnsentDraft ? (
+              <span
+                aria-label="Unsent draft"
+                className="thread-row__title-draft tooltip-target"
+                data-tooltip="Unsent draft in this thread"
+                role="img"
+              >
+                <DraftIcon size={12} aria-hidden="true" />
+              </span>
+            ) : null}
             {props.renaming && props.onCommitRename ? (
               <InlineRenameInput
                 ariaLabel="Thread name"
@@ -570,6 +598,22 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 open={pickerOpen}
                 onToggle={toggleReactionPicker}
               />
+            ) : null}
+
+            {/* Minimal density's reactions ride the title line, beside the
+                add-reaction control, and the title gives up the room. CSS
+                hides them while X-ray is held, when the chip flow's own
+                reaction chips come back. */}
+            {density === "minimal" && reactions.length > 0 ? (
+              <span className="thread-row__title-reactions">
+                {reactions.map((emoji) => (
+                  <ReactionChip
+                    key={emoji}
+                    emoji={emoji}
+                    onToggle={() => toggleReaction(emoji)}
+                  />
+                ))}
+              </span>
             ) : null}
 
             {/* A pinned row, and the dashed pin on a selection-retained
@@ -636,6 +680,23 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
               </button>
             ) : null}
             {pinTooltipController.tooltipNode}
+
+            {/* Minimal density's one PR chip. CSS hides it while X-ray is
+                held, so a peek re-renders no row. It sits right of the pin
+                so the hover-only pin button never shifts it. */}
+            {density === "minimal" && prs.length > 0 ? (
+              <PrRollupChip
+                prs={prs}
+                threadTitle={props.thread.title}
+                repoPrefixedUrls={repoPrefixedPrUrls}
+                onOpen={openPrStable}
+                onOpenContextMenu={
+                  props.onOpenPullRequestContextMenu
+                    ? openPrContextMenu
+                    : undefined
+                }
+              />
+            ) : null}
 
             <span className="thread-row__time-lane">
               <span className="thread-row__time">
@@ -704,7 +765,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             hasIntegratedTerminal={props.terminalThreadKeys?.[threadKey] === true}
             hasInputRequest={props.inputRequestThreadKeys?.[threadKey] === true}
             queuedMessageState={props.queuedMessageThreadKeys?.[threadKey]}
-            hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
+            hasUnsentDraft={hasUnsentDraft}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
             prChips={prs.map((pr) => (

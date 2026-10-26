@@ -5,10 +5,10 @@ import type {
 } from "@pwragent/shared";
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { xrayKeyLabel } from "../../lib/xray-mode";
 import type {
   AppearanceController,
   DarkThemePreference,
-  DensityPreference,
   LightThemePreference,
   TextSizePreference,
   ThemePreference,
@@ -22,6 +22,7 @@ import {
   SettingsSectionStack,
   ToggleField,
 } from "./SettingsLayout";
+import { DensityPicker } from "./DensityPicker";
 import { sourceBadge } from "./settings-fields";
 
 const THEME_OPTIONS: Array<{
@@ -154,19 +155,6 @@ function themeFieldSub(
 }
 
 const THEME_PICKER_CLASS = "settings-select settings-select--chip";
-
-const DENSITY_OPTIONS: Array<{
-  label: string;
-  meta: string;
-  value: DensityPreference;
-}> = [
-  {
-    label: "Mission control",
-    meta: "Full thread chips",
-    value: "mission-control",
-  },
-  { label: "Compact", meta: "Metadata chips hidden", value: "compact" },
-];
 
 /* One notch scale serves both text-size axes (sidebar titles,
    transcript body). */
@@ -441,13 +429,14 @@ export function GeneralSettings(props: {
             ) : null}
             <SettingsField
               label="Info density"
-              sub="Compact hides the provider, directory, and branch chips in thread rows so more threads fit on screen. PR chips, reactions, and pin markers stay visible."
+              sub="How much rides on each thread row. Each preview is the same four threads."
+              help={`In Compact and Minimal, hold ${xrayKeyLabel(props.desktopApi?.platform)} to x-ray every chip. Press it twice to keep them showing.`}
               control={
                 // No pending tracker: the thread rows recompose on the click.
-                <SegmentedControl
-                  label="Info density"
-                  options={DENSITY_OPTIONS}
+                <DensityPicker
+                  platform={props.desktopApi?.platform}
                   value={appearance.density}
+                  variant="settings"
                   onChange={(value) => {
                     props.appearanceController?.setDensity(value);
                   }}

@@ -76,6 +76,18 @@ describe("applyAppearanceAttributes", () => {
   });
 });
 
+describe("applyAppearanceAttributes density", () => {
+  it("sets data-density for each denser mode and clears it for Mission Control", () => {
+    const root = document.documentElement;
+    for (const density of ["compact", "minimal"] as const) {
+      applyAppearanceAttributes("dark", "tangerine-dark", "tangerine-light", density, "md", "md");
+      expect(root.dataset.density).toBe(density);
+    }
+    applyAppearanceAttributes("dark", "tangerine-dark", "tangerine-light", "mission-control", "md", "md");
+    expect(root.hasAttribute("data-density")).toBe(false);
+  });
+});
+
 describe("readBridgedAppearance", () => {
   it("reads bridged themes and falls back to Tangerine on anything else", () => {
     (window as BridgedWindow).__pwragentAppearance = {
