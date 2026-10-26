@@ -10,6 +10,7 @@ import { DirectorVoiceButton, DirectorVoiceComposerToggle, DirectorVoicePanel, o
 import type { AgentEvent } from "@pwragent/shared";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, MUTED_STALL_END_MS, type NativeVoiceController } from "../native-voice-controller";
+import { cssWithOnlyProperties } from "../../../styles/__tests__/css-property-cascade";
 import type { NativeVoiceEvent } from "../../../../../shared/native-voice";
 
 const owners = new Set<NativeVoiceController>();
@@ -536,11 +537,13 @@ it("resizes the director panel from its grip and remembers the size", async () =
 
 // The panel floats at its own layer and its tooltips portal to the body, so
 // a tooltip left on the default viewport-tooltip layer paints under the
-// panel it describes. Resolved through the real stylesheets, not a copy.
+// panel it describes. Resolved through the real stylesheets, not a copy, cut
+// to their z-index cascade: jsdom took 2 s to parse all of app.css, and every
+// role query after it walked 6,000 rules.
 it("draws the director panel's tooltips above the panel", async () => {
   const styles = document.createElement("style");
   styles.textContent = ["../../../styles/app.css", "../native-voice.css"]
-    .map((file) => readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8"))
+    .map((file) => cssWithOnlyProperties(readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8"), ["z-index"]))
     .join("\n");
   document.head.append(styles);
   try {
