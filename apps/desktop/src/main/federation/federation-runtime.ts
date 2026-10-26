@@ -293,9 +293,12 @@ import { registerWorktreeTerminalOwner } from "../terminal/worktree-terminals";
 import {
   readTranscriptImageProtocolRequest,
   rewriteFederatedTranscriptImageUrlsForRenderer,
-  materializeTranscriptImageUrlsForRenderer,
   toFederatedTranscriptImageProtocolUrl,
 } from "../transcript-image-protocol";
+import {
+  readThreadForPeer,
+  readTurnAssistantReplyForPeer,
+} from "./federation-owner-thread-reads";
 import { getMainLogger } from "../log";
 import {
   discoverDesktopApplications,
@@ -620,6 +623,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "navigation_directory_set_events",
   "turn_queue_reorder",
   "turn_queue_pause",
+  "turn_assistant_reply",
   "thread_mcp_connections",
   "thread_todos",
   "operator_questions",
@@ -6878,29 +6882,10 @@ function localBackendOperations(): FederationBackendOperations {
     async readThread(
       request: AppServerReadThreadRequest,
     ): Promise<AppServerReadThreadResponse> {
-      const backend = request.backend ?? "codex";
-      const response = await getDesktopBackendRegistry().readThread({
-        backend,
-        display: request.display,
-        threadId: request.threadId,
-        ...(request.includeTurns !== undefined
-          ? { includeTurns: request.includeTurns }
-          : {}),
-        ...(request.includeAllToolInvocations !== undefined
-          ? { includeAllToolInvocations: request.includeAllToolInvocations }
-          : {}),
-        before: request.before,
-        limit: request.limit,
-        ...(request.viewOnly !== undefined
-          ? { viewOnly: request.viewOnly }
-          : {}),
-      });
-      return await materializeTranscriptImageUrlsForRenderer(response, {}, {
-        includeTemporaryImageRoots: true,
-        resolveApprovedLocalImageRoots: () => getDesktopBackendRegistry().getThreadTranscriptImageRoots({
-          backend, threadId: request.threadId,
-        }),
-      });
+      return await readThreadForPeer(getDesktopBackendRegistry(), request);
+    },
+    async readTurnAssistantReply(request) {
+      return await readTurnAssistantReplyForPeer(getDesktopBackendRegistry(), request);
     },
     async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
       return await getDesktopBackendRegistry().readUsageActivity(request);

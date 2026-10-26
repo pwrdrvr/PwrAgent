@@ -70,6 +70,12 @@ export const FEDERATION_CAPABILITIES = [
    * keeps the legacy 256-turn chunks and 20-row pages without it.
    */
   "thread_display_bulk_reads",
+  /**
+   * The owner answers `backend.readTurnAssistantReply` with one finished
+   * turn's reply, its images materialized. A messaging gateway without it
+   * reads a transcript page at every bound turn end.
+   */
+  "turn_assistant_reply",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

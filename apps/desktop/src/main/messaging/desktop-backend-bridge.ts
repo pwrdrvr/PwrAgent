@@ -94,6 +94,8 @@ import { getMainLogger } from "../log";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
+import { hasFederationErrorCode } from "../federation/federation-rpc";
+import { findAssistantMessageForText } from "./find-assistant-reply-message";
 import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import {
@@ -853,27 +855,17 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   }
 
   /**
-   * A peer-owned thread's images live on the peer. Its readThread already
-   * materializes them, Markdown-linked `/tmp` files included, so read the
-   * message from there and fetch each image's bytes from the owner. A local
-   * lookup would find neither the thread nor the files.
+   * A peer-owned thread's images live on the peer. The owner materializes
+   * them, Markdown-linked `/tmp` files included, so read the message from
+   * there and fetch each image's bytes from the owner. A local lookup would
+   * find neither the thread nor the files.
    */
   private async resolveRemoteAssistantMessageImages(
     request: AssistantImageRequest,
     target: FederationRemoteTarget,
     remote: FederationBackendOperations,
   ): Promise<MessagingImagePart[]> {
-    const response = await remote.readThread({
-      backend: request.backend,
-      limit: 20,
-      threadId: request.threadId,
-    });
-    const message = findAssistantMessageForText(
-      response.replay,
-      request.text,
-      request.itemId,
-      request.turnId,
-    );
+    const message = await this.readRemoteAssistantMessage(request, target, remote);
     if (!message) {
       return [];
     }
@@ -886,6 +878,60 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       ...part,
       source: "assistant" as const,
     }));
+  }
+
+  /**
+   * A finished turn's reply comes from that turn when the owner advertises
+   * `turn_assistant_reply`. An older owner, and the resume repost, which has
+   * no turn, still read the last transcript page.
+   */
+  private async readRemoteAssistantMessage(
+    request: AssistantImageRequest,
+    target: FederationRemoteTarget,
+    remote: FederationBackendOperations,
+  ): Promise<AppServerThreadMessage | undefined> {
+    if (
+      request.turnId
+      && remote.readTurnAssistantReply
+      && this.peerAdvertises(target, "turn_assistant_reply")
+    ) {
+      try {
+        const response = await remote.readTurnAssistantReply({
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: request.turnId,
+          ...(request.itemId ? { itemId: request.itemId } : {}),
+          text: request.text,
+        });
+        return response.message ?? undefined;
+      } catch (error) {
+        // A hop on the route can predate the method the owner advertises.
+        if (!hasFederationErrorCode(error, "method_not_found")) {
+          throw error;
+        }
+      }
+    }
+    const response = await remote.readThread({
+      backend: request.backend,
+      limit: 20,
+      threadId: request.threadId,
+    });
+    return findAssistantMessageForText(
+      response.replay,
+      request.text,
+      request.itemId,
+      request.turnId,
+    );
+  }
+
+  private peerAdvertises(
+    target: FederationRemoteTarget,
+    capability: FederationCapability,
+  ): boolean {
+    return this.federation
+      ?.connectedPeerTargets()
+      .find((peer) => peer.target.instanceId === target.instanceId)
+      ?.capabilities.includes(capability) ?? false;
   }
 
   async handoffThreadWorkspace(
@@ -1258,69 +1304,6 @@ function stripFederationTarget<T extends { federationTarget?: FederationTarget }
 ): Omit<T, "federationTarget"> {
   const { federationTarget: _federationTarget, ...localRequest } = request;
   return localRequest;
-}
-
-function findAssistantMessageForText(
-  replay: AppServerThreadReplay,
-  text: string,
-  itemId?: string,
-  turnId?: string,
-): AppServerThreadMessage | undefined {
-  if (itemId) {
-    for (let index = replay.messages.length - 1; index >= 0; index -= 1) {
-      const message = replay.messages[index];
-      if (message?.role === "assistant" && message.id === itemId) {
-        return message;
-      }
-    }
-    for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
-      const entry = replay.entries[index];
-      if (
-        entry?.type === "message"
-        && entry.role === "assistant"
-        && entry.id === itemId
-      ) {
-        return entry;
-      }
-    }
-  }
-  const expected = text.trim();
-  if (turnId) {
-    for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
-      const entry = replay.entries[index];
-      if (
-        entry?.type === "message"
-        && entry.role === "assistant"
-        && entry.turn?.id === turnId
-        && entry.text.trim() === expected
-      ) {
-        return entry;
-      }
-    }
-  }
-  // Empty assistant messages need an item or turn identity. Falling back to a
-  // text-only match here could pick an unrelated image-only result from an
-  // earlier turn when the current terminal event produced no assistant output.
-  if (!expected && (itemId || turnId)) {
-    return undefined;
-  }
-  for (let index = replay.messages.length - 1; index >= 0; index -= 1) {
-    const message = replay.messages[index];
-    if (message?.role === "assistant" && message.text.trim() === expected) {
-      return message;
-    }
-  }
-  for (let index = replay.entries.length - 1; index >= 0; index -= 1) {
-    const entry = replay.entries[index];
-    if (
-      entry?.type === "message"
-      && entry.role === "assistant"
-      && entry.text.trim() === expected
-    ) {
-      return entry;
-    }
-  }
-  return undefined;
 }
 
 function findLastAssistantMessageReply(
