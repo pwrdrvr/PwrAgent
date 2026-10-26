@@ -78,7 +78,8 @@ export class FederationServices {
   private checking = false;
   private nextThreadCheckAt = 0;
   private notify?: ServiceNotify;
-  private readonly scheduler = new ServiceStreamScheduler();
+  /** One per viewer, so one viewer's transport backpressure never stalls another's streams. */
+  private readonly schedulers = new Map<string, ServiceStreamScheduler>();
   private readonly budget: ServiceStreamBudget;
 
   constructor(private readonly options: {
@@ -209,7 +210,7 @@ export class FederationServices {
     socket.on("error", () => { stream.error = "Service connection failed or stopped."; });
     await this.connect(peerId, stream);
     const endpoint = new ServiceStreamEndpoint({
-      streamId, socket, scheduler: this.scheduler, budget: this.budget, frameBytes, window: this.options.streamWindow,
+      streamId, socket, scheduler: this.scheduler(peerId), budget: this.budget, frameBytes, window: this.options.streamWindow,
       send: (method, params) => notify(peerId, method, params),
       authorize: () => { this.getLease(peerId, lease.leaseId); },
       onClosed: () => { if (this.streams.get(streamId) === stream) this.streams.delete(streamId); },
@@ -249,6 +250,12 @@ export class FederationServices {
     else if (method === FEDERATION_SERVICE_V2_NOTIFICATIONS.window) endpoint.receiveWindow(frame);
     else if (method === FEDERATION_SERVICE_V2_NOTIFICATIONS.close) endpoint.receiveClose(frame);
     return true;
+  }
+
+  private scheduler(peerId: string): ServiceStreamScheduler {
+    let scheduler = this.schedulers.get(peerId);
+    if (!scheduler) this.schedulers.set(peerId, scheduler = new ServiceStreamScheduler());
+    return scheduler;
   }
 
   private assertStreamCapacity(peerId: string): void {
@@ -342,6 +349,7 @@ export class FederationServices {
 
   disconnect(peerId: string): void {
     for (const lease of this.leases.values()) if (lease.peerId === peerId) this.release(peerId, lease.leaseId);
+    this.schedulers.delete(peerId);
   }
 
   dispose(): void {

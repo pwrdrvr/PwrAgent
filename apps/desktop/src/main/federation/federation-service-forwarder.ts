@@ -38,7 +38,8 @@ function unsupported(error: unknown): boolean {
 export class FederationServiceForwarder {
   private readonly forwards = new Map<string, Forward>();
   private readonly streams = new Map<string, WindowedStream>();
-  private readonly scheduler = new ServiceStreamScheduler();
+  /** One per owner, so one owner's transport backpressure never stalls another's streams. */
+  private readonly schedulers = new Map<string, ServiceStreamScheduler>();
   private readonly budget: ServiceStreamBudget;
 
   constructor(private readonly options: {
@@ -141,6 +142,13 @@ export class FederationServiceForwarder {
   }
   disconnectPeer(instanceId: string): void {
     for (const forward of this.forwards.values()) if (forward.view.service.ownerInstanceId === instanceId) this.cleanup(forward);
+    this.schedulers.delete(instanceId);
+  }
+
+  private scheduler(ownerInstanceId: string): ServiceStreamScheduler {
+    let scheduler = this.schedulers.get(ownerInstanceId);
+    if (!scheduler) this.schedulers.set(ownerInstanceId, scheduler = new ServiceStreamScheduler());
+    return scheduler;
   }
   dispose(): void { for (const forward of this.forwards.values()) this.cleanup(forward); }
 
@@ -181,7 +189,7 @@ export class FederationServiceForwarder {
     const streamId = randomUUID();
     const notify = forward.rpc.notify!.bind(forward.rpc);
     const endpoint = new ServiceStreamEndpoint({
-      streamId, socket, scheduler: this.scheduler, budget: this.budget,
+      streamId, socket, scheduler: this.scheduler(forward.view.service.ownerInstanceId), budget: this.budget,
       window: this.options.streamWindow, frameBytes: this.options.streamFrameBytes,
       send: notify,
       onTransfer: (sent, received) => {
