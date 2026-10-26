@@ -1007,7 +1007,12 @@ export function projectNavigationQuery(params: {
       : params.index.threads;
   return {
     coverage: params.index.coverage ?? { state: "complete" },
-    counts: countsForThreads(countsThreads, { backends: query.kind === "directory-index" }),
+    // Both pages count every owner thread, so both can say which providers
+    // the owner uses. Provider chips hide while that is a single provider.
+    counts: countsForThreads(countsThreads, {
+      backends: query.kind === "directory-index"
+        || (query.kind === "star-map" && query.projectKey === undefined),
+    }),
     ...(query.kind === "exact" && selectedThreads.length ? {
       // Resolve the canonical home from the complete compact index. A linked
       // worktree path is not necessarily the directory key shown by the viewer.

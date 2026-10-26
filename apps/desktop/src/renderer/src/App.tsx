@@ -74,7 +74,10 @@ import {
   ThreadDependencyIndicatorsContext,
   useThreadDependencyIndicators,
 } from "./features/thread-dependencies/useThreadDependencyIndicators";
-import { ThreadProvidersContext } from "./features/navigation/provider-chip-visibility";
+import {
+  ThreadProvidersContext,
+  useStableThreadProviders,
+} from "./features/navigation/provider-chip-visibility";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
 import type {
   LaunchpadMachineControl,
@@ -2487,13 +2490,8 @@ function DesktopAppShell(props: {
   const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
   // Providers with threads, from the directory index that counts them all.
   // Keyed by the joined list so a refreshed page keeps one array identity.
-  const threadProvidersKey = navigation.pagedNavigation.resources
-    .get("directory-index")?.state.page?.counts.backends?.join("\n");
-  const threadProviders = useMemo(
-    () => threadProvidersKey === undefined
-      ? undefined
-      : threadProvidersKey.split("\n").filter(Boolean) as AppServerBackendKind[],
-    [threadProvidersKey],
+  const threadProviders = useStableThreadProviders(
+    navigation.pagedNavigation.resources.get("directory-index")?.state.page?.counts.backends,
   );
   const operatorWaitsContext = useMemo(
     () => operatorRequests.ready ? {

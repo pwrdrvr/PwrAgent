@@ -1802,6 +1802,36 @@ describe("StarMapScreen", () => {
     expect(card.textContent).not.toContain("#11");
   });
 
+  it.each([
+    { label: "hides", sources: ["codex", "codex"], shown: false },
+    { label: "shows", sources: ["codex", "claude"], shown: true },
+  ] as const)(
+    "$label the opted-in provider chip when the map's threads use $sources",
+    async ({ sources, shown }) => {
+      window.localStorage.setItem(
+        "pwragent.starMap.viewPreferences",
+        JSON.stringify({ cardFields: { provider: true } }),
+      );
+      const threads = sources.map((source, index) => ({
+        ...unreadThread(`p${index}`),
+        source,
+      }) as NavigationThreadSummary);
+      render(
+        <StarMapScreen
+          desktopApi={buildDesktopApi()}
+          localThreads={threads}
+          sessionKeys={{}}
+          onOpenLocalThread={() => undefined}
+          onFocusLocalInstance={() => undefined}
+        />,
+      );
+      const card = starMapCard(
+        await screen.findByRole("button", { name: /Open thread: Thread p0/ }),
+      );
+      expect(Boolean(card.querySelector(".thread-row__chip--backend"))).toBe(shown);
+    },
+  );
+
   it("hides offline instances when the view option is set", async () => {
     window.localStorage.clear();
     const desktopApi: DesktopApi = {
