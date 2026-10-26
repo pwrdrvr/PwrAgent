@@ -31,7 +31,9 @@ function queries<T extends object>(value: T): T {
 
 export * from "@testing-library/react";
 export const screen = queries(rtl.screen);
-export const within: typeof rtl.within = (...args) => queries(rtl.within(...args));
+export const within = new Proxy(rtl.within, {
+  apply: (target, receiver, args) => queries(Reflect.apply(target, receiver, args)),
+});
 function profiled(ui: React.ReactNode) {
   return enabled
     ? createElement(Profiler, { id: "test", onRender: (_id, _phase, duration) => record("react", duration) }, ui)
