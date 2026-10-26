@@ -1,6 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { RuntimeFederationLeaseCoordinator } from "../runtime-federation-lease";
@@ -8,6 +6,7 @@ import { RuntimeMessagingLeaseCoordinator } from "../runtime-messaging-lease";
 import { RUNTIME_LEASE_RETRY_MS } from "../runtime-lease-retry";
 import { AppRuntimeInstanceStore } from "../state/app-runtime-instance-store";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb } from "./sqlite-test-utils";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import type { DesktopMessagingConfigLoadOptions, DesktopMessagingConfig } from "../messaging/messaging-config";
@@ -48,9 +47,10 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(1_800_000_000_000);
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-lease-recovery-"));
+  const fixture = createTempStateDb("pwragent-lease-recovery-");
+  directory = fixture.tempDir;
   // A write budget records WAL growth, which only a real file has.
-  db = StateDb.open(path.join(directory, "state.db"), { profileName: "dev" });
+  db = StateDb.open(fixture.dbPath, { profileName: "dev" });
   store = new AppRuntimeInstanceStore(db);
   ownerAlive = true;
   messagingEnabled = false;

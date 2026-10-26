@@ -1,13 +1,13 @@
 import { SandboxerConnection } from "../mcp-connections/sandboxer-connection";
 import { sandboxerStub } from "./helpers/sandboxer-stub";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerMcpElicitationRequestNotification, AppServerPendingRequestNotification, AgentEvent, ThreadExecutionMode } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb } from "./sqlite-test-utils";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
@@ -54,8 +54,9 @@ describe("backend MCP gateway dispatch", () => {
   });
 
   beforeEach(async () => {
-    directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-gateway-dispatch-"));
-    db = StateDb.open(path.join(directory, "state.db"));
+    const fixture = createTempStateDb("pwragent-gateway-dispatch-");
+    directory = fixture.tempDir;
+    db = StateDb.open(fixture.dbPath);
     store = new SqliteOverlayStore(db);
     await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: ["one"] });
     operation = vi.fn(async (params) => params.operation === "gateway/tools/list"

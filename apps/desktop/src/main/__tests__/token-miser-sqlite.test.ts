@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb } from "./sqlite-test-utils";
 import { attachSqliteWriteMetrics, isSqliteWriteMetricsEnabled, measureSqliteWrites } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
@@ -21,7 +21,7 @@ const params = {
   summary: { summary: "PRIVATE_SUMMARY", usefulDetails: [] },
 };
 async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "miser-sqlite-"));
+  const { tempDir: root } = createTempStateDb("miser-sqlite-");
   roots.push(root);
   const stateDb = StateDb.open(path.join(root, "state.db"));
   databases.push(stateDb);

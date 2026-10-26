@@ -9,6 +9,7 @@ import { WorktreeContainerService } from "../app-server/worktree-container-servi
 import { CodexAppServerClient } from "../codex-app-server/client";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb } from "./sqlite-test-utils";
 import { runOneTimeArchivedWorktreeRepair } from "../state/archived-worktree-repair";
 import { ArchiveCleanupCheckpointStore } from "../state/archive-cleanup-checkpoint";
 import { measureSqliteWrites } from "../state/sqlite-write-metrics";
@@ -57,8 +58,10 @@ async function createFixture(managed = false) {
   await git(repo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-m", "fixture"]);
   await git(repo, ["worktree", "add", "-b", "owned", worktree]);
   const directory = { id: "owned", kind: "worktree" as const, label: "repo", path: repo, worktreePath: worktree };
+  const { dbPath, tempDir } = createTempStateDb("pwragent-archive-restart-db-");
+  roots.push(tempDir);
   const reopen = (workspace = directory, checkpoint = false) => {
-    const db = StateDb.open(path.join(root, "state.db"));
+    const db = StateDb.open(dbPath);
     databases.push(db);
     const store = new SqliteOverlayStore(db);
     const client = new CodexAppServerClient({ directoryResolver: async (cwd) => cwd === workspace.worktreePath ? [workspace] : [] });
