@@ -24018,6 +24018,24 @@ a.button {
   margin-top: 8px;
 }
 
+/* Names a checklist when the card has two kinds: what the operator does
+   before starting, and what the new thread does. The facts' label type. */
+.thread-todo-card__group-label {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.thread-todo-card__detail + .thread-todo-card__group-label {
+  margin-top: 8px;
+}
+
+.thread-todo-card__group-label + .thread-todo-checklist {
+  margin-top: 2px;
+}
+
 .thread-todo-checklist__label {
   display: grid;
   grid-template-columns: 14px minmax(0, 1fr);

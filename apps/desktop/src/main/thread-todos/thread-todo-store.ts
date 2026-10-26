@@ -386,7 +386,12 @@ function projectJson(project: ThreadTodoProject | undefined): string | null {
 
 function itemsJson(items: ThreadTodoItem[] | undefined): string | null {
   return items && items.length > 0
-    ? JSON.stringify(items.map(({ id, text, checked }) => ({ id, text, checked })))
+    ? JSON.stringify(items.map(({ id, text, checked, prerequisite }) => ({
+        id,
+        text,
+        checked,
+        ...(prerequisite ? { prerequisite: true } : {}),
+      })))
     : null;
 }
 
@@ -398,7 +403,12 @@ function parseItems(value: string | null): ThreadTodoItem[] {
       && typeof item.id === "string"
       && typeof item.text === "string"
       && typeof item.checked === "boolean"
-      ? [{ id: item.id, text: item.text, checked: item.checked }]
+      ? [{
+          id: item.id,
+          text: item.text,
+          checked: item.checked,
+          ...(item.prerequisite === true ? { prerequisite: true as const } : {}),
+        }]
       : []);
 }
 

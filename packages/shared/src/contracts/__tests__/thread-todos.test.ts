@@ -4,6 +4,7 @@ import {
   THREAD_TODO_MAX_ITEMS,
   mergeThreadTodoItems,
   parseThreadTodoItemTexts,
+  threadTodoBlockingItems,
   threadTodoItemProgress,
   threadTodoOpenItems,
   type ThreadTodoItem,
@@ -91,5 +92,37 @@ describe("checklist progress", () => {
       { id: "a", text: "Tests", checked: true },
       { id: "b", text: "Docs", checked: false },
     ] })).toEqual([{ id: "b", text: "Docs", checked: false }]);
+  });
+});
+
+describe("prerequisites", () => {
+  const items: ThreadTodoItem[] = [
+    { id: "p", text: "Clone", checked: false, prerequisite: true },
+    { id: "a", text: "Implement", checked: false },
+    { id: "b", text: "Test", checked: true },
+  ];
+
+  it("merge apart from the steps and come first", () => {
+    expect(mergeThreadTodoItems(undefined, ["Implement"], counter(), ["Clone"])).toEqual([
+      { id: "new-1", text: "Clone", checked: false, prerequisite: true },
+      { id: "new-2", text: "Implement", checked: false },
+    ]);
+    // A list left undefined keeps that kind as it is.
+    expect(mergeThreadTodoItems(items, undefined, counter(), ["Clone", "Sign in"])).toEqual([
+      items[0],
+      { id: "new-1", text: "Sign in", checked: false, prerequisite: true },
+      items[1],
+      items[2],
+    ]);
+    expect(mergeThreadTodoItems(items, ["Test"], counter())).toEqual([items[0], items[2]]);
+  });
+
+  it("block a handoff alone, and leave the progress count to the steps", () => {
+    const handoff = { items, action: { type: "start_thread" as const, prompt: "Go" } };
+    expect(threadTodoBlockingItems(handoff)).toEqual([items[0]]);
+    expect(threadTodoBlockingItems({ items })).toEqual([items[0], items[1]]);
+    expect(threadTodoBlockingItems({ ...handoff, items: items.slice(1) })).toEqual([]);
+    expect(threadTodoItemProgress({ items })).toEqual({ checked: 1, total: 2 });
+    expect(threadTodoItemProgress({ items: [items[0]!] })).toBeUndefined();
   });
 });

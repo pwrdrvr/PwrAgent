@@ -531,6 +531,8 @@ describe("thread to-do checklists", () => {
     ["Run the tests", "Update the docs", "Attach screenshots", "Tag the release"]
       .slice(0, checked.length)
       .map((text, index) => ({ id: `s${index + 1}`, text, checked: checked[index] ?? false }));
+  const prerequisite = (text: string): NonNullable<ThreadTodo["items"]>[number] =>
+    ({ id: `p-${text}`, text, checked: false, prerequisite: true });
 
   it("lists the steps as labelled checkboxes with the card's progress", () => {
     const card = todo({ id: "k1", title: "Ship it", items: steps([true, false, false]) });
@@ -642,7 +644,7 @@ describe("thread to-do checklists", () => {
       id: "k6",
       kind: "handoff",
       action: { type: "start_thread", prompt: "Carry on" },
-      items: steps([false, false]),
+      items: [prerequisite("Clone the repository"), ...steps([false, false])],
     });
     const handoffView = createView([handoff]);
     render(
@@ -650,10 +652,35 @@ describe("thread to-do checklists", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     expect(handoffView.run).not.toHaveBeenCalled();
+    expect(screen.getByText("1 prerequisite still open. Start the thread anyway?")).toBeTruthy();
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
     expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true });
+  });
+
+  it("starts a thread at once when only the new thread's steps are open", async () => {
+    // The steps are the plan the new thread carries out, not chores for the
+    // operator. The override still goes along for an older peer, which
+    // blocks on every open step.
+    const handoff = todo({
+      id: "k20",
+      kind: "handoff",
+      action: { type: "start_thread", prompt: "Carry on" },
+      items: [{ ...prerequisite("Clone the repository"), checked: true }, ...steps([false, false])],
+    });
+    const view = createView([handoff]);
+    render(
+      <ThreadTodoStack threadKey="codex:checklist-20" todos={[handoff]} view={view} onStartReview={vi.fn()} />,
+    );
+    expect(screen.getByRole("list", { name: "Before you start, 1 of 1 checked" })).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Steps for the new thread, 0 of 2 checked" })).toBeTruthy();
+    expect(screen.getByText("0 of 2")).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    });
+    expect(screen.queryByText(/still open/)).toBeNull();
+    expect(view.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true });
   });
 
   it("drops the question once the last open step is checked", () => {
@@ -685,7 +712,7 @@ describe("thread to-do checklists", () => {
       id: "k11",
       kind: "handoff",
       action: { type: "start_thread", prompt: "Carry on" },
-      items: steps([false]),
+      items: [prerequisite("Clone the repository")],
     });
     render(
       <ThreadTodoStack threadKey="codex:checklist-11" todos={[card]} view={createView([card])} onStartReview={vi.fn()} />,

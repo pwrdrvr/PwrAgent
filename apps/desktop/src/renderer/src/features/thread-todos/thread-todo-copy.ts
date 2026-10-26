@@ -1,4 +1,5 @@
 import type { ThreadReviewItem, ThreadTodo, ThreadTodoItem } from "@pwragent/shared";
+import { threadTodoPrerequisites, threadTodoSteps } from "@pwragent/shared";
 
 /**
  * What a card puts on the clipboard: Markdown a new thread's composer takes
@@ -11,7 +12,17 @@ export function threadTodoMarkdown(
 ): string {
   const sections = [`## ${todo.title}`];
   if (todo.detail?.trim()) sections.push(todo.detail.trim());
-  if (todo.items && todo.items.length > 0) sections.push(threadTodoStepsMarkdown(todo.items));
+  const prerequisites = threadTodoPrerequisites(todo);
+  if (prerequisites.length > 0) {
+    sections.push(`### Before you start\n\n${threadTodoStepsMarkdown(prerequisites)}`);
+  }
+  const steps = threadTodoSteps(todo);
+  if (steps.length > 0) {
+    // Headed only beside prerequisites; a card with steps alone copies as it always did.
+    sections.push(prerequisites.length > 0
+      ? `### Steps\n\n${threadTodoStepsMarkdown(steps)}`
+      : threadTodoStepsMarkdown(steps));
+  }
   if (reviewItems && reviewItems.length > 0) {
     sections.push(reviewItems.map(reviewItemMarkdown).join("\n"));
   }
