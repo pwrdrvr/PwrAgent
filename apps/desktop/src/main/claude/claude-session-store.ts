@@ -16,6 +16,37 @@ export type ClaudeSession = {
   titleGenerationAttempted?: boolean;
   modelUsage?: ClaudeUsageTotals;
   contextWindow?: { usedTokens: number; modelContextWindow: number };
+  /**
+   * The SDK entry the next query resumes at, set by a rewind. Claude drops
+   * every later entry from the conversation it continues, and keeps them in
+   * the session file as another branch. Cleared once a query resumes there.
+   */
+  resumeSessionAt?: string;
+  /** Each rewind, oldest first. */
+  rewinds?: ClaudeRewindRecord[];
+};
+
+export type ClaudeRewindRecord = {
+  at: number;
+  /** The desktop turn the rewind removed, with every later turn. */
+  beforeTurnId: string;
+  /** The SDK session that holds the removed turns. */
+  sdkSessionId: string;
+  /** The last entry of the removed branch, where an undo would resume. */
+  removedLeafUuid?: string;
+  restoredFiles?: string[];
+};
+
+/**
+ * A history line that drops an entry and every entry recorded after it. The
+ * history stays append-only, so a rewind survives a restart without
+ * rewriting the file.
+ */
+type ClaudeTruncationRecord = {
+  type: "pwragent_truncation";
+  id: string;
+  beforeEntryId: string;
+  createdAt: number;
 };
 
 export type ClaudeRateLimitsRecord = {
@@ -143,6 +174,15 @@ export class ClaudeSessionStore {
     await appendFile(this.file(id, "jsonl"), entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n", { mode: 0o600 });
   }
 
+  /** Drop `beforeEntryId` and every entry recorded after it. */
+  async truncate(id: string, beforeEntryId: string): Promise<void> {
+    const record: ClaudeTruncationRecord = {
+      type: "pwragent_truncation", id: `truncation:${randomUUID()}`, beforeEntryId, createdAt: Date.now(),
+    };
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    await appendFile(this.file(id, "jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 });
+  }
+
   async entries(id: string): Promise<AppServerThreadEntry[]> {
     try {
       const text = await readFile(this.file(id, "jsonl"), "utf8");
@@ -151,9 +191,18 @@ export class ClaudeSessionStore {
       for (const line of text.split("\n").filter(Boolean)) {
         // appendFile is not atomic: a crash can leave a torn final line.
         // Skip it rather than make the whole transcript unreadable.
-        let entry: AppServerThreadEntry;
-        try { entry = JSON.parse(line) as AppServerThreadEntry; }
+        let entry: AppServerThreadEntry | ClaudeTruncationRecord;
+        try { entry = JSON.parse(line) as AppServerThreadEntry | ClaudeTruncationRecord; }
         catch { continue; }
+        if (entry.type === "pwragent_truncation") {
+          // Map keys keep the order entries were first recorded in.
+          let removing = false;
+          for (const key of entries.keys()) {
+            if (key === entry.beforeEntryId) removing = true;
+            if (removing) entries.delete(key);
+          }
+          continue;
+        }
         entries.set(entry.id, entry);
       }
       return [...entries.values()];

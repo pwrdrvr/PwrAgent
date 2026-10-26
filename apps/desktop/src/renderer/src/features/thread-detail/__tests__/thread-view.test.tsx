@@ -327,7 +327,7 @@ describe("ThreadView", () => {
   });
 
   function rewindBackend(
-    kind: "codex" | "acp:grok",
+    kind: "codex" | "acp:grok" | "claude",
     label: string,
     threadRewind: BackendSummary["capabilities"]["threadRewind"] | null = { files: false, undo: false },
   ): BackendSummary {
@@ -403,7 +403,7 @@ describe("ThreadView", () => {
     },
   ];
 
-  const rewindThread = (source: "codex" | "acp:grok"): NavigationThreadSummary => ({
+  const rewindThread = (source: "codex" | "acp:grok" | "claude"): NavigationThreadSummary => ({
     id: `${source}-thread`,
     title: "Fix the flaky queue test",
     titleSource: "explicit",
@@ -456,7 +456,7 @@ describe("ThreadView", () => {
     expect(confirm).toHaveTextContent(
       "Codex rewinds the conversation only. The 2 files changed since stay as they are.",
     );
-    expect(confirm).toHaveTextContent("so this rewind cannot be undone");
+    expect(confirm).toHaveTextContent("This rewind cannot be undone.");
     expect(within(confirm).getByRole("checkbox", { name: /Restore files/ })).toBeDisabled();
     fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
 
@@ -687,6 +687,109 @@ describe("ThreadView", () => {
     expect(
       await screen.findAllByRole("button", { name: "Rewind to before this message" }),
     ).toHaveLength(3);
+  });
+
+  it("previews Claude's file restore and rewinds the conversation and files", async () => {
+    const preview = Promise.withResolvers<{
+      backend: "claude";
+      threadId: string;
+      target: { messageId: string; turnId?: string };
+      files: { paths: string[]; insertions: number; deletions: number };
+    }>();
+    const previewThreadRewind = vi.fn(async () => await preview.promise);
+    const rewindThreadApi = vi.fn(async () => ({
+      backend: "claude" as const,
+      threadId: "claude-thread",
+      target: { messageId: "prompt-2", turnId: "turn-2" },
+      mode: "conversation-and-files" as const,
+      updatedAt: 2000,
+      restoredFileCount: 2,
+    }));
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[rewindBackend("claude", "Claude", { files: true, undo: false })]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{ previewThreadRewind, rewindThread: rewindThreadApi }}
+        loading={false}
+        loadingMore={false}
+        messageCount={4}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={rewindThread("claude")}
+        skills={[]}
+        transcriptEntries={rewindTranscript}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Rewind to before this message" })[1]!);
+    const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    expect(previewThreadRewind).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", threadId: "claude-thread", target: { messageId: "prompt-2", turnId: "turn-2" },
+    }));
+    // Nothing is confirmed until Claude says what it would restore.
+    expect(confirm).toHaveTextContent("Checking which files Claude can restore...");
+    expect(within(confirm).getByRole("button", { name: "Rewind and edit" })).toBeDisabled();
+
+    preview.resolve({
+      backend: "claude",
+      threadId: "claude-thread",
+      target: { messageId: "prompt-2", turnId: "turn-2" },
+      files: { paths: ["src/queue/lock.ts", "src/queue/lock.test.ts"], insertions: 59, deletions: 6 },
+    });
+    const restore = await within(confirm).findByRole("checkbox", { name: /Restore files/ });
+    await waitFor(() => expect(restore).toBeEnabled());
+    expect(restore).toBeChecked();
+    expect(confirm).toHaveTextContent("Restores 2 files Claude changed since this prompt (+59 \u22126).");
+    expect(confirm).toHaveTextContent("Changes made by shell commands are not restored.");
+    expect(confirm).toHaveTextContent("src/queue/lock.test.ts");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Rewind and edit" }));
+
+    await waitFor(() => expect(rewindThreadApi).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", mode: "conversation-and-files",
+    })));
+  });
+
+  it("explains why Claude cannot restore a prompt's files, or rewind it at all", async () => {
+    const previewThreadRewind = vi.fn()
+      .mockResolvedValueOnce({
+        backend: "claude", threadId: "claude-thread", target: { messageId: "prompt-2", turnId: "turn-2" },
+        filesUnavailableReason: "Claude has no file checkpoint for this prompt.",
+      })
+      .mockResolvedValueOnce({
+        backend: "claude", threadId: "claude-thread", target: { messageId: "prompt-1", turnId: "turn-1" },
+        unavailableReason: "Stop Claude's background tasks before rewinding.",
+      });
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[rewindBackend("claude", "Claude", { files: true, undo: false })]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{ previewThreadRewind, rewindThread: vi.fn() }}
+        loading={false}
+        loadingMore={false}
+        messageCount={4}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={rewindThread("claude")}
+        skills={[]}
+        transcriptEntries={rewindTranscript}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Rewind to before this message" })[1]!);
+    let confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    expect(await within(confirm).findByText("Claude has no file checkpoint for this prompt.")).toBeInTheDocument();
+    expect(within(confirm).getByRole("checkbox", { name: /Restore files/ })).toBeDisabled();
+    expect(within(confirm).getByRole("button", { name: "Rewind and edit" })).toBeEnabled();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Rewind to before this message" })[0]!);
+    confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
+    expect(await within(confirm).findByRole("alert")).toHaveTextContent("Stop Claude's background tasks before rewinding.");
+    expect(within(confirm).getByRole("button", { name: "Rewind and edit" })).toBeDisabled();
   });
 
   it("keeps the rewind open with the provider's error and offers none without the capability", async () => {

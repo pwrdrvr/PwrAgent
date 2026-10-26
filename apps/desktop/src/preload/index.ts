@@ -176,6 +176,8 @@ import type {
   SetThreadMcpConnectionsResponse,
   RemoveCodexMcpServerRequest,
   RemoveCodexMcpServerResponse,
+  PreviewThreadRewindRequest,
+  PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
   StartCodexMcpServerLoginRequest,
@@ -705,6 +707,7 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
   AGENT_REWIND_THREAD_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
@@ -2426,6 +2429,10 @@ const desktopApi = Object.freeze({
     request: SteerTurnRequest
   ): Promise<SteerTurnResponse> =>
     await ipcRenderer.invoke(AGENT_STEER_TURN_CHANNEL, request),
+  previewThreadRewind: async (
+    request: PreviewThreadRewindRequest,
+  ): Promise<PreviewThreadRewindResponse> =>
+    await ipcRenderer.invoke(AGENT_PREVIEW_THREAD_REWIND_CHANNEL, request),
   rewindThread: async (
     request: RewindThreadRequest,
   ): Promise<RewindThreadResponse> =>

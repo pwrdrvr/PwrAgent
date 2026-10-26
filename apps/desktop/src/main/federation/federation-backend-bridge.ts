@@ -56,6 +56,8 @@ import type {
   CheckThreadBranchDriftResponse,
   CompactThreadRequest,
   CompactThreadResponse,
+  PreviewThreadRewindRequest,
+  PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
   ControlActiveTurnRequest,
@@ -618,6 +620,7 @@ export const FEDERATION_BACKEND_METHODS = {
   sendScheduledThreadActionNow: "backend.sendScheduledThreadActionNow",
   compactThread: "backend.compactThread",
   rewindThread: "backend.rewindThread",
+  previewThreadRewind: "backend.previewThreadRewind",
   listMcpConnections: "backend.listMcpConnections",
   readThreadMcpConnections: "backend.readThreadMcpConnections",
   setThreadMcpConnections: "backend.setThreadMcpConnections",
@@ -770,6 +773,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.sendScheduledThreadActionNow]: "scheduled_actions",
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.rewindThread]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.previewThreadRewind]: "turn_control",
   [FEDERATION_BACKEND_METHODS.listMcpConnections]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readThreadMcpConnections]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.setThreadMcpConnections]: "turn_control",
@@ -1036,6 +1040,7 @@ export type FederationBackendOperations = {
   ): Promise<ScheduledThreadActionMutationResponse>;
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   rewindThread(request: RewindThreadRequest): Promise<RewindThreadResponse>;
+  previewThreadRewind(request: PreviewThreadRewindRequest): Promise<PreviewThreadRewindResponse>;
   listMcpConnections(): Promise<ListMcpConnectionsResponse>;
   readThreadMcpConnections(
     request: ReadThreadMcpConnectionsRequest,
@@ -1823,6 +1828,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.rewindThread(
         envelope.params as RewindThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.previewThreadRewind,
+    async (envelope) =>
+      await params.backend.previewThreadRewind(
+        envelope.params as PreviewThreadRewindRequest,
       ),
   );
   params.router.registerHandler(
@@ -2945,6 +2957,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<RewindThreadResponse> {
     return await this.rpc.request<RewindThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.rewindThread,
+      params: request,
+    });
+  }
+
+  async previewThreadRewind(
+    request: PreviewThreadRewindRequest,
+  ): Promise<PreviewThreadRewindResponse> {
+    return await this.rpc.request<PreviewThreadRewindResponse>({
+      method: FEDERATION_BACKEND_METHODS.previewThreadRewind,
       params: request,
     });
   }

@@ -144,6 +144,8 @@ import { refreshReviewBaseBranch } from "./review-base-branch";
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
   type AcpBackendId,
+  type PreviewThreadRewindRequest,
+  type PreviewThreadRewindResponse,
   type RewindThreadRequest,
   type RewindThreadResponse,
   anchorTurnUsageEntries,
@@ -23347,19 +23349,50 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * What a rewind to before one prompt would put back. Only Claude restores
+   * files, so only Claude reads anything from its provider here.
+   */
+  async previewThreadRewind(
+    request: PreviewThreadRewindRequest,
+  ): Promise<PreviewThreadRewindResponse> {
+    const preview = request.backend === "claude"
+      ? await this.claudeBackend.previewRewind(request.threadId, request.target)
+      : {};
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      target: request.target,
+      ...preview,
+    };
+  }
+
   async rewindThread(
     request: RewindThreadRequest,
   ): Promise<RewindThreadResponse> {
-    if (request.mode !== "conversation") {
+    if (request.mode !== "conversation" && request.backend !== "claude") {
       throw new Error("This provider cannot restore files when it rewinds a thread");
     }
     let result: {
       announced?: boolean;
       promptText?: string;
+      restoredFileCount?: number;
       targetPromptIndex?: number;
       updatedAt: number;
     };
-    if (isAcpBackendId(request.backend)) {
+    if (request.backend === "claude") {
+      await this.assertThreadNotLocked("claude", request.threadId);
+      try {
+        result = await this.claudeBackend.rewindThread({
+          threadId: request.threadId,
+          target: request.target,
+          mode: request.mode,
+        });
+      } finally {
+        // A reply sent during the rewind waited in the queue.
+        this.threadTurnQueue.scheduleThreadDrain({ backend: "claude", threadId: request.threadId });
+      }
+    } else if (isAcpBackendId(request.backend)) {
       const backend = request.backend;
       result = await this.acpSessionPromptLocks.run(
         executionModeQueueKey(backend, request.threadId),
@@ -23404,6 +23437,7 @@ export class DesktopBackendRegistry {
       mode: request.mode,
       updatedAt: result.updatedAt,
       ...(result.promptText ? { promptText: result.promptText } : {}),
+      ...(result.restoredFileCount !== undefined ? { restoredFileCount: result.restoredFileCount } : {}),
     };
   }
 

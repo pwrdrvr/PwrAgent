@@ -127,7 +127,8 @@ relaunch while background tasks run.
 
 The adapter records metadata and append-only replay entries beneath the
 active profile's `state/claude/` directory. It does not inspect Claude-owned
-history files or store transcripts in SQLite. Normal desktop overlays continue
+history files or store transcripts in SQLite; rewind reads Claude's
+conversation only through the SDK's session API. Normal desktop overlays continue
 to use the existing registry persistence paths. Checked-in SQLite budgets
 measure three commits (49,440 WAL bytes) for thread creation and one commit
 (16,480 WAL bytes) for an operator permission change. One hundred duplicate
@@ -152,6 +153,49 @@ when it keeps the process. Request IDs deduplicate retries; attachment
 parts and message origins survive replay. A steer with an agent origin writes
 one SQLite commit (~12 KB, or ~1.24 MB/day at 100 steers/day); a duplicate
 request adds no write, and there are no idle writes.
+
+## Rewind
+
+A Claude thread can rewind to before any prompt that starts a turn: that
+turn and every later one leave the conversation, and the prompt returns to
+the composer. With Restore files, Claude also puts back the files its Edit,
+Write, and NotebookEdit tools changed since. Shell commands' changes are not
+restored. See [thread-rewind.md](thread-rewind.md) for the provider-neutral
+contract and the confirmation.
+
+- Every query sets `enableFileCheckpointing`, so the CLI checkpoints files at
+  each prompt.
+- Each prompt is sent with the desktop turn's id as its SDK `uuid`, including
+  the first prompt of a session. The prompt's transcript entry is
+  `user:<turnId>`, so the turn-to-prompt mapping needs no extra storage.
+  Prompts sent before this have provider-assigned UUIDs, and Claude compaction
+  can drop a prompt from the conversation it resumes. Neither can be rewound;
+  the confirmation says so.
+- The adapter finds the prompt with the SDK's `getSessionMessages`, the same
+  session API it uses for titles; it does not read Claude's files itself. The
+  entry just before the prompt is the point the next query resumes at
+  (`resume` with `resumeSessionAt`). Claude writes the next turn as a new
+  branch of the same session file, so prompt UUIDs and file checkpoints stay
+  valid for later rewinds. `forkSession` was not used: it gives every
+  forked entry a new UUID, which would orphan both.
+- Rewinding the first prompt leaves nothing to resume at. The next turn starts
+  a new SDK session with its own id; the thread id already named the first.
+- Files restore through a control-only query: `resume` the thread's session
+  with checkpointing, send no prompt, call `Query.rewindFiles`, and close.
+  The confirmation's file count comes from the same call with `dryRun`.
+  Files go first, so a refused restore leaves the conversation as it was.
+  A turn waits for a control query to close, so two CLI processes never
+  resume one session. The confirmation holds its button for the dry run, so
+  a dry run Claude does not answer in 30 seconds reports the files as
+  unavailable rather than holding it forever.
+- The rewind is refused while a turn starts or runs, or while a background
+  task runs. An idle session kept open for a task's follow-up is closed once
+  the prompt is confirmed rewindable, never for a rewind that is refused.
+  A message sent during the rewind waits in the queue, which drains after it.
+- The session metadata records each rewind: the turn it removed, the SDK
+  session, and the removed branch's last entry, which is where an undo would
+  resume. The append-only history gains a truncation line that drops the
+  removed entries on every read, so the rewind survives a restart.
 
 ## Background tasks and sub-agents
 

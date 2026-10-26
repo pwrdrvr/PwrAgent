@@ -455,6 +455,8 @@ import type {
   QueueThreadExecutionModeResponse,
   ReloadCodexMcpConfigRequest,
   ReloadCodexMcpConfigResponse,
+  PreviewThreadRewindRequest,
+  PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
   SetAcpSessionRuntimeOptionRequest,
@@ -1147,6 +1149,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
     request: StopSubAgentRequest,
   ) => Promise<StopSubAgentResponse>;
   steerTurn?: (request: SteerTurnRequest) => Promise<SteerTurnResponse>;
+  previewThreadRewind?: (
+    request: PreviewThreadRewindRequest,
+  ) => Promise<PreviewThreadRewindResponse>;
   rewindThread?: (
     request: RewindThreadRequest,
   ) => Promise<RewindThreadResponse>;

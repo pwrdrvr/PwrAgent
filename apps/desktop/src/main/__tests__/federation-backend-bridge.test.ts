@@ -4013,6 +4013,12 @@ describe("federation backend bridge", () => {
         mode: "conversation" as const,
         updatedAt: 1_500,
       })),
+      previewThreadRewind: vi.fn(async () => ({
+        backend: "claude" as const,
+        threadId: "claude-1",
+        target: { messageId: "user:turn-2", turnId: "turn-2" },
+        files: { paths: ["src/a.ts"], insertions: 3, deletions: 1 },
+      })),
       listMcpConnections: vi.fn(),
       readThreadMcpConnections: vi.fn(),
       setThreadMcpConnections: vi.fn(),
@@ -4170,6 +4176,23 @@ describe("federation backend bridge", () => {
         sourceInstanceId: "gateway_one",
         targetInstanceId: "client_one",
         createdAt: 1_005,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "gateway_one",
+      envelope: {
+        id: "rewind-preview-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.previewThreadRewind,
+        params: {
+          backend: "claude",
+          threadId: "claude-1",
+          target: { messageId: "user:turn-2", turnId: "turn-2" },
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "gateway_one",
+        targetInstanceId: "client_one",
+        createdAt: 1_006,
       },
     });
     await router.routeEnvelope({
@@ -4353,6 +4376,11 @@ describe("federation backend bridge", () => {
       },
       {
         kind: "response",
+        requestId: "rewind-preview-request",
+        result: { files: { paths: ["src/a.ts"], insertions: 3, deletions: 1 } },
+      },
+      {
+        kind: "response",
         requestId: "mcp-inventory-request",
         result: {
           detail: "full",
@@ -4471,6 +4499,7 @@ describe("federation backend bridge", () => {
         sendScheduledThreadActionNow: vi.fn(),
         compactThread: vi.fn(),
         rewindThread: vi.fn(),
+        previewThreadRewind: vi.fn(),
         listMcpConnections: vi.fn(),
       readThreadMcpConnections: vi.fn(),
       setThreadMcpConnections: vi.fn(),

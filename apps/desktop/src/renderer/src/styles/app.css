@@ -42802,6 +42802,21 @@ button.composer__subthread-source-parent:hover {
   line-height: 1.45;
 }
 
+.thread-rewind-confirm__files small.thread-rewind-confirm__file-list {
+  display: grid;
+  gap: 2px;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.thread-rewind-confirm__file-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .thread-rewind-confirm p.thread-rewind-confirm__warning,
 .thread-rewind-confirm p.thread-rewind-confirm__error {
   color: var(--danger-text);
