@@ -1095,12 +1095,12 @@ describe("Sidebar commands under a resting pointer", () => {
       directories: [pinnedRepo, other],
       paged: navigation([pinnedRepo, other], false),
     }));
-    const repoHeader = screen.getByRole("button", { name: "Repo", exact: true });
+    const repoHeader = screen.getByRole("button", { name: "Repo" });
     fireEvent.pointerOver(repoHeader, { pointerType: "mouse" });
     fireEvent.contextMenu(repoHeader);
     await chooseFromMenuOverRows(
       screen.getByRole("menuitem", { name: "Unpin Directory" }),
-      () => screen.getByRole("button", { name: "Other", exact: true }),
+      () => screen.getByRole("button", { name: "Other" }),
     );
     expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: pinnedRepo.key }), false);
 
