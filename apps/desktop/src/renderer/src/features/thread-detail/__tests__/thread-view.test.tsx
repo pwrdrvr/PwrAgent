@@ -480,21 +480,14 @@ describe("ThreadView", () => {
     expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
   });
 
-  it("opens the rewind on the last prompt from the header and keeps it keyboard-contained", async () => {
-    render(
+  function renderGrokDialogThread(desktopApi: ThreadViewProps["desktopApi"]) {
+    return render(
       <ThreadView
         addOptimisticUserMessage={(_text) => "optimistic-1"}
         backends={[rewindBackend("acp:grok", "Grok Build")]}
         clearPendingRequest={() => undefined}
         composerDisabled={false}
-        desktopApi={{
-          configureGrokWorkflowBudget: vi.fn(async () => ({
-            backend: "acp:grok" as const,
-            threadId: "acp:grok-thread",
-            policy: { defaultAgentBudget: 128, maxAgentBudget: 1024 },
-          })),
-          rewindThread: vi.fn(),
-        }}
+        desktopApi={desktopApi}
         loading={false}
         loadingMore={false}
         messageCount={4}
@@ -505,15 +498,15 @@ describe("ThreadView", () => {
         transcriptEntries={rewindTranscript}
       />,
     );
-    const openFrom = (button: HTMLElement) => {
-      act(() => {
-        button.focus();
-        button.click();
-      });
-    };
+  }
 
+  it("opens the rewind on the last prompt from the header and keeps it keyboard-contained", () => {
+    renderGrokDialogThread({ rewindThread: vi.fn() });
     const rewind = screen.getByRole("button", { name: "Rewind to before the last prompt" });
-    openFrom(rewind);
+    act(() => {
+      rewind.focus();
+      rewind.click();
+    });
     const confirm = screen.getByRole("dialog", { name: "Rewind to before this message?" });
     const lastPrompt = screen
       .getByText("Now add a regression test for it.")
@@ -525,11 +518,29 @@ describe("ThreadView", () => {
     pressEscape();
     expect(confirm).not.toBeInTheDocument();
     expect(document.activeElement).toBe(rewind);
+  });
 
+  it("keeps the loaded Grok workflow budget dialog keyboard-contained and restores its opener", async () => {
+    const response = {
+      backend: "acp:grok" as const,
+      threadId: "acp:grok-thread",
+      policy: { defaultAgentBudget: 128, maxAgentBudget: 1024 },
+    };
+    let completeRead!: () => void;
+    const configureGrokWorkflowBudget = vi.fn(() => new Promise<typeof response>((resolve) => {
+      completeRead = () => resolve(response);
+    }));
+    renderGrokDialogThread({ configureGrokWorkflowBudget });
     const budgets = screen.getByRole("button", { name: "Configure Grok workflow budgets" });
-    openFrom(budgets);
+    act(() => {
+      budgets.focus();
+      budgets.click();
+    });
     const budgetDialog = screen.getByRole("dialog", { name: "Grok workflow budgets" });
-    await within(budgetDialog).findByRole("spinbutton", { name: /Default when omitted/ });
+    expect(within(budgetDialog).getByRole("status")).toHaveTextContent("Loading workflow budgets...");
+    expect(configureGrokWorkflowBudget).toHaveBeenCalledWith({ backend: "acp:grok", threadId: response.threadId });
+    await act(async () => { completeRead(); });
+    expect(within(budgetDialog).getByRole("spinbutton", { name: /Default when omitted/ })).toHaveValue(128);
     expect(budgetDialog.contains(document.activeElement)).toBe(true);
     expect(tabEscapes(budgetDialog)).toEqual({ forward: [], backward: [] });
     pressEscape();
