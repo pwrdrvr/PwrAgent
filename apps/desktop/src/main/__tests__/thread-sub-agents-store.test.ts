@@ -432,8 +432,10 @@ describe("thread sub-agent table", () => {
       await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1", subAgents: mixedGates() });
       // The profile as the previous build left it.
       stateDb.raw.exec(`DROP TRIGGER thread_sub_agent_gate_totals_insert;
-        DROP TRIGGER thread_sub_agent_gate_totals_update;
+        DROP TRIGGER thread_sub_agent_gate_totals_update_old;
+        DROP TRIGGER thread_sub_agent_gate_totals_update_new;
         DROP TRIGGER thread_sub_agent_gate_totals_delete;
+        DROP VIEW thread_sub_agent_gate_shares;
         DROP INDEX thread_sub_agents_by_lens;`);
       for (const column of (stateDb.raw.prepare("SELECT name FROM pragma_table_info('thread_sub_agent_revisions')").all() as Array<{ name: string }>)
         .map((row) => row.name).filter((name) => name.startsWith("gate_"))) {
