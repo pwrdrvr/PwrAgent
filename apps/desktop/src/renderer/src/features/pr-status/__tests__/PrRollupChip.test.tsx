@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
-import { PrRollupChip } from "../PrRollupChip";
+import { placeRowCard, PrRollupChip } from "../PrRollupChip";
 
 afterEach(() => {
   cleanup();
@@ -256,5 +256,38 @@ describe("PrRollupChip", () => {
     // Shift+Tab stops on the chip itself.
     expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
     expect(chip).toHaveFocus();
+  });
+});
+
+describe("placeRowCard", () => {
+  // A 340px list at the sidebar's left edge, rows from y=120.
+  const list = { top: 100, right: 356, bottom: 260, left: 16 };
+  const card = { rowTop: 160, width: 272, height: 300 };
+
+  it("sits right of the list, level with the row", () => {
+    expect(placeRowCard({ ...card, list, viewport: { width: 1200, height: 900 } }))
+      .toEqual({ top: 160, left: 362 });
+  });
+
+  it("flips left of the list when the window has no room on the right", () => {
+    const rightList = { top: 100, right: 1180, bottom: 260, left: 840 };
+    expect(placeRowCard({ ...card, list: rightList, viewport: { width: 1200, height: 900 } }))
+      .toEqual({ top: 160, left: 562 });
+  });
+
+  it("keeps the card on screen when the row is near the bottom", () => {
+    expect(placeRowCard({ ...card, rowTop: 800, list, viewport: { width: 1200, height: 900 } }).top)
+      .toBe(592);
+  });
+
+  it("goes below, then above, the list before overlapping it in a narrow window", () => {
+    expect(placeRowCard({ ...card, list, viewport: { width: 600, height: 900 } }))
+      .toEqual({ top: 266, left: 16 });
+    const lowList = { top: 500, right: 356, bottom: 700, left: 16 };
+    expect(placeRowCard({ ...card, rowTop: 560, list: lowList, viewport: { width: 600, height: 900 } }))
+      .toEqual({ top: 194, left: 16 });
+    // No room anywhere: beside the row, clamped on screen.
+    expect(placeRowCard({ ...card, list, viewport: { width: 600, height: 400 } }))
+      .toEqual({ top: 92, left: 8 });
   });
 });

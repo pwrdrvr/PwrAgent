@@ -87,6 +87,42 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
   return <MultiPrRollupChip {...props} />;
 });
 
+/**
+ * Where the row card goes. Beside the list keeps every row visible, so
+ * that comes first; below or above the list also covers no row; only a
+ * window too small for all four overlaps the list.
+ */
+export function placeRowCard(params: {
+  list: { top: number; right: number; bottom: number; left: number };
+  rowTop: number;
+  width: number;
+  height: number;
+  viewport: { width: number; height: number };
+}): { top: number; left: number } {
+  const { list, width, height, viewport } = params;
+  const maxLeft = viewport.width - VIEWPORT_MARGIN - width;
+  const maxTop = viewport.height - VIEWPORT_MARGIN - height;
+  const besideTop = Math.max(VIEWPORT_MARGIN, Math.min(params.rowTop, maxTop));
+  const right = list.right + POPOVER_GAP;
+  if (right <= maxLeft) {
+    return { top: besideTop, left: right };
+  }
+  const leftSide = list.left - POPOVER_GAP - width;
+  if (leftSide >= VIEWPORT_MARGIN) {
+    return { top: besideTop, left: leftSide };
+  }
+  const alignedLeft = Math.max(VIEWPORT_MARGIN, Math.min(list.left, maxLeft));
+  const below = list.bottom + POPOVER_GAP;
+  if (below <= maxTop) {
+    return { top: below, left: alignedLeft };
+  }
+  const above = list.top - POPOVER_GAP - height;
+  if (above >= VIEWPORT_MARGIN) {
+    return { top: above, left: alignedLeft };
+  }
+  return { top: besideTop, left: Math.max(VIEWPORT_MARGIN, leftSide) };
+}
+
 function MultiPrRollupChip(props: PrRollupChipProps) {
   const rollup = resolvePrRollup(props.prs)!;
   const repoPrefixed = new Set(props.repoPrefixedUrls.split("\n"));
@@ -117,20 +153,17 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       hoverTimerRef.current = null;
     }
   };
-  const clearCardTimer = (): void => {
+  const clearCardTimer = useCallback((): void => {
     if (cardTimerRef.current !== null) {
       window.clearTimeout(cardTimerRef.current);
       cardTimerRef.current = null;
     }
-  };
+  }, []);
   const hideRowCard = useCallback((): void => {
-    if (cardTimerRef.current !== null) {
-      window.clearTimeout(cardTimerRef.current);
-      cardTimerRef.current = null;
-    }
+    clearCardTimer();
     setRowCard(undefined);
     setCardPosition(undefined);
-  }, []);
+  }, [clearCardTimer]);
   // The first card waits out the tooltip delay, so a pointer crossing the
   // list on its way elsewhere opens none. Once one shows, moving to another
   // row swaps it at once. Focus shows it at once too.
@@ -191,8 +224,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
 
   // The row's PR card sits beside the list, top-aligned with the row, so it
   // covers no other row: right of the list, or left when the window has no
-  // room there. No dependency list: the card's height follows its content,
-  // and the guarded update settles in one pass.
+  // room there. A window too narrow for either puts it below the list, or
+  // above, before it gives up and overlaps. No dependency list: the card's
+  // height follows its content, and the guarded update settles in one pass.
   useLayoutEffect(() => {
     if (!rowCard) return;
     const popover = popoverRef.current;
@@ -202,14 +236,13 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
     const row = rowCard.row.getBoundingClientRect();
     const width = card.offsetWidth;
     const height = card.offsetHeight;
-    const right = list.right + POPOVER_GAP;
-    const left = right + width <= window.innerWidth - VIEWPORT_MARGIN
-      ? right
-      : Math.max(VIEWPORT_MARGIN, list.left - POPOVER_GAP - width);
-    const top = Math.max(
-      VIEWPORT_MARGIN,
-      Math.min(row.top, window.innerHeight - VIEWPORT_MARGIN - height),
-    );
+    const { top, left } = placeRowCard({
+      list,
+      rowTop: row.top,
+      width,
+      height,
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+    });
     setCardPosition((current) =>
       current && current.top === top && current.left === left
         ? current
