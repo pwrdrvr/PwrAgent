@@ -88,8 +88,10 @@ it("publishes identical accepted pages and freezes hover again after a revealed 
     return { backend: "codex", threadId: request.threadId, pinnedRank };
   });
   const api = { ...f.api, setThreadPin };
+  const loadingFlags: Array<{ loading: boolean; refreshing: boolean }> = [];
   const { result, unmount } = renderHook(() => {
     const navigation = useThreadNavigation(api);
+    loadingFlags.push({ loading: navigation.loading, refreshing: navigation.refreshing });
     const hover = useHoverStableSnapshot({
       scope: navigation.browseMode,
       outstandingReads: [
@@ -121,21 +123,24 @@ it("publishes identical accepted pages and freezes hover again after a revealed 
   const threads = result.current.navigation.threads;
   const directories = result.current.navigation.directories;
   const pages = [...result.current.navigation.pagedNavigation.resources.values()].map((resource) => resource.state.page);
+  loadingFlags.length = 0;
   // Immediate read start/completion batch together: row identities and both
   // loading flags stay unchanged, but the newly accepted pages must publish.
   await act(async () => { await result.current.navigation.pagedNavigation.refresh(); });
   expect(result.current.navigation.loading).toBe(false);
   expect(result.current.navigation.refreshing).toBe(false);
+  expect(loadingFlags.every(({ loading, refreshing }) => !loading && !refreshing)).toBe(true);
   expect([...result.current.navigation.pagedNavigation.resources.values()].some((resource, index) => resource.state.page !== pages[index])).toBe(true);
   expect(result.current.navigation.threads).toBe(threads);
   expect(result.current.navigation.directories).toBe(directories);
-  expect(result.current.navigation.pagesAwaitingRows).toEqual([]);
+  const awaitingRows = result.current.navigation.pagesAwaitingRows;
 
   removeLast = true;
   await act(async () => { await result.current.navigation.pagedNavigation.refresh(); });
   expect(result.current.navigation.threads.some((thread) => thread.id === "thread-9")).toBe(false);
   expect(result.current.hover.value).toBe(threads);
   expect(result.current.hover.value.some((thread) => thread.id === "thread-9")).toBe(true);
+  expect(awaitingRows).toEqual([]);
   unmount();
 });
 
