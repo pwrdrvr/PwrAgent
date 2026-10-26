@@ -32,3 +32,31 @@ it("shares ancestor reads within a scan and observes visibility on the next Tab"
   pressTab();
   expect(first).toHaveFocus();
 });
+
+it("wraps in both directions and starts from a negative-tabindex container", () => {
+  render(<>
+    <button>First</button>
+    <div data-testid="container" tabIndex={-1}>
+      <button disabled>Disabled</button>
+      <button>Last</button>
+    </div>
+  </>);
+  const first = screen.getByRole("button", { name: "First" });
+  const last = screen.getByRole("button", { name: "Last" });
+  const container = screen.getByTestId("container");
+
+  first.focus();
+  pressTab();
+  expect(last).toHaveFocus();
+  pressTab();
+  expect(first).toHaveFocus();
+  pressTab({ shift: true });
+  expect(last).toHaveFocus();
+
+  container.focus();
+  pressTab({ shift: true });
+  expect(first).toHaveFocus();
+  container.focus();
+  pressTab();
+  expect(last).toHaveFocus();
+});

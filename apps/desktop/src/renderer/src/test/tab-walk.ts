@@ -53,39 +53,40 @@ function keydown(key: string, shiftKey: boolean): KeyboardEvent {
 export function pressTab({ shift = false }: { shift?: boolean } = {}): KeyboardEvent {
   const event = keydown("Tab", shift);
   if (event.defaultPrevented) return event;
-  // The active control and its next stop share ancestors. Cache only within
-  // this keypress, after key handlers have committed their visibility changes.
+  // Cache only within this keypress, after key handlers have committed
+  // visibility changes. The next stop does not need a whole-page selector scan.
   const styles = new Map<HTMLElement, CSSStyleDeclaration>();
-  const isStop = (el: HTMLElement) => isTabStop(el, styles);
-  const candidates = [...document.querySelectorAll<HTMLElement>(TABBABLE)];
+  const root = document.body;
   const active = document.activeElement as HTMLElement | null;
-  const at = active === null ? -1 : candidates.indexOf(active);
-  // Only the next stop needs a visibility check. Walking the entire page's
-  // computed styles on every Tab makes a trapped dialog pay for all the
-  // settings controls behind it, even though focus never reaches them.
-  let next: HTMLElement | undefined;
-  if (at !== -1 && active !== null && active.tabIndex >= 0) {
-    const ordered = shift
-      ? [...candidates.slice(0, at).reverse(), ...candidates.slice(at).reverse()]
-      : [...candidates.slice(at + 1), ...candidates.slice(0, at + 1)];
-    next = ordered.find(isStop);
-  } else if (active === null || active === document.body) {
-    next = (shift ? candidates.reverse() : candidates).find(isStop);
-  } else if (shift) {
-    // Focus on something that is not a stop (a tabIndex={-1} container):
-    // Chromium continues from its position in the document. Its descendants
-    // follow it, and its ancestors do not precede it.
-    next = candidates
-      .filter((stop) =>
-        Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_PRECEDING)
-        && !stop.contains(active))
-      .reverse()
-      .find(isStop) ?? candidates.reverse().find(isStop);
-  } else {
-    next = candidates.find((stop) =>
-      Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING)
-      && isStop(stop))
-      ?? candidates.find(isStop);
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  walker.currentNode = active && root.contains(active) ? active : root;
+  let wrapping = false;
+  const accepts = (node: Node): node is HTMLElement => {
+    const el = node as HTMLElement;
+    // A negative-tabindex container gives an origin, but its ancestors are
+    // not earlier stops when walking backwards from that origin.
+    return !(shift && !wrapping && active && active.tabIndex < 0 && el.contains(active))
+      && el.matches(TABBABLE) && isTabStop(el, styles);
+  };
+  const seek = (): HTMLElement | undefined => {
+    for (let node = shift ? walker.previousNode() : walker.nextNode(); node;
+      node = shift ? walker.previousNode() : walker.nextNode()) {
+      if (accepts(node)) return node;
+    }
+    return undefined;
+  };
+  let next = seek();
+  if (!next) {
+    wrapping = true;
+    if (shift) {
+      let last: Element = root;
+      while (last.lastElementChild) last = last.lastElementChild;
+      walker.currentNode = last;
+      next = accepts(last) ? last : seek();
+    } else {
+      walker.currentNode = root;
+      next = accepts(root) ? root : seek();
+    }
   }
   if (next === undefined) return event;
   act(() => {
