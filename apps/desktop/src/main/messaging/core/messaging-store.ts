@@ -834,6 +834,23 @@ export class MessagingStore {
     return await this.withReadData((data) => structuredClone(data));
   }
 
+  /**
+   * Resolves once every read and write queued for this file has finished,
+   * including work queued while it waits. An owner about to remove the
+   * store's directory awaits this so no temp-file rename is still pending.
+   */
+  async whenIdle(): Promise<void> {
+    let queue = MessagingStore.queues.get(this.filePath);
+    while (queue) {
+      await queue;
+      const next = MessagingStore.queues.get(this.filePath);
+      if (next === queue) {
+        return;
+      }
+      queue = next;
+    }
+  }
+
   private async withData<T>(
     operation: (data: MessagingStoreData) => Promise<T> | T,
   ): Promise<T> {

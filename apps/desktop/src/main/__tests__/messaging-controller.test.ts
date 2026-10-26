@@ -95,6 +95,10 @@ import {
 } from "../pdf/pdf-page-renderer";
 
 const tempDirs: string[] = [];
+// Teardown owns what each test leaves running: tool-update batches a flush
+// timer started, and the store writes behind them. No test step awaits these.
+const harnessControllers: MessagingController[] = [];
+const harnessStores: MessagingStore[] = [];
 
 vi.mock("../messaging/attachment-image-normalization", () => ({
   normalizeMessagingImageAttachment: vi.fn(async () => ({
@@ -125,7 +129,21 @@ vi.mock("../pdf/pdf-page-renderer", () => ({
 async function createStore(): Promise<MessagingStore> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-controller-"));
   tempDirs.push(tempDir);
-  return new MessagingStore(path.join(tempDir, "messaging-state.json"));
+  const store = new MessagingStore(path.join(tempDir, "messaging-state.json"));
+  harnessStores.push(store);
+  return store;
+}
+
+/**
+ * Waits for the work no test step awaits before afterEach removes the store
+ * directories: a delivery a flush timer started can still be writing its
+ * delivery record after the test has seen the message and returned.
+ */
+async function settleHarnessWork(): Promise<void> {
+  await Promise.all(
+    harnessControllers.splice(0).map((controller) => controller.whenToolUpdatesSettled()),
+  );
+  await Promise.all(harnessStores.splice(0).map((store) => store.whenIdle()));
 }
 
 function createDeferred<T>(): {
@@ -141,6 +159,7 @@ function createDeferred<T>(): {
 
 afterEach(async () => {
   vi.useRealTimers();
+  await settleHarnessWork();
   await Promise.all(
     tempDirs.splice(0).map(async (tempDir) => {
       await rm(tempDir, {
@@ -10804,6 +10823,71 @@ describe("MessagingController", () => {
     } finally {
       harness.controller.dispose();
       vi.useRealTimers();
+    }
+  });
+
+  it("holds teardown until a receipt window's delivery record has been written", async () => {
+    vi.useFakeTimers();
+    const harness = await createHarness({ toolUpdateDefaultMode: "show_less" });
+    // Hold the store write that follows the adapter delivery. On Windows CI,
+    // afterEach removed the store directory while this write's temp-file
+    // rename was still pending, and the rename failed with ENOENT.
+    const internals = MessagingStore.prototype as unknown as {
+      writeData: (data: unknown) => Promise<void>;
+    };
+    const writeData = internals.writeData;
+    const writing = Promise.withResolvers<void>();
+    let holdNextWrite = false;
+    let heldWrites = 0;
+    const writeSpy = vi.spyOn(internals, "writeData").mockImplementation(async function (this: unknown, data: unknown) {
+      if (holdNextWrite) {
+        holdNextWrite = false;
+        heldWrites += 1;
+        await writing.promise;
+      }
+      await writeData.call(this, data);
+    });
+    try {
+      await bindThread(harness);
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId: "thread-1", turnId: "source-turn", turn: { id: "source-turn" } },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/completed", params: { threadId: "thread-1", turnId: "source-turn", turn: { id: "source-turn", status: "completed", output: [] } },
+      } });
+      harness.delivered.length = 0;
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/completed", params: { threadId: "thread-1", turnId: "source-turn", item: {
+          id: "delayed-receipt", type: "agentMessage",
+          origin: { kind: "pwragent", systemReason: "thread-correspondence", sourceThread: { backend: "codex", threadId: "thread-1", title: "Sender" } },
+          text: "**Message to [Recipient](pwragent://thread/recipient?backend=codex)** · Receiving thread started work\n\nDelayed receipt",
+        } },
+      } });
+      holdNextWrite = true;
+      await vi.advanceTimersByTimeAsync(60_001);
+      await vi.waitFor(() => expect(harness.delivered.filter((intent) => intent.kind === "message")).toHaveLength(1));
+      await vi.waitFor(() => expect(heldWrites).toBe(1));
+      const intentId = harness.delivered.find((intent) => intent.kind === "message")!.id;
+
+      // What the test body does before afterEach: it has seen the message.
+      harness.controller.dispose();
+      vi.useRealTimers();
+      let settled = false;
+      const teardown = settleHarnessWork().then(() => {
+        settled = true;
+      });
+      for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+
+      writing.resolve();
+      await teardown;
+      const snapshot = await harness.store.readSnapshot();
+      expect(Object.values(snapshot.deliveries).map((delivery) => delivery.intentId)).toContain(intentId);
+    } finally {
+      writing.resolve();
+      harness.controller.dispose();
+      vi.useRealTimers();
+      writeSpy.mockRestore();
     }
   });
 
@@ -27400,6 +27484,7 @@ async function createHarness<
     toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
   });
   controllerRef.current = controller;
+  harnessControllers.push(controller);
 
   return {
     controller,
