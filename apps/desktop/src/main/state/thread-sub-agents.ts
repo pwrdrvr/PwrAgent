@@ -565,6 +565,20 @@ export class ThreadSubAgentTable {
     return parseCards(rows as CardRow[]);
   }
 
+  /** One page of every card, newest first, read from the created index; only the page's cards are parsed. */
+  page(params: {
+    storageKey: string;
+    excludeMonitorIds?: readonly string[];
+    offset: number;
+    limit: number;
+  }): ThreadSubAgentSummary[] {
+    const excluded = JSON.stringify([...new Set(params.excludeMonitorIds ?? [])]);
+    return parseCards(this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_created
+      WHERE thread_id = ? AND monitor_id NOT IN (SELECT value FROM json_each(?))
+      ORDER BY created_at DESC, monitor_id LIMIT ? OFFSET ?`)
+      .all(params.storageKey, excluded, params.limit, params.offset) as CardRow[]);
+  }
+
   /**
    * The thread's stored gate totals. A thread that predates the columns has
    * its totals summed from its gate cards once, on this first read.

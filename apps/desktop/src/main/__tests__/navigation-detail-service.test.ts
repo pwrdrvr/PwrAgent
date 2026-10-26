@@ -13,6 +13,10 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 const mocks = vi.hoisted(() => ({
   /** The selected thread's stored cards, as the store's card reads see them. */
   cards: [] as ThreadSubAgentSummary[],
+  /** The card table's order: newest `createdAt` first, then monitor id. */
+  newestFirst: (cards: readonly ThreadSubAgentSummary[]) => [...cards].sort((left, right) =>
+    right.createdAt - left.createdAt
+    || (left.monitorId < right.monitorId ? -1 : left.monitorId > right.monitorId ? 1 : 0)),
   reconcileNavigationSnapshot: vi.fn(),
   projectNavigationThreadDetail: vi.fn(),
   getThreadOverlayState: vi.fn(),
@@ -28,9 +32,14 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
     getThreadOverlayState: mocks.getThreadOverlayState,
     getLaunchpadDefaults: mocks.getLaunchpadDefaults,
     getDirectoryLaunchpad: mocks.getDirectoryLaunchpad,
-    listThreadSubAgents: async () => mocks.cards,
+    listThreadSubAgentPage: async (params: { excludeMonitorIds?: readonly string[]; offset: number; limit: number }) =>
+      mocks.newestFirst(mocks.cards)
+        .filter((card) => !params.excludeMonitorIds?.includes(card.monitorId))
+        .slice(params.offset, params.offset + params.limit),
     getThreadSubAgent: async ({ monitorId }: { monitorId: string }) =>
       mocks.cards.find((card) => card.monitorId === monitorId),
+    getThreadSubAgents: async ({ monitorIds }: { monitorIds: readonly string[] }) =>
+      mocks.cards.filter((card) => monitorIds.includes(card.monitorId)),
     listActiveThreadSubAgents: async () => mocks.cards.filter((card) =>
       card.completedAt === undefined || card.status === "failed" || card.status === "failure"),
     readThreadSubAgentRevision: async () => {
@@ -204,7 +213,7 @@ describe("NavigationDetailService", () => {
       cursor = response.collectionPage!.nextCursor;
       expect(response.collectionPage!.complete).toBe(!cursor);
     } while (cursor);
-    expect(monitors).toEqual(cards.map((agent) => agent.monitorId));
+    expect(monitors).toEqual(cards.map((agent) => agent.monitorId).reverse());
     expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledTimes(hydratedBefore);
     expect(registry.getQueuedTurnsSnapshot).not.toHaveBeenCalled();
     await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "selected" }, probeWorkingStates: true });

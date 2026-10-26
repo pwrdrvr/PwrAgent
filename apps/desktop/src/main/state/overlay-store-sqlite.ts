@@ -4098,6 +4098,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return this.subAgentTable.lensPage({ ...params, storageKey: this.subAgentStorageKey(params) });
   }
 
+  /**
+   * One page of every card on the thread, newest first (`createdAt`
+   * descending, then monitor id). `excludeMonitorIds` leaves out cards the
+   * caller replaces with live state.
+   */
+  async listThreadSubAgentPage(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    excludeMonitorIds?: readonly string[];
+    offset: number;
+    limit: number;
+  }): Promise<ThreadSubAgentSummary[]> {
+    return this.subAgentTable.page({ ...params, storageKey: this.subAgentStorageKey(params) });
+  }
+
   /** Sums over every Token Miser gate card, kept on write; reads no card. */
   async readThreadTokenMiserGateTotals(params: {
     backend: ThreadOverlayState["backend"];
@@ -10895,6 +10910,7 @@ export type OverlayStoreLike = Pick<
   | "getThreadSubAgents"
   | "readThreadSubAgentLensCounts"
   | "listThreadSubAgentLensPage"
+  | "listThreadSubAgentPage"
   | "readThreadTokenMiserGateTotals"
   | "setThreadReaction"
   | "setThreadLock"

@@ -130,6 +130,16 @@ export function mockSubAgentReads(read: ReadOverlay) {
       visibleCards(params)
         .filter((card) => subAgentLens(card) === params.lens)
         .slice(params.offset, params.offset + params.limit),
+    listThreadSubAgentPage: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      excludeMonitorIds?: readonly string[];
+      offset: number;
+      limit: number;
+    }) =>
+      cards(params.backend, params.threadId)
+        .filter((card) => !params.excludeMonitorIds?.includes(card.monitorId))
+        .slice(params.offset, params.offset + params.limit),
     readThreadTokenMiserGateTotals: async (params: {
       backend: AppServerBackendKind;
       threadId: string;

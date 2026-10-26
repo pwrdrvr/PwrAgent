@@ -70,6 +70,37 @@ const compareNewestFirst = (left: ThreadSubAgentSummary, right: ThreadSubAgentSu
   || (left.monitorId < right.monitorId ? -1 : left.monitorId > right.monitorId ? 1 : 0);
 
 /**
+ * One page of cards newest first (`createdAt` descending, then monitor id),
+ * with live cards merged into the stored rows in order. `read` pages the
+ * stored rows in that order, leaving out every live card's monitor id, and
+ * `storedCount` is how many such rows there are. Live cards, which only the
+ * owner's memory holds, are at most a turn's worth, so a page reads at most
+ * `limit` plus that many stored rows, whatever its offset.
+ */
+export async function readMergedSubAgentPage(params: {
+  offset: number;
+  limit: number;
+  storedCount: number;
+  live: readonly ThreadSubAgentSummary[];
+  read: (offset: number, limit: number) => Promise<ThreadSubAgentSummary[]>;
+}): Promise<ThreadSubAgentSummary[]> {
+  const { offset, limit, read } = params;
+  if (params.live.length === 0) return await read(offset, limit);
+  if (offset >= params.storedCount + params.live.length) return [];
+  const live = [...params.live].sort(compareNewestFirst);
+  // Each live card ahead of a stored row moves it down one place, so the
+  // stored rows on this page start at most that many places earlier.
+  let start = Math.max(0, offset - live.length);
+  if (start >= params.storedCount) start = 0;
+  const stored = await read(start, offset + limit - start);
+  const first = stored[0];
+  const ahead = start === 0 || !first ? [] : live.filter((card) => compareNewestFirst(card, first) < 0);
+  const merged = [...stored, ...live.filter((card) => !ahead.includes(card))].sort(compareNewestFirst);
+  const base = start + ahead.length;
+  return merged.slice(offset - base, offset - base + limit);
+}
+
+/**
  * The sub-agents panel page: lens counts and one lens page from the card
  * table, newest first (`createdAt` descending, then monitor id). Live cards,
  * which only the owner's memory holds, replace their stored rows and merge
@@ -96,25 +127,14 @@ export async function readThreadSubAgentPanel(params: {
     : subAgentCounts.harness > 0 ? "harness" : subAgentCounts.pwragent > 0 ? "pwragent" : "token-miser";
   const revisionSource = { stored: params.storedRevision, live: live.cards, selectedLens, subAgentCounts };
   const { offset, limit } = threadDisplayPage(demand, threadDisplayRevision(demand, revisionSource));
-  const liveInLens = liveCards.filter((card) => subAgentLens(card) === selectedLens).sort(compareNewestFirst);
-  const storedInLens = subAgentCounts[selectedLens] - liveInLens.length;
-  const read = (from: number, count: number) =>
-    reader.page({ lens: selectedLens, visibleSince, excludeMonitorIds, offset: from, limit: count });
-  let subAgents: ThreadSubAgentSummary[];
-  if (liveInLens.length === 0) {
-    subAgents = await read(offset, limit);
-  } else {
-    // Each live card ahead of a stored row moves it down one place, so the
-    // stored rows on this page start at most that many places earlier.
-    let start = Math.max(0, offset - liveInLens.length);
-    if (start >= storedInLens) start = 0;
-    const stored = await read(start, offset + limit - start);
-    const first = stored[0];
-    const ahead = start === 0 || !first ? [] : liveInLens.filter((card) => compareNewestFirst(card, first) < 0);
-    const merged = [...stored, ...liveInLens.filter((card) => !ahead.includes(card))].sort(compareNewestFirst);
-    const base = start + ahead.length;
-    subAgents = merged.slice(offset - base, offset - base + limit);
-  }
+  const liveInLens = liveCards.filter((card) => subAgentLens(card) === selectedLens);
+  const subAgents = await readMergedSubAgentPage({
+    offset,
+    limit,
+    storedCount: subAgentCounts[selectedLens] - liveInLens.length,
+    live: liveInLens,
+    read: (from, count) => reader.page({ lens: selectedLens, visibleSince, excludeMonitorIds, offset: from, limit: count }),
+  });
   return { subAgents, subAgentCounts, subAgentLens: selectedLens, revisionSource };
 }
 

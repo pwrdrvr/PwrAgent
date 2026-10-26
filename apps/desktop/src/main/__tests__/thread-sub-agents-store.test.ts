@@ -9,6 +9,9 @@ import {
   type TokenMiserSubAgentAccounting,
 } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
+import { NavigationDetailService } from "../app-server/navigation-detail-service";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { StateDb } from "../state/state-db";
@@ -483,10 +486,11 @@ describe("thread sub-agent table", () => {
       for (const lens of ["harness", "pwragent", "token-miser"] as const) {
         await store.listThreadSubAgentLensPage({ ...thread, lens, limit: 20, offset: 0, visibleSince });
       }
+      await store.listThreadSubAgentPage({ ...thread, excludeMonitorIds: [card(2).monitorId], limit: 100, offset: 100 });
       spy.mockRestore();
 
       const reads = [...new Set(statements)].filter((sql) => /^\s*SELECT/i.test(sql) && /FROM thread_sub_agent/.test(sql));
-      expect(reads.length).toBeGreaterThanOrEqual(5);
+      expect(reads.length).toBeGreaterThanOrEqual(6);
       for (const sql of reads) {
         const plan = (stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`)
           .all(...Array.from({ length: sql.match(/\?/g)?.length ?? 0 }, () => null)) as Array<{ detail: string }>)
@@ -536,6 +540,126 @@ describe("thread sub-agent table", () => {
       expect(large.totals.gateCount).toBe(BIG + 25);
       expect(large.totals.terms.savingsMicros).toBe(totalTokenMiserGateAccountings([...recent, ...older]
         .map((entry) => entry.tokenMiserAccounting)).terms.savingsMicros);
+    });
+  });
+
+  describe("selected-detail collection", () => {
+    afterEach(() => resetDesktopOverlayStoreForTests());
+
+    /**
+     * The owner's view of one Codex thread: its live gates and live native
+     * usage, merged by the registry's own methods.
+     */
+    function ownerService(threadId: string, live: {
+      gates?: ThreadSubAgentSummary[];
+      usage?: Array<[string, { monitorUsage: { summary: string }; updatedAt: number; lines: ReadonlyMap<string, unknown> }]>;
+    } = {}) {
+      const registry = {
+        getCachedThreadSummary: () => ({ id: threadId, source: "codex" }),
+        liveTokenMiserSubAgents: new Map([[threadId, new Map((live.gates ?? []).map((gate) => [gate.monitorId, gate]))]]),
+        liveCodexNativeSubAgentUsage: new Map([[threadId, new Map(live.usage ?? [])]]),
+        mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.mergeLiveTokenMiserSubAgents,
+        listLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.listLiveTokenMiserSubAgents,
+        readLiveSubAgentRevisionSource: DesktopBackendRegistry.prototype.readLiveSubAgentRevisionSource,
+      } as unknown as DesktopBackendRegistry;
+      return { registry, service: new NavigationDetailService(registry) };
+    }
+
+    /** Every page of the `subAgents` collection, as an older viewer pages it. */
+    async function pageCollection(service: NavigationDetailService, threadId: string, onPage?: (cursor: string | undefined) => void) {
+      const pages: ThreadSubAgentSummary[][] = [];
+      let cursor: string | undefined;
+      do {
+        onPage?.(cursor);
+        const response = await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId },
+          collection: { name: "subAgents", cursor } });
+        const page = response.collectionPage!;
+        pages.push(page.values.subAgents!);
+        expect(page.complete).toBe(!page.nextCursor);
+        cursor = page.nextCursor;
+      } while (cursor);
+      return pages;
+    }
+
+    it("parses the same card bytes for one page on a thread with 25 or 2,025 cards", async () => {
+      const { stateDb, store } = openStore();
+      setDesktopOverlayStoreForTests(store);
+      // The same 25 oldest cards on both threads; the large thread also holds
+      // 2,000 newer ones, so its last page is the small thread's only page.
+      const oldest = Array.from({ length: 25 }, (_, index) => card(index));
+      const newer = Array.from({ length: BIG }, (_, index) => card(25 + index));
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-small", subAgents: oldest });
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-large", subAgents: [...newer, ...oldest] });
+      stateDb.raw.pragma("wal_checkpoint(TRUNCATE)");
+
+      // Bytes parsed per page. A continuation cursor is parsed too; it is left
+      // out, since only the large thread needs one to reach its last page.
+      const perPage: number[] = [];
+      let cursorText: string | undefined;
+      const parse = JSON.parse;
+      const spy = vi.spyOn(JSON, "parse").mockImplementation((text: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
+        if (text !== cursorText) perPage[perPage.length - 1] += text.length;
+        return parse(text, reviver);
+      });
+      const read = async (threadId: string) => {
+        perPage.length = 0;
+        const pages = await pageCollection(ownerService(threadId).service, threadId, (cursor) => {
+          cursorText = cursor && Buffer.from(cursor, "base64url").toString("utf8");
+          perPage.push(0);
+        });
+        return { pages, perPage: [...perPage] };
+      };
+      const small = await read("thread-small");
+      const large = await read("thread-large");
+      spy.mockRestore();
+
+      expect(small.pages.map((page) => page.length)).toEqual([25]);
+      expect(large.pages).toHaveLength(21);
+      expect(large.pages.at(-1)).toEqual(small.pages[0]);
+      expect(large.perPage.at(-1)).toBe(small.perPage[0]);
+      // Paging the whole collection parses each stored card once.
+      const stored = (stateDb.raw.prepare("SELECT sum(length(card)) AS bytes FROM thread_sub_agents WHERE thread_id = ?")
+        .get("codex:thread-large") as { bytes: number }).bytes;
+      expect(large.perPage.reduce((total, bytes) => total + bytes, 0)).toBe(stored);
+    });
+
+    it("ends the collection at a card that does not parse rather than leave a viewer without a cursor", async () => {
+      const { stateDb, store } = openStore();
+      setDesktopOverlayStoreForTests(store);
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-bad", subAgents: [card(1), card(2), card(3)] });
+      stateDb.raw.prepare("UPDATE thread_sub_agents SET card = 'not json' WHERE monitor_id = ?").run(card(1).monitorId);
+
+      const pages = await pageCollection(ownerService("thread-bad").service, "thread-bad");
+
+      expect(pages.map((page) => page.map((entry) => entry.monitorId))).toEqual([[card(3).monitorId, card(2).monitorId]]);
+    });
+
+    it("pages live gates and live usage into the stored cards in table order", async () => {
+      const { store } = openStore();
+      setDesktopOverlayStoreForTests(store);
+      const threadId = "thread-live";
+      const at = (index: number) => 1_800_000_000_000 + 2 * index;
+      const stored = Array.from({ length: 250 }, (_, index) => card(index, { createdAt: at(index), updatedAt: at(index) }));
+      await store.upsertThreadSubAgents({ backend: "codex", threadId, subAgents: stored });
+      const { registry, service } = ownerService(threadId, {
+        gates: [
+          // A gate this turn rewrote, one newer than every stored card, and
+          // one that sorts between two stored cards on the second page.
+          { ...stored[200]!, task: "Gate rewritten this turn", updatedAt: at(400) },
+          card(1_000, { createdAt: at(1_000), updatedAt: at(1_000) }),
+          card(1_001, { createdAt: at(130) + 1, updatedAt: at(130) + 1 }),
+        ],
+        usage: [[stored[50]!.monitorId, { monitorUsage: { summary: "live usage" }, updatedAt: at(500), lines: new Map() }]],
+      });
+
+      const pages = await pageCollection(service, threadId);
+
+      const expected = registry.mergeLiveTokenMiserSubAgents(threadId, stored).sort((left, right) =>
+        right.createdAt - left.createdAt || (left.monitorId < right.monitorId ? -1 : 1));
+      expect(pages.map((page) => page.length)).toEqual([100, 100, 52]);
+      expect(pages.flat()).toEqual(expected);
+      expect(pages.flat().find((entry) => entry.monitorId === stored[200]!.monitorId)?.task).toBe("Gate rewritten this turn");
+      expect(pages.flat().find((entry) => entry.monitorId === stored[50]!.monitorId)?.monitorUsage?.summary).toBe("live usage");
     });
   });
 
