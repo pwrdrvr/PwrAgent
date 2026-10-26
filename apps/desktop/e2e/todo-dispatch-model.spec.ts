@@ -90,20 +90,29 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await stack.getByRole("heading", { name: "Cache the signing-key lookup", exact: true }).click();
     await expect(app.window.locator(".data-tooltip-layer")).not.toBeVisible();
     await stack.screenshot({ path: testInfo.outputPath("todo-dispatch-after.png"), animations: "disabled" });
-    // A scrolled card can place the chip at the viewport edge. Exercise the
-    // actual Chromium layout and keyboard focus with that fixture geometry.
-    await chip.evaluate((element) => {
-      const rect = element.getBoundingClientRect();
-      element.style.position = "relative";
-      element.style.top = `${window.innerHeight - 30 - rect.top}px`;
-      element.style.left = `${600 - rect.left}px`;
-      element.style.zIndex = "151";
+    // Add scrollable fixture space, then put a real To-dos-panel chip at
+    // the bottom edge without moving it outside its clipping ancestors.
+    const todosTab = app.window.getByRole("tab", { name: /^To-dos/ });
+    await todosTab.click();
+    const panel = app.window.getByRole("tabpanel", { name: /^To-dos/ });
+    await expect(panel.locator(".thread-todo-card")).toHaveCount(2);
+    await panel.locator(".thread-todos-panel").evaluate((element) => { element.style.paddingTop = "900px"; });
+    const panelChip = panel.getByRole("button", { name: /^Model for the new thread:/ }).first();
+    await panelChip.evaluate((element) => {
+      const scroller = element.closest<HTMLElement>(".context-panel__scroll");
+      if (!scroller) throw new Error("Missing To-dos scroll container");
+      scroller.scrollTop += element.getBoundingClientRect().top - (window.innerHeight - 50);
     });
-    await chip.click();
+    await expect.poll(async () => {
+      const anchor = await panelChip.boundingBox();
+      const viewportHeight = await app.window.evaluate(() => window.innerHeight);
+      return Boolean(anchor && anchor.y >= viewportHeight - 80 && anchor.y + anchor.height <= viewportHeight - 8);
+    }).toBe(true);
+    await panelChip.click();
     await expect(menu).toBeVisible();
     await expect.poll(async () => {
       const bounds = await menu.boundingBox();
-      const anchor = await chip.boundingBox();
+      const anchor = await panelChip.boundingBox();
       const viewportHeight = await app.window.evaluate(() => window.innerHeight);
       return Boolean(bounds && anchor && bounds.y >= 8 && bounds.y + bounds.height <= viewportHeight - 8
         && bounds.y + bounds.height <= anchor.y);
@@ -111,9 +120,8 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await menu.getByRole("menuitemradio").first().press("End");
     await expect(menu.getByRole("menuitem", { name: /To-do reasoning:/ })).toBeFocused();
     await app.window.keyboard.press("Escape");
-    await chip.evaluate((element) => {
-      for (const property of ["position", "top", "left", "z-index"]) element.style.removeProperty(property);
-    });
+    await todosTab.click();
+    await expect(panel).not.toBeVisible();
     await stack.getByRole("button", { name: "Start thread", exact: true }).click();
     await expect.poll(() => app.getLastStartTurn()).toMatchObject({ model: "gpt-5.5", reasoningEffort: "xhigh" });
     await expect(stack).toContainText("Last used in this thread");
