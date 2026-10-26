@@ -190,7 +190,7 @@ async function renderThreadApp(signal?: AbortSignal): Promise<void> {
   });
   try {
     if (cancelled) throw cancelledError;
-    await act(async () => { view = render(<App />); });
+    view = await renderApp();
     // Commit each deferred paint/task separately. Wait for the import's
     // admission event before awaiting its completion inside act.
     while (!importStarted && !cancelled) {

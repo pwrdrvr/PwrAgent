@@ -80,7 +80,7 @@ describe("useFocusTrap", () => {
     const visited: string[] = [];
     const recordFocus = () => visited.push(focusedLabel() ?? "");
     dialog.addEventListener("focusin", recordFocus);
-    expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
+    expect(tabEscapes(dialog, 60, { stopAtCycle: true })).toEqual({ forward: [], backward: [] });
     expect(visited).toEqual(["Middle", "Last", "First", "Last", "Middle", "First"]);
   });
 
@@ -126,7 +126,7 @@ describe("useFocusTrap", () => {
     expect(focusedLabel()).toBe("First");
   });
 
-  it("reads shared ancestor styles once per Tab scan", () => {
+  it("reads shared ancestor styles only for the Tab cycle's edges", () => {
     render(<Dialog open />);
     const middle = button("Middle");
     button("Last").focus();

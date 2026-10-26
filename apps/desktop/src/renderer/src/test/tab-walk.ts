@@ -155,21 +155,22 @@ function describeStop(el: Element): string {
 }
 
 /**
- * Walks a complete focus cycle in each direction, up to `count` Tabs, with
- * sentinels around the page, and names every stop outside `dialog` that focus
- * reached. Repeating an already visited cycle adds no coverage. A trapped
- * dialog answers `{ forward: [], backward: [] }`.
+ * Walks `count` Tabs in each direction with sentinels around the page, and
+ * names every stop outside `dialog` that focus reached. A trapped dialog
+ * answers `{ forward: [], backward: [] }`. A cycle-only check can opt into
+ * stopping when focus first returns to a visited control.
  */
 export function tabEscapes(
   dialog: Element,
   count = 60,
+  { stopAtCycle = false }: { stopAtCycle?: boolean } = {},
 ): { forward: string[]; backward: string[] } {
   const sentinels = addTabSentinels();
   try {
     const outside = (visited: Element[]) =>
       visited.filter((el) => !dialog.contains(el)).map(describeStop);
-    const forward = outside(walkTab(count, { stopAtCycle: true }));
-    const backward = outside(walkTab(count, { shift: true, stopAtCycle: true }));
+    const forward = outside(walkTab(count, { stopAtCycle }));
+    const backward = outside(walkTab(count, { shift: true, stopAtCycle }));
     return { forward, backward };
   } finally {
     sentinels.remove();
