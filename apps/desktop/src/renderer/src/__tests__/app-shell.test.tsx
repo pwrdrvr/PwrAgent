@@ -7254,6 +7254,62 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: /sub-thread draft/ })).not.toBeInTheDocument();
   });
 
+  // The desktop API a mounted thread shell needs: Codex threads in the
+  // Inbox, seen marks echoed back, and no live events. `api` adds what a
+  // test drives; `threads` is read on every snapshot, so a rename shows.
+  function installCodexThreadShell(params: {
+    threads: () => Array<{ id: string; title: string; summary?: string; updatedAt: number }>;
+    api: object;
+  }): void {
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        copyText: async () => undefined,
+        ping: () => "pong",
+        getNavigationSnapshot: async () => {
+          const threads = params.threads();
+          return {
+            backend: "all" as const,
+            fetchedAt: Date.now(),
+            unchanged: false,
+            inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
+            threads: threads.map((thread) => ({
+              ...thread,
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              executionMode: "default" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+            })),
+            directories: [],
+            launchpadDefaults: {
+              backend: "codex" as const,
+              executionMode: "default" as const,
+            },
+          };
+        },
+        markThreadSeen: async ({
+          backend,
+          threadId,
+        }: {
+          backend: AppServerBackendKind;
+          threadId: string;
+        }) => ({
+          backend,
+          threadId,
+          seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        platform: "darwin",
+        ...params.api,
+      }),
+    });
+  }
+
   // One Codex thread whose backend renames, reflected by the next snapshot.
   function installRenamableThreadFixture() {
     let threadTitle = "Build Codex client";
@@ -7281,11 +7337,14 @@ describe("App", () => {
       },
     }));
 
-    Object.defineProperty(window, "pwragent", {
-      configurable: true,
-      value: ownerApi({
-        copyText: async () => undefined,
-        ping: () => "pong",
+    installCodexThreadShell({
+      threads: () => [{
+        id: "thread-1",
+        title: threadTitle,
+        summary: "Wire the app-server transport and list threads",
+        updatedAt: 2_000,
+      }],
+      api: {
         listSkills: async () => ({
           backend: "codex" as const,
           fetchedAt: Date.now(),
@@ -7324,50 +7383,9 @@ describe("App", () => {
             },
           ],
         }),
-        getNavigationSnapshot: async () => ({
-          backend: "all" as const,
-          fetchedAt: Date.now(),
-          unchanged: false,
-          inboxThreadKeys: ["codex:thread-1"],
-          threads: [
-            {
-              id: "thread-1",
-              title: threadTitle,
-              titleSource: "explicit" as const,
-              summary: "Wire the app-server transport and list threads",
-              source: "codex" as const,
-              executionMode: "default" as const,
-              linkedDirectories: [],
-              inbox: {
-                inInbox: true,
-                reason: "new-thread" as const,
-              },
-              updatedAt: 2_000,
-            },
-          ],
-          directories: [],
-          launchpadDefaults: {
-            backend: "codex" as const,
-            executionMode: "default" as const,
-          },
-        }),
-        markThreadSeen: async ({
-          backend,
-          threadId,
-        }: {
-          backend: AppServerBackendKind;
-          threadId: string;
-        }) => ({
-          backend,
-          threadId,
-          seenAt: Date.now(),
-        }),
-        onAgentEvent: () => () => undefined,
-        onWindowFocus: () => () => undefined,
-        platform: "darwin",
         readThread,
         renameThread,
-      }),
+      },
     });
     return { renameThread };
   }
@@ -7412,19 +7430,6 @@ describe("App", () => {
       delivery: "async" as const,
       questions: [{ title: "Which region should we deploy to?", options: null }],
     };
-    const thread = (id: string, title: string, updatedAt: number) => ({
-      id,
-      title,
-      titleSource: "explicit" as const,
-      source: "codex" as const,
-      executionMode: "default" as const,
-      linkedDirectories: [],
-      inbox: {
-        inInbox: true,
-        reason: "new-thread" as const,
-      },
-      updatedAt,
-    });
     const readThread = vi.fn(async ({ threadId }: { threadId: string }) => ({
       backend: "codex" as const,
       fetchedAt: Date.now(),
@@ -7443,27 +7448,13 @@ describe("App", () => {
       },
     }));
 
-    Object.defineProperty(window, "pwragent", {
-      configurable: true,
-      value: ownerApi({
-        copyText: async () => undefined,
-        ping: () => "pong",
+    installCodexThreadShell({
+      threads: () => [
+        { id: "thread-1", title: "Build Codex client", updatedAt: 2_000 },
+        { id: "thread-2", title: "Deploy the gateway", updatedAt: 1_000 },
+      ],
+      api: {
         listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
-        getNavigationSnapshot: async () => ({
-          backend: "all" as const,
-          fetchedAt: Date.now(),
-          unchanged: false,
-          inboxThreadKeys: ["codex:thread-1", "codex:thread-2"],
-          threads: [
-            thread("thread-1", "Build Codex client", 2_000),
-            thread("thread-2", "Deploy the gateway", 1_000),
-          ],
-          directories: [],
-          launchpadDefaults: {
-            backend: "codex" as const,
-            executionMode: "default" as const,
-          },
-        }),
         listOperatorRequests: async () => ({
           serverRequests: [],
           questions: [{
@@ -7475,22 +7466,8 @@ describe("App", () => {
           }],
           seenKeys: [],
         }),
-        markThreadSeen: async ({
-          backend,
-          threadId,
-        }: {
-          backend: AppServerBackendKind;
-          threadId: string;
-        }) => ({
-          backend,
-          threadId,
-          seenAt: Date.now(),
-        }),
-        onAgentEvent: () => () => undefined,
-        onWindowFocus: () => () => undefined,
-        platform: "darwin",
         readThread,
-      }),
+      },
     });
 
     // jsdom has no scrollIntoView. Record what the jump scrolls.
