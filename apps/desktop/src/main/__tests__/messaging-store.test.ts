@@ -285,10 +285,12 @@ describe("MessagingStore", () => {
     };
     const writeData = internals.writeData;
     const writing = Promise.withResolvers<void>();
+    const firstWriteHeld = Promise.withResolvers<void>();
     let holdNextWrite = true;
     const writeSpy = vi.spyOn(internals, "writeData").mockImplementation(async function (this: unknown, data: unknown) {
       if (holdNextWrite) {
         holdNextWrite = false;
+        firstWriteHeld.resolve();
         await writing.promise;
       }
       await writeData.call(this, data);
@@ -301,6 +303,9 @@ describe("MessagingStore", () => {
       });
       // A second store on the same file shares its queue.
       const laterWrite = new MessagingStore(filePath).upsertBinding(buildBinding({ id: "binding-2" }));
+      // The first write reads the file before it writes, and that read is
+      // real I/O, so a fixed number of ticks can end before it gets here.
+      await firstWriteHeld.promise;
       for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
       expect(writeSpy).toHaveBeenCalledOnce();
       expect(idle).toBe(false);
@@ -315,6 +320,9 @@ describe("MessagingStore", () => {
       expect(Object.keys(stored.bindings).sort()).toEqual(["binding-1", "binding-2"]);
     } finally {
       writing.resolve();
+      // Drain before afterEach removes the directory, even when an assertion
+      // failed with writes still queued.
+      await store.whenIdle();
       writeSpy.mockRestore();
     }
   });
