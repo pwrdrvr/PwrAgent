@@ -51,7 +51,7 @@ identities until PwrAgent checks its own message provenance. Agent handoffs,
 agent steers, automation/system messages, unknown origins and legacy handoff
 history require human confirmation; a protocol `userMessage` role alone is not
 human consent. Desktop inputs need a matching host admission record, held in a
-bounded process-local map (512 messages per thread, 128 threads); attributed
+bounded process-local map (32 KB and 512 messages per thread, 128 threads); attributed
 messaging inputs use their recorded actor origin. A restart or eviction can
 therefore require confirmation for older desktop history. Missing provenance
 is never inferred to mean human, and a turn-level origin applies only to that

@@ -8975,6 +8975,7 @@ export class CodexAppServerClient {
       method !== "item/completed" &&
       method !== "turn/completed" &&
       method !== "turn/failed" &&
+      method !== "turn/started" &&
       method !== "thread/tokenUsage/updated"
     ) {
       return;
