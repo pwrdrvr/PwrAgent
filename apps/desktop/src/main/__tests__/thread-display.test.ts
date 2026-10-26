@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { emptyTokenMiserGateAccountingTotals, type AppServerReadThreadRequest, type AppServerReadThreadResponse, type ThreadUsageLineRecord, type ThreadSubAgentSummary, type AgentEvent } from "@pwragent/shared";
+import { emptyTokenMiserGateAccountingTotals, totalTokenMiserGateAccountings, type AppServerReadThreadRequest, type AppServerReadThreadResponse, type ThreadUsageLineRecord, type ThreadSubAgentSummary, type AgentEvent } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { projectThreadDisplay, readThreadSubAgentPanel } from "../app-server/thread-display";
 import { mockSubAgentReads } from "./helpers/mock-sub-agent-store";
@@ -417,6 +417,45 @@ it.each([false, true])("joins live gate metadata before pricing pagination (defe
   const second = await registry.readThread({ threadId: "fixture", display: { ...display, cursor: first.display!.nextCursor } });
   expect(second.display!.pricingPage!.rows).toHaveLength(5);
   expect(second.display!.nextCursor).toBeUndefined();
+});
+
+it("swaps a live gate's accounting for its stored version in the savings total", async () => {
+  const accounting = (savingsMicros: number) => ({
+    currency: "USD" as const, originalModel: "gpt-5.5", baselineParentTokens: 1000, baselineParentCostMicros: 500_000,
+    gateModel: "gpt-5.6-luna", gateTotalTokens: 110, gateCostMicros: 600,
+    revealedParentTokens: 100, revealedParentCostMicros: 1000, savingsMicros,
+  });
+  const gate = (name: string, savingsMicros: number): ThreadSubAgentSummary => ({
+    monitorId: `system:token-miser:${name}`, task: "Gate", status: "success",
+    createdAt: 1, updatedAt: 1, tokenMiserAccounting: accounting(savingsMicros),
+  });
+  // Stored: two gates. Live: a newer version of one of them and a new gate.
+  const stored = [gate("kept", 1_000), gate("updated", 2_000)];
+  const live = [gate("updated", 7_000), gate("new", 30_000)];
+  const registry = Object.assign(Object.create(DesktopBackendRegistry.prototype), {
+    automaticArchiveReservations: new Map(),
+    overlayStore: {
+      getThreadOverlayState: async () => undefined,
+      getThreadSubAgents: async (params: { monitorIds: readonly string[] }) =>
+        stored.filter((card) => params.monitorIds.includes(card.monitorId)),
+      readThreadTokenMiserGateTotals: async () =>
+        totalTokenMiserGateAccountings(stored.map((card) => card.tokenMiserAccounting)),
+      readThreadPricing: async () => ({ lines: [], summaries: [] }),
+      readThreadToolAccounting: async () => undefined,
+    },
+    assertNotBootstrap: () => {},
+    resolveCodexLocalModelIdsFn: () => [],
+    getActiveTurnForThread: () => undefined,
+    liveTokenMiserUsageLines: new Map(),
+    liveTokenMiserSubAgents: new Map([["fixture", new Map(live.map((card) => [card.monitorId, card]))]]),
+    liveCodexNativeSubAgentUsage: new Map(),
+    // An empty ledger asks Codex for a pricing snapshot; there is none here.
+    withCodexThreadClient: async () => undefined,
+  }) as DesktopBackendRegistry;
+  const result = await registry.readThread({ threadId: "fixture", display: { resource: "pricing" } });
+  expect(result.display!.pricing.tokenMiserSummary).toMatchObject({
+    decisionCount: 3, pricedDecisionCount: 3, terms: { savingsMicros: 1_000 + 7_000 + 30_000 },
+  });
 });
 
 it("excludes hidden orphan gates before paging without removing their charges", () => {

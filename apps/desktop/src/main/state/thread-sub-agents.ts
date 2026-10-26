@@ -543,14 +543,16 @@ export class ThreadSubAgentTable {
           ELSE 'pwragent' END) = ?
         AND monitor_id NOT IN (SELECT value FROM json_each(?))`);
     // `isThreadSubAgentVisibleInPanel` (subagent-visibility.ts) in SQL: a
-    // finished native worker leaves the panel a day after it last moved.
+    // finished native worker leaves the panel a day after it last moved. A
+    // card that is not JSON is skipped, as `parseCards` skips it, rather than
+    // failing the read.
     const harness = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
       WHERE thread_id = ? AND (CASE
           WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
           ELSE 'pwragent' END) = 'harness'
         AND monitor_id NOT IN (SELECT value FROM json_each(?))
-        AND NOT (
+        AND json_valid(card) AND NOT (
           (status IN ('success', 'failure', 'cancelled')
             OR json_type(card, '$.completedAt') IS NOT NULL
             OR json_type(card, '$.outcome') IS NOT NULL
@@ -580,7 +582,7 @@ export class ThreadSubAgentTable {
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
           ELSE 'pwragent' END) = 'harness'
             AND monitor_id NOT IN (SELECT value FROM json_each(?))
-            AND NOT (
+            AND json_valid(card) AND NOT (
           (status IN ('success', 'failure', 'cancelled')
             OR json_type(card, '$.completedAt') IS NOT NULL
             OR json_type(card, '$.outcome') IS NOT NULL

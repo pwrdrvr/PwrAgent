@@ -350,7 +350,7 @@ describe("thread sub-agent table", () => {
     });
 
     it("counts and pages the panel as the shared visibility rule filters it", async () => {
-      const { store } = openStore();
+      const { stateDb, store } = openStore();
       const old = visibleSince - 1;
       const recent = visibleSince + 1;
       const native = (index: number, overrides: Partial<ThreadSubAgentSummary>) =>
@@ -370,6 +370,9 @@ describe("thread sub-agent table", () => {
         ...Array.from({ length: 4 }, (_, index) => card(20 + index)),
       ];
       await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1", subAgents: cards });
+      // A harness row whose card is not JSON is skipped, as every card read skips it.
+      stateDb.raw.prepare(`INSERT INTO thread_sub_agents(thread_id, monitor_id, created_at, updated_at, status, card)
+        VALUES ('codex:thread-1', 'codex-native:broken', 1, 1, 'success', '{not json')`).run();
 
       const expected = (lens: SubAgentLens) => cards
         .filter((entry) => isThreadSubAgentVisibleInPanel(entry, NOW) && subAgentLens(entry) === lens)

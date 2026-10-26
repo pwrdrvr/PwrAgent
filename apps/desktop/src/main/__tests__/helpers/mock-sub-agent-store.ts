@@ -42,7 +42,8 @@ export function mockSubAgentReads(read: ReadOverlay) {
     [...(read(backend, threadId)?.subAgents ?? [])].sort(
       (left, right) =>
         right.createdAt - left.createdAt
-        || left.monitorId.localeCompare(right.monitorId),
+        // SQLite's BINARY collation, as `ORDER BY monitor_id` uses.
+        || (left.monitorId < right.monitorId ? -1 : left.monitorId > right.monitorId ? 1 : 0),
     );
   // The panel's retention window, from its `visibleSince` cutoff.
   const visibleCards = (params: {

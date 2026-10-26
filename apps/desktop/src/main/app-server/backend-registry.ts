@@ -17121,16 +17121,17 @@ export class DesktopBackendRegistry {
     });
     const toolAccounting = stored ? await this.withTokenMiserAccounting({ accounting: stored, backend, threadId: request.threadId }) : undefined;
     const monitorId = request.display.monitorId;
+    // Pricing includes in-memory gates; their parent links and accounting
+    // must come from the same live view before grouping and pagination.
+    const pricingCards = await this.readPricingSubAgents({ backend, threadId: request.threadId, pricing });
     return projectThreadDisplay({
       backend, threadId: request.threadId, fetchedAt: Date.now(), pricing, toolAccounting,
       replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
     }, request, {
       ...overlay,
-      // Pricing includes in-memory gates; their parent links and accounting
-      // must come from the same live view before grouping and pagination.
-      ...await this.readPricingSubAgents({ backend, threadId: request.threadId, pricing }),
+      ...pricingCards,
       ...(request.display.resource === "subagents"
-        ? { subAgentPanel: await this.readSubAgentPanel({ backend, request }) }
+        ? { subAgentPanel: await this.readSubAgentPanel({ backend, request, pricingSubAgents: pricingCards.pricingSubAgents }) }
         : {}),
       ...(request.display.resource === "subagent" && monitorId
         ? { subAgent: (await this.readSubAgentsWithLiveState({ backend, threadId: request.threadId, monitorIds: [monitorId] }))
@@ -17195,23 +17196,26 @@ export class DesktopBackendRegistry {
     };
   }
 
-  /** The sub-agents panel's page from the card table, with live cards merged into it. */
+  /**
+   * The sub-agents panel's page from the card table, with live cards merged
+   * into it. Pricing's cards already hold every live card with its live state.
+   */
   private async readSubAgentPanel(params: {
     backend: AppServerBackendKind;
     request: AppServerReadThreadRequest;
+    pricingSubAgents: readonly ThreadSubAgentSummary[] | undefined;
   }): Promise<ThreadSubAgentPanel> {
     const { backend, request } = params;
     const threadId = request.threadId;
     const liveIds = this.liveSubAgentMonitorIds(backend, threadId);
+    const live = new Set(liveIds);
     return await readThreadSubAgentPanel({
       demand: request.display!,
       now: Date.now(),
       storedRevision: await this.overlayStore.readThreadSubAgentRevision({ backend, threadId }),
       live: {
         monitorIds: liveIds,
-        cards: liveIds.length > 0
-          ? await this.readSubAgentsWithLiveState({ backend, threadId, monitorIds: liveIds })
-          : [],
+        cards: (params.pricingSubAgents ?? []).filter((card) => live.has(card.monitorId)),
       },
       reader: {
         counts: (read) => this.overlayStore.readThreadSubAgentLensCounts({ backend, threadId, ...read }),
