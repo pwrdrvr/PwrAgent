@@ -155,28 +155,67 @@ async function flushReactUpdates(): Promise<void> {
   });
 }
 
-async function renderThreadApp(): Promise<void> {
+async function renderThreadApp(signal?: AbortSignal): Promise<void> {
   const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
   const record = api.recordStartupProfileEvent;
   let ready!: () => void;
   let failed!: (error: Error) => void;
+  let completed!: () => void;
   const imported = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject; });
+  const completion = new Promise<void>((resolve) => { completed = resolve; });
   void imported.catch(() => undefined);
+  let importStarted = false;
+  let cancelled = false;
+  let finished = false;
+  let cancelPhase: (() => void) | undefined;
+  let view: ReturnType<typeof render> | undefined;
+  const cancelledError = new Error("Renderer startup was cancelled.");
+  const cancel = () => {
+    cancelled = true;
+    cancelPhase?.();
+    failed(cancelledError);
+  };
   api.recordStartupProfileEvent = (type, detail) => {
-    record?.(type, detail);
+    if (type === "thread-view-import:start") importStarted = true;
     if (type === "thread-view-import:end") ready();
     if (type === "thread-view-import:error") failed(new Error(String(detail?.error)));
+    record?.(type, detail);
   };
-  onTestFinished(() => { api.recordStartupProfileEvent = record; });
-  await act(async () => { render(<App />); });
-  // App defers detail through two paints and a task. Commit that readiness
-  // before awaiting its import, or act would hold the effect that starts it.
-  await act(async () => {
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) cancel();
+  onTestFinished(async () => {
+    if (!finished) cancel();
+    await completion;
+    api.recordStartupProfileEvent = record;
   });
-  await act(async () => { await imported; });
+  try {
+    if (cancelled) throw cancelledError;
+    await act(async () => { view = render(<App />); });
+    // Commit each deferred paint/task separately. Wait for the import's
+    // admission event before awaiting its completion inside act.
+    while (!importStarted && !cancelled) {
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const done = () => { cancelPhase = undefined; resolve(); };
+          const frame = requestAnimationFrame(() => { timer = setTimeout(done, 0); });
+          cancelPhase = () => {
+            cancelAnimationFrame(frame);
+            if (timer !== undefined) clearTimeout(timer);
+            done();
+          };
+        });
+      });
+    }
+    if (cancelled) throw cancelledError;
+    await act(async () => { await imported; });
+  } finally {
+    cancelPhase?.();
+    signal?.removeEventListener("abort", cancel);
+    if (cancelled) view?.unmount();
+    finished = true;
+    completed();
+  }
 }
 
 function createDeferred<T>(): {
@@ -342,6 +381,21 @@ describe("App", () => {
     delete (window as typeof window & {
       __pwragentFederationLabel?: unknown;
     }).__pwragentFederationLabel;
+  });
+
+  it("cancels pending startup work without leaving an act scope open", async () => {
+    const controller = new AbortController();
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({ readSettings: () => new Promise<never>(() => {
+        requestAnimationFrame(() => controller.abort());
+      }) }),
+    });
+
+    await expect(renderThreadApp(controller.signal)).rejects.toThrow("Renderer startup was cancelled.");
+
+    render(<button>Independent render</button>);
+    expect(screen.getByRole("button", { name: "Independent render" })).toBeInTheDocument();
   });
 
   it("keeps a selected document intact while another thread queues and refunds a CI repair", async () => {
