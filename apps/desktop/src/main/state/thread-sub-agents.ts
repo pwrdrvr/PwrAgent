@@ -124,17 +124,19 @@ END;
 
 /**
  * The sub-agents panel's lens, from the monitor id alone. This is
- * `subAgentLens` in `@pwragent/shared` (subagent-kind.ts) restated in SQL, so
- * every writer, including an older build's statements and the capture
- * triggers, gets it without knowing the column exists. A generated column
- * reads no card; the index stores it at write time.
+ * `subAgentLens` in `@pwragent/shared` (subagent-kind.ts) restated in SQL.
+ * The lens index stores it at write time, whichever build writes the card,
+ * and a query that repeats this exact expression reads it from the index.
+ * (A generated column would not: SQLite reads one from the table row, so
+ * counting a lens would visit every row in it.)
  */
-const LENS_COLUMN = `ALTER TABLE thread_sub_agents ADD COLUMN lens TEXT GENERATED ALWAYS AS (CASE
+export const THREAD_SUB_AGENT_LENS_SQL = `(CASE
   WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
   WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
-  ELSE 'pwragent' END) VIRTUAL`;
+  ELSE 'pwragent' END)`;
+const LENS = THREAD_SUB_AGENT_LENS_SQL;
 const LENS_INDEX = `CREATE INDEX IF NOT EXISTS thread_sub_agents_by_lens
-  ON thread_sub_agents(thread_id, lens, created_at DESC, monitor_id)`;
+  ON thread_sub_agents(thread_id, ${LENS}, created_at DESC, monitor_id)`;
 
 /**
  * `isThreadSubAgentVisibleInPanel` (subagent-visibility.ts) for a harness
@@ -223,24 +225,25 @@ function columnNames(db: BetterSqlite3.Database, table: string): Set<string> {
 }
 
 /**
- * The lens column and index and the gate totals, added once. Later opens read
- * two table infos and write nothing. Adding the columns builds the index over
- * the card rows' leading columns, which never touches a card body, and marks
- * every existing thread's totals stale; `ThreadSubAgentTable.gateTotals`
- * recomputes one thread's on its first read. Rows created afterwards start
- * fresh, and the triggers keep them current whichever build writes the card.
+ * The lens index and the gate totals, added once. Later opens read the schema
+ * and write nothing. The index is built from the card rows' leading columns,
+ * which never touches a card body. Adding the totals marks every existing
+ * thread's stale; `ThreadSubAgentTable.gateTotals` sums one thread's on its
+ * first read. Rows created afterwards start fresh, and the triggers keep them
+ * current whichever build writes the card.
  */
 export function ensureThreadSubAgentPanelSchema(db: BetterSqlite3.Database): void {
   if (!tableExists(db, "thread_sub_agents") || !tableExists(db, "thread_sub_agent_revisions")) return;
-  const isCurrent = () => columnNames(db, "thread_sub_agents").has("lens")
+  const isCurrent = () =>
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'thread_sub_agents_by_lens'").get() !== undefined
     && columnNames(db, "thread_sub_agent_revisions").has("gate_totals_ready");
   if (isCurrent()) return;
   db.transaction(() => {
     // Another opener may have added them while this connection waited.
     if (isCurrent()) return;
-    if (!columnNames(db, "thread_sub_agents").has("lens")) db.exec(LENS_COLUMN);
     db.exec(LENS_INDEX);
     const revisionColumns = columnNames(db, "thread_sub_agent_revisions");
+    if (revisionColumns.has("gate_totals_ready")) return;
     for (const column of GATE_TOTAL_COLUMNS) {
       if (!revisionColumns.has(column)) {
         db.exec(`ALTER TABLE thread_sub_agent_revisions ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
@@ -442,15 +445,13 @@ export class ThreadSubAgentTable {
   lensCounts(storageKey: string, visibleSince: number, excludeMonitorIds: readonly string[] = []): Record<SubAgentLens, number> {
     const counts: Record<SubAgentLens, number> = { harness: 0, "token-miser": 0, pwragent: 0 };
     const excluded = JSON.stringify([...new Set(excludeMonitorIds)]);
-    // Counted per lens without selecting it: SQLite reads a generated column
-    // from the table row, not the index, so naming it would visit every row.
     const count = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
-      WHERE thread_id = ? AND lens = ? AND monitor_id NOT IN (SELECT value FROM json_each(?))`);
+      WHERE thread_id = ? AND ${LENS} = ? AND monitor_id NOT IN (SELECT value FROM json_each(?))`);
     for (const lens of ["token-miser", "pwragent"] as const) {
       counts[lens] = (count.get(storageKey, lens, excluded) as { count: number }).count;
     }
     counts.harness = (this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
-      WHERE thread_id = ? AND lens = 'harness'
+      WHERE thread_id = ? AND ${LENS} = 'harness'
         AND monitor_id NOT IN (SELECT value FROM json_each(?)) AND ${HARNESS_VISIBLE}`)
       .get(storageKey, excluded, visibleSince) as { count: number }).count;
     return counts;
@@ -468,12 +469,12 @@ export class ThreadSubAgentTable {
     const excluded = JSON.stringify([...new Set(params.excludeMonitorIds ?? [])]);
     const rows = params.lens === "harness"
       ? this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
-          WHERE thread_id = ? AND lens = 'harness'
+          WHERE thread_id = ? AND ${LENS} = 'harness'
             AND monitor_id NOT IN (SELECT value FROM json_each(?)) AND ${HARNESS_VISIBLE}
           ORDER BY created_at DESC, monitor_id LIMIT ? OFFSET ?`)
         .all(params.storageKey, excluded, params.visibleSince, params.limit, params.offset)
       : this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
-          WHERE thread_id = ? AND lens = ?
+          WHERE thread_id = ? AND ${LENS} = ?
             AND monitor_id NOT IN (SELECT value FROM json_each(?))
           ORDER BY created_at DESC, monitor_id LIMIT ? OFFSET ?`)
         .all(params.storageKey, params.lens, excluded, params.limit, params.offset);

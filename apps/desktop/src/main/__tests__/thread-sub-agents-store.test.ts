@@ -15,6 +15,7 @@ import { StateDb } from "../state/state-db";
 import {
   ensureThreadSubAgentPanelSchema,
   ensureThreadSubAgentSchema,
+  THREAD_SUB_AGENT_LENS_SQL,
   THREAD_SUB_AGENTS_MOVED_META_KEY,
 } from "../state/thread-sub-agents";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -343,7 +344,7 @@ describe("thread sub-agent table", () => {
         "review:turn-1", "system:title-helper:x", "task-monitor:abc", "codex-native:"];
       await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1",
         subAgents: ids.map((monitorId, index) => card(index, { monitorId })) });
-      const rows = stateDb.raw.prepare("SELECT monitor_id, lens FROM thread_sub_agents").all() as Array<{ monitor_id: string; lens: SubAgentLens }>;
+      const rows = stateDb.raw.prepare(`SELECT monitor_id, ${THREAD_SUB_AGENT_LENS_SQL} AS lens FROM thread_sub_agents`).all() as Array<{ monitor_id: string; lens: SubAgentLens }>;
       expect(rows).toHaveLength(ids.length);
       for (const row of rows) expect([row.monitor_id, row.lens]).toEqual([row.monitor_id, subAgentLens(card(0, { monitorId: row.monitor_id }))]);
     });
@@ -433,8 +434,7 @@ describe("thread sub-agent table", () => {
       stateDb.raw.exec(`DROP TRIGGER thread_sub_agent_gate_totals_insert;
         DROP TRIGGER thread_sub_agent_gate_totals_update;
         DROP TRIGGER thread_sub_agent_gate_totals_delete;
-        DROP INDEX thread_sub_agents_by_lens;
-        ALTER TABLE thread_sub_agents DROP COLUMN lens;`);
+        DROP INDEX thread_sub_agents_by_lens;`);
       for (const column of (stateDb.raw.prepare("SELECT name FROM pragma_table_info('thread_sub_agent_revisions')").all() as Array<{ name: string }>)
         .map((row) => row.name).filter((name) => name.startsWith("gate_"))) {
         stateDb.raw.exec(`ALTER TABLE thread_sub_agent_revisions DROP COLUMN ${column}`);
@@ -490,7 +490,7 @@ describe("thread sub-agent table", () => {
         expect(plan, sql).toMatch(/SEARCH (thread_sub_agents|thread_sub_agent_revisions) USING/);
       }
       // The two lenses that never age out are counted from the index alone.
-      const counts = reads.find((sql) => sql.startsWith("SELECT count(*)") && !sql.includes("harness"))!;
+      const counts = reads.find((sql) => sql.startsWith("SELECT count(*)") && !sql.includes("completedAt"))!;
       expect((stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${counts}`).all(null, null, null) as Array<{ detail: string }>)
         .map((row) => row.detail).join("\n")).toMatch(/USING COVERING INDEX thread_sub_agents_by_lens/);
     });
