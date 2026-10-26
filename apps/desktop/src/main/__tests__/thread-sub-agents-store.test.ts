@@ -363,7 +363,7 @@ describe("thread sub-agent table", () => {
         native(5, { status: "cancelled", completedAt: recent, updatedAt: old }),
         native(6, { status: "failed" }),
         native(7, { outcome: "success" }),
-        native(8, { completionSource: "monitor_job" } as Partial<ThreadSubAgentSummary>),
+        native(8, { completionSource: { type: "monitor_tool" } }),
         native(9, { completedAt: old }),
         native(10, { completedAt: visibleSince, status: "success" }),
         card(11, { monitorId: "review:turn-11", status: "success", updatedAt: old }),
