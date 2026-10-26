@@ -48215,6 +48215,11 @@ export class DesktopBackendRegistry {
       }
     }
 
+    if (event.backend === "codex" && event.notification.method === "thread/status/changed"
+      && ["idle", "notLoaded"].includes(readStatusType(event.notification.params.status) ?? "")) {
+      void this.maybeRestartCodexForManagedRuntimeChange();
+    }
+
     if (event.backend === "codex" && (
       event.notification.method === "turn/completed"
       || event.notification.method === "turn/failed"

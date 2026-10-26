@@ -26512,10 +26512,24 @@ command = "pnpm dev"
         await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
         // The terminal list cannot settle a non-command while its turn runs.
         expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(1);
+        expect(registry.getQuitBlockerDiagnostics().sourceCounts["live-tool-items"]).toBe(1);
         await endTurnWithRunningCommands(codexClient, []);
         expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
       },
     );
+
+    it("does not infer command completion from missing active-turn ownership", async () => {
+      const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [] }));
+      const { codexClient, registry } = setup(listBackgroundTerminals);
+      await codexClient.emit({ method: "item/started", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "command-1", type: "commandExecution", status: "inProgress" },
+      } });
+      await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(1);
+      await codexClient.emit({ method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } } });
+      await vi.waitFor(() => expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0));
+    });
 
     it("reconciles a missed command completion after locally owned turn bookkeeping", async () => {
       const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [] }));
@@ -26723,6 +26737,27 @@ command = "pnpm dev"
       await codexClient.emit({ method: "turn/completed", params: {
         threadId: "thread-1", turnId: "review-1", turn: { id: "review-1", status: "completed", output: [] },
       } });
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+    });
+
+    it.each(["idle", "notLoaded"])("releases a managed runtime switch after missed tool completion at %s", async (type) => {
+      const codexClient = new MockBackendClient({ threads: [] });
+      let selectionListener: ((change: ManagedCodexSelectionChange) => Promise<unknown> | unknown) | undefined;
+      const markSwitchComplete = vi.fn();
+      const registry = new DesktopBackendRegistry({
+        codexClient, overlayStore: createOverlayStoreMock(),
+        markManagedCodexRuntimeSwitchComplete: markSwitchComplete,
+        watchManagedCodexRuntime: (listener) => { selectionListener = listener; return () => undefined; },
+      });
+      onTestFinished(() => registry.close());
+      await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Run" }] });
+      await codexClient.emit({ method: "item/started", params: {
+        threadId: "thread-1", turnId: "turn-1", item: { id: "tool-1", type: "mcpToolCall", status: "inProgress" },
+      } });
+      await selectionListener?.({ enabled: true, reason: "availability" });
+      expect(markSwitchComplete).not.toHaveBeenCalled();
+      await codexClient.emit({ method: "thread/status/changed", params: { threadId: "thread-1", status: { type } } });
+      await vi.waitFor(() => expect(markSwitchComplete).toHaveBeenCalledOnce());
       expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
     });
 
