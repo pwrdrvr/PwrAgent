@@ -1101,6 +1101,46 @@ describe("thread row to-do chip", () => {
     expect(chip.className).toContain("thread-row__chip--question");
   });
 
+  it("opens the thread's newest question from its chip instead of selecting the row", () => {
+    const older = sampleWaits().find((wait) => wait.kind === "question")!;
+    const [newer] = buildOperatorWaits({
+      serverRequests: [],
+      questions: [{
+        backend: "codex",
+        threadId: "thread-b",
+        messageId: "msg-2",
+        questions: [{ title: "Which region?" }],
+        createdAt: older.createdAt + 60_000,
+      }],
+      seenKeys: [],
+    });
+    const openWait = vi.fn();
+    const selectRow = vi.fn();
+    render(
+      <OperatorWaitsContext.Provider
+        value={{
+          waitsByThreadKey: new Map([["codex:thread-b", [older, newer!]]]),
+          seenKeys: new Set(),
+          openWait,
+        }}
+      >
+        <div onClick={selectRow} onKeyDown={selectRow}>
+          <ThreadMetaChips thread={{ ...thread, id: "thread-b" }} />
+        </div>
+      </OperatorWaitsContext.Provider>,
+    );
+
+    const chip = screen.getByRole("button", { name: "Question: Which region?" });
+    fireEvent.click(chip);
+    expect(openWait).toHaveBeenCalledTimes(1);
+    expect(openWait.mock.calls[0]![0]).toMatchObject({ kind: "question", question: { messageId: "msg-2" } });
+
+    fireEvent.keyDown(chip, { key: "Enter" });
+    expect(openWait).toHaveBeenCalledTimes(2);
+    // The chip owns the click: the row would open the thread at its bottom.
+    expect(selectRow).not.toHaveBeenCalled();
+  });
+
   it("keeps the session's flags while the wait list names nothing for the thread", () => {
     render(
       <OperatorWaitsContext.Provider value={{ waitsByThreadKey: new Map(), seenKeys: new Set() }}>

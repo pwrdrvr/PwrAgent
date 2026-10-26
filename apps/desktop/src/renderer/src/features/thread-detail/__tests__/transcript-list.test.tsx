@@ -2710,7 +2710,10 @@ Implementation notes remain in a readable bubble.`;
       await waitFor(() => {
         expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
       });
-      expect(card.closest("[data-entry-id]")).toHaveAttribute("data-entry-id", "call-question");
+      const item = card.closest("[data-entry-id]");
+      expect(item).toHaveAttribute("data-entry-id", "call-question");
+      // Not the `display: contents` list item, which has no box to scroll to.
+      expect(scrollIntoView.mock.contexts).toEqual([item?.firstElementChild]);
       expect(onLinkedMessageHandled).toHaveBeenCalledTimes(1);
     });
   });
@@ -5868,10 +5871,11 @@ Implementation notes remain in a readable bubble.`;
         block: "center",
       });
     });
-    expect(screen.getByRole("listitem")).toHaveAttribute(
-      "data-linked-message",
-      "true",
-    );
+    const item = screen.getByRole("listitem");
+    expect(item).toHaveAttribute("data-linked-message", "true");
+    // The list item is `display: contents` and has no box, so Chromium does
+    // not scroll to it. The message it holds is what scrolls into view.
+    expect(scrollIntoView.mock.contexts).toEqual([item.firstElementChild]);
     expect(onLinkedMessageHandled).toHaveBeenCalledTimes(1);
   });
 
