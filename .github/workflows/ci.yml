@@ -477,17 +477,19 @@ jobs:
       # Playwright shards by test COUNT, in file order, without regard to
       # duration, and a shard boundary never splits a group: with
       # `fullyParallel: false` each file is one group. `a11y.spec.ts` sorts
-      # first and is 66 tests (six surfaces in each of eleven color themes)
-      # at ~3.5s apiece on macOS against ~2.4s for the rest of the suite.
-      # As one group it sat whole in lane 1, which ran 249s of tests on
-      # macOS against 145-184s for the other lanes, and set the end of the
-      # whole CI run.
+      # first. At 66 tests (six surfaces in each of eleven color themes) and
+      # ~3.5s apiece on macOS against ~2.4s for the rest of the suite, it sat
+      # whole in lane 1 as one group. That lane ran 249s of tests on macOS
+      # against 145-184s for the other lanes, and set the end of the whole CI
+      # run. It is now 57 tests: five surfaces in each of eleven color
+      # themes, plus one ARIA-only block in the two Tangerine themes.
       #
       # Two settings move that work. `a11y.spec.ts` runs in `parallel` mode,
       # so each of its tests is its own group (workers stay at 1, so this
       # changes grouping only). PWTEST_SHARD_WEIGHTS on the test step then
-      # sizes the lanes 9:12:12:14 by test count (54/71/71/82 of 278), so
-      # lane 1 takes 54 a11y tests and lane 2 the rest. The weights count
+      # sizes the lanes 9:12:12:14 by test count. When they were fit, with
+      # 66 a11y tests, that was 54/71/71/82 of 278: lane 1 took 54 a11y
+      # tests and lane 2 the rest. The weights count
       # tests, not seconds. They were fit to per-test times from CI runs on
       # all three platforms: a11y is relatively slowest on Linux, and the
       # late files are slowest on Windows, so one set of weights cannot even

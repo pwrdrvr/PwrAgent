@@ -820,6 +820,14 @@ Things to know when extending the audit:
   gate ran dark-only for its whole life, which is how three token-level
   light-theme contrast failures shipped unnoticed. Add a new color theme to
   `AUDIT_DARK_THEMES` or `AUDIT_LIGHT_THEMES`.
+- **Work that reads no color runs once.** A color theme sets color tokens
+  only. Tangerine dark and light run the full WCAG AA tag set; the other
+  color themes run only `COLOR_RULES` (`color-contrast`,
+  `link-in-text-block`), through the loop's local `runAxe`. A block whose
+  scans run only ARIA rules (the composer autocomplete block) runs outside
+  the loop in the Tangerine pair, and behavior checks with no scan run only when
+  `runsFunctionalChecks` is true (Tangerine dark). Put a new block like that
+  in the same place; each Electron launch in the loop costs eleven.
 - **`runAxe(window, { include })` narrows the scan to one subtree.** No
   block passes it today, and it is not a tool for silencing a failure —
   everything outside the scope stops being gated. Prefer a

@@ -18,14 +18,22 @@
 // reset any stateful layer before the next step. Launch via
 // `launchAuditApp({ theme })` so every surface is audited at rest (see below).
 //
-// Every surface is audited in BOTH themes. The gate ran dark-only for
-// its whole life, which is exactly why three light-theme token-level
-// contrast failures shipped unnoticed: `--accent` at 4.20:1 on the
-// sidebar wordmark, `--accent-bright` at 3.17:1 on the active lens tab,
-// and `--text-muted` at 4.23:1 on the .context-grid thread-info labels.
+// Every surface is audited in every shipped appearance: Tangerine dark
+// and light, plus each other color theme in the one scheme it renders in
+// (`AUDIT_APPEARANCES` below). The gate ran dark-only for its whole life,
+// which is exactly why three light-theme token-level contrast failures
+// shipped unnoticed: `--accent` at 4.20:1 on the sidebar wordmark,
+// `--accent-bright` at 3.17:1 on the active lens tab, and `--text-muted`
+// at 4.23:1 on the .context-grid thread-info labels.
+//
 // Contrast is the one rule class that is genuinely theme-dependent —
-// roles, names, and focus order are not — so auditing a single theme
-// buys roughly half the coverage it appears to.
+// roles, names, and focus order are not. A color theme in app.css sets
+// color tokens only, and no component branches on it, so work that
+// cannot see color skips the extra color themes. Tangerine
+// dark and light run the full WCAG AA tag set on every surface; the other
+// color themes run only the color rules (`COLOR_RULES`). The ARIA-only
+// composer block runs in the Tangerine pair only, and the directories
+// block's functional steps run in Tangerine dark only.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
@@ -117,7 +125,7 @@ async function launchAuditApp(options?: {
 // threads are `threadStatus: "active"` and therefore reach the map in
 // every lens (orbit clouds by default, lanes/projects when chosen).
 //
-// Both themes ship, so both themes are gated. See the header note.
+// Both schemes ship, so both are gated. See the header note.
 // `as const`, not `readonly DesktopAppearanceTheme[]` — that type also
 // admits "system", which resolves through the OS and lands on light on
 // most Linux runners (see the note on `appearance` in
@@ -211,6 +219,12 @@ const WCAG_AA_TAGS = [
   "wcag21aa",
   "wcag22aa",
 ];
+
+// The axe rules that read color. A color theme sets color tokens only, so
+// these are the only rules whose result can differ from Tangerine in the
+// same scheme. Measured on a Linux sandbox, a scan limited to them took
+// ~250ms against ~390ms for the full tag set.
+const COLOR_RULES = ["color-contrast", "link-in-text-block"];
 
 // Selectors waived from the axe scan, with a written reason. The
 // baseline is empty — every previously waived violation has been
@@ -326,7 +340,7 @@ async function describeObscurers(
     : "";
 }
 
-async function runAxe(
+async function runAxeScan(
   window: Page,
   surface: string,
   options?: {
@@ -415,6 +429,22 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
   // Tangerine keeps its original titles so its results stay comparable.
   const colorThemeLabel = colorTheme ? `, ${colorTheme}` : "";
   const appearance = { theme, darkTheme, lightTheme };
+  // Behavior checks that ride along with an audit and read no color run in
+  // one appearance only. Tangerine dark is the harness default.
+  const runsFunctionalChecks = !colorTheme && theme === "dark";
+  // Tangerine dark and light run the full WCAG AA tag set on every surface.
+  // The other color themes run only the color rules there: every other rule
+  // sees the same DOM and geometry as Tangerine in the same scheme. A block
+  // that passes its own `rules` keeps them.
+  const runAxe = (
+    page: Page,
+    surface: string,
+    options?: Parameters<typeof runAxeScan>[2],
+  ) =>
+    runAxeScan(page, surface, {
+      ...options,
+      rules: options?.rules ?? (colorTheme ? COLOR_RULES : undefined),
+    });
   test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme${colorThemeLabel})`, () => {
     test("smoke fixture surfaces have no violations", async () => {
       const app = await launchAuditApp(appearance);
@@ -624,65 +654,6 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
             }),
           ).toBeVisible();
           await runAxe(app.window, "sidebar rows carrying copy chips");
-        });
-      } finally {
-        await app.close();
-      }
-    });
-
-    // The default smoke fixture never opens a composer autocomplete, so its
-    // listboxes and active-descendant targets otherwise remain outside the
-    // gate. Audit both shapes: `$` is the shared listbox-of-options pattern,
-    // while `@` also carries real Add buttons that must stay outside the
-    // listbox rather than masquerading as directory options.
-    test("composer autocomplete listbox semantics are valid", async () => {
-      const app = await launchAuditApp({
-        ...appearance,
-        fixturePath: COMPOSER_AUTOCOMPLETE_FIXTURE,
-      });
-      try {
-        await app.window
-          .getByRole("button", { name: /Skill autocomplete replay/i })
-          .first()
-          .click();
-        const textbox = app.window.getByRole("textbox", { name: "Reply" });
-        await expect(textbox).toBeVisible();
-
-        await test.step("skills autocomplete", async () => {
-          await textbox.fill("$ce");
-          const skills = app.window.getByRole("listbox", { name: "Skills" });
-          const activeOption = skills.getByRole("option").first();
-          await expect(activeOption).toBeVisible();
-          await expect(activeOption).toHaveAttribute("aria-selected", "true");
-          await expect(textbox).toHaveAttribute(
-            "aria-activedescendant",
-            await activeOption.getAttribute("id") ?? "missing-option-id",
-          );
-          await runAxe(app.window, "skills autocomplete", {
-            rules: ["aria-required-children", "aria-required-parent"],
-          });
-        });
-
-        await test.step("directory autocomplete with sibling actions", async () => {
-          await textbox.fill("@");
-          const directories = app.window.getByRole("listbox", {
-            name: "Projects and instances",
-          });
-          await expect(directories.getByRole("option").first()).toBeVisible();
-          await expect(directories.getByRole("button")).toHaveCount(0);
-          await expect(
-            app.window.getByRole("button", { name: "+ Add directory…" }),
-          ).toBeVisible();
-          await expect(
-            app.window.getByRole("button", { name: "+ Add file…" }),
-          ).toBeVisible();
-          await runAxe(
-            app.window,
-            "directory autocomplete with sibling actions",
-            {
-              rules: ["aria-required-children", "aria-required-parent"],
-            },
-          );
         });
       } finally {
         await app.close();
@@ -978,35 +949,47 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
         await test.step("expanded unpinned overflow", async () => {
           const more = directoryRow.getByRole("button", { name: "Load more threads", exact: true });
           await more.scrollIntoViewIfNeeded();
+          // The scroll anchor is #2001 paging behavior, not an audit input.
           const lastRow = threads.locator(".thread-row-shell").last();
-          const lastRowKey = await lastRow.getAttribute("data-thread-pin-key");
-          const before = await lastRow.boundingBox();
+          const anchor = runsFunctionalChecks
+            ? {
+                key: await lastRow.getAttribute("data-thread-pin-key"),
+                box: await lastRow.boundingBox(),
+              }
+            : undefined;
           await more.click();
           await expect(listItems(threads)).toHaveCount(17);
           await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
-          if (!before || !lastRowKey) throw new Error("Missing pagination scroll anchor");
-          await expect.poll(async () => {
-            const after = await threads.locator(`[data-thread-pin-key="${lastRowKey}"]`).boundingBox();
-            return after ? Math.abs(after.y - before.y) : Infinity;
-          }).toBeLessThanOrEqual(2);
+          if (anchor) {
+            const { key, box: before } = anchor;
+            if (!before || !key) throw new Error("Missing pagination scroll anchor");
+            await expect.poll(async () => {
+              const after = await threads.locator(`[data-thread-pin-key="${key}"]`).boundingBox();
+              return after ? Math.abs(after.y - before.y) : Infinity;
+            }).toBeLessThanOrEqual(2);
+          }
           await expect(directoryRow.getByRole("button", { name: "Load more threads", exact: true })).toHaveCount(0);
           await settle();
           await runAxe(app.window, "directories lens, unpinned overflow");
         });
 
-        await test.step("bulk context menu preserves the accumulated directory range", async () => {
-          const unpinned = threads.locator('[data-thread-pin-state="unpinned"]');
-          await unpinned.first().locator(".thread-row__open").click();
-          await unpinned.last().locator(".thread-row__open").click({ modifiers: ["Shift"] });
-          await unpinned.last().click({ button: "right" });
-          const menu = app.window.getByRole("menu", { name: "Actions for 12 threads selected" });
-          await expect(menu).toBeVisible();
-          await menu.hover();
-          await expect(unpinned).toHaveCount(12);
-          await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
-          await expect(listItems(threads)).toHaveCount(17);
-          await app.window.keyboard.press("Escape");
-        });
+        // #2001 range-selection behavior. It runs no scan, so one appearance
+        // covers it.
+        if (runsFunctionalChecks) {
+          await test.step("bulk context menu preserves the accumulated directory range", async () => {
+            const unpinned = threads.locator('[data-thread-pin-state="unpinned"]');
+            await unpinned.first().locator(".thread-row__open").click();
+            await unpinned.last().locator(".thread-row__open").click({ modifiers: ["Shift"] });
+            await unpinned.last().click({ button: "right" });
+            const menu = app.window.getByRole("menu", { name: "Actions for 12 threads selected" });
+            await expect(menu).toBeVisible();
+            await menu.hover();
+            await expect(unpinned).toHaveCount(12);
+            await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
+            await expect(listItems(threads)).toHaveCount(17);
+            await app.window.keyboard.press("Escape");
+          });
+        }
 
         await test.step("collapsed directory rows", async () => {
           // Collapsing unmounts the list, so this scan covers the directory
@@ -1026,15 +1009,18 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
           await settle();
           await runAxe(app.window, "directories lens, collapsed");
         });
-        await test.step("user expansion restores loaded rows under a stationary pointer", async () => {
-          await directory.click();
-          await expect(directory).toHaveAttribute("aria-expanded", "true");
-          // No mouse move or hover release while the retained pages refresh.
-          // Reopening preserves the extra rows loaded above instead of resetting
-          // the directory to its first ten unpinned roots.
-          await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
-          await expect(threads.locator('[data-thread-pin-state="unpinned"]')).toHaveCount(12);
-        });
+        // #2001 retained-pages behavior; no scan, so one appearance.
+        if (runsFunctionalChecks) {
+          await test.step("user expansion restores loaded rows under a stationary pointer", async () => {
+            await directory.click();
+            await expect(directory).toHaveAttribute("aria-expanded", "true");
+            // No mouse move or hover release while the retained pages refresh.
+            // Reopening preserves the extra rows loaded above instead of resetting
+            // the directory to its first ten unpinned roots.
+            await expect(threads.locator('[data-thread-pin-state="pinned"]')).toHaveCount(2);
+            await expect(threads.locator('[data-thread-pin-state="unpinned"]')).toHaveCount(12);
+          });
+        }
       } finally {
         await app.close();
       }
@@ -1116,6 +1102,73 @@ for (const { colorTheme, darkTheme, lightTheme, theme } of AUDIT_APPEARANCES) {
             app.window.locator(".transcript-list__pending"),
           ).toHaveCount(1);
           await runAxe(app.window, "open thread view with an active thread");
+        });
+      } finally {
+        await app.close();
+      }
+    });
+  });
+}
+
+// Role structure only, so the extra color themes add nothing here: a color
+// theme changes no role, name or attribute, and both scans below run ARIA
+// rules alone. It runs in the Tangerine pair, one launch per scheme, under
+// the same describe titles the loop above gives Tangerine.
+for (const theme of AUDIT_THEMES) {
+  test.describe(`desktop renderer accessibility (WCAG2 AA, ${theme} theme)`, () => {
+    // The default smoke fixture never opens a composer autocomplete, so its
+    // listboxes and active-descendant targets otherwise remain outside the
+    // gate. Audit both shapes: `$` is the shared listbox-of-options pattern,
+    // while `@` also carries real Add buttons that must stay outside the
+    // listbox rather than masquerading as directory options.
+    test("composer autocomplete listbox semantics are valid", async () => {
+      const app = await launchAuditApp({
+        theme,
+        fixturePath: COMPOSER_AUTOCOMPLETE_FIXTURE,
+      });
+      try {
+        await app.window
+          .getByRole("button", { name: /Skill autocomplete replay/i })
+          .first()
+          .click();
+        const textbox = app.window.getByRole("textbox", { name: "Reply" });
+        await expect(textbox).toBeVisible();
+
+        await test.step("skills autocomplete", async () => {
+          await textbox.fill("$ce");
+          const skills = app.window.getByRole("listbox", { name: "Skills" });
+          const activeOption = skills.getByRole("option").first();
+          await expect(activeOption).toBeVisible();
+          await expect(activeOption).toHaveAttribute("aria-selected", "true");
+          await expect(textbox).toHaveAttribute(
+            "aria-activedescendant",
+            await activeOption.getAttribute("id") ?? "missing-option-id",
+          );
+          await runAxeScan(app.window, "skills autocomplete", {
+            rules: ["aria-required-children", "aria-required-parent"],
+          });
+        });
+
+        await test.step("directory autocomplete with sibling actions", async () => {
+          await textbox.fill("@");
+          const directories = app.window.getByRole("listbox", {
+            name: "Projects and instances",
+          });
+          await expect(directories.getByRole("option").first()).toBeVisible();
+          await expect(directories.getByRole("button")).toHaveCount(0);
+          await expect(
+            app.window.getByRole("button", { name: "+ Add directory…" }),
+          ).toBeVisible();
+          await expect(
+            app.window.getByRole("button", { name: "+ Add file…" }),
+          ).toBeVisible();
+          await runAxeScan(
+            app.window,
+            "directory autocomplete with sibling actions",
+            {
+              rules: ["aria-required-children", "aria-required-parent"],
+            },
+          );
         });
       } finally {
         await app.close();
