@@ -2214,12 +2214,12 @@ export function Sidebar(props: SidebarProps) {
       case "threads.toggle_unread":
         if (single && thread.inbox.inInbox) {
           handled = Boolean(props.onMarkThreadsSeen) && !(thread.federation && !federationTarget);
-          if (handled) void props.onMarkThreadsSeen?.([thread]);
+          if (handled) void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.([thread]));
         } else if (single) {
           handled = Boolean(props.onMarkThreadUnread)
             && thread.updatedAt !== undefined
             && threadCanRouteRemoteCapability(thread, "thread_navigation");
-          if (handled) void props.onMarkThreadUnread?.(thread);
+          if (handled) void revealHoverStableSnapshot(() => props.onMarkThreadUnread?.(thread));
         } else {
           handled = false;
         }

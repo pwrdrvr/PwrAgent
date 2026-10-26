@@ -101,17 +101,23 @@ async function startChurn(page: Page): Promise<void> {
     const api = (window as unknown as {
       pwragent: { setThreadReaction: (request: unknown) => Promise<unknown> };
     }).pwragent;
-    let present = true;
-    (window as unknown as { __sidebarChurn: number }).__sidebarChurn = window.setInterval(() => {
-      void api.setThreadReaction({ backend: "codex", threadId: "thread-Aproject-2", emoji: "👀", present });
-      present = !present;
-    }, 40);
+    const churn = { running: true };
+    (window as unknown as { __sidebarChurn: typeof churn }).__sidebarChurn = churn;
+    // One write at a time: a slow runner must fall behind, not pile up.
+    void (async () => {
+      let present = true;
+      while (churn.running) {
+        await api.setThreadReaction({ backend: "codex", threadId: "thread-Aproject-2", emoji: "👀", present });
+        present = !present;
+        await new Promise((resolve) => window.setTimeout(resolve, 40));
+      }
+    })();
   });
 }
 
 async function stopChurn(page: Page): Promise<void> {
   await page.evaluate(() => {
-    window.clearInterval((window as unknown as { __sidebarChurn: number }).__sidebarChurn);
+    (window as unknown as { __sidebarChurn: { running: boolean } }).__sidebarChurn.running = false;
   });
 }
 
