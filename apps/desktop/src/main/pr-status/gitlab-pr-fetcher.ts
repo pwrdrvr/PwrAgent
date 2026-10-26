@@ -175,6 +175,8 @@ export class GitLabPrFetcher {
   invalidate(): void {
     this.discovery = undefined;
     this.statuses.clear();
+    // A re-check follows a sign-in change; never upload with the previous account's token.
+    this.tokens.clear();
   }
 
   private discover(): Promise<DesktopGlabDiscoverySnapshot> {
@@ -205,8 +207,9 @@ export class GitLabPrFetcher {
     if (this.activeWrites >= API_CONCURRENCY) throw new Error("GitLab request concurrency limit reached.");
     if (this.options.tryTakeRequestToken && !this.options.tryTakeRequestToken()) throw new Error("PR status refresh budget is temporarily exhausted.");
     this.activeWrites++;
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-glab-"));
+    let dir: string | undefined;
     try {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-glab-"));
       const file = path.join(dir, "body.json");
       await fs.writeFile(file, JSON.stringify(body ?? {}), { encoding: "utf8", mode: 0o600 });
       const args = ["api", "--hostname", host, "--method", method, "--include", "--header", "Content-Type: application/json", "--input", file, endpoint];
@@ -238,7 +241,7 @@ export class GitLabPrFetcher {
       return (responseBody.trim() ? JSON.parse(responseBody) : null) as T;
     } finally {
       this.activeWrites--;
-      await fs.rm(dir, { recursive: true, force: true });
+      if (dir) await fs.rm(dir, { recursive: true, force: true });
     }
   }
 
@@ -267,14 +270,14 @@ export class GitLabPrFetcher {
   }
 
   /** Upload one file to a project's uploads, returning the Markdown link target GitLab assigns. */
-  async uploadProjectFile(host: string, projectPath: string, file: { realPath: string; name: string }, signal?: AbortSignal): Promise<{ url: string }> {
+  async uploadProjectFile(host: string, projectPath: string, file: { data: Uint8Array; name: string }, signal?: AbortSignal): Promise<{ url: string }> {
     signal?.throwIfAborted();
     if (!/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i.test(host) || host === "github.com") throw new Error("Invalid GitLab hostname.");
     if (this.options.tryTakeRequestToken && !this.options.tryTakeRequestToken()) throw new Error("PR status refresh budget is temporarily exhausted.");
     const token = await this.readToken(host);
     if (!token) throw new GitLabReadError(401, undefined, `glab has no token for ${host} to upload attachments. Sign in with glab auth login.`);
     const form = new FormData();
-    form.append("file", new Blob([await fs.readFile(file.realPath)]), file.name);
+    form.append("file", new Blob([file.data]), file.name);
     const timeout = AbortSignal.timeout(120_000);
     const response = await (this.options.fetch ?? fetch)(`https://${host}/api/v4/projects/${encodeURIComponent(projectPath)}/uploads`, {
       method: "POST", body: form, redirect: "error",

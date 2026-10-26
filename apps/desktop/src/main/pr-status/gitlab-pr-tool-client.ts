@@ -3,7 +3,7 @@ import { redactForgeLog } from "./forge-ci-client";
 import { ForgeReadError, repositoryUrl, type ForgeRepository } from "./forge-tool-contract";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "./forge-pr-tool-contract";
 import {
-  BODY_READ_MAX_CHARS, COMMENT_READ_MAX_CHARS, UNTRUSTED, num, pageUnifiedDiff, payloadItems, payloadObject, placeUploadedAttachments, positive, str, untrusted, validateForgeAttachments,
+  BODY_READ_MAX_CHARS, COMMENT_READ_MAX_CHARS, UNTRUSTED, forgeWebUrl, num, pageUnifiedDiff, payloadItems, payloadObject, placeUploadedAttachments, positive, readValidatedAttachment, str, untrusted, validateForgeAttachments,
   type ForgePrToolContext, type Payload,
 } from "./forge-pr-tool-shared";
 import { GitLabReadError, type GitLabPrFetcher, type GitLabWriteMethod } from "./gitlab-pr-fetcher";
@@ -27,13 +27,6 @@ function labels(value: unknown): string[] {
 /** GitLab says "opened"; the shared contract says "open", as GitHub does. */
 function state(value: unknown): string | undefined {
   return value === "opened" ? "open" : str(value, 20);
-}
-function webUrl(r: ForgeRepository, value: unknown, fallback: string): string {
-  try {
-    const url = new URL(String(value));
-    if (url.protocol === "https:" && !url.username && !url.password && url.host === r.host) return `${url.origin}${url.pathname}${url.hash}`;
-  } catch { /* Use the project URL. */ }
-  return `${repositoryUrl(r)}${fallback}`;
 }
 function diffCounts(diff: unknown): { additions: number; deletions: number } {
   let additions = 0;
@@ -74,7 +67,7 @@ function mergeRequestSummary(r: ForgeRepository, p: Payload) {
     changedFiles: typeof p.changes_count === "string" ? Number.parseInt(p.changes_count, 10) || undefined : num(p.changes_count),
     comments: num(p.user_notes_count),
     createdAt: str(p.created_at, 40), updatedAt: str(p.updated_at, 40), closedAt: str(p.closed_at, 40), mergedAt: str(p.merged_at, 40),
-    url: webUrl(r, p.web_url, `/-/merge_requests/${number}`),
+    url: forgeWebUrl(r, p.web_url, `/-/merge_requests/${number}`),
   };
 }
 function issueSummary(r: ForgeRepository, p: Payload, isPullRequest = false) {
@@ -83,7 +76,7 @@ function issueSummary(r: ForgeRepository, p: Payload, isPullRequest = false) {
     number, isPullRequest, title: str(p.title, 1000), state: state(p.state), stateReason: undefined,
     author: username(p.author), labels: labels(p.labels), assignees: usernames(p.assignees), comments: num(p.user_notes_count),
     createdAt: str(p.created_at, 40), updatedAt: str(p.updated_at, 40), closedAt: str(p.closed_at, 40),
-    url: webUrl(r, p.web_url, `/-/${isPullRequest ? "merge_requests" : "issues"}/${number}`),
+    url: forgeWebUrl(r, p.web_url, `/-/${isPullRequest ? "merge_requests" : "issues"}/${number}`),
   };
 }
 function noteSummary(r: ForgeRepository, p: Payload, fallback: string) {
@@ -169,7 +162,7 @@ export class GitlabPrToolClient {
       const uploads = [];
       for (const attachment of validated) {
         providerRequests++;
-        const uploaded = await gitlab.uploadProjectFile(r.host, project, { realPath: attachment.realPath, name: path.basename(attachment.path) }, ctx.signal);
+        const uploaded = await gitlab.uploadProjectFile(r.host, project, { data: await readValidatedAttachment(attachment), name: path.basename(attachment.path) }, ctx.signal);
         uploads.push({ path: attachment.path, alt: attachment.alt, url: uploaded.url, video: VIDEO_EXTENSIONS.has(path.extname(attachment.path).toLowerCase()) });
       }
       return { body: placeUploadedAttachments(body, uploads) };
@@ -402,7 +395,7 @@ export class GitlabPrToolClient {
           if (error instanceof GitLabReadError && error.status === 409) throw new ForgeReadError("head_changed", `The merge request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
           throw error;
         }
-        return writeResult({ merged: result.state === "merged", number: args.number, method, mergeCommitSha: str(result.merge_commit_sha ?? result.squash_commit_sha, 64), url: webUrl(r, result.web_url, `/-/merge_requests/${args.number}`) });
+        return writeResult({ merged: result.state === "merged", number: args.number, method, mergeCommitSha: str(result.merge_commit_sha ?? result.squash_commit_sha, 64), url: forgeWebUrl(r, result.web_url, `/-/merge_requests/${args.number}`) });
       }
     }
   }

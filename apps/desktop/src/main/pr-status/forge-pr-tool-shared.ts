@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { ForgeReadError, type ForgeRepository } from "./forge-tool-contract";
+import { ForgeReadError, repositoryUrl, type ForgeRepository } from "./forge-tool-contract";
 import type { ForgeAttachment, ForgePrToolArgs } from "./forge-pr-tool-contract";
 
 /** What each provider client needs about the calling thread. */
@@ -45,6 +46,14 @@ export function num(value: unknown): number | undefined {
 export function positive(value: unknown, what: string): number {
   if (!Number.isSafeInteger(value) || Number(value) < 1) throw new ForgeReadError("invalid_response", `The forge returned an invalid ${what}.`);
   return Number(value);
+}
+/** A provider link as a credential-free https URL on the repository's host, else a link built from the repository. */
+export function forgeWebUrl(r: ForgeRepository, value: unknown, fallback: string): string {
+  try {
+    const url = new URL(String(value));
+    if (url.protocol === "https:" && !url.username && !url.password && url.host === r.host) return `${url.origin}${url.pathname}${url.hash}`;
+  } catch { /* Use the repository URL. */ }
+  return `${repositoryUrl(r)}${fallback}`;
 }
 /** Bodies and comments can be long and are written by anyone with access. */
 export function untrusted(value: unknown, max: number): { text: string; totalChars: number; truncated: boolean } {
@@ -119,6 +128,7 @@ export async function validateForgeAttachments(
     if (!ATTACHMENT_EXTENSIONS.has(extension)) throw new ForgeReadError("invalid_arguments", `${path.basename(attachment.path)} is not an image or video the forge accepts (${[...ATTACHMENT_EXTENSIONS].join(", ")}).`);
     let realPath: string;
     try { realPath = await fs.realpath(attachment.path); } catch { throw new ForgeReadError("invalid_arguments", `Attachment not found: ${attachment.path}.`); }
+    if (!ATTACHMENT_EXTENSIONS.has(path.extname(realPath).toLowerCase())) throw new ForgeReadError("invalid_arguments", `${attachment.path} links to a file that is not an image or video.`);
     if (!allowed.some((root) => isInside(realPath, root)) || blocked.some((root) => isInside(realPath, root))) {
       throw new ForgeReadError("forbidden", `${attachment.path} is outside this thread's directories and the temp folder. Save attachments there first.`);
     }
@@ -128,6 +138,27 @@ export async function validateForgeAttachments(
     validated.push({ ...attachment, realPath, size: stat.size });
   }
   return validated;
+}
+
+/**
+ * Read a validated attachment once, refusing a symlink swapped in after
+ * validation, and re-checking that it is still a regular file within the
+ * limit. Uploads use these bytes, never the agent-supplied path again.
+ */
+export async function readValidatedAttachment(attachment: ValidatedAttachment): Promise<Buffer> {
+  let handle: fs.FileHandle;
+  try {
+    handle = await fs.open(attachment.realPath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  } catch {
+    throw new ForgeReadError("invalid_arguments", `${attachment.path} changed after it was checked. Attach it again.`);
+  }
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > FORGE_ATTACHMENT_MAX_BYTES) throw new ForgeReadError("invalid_arguments", `${attachment.path} changed after it was checked. Attach it again.`);
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
 }
 
 /**

@@ -148,7 +148,7 @@ describe("GitLab write transport", () => {
       return new Response(JSON.stringify({ url: "/uploads/abc/shot.png", markdown: "![shot](/uploads/abc/shot.png)" }), { status: 201 });
     });
     const fetcher = new GitLabPrFetcher({ discover: async () => ({ selectedCommand: "glab-fixture", candidates: [], checkedAt: 0 }), run, fetch: fetch as unknown as typeof globalThis.fetch });
-    await expect(fetcher.uploadProjectFile("gitlab.example.test", "group/sub/project", { realPath: file, name: "shot.png" })).resolves.toEqual({ url: "/uploads/abc/shot.png" });
+    await expect(fetcher.uploadProjectFile("gitlab.example.test", "group/sub/project", { data: readFileSync(file), name: "shot.png" })).resolves.toEqual({ url: "/uploads/abc/shot.png" });
     expect(String(fetch.mock.calls[0]![0])).toBe("https://gitlab.example.test/api/v4/projects/group%2Fsub%2Fproject/uploads");
   });
 });

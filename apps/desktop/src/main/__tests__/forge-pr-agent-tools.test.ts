@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -215,17 +215,30 @@ describe("GitHub attachments", () => {
   it("uploads through gh with a body file and reads the new pull request back", async () => {
     const image = path.join(root, "shots", "after.png");
     let bodyText = "";
+    let uploaded = "";
     const runGh = vi.fn<GhRunner>(async (args) => {
       bodyText = readFileSync(args[args.indexOf("--body-file") + 1]!, "utf8");
+      uploaded = readFileSync(args[args.indexOf("--attach") + 1]!, "utf8");
       return { stdout: "https://github.com/fixture/project/pull/44\n", stderr: "", exitCode: 0 };
     });
     const { client } = harness(() => json(pull(44)), runGh);
     const result = await client.execute("create_pull_request", { title: "With screenshot", base: "main", body: `![After](${image})`, attachments: [{ path: image }] }, ctx({ directories: [root] })) as Record<string, unknown>;
     const args = runGh.mock.calls[0]![0];
     expect(args.slice(0, 7)).toEqual(["pr", "create", "--head", "topic", "--base", "main", "--title"]);
-    expect(args).toEqual(expect.arrayContaining(["-R", "fixture/project", "--attach", image]));
-    expect(bodyText).toBe(`![After](${image})`);
+    // gh uploads a private copy of the checked bytes, and the body reference follows it.
+    const copy = args[args.indexOf("--attach") + 1]!;
+    expect(args).toEqual(expect.arrayContaining(["-R", "fixture/project"]));
+    expect(copy).not.toBe(image);
+    expect(path.basename(copy)).toBe("after.png");
+    expect(uploaded).toBe("png");
+    expect(bodyText).toBe(`![After](${copy})`);
     expect(result).toMatchObject({ created: true, url: "https://github.com/fixture/project/pull/44" });
+  });
+
+  it("refuses a link whose target is not an image", async () => {
+    symlinkSync(path.join(root, "notes.txt"), path.join(root, "shots", "notes.png"));
+    await expect(validateForgeAttachments([{ path: path.join(root, "shots", "notes.png") }], { directories: [root], privateRoots: [], tempRoots: [] }))
+      .rejects.toThrow(/links to a file that is not an image or video/);
   });
 
   it("names the gh upgrade when gh is too old to attach", async () => {

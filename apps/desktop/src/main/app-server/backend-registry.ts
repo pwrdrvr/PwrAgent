@@ -2,7 +2,7 @@ import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from 
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import { buildForgeToolDefinitions, type ForgePrRepositoryResolver, type ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
-import { ForgeReadError, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
@@ -9559,8 +9559,9 @@ export class DesktopBackendRegistry {
 
   private forgePrToolHandler?: ForgePrToolHandler;
   private forgePrRepositoryResolver?: ForgePrRepositoryResolver;
+  private forgeDispatchRouter?: AgentToolRouter;
   private forgeToolPolicyResolver?: () => ForgeAgentToolPolicy;
-  /** Conversation grants for forge writes, keyed by thread, then tool. Memory only. */
+  /** Conversation grants for forge writes, keyed by thread, then tool and repository. Memory only. */
   private readonly forgeToolSessionApprovals = new Map<string, Map<string, string>>();
 
   /** `resolveRepository` names the repository on an approval card and fails a bad target before asking. */
@@ -9605,12 +9606,15 @@ export class DesktopBackendRegistry {
   private readonly gatedForgePrToolHandler: ForgePrToolHandler = async (operation, args, context) => {
     const group = forgePrToolGroup(operation, args);
     const access = this.assertForgeToolAllowed(group, operation);
+    let target = args;
     if (group !== "read") {
       const repository = this.forgePrRepositoryResolver ? await this.forgePrRepositoryResolver(args, context) : args.repository;
       await this.approveForgeToolWrite(operation, args, context, group, access, repository);
+      // Act exactly where the card said, even if the thread's remotes change while it waits.
+      if (repository) target = { ...args, repository };
     }
     if (!this.forgePrToolHandler) throw new ForgeReadError("unavailable", "Forge tools are unavailable on this instance.");
-    const result = await this.forgePrToolHandler(operation, args, context);
+    const result = await this.forgePrToolHandler(operation, target, context);
     if (operation === "create_pull_request") return await this.attachCreatedPullRequest(result, context);
     return result;
   };
@@ -9682,8 +9686,11 @@ export class DesktopBackendRegistry {
       throw new ForgeReadError("approval_required", `${label} needs the operator's approval, which requires an active turn.`);
     }
     const sessionKey = JSON.stringify([context.backend, context.threadId]);
+    // A grant covers one tool in one repository, never every repository the
+    // thread links, and ends when that group's access level changes.
+    const grantTarget = `${operation}\u0000${repository ? repositoryKey(repository) : ""}`;
     const grantKey = `${group}:${access}`;
-    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(operation) === grantKey) return;
+    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return;
     const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, requestId });
     const approved = await new Promise<"once" | "session" | false>((resolve, reject) => {
       const finish = (value: "once" | "session" | false, error?: unknown): void => {
@@ -9715,7 +9722,7 @@ export class DesktopBackendRegistry {
     if (!approved) throw new ForgeReadError("declined", `The operator declined ${operation}. Do not retry it or use the gh or glab CLI instead; ask what they want changed.`);
     if (approved === "session") {
       const grants = this.forgeToolSessionApprovals.get(sessionKey) ?? new Map<string, string>();
-      grants.set(operation, grantKey);
+      grants.set(grantTarget, grantKey);
       this.forgeToolSessionApprovals.set(sessionKey, grants);
     }
   }
@@ -39257,8 +39264,9 @@ export class DesktopBackendRegistry {
         .handleDynamicToolCall({ backend, call: hostToolCall });
     }
     // Every forge tool name, advertised or not: a call the policy has since
-    // removed gets the policy's refusal rather than "no handler".
-    const forgeRouter = new AgentToolRouter(buildForgeToolDefinitions({
+    // removed gets the policy's refusal rather than "no handler". The gated
+    // handlers read the policy per call, so one router serves every call.
+    const forgeRouter = this.forgeDispatchRouter ??= new AgentToolRouter(buildForgeToolDefinitions({
       forgeReadHandler: this.gatedForgeReadHandler,
       forgePrToolHandler: this.gatedForgePrToolHandler,
     }));

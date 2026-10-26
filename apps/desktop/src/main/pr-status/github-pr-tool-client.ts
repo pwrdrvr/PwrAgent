@@ -10,7 +10,7 @@ import { redactForgeLog, type ForgeCiClient } from "./forge-ci-client";
 import { ForgeReadError, repositoryUrl, type ForgeRepository } from "./forge-tool-contract";
 import type { ForgeAttachment, ForgePrToolArgs, ForgePrToolOperation } from "./forge-pr-tool-contract";
 import {
-  BODY_READ_MAX_CHARS, COMMENT_READ_MAX_CHARS, UNTRUSTED, num, pageUnifiedDiff, payloadItems, payloadObject, positive, str, untrusted, validateForgeAttachments,
+  BODY_READ_MAX_CHARS, COMMENT_READ_MAX_CHARS, UNTRUSTED, forgeWebUrl, num, pageUnifiedDiff, payloadItems, payloadObject, positive, readValidatedAttachment, str, untrusted, validateForgeAttachments,
   type ForgePrToolContext, type Payload,
 } from "./forge-pr-tool-shared";
 
@@ -30,13 +30,6 @@ function logins(value: unknown): string[] {
 function labelNames(value: unknown): string[] {
   return Array.isArray(value) ? value.map((label) => typeof label === "string" ? label : label && typeof label === "object" ? str((label as Payload).name, 200) : undefined).filter((name): name is string => Boolean(name)) : [];
 }
-function htmlUrl(r: ForgeRepository, value: unknown, fallback: string): string {
-  try {
-    const url = new URL(String(value));
-    if (url.protocol === "https:" && !url.username && !url.password && url.host === r.host) return `${url.origin}${url.pathname}${url.hash}`;
-  } catch { /* Use the repository URL. */ }
-  return `${repositoryUrl(r)}${fallback}`;
-}
 function pullRequestSummary(r: ForgeRepository, p: Payload) {
   const number = positive(p.number, "pull request number");
   const head = p.head && typeof p.head === "object" ? p.head as Payload : {};
@@ -53,7 +46,7 @@ function pullRequestSummary(r: ForgeRepository, p: Payload) {
     additions: num(p.additions), deletions: num(p.deletions), changedFiles: num(p.changed_files), commits: num(p.commits),
     comments: num(p.comments), reviewComments: num(p.review_comments), autoMerge: p.auto_merge ? true : p.auto_merge === null ? false : undefined,
     createdAt: str(p.created_at, 40), updatedAt: str(p.updated_at, 40), closedAt: str(p.closed_at, 40), mergedAt: str(p.merged_at, 40),
-    url: htmlUrl(r, p.html_url, `/pull/${number}`),
+    url: forgeWebUrl(r, p.html_url, `/pull/${number}`),
   };
 }
 function issueSummary(r: ForgeRepository, p: Payload) {
@@ -63,11 +56,11 @@ function issueSummary(r: ForgeRepository, p: Payload) {
     number, isPullRequest, title: str(p.title, 1000), state: str(p.state, 20), stateReason: str(p.state_reason, 40),
     author: login(p.user), labels: labelNames(p.labels), assignees: logins(p.assignees), comments: num(p.comments),
     createdAt: str(p.created_at, 40), updatedAt: str(p.updated_at, 40), closedAt: str(p.closed_at, 40),
-    url: htmlUrl(r, p.html_url, `/${isPullRequest ? "pull" : "issues"}/${number}`),
+    url: forgeWebUrl(r, p.html_url, `/${isPullRequest ? "pull" : "issues"}/${number}`),
   };
 }
 function commentSummary(r: ForgeRepository, p: Payload) {
-  return { id: positive(p.id, "comment id"), author: login(p.user), body: untrusted(p.body, COMMENT_READ_MAX_CHARS), createdAt: str(p.created_at, 40), updatedAt: str(p.updated_at, 40), url: htmlUrl(r, p.html_url, "") };
+  return { id: positive(p.id, "comment id"), author: login(p.user), body: untrusted(p.body, COMMENT_READ_MAX_CHARS), createdAt: str(p.created_at, 40), updatedAt: str(p.updated_at, 40), url: forgeWebUrl(r, p.html_url, "") };
 }
 
 async function defaultGhRunner(args: string[], options: { cwd?: string; signal?: AbortSignal; timeoutMs: number }): Promise<GhRunResult> {
@@ -161,10 +154,21 @@ export class GithubPrToolClient {
     // gh owns attachment upload: GitHub has no public upload API.
     const runGhWithBody = async (ghArgs: string[], body: string, attachments: ForgeAttachment[]): Promise<{ url: string; warning?: string }> => {
       const validated = await validateForgeAttachments(attachments, { directories: ctx.directories, privateRoots: ctx.privateRoots, ...(this.options.tempRoots ? { tempRoots: this.options.tempRoots } : {}) });
-      // gh rewrites a body reference only when it equals the --attach path byte-for-byte.
-      const attachArgs = validated.flatMap((attachment) => ["--attach", attachment.alt ? `${attachment.path}#${attachment.alt}` : attachment.path]);
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-gh-"));
       try {
+        // gh reads private copies of the checked bytes, so a path swapped after
+        // validation cannot publish another file. It rewrites a body reference
+        // only when it equals the --attach path byte-for-byte, so references
+        // move to the copy.
+        const attachArgs: string[] = [];
+        for (const [index, attachment] of validated.entries()) {
+          const copyDir = path.join(dir, String(index));
+          await fs.mkdir(copyDir, { mode: 0o700 });
+          const copy = path.join(copyDir, path.basename(attachment.path));
+          await fs.writeFile(copy, await readValidatedAttachment(attachment), { mode: 0o600 });
+          body = body.split(`](${attachment.path})`).join(`](${copy})`);
+          attachArgs.push("--attach", attachment.alt ? `${copy}#${attachment.alt}` : copy);
+        }
         const bodyFile = path.join(dir, "body.md");
         await fs.writeFile(bodyFile, body, { encoding: "utf8", mode: 0o600 });
         const repoSpec = r.host === "github.com" ? `${r.owner}/${r.repo}` : `${r.host}/${r.owner}/${r.repo}`;
@@ -243,7 +247,7 @@ export class GithubPrToolClient {
         const rows = items(await call("GET", `/pulls/${args.number}/reviews?${paging}`));
         return done({
           number: args.number, trust: "untrusted", warning: UNTRUSTED, ...pageInfo(rows),
-          reviews: rows.slice(0, perPage).map((p) => ({ id: positive(p.id, "review id"), author: login(p.user), state: str(p.state, 40), body: untrusted(p.body, COMMENT_READ_MAX_CHARS), commitId: str(p.commit_id, 64), submittedAt: str(p.submitted_at, 40), url: htmlUrl(r, p.html_url, `/pull/${args.number}`) })),
+          reviews: rows.slice(0, perPage).map((p) => ({ id: positive(p.id, "review id"), author: login(p.user), state: str(p.state, 40), body: untrusted(p.body, COMMENT_READ_MAX_CHARS), commitId: str(p.commit_id, 64), submittedAt: str(p.submitted_at, 40), url: forgeWebUrl(r, p.html_url, `/pull/${args.number}`) })),
         });
       }
       case "list_pull_request_review_threads": {
@@ -258,7 +262,7 @@ export class GithubPrToolClient {
             reviewThreadId: str(t.id, 200), isResolved: t.isResolved === true, isOutdated: t.isOutdated === true,
             path: str(t.path, 4096), line: num(t.line) ?? null, originalLine: num(t.originalLine) ?? null, startLine: num(t.startLine) ?? null, side: str(t.diffSide, 10), resolvedBy: login(t.resolvedBy),
             commentCount: num(comments.totalCount),
-            comments: items(comments.nodes).map((c) => ({ commentId: num(c.databaseId), author: login(c.author), body: untrusted(c.body, COMMENT_READ_MAX_CHARS), createdAt: str(c.createdAt, 40), url: htmlUrl(r, c.url, `/pull/${args.number}`) })),
+            comments: items(comments.nodes).map((c) => ({ commentId: num(c.databaseId), author: login(c.author), body: untrusted(c.body, COMMENT_READ_MAX_CHARS), createdAt: str(c.createdAt, 40), url: forgeWebUrl(r, c.url, `/pull/${args.number}`) })),
           };
         });
         return done({
@@ -331,17 +335,17 @@ export class GithubPrToolClient {
           return writeResult({ created: true, number: args.number, url: created.url, ...(created.warning ? { attachmentWarning: created.warning } : {}) });
         }
         const comment = object(await call("POST", `/issues/${args.number}/comments`, { body: args.body }));
-        return writeResult({ created: true, number: args.number, commentId: positive(comment.id, "comment id"), url: htmlUrl(r, comment.html_url, `/issues/${args.number}`) });
+        return writeResult({ created: true, number: args.number, commentId: positive(comment.id, "comment id"), url: forgeWebUrl(r, comment.html_url, `/issues/${args.number}`) });
       }
       case "reply_to_review_comment": {
         if (args.reviewThreadId) {
           await assertReviewThreadInRepository(args.reviewThreadId);
           const data = await graphql("mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){comment{databaseId url}}}", { id: args.reviewThreadId, body: args.body });
           const comment = object(object(data.addPullRequestReviewThreadReply).comment);
-          return writeResult({ created: true, number: args.number, reviewThreadId: args.reviewThreadId, commentId: num(comment.databaseId), url: htmlUrl(r, comment.url, `/pull/${args.number}`) });
+          return writeResult({ created: true, number: args.number, reviewThreadId: args.reviewThreadId, commentId: num(comment.databaseId), url: forgeWebUrl(r, comment.url, `/pull/${args.number}`) });
         }
         const reply = object(await call("POST", `/pulls/${args.number}/comments/${args.commentId}/replies`, { body: args.body }));
-        return writeResult({ created: true, number: args.number, inReplyTo: args.commentId, commentId: positive(reply.id, "comment id"), url: htmlUrl(r, reply.html_url, `/pull/${args.number}`) });
+        return writeResult({ created: true, number: args.number, inReplyTo: args.commentId, commentId: positive(reply.id, "comment id"), url: forgeWebUrl(r, reply.html_url, `/pull/${args.number}`) });
       }
       case "submit_pull_request_review": {
         const review = object(await call("POST", `/pulls/${args.number}/reviews`, {
@@ -350,7 +354,7 @@ export class GithubPrToolClient {
           ...(args.commitId ? { commit_id: args.commitId } : {}),
           ...(args.comments?.length ? { comments: args.comments.map((c) => ({ path: c.path, line: c.line, side: c.side ?? "RIGHT", ...(c.startLine ? { start_line: c.startLine, start_side: c.startSide ?? c.side ?? "RIGHT" } : {}), body: c.body })) } : {}),
         }));
-        return writeResult({ submitted: true, number: args.number, reviewId: positive(review.id, "review id"), state: str(review.state, 40), url: htmlUrl(r, review.html_url, `/pull/${args.number}`) });
+        return writeResult({ submitted: true, number: args.number, reviewId: positive(review.id, "review id"), state: str(review.state, 40), url: forgeWebUrl(r, review.html_url, `/pull/${args.number}`) });
       }
       case "resolve_review_thread": {
         const owner = await assertReviewThreadInRepository(args.reviewThreadId!);

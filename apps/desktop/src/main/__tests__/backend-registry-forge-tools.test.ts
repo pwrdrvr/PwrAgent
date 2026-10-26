@@ -138,6 +138,27 @@ describe("backend forge tool dispatch", () => {
     expect(text(await pending)).toContain("declined");
   });
 
+  it("runs a write in the approved repository and scopes conversation grants to it", async () => {
+    const repoA = { provider: "github" as const, host: "github.com", owner: "acme", repo: "app" };
+    const repoB = { provider: "github" as const, host: "github.com", owner: "acme", repo: "site" };
+    let next = repoA;
+    registry.setForgePrToolHandler(github, async () => next);
+    const first = nextApproval();
+    const pendingA = internals.handleServerRequest("codex", request("add_issue_comment", { number: 1, body: "Fixed." }, "call-grant-a"));
+    await answer(await first, "accept", "session");
+    expect((await pendingA).success).toBe(true);
+    expect(github).toHaveBeenLastCalledWith("add_issue_comment", { number: 1, body: "Fixed.", repository: repoA }, expect.anything());
+    expect((await internals.handleServerRequest("codex", request("add_issue_comment", { number: 2, body: "Again." }, "call-grant-a2"))).success).toBe(true);
+    next = repoB;
+    const second = nextApproval();
+    const pendingB = internals.handleServerRequest("codex", request("add_issue_comment", { number: 3, body: "Elsewhere." }, "call-grant-b"));
+    const notification = await second;
+    expect(notification.params._meta).toMatchObject({ connector_name: "acme/site" });
+    await answer(notification, "decline");
+    expect(text(await pendingB)).toContain("declined");
+    expect(github).toHaveBeenCalledTimes(2);
+  });
+
   it("fails a write with no single target before asking", async () => {
     const prompts = vi.fn();
     registry.onEvent((event) => { if (event.notification.method === "mcpServer/elicitation/request") prompts(); });
