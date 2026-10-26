@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, rmSync, statfsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { StateDb } from "../state/state-db";
@@ -29,11 +29,54 @@ export function openInMemoryStateDb(options?: {
   return StateDb.open(":memory:", options);
 }
 
+/** `f_type` that `statfs` reports for tmpfs on Linux. */
+const TMPFS_MAGIC = 0x01021994;
+/** Free space below which RAM is not worth risking. Docker gives 64 MB. */
+const MIN_RAM_ROOT_FREE_BYTES = 1024 * 1024 * 1024;
+const LINUX_RAM_ROOT = "/dev/shm";
+
+let tempStateDbRoot: string | undefined;
+
+/**
+ * Where temporary database files go: Linux's RAM-backed `/dev/shm` when it is
+ * a roomy tmpfs, else the OS temp dir.
+ *
+ * SQLite fsyncs a file database on journal switches, checkpoints and closes:
+ * 16 to 20 times in one open-and-reopen test. On a disk, each fsync can also
+ * wait for writeback of other processes' dirty pages. Measured on Sandboxer
+ * (8 vCPUs) with 4 Vitest runs and a concurrent buffered writer, fsync took
+ * 559 ms at the median and up to 2.8 s. Two reopen tests then took up to 18 s
+ * and failed their 5 s timeout in 28 of 48 runs. Tmpfs keeps files, WAL,
+ * second connections and reopen, but its fsync returns at once. No test here
+ * asserts durability across power loss.
+ *
+ * macOS and Windows have no such mount and keep the OS temp dir.
+ */
+function resolveTempStateDbRoot(): string {
+  if (tempStateDbRoot !== undefined) return tempStateDbRoot;
+  tempStateDbRoot = os.tmpdir();
+  if (process.platform === "linux") {
+    try {
+      const stats = statfsSync(LINUX_RAM_ROOT);
+      if (
+        stats.type === TMPFS_MAGIC
+        && stats.bavail * stats.bsize >= MIN_RAM_ROOT_FREE_BYTES
+      ) {
+        accessSync(LINUX_RAM_ROOT, constants.W_OK);
+        tempStateDbRoot = LINUX_RAM_ROOT;
+      }
+    } catch {
+      // Missing or unwritable: the OS temp dir is the fallback.
+    }
+  }
+  return tempStateDbRoot;
+}
+
 export function createTempStateDb(prefix: string): {
   dbPath: string;
   tempDir: string;
 } {
-  const tempDir = mkdtempSync(path.join(os.tmpdir(), prefix));
+  const tempDir = mkdtempSync(path.join(resolveTempStateDbRoot(), prefix));
   return {
     dbPath: path.join(tempDir, "state.db"),
     tempDir,
