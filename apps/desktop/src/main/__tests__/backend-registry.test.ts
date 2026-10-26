@@ -26345,6 +26345,25 @@ command = "pnpm dev"
       expect(registry.withNavigationSubAgentActivity([row])[0]).not.toHaveProperty("hasAgentCommands");
     });
 
+    it("keeps a tool item that is not a command, which the list never names", async () => {
+      const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [] }));
+      const { codexClient, registry } = setup(listBackgroundTerminals);
+      const mcpCall = { id: "mcp-1", type: "mcpToolCall", server: "docs", tool: "search" };
+
+      await codexClient.emit({ method: "item/started", params: {
+        threadId: "thread-1", turnId: "turn-1", item: { ...mcpCall, status: "inProgress" },
+      } });
+      await endTurnWithRunningCommands(codexClient, ["command-1"]);
+      await vi.waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(1));
+      expect(registry.getInProgressThreadSnapshotForQuit().threadIds).toEqual(["codex:thread-1"]);
+
+      // Its own completion still settles it.
+      await codexClient.emit({ method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", item: { ...mcpCall, status: "completed" },
+      } });
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+    });
+
     it.each([
       // Accepting the turn registers it before Codex reports the thread active.
       ["its turn is active", { startTurn: true }],
