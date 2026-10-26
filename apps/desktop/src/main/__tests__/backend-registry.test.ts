@@ -55977,7 +55977,7 @@ script = "printf setup"
       "upsertThreadUsageLine",
     );
     const fullOverlayReads = vi.spyOn(overlayStore, "getThreadOverlayStates");
-    const usageActivityReads = vi.spyOn(overlayStore, "readThreadUsageActivities");
+    const usageActivityReads = vi.spyOn(overlayStore as SqliteOverlayStore, "readThreadUsageActivities");
     registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
