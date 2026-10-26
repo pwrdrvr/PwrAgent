@@ -21,7 +21,7 @@ test("restores a native Claude transcript after switching threads", async () => 
       const root = path.join(homeRoot, ".pwragent/profiles/default/state/claude");
       await mkdir(root, { recursive: true });
       for (const [id, title, history] of [
-        [threadId, "Claude scroll restoration", entries],
+        [threadId, "Claude scroll restoration", entries.slice(-16)],
         [companionId, "Claude companion", entries.slice(-4)],
       ] as const) {
         await writeFile(path.join(root, `${id}.json`), JSON.stringify({
@@ -42,13 +42,16 @@ test("restores a native Claude transcript after switching threads", async () => 
     await openThread("Claude scroll restoration");
     await expect.poll(() => distanceFromTranscriptBottom(list)).toBeLessThanOrEqual(1);
     const metrics = await readScrollMetrics(list);
-    expect(metrics.maxScrollTop).toBeGreaterThan(2000);
-    const saved = await setTranscriptScrollTop(list, Math.floor(metrics.maxScrollTop / 2));
-    await openThread("Claude companion");
-    await openThread("Claude scroll restoration");
-    const samples = await collectScrollSamples(list);
-    expectStableSeries(samples, "native Claude middle viewport restore");
-    expect(Math.max(...samples.map((top) => Math.abs(top - saved.scrollTop)))).toBeLessThanOrEqual(4);
+    expect(metrics.maxScrollTop).toBeGreaterThan(400);
+    const saved = await setTranscriptScrollTop(list, metrics.maxScrollTop - 250);
+    for (const companion of ["Claude companion", "Short companion thread"]) {
+      await app.window.getByRole("button", { name: new RegExp(companion) }).first().click();
+      await expect(app.window.getByRole("heading", { level: 2, name: companion, exact: true })).toBeVisible();
+      await openThread("Claude scroll restoration");
+      const samples = await collectScrollSamples(list);
+      expectStableSeries(samples, "native Claude near-bottom viewport restore");
+      expect(Math.max(...samples.map((top) => Math.abs(top - saved.scrollTop)))).toBeLessThanOrEqual(4);
+    }
   } finally {
     await app.close();
   }

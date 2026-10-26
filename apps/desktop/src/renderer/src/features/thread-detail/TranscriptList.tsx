@@ -680,7 +680,9 @@ export function TranscriptList(props: TranscriptListProps) {
   const bottomFollowFrameRef = useRef<number | undefined>(undefined);
   const snapshotRef = useRef<ScrollSnapshot | undefined>(undefined);
   const savedViewportsRef = useRef(new Map<string, TranscriptViewport>());
-  const appliedReglueRequestKeyRef = useRef(0);
+  // A remount can restore a reading position after an earlier send. Only a
+  // request issued while this transcript is mounted should override it.
+  const appliedReglueRequestKeyRef = useRef(props.reglueRequestKey);
   const olderPageRequestPendingRef = useRef(false);
   const olderPageRequestGenerationRef = useRef(0);
   const lastUnderflowHistoryRequestRef = useRef<string | undefined>(undefined);
