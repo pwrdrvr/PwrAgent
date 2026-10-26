@@ -26348,7 +26348,7 @@ command = "pnpm dev"
       const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [terminal] }));
       const { codexClient, registry, updates } = setup(listBackgroundTerminals);
       await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
-      expect(updates).toEqual([{ backend: "codex", threadId: "thread-1", tasks: [terminal] }]);
+      await vi.waitFor(() => expect(updates).toEqual([{ backend: "codex", threadId: "thread-1", tasks: [terminal] }]));
 
       await end(codexClient);
       await vi.waitFor(() => expect(updates).toHaveLength(2));
