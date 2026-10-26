@@ -311,6 +311,7 @@ describe("DesktopFederationRuntime", () => {
     (runtime as unknown as RuntimeHarness).localInstanceId = "service-owner";
     try {
       expect(DEFAULT_CAPABILITIES).toContain("service_forward_v1");
+      expect(DEFAULT_CAPABILITIES).toContain("service_forward_v2");
       expect(runtime.receiverPermissions().portForwarding).toBe(false);
       const services = runtime.threadServices();
       const thread = { backend: "codex" as const, threadId: "service-thread" };

@@ -91,9 +91,60 @@ database write. FIN is distinct from cancellation; each direction may half-close
 Failed/ambiguous exchanges close the stream instead of replaying bytes.
 
 This favors correctness and reviewable integration over bulk throughput. WAN
-throughput is limited to roughly one quantum per round trip per stream. A later
-negotiated v2 can use binary frames and window credits with shared-transport
-priority scheduling. Do not silently claim v1 has that throughput.
+throughput is limited to roughly one quantum per round trip per stream. Peers
+that both support v2 use it instead; v1 remains for mixed-version pairs.
+
+## Wire protocol v2
+
+Additive `service_forward_v2` changes only the data path. Inventory, leases,
+renewal, and release stay on v1, and the same permission, lease, peer, and
+literal-loopback checks apply. Every hop must grant the capability: an owner
+without it answers `services.v2.open` with `method_not_found`, a hop without it
+with `capability_denied`, and the forward falls back to v1 for that socket and
+every later one.
+
+| Message | Kind | Purpose |
+| --- | --- | --- |
+| `services.v2.open` | request | Connect a stream under a viewer-chosen id; exchange initial windows and frame sizes |
+| `services.v2.renew` | request | Renew the lease and name its live streams |
+| `service_data` | binary envelope | Up to one frame of raw bytes, a per-direction sequence number, and an optional FIN |
+| `services.v2.window` | notification | Grant the sender more credit |
+| `services.v2.close` | notification | Stop the stream, with an optional error |
+
+Flow control follows SSH channel windows. Each direction has its own credit.
+The receiver advertises a window at open (4 MiB by default) and sends
+`services.v2.window` as its local socket drains, once a quarter of the window
+has flushed. The sender may have the whole window in flight across many frames
+of at most 64 KiB, so per-stream throughput is about window / RTT rather than
+one chunk per round trip. The owner pushes service output as it arrives; no one
+polls. Data beyond the granted window, a sequence gap, data after FIN, a frame
+larger than the agreed frame size, or a frame without binary data closes the
+stream.
+
+Data frames are not JSON. A `service_data` envelope uses the transport's binary
+envelope frame, the one turn attachments use for `blob_chunk`: the `PWRBLOB1`
+magic, a 4-byte header length, the envelope as JSON without `data`, then the
+bytes raw. The header is about 300 bytes per frame of up to 64 KiB, and tunnel
+bytes are never base64 encoded or parsed. Gateways decode and re-encode each
+frame, so the router only accepts and relays `service_data` from a connection
+that grants `service_forward_v2`; a build that predates it decodes the frame to
+nothing, and no stream opens through it in the first place.
+
+Each side bounds its receive memory: granted but unflushed bytes across all
+streams stay within one budget (32 MiB by default). A stream that cannot reach
+its window waits in line and is topped up in turn as others drain. Backpressure
+comes only from these windows, local socket writes, and transport capacity:
+data frames wait for the WebSocket to drain below its high-water mark, and
+credit and close frames never wait. There is no timer or rate cap. Instead a
+per-peer scheduler sends one frame per ready stream in turn and yields to the
+event loop after each, so control traffic interleaves with bulk transfers.
+
+The viewer names the stream, so frames that race the open result still land.
+Frames are one-way and arrive in order on the same path; a FIN followed by
+`close` without an error still flushes the receiver's pending writes, and any
+other `close` resets the stream. The owner reaps streams that neither carry
+frames nor appear in a renewal for 30 seconds, and closes every stream with its
+reason when a lease is released or forwarding is disabled.
 
 ## Familiar port-forwarding terminology
 
@@ -212,6 +263,33 @@ expiry, removal, refused/stopped target, late lease cancellation, listener closu
 window scoping, tool context validation, and explicit UI actions. The signed
 transport test uses two Noise-encrypted clients through a third gateway and
 checks that diagnostics contain no HTTP/WS body bytes.
+
+### Measured throughput
+
+`federation-services-throughput.test.ts` measures the forwarder, RPC endpoint,
+routers, and owner in process, optionally with an artificial round trip, and
+through a real gateway with two Noise-encrypted clients. It is skipped unless
+`PWRAGENT_SERVICE_TUNNEL_BENCH=1`. On an 8-vCPU Linux sandbox, one TCP stream
+of random bytes unless marked text, one direction:
+
+| Path | v1 | v2 |
+| --- | --- | --- |
+| In process, no delay | 3.9 MiB/s | 1,270–1,320 MiB/s at 0.8 ms CPU per MiB |
+| In process, 20 / 50 / 200 ms RTT | 0.70 / 0.30 / 0.078 MiB/s | 184–191 / 78 / 15–20 MiB/s |
+| Real gateway, Noise and brotli | 3.9 MiB/s at 121 ms CPU per MiB | 97–123 MiB/s at 9–11 ms CPU per MiB |
+| Real gateway, Noise without brotli | 3.9 MiB/s at 110 ms CPU per MiB | 145–162 MiB/s at 6–8 ms CPU per MiB |
+| Real gateway, Noise and brotli, text | | 61–90 MiB/s at 12–22 ms CPU per MiB |
+
+The gateway rows run owner, gateway, and viewer in one process, so each MiB
+pays framing and Noise on two hops. With base64 inside JSON notifications the
+same v2 windows reached 38 MiB/s with brotli and 62–72 MiB/s without: JSON and
+base64 cost about 6 ms of CPU per MiB to encode and decode, where the binary frame costs
+0.4–0.8 ms. In process the link has no bandwidth limit, so compressing text
+(to about 0.15 of its size) only costs CPU here; on a slower link it sends
+about a seventh of the bytes. Before brotli compresses a frame of 32 KiB or
+more it compresses the frame's last 4 KiB, and skips the rest when that sample
+does not shrink, which cut brotli's share of main-thread time for random data
+from 22% to 9–12%.
 
 ### Deliberate v1 limits
 

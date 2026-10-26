@@ -15,6 +15,17 @@ export const FEDERATION_BROTLI_CAPABILITY = "transport_brotli" as const;
 export const FEDERATION_COMPRESSION_THRESHOLD_BYTES = 4 * 1024;
 
 /**
+ * A frame this large is probed before it is compressed: brotli runs on its
+ * last 4 KiB first, and a sample that does not shrink to 90% skips the rest.
+ * Random, encrypted, and already-compressed bytes then cost 1/8 or less of a
+ * full attempt. The tail, not the head, because a binary envelope frame starts
+ * with its JSON header and ends with its raw bytes.
+ */
+export const FEDERATION_COMPRESSION_PROBE_MIN_BYTES = 32 * 1024;
+const FEDERATION_COMPRESSION_PROBE_BYTES = 4 * 1024;
+const FEDERATION_COMPRESSION_PROBE_MAX_RATIO = 0.9;
+
+/**
  * Logical-message ceiling after decompression. This is deliberately separate
  * from ws maxPayload, which limits the compressed/encrypted wire message.
  */
@@ -40,14 +51,15 @@ export function encodeFederationFramePayload(params: {
     return params.json;
   }
 
-  const compressed = brotliCompressSync(params.json, {
-    params: {
-      // Quality 1 is the low-latency mode. Federation compresses discrete
-      // messages, not one context-carrying stream, so every frame remains
-      // independently decodable and small notifications stay uncompressed.
-      [zlibConstants.BROTLI_PARAM_QUALITY]: 1,
-    },
-  });
+  if (
+    params.json.length >= FEDERATION_COMPRESSION_PROBE_MIN_BYTES
+    && brotliQ1(params.json.subarray(-FEDERATION_COMPRESSION_PROBE_BYTES)).length
+      >= FEDERATION_COMPRESSION_PROBE_BYTES * FEDERATION_COMPRESSION_PROBE_MAX_RATIO
+  ) {
+    return params.json;
+  }
+
+  const compressed = brotliQ1(params.json);
   if (compressed.length + FEDERATION_BROTLI_HEADER_BYTES >= params.json.length) {
     return params.json;
   }
@@ -56,6 +68,17 @@ export function encodeFederationFramePayload(params: {
   FEDERATION_BROTLI_HEADER.copy(header);
   header.writeUInt32BE(params.json.length, FEDERATION_BROTLI_HEADER.length);
   return Buffer.concat([header, compressed]);
+}
+
+function brotliQ1(data: Buffer): Buffer {
+  return brotliCompressSync(data, {
+    params: {
+      // Quality 1 is the low-latency mode. Federation compresses discrete
+      // messages, not one context-carrying stream, so every frame remains
+      // independently decodable and small notifications stay uncompressed.
+      [zlibConstants.BROTLI_PARAM_QUALITY]: 1,
+    },
+  });
 }
 
 export function decodeFederationFramePayload(params: {

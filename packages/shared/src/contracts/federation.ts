@@ -30,6 +30,8 @@ export const FEDERATION_CAPABILITIES = [
   "gateway_relay",
   "remote_pty",
   "service_forward_v1",
+  /** Windowed, owner-pushed service streams; see `FEDERATION_SERVICE_V2_CAPABILITY`. */
+  "service_forward_v2",
   "file_push",
   "thread_handoff",
   "file_pull",
@@ -870,12 +872,29 @@ export type FederationBlobChunkEnvelope = FederationEnvelopeBase & {
   data: Uint8Array;
 };
 
+/**
+ * One data frame of a windowed service stream (`service_forward_v2`). As with
+ * `blob_chunk`, the transport sends `data` raw after a small JSON header in a
+ * binary WebSocket frame, so tunnel bytes are never base64 encoded. Only peers
+ * and gateways that grant `service_forward_v2` send or relay it.
+ */
+export type FederationServiceDataEnvelope = FederationEnvelopeBase & {
+  kind: "service_data";
+  streamId: string;
+  /** Counts data frames per direction from 0. */
+  seq: number;
+  /** Half-closes this direction after `data`. */
+  fin?: boolean;
+  data: Uint8Array;
+};
+
 export type FederationProtocolEnvelope =
   | FederationRequestEnvelope
   | FederationResponseEnvelope
   | FederationErrorEnvelope
   | FederationNotificationEnvelope
-  | FederationBlobChunkEnvelope;
+  | FederationBlobChunkEnvelope
+  | FederationServiceDataEnvelope;
 
 export function isFederationCapability(
   value: unknown,
