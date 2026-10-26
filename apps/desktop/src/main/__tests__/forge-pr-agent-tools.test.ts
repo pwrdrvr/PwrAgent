@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_FORGE_AGENT_TOOL_POLICY, FORGE_AGENT_WRITE_TOOL_GROUPS, permissionForDynamicTool, type ForgeAgentToolPolicy } from "@pwragent/shared";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { ForgeReadError, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { GithubPrToolClient, validateForgeAttachments, type GhRunner, type ForgePrToolContext } from "../pr-status/github-pr-tool-client";
+import { GithubPrToolClient, type GhRunner } from "../pr-status/github-pr-tool-client";
+import { validateForgeAttachments, type ForgePrToolContext } from "../pr-status/forge-pr-tool-shared";
 import { FORGE_PR_WRITE_OPERATIONS, forgePrToolGroup, validateForgePrToolArgs } from "../pr-status/forge-pr-tool-contract";
 import { ForgePrToolService } from "../pr-status/forge-pr-tool-service";
 import { buildForgeToolDefinitions, buildForgePrToolDefinitions } from "../agent-tools/pwragent-forge-pr-agent-tools";
@@ -205,7 +206,7 @@ describe("GitHub attachments", () => {
   it("accepts images in the thread's directories and refuses everything else", async () => {
     const options = { directories: [root], privateRoots: [], tempRoots: [] };
     const image = path.join(root, "shots", "after.png");
-    await expect(validateForgeAttachments([{ path: image, alt: "After" }], options)).resolves.toEqual(["--attach", `${image}#After`]);
+    await expect(validateForgeAttachments([{ path: image, alt: "After" }], options)).resolves.toEqual([expect.objectContaining({ path: image, alt: "After", size: 3 })]);
     await expect(validateForgeAttachments([{ path: path.join(outside, "secret.png") }], options)).rejects.toMatchObject({ code: "forbidden" });
     await expect(validateForgeAttachments([{ path: path.join(root, "notes.txt") }], options)).rejects.toThrow(/not an image or video/);
     await expect(validateForgeAttachments([{ path: image }], { ...options, privateRoots: [root] })).rejects.toMatchObject({ code: "forbidden" });
