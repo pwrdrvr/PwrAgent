@@ -203,7 +203,7 @@ export class FederationServices {
     if (this.streams.has(streamId)) throw new Error("Service stream already exists.");
     this.assertStreamCapacity(peerId);
     const frameBytes = Math.min(this.options.streamFrameBytes ?? SERVICE_STREAM_FRAME_BYTES, SERVICE_STREAM_MAX_FRAME_BYTES);
-    const socket = new Socket({ allowHalfOpen: true, readableHighWaterMark: 2 * frameBytes });
+    const socket = new Socket({ allowHalfOpen: true });
     const stream: Stream = { streamId, lease, socket, seq: 0, busy: false, writing: false, touchedAt: this.now(), windowed: true };
     this.streams.set(streamId, stream);
     socket.on("error", () => { stream.error = "Service connection failed or stopped."; });
