@@ -654,6 +654,93 @@ describe("ThreadTodoService", () => {
       .resolves.toMatchObject({ status: "done", result: "Merged #42" });
   });
 
+  it("starts a thread past its own open steps, but not past an open prerequisite", async () => {
+    const startThread = vi.fn(async () => ({ backend: "codex" as const, threadId: "child" }));
+    const service = createService({ mergePullRequest: vi.fn(), startThread });
+    const { todo } = service.add({
+      ...THREAD,
+      input: {
+        title: "Build it",
+        items: ["Implement", "Test"],
+        prerequisites: ["Clone the repository"],
+        action: { type: "start_thread", prompt: "Go" },
+      },
+    });
+    // Prerequisites come first, and are stored as such.
+    expect(service.list({ status: "open" })[0]?.items).toEqual([
+      { id: "todo-2", text: "Clone the repository", checked: false, prerequisite: true },
+      { id: "todo-3", text: "Implement", checked: false },
+      { id: "todo-4", text: "Test", checked: false },
+    ]);
+
+    const refusal = await service.runAction(todo.id).catch((error: unknown) => error);
+    expect(refusal).toMatchObject({ code: "open_items" });
+    expect((refusal as Error).message)
+      .toContain('1 unchecked prerequisite: "Clone the repository" (todo-2)');
+    expect(startThread).not.toHaveBeenCalled();
+
+    service.setItemsChecked({ id: todo.id, check: ["todo-2"], uncheck: [] });
+    // The steps are the new thread's plan: they go along unchecked.
+    await expect(service.runAction(todo.id))
+      .resolves.toMatchObject({ status: "done", startedThread: { threadId: "child" } });
+  });
+
+  it("marks a start_thread card done with only its own steps open", () => {
+    const service = createService();
+    const { todo } = service.add({
+      ...THREAD,
+      input: {
+        title: "Build it",
+        items: ["Implement"],
+        action: { type: "start_thread", prompt: "Go" },
+      },
+    });
+    expect(service.resolve({ id: todo.id, status: "done", resolution: "sent_here" }).status)
+      .toBe("done");
+  });
+
+  it("merges prerequisites and steps separately when a card is restated", () => {
+    const service = createService();
+    const { todo } = service.add({
+      ...THREAD,
+      input: {
+        key: "build",
+        title: "Build it",
+        items: ["Implement"],
+        prerequisites: ["Clone"],
+        action: { type: "start_thread", prompt: "Go" },
+      },
+    });
+    service.setItemsChecked({ id: todo.id, check: ["todo-2", "todo-3"], uncheck: [] });
+
+    // Restating only the steps keeps the ticked prerequisite.
+    const restated = service.add({
+      ...THREAD,
+      input: {
+        key: "build",
+        title: "Build it",
+        items: ["Implement", "Document"],
+        action: { type: "start_thread", prompt: "Go" },
+      },
+    }).todo;
+    expect(restated.items).toEqual([
+      { id: "todo-2", text: "Clone", checked: true, prerequisite: true },
+      { id: "todo-3", text: "Implement", checked: true },
+      { id: "todo-4", text: "Document", checked: false },
+    ]);
+
+    // A step text moved to the prerequisites is a new prerequisite.
+    const updated = service.update({ id: todo.id, prerequisites: ["Clone", "Implement"] });
+    expect(updated.items).toEqual([
+      { id: "todo-2", text: "Clone", checked: true, prerequisite: true },
+      { id: "todo-5", text: "Implement", checked: false, prerequisite: true },
+      { id: "todo-3", text: "Implement", checked: true },
+      { id: "todo-4", text: "Document", checked: false },
+    ]);
+    expect(service.update({ id: todo.id, prerequisites: [] }).items?.map((item) => item.text))
+      .toEqual(["Implement", "Document"]);
+  });
+
   it("restates and ticks steps through update, and refuses ids it does not have", () => {
     const service = createService();
     const { todo } = service.add({ ...THREAD, input: { title: "Steps", items: ["A", "B"] } });
