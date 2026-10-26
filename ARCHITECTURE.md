@@ -434,6 +434,17 @@ the commands a model runs by default (`ignore_default_excludes = true`), so a
 `shell_environment_policy.set.<VAR>=""` override blanks each key for them. Changing a provider's endpoint or
 key reconnects Codex when it is idle; its models and rates do not.
 
+When the section opens, it offers the providers that Codex config files
+already define. The main process
+(`apps/desktop/src/main/settings/codex-model-provider-import.ts`) reads only
+`config.toml` in the active Codex home and in each auth profile home that
+Settings lists. It picks those paths itself, so the renderer cannot name a
+file. Import prefills the add form with the name, the Codex key as the id,
+`base_url`, the model each profile sets for it, and Runs locally for a
+loopback URL. It never copies a key, bearer token or header from the file. It
+skips a provider that PwrAgent cannot run, such as a `wire_api` other than
+`responses`, and says why.
+
 Every PwrAgent surface names a provider model with a qualified id,
 `@<provider>/<model>` (`packages/shared/src/codex-model-providers.ts`). Codex
 ids never start with `@`. `CodexModelProviderTranslator` is the one place the

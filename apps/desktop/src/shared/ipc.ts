@@ -764,6 +764,8 @@ export const SETTINGS_SET_CODEX_MODEL_PROVIDER_KEY_CHANNEL =
   "settings:set-codex-model-provider-key";
 export const SETTINGS_TEST_CODEX_MODEL_PROVIDER_CHANNEL =
   "settings:test-codex-model-provider";
+export const SETTINGS_SCAN_CODEX_MODEL_PROVIDER_IMPORTS_CHANNEL =
+  "settings:scan-codex-model-provider-imports";
 export const SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL =
   "settings:refresh-codex-discovery";
 export const SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL =
