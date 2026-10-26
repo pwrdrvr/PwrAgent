@@ -82,7 +82,7 @@ export async function readMergedSubAgentPage(params: {
   limit: number;
   storedCount: number;
   live: readonly ThreadSubAgentSummary[];
-  read(offset: number, limit: number): Promise<ThreadSubAgentSummary[]>;
+  read: (offset: number, limit: number) => Promise<ThreadSubAgentSummary[]>;
 }): Promise<ThreadSubAgentSummary[]> {
   const { offset, limit, read } = params;
   if (params.live.length === 0) return await read(offset, limit);
