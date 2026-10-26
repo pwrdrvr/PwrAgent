@@ -1899,6 +1899,11 @@ export type NavigationCounts = {
   unread: number;
   /** Unread and idle. Active and review are exclusive in sidebar counts. */
   review: number;
+  /**
+   * Distinct providers among the counted threads, sorted. Set only on the
+   * directory index, which counts every thread. Absent from older owners.
+   */
+  backends?: AppServerBackendKind[];
 };
 
 export type NavigationQueryCoverage = {

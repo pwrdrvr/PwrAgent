@@ -4166,6 +4166,7 @@ export function ThreadView(props: ThreadViewProps) {
   const header = pendingForkEnvironmentSetup ? (
     <ThreadPlaceholderHeader
       {...headerChrome}
+      backend={pendingForkEnvironmentSetup.backend}
       backendLabel={formatBackendLabel(
         pendingForkEnvironmentSetup.backend,
         props.backends,
@@ -4178,6 +4179,7 @@ export function ThreadView(props: ThreadViewProps) {
   ) : composerLaunchpad ? (
     <ThreadPlaceholderHeader
       {...headerChrome}
+      backend={composerLaunchpad.backend}
       backendLabel={formatBackendLabel(
         composerLaunchpad.backend,
         props.backends,

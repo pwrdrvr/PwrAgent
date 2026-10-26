@@ -74,6 +74,38 @@ describe("navigation query projection", () => {
     });
   });
 
+  it("names the providers that own threads in the directory index counts", () => {
+    const codexOnly = projectNavigationQuery({
+      index: snapshot([thread("one"), thread("two")]),
+      request: request({ kind: "directory-index" }),
+    });
+    expect(codexOnly.counts.backends).toEqual(["codex"]);
+
+    const mixed = projectNavigationQuery({
+      index: snapshot([
+        thread("one"),
+        thread("two", { source: "claude" }),
+        thread("three", { source: "acp:gemini" }),
+      ]),
+      request: request({ kind: "directory-index" }),
+    });
+    expect(mixed.counts.backends).toEqual(["acp:gemini", "claude", "codex"]);
+
+    const empty = projectNavigationQuery({
+      index: snapshot([]),
+      request: request({ kind: "directory-index" }),
+    });
+    expect(empty.counts.backends).toEqual([]);
+  });
+
+  it("keeps the provider list off scoped counts", () => {
+    const page = projectNavigationQuery({
+      index: snapshot([thread("one"), thread("two", { source: "claude" })]),
+      request: request({ kind: "lens", lens: "inbox" }),
+    });
+    expect(page.counts.backends).toBeUndefined();
+  });
+
   it.each([
     ["PwrSuiteLab", "pws"], ["PwrAgent", "PA"], ["PwrSnap", "ps"], ["trading-system", "TS"],
   ])("finds owner threads and directory-index projects by initials: %s / %s", (name, text) => {

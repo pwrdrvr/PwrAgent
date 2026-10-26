@@ -12,6 +12,7 @@ import {
   WorktreeIcon,
 } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
+import { useProviderChipNeeded } from "./provider-chip-visibility";
 import { copyText } from "../../lib/copy-text";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
@@ -100,7 +101,8 @@ export function ThreadMetaChips({
   chipVisibility,
   thread,
 }: ThreadMetaChipsProps) {
-  const showProvider = chipVisibility?.provider ?? true;
+  const providerChipNeeded = useProviderChipNeeded(thread.source);
+  const showProvider = (chipVisibility?.provider ?? true) && providerChipNeeded;
   const showBranch = chipVisibility?.branch ?? true;
   const maxLinkedDirectories = chipVisibility?.maxLinkedDirectories;
   const gitStateTooltip = useViewportTooltip({ className: "viewport-tooltip" });

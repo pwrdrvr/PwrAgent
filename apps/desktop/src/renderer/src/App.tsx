@@ -74,6 +74,7 @@ import {
   ThreadDependencyIndicatorsContext,
   useThreadDependencyIndicators,
 } from "./features/thread-dependencies/useThreadDependencyIndicators";
+import { ThreadProvidersContext } from "./features/navigation/provider-chip-visibility";
 import type { FederationProjectDirectory } from "./features/chrome/useFederationProjectStates";
 import type {
   LaunchpadMachineControl,
@@ -2484,6 +2485,16 @@ function DesktopAppShell(props: {
     .map(threadSummaryIdentityKey).sort().join("\n"), [navigation.threads]);
   const threadTodoController = useThreadTodos(desktopApi, mountedTodoThreadKeys);
   const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
+  // Providers with threads, from the directory index that counts them all.
+  // Keyed by the joined list so a refreshed page keeps one array identity.
+  const threadProvidersKey = navigation.pagedNavigation.resources
+    .get("directory-index")?.state.page?.counts.backends?.join("\n");
+  const threadProviders = useMemo(
+    () => threadProvidersKey === undefined
+      ? undefined
+      : threadProvidersKey.split("\n").filter(Boolean) as AppServerBackendKind[],
+    [threadProvidersKey],
+  );
   const operatorWaitsContext = useMemo(
     () => operatorRequests.ready ? {
       waitsByThreadKey: operatorRequests.waitsByThreadKey,
@@ -4021,6 +4032,7 @@ function DesktopAppShell(props: {
     <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
+    <ThreadProvidersContext.Provider value={threadProviders}>
     <TranscriptLinkProvider
       localInstanceId={liveFederationHealth?.instanceId}
       activeThread={navigation.selectedThread}
@@ -4640,6 +4652,7 @@ function DesktopAppShell(props: {
 
       {todoFullAccessRiskDialog}
     </TranscriptLinkProvider>
+    </ThreadProvidersContext.Provider>
     </ThreadDependencyIndicatorsContext.Provider>
     </OperatorWaitsContext.Provider>
     </ThreadTodoCountsContext.Provider>
