@@ -24549,8 +24549,7 @@ a.button {
   overflow-wrap: anywhere;
 }
 
-/* The proposed prompt, quoted. Three lines until it is opened; the clamp is
-   on the inner span so the padding never shows a partial fourth line. */
+/* The Markdown prompt rests at three lines; its own control opens it. */
 .thread-todo-card__prompt {
   display: block;
   width: 100%;
@@ -24565,28 +24564,36 @@ a.button {
   font-size: 12px;
   line-height: 17px;
   text-align: left;
-  cursor: pointer;
 }
 
-.thread-todo-card__prompt:focus-visible {
+.thread-todo-card__prompt-text:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
 .thread-todo-card__prompt-text {
-  display: -webkit-box;
+  max-height: 51px;
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .thread-todo-card__prompt.is-expanded .thread-todo-card__prompt-text {
-  display: block;
   max-height: 240px;
   overflow-y: auto;
-  -webkit-line-clamp: unset;
+}
+
+.thread-todo-card__prompt .thread-markdown {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.thread-todo-card__prompt .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.thread-todo-card__prompt .thread-markdown > * + * {
+  margin-top: 6px;
 }
 
 /* Opens and closes a resting card: the review card's "Show N more" type,
@@ -24615,6 +24622,10 @@ a.button {
   border-radius: 4px;
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+.thread-todo-card__prompt .thread-todo-card__more {
+  margin-left: 0;
 }
 
 .thread-todo-card__error {

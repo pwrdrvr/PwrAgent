@@ -1,5 +1,12 @@
 import type { ThreadReviewItem, ThreadTodo, ThreadTodoItem } from "@pwragent/shared";
 import { threadTodoPrerequisites, threadTodoSteps } from "@pwragent/shared";
+import { copyTextWithHtml } from "../../lib/copy-text";
+import { renderMarkdownToClipboardHtml } from "../thread-detail/markdown-clipboard-html";
+
+/** Keep Markdown for plain-text targets and semantic HTML for rich editors. */
+export function copyTodoMarkdown(markdown: string): Promise<void> {
+  return copyTextWithHtml(markdown, renderMarkdownToClipboardHtml(markdown));
+}
 
 /**
  * What a card puts on the clipboard: Markdown a new thread's composer takes
@@ -28,7 +35,8 @@ export function threadTodoMarkdown(
   }
   const action = todo.action;
   if (action?.type === "start_thread" && action.prompt.trim()) {
-    sections.push(`### Prompt\n\n${action.prompt.trim()}`);
+    const quoted = action.prompt.trim().split(/\r?\n/).map((line) => line ? `> ${line}` : ">").join("\n");
+    sections.push(`### Prompt\n\n${quoted}`);
   }
   return sections.join("\n\n");
 }

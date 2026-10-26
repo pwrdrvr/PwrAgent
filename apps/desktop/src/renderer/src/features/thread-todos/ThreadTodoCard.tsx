@@ -53,6 +53,7 @@ import {
   type ChipContextMenuPosition,
 } from "../chrome/ChipContextMenu";
 import { TodoProjectPicker } from "./TodoProjectPicker";
+import { ThreadMarkdown } from "../thread-detail/ThreadMarkdown";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "./TodoSplitButton";
 import type {
   ThreadTodoDoHereOptions,
@@ -68,6 +69,7 @@ import {
   useTrackedReview,
 } from "./review-tracking";
 import {
+  copyTodoMarkdown,
   threadTodoMarkdown,
   threadTodoStepsMarkdown,
   threadTodosMarkdown,
@@ -586,6 +588,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const wasConfirmingRef = useRef(false);
   const confirmTextId = useId();
   const [promptExpanded, setPromptExpanded] = useState(false);
+  const promptId = useId();
   const resting = useRestingCard(todo);
   const copying = useTodoCopy(todo, {
     markdown: () => threadTodoMarkdown(todo),
@@ -672,7 +675,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
 
   const copyPrompt = (): void => {
     if (!prompt) return;
-    void copyText(prompt).then(() => {
+    void copyTodoMarkdown(prompt).then(() => {
       clearTimeout(copiedTimerRef.current);
       setCopied(true);
       copiedTimerRef.current = setTimeout(() => setCopied(false), COPIED_MS);
@@ -953,15 +956,31 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           {action?.type === "start_thread" ? <TodoModelProvenance todo={todo} selection={selection} onPick={pickModel} disabled={props.running} /> : null}
           {prompt ? (
             <div className="thread-todo-card__prompt-block">
-              <button
-                type="button"
+              <div
                 className={`thread-todo-card__prompt${promptExpanded ? " is-expanded" : ""}`}
-                aria-expanded={promptExpanded}
-                aria-label={promptExpanded ? "Collapse proposed prompt" : "Show the whole proposed prompt"}
-                onClick={() => setPromptExpanded((current) => !current)}
               >
-                <span className="thread-todo-card__prompt-text">{prompt}</span>
-              </button>
+                <div
+                  id={promptId}
+                  role="region"
+                  aria-label="Proposed prompt"
+                  className="thread-todo-card__prompt-text"
+                  tabIndex={promptExpanded ? 0 : undefined}
+                  inert={!promptExpanded}
+                >
+                  <ThreadMarkdown text={prompt} variant="summary" />
+                </div>
+                <button
+                  type="button"
+                  className="thread-todo-card__more"
+                  aria-expanded={promptExpanded}
+                  aria-controls={promptId}
+                  aria-label={promptExpanded ? "Collapse proposed prompt" : "Show the whole proposed prompt"}
+                  onClick={() => setPromptExpanded((current) => !current)}
+                >
+                  {promptExpanded ? <ChevronUpIcon size={12} /> : <ChevronDownIcon size={12} />}
+                  {promptExpanded ? "Show less" : "Show prompt"}
+                </button>
+              </div>
               <button
                 type="button"
                 className="thread-todo-card__icon-button thread-todo-card__copy"
@@ -1034,8 +1053,8 @@ function useTodoCopy(
   const buttonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => () => clearTimeout(timerRef.current), []);
 
-  const copy = (text: string): void => {
-    void copyText(text).then(() => {
+  const copy = (text: string, markdown = false): void => {
+    void (markdown ? copyTodoMarkdown(text) : copyText(text)).then(() => {
       clearTimeout(timerRef.current);
       setCopied(true);
       timerRef.current = setTimeout(() => setCopied(false), COPIED_MS);
@@ -1047,7 +1066,7 @@ function useTodoCopy(
   return {
     copied,
     buttonRef,
-    copyCard: () => copy(options.markdown()),
+    copyCard: () => copy(options.markdown(), true),
     /**
      * A right press selects the word under the pointer on macOS, which
      * would replace a selection the operator made in order to copy it.
@@ -1079,7 +1098,7 @@ function useTodoCopy(
         label: "Copy to-do",
         aside: steps.length > 0 ? `${steps.length} ${steps.length === 1 ? "step" : "steps"}` : undefined,
         separated: items.length > 0,
-        action: () => copy(options.markdown()),
+        action: () => copy(options.markdown(), true),
       });
       const openSteps = steps.filter((item) => !item.checked);
       // With nothing ticked it would copy the same list as Copy to-do.
@@ -1087,7 +1106,7 @@ function useTodoCopy(
         items.push({
           label: "Copy open steps",
           aside: String(openSteps.length),
-          action: () => copy(threadTodoStepsMarkdown(openSteps)),
+          action: () => copy(threadTodoStepsMarkdown(openSteps), true),
         });
       }
       const all = options.copyAllTodos;
@@ -1095,7 +1114,7 @@ function useTodoCopy(
         items.push({
           label: "Copy all to-dos",
           aside: String(all.length),
-          action: () => copy(threadTodosMarkdown(all)),
+          action: () => copy(threadTodosMarkdown(all), true),
         });
       }
       setMenu({

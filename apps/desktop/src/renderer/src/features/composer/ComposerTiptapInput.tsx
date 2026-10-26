@@ -620,19 +620,25 @@ function isMarkdownThematicBreak(line: string): boolean {
   return /^\s{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line);
 }
 
+function matchMarkdownHeading(line: string): RegExpMatchArray | null {
+  return line.match(/^ {0,3}(#{1,6})(?:[ \t]+(.*)|$)/);
+}
+
 function isMarkdownBlockStart(line: string): boolean {
   return (
     parseBacktickFenceLine(line) !== undefined ||
     isMarkdownThematicBreak(line) ||
     matchMarkdownOrderedListItem(line) !== null ||
-    matchMarkdownBulletListItem(line) !== null
+    matchMarkdownBulletListItem(line) !== null ||
+    matchMarkdownHeading(line) !== null ||
+    /^ {0,3}>/.test(line)
   );
 }
 
 // Does the text contain block-level markdown that `buildMarkdownTiptapContent`
 // reconstructs but ProseMirror's default paste does not? Inline marks
 // (bold/italic/code) are handled by paste rules, so a pure-prose paste does NOT
-// match here — only a fenced code block or a list does. This is the gate for
+// match here — only block structure does. This is the gate for
 // rerouting a paste through the markdown parser instead of the default path.
 function containsBlockMarkdown(text: string): boolean {
   return text.split("\n").some((line) => isMarkdownBlockStart(line));
@@ -689,7 +695,7 @@ function parseMarkdownTableDelimiterRow(line: string): string[] | undefined {
 }
 
 function containsMarkdownTable(text: string): boolean {
-  const lines = text.split("\n");
+  const lines = text.split("\n").map(stripMarkdownBlockquoteMarkers);
   return lines.some((line, index) => {
     if (!line.trim()) {
       return false;
@@ -697,6 +703,16 @@ function containsMarkdownTable(text: string): boolean {
     const delimiterCells = parseMarkdownTableDelimiterRow(lines[index + 1] ?? "");
     return delimiterCells?.length === splitMarkdownTableCells(line).length;
   });
+}
+
+function stripMarkdownBlockquoteMarkers(line: string): string {
+  return line.replace(/^(?: {0,3}>[ \t]?)+/, "");
+}
+
+function containsMarkdownTaskList(text: string): boolean {
+  return text.split("\n").some((line) =>
+    /^[ \t]*(?:[-+*]|\d+[.)])[ \t]+\[[ xX]\](?:[ \t]|$)/.test(stripMarkdownBlockquoteMarkers(line)),
+  );
 }
 
 function isMarkdownSectionLabelLine(line: string): boolean {
@@ -1174,6 +1190,30 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
     if (isMarkdownThematicBreak(line)) {
       content.push({ type: "horizontalRule" });
       index += 1;
+      continue;
+    }
+
+    const heading = matchMarkdownHeading(line);
+    if (heading) {
+      content.push({
+        type: "heading",
+        attrs: { level: heading[1].length },
+        content: parseInlineMarkdown((heading[2] ?? "").replace(/[ \t]+#+[ \t]*$/, "")),
+      });
+      index += 1;
+      continue;
+    }
+
+    if (/^ {0,3}>/.test(line)) {
+      const quotedLines: string[] = [];
+      while (index < lines.length && /^ {0,3}>/.test(lines[index] ?? "")) {
+        quotedLines.push((lines[index] ?? "").replace(/^ {0,3}>[ \t]?/, ""));
+        index += 1;
+      }
+      content.push({
+        type: "blockquote",
+        content: buildMarkdownTiptapContent(quotedLines.join("\n")).content,
+      });
       continue;
     }
 
@@ -1818,16 +1858,18 @@ function pastePlainMarkdownText(
 ): boolean {
   const text = getPlainTextFromPaste(event);
   const preserveMarkdownTableSource = containsMarkdownTable(text);
+  const preserveMarkdownTaskState = containsMarkdownTaskList(text);
   // Only reroute through the markdown parser when the text carries block
   // structure the default paste won't rebuild (fences, bullet/ordered lists),
-  // or when text/plain contains a GFM table. In that table case, text/plain is
+  // or when text/plain contains a GFM table or task list. For those, text/plain is
   // the lossless Markdown source: ProseMirror adds blank paragraphs between
   // rows for plain-only paste, while the rich HTML path flattens adjacent cell
-  // text because the composer schema deliberately has no table node.
+  // text because the composer schema deliberately has no table node. It also
+  // has no task nodes, so rich HTML checkboxes would drop their checked state.
   // Pure prose — and inline-only markdown like **bold** / `code`, which paste
   // rules already handle — stays on the default path so we don't disturb
   // mid-sentence pastes.
-  if (!containsBlockMarkdown(text) && !preserveMarkdownTableSource) {
+  if (!containsBlockMarkdown(text) && !preserveMarkdownTableSource && !preserveMarkdownTaskState) {
     return false;
   }
 
@@ -1841,7 +1883,8 @@ function pastePlainMarkdownText(
   // parsed; it should only ensure the block is formed, which the HTML does here.
   //
   // We keep the custom parse (do NOT defer) only when text/plain is the
-  // authoritative markdown source: either there is no usable HTML, or the HTML
+  // authoritative markdown source: tables and task markers the schema cannot
+  // represent, or when there is no usable HTML, or the HTML
   // carries none of those block tags (so the default paste would flatten the
   // list/fence to literal prose). The tag test is a deliberately coarse presence
   // heuristic, not a per-block reconciliation; a mixed paste whose HTML encodes
@@ -1851,6 +1894,7 @@ function pastePlainMarkdownText(
   // bare paragraph HTML around a text/plain fence must still reach the parser.
   if (
     !preserveMarkdownTableSource
+    && !preserveMarkdownTaskState
     && clipboardHtmlHasStructuredBlocks(event)
   ) {
     return false;
