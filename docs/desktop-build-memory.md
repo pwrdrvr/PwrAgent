@@ -1,9 +1,10 @@
 # Desktop build heap investigation — 2026-10-26
 
-The desktop build's large heap comes from Rollup's module graphs and the
+The earlier Rollup build's large heap came from its module graphs and the
 generation, decoding, and composition of source maps. Main and renderer each
-need substantial memory independently. Building them in fresh, sequential Node
-processes reduces the peak without changing their generated files.
+needed substantial memory independently. Building them in fresh, sequential Node
+processes reduced the peak without changing their generated files. The final
+Rolldown/Oxc build is described in the follow-up section below.
 
 Measurements below used macOS arm64, Node 24.22.1, electron-vite 5.0.0,
 Vite 7.3.7, Rollup 4.61.1, and `--max-old-space-size=4096`, starting from
@@ -123,7 +124,7 @@ validated 238 debug files, including 115 maps with embedded sources. The final
 normal package build also matched the baseline's 344 file hashes. A full
 packaged application and desktop E2E were not run for this build-only change.
 
-Keep the CI heap allowance from PR #2924. Individual targets still exceed
+In these Rollup experiments, individual targets still exceeded
 2 GiB at a 4 GiB old-space allowance. Both layouts also completed a separate
 2 GiB diagnostic locally, with much more GC and variable timings; that does
 not reproduce or invalidate the original CI failure, or establish safe
@@ -187,7 +188,10 @@ and 1,523 MiB. Timing differences between the two native layouts are small
 relative to run variability; the memory reduction is the reason to retain
 separate processes. RSS was more variable without process isolation
 (1,213–2,293 MiB), so these are local measurements, not cross-platform promises.
-Keep the existing CI heap allowance.
+The 4 GiB old-space flag was an explicit setting for these comparative
+benchmarks. [PR #2924](https://github.com/pwrdrvr/PwrAgent/pull/2924) proposed
+a macOS CI heap override but was closed without merging; that flag did not
+become the macOS CI configuration.
 
 Two additional isolated native experiments kept all hidden maps:
 
@@ -231,3 +235,11 @@ locally. Broader lint, unit, platform E2E, and packaging checks are delegated
 to repository CI: Sandboxer rejected a new verification VM with
 `daily_limit_reached` (100 machine starts per day). No repository unit tests,
 lint, or typecheck were run locally during this follow-up.
+
+[PR #2934](https://github.com/pwrdrvr/PwrAgent/pull/2934) merged the
+Rolldown/Oxc build as `9683259cc9df18fc503f1b16dbfcfbc5c4b20f87`. All four
+self-hosted macOS E2E lanes passed in
+[run 40323514099](https://github.com/pwrdrvr/PwrAgent/actions/runs/40323514099),
+including a fresh build on the runner that had previously exhausted its heap.
+Those CI results used the default heap configuration and are separate from
+the local benchmarks with the explicit 4 GiB old-space setting.
