@@ -22,3 +22,22 @@ export function usageAccountKey(
   }
   return undefined;
 }
+
+/**
+ * The account behind a Codex model provider: the endpoint's origin and a
+ * digest of its key. Two providers with the same origin and key are one
+ * account; a different key or origin is a different one. The key itself is
+ * never part of what is stored, only this one-way digest of a digest.
+ */
+export function codexModelProviderAccountKey(baseUrl: string, apiKey: string | undefined): string {
+  let origin = baseUrl;
+  try {
+    const url = new URL(baseUrl);
+    origin = `${url.protocol}//${url.host}`.toLowerCase();
+  } catch {
+    // Validation rejects such URLs; keep the raw string as a stable fallback.
+  }
+  const keyDigest = apiKey ? createHash("sha256").update(apiKey).digest("hex") : "";
+  return createHash("sha256").update(`codex-model-provider\u0000${origin}\u0000${keyDigest}`)
+    .digest("hex").slice(0, 32);
+}

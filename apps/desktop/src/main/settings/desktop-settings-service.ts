@@ -1,6 +1,9 @@
 import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
+  codexModelProviderApiKeyEnv,
+  isValidCodexModelProviderId,
   normalizeThreadArchivePolicy,
+  type CodexModelProviderSettings,
 } from "@pwragent/shared";
 import { bundledGitExecutable, bundledGitLfsExecutable } from "../bundled-git";
 import { gitRuntimeEnvironment } from "../git-runtime";
@@ -813,6 +816,9 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
+    const codexModelProviderKeyIds = secretStorage.available && config.models?.codex?.providers?.length
+      ? await this.readCodexModelProviderKeyIds()
+      : new Set<string>();
     const managedCodexRuntime = this.managedCodexRuntime;
     const managedCodexError = this.managedCodexError;
     const codexDiscoveryCommand = this.resolveActiveCodexCommand(config);
@@ -1589,6 +1595,10 @@ export class DesktopSettingsService {
             value: config.models?.codex?.configOverrides ?? [],
             source: config.models?.codex?.configOverrides === undefined ? "default" : "config",
           },
+          providers: (config.models?.codex?.providers ?? []).map((provider) => ({
+            ...provider,
+            hasApiKey: codexModelProviderKeyIds.has(provider.id),
+          })),
           allowFast: this.resolveConfigBoolean(
             config.models?.codex?.allowFast,
             true,
@@ -3103,6 +3113,103 @@ export class DesktopSettingsService {
     return [...(this.readModelsConfig().codex?.configOverrides ?? [])];
   }
 
+  resolveCodexModelProviders(): CodexModelProviderSettings[] {
+    return [...(this.readModelsConfig().codex?.providers ?? [])];
+  }
+
+  /** Stored provider API keys, keyed by provider id. Main process only. */
+  async resolveCodexModelProviderKeys(): Promise<Record<string, string>> {
+    try {
+      const keys = parseCodexModelProviderKeys(
+        await this.options.secretStore.getSecret("codexModelProviderKeys"),
+      );
+      this.codexModelProviderKeyIds = new Set(Object.keys(keys));
+      return keys;
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Which providers have a stored key. Snapshots are read often, so the key
+   * map is decrypted at most once per process; every write goes through
+   * `setCodexModelProviderApiKey`, which keeps the ids current.
+   */
+  private codexModelProviderKeyIds?: Set<string>;
+
+  private async readCodexModelProviderKeyIds(): Promise<Set<string>> {
+    if (this.codexModelProviderKeyIds) return this.codexModelProviderKeyIds;
+    if (!await this.options.secretStore.hasSecret("codexModelProviderKeys").catch(() => false)) {
+      return new Set();
+    }
+    await this.resolveCodexModelProviderKeys();
+    return this.codexModelProviderKeyIds ?? new Set();
+  }
+
+  /**
+   * Spawn environment entries that hand each configured provider's key to the
+   * Codex App Server. Only the App Server gets these, never helper commands.
+   */
+  async resolveCodexModelProviderEnv(): Promise<Record<string, string>> {
+    const keys = await this.resolveCodexModelProviderKeys();
+    return Object.fromEntries(this.resolveCodexModelProviders().flatMap((provider) =>
+      keys[provider.id] ? [[codexModelProviderApiKeyEnv(provider.id), keys[provider.id]]] : []));
+  }
+
+  /** Save or, with no key, clear one provider's API key. */
+  async setCodexModelProviderApiKey(providerId: string, apiKey: string | undefined): Promise<void> {
+    if (!isValidCodexModelProviderId(providerId)) {
+      throw new Error("Unknown model provider id.");
+    }
+    const key = apiKey?.trim();
+    if (key && (key.length > 4096 || /[\0\r\n]/.test(key))) {
+      throw new Error("The API key must be one line.");
+    }
+    // Every provider's key lives in one secret, so writes take turns: two
+    // overlapping read-modify-writes would each drop the other's change.
+    const write = this.codexModelProviderKeyWrites
+      .catch(() => undefined)
+      .then(() => this.writeCodexModelProviderApiKey(providerId, key));
+    this.codexModelProviderKeyWrites = write;
+    await write;
+  }
+
+  private codexModelProviderKeyWrites: Promise<void> = Promise.resolve();
+
+  private async writeCodexModelProviderApiKey(providerId: string, key: string | undefined): Promise<void> {
+    const keys = await this.resolveCodexModelProviderKeys();
+    if (key) {
+      keys[providerId] = key;
+    } else {
+      delete keys[providerId];
+    }
+    if (Object.keys(keys).length) {
+      await this.options.secretStore.setSecret("codexModelProviderKeys", JSON.stringify(keys));
+    } else {
+      await this.options.secretStore.deleteSecret("codexModelProviderKeys");
+    }
+    this.codexModelProviderKeyIds = new Set(Object.keys(keys));
+    this.emitCodexModelProviderKeysChanged();
+  }
+
+  private readonly codexModelProviderKeyListeners = new Set<() => void>();
+
+  /** Keys reach Codex through its environment, so a change needs a reconnect. */
+  onCodexModelProviderKeysChanged(listener: () => void): () => void {
+    this.codexModelProviderKeyListeners.add(listener);
+    return () => this.codexModelProviderKeyListeners.delete(listener);
+  }
+
+  private emitCodexModelProviderKeysChanged(): void {
+    for (const listener of this.codexModelProviderKeyListeners) {
+      try {
+        listener();
+      } catch {
+        // A listener failure must not undo a saved key.
+      }
+    }
+  }
+
   resolveCodexLocalModelIds(): string[] {
     return [...(this.readModelsConfig().codex?.localModelIds ?? [])];
   }
@@ -4355,8 +4462,17 @@ function secretEnvironmentKey(
     case "mcpStdioConnectionSecrets":
     case "decisionLocalApiKey":
     case "typesafeJevApiKey":
+    case "codexModelProviderKeys":
       return undefined;
   }
+}
+
+function parseCodexModelProviderKeys(value: string | undefined): Record<string, string> {
+  if (!value) return {};
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] =>
+    typeof entry[1] === "string" && entry[1].length > 0));
 }
 
 function feishuTenantUrlForRegion(region: "feishu" | "lark"): string {

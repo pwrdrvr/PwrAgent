@@ -43,6 +43,7 @@ import {
   buildThreadUrl,
   formatFederationPeerDisplayLabel,
   isRemoteFederationTarget,
+  resolveModelOptionReference,
   THREAD_ENVIRONMENT_NONE,
 } from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
@@ -585,6 +586,23 @@ async function createInstanceThread(
   const projectBackend = args.backend
     ?? config.launchpad?.backend
     ?? config.defaults.backend;
+  if (args.model) {
+    // Match a model named the way a person says it ("Refuseless / GLM-5.3
+    // abliterated") to the owner's exact id. Anything unmatched passes
+    // through as before, for the owner to accept or refuse.
+    const listed = await listInstanceBackends(backendFor(runtime, instance));
+    const options = listed.backends?.find((entry) => entry.backend === projectBackend)?.modelOptions ?? [];
+    const reference = resolveModelOptionReference(options, args.model);
+    if (reference.candidates.length > 1) {
+      return failure(
+        "invalid_arguments",
+        `model="${args.model}" matches several models on ${instance.label}: ${reference.candidates.map((model) => model.id).join(", ")}. Pass one exact id.`,
+      );
+    }
+    if (reference.id && reference.id !== args.model) {
+      args = { ...args, model: reference.id };
+    }
+  }
   if (args.tokenMiserEnabled !== undefined && projectBackend !== "codex") {
     return failure(
       "invalid_arguments",

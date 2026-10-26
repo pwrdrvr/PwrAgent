@@ -1,4 +1,5 @@
 import { CODEX_SPEED_LABELS, codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared";
+import { codexProviderIdOfModel, formatModelOptionLabel } from "@pwragent/shared";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
 import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
 import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-update-diagnostics";
@@ -265,6 +266,8 @@ import {
 import { useNavigationQueryResource } from "../../lib/useNavigationQueryResource";
 import {
   ComposerDropdown,
+  type ComposerDropdownGroup,
+  type ComposerDropdownOption,
   useDismissableMenu,
 } from "./ComposerDropdown";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
@@ -1107,6 +1110,29 @@ const REVIEW_TARGET_OPTIONS: Array<{
     description: "Review using custom instructions",
   },
 ];
+
+function toModelDropdownOption(model: ModelOption): ComposerDropdownOption {
+  return {
+    label: model.label ?? model.id,
+    ...(model.providerLabel ? { selectedLabel: formatModelOptionLabel(model) } : {}),
+    value: model.id,
+  };
+}
+
+function groupModelOptionsByProvider(models: readonly ModelOption[]): ComposerDropdownGroup[] {
+  const groups = new Map<string, ComposerDropdownGroup>();
+  for (const model of models) {
+    const providerId = model.providerId;
+    if (!providerId) continue;
+    let group = groups.get(providerId);
+    if (!group) {
+      group = { label: model.providerLabel ?? providerId, options: [] };
+      groups.set(providerId, group);
+    }
+    group.options.push(toModelDropdownOption(model));
+  }
+  return [...groups.values()];
+}
 
 function getDefaultModelOption(backend?: BackendSummary): ModelOption | undefined {
   const models = backend?.launchpadOptions?.models ?? [];
@@ -10575,16 +10601,39 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const prAutoDispatchAvailable =
     backgroundPrPollingEnabled && prAutoDispatchAllowed;
   const modelOptions = backend?.launchpadOptions?.models ?? [];
+  // Codex model providers list their models after Codex's own, one titled
+  // section each. Codex fixes a thread's provider when it starts, so an
+  // existing thread offers only its own provider's models.
+  const threadModelProvider = backend?.kind === "codex" && props.thread && !props.launchpad
+    ? codexProviderIdOfModel(props.thread.model)
+    : undefined;
+  const ownModelOptions = threadModelProvider
+    ? modelOptions.filter((model) => model.providerId === threadModelProvider)
+    : modelOptions.filter((model) => !model.providerId);
+  const providerModelOptions = modelOptions.filter((model) => model.providerId);
+  const providerModelGroups = props.launchpad
+    ? groupModelOptionsByProvider(providerModelOptions)
+    : [];
+  const threadProviderLabel = threadModelProvider
+    ? ownModelOptions[0]?.providerLabel ?? threadModelProvider
+    : "Codex";
+  const modelMenuFootnote = backend?.kind === "codex"
+    && props.thread
+    && !props.launchpad
+    && (threadModelProvider || providerModelOptions.length > 0)
+    ? `This thread runs on ${threadProviderLabel}. To use another provider, hand it off to a new thread.`
+    : undefined;
   const showOlderCodexModelsUnderOther = backend?.kind === "codex"
-    && modelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
+    && !threadModelProvider
+    && ownModelOptions.some((model) => /^gpt-6(?:[.-]|$)/iu.test(model.id));
   const otherModelOptions = backend?.kind === "claude"
-    ? modelOptions.filter((model) => model.other)
+    ? ownModelOptions.filter((model) => model.other)
     : showOlderCodexModelsUnderOther
-    ? modelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
+    ? ownModelOptions.filter((model) => /^gpt-5\.(?:5|6)(?:-|$)/iu.test(model.id))
     : [];
   const visibleModelOptions = otherModelOptions.length
-    ? modelOptions.filter((model) => !otherModelOptions.includes(model))
-    : modelOptions;
+    ? ownModelOptions.filter((model) => !otherModelOptions.includes(model))
+    : ownModelOptions;
   const selectedModelOption =
     modelOptions.find((option) => option.id === currentSettings?.model) ??
     getDefaultModelOption(backend);
@@ -14138,14 +14187,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               ariaLabel="Model"
               disabled={launchpadSubmitting}
               value={selectedModelOption?.id ?? ""}
-              options={visibleModelOptions.map((model) => ({
-                label: model.label ?? model.id,
-                value: model.id,
-              }))}
-              otherOptions={otherModelOptions.map((model) => ({
-                label: model.label ?? model.id,
-                value: model.id,
-              }))}
+              options={visibleModelOptions.map(toModelDropdownOption)}
+              optionsLabel={formatBackendLabel(backend.kind)}
+              groups={providerModelGroups}
+              footnote={modelMenuFootnote}
+              otherOptions={otherModelOptions.map(toModelDropdownOption)}
               otherLabel={backend.kind === "claude" ? "Other Models" : undefined}
               onChange={(value) => {
                 const model = value;

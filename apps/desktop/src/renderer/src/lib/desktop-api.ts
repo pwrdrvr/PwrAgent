@@ -561,6 +561,10 @@ import type {
   PickGhCommandResponse,
   PickGitCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
+  SetCodexModelProviderApiKeyRequest,
+  SetCodexModelProviderApiKeyResponse,
+  TestCodexModelProviderRequest,
+  CodexModelProviderTestResult,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
   RecordComposerDraftHistoryResponse,
@@ -1281,6 +1285,12 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   refreshCodexDiscovery?: (
     request: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;
+  setCodexModelProviderApiKey?: (
+    request: SetCodexModelProviderApiKeyRequest
+  ) => Promise<SetCodexModelProviderApiKeyResponse>;
+  testCodexModelProvider?: (
+    request: TestCodexModelProviderRequest
+  ) => Promise<CodexModelProviderTestResult>;
   createCodexAuthProfile?: (
     request: CreateDesktopCodexAuthProfileRequest,
   ) => Promise<CreateDesktopCodexAuthProfileResponse>;
