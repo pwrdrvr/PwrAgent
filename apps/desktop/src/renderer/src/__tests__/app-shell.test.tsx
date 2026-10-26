@@ -6075,6 +6075,21 @@ describe("App", () => {
       name: "Name this thread something funny and spunky. Something about potatoes."
     });
 
+    // The owner stores a rename before it announces one. The event patches
+    // the header in place, and 250 ms later the selected-thread detail read
+    // that it triggers replaces it with whatever the owner returns. An owner
+    // that still returned the derived title put that title back, so the
+    // assertion below passed only when it ran before that read.
+    navigationSnapshot = {
+      ...navigationSnapshot,
+      fetchedAt: Date.now(),
+      threads: navigationSnapshot.threads.map((thread) =>
+        thread.id === "thread-new"
+          ? { ...thread, title: "Spud up the thread", titleSource: "explicit" as const }
+          : thread
+      ),
+    };
+
     await act(async () => {
       for (const listener of agentEventListeners) {
         listener({
