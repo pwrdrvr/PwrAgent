@@ -216,20 +216,19 @@ describe("Claude ReportFindings outcomes", () => {
       expect(claudeSkippedFindingsGuidance(withOutcomes(undefined, undefined))).toBeUndefined();
     });
 
-    it("says skipped findings stay open and how to decline or defer each one", () => {
+    it("says skipped findings were declined and how to defer one or document why", () => {
       const guidance = claudeSkippedFindingsGuidance(withOutcomes("fixed", "skipped"))!;
-      expect(guidance).toContain("`skipped` does not settle a finding: this one stays open there until you settle it.");
+      expect(guidance).toContain("It recorded this `skipped` finding as declined, with no reason:");
       expect(guidance).toContain("- src/migrate.ts:2 The migration parses every payload without a guard.");
       expect(guidance).not.toContain("Access change stamps every launchpad");
       for (const word of ["update_review_item", "declined", "deferred", "todoId", "add_todo", "list_reviews"]) {
         expect(guidance).toContain(word);
       }
-      expect(guidance).toContain("`fixed` findings as addressed and `no_change_needed` findings as declined");
     });
 
     it("lists ten skipped findings and counts the rest", () => {
       const guidance = claudeSkippedFindingsGuidance(withOutcomes(...Array.from({ length: 12 }, () => "skipped")))!;
-      expect(guidance).toContain("these 12 stay open there until you settle each one.");
+      expect(guidance).toContain("these 12 `skipped` findings as declined");
       expect(guidance.split("\n").filter((line) => line.startsWith("- src/"))).toHaveLength(10);
       expect(guidance).toContain("- and 2 more");
     });

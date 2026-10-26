@@ -136,6 +136,12 @@ describe("review tracking runtime eligibility", () => {
     expect(() => handler.reviews!.update(THREAD, {
       id: review.id, itemId, status: "deferred", note: "Later.", todoId: elsewhere.id,
     })).toThrow("No to-do card with that todoId belongs to this thread.");
+    const { todo: closed } = getThreadTodoService().add({ ...THREAD, input: { title: "Already dismissed" } });
+    getThreadTodoService().resolve({ id: closed.id, status: "dismissed" });
+    expect(() => handler.reviews!.update(THREAD, {
+      id: review.id, itemId, status: "deferred", note: "Later.", todoId: closed.id,
+    })).toThrow("That to-do card is closed.");
+    expect(getThreadReviewService().get(review.id)?.items[0]?.status).toBe("open");
     const deferred = handler.reviews!.update(THREAD, {
       id: review.id, itemId, status: "deferred", note: "Needs a design pass.", todoId: todo.id,
     });

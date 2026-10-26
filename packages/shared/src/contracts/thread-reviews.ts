@@ -21,12 +21,16 @@ export type ThreadReviewStatus = "open" | "handled" | "dismissed";
 export type ThreadReviewItemStatus = "open" | "addressed" | "declined" | "deferred";
 export const THREAD_REVIEW_ITEM_STATUSES: readonly ThreadReviewItemStatus[] = ["open", "addressed", "declined", "deferred"];
 /**
- * Older names a finding update still accepts. Records and peers written
- * before `declined` store `dismissed`; `fixed` is Claude Code's word.
+ * Other names a finding update accepts. Records and peers written before
+ * `declined` store `dismissed`. Claude Code's code review reports `fixed`,
+ * `no_change_needed`, and `skipped` ("real but not applied"); it treats all
+ * three as settled, so PwrAgent does too.
  */
 export const THREAD_REVIEW_ITEM_STATUS_ALIASES: Readonly<Record<string, ThreadReviewItemStatus>> = {
   dismissed: "declined",
   fixed: "addressed",
+  no_change_needed: "declined",
+  skipped: "declined",
 };
 export type ThreadReviewIdentity = { backend: AppServerBackendKind; threadId: string; federationTarget?: FederationRemoteTarget };
 

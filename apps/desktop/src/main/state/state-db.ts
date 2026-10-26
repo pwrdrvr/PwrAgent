@@ -2876,14 +2876,18 @@ CREATE INDEX IF NOT EXISTS idx_app_runtime_instances_profile_cwd_hash
 
 /**
  * A finding declined before `declined` had its name was stored `dismissed`.
- * This renames each in place, in the open's one transaction. A profile with
- * none left writes nothing; the prefilter also reads dismissed reviews, which
- * keep that name, and leaves them as they are.
+ * This renames each in place, in the open's one transaction. The query
+ * selects only rows whose findings still say `dismissed`, so a profile with
+ * none left reads no payload into JavaScript and writes nothing. A dismissed
+ * review keeps its own name. CASE keeps json_each off a malformed payload.
  */
 function ensureThreadReviewFindingStatusNames(db: BetterSqlite3.Database): void {
   const rows = db.prepare(
     `SELECT review_id, payload FROM thread_reviews
-       WHERE payload LIKE '%"status":"dismissed"%'`,
+       WHERE CASE WHEN NOT json_valid(payload) THEN 0
+         WHEN json_type(payload, '$.items') IS NOT 'array' THEN 0
+         ELSE EXISTS (SELECT 1 FROM json_each(payload, '$.items')
+           WHERE json_extract(value, '$.status') = 'dismissed') END`,
   ).all() as Array<{ review_id: string; payload: string }>;
   if (rows.length === 0) return;
   const update = db.prepare("UPDATE thread_reviews SET payload = ? WHERE review_id = ?");

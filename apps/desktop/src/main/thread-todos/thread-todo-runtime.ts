@@ -292,12 +292,18 @@ export function installThreadTodoRuntime(params: {
         // A deferral names a card this thread raised; the lookup refuses any other.
         let todo: { id: string; title: string } | undefined;
         if (request.todoId) {
+          let card: ThreadTodo;
           try {
-            todo = todos.findForThread({ ...identity, id: request.todoId });
+            card = todos.findForThread({ ...identity, id: request.todoId });
           } catch (error) {
             if (!(error instanceof ThreadTodoError)) throw error;
             throw new ThreadReviewError("not_found", "No to-do card with that todoId belongs to this thread.");
           }
+          // A closed card tracks nothing; the finding would leave every queue.
+          if (card.status !== "open") {
+            throw new ThreadReviewError("conflict", "That to-do card is closed. Defer the finding to an open card.");
+          }
+          todo = card;
         }
         return reviews.update(request, "agent", identity, todo && { id: todo.id, title: todo.title });
       },

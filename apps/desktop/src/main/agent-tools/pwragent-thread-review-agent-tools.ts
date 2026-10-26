@@ -48,9 +48,10 @@ const schemas: Record<(typeof PWRAGENT_THREAD_REVIEW_OPERATION_NAMES)[number], R
       ...resolutionFields, itemId: stringField,
       status: {
         type: "string",
-        // `dismissed` and `fixed` are older names for declined and addressed.
-        enum: ["open", "addressed", "declined", "deferred", "dismissed", "fixed"],
-        description: "addressed: you fixed it. declined: it will not be fixed. deferred: a to-do card tracks it for later. open: reopen it. `dismissed` and `fixed` are accepted as older names for declined and addressed.",
+        // Older and Claude Code names: THREAD_REVIEW_ITEM_STATUS_ALIASES.
+        enum: ["open", "addressed", "declined", "deferred", "dismissed", "fixed", "no_change_needed", "skipped"],
+        description: "addressed: you fixed it. declined: it will not be fixed. deferred: a to-do card tracks it for later. open: reopen it."
+          + " fixed means addressed. dismissed, no_change_needed, and skipped mean declined.",
       },
       todoId: { ...stringField, description: "Required with deferred: the id add_todo returned for the card that tracks this finding." },
     },
@@ -76,7 +77,7 @@ export const OPEN_FINDINGS_GUIDANCE =
 const descriptions = {
   record_review: "Track an external or manually written code review on this thread. Native, managed, and Claude Code reviews are tracked automatically. Use a stable sourceKey. Findings remain on the operator's To-do list until each is addressed, declined, or deferred. Do not use this for progress updates.",
   list_reviews: "List this thread's tracked reviews and findings, including stable ids, statuses, last update dates, and resolution notes/links. Defaults to open reviews. Read dismissed reviews with status all: do not address them unless the operator asks to reopen them.",
-  update_review_item: "Settle one finding. addressed: you fixed it, so note what changed. declined: it will not be fixed, so note why. deferred: an add_todo card tracks it, so pass its todoId and note why it waits. open reopens it. A finding left alone or reported skipped stays open on the operator's To-do list. Settling the last open finding marks the review handled.",
+  update_review_item: "Settle one finding. addressed: you fixed it, so note what changed. declined: it will not be fixed, so note why. deferred: an add_todo card tracks it, so pass its todoId and note why it waits. open reopens it. A finding left alone stays open on the operator's To-do list. Settling the last open finding marks the review handled.",
   update_review: "Dismiss, reopen, or document an entire review as handled. A dismissed review stays visible as Dismissed. A review with open findings cannot be marked handled: settle each finding first with update_review_item. Use note and optionally url to document the final outcome.",
 };
 

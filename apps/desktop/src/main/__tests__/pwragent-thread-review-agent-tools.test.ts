@@ -58,13 +58,14 @@ describe("review tools", () => {
   it("names every way to settle a finding in its schema and guidance", () => {
     const tool = buildPwrAgentThreadReviewToolDefinitions(handler).find((entry) => entry.name === "update_review_item")!;
     const properties = tool.inputSchema.properties as Record<string, { enum?: string[] }>;
-    expect(properties.status!.enum).toEqual(["open", "addressed", "declined", "deferred", "dismissed", "fixed"]);
+    expect(properties.status!.enum).toEqual([
+      "open", "addressed", "declined", "deferred", "dismissed", "fixed", "no_change_needed", "skipped",
+    ]);
     expect(properties).toHaveProperty("todoId");
     for (const word of ["addressed", "declined", "deferred", "add_todo", "todoId"]) {
       expect(OPEN_FINDINGS_GUIDANCE).toContain(word);
       expect(tool.description).toContain(word);
     }
-    expect(tool.description).toContain("skipped");
   });
 
   it("settles findings through their older names and passes a deferral's todoId to the handler", async () => {
@@ -83,8 +84,8 @@ describe("review tools", () => {
       .toMatchObject({ ok: true });
     expect(await tool.dispatch({ id: review.id, itemId: two!.id, status: "fixed", note: "Done." }, context))
       .toMatchObject({ ok: true });
-    expect(await tool.dispatch({ id: review.id, itemId: three!.id, status: "skipped", note: "Later." }, context))
-      .toMatchObject({ ok: false, code: "invalid_arguments", message: expect.stringContaining("leaves a finding open") });
+    expect(await tool.dispatch({ id: review.id, itemId: three!.id, status: "skipped", note: "Out of scope." }, context))
+      .toMatchObject({ ok: true, data: { review: { items: [{}, {}, { status: "declined" }] } } });
     expect(await tool.dispatch({ id: review.id, itemId: three!.id, status: "deferred", note: "Later." }, context))
       .toMatchObject({ ok: false, code: "invalid_arguments", message: expect.stringContaining("todoId") });
     expect(await tool.dispatch({ id: review.id, itemId: three!.id, status: "deferred", note: "Later.", todoId: "todo-1" }, context))

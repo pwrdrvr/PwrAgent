@@ -35,11 +35,12 @@ refuses any other id. That keeps the work on the operator's list after the
 finding leaves it. The repository's "Deferred work" rule in `AGENTS.md` gives
 such a card a `start_thread` action whose prompt stands alone.
 
-`update_review_item` also accepts two older names: `dismissed` (declined) and
-`fixed` (addressed, Claude Code's word). It refuses `skipped` with a message
-saying the finding stays open until it is declined or deferred. The tool keeps
-its name: a second name for the same tool would put two entries in the
-catalog for one action.
+`update_review_item` also accepts other names. `dismissed` is the older name
+for declined. Claude Code's code review reports `fixed`, `no_change_needed`,
+and `skipped`, and treats all three as settled. `fixed` means addressed. The
+other two mean declined: `skipped` is Claude Code's "real but not applied".
+The tool keeps its name: a second name for the same tool would put two
+entries in the catalog for one action.
 
 Builds before this vocabulary stored a declined finding as `dismissed`. Each
 open of the state database renames those in place, in its one schema
@@ -153,23 +154,24 @@ by location and title, then by location, then by position when both lists have
 the same length. Position alone pairs only within the review's own turn; a
 later turn's report must also match one finding's location. It publishes
 `thread/review/outcomesReported`. Tracking marks `fixed` findings addressed
-and `no_change_needed` findings declined, with the agent as the actor, in one
-commit. Each note names the reported word ("Addressed automatically: the code
+and `no_change_needed` and `skipped` findings declined, with the agent as the
+actor, in one commit. That matches Claude Code, which counts all three as
+settled. Each note names the reported word ("Addressed automatically: the code
 review reported it `fixed`."), so an agent reading `list_reviews` can tell an
 automatic outcome from one it recorded. A reported outcome never overrides an
 outcome already recorded for that finding. An
 outcome report that matches no earlier review is recorded as a new review with
 those outcomes. The checked-in `thread-review-reported-outcomes` budget
 measures one commit per settling report (~8 KB WAL, about 0.8 MB/day at 100
-reports per day). Repeats and skipped-only reports make no commits.
+reports per day). Repeats make no commits.
 
-`skipped` findings stay open: PwrAgent cannot tell why a finding was skipped,
-and Claude Code's word reads like a settled outcome. A `PostToolUse` hook on
-`ReportFindings` (`claudeReportFindingsHooks`) therefore adds context to the
-tool result when a report has any. It lists them (ten at most), says they stay
-open on the operator's To-do list, and tells the agent to decline each one with
-a reason or defer it to an `add_todo` card through `update_review_item`. A
-report without `skipped` findings gets no added context.
+A `skipped` finding is real, and the report gives no reason for it. A
+`PostToolUse` hook on `ReportFindings` (`claudeReportFindingsHooks`) therefore
+adds context to the tool result when a report has any. It lists them (ten at
+most) and says they were recorded as declined with no reason. It tells the
+agent how to defer one worth doing later to an `add_todo` card, or document a
+decline, through `update_review_item`. A report without `skipped` findings
+gets no added context.
 
 ## Controls
 

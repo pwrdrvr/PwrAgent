@@ -43,7 +43,8 @@ function operatorReviewNote(
     case "declined":
       return "Declined by operator.";
     case "deferred":
-      return "Deferred by operator.";
+      // A deferral needs a to-do card, which an operator update never carries.
+      return undefined;
     case "dismissed":
       // A finding's older name for declined, from a viewer that predates it.
       return request.itemId ? "Declined by operator." : "Dismissed by operator.";

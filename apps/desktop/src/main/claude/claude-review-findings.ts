@@ -68,10 +68,11 @@ export function parseClaudeFindingsReport(input: unknown): ClaudeFindingsReport 
 const SKIPPED_TITLES_SHOWN = 10;
 
 /**
- * What the agent is told when its report leaves findings `skipped`. Claude
- * Code's word reads like a settled outcome, but PwrAgent cannot know why a
- * finding was skipped, so it stays open on the operator's To-do list. The
- * agent must decline it with a reason or defer it to a to-do card.
+ * What the agent is told when its report has `skipped` findings. Claude Code
+ * means "real but not applied" and treats it as settled, so PwrAgent records
+ * each as declined. The report carries no reason, and a real finding worth
+ * doing later belongs on a to-do card, so the agent is told how to defer it
+ * or document the decline.
  */
 export function claudeSkippedFindingsGuidance(report: ClaudeFindingsReport): string | undefined {
   const skipped = report.findings.filter((finding) => finding.outcome === "skipped");
@@ -80,13 +81,13 @@ export function claudeSkippedFindingsGuidance(report: ClaudeFindingsReport): str
     `- ${finding.file}${finding.line ? `:${finding.line}` : ""} ${findingTitle(finding)}`);
   if (skipped.length > SKIPPED_TITLES_SHOWN) titles.push(`- and ${skipped.length - SKIPPED_TITLES_SHOWN} more`);
   return [
-    `PwrAgent tracks this review on the operator's To-do list. \`skipped\` does not settle a finding: ${skipped.length === 1
-      ? "this one stays" : `these ${skipped.length} stay`} open there until you settle ${skipped.length === 1 ? "it" : "each one"}.`,
+    `PwrAgent tracks this review on the operator's To-do list. It recorded ${skipped.length === 1
+      ? "this `skipped` finding" : `these ${skipped.length} \`skipped\` findings`} as declined, with no reason:`,
     ...titles,
-    "Use PwrAgent's update_review_item for each: status declined, with a note giving the reason, or status deferred,"
-      + " with the todoId of an add_todo card (a start_thread action whose prompt stands alone) and a note on why it waits."
+    "If one is worth doing later, raise an add_todo card (a start_thread action whose prompt stands alone),"
+      + " then call PwrAgent's update_review_item with status deferred, its todoId, and a note on why it waits."
+      + " To record why one will not be fixed, call update_review_item with status declined and a note."
       + " list_reviews gives the review and finding ids.",
-    "PwrAgent records `fixed` findings as addressed and `no_change_needed` findings as declined.",
   ].join("\n");
 }
 

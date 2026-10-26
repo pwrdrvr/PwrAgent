@@ -43,7 +43,7 @@
   - `addressed`: you fixed it. Note what changed.
   - `declined`: it is not worth doing. Note the reason.
   - `deferred`: it is worth doing later. Raise the card first, then pass its id as `todoId`.
-  - Claude Code's `skipped` outcome settles nothing. The finding stays open on the operator's To-do list.
+  - Claude Code's `skipped` outcome is recorded as `declined` with no reason. Defer a skipped finding that is still worth doing.
   - [docs/thread-reviews.md](docs/thread-reviews.md#finding-outcomes) defines the outcomes.
 
 ### Command output

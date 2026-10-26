@@ -38,6 +38,7 @@ const TRACKING_STARTED_KEY = "thread_review_tracking_started_at";
  */
 export const REPORTED_FIXED_NOTE = "Addressed automatically: the code review reported it `fixed`.";
 export const REPORTED_NO_CHANGE_NOTE = "Declined automatically: the code review reported `no_change_needed`.";
+export const REPORTED_SKIPPED_NOTE = "Declined automatically: the code review reported it `skipped`, real but not applied.";
 /** A review's note once nothing in it is open. */
 export const ALL_FINDINGS_SETTLED_NOTE = "Every finding is addressed, declined, or deferred.";
 
@@ -257,9 +258,6 @@ export class ThreadReviewService {
       }
       const item = request.itemId ? review.items.find((entry) => entry.id === request.itemId) : undefined;
       if (request.itemId && !item) throw new ThreadReviewError("not_found", "Review finding not found.");
-      if (item && (request.status as string) === "skipped") {
-        throw new ThreadReviewError("invalid_arguments", SKIPPED_IS_NOT_AN_OUTCOME);
-      }
       const statuses: readonly string[] = item ? THREAD_REVIEW_ITEM_STATUSES : ["open", "handled", "dismissed"];
       if (!statuses.includes(request.status)) {
         throw new ThreadReviewError("invalid_arguments", item
@@ -329,9 +327,9 @@ export class ThreadReviewService {
    * Records what the reviewer later reported about its own findings, in one
    * commit. Only open findings change: a reviewer's later report never
    * overrides an outcome the operator or an agent already recorded. `fixed`
-   * becomes addressed and `no_change_needed` declined. A `skipped` finding
-   * stays open, because it is real and still unaddressed: the agent is told
-   * to decline or defer it (`claudeSkippedFindingsGuidance`).
+   * becomes addressed; `no_change_needed` and `skipped` become declined, as
+   * the reviewer treats all three as settled. A skipped finding worth doing
+   * later is the agent's to defer (`claudeSkippedFindingsGuidance`).
    */
   applyReportedOutcomes(
     identity: ThreadReviewIdentity,
@@ -339,8 +337,7 @@ export class ThreadReviewService {
     outcomes: AppServerReviewFindingOutcome[],
   ): ThreadReview | undefined {
     const id = reviewId(identity, sourceKey);
-    const settles = (review: ThreadReview) => outcomes.some(({ index, outcome }) =>
-      outcome !== "skipped" && review.items[index]?.status === "open");
+    const settles = (review: ThreadReview) => outcomes.some(({ index }) => review.items[index]?.status === "open");
     const snapshot = this.get(id);
     if (!snapshot || !settles(snapshot)) return snapshot;
     let changed = false;
@@ -350,11 +347,12 @@ export class ThreadReviewService {
       const now = this.now();
       for (const { index, outcome } of outcomes) {
         const item = review.items[index];
-        if (outcome === "skipped" || item?.status !== "open") continue;
+        if (item?.status !== "open") continue;
         item.status = outcome === "fixed" ? "addressed" : "declined";
         item.updatedAt = now;
         item.resolution = {
-          note: outcome === "fixed" ? REPORTED_FIXED_NOTE : REPORTED_NO_CHANGE_NOTE,
+          note: outcome === "fixed" ? REPORTED_FIXED_NOTE
+            : outcome === "skipped" ? REPORTED_SKIPPED_NOTE : REPORTED_NO_CHANGE_NOTE,
           actor: "agent", at: now,
         };
       }
@@ -376,10 +374,6 @@ export class ThreadReviewService {
     this.onChanged({ backend: review.backend, threadId: review.threadId, at: this.now() });
   }
 }
-
-/** Why `skipped` cannot settle a finding, wherever an agent tries it. */
-export const SKIPPED_IS_NOT_AN_OUTCOME =
-  "`skipped` leaves a finding open. Settle it as declined, with the reason, or as deferred, with the to-do card that tracks it.";
 
 function parseReview(payload: string): ThreadReview {
   // An older build sharing this profile can still write `dismissed`.

@@ -5,6 +5,7 @@ import {
   ALL_FINDINGS_SETTLED_NOTE,
   REPORTED_FIXED_NOTE,
   REPORTED_NO_CHANGE_NOTE,
+  REPORTED_SKIPPED_NOTE,
   THREAD_REVIEW_MAX_FINDINGS,
   THREAD_REVIEW_TEXT_LIMITS,
   ThreadReviewService,
@@ -106,17 +107,20 @@ describe("persistent thread reviews", () => {
     expect(() => service.update({ id: review.id, status: "declined", note: "No" }, "user")).toThrow("A review's status");
   });
 
-  it("accepts a finding's older names and refuses skipped", () => {
-    const review = service.record(THREAD, INPUT);
-    const [first, second] = review.items;
+  it("accepts a finding's older names and Claude Code's outcomes", () => {
+    const review = service.record({ ...THREAD }, { ...INPUT, items: [...INPUT.items, { title: "Three" }, { title: "Four" }] });
+    const [first, second, third, fourth] = review.items;
     const declined = service.update({ id: review.id, itemId: first!.id, status: "dismissed", note: "Intended." }, "agent", THREAD);
     expect(declined.items[0]!.status).toBe("declined");
     // The same outcome under its older name is no change.
     expect(service.update({ id: review.id, itemId: first!.id, status: "dismissed" }, "agent", THREAD)).toEqual(declined);
     const fixed = service.update({ id: review.id, itemId: second!.id, status: "fixed" as never, note: "Done." }, "agent", THREAD);
     expect(fixed.items[1]!.status).toBe("addressed");
-    expect(() => service.update({ id: review.id, itemId: second!.id, status: "skipped" as never, note: "Later." }, "agent", THREAD))
-      .toThrow("`skipped` leaves a finding open");
+    const skipped = service.update({ id: review.id, itemId: third!.id, status: "skipped" as never, note: "Out of scope." }, "agent", THREAD);
+    expect(skipped.items[2]!.status).toBe("declined");
+    const noChange = service.update({ id: review.id, itemId: fourth!.id, status: "no_change_needed" as never, note: "Wrong." }, "agent", THREAD);
+    expect(noChange.items[3]!.status).toBe("declined");
+    expect(noChange.status).toBe("handled");
     expect(() => service.update({ id: review.id, itemId: second!.id, status: "handled", note: "Done." }, "agent", THREAD))
       .toThrow("A finding's status is open, addressed, declined, or deferred.");
   });
@@ -397,10 +401,10 @@ describe("persistent thread reviews", () => {
     const CLAUDE = { backend: "claude" as const, threadId: "claude-owner" };
     const THREE = { ...INPUT, items: [...INPUT.items, { title: "Guard the parse" }] };
 
-    it("settles fixed and no-change findings, keeps skipped ones open, and handles the review when none remain", () => {
+    it("settles every reported outcome the way Claude Code does, and handles the review when none remain", () => {
       const review = service.record(CLAUDE, THREE, "automatic");
       const partial = service.applyReportedOutcomes(CLAUDE, THREE.sourceKey, [
-        { index: 0, outcome: "fixed" }, { index: 1, outcome: "skipped" }, { index: 2, outcome: "no_change_needed" },
+        { index: 0, outcome: "fixed" }, { index: 2, outcome: "no_change_needed" },
       ])!;
       expect(partial.items.map((item) => item.status)).toEqual(["addressed", "open", "declined"]);
       expect(partial.items[0]!.resolution).toEqual({ note: REPORTED_FIXED_NOTE, actor: "agent", at: expect.any(Number) });
@@ -410,7 +414,11 @@ describe("persistent thread reviews", () => {
       expect(threadReviewTodo(partial).detail).toBe("1 open finding · Two correctness findings.");
       expect(events).toHaveLength(2);
 
-      const settled = service.applyReportedOutcomes(CLAUDE, THREE.sourceKey, [{ index: 1, outcome: "fixed" }])!;
+      // Skipped is "real but not applied": settled, as declined with no reason.
+      const settled = service.applyReportedOutcomes(CLAUDE, THREE.sourceKey, [{ index: 1, outcome: "skipped" }])!;
+      expect(settled.items[1]).toMatchObject({
+        status: "declined", resolution: { note: REPORTED_SKIPPED_NOTE, actor: "agent" },
+      });
       expect(settled.status).toBe("handled");
       expect(settled.resolution).toMatchObject({ actor: "system", note: ALL_FINDINGS_SETTLED_NOTE });
       expect(service.get(review.id)?.status).toBe("handled");
@@ -424,11 +432,11 @@ describe("persistent thread reviews", () => {
       expect(events).toHaveLength(2);
     });
 
-    it("ignores unknown reviews, other threads, out-of-range findings, and skipped-only reports", () => {
+    it("ignores unknown reviews, other threads, and out-of-range findings", () => {
       service.record(CLAUDE, INPUT, "automatic");
       expect(service.applyReportedOutcomes(CLAUDE, "missing", [{ index: 0, outcome: "fixed" }])).toBeUndefined();
       expect(service.applyReportedOutcomes({ ...CLAUDE, threadId: "other" }, INPUT.sourceKey, [{ index: 0, outcome: "fixed" }])).toBeUndefined();
-      const unchanged = service.applyReportedOutcomes(CLAUDE, INPUT.sourceKey, [{ index: 5, outcome: "fixed" }, { index: 0, outcome: "skipped" }])!;
+      const unchanged = service.applyReportedOutcomes(CLAUDE, INPUT.sourceKey, [{ index: 5, outcome: "skipped" }])!;
       expect(unchanged.items.every((item) => item.status === "open")).toBe(true);
       expect(events).toHaveLength(1);
     });
@@ -453,7 +461,7 @@ describe("persistent thread reviews", () => {
         for (let index = 0; index < 100; index++) service.applyReportedOutcomes(CLAUDE, THREE.sourceKey, outcomes);
       });
       expect(writes.commits).toBe(1);
-      expectSqliteWriteBudget({ scenario: "thread-review-reported-outcomes", note: "One re-report settling two of three findings, then 99 identical re-reports. One commit for the whole report; repeats and skipped findings write nothing. ~8 KB per report: ~0.8 MB/day at 100 reports/day, 0 MB/day idle.", writes });
+      expectSqliteWriteBudget({ scenario: "thread-review-reported-outcomes", note: "One re-report settling three findings (fixed, no_change_needed, skipped), then 99 identical re-reports. One commit for the whole report; repeats write nothing. ~8 KB per report: ~0.8 MB/day at 100 reports/day, 0 MB/day idle.", writes });
     });
   });
 });

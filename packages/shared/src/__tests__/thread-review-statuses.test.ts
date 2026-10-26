@@ -13,10 +13,13 @@ describe("finding status names", () => {
     for (const status of THREAD_REVIEW_ITEM_STATUSES) expect(normalizeThreadReviewItemStatus(status)).toBe(status);
     expect(normalizeThreadReviewItemStatus("dismissed")).toBe("declined");
     expect(normalizeThreadReviewItemStatus("fixed")).toBe("addressed");
+    // Claude Code counts both as settled: "real but not applied", and wrong.
+    expect(normalizeThreadReviewItemStatus("skipped")).toBe("declined");
+    expect(normalizeThreadReviewItemStatus("no_change_needed")).toBe("declined");
   });
 
-  it("names nothing for skipped, a review's statuses, or a non-string", () => {
-    for (const value of ["skipped", "no_change_needed", "handled", "toString", "", undefined, 1]) {
+  it("names nothing for a review's statuses or a non-string", () => {
+    for (const value of ["handled", "toString", "", undefined, 1]) {
       expect(normalizeThreadReviewItemStatus(value)).toBeUndefined();
     }
   });

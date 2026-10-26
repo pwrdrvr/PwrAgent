@@ -119,15 +119,25 @@ const SETTLED_FINDING_LABELS = {
 
 export type SettledFindingStatus = keyof typeof SETTLED_FINDING_LABELS;
 
+/**
+ * A settled finding's label. A status this build does not know, from a newer
+ * peer, still reads as settled rather than failing the render.
+ */
+function settledFindingLabel(status: string) {
+  return Object.hasOwn(SETTLED_FINDING_LABELS, status)
+    ? SETTLED_FINDING_LABELS[status as SettledFindingStatus]
+    : { label: "Settled", Icon: CheckIcon };
+}
+
 /** A settled finding's status as labelled, or undefined while it is open. */
-export function settledFindingStatus(review: ThreadReview, item: ThreadReviewItem): SettledFindingStatus | undefined {
+export function settledFindingStatus(review: ThreadReview, item: ThreadReviewItem): string | undefined {
   if (review.status === "dismissed") return "dismissed";
   return item.status === "open" ? undefined : item.status;
 }
 
 /** A settled finding's glyph and label. */
-export function SettledFindingLabel(props: { status: SettledFindingStatus; size: number }) {
-  const { label, Icon } = SETTLED_FINDING_LABELS[props.status];
+export function SettledFindingLabel(props: { status: string; size: number }) {
+  const { label, Icon } = settledFindingLabel(props.status);
   return <><Icon size={props.size} />{label}</>;
 }
 
@@ -368,7 +378,7 @@ export function ReviewFindingResolution(props: TranscriptFindingControlsProps) {
   return (
     <div className="review-status" data-status={item.status}>
       <ResolutionDetails
-        outcome={SETTLED_FINDING_LABELS[item.status].label}
+        outcome={settledFindingLabel(item.status).label}
         resolution={item.resolution}
       />
       <div className="review-status__actions">

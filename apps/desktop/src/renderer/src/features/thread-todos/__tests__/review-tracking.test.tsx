@@ -113,6 +113,14 @@ describe("review status controls", () => {
     expect(screen.getByRole("button", { name: "Reopen finding: Abort pending exports" })).toBeVisible();
   });
 
+  it("labels a finding status from a newer peer as settled instead of failing", async () => {
+    installApi(review, { ...review, status: "handled", items: [{ ...review.items[0]!, status: "superseded" as never,
+      resolution: { note: "Replaced by the queue rewrite.", actor: "agent", at: 2 } }] });
+    render(<TranscriptReview entry={entry} parentThreadId="owner" />);
+    expect(await screen.findByText("Settled", { exact: true })).toBeVisible();
+    expect(screen.getByText("Settled by the agent · Replaced by the queue rewrite.")).toBeVisible();
+  });
+
   it("renders what a finding says from the transcript and reads only its state from the record", async () => {
     installApi(review, { ...review, items: [{ ...review.items[0]!, title: "Stored excerpt…", body: "Stored body" }] });
     render(<TranscriptReview entry={entry} parentThreadId="owner" />);
