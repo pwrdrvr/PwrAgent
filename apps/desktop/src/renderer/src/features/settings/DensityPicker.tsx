@@ -31,7 +31,7 @@ export const DENSITY_CHOICES: readonly DensityChoice[] = [
     label: "Compact",
     title: "Pull requests and reactions only",
     desc: (key) =>
-      `Hides the provider, worktree, and branch chips. Pull requests, reactions, and anything waiting on you stay. Hold ${key} to x-ray the rest.`,
+      `Hides the provider, worktree, and branch chips. Pull requests, reactions, and anything waiting on you stay. Hold ${key} to x-ray a thread's other chips.`,
     hint: "Best for: knowing where each thread lives.",
   },
   {
@@ -39,7 +39,7 @@ export const DENSITY_CHOICES: readonly DensityChoice[] = [
     label: "Minimal",
     title: "One line per thread",
     desc: (key) =>
-      `One line: the title, a pencil for an unsent draft, reactions, and one chip for all of a thread's pull requests that shows the one needing you most. Hold ${key} to x-ray every chip; press ${key} twice to keep them showing.`,
+      `One line: the title, a pencil for an unsent draft, reactions, and one chip for all of a thread's pull requests that shows the one needing you most. Hold ${key} to x-ray every chip of a thread; press ${key} twice to keep X-ray on.`,
     hint: "Best for: long thread lists and small windows.",
   },
 ];

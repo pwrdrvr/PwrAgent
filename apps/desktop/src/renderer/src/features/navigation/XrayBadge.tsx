@@ -8,13 +8,14 @@ import {
   useXrayState,
   xrayKeyLabel,
 } from "../../lib/xray-mode";
+import { useXraySpyCard } from "./xray-spy-card";
 
 /**
- * Installs X-ray for the thread list (see lib/xray-mode.ts) and shows its
- * badge while it is on: a pill over the foot of the sidebar that names the
- * mode and carries the pin, as IntelliJ's X-Ray indicator does. The badge is
- * a portal measured against the sidebar's scroll region, so the sidebar's
- * own layout is untouched.
+ * Installs X-ray for the thread list (see lib/xray-mode.ts), lifts its spy
+ * card (see xray-spy-card.ts), and shows its badge while it is on: a pill
+ * over the foot of the sidebar that names the mode and carries the pin, as
+ * IntelliJ's X-Ray indicator does. The badge is a portal measured against
+ * the sidebar's scroll region, so the sidebar's own layout is untouched.
  */
 export function XrayMode(props: {
   density: DesktopAppearanceDensity;
@@ -27,6 +28,7 @@ export function XrayMode(props: {
     platform: props.platform,
   });
   const xray = useXrayState();
+  useXraySpyCard(xray.active);
   const [anchor, setAnchor] = useState<{ left: number; width: number; bottom: number }>();
 
   useLayoutEffect(() => {

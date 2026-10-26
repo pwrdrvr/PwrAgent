@@ -430,7 +430,7 @@ export function GeneralSettings(props: {
             <SettingsField
               label="Info density"
               sub="How much rides on each thread row. Each preview is the same four threads."
-              help={`In Compact and Minimal, hold ${xrayKeyLabel(props.desktopApi?.platform)} to x-ray every chip. Press it twice to keep them showing.`}
+              help={`In Compact and Minimal, hold ${xrayKeyLabel(props.desktopApi?.platform)} to x-ray every chip of the thread under the pointer, or of the selected thread. Press it twice to keep X-ray on.`}
               control={
                 // No pending tracker: the thread rows recompose on the click.
                 <DensityPicker
