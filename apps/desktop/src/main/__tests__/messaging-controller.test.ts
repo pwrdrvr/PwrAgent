@@ -95,6 +95,9 @@ import {
 } from "../pdf/pdf-page-renderer";
 
 const tempDirs: string[] = [];
+// Teardown drains these before it removes tempDirs. See afterEach.
+const harnessControllers: MessagingController[] = [];
+const tempStores: MessagingStore[] = [];
 
 vi.mock("../messaging/attachment-image-normalization", () => ({
   normalizeMessagingImageAttachment: vi.fn(async () => ({
@@ -125,7 +128,9 @@ vi.mock("../pdf/pdf-page-renderer", () => ({
 async function createStore(): Promise<MessagingStore> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-controller-"));
   tempDirs.push(tempDir);
-  return new MessagingStore(path.join(tempDir, "messaging-state.json"));
+  const store = new MessagingStore(path.join(tempDir, "messaging-state.json"));
+  tempStores.push(store);
+  return store;
 }
 
 function createDeferred<T>(): {
@@ -141,6 +146,15 @@ function createDeferred<T>(): {
 
 afterEach(async () => {
   vi.useRealTimers();
+  // A flush timer can start a delivery that no test step awaits, and that
+  // delivery writes the store after the test body returns. Stop each
+  // controller, wait for its started deliveries, then wait for the store
+  // queues, so no write renames a temp file into a removed directory.
+  for (const controller of harnessControllers.splice(0)) {
+    controller.dispose();
+    await controller.whenToolUpdatesSettled();
+  }
+  await Promise.all(tempStores.splice(0).map((store) => store.whenIdle()));
   await Promise.all(
     tempDirs.splice(0).map(async (tempDir) => {
       await rm(tempDir, {
@@ -27400,6 +27414,7 @@ async function createHarness<
     toolUpdateDefaultMode: options?.toolUpdateDefaultMode,
   });
   controllerRef.current = controller;
+  harnessControllers.push(controller);
 
   return {
     controller,

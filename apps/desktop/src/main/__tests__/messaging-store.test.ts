@@ -275,6 +275,50 @@ describe("MessagingStore", () => {
     }
   });
 
+  it("waits in whenIdle for queued writes, including ones queued while it waits", async () => {
+    const { filePath, store } = await createStore();
+    // An owner that removes the store's directory waits here first. A write
+    // still queued would otherwise rename its temp file into a missing
+    // directory, which fails with ENOENT on Windows.
+    const internals = MessagingStore.prototype as unknown as {
+      writeData: (data: unknown) => Promise<void>;
+    };
+    const writeData = internals.writeData;
+    const writing = Promise.withResolvers<void>();
+    let holdNextWrite = true;
+    const writeSpy = vi.spyOn(internals, "writeData").mockImplementation(async function (this: unknown, data: unknown) {
+      if (holdNextWrite) {
+        holdNextWrite = false;
+        await writing.promise;
+      }
+      await writeData.call(this, data);
+    });
+    try {
+      const firstWrite = store.upsertBinding(buildBinding());
+      let idle = false;
+      const whenIdle = store.whenIdle().then(() => {
+        idle = true;
+      });
+      // A second store on the same file shares its queue.
+      const laterWrite = new MessagingStore(filePath).upsertBinding(buildBinding({ id: "binding-2" }));
+      for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+      expect(writeSpy).toHaveBeenCalledOnce();
+      expect(idle).toBe(false);
+
+      writing.resolve();
+      await whenIdle;
+      expect(writeSpy).toHaveBeenCalledTimes(2);
+      await Promise.all([firstWrite, laterWrite]);
+      const stored = JSON.parse(await readFile(filePath, "utf8")) as {
+        bindings: Record<string, unknown>;
+      };
+      expect(Object.keys(stored.bindings).sort()).toEqual(["binding-1", "binding-2"]);
+    } finally {
+      writing.resolve();
+      writeSpy.mockRestore();
+    }
+  });
+
   it("matches a thread's bindings by the shared backend rule", async () => {
     const { store } = await createStore();
     // One conversation holds one binding, so each needs its own chat.
