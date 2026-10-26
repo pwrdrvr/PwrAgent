@@ -10,6 +10,8 @@ import {
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb } from "./sqlite-test-utils";
 import type { ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
@@ -20,11 +22,13 @@ type DynamicResult = { success: boolean; contentItems: Array<{ type: string; tex
 describe("backend forge tool dispatch", () => {
   let directory: string;
   let db: StateDb;
+  let overlayStore: SqliteOverlayStore;
   let registry: DesktopBackendRegistry;
   let policy: ForgeAgentToolPolicy;
   let forgeRead: ReturnType<typeof vi.fn<ForgeReadHandler>>;
   let github: ReturnType<typeof vi.fn<ForgePrToolHandler>>;
   let attach: ReturnType<typeof vi.fn<(args: unknown) => Promise<unknown>>>;
+  let realAttach: (args: unknown) => Promise<unknown>;
   let internals: {
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
@@ -37,15 +41,18 @@ describe("backend forge tool dispatch", () => {
   const text = (result: DynamicResult) => result.contentItems.map((item) => item.text ?? "").join("");
 
   beforeEach(() => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const fixture = createTempStateDb("pwragent-forge-dispatch-");
     directory = fixture.tempDir;
     db = StateDb.open(fixture.dbPath);
+    overlayStore = new SqliteOverlayStore(db);
     registry = new DesktopBackendRegistry({
       codexClient: {
-        close: async () => {}, getInitializeResult: async () => ({ methods: [] }), listThreads: async () => [],
+        close: async () => {}, getInitializeResult: async () => ({ methods: [] }),
+        listThreads: async () => [{ id: "thread-1", title: "Fixture work", titleSource: "explicit", source: "codex", linkedDirectories: [] }],
         onNotification: () => () => {}, onPendingRequest: () => () => {}, readConfiguredMcpServerNames: async () => [],
       } as never,
-      overlayStore: new SqliteOverlayStore(db), isBootstrapMode: () => false,
+      overlayStore, isBootstrapMode: () => false,
     });
     internals = registry as unknown as typeof internals;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
@@ -56,6 +63,7 @@ describe("backend forge tool dispatch", () => {
       ? { created: true, url: "https://github.com/fixture/project/pull/9" }
       : { ok: true });
     attach = vi.fn<(args: unknown) => Promise<unknown>>(async () => ({ ok: true }));
+    realAttach = internals.handleAttachThreadPullRequestInspectionRequest.bind(registry);
     internals.handleAttachThreadPullRequestInspectionRequest = attach;
     registry.setForgeReadHandlers(forgeRead, forgeRead);
     registry.setForgePrToolHandler(github);
@@ -66,6 +74,7 @@ describe("backend forge tool dispatch", () => {
     await registry.close();
     db.close();
     rmSync(directory, { recursive: true, force: true });
+    vi.unstubAllEnvs();
   });
 
   function nextApproval() {
@@ -125,6 +134,33 @@ describe("backend forge tool dispatch", () => {
     expect(result.success).toBe(true);
     expect(text(result)).toMatch(/"attachedToThread":\s*true/);
     expect(attach).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", url: "https://github.com/fixture/project/pull/9" });
+  });
+
+  it("budgets creating a pull request and attaching it through the real SQLite store", async () => {
+    policy.access.pull_requests = "allow";
+    internals.handleAttachThreadPullRequestInspectionRequest = realAttach;
+
+    const { result, writes } = await measureSqliteWrites(() => internals.handleServerRequest(
+      "codex", request("create_pull_request", { title: "fix: tests", draft: true }, "call-pr-budget"),
+    ));
+
+    expect(result.success).toBe(true);
+    expect(JSON.parse(text(result))).toMatchObject({ created: true, attachedToThread: true });
+    expect(github).toHaveBeenCalledExactlyOnceWith(
+      "create_pull_request", { title: "fix: tests", draft: true },
+      expect.objectContaining({ backend: "codex", threadId: "thread-1", turnId: "turn-1" }),
+    );
+    const overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" });
+    expect(overlay?.prs).toEqual([expect.objectContaining({
+      provider: "github.com", org: "fixture", repo: "project", number: 9,
+      url: "https://github.com/fixture/project/pull/9", explicitlyAttached: true,
+    })]);
+    expect(attach).not.toHaveBeenCalled();
+    expectSqliteWriteBudget({
+      scenario: "forge-create-pull-request-attach",
+      writes,
+      note: "One allowed create_pull_request through registry dispatch and real SQLite attachment: 1 commit/16,480 bytes WAL; 20 PR creations/day = 0.3296 MB/day. Provider creation is stubbed; setup and overlay verification are excluded.",
+    });
   });
 
   it("names the GitLab repository and merge request on the card", async () => {
