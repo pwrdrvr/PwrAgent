@@ -1901,7 +1901,8 @@ export type NavigationCounts = {
   review: number;
   /**
    * Distinct providers among the counted threads, sorted. Set only on the
-   * directory index, which counts every thread. Absent from older owners.
+   * directory index and the whole-map Star Map page, which count every
+   * thread. Absent from older owners.
    */
   backends?: AppServerBackendKind[];
 };
