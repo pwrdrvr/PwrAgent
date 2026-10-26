@@ -2009,6 +2009,9 @@ function normalizePositivePullRequestNumber(value: unknown): number | undefined 
   return value;
 }
 
+/** A started Codex tool item; `itemType` is lowercased with separators removed. */
+type LiveCodexToolItem = { turnId: string; itemType: string };
+
 type PendingServerRequest = {
   backend: AppServerBackendKind;
   notification: AppServerPendingRequestNotification;
@@ -9156,7 +9159,7 @@ export class DesktopBackendRegistry {
    */
   private readonly backendActiveCodexThreadIds = new Set<string>();
   /** Started Codex tool items can keep running after their parent turn ends. */
-  private readonly liveCodexToolItemsByThread = new Map<string, Map<string, string>>();
+  private readonly liveCodexToolItemsByThread = new Map<string, Map<string, LiveCodexToolItem>>();
   private readonly codexBackgroundTerminals = new Map<string, CodexBackgroundTerminal[]>();
   /**
    * Latest revision per thread with a list read in flight. An entry lives
@@ -26510,13 +26513,44 @@ export class DesktopBackendRegistry {
       );
       const applied = !this.closed && response.supported && generation === this.backgroundTerminalGeneration
         && revision === this.backgroundTerminalReadRevisions.get(threadId);
-      if (applied) this.publishCodexBackgroundTerminals(threadId, response.terminals);
+      if (applied) {
+        this.publishCodexBackgroundTerminals(threadId, response.terminals);
+        this.pruneUnlistedCodexCommands(threadId, response.terminals);
+      }
       return { response, applied };
     } finally {
       if (this.backgroundTerminalReadRevisions.get(threadId) === revision) {
         this.backgroundTerminalReadRevisions.delete(threadId);
       }
     }
+  }
+
+  /**
+   * The list names every command that outlived its turn, so a command from a
+   * finished turn that it omits is done even if Codex never sent its
+   * `item/completed`. Without this a missed completion holds the thread in
+   * the quit prompt and blocks a runtime restart forever. Commands in a live
+   * turn may not have a session yet, and other tool kinds never appear in the
+   * list, so both are kept.
+   */
+  private pruneUnlistedCodexCommands(threadId: string, terminals: CodexBackgroundTerminal[]): void {
+    const items = this.liveCodexToolItemsByThread.get(threadId);
+    if (!items || this.backendActiveCodexThreadIds.has(threadId)) return;
+    const listed = new Set(terminals.map((terminal) => terminal.itemId));
+    let pruned = false;
+    for (const [itemId, { turnId, itemType }] of items) {
+      if (
+        itemType === "commandexecution"
+        && !listed.has(itemId)
+        && !this.activeTurnKeys.has(buildActiveTurnKey("codex", threadId, turnId))
+      ) {
+        items.delete(itemId);
+        pruned = true;
+      }
+    }
+    if (!pruned) return;
+    if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
+    void this.maybeRestartCodexForManagedRuntimeChange();
   }
 
   /**
@@ -47062,8 +47096,8 @@ export class DesktopBackendRegistry {
         this.liveCodexToolItemsByThread.delete(threadId);
         return;
       }
-      for (const [itemId, itemTurnId] of items) {
-        if (itemTurnId === turnId) items.delete(itemId);
+      for (const [itemId, item] of items) {
+        if (item.turnId === turnId) items.delete(itemId);
       }
       if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
       return;
@@ -47085,8 +47119,8 @@ export class DesktopBackendRegistry {
       if (item?.status !== "inProgress" && item?.status !== "in_progress") return;
       const turnId = readOptionalString(readRecord(notification.params), ["turnId", "turn_id"]);
       if (!turnId) return;
-      const items = this.liveCodexToolItemsByThread.get(threadId) ?? new Map<string, string>();
-      items.set(itemId, turnId);
+      const items = this.liveCodexToolItemsByThread.get(threadId) ?? new Map<string, LiveCodexToolItem>();
+      items.set(itemId, { turnId, itemType });
       this.liveCodexToolItemsByThread.set(threadId, items);
       return;
     }

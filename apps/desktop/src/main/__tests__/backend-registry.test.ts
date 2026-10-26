@@ -26334,6 +26334,96 @@ command = "pnpm dev"
       expect(registry.withNavigationSubAgentActivity([row])[0]).toMatchObject({ hasAgentCommands: true });
     });
 
+    it("drops a command from a finished turn that the list omits", async () => {
+      const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [] }));
+      const { codexClient, registry } = setup(listBackgroundTerminals);
+
+      await endTurnWithRunningCommands(codexClient, ["command-1"]);
+      await vi.waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(1));
+      // Codex never sent item/completed, but the list names no session for it.
+      await vi.waitFor(() => expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0));
+      expect(registry.withNavigationSubAgentActivity([row])[0]).not.toHaveProperty("hasAgentCommands");
+    });
+
+    it("keeps a tool item that is not a command, which the list never names", async () => {
+      const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [] }));
+      const { codexClient, registry } = setup(listBackgroundTerminals);
+      const mcpCall = { id: "mcp-1", type: "mcpToolCall", server: "docs", tool: "search" };
+
+      await codexClient.emit({ method: "item/started", params: {
+        threadId: "thread-1", turnId: "turn-1", item: { ...mcpCall, status: "inProgress" },
+      } });
+      await endTurnWithRunningCommands(codexClient, ["command-1"]);
+      await vi.waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(1));
+      expect(registry.getInProgressThreadSnapshotForQuit().threadIds).toEqual(["codex:thread-1"]);
+
+      // Its own completion still settles it.
+      await codexClient.emit({ method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", item: { ...mcpCall, status: "completed" },
+      } });
+      await vi.waitFor(() => expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0));
+    });
+
+    it.each([
+      // A turn this registry started and has not seen end.
+      ["its turn is active", { startTurn: true }],
+      // A main-process reload can miss the start of a turn that is still running.
+      ["Codex reports the thread active", { startTurn: false }],
+    ])("keeps a command the list omits while %s", async (_case, { startTurn }) => {
+      const listBackgroundTerminals = vi.fn()
+        .mockResolvedValueOnce({ supported: true, terminals: [] })
+        // A runtime without the list after the turn proves nothing either way.
+        .mockResolvedValue({ supported: false, terminals: [] });
+      const { codexClient, registry } = setup(listBackgroundTerminals);
+
+      if (startTurn) {
+        await registry.startTurn({ backend: "codex", threadId: "thread-1", input: [{ type: "text", text: "Start the dev server" }] });
+      } else {
+        await codexClient.emit({ method: "thread/status/changed", params: {
+          threadId: "thread-1", status: { type: "active" },
+        } });
+      }
+      await codexClient.emit({ method: "item/started", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "command-1", type: "commandExecution", status: "inProgress", command: "pnpm dev" },
+      } });
+      // The session may not exist yet while its turn runs.
+      await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+      await codexClient.emit({ method: "thread/status/changed", params: {
+        threadId: "thread-1", status: { type: "idle" },
+      } });
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } });
+      await vi.waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(2));
+
+      // Only the live command can still hold the thread: no turn, no terminal.
+      expect(registry.getInProgressThreadSnapshotForQuit().threadIds).toEqual(["codex:thread-1"]);
+    });
+
+    it("prunes nothing from a list read that an event raced", async () => {
+      let resolveRaced!: (response: { supported: boolean; terminals: typeof terminal[] }) => void;
+      const listBackgroundTerminals = vi.fn()
+        .mockResolvedValueOnce({ supported: false, terminals: [] })
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveRaced = resolve; }))
+        .mockResolvedValue({ supported: true, terminals: [] });
+      const { codexClient, registry } = setup(listBackgroundTerminals);
+
+      await endTurnWithRunningCommands(codexClient, ["command-1"]);
+      await vi.waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(1));
+      const raced = registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+      await vi.waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(2));
+      await codexClient.emit({ method: "thread/status/changed", params: {
+        threadId: "thread-1", status: { type: "idle" },
+      } });
+      resolveRaced({ supported: true, terminals: [] });
+      await raced;
+      expect(registry.getInProgressThreadSnapshotForQuit().threadIds).toEqual(["codex:thread-1"]);
+
+      await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+    });
+
     it("does not read terminals after a turn that left no command running", async () => {
       const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [] }));
       const { codexClient, updates } = setup(listBackgroundTerminals);
