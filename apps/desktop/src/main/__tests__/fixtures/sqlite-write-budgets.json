@@ -796,6 +796,10 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "overlay-row-update-11000": {"commits": 1, "note": "one seen-watermark write on an existing 11000-byte overlay; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 12392, "rowsChanged": 1, "statements": 1},
+  "overlay-row-update-11000-pending": {"commits": 1, "note": "one seen-watermark write on an existing 11000-byte overlay with a pending spend alert; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1},
+  "overlay-row-update-25000": {"commits": 1, "note": "one seen-watermark write on an existing 25000-byte overlay; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 12392, "rowsChanged": 1, "statements": 1},
+  "overlay-row-update-25000-pending": {"commits": 1, "note": "one seen-watermark write on an existing 25000-byte overlay with a pending spend alert; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1},
   "overlay-scalar-write-flat": {
     "commits": 1,
     "note": "one overlay scalar write (a reaction) on a thread holding 2,000 gate cards: the small overlay row only, ~16 KB WAL. It rewrote the ~3.5 MB row while the cards lived there",

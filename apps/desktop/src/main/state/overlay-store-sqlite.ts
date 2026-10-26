@@ -9237,24 +9237,32 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       ...persistable
     } = state as ThreadOverlayState & LegacyOverlayArrays;
     const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
-    // Replacing a row a one-time move has not reached would drop its array.
+    // Rewriting a row a one-time move has not reached would drop its array.
     this.subAgentTable.moveLegacyCards(storageKey);
     this.usageActivityTable.moveLegacyActivities(storageKey);
     const navigationCache = this.navigationOverlayCache;
     const previousThreadChanges = navigationCache ? sqliteThreadChangeVersion(this.stateDb.raw) : undefined;
-    this.stateDb.raw
-      .prepare(
-        `INSERT OR REPLACE INTO threads(thread_id, directory_path, last_seen_at, dismissed_at, snoozed_until, payload)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        storageKey,
-        (persistable as Record<string, unknown>).directoryPath as string ?? null,
-        persistable.lastSeenAt ?? null,
-        persistable.dismissedAt ?? null,
-        persistable.snoozedUntil ?? null,
-        JSON.stringify(persistable),
-      );
+    // Preserve the rowid and overflow chain. REPLACE deletes and reinserts
+    // the row, rewriting indexes and freelist pages even for one watermark.
+    // The conflict UPDATE also avoids an existence-check race with another
+    // profile writer, and a failed UPDATE statement on each new thread.
+    this.stateDb.raw.prepare(
+      `INSERT INTO threads(thread_id, directory_path, last_seen_at, dismissed_at, snoozed_until, payload)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(thread_id) DO UPDATE SET
+         directory_path = excluded.directory_path,
+         last_seen_at = excluded.last_seen_at,
+         dismissed_at = excluded.dismissed_at,
+         snoozed_until = excluded.snoozed_until,
+         payload = excluded.payload`,
+    ).run(
+      storageKey,
+      (persistable as Record<string, unknown>).directoryPath as string ?? null,
+      persistable.lastSeenAt ?? null,
+      persistable.dismissedAt ?? null,
+      persistable.snoozedUntil ?? null,
+      JSON.stringify(persistable),
+    );
     if (navigationCache && !this.stateDb.raw.inTransaction
       && navigationCache.threadChanges === previousThreadChanges) {
       const threadChanges = sqliteThreadChangeVersion(this.stateDb.raw);
