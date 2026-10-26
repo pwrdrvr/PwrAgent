@@ -59,10 +59,10 @@
   },
   "archive-retention-delete-batch": {
     "commits": 1,
-    "note": "One transaction releases 100 overlays after permanent provider deletion, plus one statement each clearing their sub-agent cards and card counters.",
+    "note": "One transaction releases 100 overlays after permanent provider deletion, plus one statement each clearing their sub-agent cards, card counters and usage activities.",
     "observedWalBytes": 41200,
     "rowsChanged": 100,
-    "statements": 102
+    "statements": 103
   },
   "archive-retention-idle-day": {
     "commits": 0,

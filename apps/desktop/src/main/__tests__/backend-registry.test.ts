@@ -55977,6 +55977,7 @@ script = "printf setup"
       "upsertThreadUsageLine",
     );
     const fullOverlayReads = vi.spyOn(overlayStore, "getThreadOverlayStates");
+    const usageActivityReads = vi.spyOn(overlayStore, "readThreadUsageActivities");
     registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
@@ -56037,9 +56038,10 @@ script = "printf setup"
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
     expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
     if (storeKind === "sqlite") {
-      // Each listing may load the discovered worker's durable usage. Ordinary
-      // parent overlays must retain the compact projection on both passes.
-      expect(fullOverlayReads.mock.calls).toEqual([
+      // Each listing loads the discovered worker's durable usage rows. No
+      // overlay, parent or worker, is read in full on either pass.
+      expect(fullOverlayReads).not.toHaveBeenCalled();
+      expect(usageActivityReads.mock.calls).toEqual([
         [{ backend: "codex", threadIds: [nativeThreadId] }],
         [{ backend: "codex", threadIds: [nativeThreadId] }],
       ]);
