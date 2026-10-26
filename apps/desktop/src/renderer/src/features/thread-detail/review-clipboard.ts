@@ -2,10 +2,12 @@ import type {
   AppServerReviewContext,
   AppServerReviewFinding,
   AppServerReviewOutput,
-  AppServerReviewPullRequest,
   AppServerThreadReviewEntry,
 } from "@pwragent/shared";
-import { formatPathRelativeToDirectories } from "@pwragent/shared";
+import {
+  formatPathRelativeToDirectories,
+  reviewContextPullRequests,
+} from "@pwragent/shared";
 import { shortReviewSha } from "../../../../shared/review-command";
 import { reviewFindingTag } from "../../../../shared/review-output";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -196,7 +198,7 @@ function formatReviewMetadata(model: ReviewClipboardModel): string[] {
   push("PR base tip", context?.pullRequestSnapshot?.baseCommit);
   push("PR merge base", context?.pullRequestSnapshot?.mergeBaseCommit);
   const pullRequest = context?.pullRequest;
-  const pullRequests = reviewedPullRequests(context);
+  const pullRequests = reviewContextPullRequests(context);
   if (pullRequests.length > 0) {
     for (const reviewed of pullRequests) {
       push(
@@ -260,21 +262,11 @@ export function formatFindingProvenance(model: ReviewClipboardModel): string {
     collapseToOneLine(model.summary) || "Code review",
     context?.projectLabel?.trim(),
     formatReviewedState(context),
-    reviewedPullRequests(context)
+    reviewContextPullRequests(context)
       .map((reviewed) => `${reviewed.org}/${reviewed.repo}#${reviewed.number}`)
       .join(", "),
   ].filter(Boolean);
   return parts.length > 0 ? `_${parts.join(" · ")}_` : "";
-}
-
-/** A review of several pull requests names them all; one names its own. */
-function reviewedPullRequests(
-  context: AppServerReviewContext | undefined,
-): AppServerReviewPullRequest[] {
-  if (context?.pullRequests?.length) {
-    return context.pullRequests;
-  }
-  return context?.pullRequest ? [context.pullRequest] : [];
 }
 
 /** The branch and the commit on it, whichever of the two were recorded. */

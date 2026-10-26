@@ -1,7 +1,8 @@
-import type {
-  AppServerReviewContext,
-  AppServerReviewPullRequest,
-  PrSummary,
+import {
+  reviewContextPullRequests,
+  type AppServerReviewContext,
+  type AppServerReviewPullRequest,
+  type PrSummary,
 } from "@pwragent/shared";
 import { useMemo } from "react";
 import {
@@ -38,11 +39,7 @@ export function ReviewProvenance(props: ReviewProvenanceProps) {
   const branchLabel = formatBranchLabel(context);
   const headCommit = context.headCommit?.trim();
   const pullRequest = context.pullRequest;
-  const pullRequests = context.pullRequests?.length
-    ? context.pullRequests
-    : pullRequest
-      ? [pullRequest]
-      : [];
+  const pullRequests = reviewContextPullRequests(context);
 
   return (
     <div

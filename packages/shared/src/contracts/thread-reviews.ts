@@ -3,6 +3,7 @@ import type {
   AppServerBackendKind,
   AppServerReviewContext,
   AppServerReviewFinding,
+  AppServerReviewPullRequest,
 } from "./normalized-app-server";
 import { classifyDirectory } from "../directory-navigation";
 import type { ThreadTodo, ThreadTodoProject } from "./thread-todos";
@@ -120,6 +121,14 @@ export function normalizeThreadReview<T extends Pick<ThreadReview, "items">>(rev
   };
 }
 
+/** Every pull request a review covered: the list for several, else the one. */
+export function reviewContextPullRequests(
+  context: AppServerReviewContext | undefined,
+): AppServerReviewPullRequest[] {
+  if (context?.pullRequests?.length) return context.pullRequests;
+  return context?.pullRequest ? [context.pullRequest] : [];
+}
+
 /**
  * What a review card is called. Stored titles are generic ("Code review"), so
  * the reviewed pull request or branch names it when the context recorded one;
@@ -128,12 +137,10 @@ export function normalizeThreadReview<T extends Pick<ThreadReview, "items">>(rev
 export function threadReviewDisplayTitle(review: Pick<ThreadReview, "title" | "context">): string {
   // An agent's own title for a recorded review says more than either.
   if (review.title !== "Code review") return review.title;
-  const pullRequests = review.context?.pullRequests;
-  if (pullRequests && pullRequests.length > 1) {
-    return `Review of PRs ${pullRequests.map((pr) => `#${pr.number}`).join(", ")}`;
+  const pullRequests = reviewContextPullRequests(review.context);
+  if (pullRequests.length > 0) {
+    return `Review of ${pullRequests.length > 1 ? "PRs" : "PR"} ${pullRequests.map((pr) => `#${pr.number}`).join(", ")}`;
   }
-  const pullRequest = review.context?.pullRequest;
-  if (pullRequest) return `Review of PR #${pullRequest.number}`;
   const branch = review.context?.gitBranch;
   return branch ? `Review of ${branch}` : review.title;
 }

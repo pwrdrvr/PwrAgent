@@ -618,4 +618,86 @@ describe("resolveReviewProvenance for a review that named its pull requests", ()
     // The checked-out branch is not evidence about what was reviewed.
     expect(context).toEqual({ workspacePath: WORKSPACE, projectLabel: "PwrAgent" });
   });
+
+  it("names no pull request when one of several named cannot be identified", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      namedPullRequests: [{ number: 1920 }, { number: 4242, org: "elsewhere", repo: "Other" }],
+      prs: [CHECKED_OUT, OTHER],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(CHECKED_OUT.headRefName),
+      target: claudeTarget,
+    });
+
+    // "Review of PR #1920" would read as a review of that one alone.
+    expect(context).toEqual({ workspacePath: WORKSPACE, projectLabel: "PwrAgent" });
+  });
+
+  it("names a pull request once however many ways the command wrote it", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{ number: 1920 }, { number: 1920, org: "pwrdrvr", repo: "PwrAgent" }],
+      prs: [CHECKED_OUT, OTHER],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(CHECKED_OUT.headRefName),
+      target: claudeTarget,
+    });
+
+    expect(context?.pullRequest?.number).toBe(1920);
+    expect(context).not.toHaveProperty("pullRequests");
+  });
+
+  it("does not borrow an unscoped pull request's repository unless a remote here matches it", async () => {
+    const elsewhere = pullRequest({
+      repo: "PwrSnap",
+      linkedDirectoryPaths: undefined,
+      url: "https://github.com/pwrdrvr/PwrSnap/pull/12",
+    });
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{ number: 5 }],
+      prs: [elsewhere],
+      resolveGitHubRepos: async () => [
+        { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+        { host: "github.com", owner: "contributor", repo: "PwrAgent" },
+      ],
+      runGit: gitRunner("feat/elsewhere"),
+      target: claudeTarget,
+    });
+
+    expect(context).not.toHaveProperty("pullRequest");
+  });
+
+  it("reads no local Git remotes for a remote workspace's named pull request", async () => {
+    let remotesRead = false;
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      executionTarget: "remote",
+      namedPullRequests: [{ number: 97 }],
+      prs: [],
+      resolveGitHubRepos: async () => {
+        remotesRead = true;
+        return [{ host: "github.com", owner: "pwrdrvr", repo: "PwrRoute" }];
+      },
+      target: claudeTarget,
+    });
+
+    expect(remotesRead).toBe(false);
+    expect(context).not.toHaveProperty("pullRequest");
+  });
+
+  it("does not read the checked-out branch for a pull request that has no head branch", async () => {
+    const seen: string[][] = [];
+    await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{ number: 97 }],
+      prs: [],
+      resolveGitHubRepos: async () => [{ host: "github.com", owner: "pwrdrvr", repo: "PwrRoute" }],
+      runGit: gitRunner(CHECKED_OUT.headRefName, {}, seen),
+      target: claudeTarget,
+    });
+
+    expect(seen).toEqual([]);
+  });
 });

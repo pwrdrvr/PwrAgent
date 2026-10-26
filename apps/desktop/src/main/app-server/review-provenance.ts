@@ -247,10 +247,18 @@ async function resolveUnattachedPullRequest(params: {
   resolveGitHubRepos: (cwd: string) => Promise<GitHubRepoRef[]>;
 }): Promise<AppServerReviewPullRequest | undefined> {
   const { named } = params;
+  const repositories = await params.resolveGitHubRepos(params.cwd).catch(
+    () => [] as GitHubRepoRef[],
+  );
   const scoped = params.prs.filter((pr) => prBelongsToWorkspace(pr, params.cwd));
+  // A row that recorded no directory may belong to any of the thread's
+  // repositories, so it speaks for this one only when a remote here matches.
   const workspacePrs = (scoped.length > 0
     ? scoped
-    : params.prs.filter((pr) => !pr.linkedDirectoryPaths?.length)
+    : params.prs.filter((pr) =>
+        !pr.linkedDirectoryPaths?.length
+        && repositories.some((repo) => prMatchesRepository(pr, repo))
+      )
   ).filter((pr) =>
     sameRepositoryName(named.provider, pr.provider)
     && sameRepositoryName(named.org, pr.org)
@@ -274,9 +282,7 @@ async function resolveUnattachedPullRequest(params: {
   if (attachedRepositories.size > 1) {
     return undefined;
   }
-  const remotes = (await params.resolveGitHubRepos(params.cwd).catch(
-    () => [] as GitHubRepoRef[],
-  )).filter((remote) =>
+  const remotes = repositories.filter((remote) =>
     sameRepositoryName(named.provider, remote.host)
     && sameRepositoryName(named.org, remote.owner)
     && sameRepositoryName(named.repo, remote.repo)
@@ -371,31 +377,40 @@ export async function resolveReviewProvenance(params: {
   // the workspace has checked out.
   const namedPullRequests = params.namedPullRequests ?? [];
   if (namedPullRequests.length > 0) {
-    const resolveGitHubRepos =
-      params.resolveGitHubRepos ?? resolveGitHubReposForDirectory;
-    const resolved = (await Promise.all(namedPullRequests.map((named) =>
+    // Only local Git can be read here; a remote workspace's remotes are not.
+    const resolveGitHubRepos = params.executionTarget === "remote"
+      ? async () => [] as GitHubRepoRef[]
+      : params.resolveGitHubRepos ?? resolveGitHubReposForDirectory;
+    const matches = await Promise.all(namedPullRequests.map((named) =>
       resolveNamedPullRequest({
         cwd,
         named,
         prs: params.prs ?? [],
         resolveGitHubRepos,
       })
-    ))).flatMap((match) => match ? [match] : []);
-    if (namedPullRequests.length > 1) {
-      // One branch and one commit cannot describe several diffs, so the card
-      // names the pull requests alone.
-      return resolved.length > 0
-        ? { ...context, pullRequest: resolved[0], pullRequests: resolved }
-        : context;
-    }
-    const [named] = resolved;
-    if (!named) {
+    ));
+    const found = matches.filter(
+      (match): match is AppServerReviewPullRequest => match !== undefined,
+    );
+    // Naming some of the reviewed pull requests would read as a review of
+    // those alone.
+    if (found.length < matches.length) {
       return context;
     }
-    const checkedOut = await resolveReviewProvenance({
-      ...params,
-      namedPullRequests: undefined,
-    });
+    // One pull request can be written several ways: `7`, `#7`, its URL.
+    const resolved = found.filter((match, index) =>
+      found.findIndex((other) => samePullRequest(other, match)) === index
+    );
+    if (resolved.length > 1) {
+      // One branch and one commit cannot describe several diffs, so the card
+      // names the pull requests alone.
+      return { ...context, pullRequest: resolved[0], pullRequests: resolved };
+    }
+    const [named] = resolved;
+    // Only a pull request with a head branch can be the checked-out one.
+    const checkedOut = named.headRefName
+      ? await resolveReviewProvenance({ ...params, namedPullRequests: undefined })
+      : undefined;
     if (checkedOut?.pullRequest && samePullRequest(checkedOut.pullRequest, named)) {
       return checkedOut;
     }

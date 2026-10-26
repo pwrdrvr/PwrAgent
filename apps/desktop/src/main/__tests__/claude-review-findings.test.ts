@@ -290,8 +290,16 @@ describe("Claude /code-review pull request targets", () => {
     expect(parseClaudeCodeReviewPullRequests("/code-reviewer 2947")).toEqual([]);
   });
 
-  it("names nothing when a target is a branch or path, which a pull request list cannot describe", () => {
-    expect(parseClaudeCodeReviewPullRequests("/code-review 2947 feat/other-branch")).toEqual([]);
+  it("names nothing when the review leads with a branch or path", () => {
+    expect(parseClaudeCodeReviewPullRequests("/code-review feat/other-branch 2947")).toEqual([]);
     expect(parseClaudeCodeReviewPullRequests("/code-review apps/desktop")).toEqual([]);
+  });
+
+  it("keeps the leading pull requests when a path or note follows them", () => {
+    expect(parseClaudeCodeReviewPullRequests("/code-review --fix 97 crates/pwrroute-os")).toEqual([{ number: 97 }]);
+    // A number inside the note is not a target.
+    expect(parseClaudeCodeReviewPullRequests("/code-review 97,98 focus on the 2 retries --fix")).toEqual([
+      { number: 97 }, { number: 98 },
+    ]);
   });
 });
