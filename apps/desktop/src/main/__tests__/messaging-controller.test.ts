@@ -144,17 +144,23 @@ function createDeferred<T>(): {
   return { promise, resolve };
 }
 
-afterEach(async () => {
-  vi.useRealTimers();
-  // A flush timer can start a delivery that no test step awaits, and that
-  // delivery writes the store after the test body returns. Stop each
-  // controller, wait for its started deliveries, then wait for the store
-  // queues, so no write renames a temp file into a removed directory.
+/**
+ * A flush timer can start a delivery that no test step awaits, and that
+ * delivery writes the store after the test body returns. Stop each
+ * controller, wait for its started deliveries, then wait for the store
+ * queues, so no write renames a temp file into a removed directory.
+ */
+async function settleHarnessWork(): Promise<void> {
   for (const controller of harnessControllers.splice(0)) {
     controller.dispose();
     await controller.whenToolUpdatesSettled();
   }
   await Promise.all(tempStores.splice(0).map((store) => store.whenIdle()));
+}
+
+afterEach(async () => {
+  vi.useRealTimers();
+  await settleHarnessWork();
   await Promise.all(
     tempDirs.splice(0).map(async (tempDir) => {
       await rm(tempDir, {
@@ -10818,6 +10824,88 @@ describe("MessagingController", () => {
     } finally {
       harness.controller.dispose();
       vi.useRealTimers();
+    }
+  });
+
+  it.each(["adapter delivery", "store write"] as const)("holds teardown until a receipt window's delivery has been recorded (held at %s)", async (holdAt) => {
+    vi.useFakeTimers();
+    // On Windows CI, afterEach removed the store directory while the store
+    // write that follows a flush-timer delivery was still pending, and its
+    // temp-file rename failed with ENOENT. Hold the delivery at either step:
+    // before the adapter returns (no store write queued yet, so only the
+    // controller knows about it) and inside the store's write.
+    let armed = false;
+    const held = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const hold = async (step: typeof holdAt): Promise<void> => {
+      if (!armed || step !== holdAt) return;
+      armed = false;
+      held.resolve();
+      await release.promise;
+    };
+    const delivered: MessagingSurfaceIntent[] = [];
+    const harness = await createHarness({
+      toolUpdateDefaultMode: "show_less",
+      deliver: async (intent) => {
+        delivered.push(intent);
+        await hold("adapter delivery");
+        return {
+          channel: "telegram",
+          deliveredAt: 1000,
+          outcome: "presented",
+          surface: { channel: "telegram", id: `surface:${intent.id}` },
+        };
+      },
+    });
+    const internals = MessagingStore.prototype as unknown as {
+      writeData: (data: unknown) => Promise<void>;
+    };
+    const writeData = internals.writeData;
+    const writeSpy = vi.spyOn(internals, "writeData").mockImplementation(async function (this: unknown, data: unknown) {
+      await hold("store write");
+      await writeData.call(this, data);
+    });
+    try {
+      await bindThread(harness);
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId: "thread-1", turnId: "source-turn", turn: { id: "source-turn" } },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "turn/completed", params: { threadId: "thread-1", turnId: "source-turn", turn: { id: "source-turn", status: "completed", output: [] } },
+      } });
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: {
+        method: "item/completed", params: { threadId: "thread-1", turnId: "source-turn", item: {
+          id: "delayed-receipt", type: "agentMessage",
+          origin: { kind: "pwragent", systemReason: "thread-correspondence", sourceThread: { backend: "codex", threadId: "thread-1", title: "Sender" } },
+          text: "**Message to [Recipient](pwragent://thread/recipient?backend=codex)** · Receiving thread started work\n\nDelayed receipt",
+        } },
+      } });
+      delivered.length = 0;
+      armed = true;
+      await vi.advanceTimersByTimeAsync(60_001);
+      await held.promise;
+      // The test body has seen the message, so it would return here.
+      const message = delivered.find((intent) => intent.kind === "message");
+      expect(JSON.stringify(message)).toContain("Delayed receipt");
+
+      harness.controller.dispose();
+      vi.useRealTimers();
+      let settled = false;
+      const teardown = settleHarnessWork().then(() => {
+        settled = true;
+      });
+      for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+
+      release.resolve();
+      await teardown;
+      const snapshot = await harness.store.readSnapshot();
+      expect(Object.values(snapshot.deliveries).map((delivery) => delivery.intentId)).toContain(message!.id);
+    } finally {
+      release.resolve();
+      harness.controller.dispose();
+      vi.useRealTimers();
+      writeSpy.mockRestore();
     }
   });
 
