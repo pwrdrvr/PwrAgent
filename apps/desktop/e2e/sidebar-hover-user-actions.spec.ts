@@ -84,12 +84,8 @@ async function chooseDirectoryMenuItem(page: Page, label: string, item: string, 
   await page.getByRole("button", { name: label, exact: true })
     .click({ button: "right", position: { x: 12, y: 8 } });
   await page.getByRole("menuitem", { name: item }).click();
-  // A row that changed section remounts; measure the one that settled.
-  await restOn.waitFor({ state: "visible" });
-  const box = await restOn.boundingBox();
-  if (!box) throw new Error("Expected a row for the pointer to rest on");
-  await page.mouse.move(box.x + 40, box.y + box.height / 2);
-  await page.mouse.move(box.x + 41, box.y + box.height / 2);
+  // Retried by Playwright: a row that changed section remounts.
+  await restOn.hover({ position: { x: 40, y: 8 } });
 }
 
 async function movePointerOffSidebar(page: Page): Promise<void> {
@@ -158,7 +154,7 @@ test.describe("sidebar commands under a resting pointer", () => {
     await startChurn(page);
     try {
       // The race this guards is timing-dependent; each round is a fresh try.
-      for (let round = 0; round < 3; round += 1) {
+      for (let round = 0; round < 5; round += 1) {
         await movePointerOffSidebar(page);
         await expect.poll(() => sidebarLayout(page)).toEqual([
           "[Bproject]*", "[Cproject]*", "Cproject thread 1", "Cproject thread 2", "[Aproject]",
