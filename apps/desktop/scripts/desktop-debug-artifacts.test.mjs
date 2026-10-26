@@ -115,9 +115,9 @@ it("retains usable hidden maps for the real lazy inline pixel-diff worker", asyn
       build: {
         outDir: join(out, "renderer"),
         emptyOutDir: true,
-        minify: "esbuild",
+        minify: "oxc",
         sourcemap: "hidden",
-        rollupOptions: {
+        rolldownOptions: {
           input: join(sourceRoot, "src/features/thread-detail/image-diff/pixel-diff-client.ts"),
           preserveEntrySignatures: "strict",
         },

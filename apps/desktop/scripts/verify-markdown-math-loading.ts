@@ -79,7 +79,7 @@ for (const [label, root] of [
       transform(_code, id) { return baselineSources.get(id); },
     }, ...(config.plugins ?? []), boundaries(label)],
     build: { ...config.build, outDir: resolve(output, label), emptyOutDir: true,
-      rollupOptions: { ...config.build?.rollupOptions, input: resolve(root, "index.html") },
+      rolldownOptions: { ...config.build?.rolldownOptions, input: resolve(root, "index.html") },
     },
   });
 }

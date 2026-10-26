@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "electron-vite";
+import { defineConfig, type UserConfig } from "electron-vite";
 import type { Plugin } from "vite";
 import { inlineWorkerDebugCode } from "./scripts/inline-worker-debug-code.mjs";
 
@@ -101,8 +101,7 @@ function reactDevtoolsBridge(): Plugin {
 // electron-vite defaults `build.minify` to false for all three targets.
 // Shipped builds retain hidden maps for separate debug artifacts. The maps
 // are excluded from app.asar; hidden maps add no sourceMappingURL to the JS.
-// esbuild minification is the right default; switch to terser only
-// if a measured size win justifies the build-time cost.
+// Vite 8 uses Rolldown and Oxc for bundling and minification.
 //
 // The function form is needed so we can conditionally define process.env.NODE_ENV
 // only during `electron-vite build`. Without this, the built main/preload bundles
@@ -138,7 +137,7 @@ export default defineConfig(({ command }) => {
     );
   }
 
-  return {
+  const config: UserConfig = {
     main: {
       define: productionDefine,
       build: {
@@ -162,12 +161,9 @@ export default defineConfig(({ command }) => {
             "ws",
           ]
         },
-        commonjsOptions: {
-          transformMixedEsModules: true
-        },
-        minify: "esbuild",
+        minify: "oxc",
         sourcemap: "hidden",
-        rollupOptions: {
+        rolldownOptions: {
           input: {
             index: resolve(__dirname, "src/main/index.ts"),
             "storage-maintenance-worker": resolve(__dirname, "src/main/state/storage-maintenance-worker.ts"),
@@ -199,9 +195,9 @@ export default defineConfig(({ command }) => {
         externalizeDeps: {
           exclude: ["@pwragent/shared"]
         },
-        minify: "esbuild",
+        minify: "oxc",
         sourcemap: "hidden",
-        rollupOptions: {
+        rolldownOptions: {
           input: {
             index: resolve(__dirname, "src/preload/index.ts"),
             "storage-maintenance": resolve(__dirname, "src/preload/storage-maintenance.ts"),
@@ -220,8 +216,10 @@ export default defineConfig(({ command }) => {
         plugins: () => [workerDebug.worker],
       },
       optimizeDeps: {
-        esbuildOptions: {
-          minify: true,
+        rolldownOptions: {
+          output: {
+            minify: true,
+          },
         },
       },
       resolve: {
@@ -233,30 +231,43 @@ export default defineConfig(({ command }) => {
         }
       },
       build: {
-        minify: "esbuild",
+        minify: "oxc",
         sourcemap: "hidden",
-        rollupOptions: {
+        rolldownOptions: {
           input: {
             index: resolve(__dirname, "src/renderer/index.html"),
             "storage-maintenance": resolve(__dirname, "src/renderer/storage-maintenance.html"),
           },
           output: {
-            manualChunks(id) {
-              if (id.includes("node_modules")) {
-                if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) {
-                  return "vendor-react";
-                }
-                if (/[\\/]node_modules[\\/](react-markdown|remark-|unified|mdast-|micromark|markdown-|vfile|hast-)[\\/]/.test(id)) {
-                  return "vendor-markdown";
-                }
-                if (/[\\/]node_modules[\\/](@tiptap|prosemirror-|@popperjs|tippy)[\\/]/.test(id)) {
-                  return "vendor-tiptap";
-                }
-              }
+            codeSplitting: {
+              groups: [{
+                name(id) {
+                  if (id.includes("node_modules")) {
+                    if (/[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/.test(id)) {
+                      return "vendor-react";
+                    }
+                    if (/[\\/]node_modules[\\/](react-markdown|remark-|unified|mdast-|micromark|markdown-|vfile|hast-)[\\/]/.test(id)) {
+                      return "vendor-markdown";
+                    }
+                    if (/[\\/]node_modules[\\/](@tiptap|prosemirror-|@popperjs|tippy)[\\/]/.test(id)) {
+                      return "vendor-tiptap";
+                    }
+                  }
+                },
+              }],
             }
           }
         }
       }
     }
   };
+
+  // scripts/build.mjs gives each target a fresh heap. Keep the regular
+  // electron-vite config (including dev/preview) usable without the wrapper.
+  const target = isBuild ? process.env.PWRAGENT_BUILD_TARGET : undefined;
+  if (target === undefined) return config;
+  if (target !== "main" && target !== "preload" && target !== "renderer") {
+    throw new Error(`Invalid PWRAGENT_BUILD_TARGET: ${target}`);
+  }
+  return { [target]: config[target] };
 });
