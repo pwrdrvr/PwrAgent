@@ -1448,6 +1448,8 @@ Numbers to compare a new write path against, all measured with this harness:
 |---|---|
 | Streamed command output, per-chunk (pre-#1406) | 3,693 commits / 58 MB WAL for one `find /` |
 | Streamed command output, coalesced (today) | 34 commits / 0.54 MB for the same command |
+| Environment action output, row rewritten per 500 ms snapshot (former) | 122 commits / 2.9 MB for one minute of output |
+| Environment action output, in memory until a run boundary (today) | 2 commits / 74 KB per run, whatever its length |
 | Former 10-second runtime lease heartbeats | 720 commits / 2.7 MB per hour (~65 MB/day) |
 | PID-owned messaging + federation leases, idle hour | 0 commits / 0 MB WAL |
 | PID-owned lease lifecycle (register, acquire/release both, exit) | 6 commits / ~93 KB WAL |

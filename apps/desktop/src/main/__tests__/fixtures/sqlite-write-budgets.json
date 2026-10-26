@@ -145,6 +145,20 @@
     "rowsChanged": 49,
     "statements": 45
   },
+  "codex-environment-action-output": {
+    "commits": 2,
+    "note": "one environment action run: start, 120 output snapshots (one minute at the 500 ms throttle, each a full 32,000-character tail) and exit. Live output stays in memory; commits do not scale with snapshots. ~74 KB per run whatever its length: ~1.5 MB/day at 20 runs/day (was 122 commits / ~2.9 MB per minute of output, ~1.4 GB/day for 8 hours of output)",
+    "observedWalBytes": 74160,
+    "rowsChanged": 2,
+    "statements": 2
+  },
+  "codex-environment-action-output-shutdown": {
+    "commits": 1,
+    "note": "120 output snapshots from a running environment action, then app shutdown: one transaction persists every running tail (was 120 commits / ~2.9 MB)",
+    "observedWalBytes": 57680,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "codex-turn-end-with-token-miser-gates": {
     "commits": 3,
     "note": "one Codex turn end on a 2,000-turn thread with 2,000 stored gate cards and 5 new gates: the final usage line, 5 keyed gate-card rows, and the gate usage lines; the overlay row is not rewritten. ~206 KB WAL, ~21 MB/day at 100 such turn ends (was ~3.6 MB and ~360 MB/day while the cards lived in the overlay row)",

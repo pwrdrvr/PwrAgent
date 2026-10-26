@@ -26950,6 +26950,13 @@ export class DesktopBackendRegistry {
               message: error instanceof Error ? error.message : String(error),
             },
           );
+        } finally {
+          // Also covers a run that was evicted or a thread that is gone.
+          this.overlayStore.dropThreadCodexEnvironmentActionLiveOutput?.({
+            backend: params.backend,
+            threadId: params.threadId,
+            runId: params.runId,
+          });
         }
       },
     );
@@ -26958,10 +26965,23 @@ export class DesktopBackendRegistry {
   /**
    * Called periodically (throttled to ~500ms) while a detached env-action
    * child is running, with a snapshot of its accumulated stdout+stderr.
-   * Patches the matching run's `output` on the overlay so the renderer's
-   * anchored UI shows live output. Does not change `status` — that stays
+   * Records the matching run's `output` in the overlay store's memory and
+   * emits it, so the renderer's anchored UI and peers show live output.
+   * Sqlite gets the tail at the run's boundaries (exit, stop, failure and
+   * shutdown), never per snapshot. Does not change `status` — that stays
    * "started" until the child closes.
    */
+  /** Shutdown is a boundary for running actions: persist their output tails. */
+  private flushCodexEnvironmentActionLiveOutputsForShutdown(): void {
+    try {
+      this.overlayStore.flushThreadCodexEnvironmentActionLiveOutputs?.();
+    } catch (error) {
+      backendRegistryLog.warn("codex-environment-action-output-flush-failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async handleCodexEnvironmentActionDetachedOutput(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -27015,12 +27035,27 @@ export class DesktopBackendRegistry {
             ...current,
             actionRuns: nextRuns,
           };
-          await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
-            backend: params.backend,
-            threadId: params.threadId,
-            codexEnvironmentRuntime: next,
-          });
-          this.invalidateThreadListCache(params.backend);
+          const setLiveOutput = this.overlayStore.setThreadCodexEnvironmentActionLiveOutput;
+          if (!ambiguousTerminalFailure && setLiveOutput) {
+            // Shutdown already flushed the running tails; nothing is left to
+            // persist or show this one.
+            if (this.closed) return;
+            setLiveOutput.call(this.overlayStore, {
+              backend: params.backend,
+              threadId: params.threadId,
+              runId: params.runId,
+              output: params.event.output,
+            });
+          } else {
+            // A status change is a boundary. Stores without the memory layer
+            // (test doubles) keep persisting every snapshot.
+            await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+              backend: params.backend,
+              threadId: params.threadId,
+              codexEnvironmentRuntime: next,
+            });
+            this.invalidateThreadListCache(params.backend);
+          }
           await this.emitCodexEnvironmentRuntimeUpdated({
             backend: params.backend,
             threadId: params.threadId,
@@ -27614,6 +27649,7 @@ export class DesktopBackendRegistry {
       for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     }
     this.closed = true;
+    this.flushCodexEnvironmentActionLiveOutputsForShutdown();
     this.threadTurnQueue.close();
     this.queuedMessageTitler.close();
     await this.archiveCleanupQueue.close();
