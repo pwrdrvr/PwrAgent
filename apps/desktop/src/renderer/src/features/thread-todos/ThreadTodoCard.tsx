@@ -1,3 +1,5 @@
+import { TodoModelPicker, TodoModelProvenance } from "./TodoModelPicker";
+import { todoDispatchPickKey, useTodoDispatchContext } from "./TodoDispatchProvider";
 import {
   useEffect,
   useId,
@@ -15,11 +17,13 @@ import type {
   ThreadTodoKind,
   ThreadTodoMergeMethod,
   ThreadTodoMergeMethodPreferences,
+  ThreadTodoModelSettings,
   ThreadTodoResolution,
 } from "@pwragent/shared";
 import {
   THREAD_TODO_MERGE_METHODS,
   resolveThreadTodoMergeMethod,
+  resolveThreadTodoModelSettings,
   threadTodoBlockingItems,
   threadTodoItemNoun,
   threadTodoItemProgress,
@@ -563,6 +567,18 @@ function ThreadTodoCardPager(props: { pager: NonNullable<ThreadTodoCardProps["pa
 
 function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const { todo } = props;
+  const dispatch = useTodoDispatchContext();
+  const [localPick, setLocalPick] = useState<ThreadTodoModelSettings>();
+  const selection = resolveThreadTodoModelSettings({
+    thread: todo.dispatchDefaults?.thread ?? { backend: todo.backend },
+    action: todo.action,
+    lastDispatch: todo.dispatchDefaults?.lastDispatch,
+    pick: dispatch.picks.get(todoDispatchPickKey(todo)) ?? localPick,
+  });
+  const pickModel = (settings: ThreadTodoModelSettings) => {
+    dispatch.pick(todo, settings);
+    setLocalPick(settings);
+  };
   const [confirmingMerge, setConfirmingMerge] = useState<MergeConfirmation>();
   const [confirmingSteps, setConfirmingSteps] = useState<OpenStepsConfirmation>();
   const confirmCancelRef = useRef<HTMLButtonElement>(null);
@@ -642,10 +658,16 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const runAction = (options?: ThreadTodoRunOptions): void =>
     completeCard(
       { question: "Start the thread anyway?", label: "Start thread" },
-      (allowOpenItems) => props.onRun(todo, {
-        ...options,
-        ...(allowOpenItems ? { allowOpenItems } : {}),
-      }),
+      (allowOpenItems) => {
+        // Freeze the attempted settings too: a failed start's Retry uses them
+        // even if another card changes the thread's memory in the meantime.
+        if (!options?.startOnInstanceId) pickModel(selection.settings);
+        props.onRun(todo, {
+          ...options,
+          ...(!options?.startOnInstanceId ? { modelSettings: selection.settings } : {}),
+          ...(allowOpenItems ? { allowOpenItems } : {}),
+        });
+      },
     );
 
   const copyPrompt = (): void => {
@@ -914,6 +936,12 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           ) : null}
           {facts.length > 0 ? (
             <dl className="thread-todo-card__facts">
+              {action?.type === "start_thread" ? (
+                <div className="thread-todo-card__fact">
+                  <dt>Model</dt>
+                  <dd><TodoModelPicker todo={todo} selection={selection} onPick={pickModel} disabled={props.running} /></dd>
+                </div>
+              ) : null}
               {facts.map(([label, value]) => (
                 <div key={label} className="thread-todo-card__fact">
                   <dt>{label}</dt>
@@ -922,6 +950,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               ))}
             </dl>
           ) : null}
+          {action?.type === "start_thread" ? <TodoModelProvenance todo={todo} selection={selection} onPick={pickModel} disabled={props.running} /> : null}
           {prompt ? (
             <div className="thread-todo-card__prompt-block">
               <button
@@ -1238,8 +1267,6 @@ function buildFacts(todo: ThreadTodo): Array<[string, string]> {
   }
   if (action?.type === "start_thread") {
     const facts: Array<[string, string]> = [];
-    const model = [action.model, action.reasoningEffort].filter(Boolean).join(" · ");
-    if (model) facts.push(["Model", model]);
     if (action.executionMode) {
       facts.push(["Access", formatExecutionModeLabel(action.executionMode)]);
     }

@@ -430,7 +430,7 @@ describe("ThreadTodoStack", () => {
       <ThreadTodoStack threadKey="codex:thread-a" todos={[handoff]} view={createView([handoff])} onStartReview={vi.fn()} />,
     );
 
-    expect(screen.getByText("gpt-6.1-sol · xhigh")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Model for the new thread: OpenAI, gpt-6.1-sol, xhigh" })).toBeTruthy();
     expect(screen.getByText("Access").nextElementSibling?.textContent).toBe("Auto");
   });
 
@@ -656,7 +656,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
-    expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true });
+    expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true, modelSettings: { backend: "codex" } });
   });
 
   it("starts a thread at once when only the new thread's steps are open", async () => {
@@ -680,7 +680,7 @@ describe("thread to-do checklists", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
     expect(screen.queryByText(/still open/)).toBeNull();
-    expect(view.run).toHaveBeenCalledWith(handoff, {});
+    expect(view.run).toHaveBeenCalledWith(handoff, { modelSettings: { backend: "codex" } });
     cleanup();
 
     // A peer's card may live on an older owner, which blocks on every open
@@ -697,7 +697,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
-    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true });
+    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true, modelSettings: { backend: "codex" } });
   });
 
   it("drops the question once the last open step is checked", () => {

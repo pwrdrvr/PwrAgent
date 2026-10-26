@@ -19,12 +19,19 @@ const FULL_ACCESS_SOL: HandoffSourceSettings = {
 function fakeRegistry(source: HandoffSourceSettings) {
   const registry = {
     readThreadHandoffSettings: vi.fn(async () => source),
+    readBackendModelOptions: vi.fn(async (_backend: string) => undefined),
+    listBackends: vi.fn(async () => ({ fetchedAt: 0, backends: ["codex", "claude", "acp:kimi"].map((kind) => ({
+      kind, label: kind, executionModes: [
+        { mode: "default", available: true }, { mode: "full-access", available: true },
+        ...(kind.startsWith("acp:") ? [] : [{ mode: "auto", available: true }]),
+      ],
+    })) })),
     startThread: vi.fn(async (params: { backend: "codex" }) => ({
       backend: params.backend,
       threadId: "child-thread",
     })),
     renameThread: vi.fn(async () => undefined),
-    startTurn: vi.fn(async () => ({ turnId: "child-turn" })),
+    startTurn: vi.fn(async (_params: Record<string, unknown>) => ({ turnId: "child-turn" })),
   };
   return {
     registry,
@@ -116,9 +123,9 @@ describe("thread to-do Start thread", () => {
     }));
   });
 
-  it("sends a peer the source thread's access but only the card's own model", async () => {
+  it("sends a peer the source thread's access and leaves model selection to its defaults", async () => {
     // The peer's catalog is its own: a model id from this machine may not
-    // exist there, so the peer applies its defaults unless the card names one.
+    // exist there, so even an agent suggestion stays on this machine.
     const source = FULL_ACCESS_SOL;
     const registry = {
       readThreadHandoffSettings: vi.fn(async () => source),
@@ -157,7 +164,7 @@ describe("thread to-do Start thread", () => {
       sourceThreadId: "source-thread",
       project: { key: "local-repo", label: "repo", path: "/local/repo" },
       crossProject: false,
-      action: { type: "start_thread", prompt: "Go" },
+      action: { type: "start_thread", prompt: "Go", model: "gpt-6.1-sol", reasoningEffort: "high" },
     });
 
     const created = federation.mock.calls
@@ -281,5 +288,86 @@ describe("thread to-do project menu", () => {
     fake.listProjects.mockRejectedValueOnce(new Error("navigation unavailable"));
     await expect(setThreadTodoProject({ id: "todo-1", projectKey: SNAP.key }, fake))
       .rejects.toThrow("navigation unavailable");
+  });
+});
+
+describe("chosen dispatch backend", () => {
+  it("validates against the chosen catalog and drops tier and fast mode across backends", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, serviceTier: "fast", fastMode: true });
+    registry.readBackendModelOptions.mockResolvedValue({ models: [{ id: "opus", label: "Opus 5.5", reasoningEfforts: ["high"] }] } as never);
+    await runners.startThread({
+      sourceBackend: "codex", sourceThreadId: "source", cwd: "/repo", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it", workMode: "worktree" },
+      modelSettings: { backend: "claude", model: "Opus 5.5", reasoningEffort: "high" },
+    });
+    expect(registry.readBackendModelOptions).toHaveBeenCalledWith("claude");
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", model: "opus", reasoningEffort: "high", executionMode: "full-access", workMode: "worktree",
+    }));
+    for (const args of [registry.startThread.mock.calls[0]![0], registry.startTurn.mock.calls[0]![0]]) {
+      expect(args).not.toHaveProperty("serviceTier");
+      expect(args).not.toHaveProperty("fastMode");
+    }
+  });
+
+  it("refuses an invalid model before starting anything", async () => {
+    const { registry, runners } = fakeRegistry(FULL_ACCESS_SOL);
+    registry.readBackendModelOptions.mockResolvedValue({ models: [{ id: "opus", reasoningEfforts: ["high"] }] } as never);
+    await expect(runners.startThread({
+      sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" },
+      modelSettings: { backend: "claude", model: "gpt-6.1-sol" },
+    })).rejects.toThrow('No model named "gpt-6.1-sol"');
+    expect(registry.startThread).not.toHaveBeenCalled();
+  });
+
+  it("keeps tier and fast mode for a same-backend pick", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, serviceTier: "fast", fastMode: true });
+    await runners.startThread({
+      sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" },
+      modelSettings: { backend: "codex", model: "other", reasoningEffort: "medium" },
+    });
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ serviceTier: "fast", fastMode: true }));
+  });
+});
+
+describe("dispatch access mode compatibility", () => {
+  it.each(["codex", "claude"] as const)("starts on ACP Default Access when inheriting %s Auto", async (sourceBackend) => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
+    await runners.startThread({ sourceBackend, sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "acp:kimi" } });
+    expect(registry.listBackends).toHaveBeenCalledWith({ includeUnavailable: true });
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ backend: "acp:kimi", executionMode: "default" }));
+    expect(registry.startTurn).toHaveBeenCalledWith(expect.objectContaining({ executionMode: "default" }));
+  });
+
+  it("keeps Auto when the destination advertises it", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
+    await runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "claude" } });
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ executionMode: "auto" }));
+    expect(registry.startTurn).toHaveBeenCalledWith(expect.objectContaining({ executionMode: "auto" }));
+  });
+
+  it("does not substitute Full Access when the inherited mode and Default Access are unavailable", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
+    registry.listBackends.mockResolvedValue({ fetchedAt: 0, backends: [{ kind: "acp:kimi", label: "Kimi", executionModes: [
+      { mode: "default", available: false }, { mode: "full-access", available: true },
+    ] }] });
+    await expect(runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "acp:kimi" } })).rejects.toThrow("Default Access");
+    expect(registry.startThread).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit card access and same-backend inheritance", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
+    await runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it", executionMode: "full-access" }, modelSettings: { backend: "acp:kimi" } });
+    expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ executionMode: "full-access" }));
+    await runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" } });
+    expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ executionMode: "auto" }));
+    expect(registry.listBackends).not.toHaveBeenCalled();
   });
 });
