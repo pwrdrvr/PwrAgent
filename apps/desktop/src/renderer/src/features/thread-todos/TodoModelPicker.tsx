@@ -96,7 +96,7 @@ export function TodoModelPicker(props: PickerProps) {
         className={`composer-dropdown__button todo-model-picker__chip tooltip-target${differs ? " is-changed" : ""}`}
         aria-label={`Model for the new thread: ${label.replaceAll(" · ", ", ")}`}
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
-        data-tooltip="Settings for starts here. Start thread on another PwrAgent uses that peer’s defaults."
+        data-tooltip={open ? undefined : "Settings for starts here. Start thread on another PwrAgent uses that peer’s defaults."}
         onClick={() => setOpen(!open)}>
         <span className="composer-dropdown__label">{label}</span><ChevronDownIcon size={12} />
       </button>

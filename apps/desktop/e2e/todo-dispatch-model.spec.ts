@@ -42,7 +42,8 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     preLaunchHook: async (homeRoot) => {
       const db = StateDb.open(stateDbPathForHomeRoot(homeRoot));
       try {
-        const todos = new ThreadTodoService({ store: new ThreadTodoStore(db), now: () => 1_791_600_000_000 });
+        let ids = 0;
+        const todos = new ThreadTodoService({ store: new ThreadTodoStore(db), now: () => 1_791_600_000_000, newId: () => `atlas-card-${++ids}` });
         for (const [threadId, titles] of [[source, ["Bound the retry queue", "Cache the signing-key lookup"]], [other, ["Separate tenant rate budgets"]]] as const) {
           db.raw.prepare("INSERT OR REPLACE INTO threads(thread_id, payload) VALUES (?, ?)").run(`codex:${threadId}`, JSON.stringify({
             backend: "codex", threadId, executionMode: "default", model: "gpt-5.5", reasoningEffort: "high", extraLinkedDirectories: [],
@@ -65,6 +66,10 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await app.window.getByRole("button", { name: /Webhook delivery hardening/ }).first().click();
     const stack = app.window.getByRole("region", { name: "To-dos for this thread" });
     await expect(stack.getByRole("button", { name: "Start thread", exact: true })).toBeVisible();
+    await expect.poll(() => app.window.evaluate(async () => {
+      const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+      return (await api.listBackends!()).backends.find((backend) => backend.kind === "codex")?.available;
+    })).toBe(true);
     if (process.env.PWRAGENT_TODO_DISPATCH_BEFORE === "1") {
       await app.window.screenshot({ path: testInfo.outputPath("todo-dispatch-before.png") });
       return;

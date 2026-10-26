@@ -41,6 +41,7 @@ describe("to-do dispatch model picker", () => {
     expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Model", "Where"]);
     expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high" }).getAttribute("aria-expanded")).toBe("false");
     const menu = await openPicker();
+    expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).hasAttribute("data-tooltip")).toBe(false);
     expect(within(menu).getAllByRole("menuitemradio").map((row) => row.textContent)).toEqual([
       "Claude · Opus 5.5 · highThis thread", "Codex · GPT-6.1-Sol · high",
     ]);
