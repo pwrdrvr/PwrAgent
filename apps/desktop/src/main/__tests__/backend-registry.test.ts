@@ -26248,6 +26248,131 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  describe("published Codex background terminals", () => {
+    const terminal = { itemId: "command-1", processId: "session-1", command: "pnpm dev", cwd: "/fixture/project", cpuPercent: 1 };
+    const row = {
+      id: "thread-1", source: "codex" as const, title: "Dev server", titleSource: "explicit" as const,
+      threadStatus: "idle" as const, linkedDirectories: [], inbox: { inInbox: false },
+    };
+
+    function setup(listBackgroundTerminals: ReturnType<typeof vi.fn>) {
+      const codexClient = new MockBackendClient({ threads: [] });
+      Object.assign(codexClient, { listBackgroundTerminals });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      onTestFinished(() => registry.close());
+      const updates: unknown[] = [];
+      registry.onEvent((event) => {
+        if (event.notification.method === "thread/backgroundTasks/updated") {
+          updates.push({ backend: event.backend, ...event.notification.params });
+        }
+      });
+      return { codexClient, registry, updates };
+    }
+
+    async function endTurnWithRunningCommands(codexClient: MockBackendClient, itemIds: string[]) {
+      for (const id of itemIds) {
+        await codexClient.emit({ method: "item/started", params: {
+          threadId: "thread-1", turnId: "turn-1",
+          item: { id, type: "commandExecution", status: "inProgress", command: "pnpm dev" },
+        } });
+      }
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] },
+      } });
+    }
+
+    function completeCommand(codexClient: MockBackendClient, id: string) {
+      return codexClient.emit({ method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id, type: "commandExecution", status: "completed", command: "pnpm dev" },
+      } });
+    }
+
+    it("marks the row with a running command when a turn ends, and clears it when the command exits", async () => {
+      const listBackgroundTerminals = vi.fn()
+        .mockResolvedValueOnce({ supported: true, terminals: [terminal] })
+        .mockResolvedValue({ supported: true, terminals: [{ ...terminal, cpuPercent: 7 }] });
+      const { codexClient, registry, updates } = setup(listBackgroundTerminals);
+
+      await endTurnWithRunningCommands(codexClient, ["command-1"]);
+      await vi.waitFor(() => expect(updates).toEqual([{ backend: "codex", threadId: "thread-1", tasks: [terminal] }]));
+      const [marked] = registry.withNavigationSubAgentActivity([row]);
+      // A Codex terminal never wakes the agent: the row is marked, not working,
+      // and the turn stays idle so the composer sends rather than queues.
+      expect(marked).toMatchObject({ threadStatus: "idle", hasAgentCommands: true });
+      expect(marked).not.toHaveProperty("hasBackgroundTasks");
+
+      // A refresh that changes only usage figures is not a membership change.
+      await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+      expect(updates).toHaveLength(1);
+
+      await completeCommand(codexClient, "command-1");
+      await vi.waitFor(() => expect(updates).toHaveLength(2));
+      expect(updates[1]).toEqual({ backend: "codex", threadId: "thread-1", tasks: [] });
+      const [settled] = registry.withNavigationSubAgentActivity([marked!]);
+      expect(settled).not.toHaveProperty("hasAgentCommands");
+      expect(settled).toMatchObject({ threadStatus: "idle" });
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+    });
+
+    it("reads again when a command exits while the read after the turn is in flight", async () => {
+      const second = { ...terminal, itemId: "command-2", processId: "session-2", command: "pnpm watch" };
+      let resolveFirst!: (response: { supported: boolean; terminals: typeof terminal[] }) => void;
+      const listBackgroundTerminals = vi.fn()
+        .mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }))
+        .mockResolvedValue({ supported: true, terminals: [second] });
+      const { codexClient, registry, updates } = setup(listBackgroundTerminals);
+
+      await endTurnWithRunningCommands(codexClient, ["command-1", "command-2"]);
+      await vi.waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledTimes(1));
+      await completeCommand(codexClient, "command-1");
+      // The first read predates the exit. Its answer must not be published.
+      resolveFirst({ supported: true, terminals: [terminal, second] });
+
+      await vi.waitFor(() => expect(updates).toEqual([{ backend: "codex", threadId: "thread-1", tasks: [second] }]));
+      expect(listBackgroundTerminals).toHaveBeenCalledTimes(2);
+      expect(registry.withNavigationSubAgentActivity([row])[0]).toMatchObject({ hasAgentCommands: true });
+    });
+
+    it("does not read terminals after a turn that left no command running", async () => {
+      const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [] }));
+      const { codexClient, updates } = setup(listBackgroundTerminals);
+      await endTurnWithRunningCommands(codexClient, []);
+      expect(listBackgroundTerminals).not.toHaveBeenCalled();
+      expect(updates).toEqual([]);
+    });
+
+    it("does not read terminals for turns that quit is stopping", async () => {
+      const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [terminal] }));
+      const { codexClient, registry, updates } = setup(listBackgroundTerminals);
+      (registry as unknown as { stoppingRunningTurnsForShutdown: boolean }).stoppingRunningTurnsForShutdown = true;
+      await endTurnWithRunningCommands(codexClient, ["command-1"]);
+      expect(listBackgroundTerminals).not.toHaveBeenCalled();
+      expect(updates).toEqual([]);
+    });
+
+    it.each([
+      ["the thread unloads", async (codexClient: MockBackendClient) => {
+        await codexClient.emit({ method: "thread/status/changed", params: {
+          threadId: "thread-1", status: { type: "notLoaded" },
+        } });
+      }],
+      ["the app server exits", async (codexClient: MockBackendClient) => {
+        codexClient.emitUnexpectedExit();
+      }],
+    ])("publishes the clear when %s", async (_case, end) => {
+      const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [terminal] }));
+      const { codexClient, registry, updates } = setup(listBackgroundTerminals);
+      await registry.listBackgroundTerminals({ backend: "codex", threadId: "thread-1" });
+      await vi.waitFor(() => expect(updates).toEqual([{ backend: "codex", threadId: "thread-1", tasks: [terminal] }]));
+
+      await end(codexClient);
+      await vi.waitFor(() => expect(updates).toHaveLength(2));
+      expect(updates[1]).toEqual({ backend: "codex", threadId: "thread-1", tasks: [] });
+      expect(registry.withNavigationSubAgentActivity([row])[0]).not.toHaveProperty("hasAgentCommands");
+    });
+  });
+
   it("keeps a running Codex command in the quit snapshot after its turn ends", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/list", "thread/read"] },

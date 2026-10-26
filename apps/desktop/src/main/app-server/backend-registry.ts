@@ -5840,6 +5840,11 @@ function turnIdFromStartedNotification(
   return notification.params.turnId ?? notification.params.turn.id;
 }
 
+/** Usage figures change on every read; only identities make a membership. */
+function backgroundTerminalMembership(terminals: CodexBackgroundTerminal[]): string {
+  return terminals.map((terminal) => `${terminal.itemId}\u0000${terminal.processId}`).sort().join("\n");
+}
+
 function turnIdFromTerminalNotification(
   notification: {
     params: {
@@ -19881,8 +19886,10 @@ export class DesktopBackendRegistry {
 
   /**
    * Navigation and shutdown share runtime worker ownership, never durable
-   * history. Background tasks that outlive a turn mark the row as working too,
-   * the same tasks the quit prompt counts.
+   * history. Claude background tasks that outlive a turn mark the row as
+   * working, because Claude takes another turn when one finishes. Codex
+   * background terminals mark it with a running command instead. The quit
+   * prompt counts both.
    */
   withNavigationSubAgentActivity(
     threads: NavigationThreadSummary[],
@@ -19893,20 +19900,28 @@ export class DesktopBackendRegistry {
         .backgroundTaskThreadIds()
         .map((threadId) => buildThreadIdentityKey("claude", threadId)),
     );
+    // A Codex terminal never wakes the agent when it exits, so it marks the
+    // row with a running command rather than as working.
+    const agentCommandOwners = new Set(
+      [...this.codexBackgroundTerminals.keys()].map((threadId) => buildThreadIdentityKey("codex", threadId)),
+    );
     return threads.map((thread) => {
       if (thread.federation) return thread;
       const key = buildThreadIdentityKey(thread.source, thread.id);
       const hasActiveSubAgent = activeOwners.has(key);
       const hasBackgroundTasks = backgroundTaskOwners.has(key);
+      const hasAgentCommands = agentCommandOwners.has(key);
       if (
         thread.hasActiveSubAgent === hasActiveSubAgent
         && Boolean(thread.hasBackgroundTasks) === hasBackgroundTasks
+        && Boolean(thread.hasAgentCommands) === hasAgentCommands
       ) return thread;
-      const { hasBackgroundTasks: _previous, ...rest } = thread;
+      const { hasBackgroundTasks: _previous, hasAgentCommands: _previousCommands, ...rest } = thread;
       return {
         ...rest,
         hasActiveSubAgent,
         ...(hasBackgroundTasks ? { hasBackgroundTasks: true } : {}),
+        ...(hasAgentCommands ? { hasAgentCommands: true } : {}),
       };
     });
   }
@@ -26340,25 +26355,70 @@ export class DesktopBackendRegistry {
     // quit and auto-archive like a Codex background terminal.
     if (request.backend === "claude") return this.claudeBackend.listBackgroundTasks(request.threadId);
     if (request.backend !== "codex") return { supported: false, terminals: [] };
+    return (await this.readCodexBackgroundTerminals(request.threadId)).response;
+  }
+
+  /** `applied` is false when an item or status event raced the read. */
+  private async readCodexBackgroundTerminals(
+    threadId: string,
+  ): Promise<{ response: ListBackgroundTerminalsResponse; applied: boolean }> {
     const generation = this.backgroundTerminalGeneration;
     const revision = ++this.backgroundTerminalReadCounter;
-    this.backgroundTerminalReadRevisions.set(request.threadId, revision);
+    this.backgroundTerminalReadRevisions.set(threadId, revision);
     try {
-      const response = await this.withCodexThreadClient(request.threadId, async (client) =>
-        client.listBackgroundTerminals?.(request.threadId) ?? { supported: false, terminals: [] },
+      const response = await this.withCodexThreadClient(threadId, async (client) =>
+        client.listBackgroundTerminals?.(threadId) ?? { supported: false, terminals: [] },
         undefined, false,
       );
-      if (!this.closed && response.supported && generation === this.backgroundTerminalGeneration
-        && revision === this.backgroundTerminalReadRevisions.get(request.threadId)) {
-        if (response.terminals.length) this.codexBackgroundTerminals.set(request.threadId, response.terminals);
-        else this.codexBackgroundTerminals.delete(request.threadId);
-      }
-      return response;
+      const applied = !this.closed && response.supported && generation === this.backgroundTerminalGeneration
+        && revision === this.backgroundTerminalReadRevisions.get(threadId);
+      if (applied) this.publishCodexBackgroundTerminals(threadId, response.terminals);
+      return { response, applied };
     } finally {
-      if (this.backgroundTerminalReadRevisions.get(request.threadId) === revision) {
-        this.backgroundTerminalReadRevisions.delete(request.threadId);
+      if (this.backgroundTerminalReadRevisions.get(threadId) === revision) {
+        this.backgroundTerminalReadRevisions.delete(threadId);
       }
     }
+  }
+
+  /**
+   * A Codex turn can end with commands still running. Codex announces no
+   * terminal set, so read it once the turn ends, and read again if a
+   * completion raced the read: navigation has no other way to learn of it.
+   */
+  private async refreshCodexBackgroundTerminalsAfterTurn(threadId: string): Promise<void> {
+    try {
+      for (let attempt = 0; attempt < 3 && !this.closed; attempt += 1) {
+        const { response, applied } = await this.readCodexBackgroundTerminals(threadId);
+        if (applied || !response.supported) return;
+      }
+    } catch (error) {
+      backendRegistryLog.debug("background terminal read after turn failed", {
+        threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Codex has no push event for background terminals, so the registry
+   * publishes `thread/backgroundTasks/updated` itself whenever a thread's set
+   * changes: a list read, a command's `item/completed`, or the thread
+   * unloading. Navigation refreshes on that event, so the row mark clears.
+   * Usage figures change on every read and are not a membership change.
+   */
+  private publishCodexBackgroundTerminals(threadId: string, terminals: CodexBackgroundTerminal[]): void {
+    const previous = this.codexBackgroundTerminals.get(threadId) ?? [];
+    if (terminals.length) this.codexBackgroundTerminals.set(threadId, terminals);
+    else this.codexBackgroundTerminals.delete(threadId);
+    if (backgroundTerminalMembership(previous) === backgroundTerminalMembership(terminals) || this.closed) return;
+    void this.emit({
+      backend: "codex",
+      notification: { method: "thread/backgroundTasks/updated", params: { threadId, tasks: terminals } },
+    }).catch((error) => backendRegistryLog.warn("background terminal update emit failed", {
+      threadId,
+      error: error instanceof Error ? error.message : String(error),
+    }));
   }
 
   async terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> {
@@ -46777,7 +46837,7 @@ export class DesktopBackendRegistry {
         this.backgroundTerminalReadRevisions.set(threadIdForRevision, ++this.backgroundTerminalReadCounter);
       }
       if (notification.method === "thread/status/changed" && readRecord(params?.status)?.type === "notLoaded") {
-        this.codexBackgroundTerminals.delete(threadIdForRevision);
+        this.publishCodexBackgroundTerminals(threadIdForRevision, []);
       }
     }
     if (notification.method === "item/completed") {
@@ -46786,9 +46846,25 @@ export class DesktopBackendRegistry {
       const threadId = notification.params.threadId;
       const terminals = this.codexBackgroundTerminals.get(threadId);
       if (terminals && itemId) {
-        const remaining = terminals.filter((terminal) => terminal.itemId !== itemId);
-        if (remaining.length) this.codexBackgroundTerminals.set(threadId, remaining);
-        else this.codexBackgroundTerminals.delete(threadId);
+        this.publishCodexBackgroundTerminals(threadId, terminals.filter((terminal) => terminal.itemId !== itemId));
+      }
+    }
+    if (
+      notification.method === "turn/completed"
+      || notification.method === "turn/failed"
+      || notification.method === "turn/cancelled"
+    ) {
+      // A command still live when its turn ends is a background terminal. A
+      // later turn can also stop or start one, so recheck a thread with some.
+      // Quit stops turns on purpose; reading then would only query a closing
+      // app server.
+      const threadId = notification.params.threadId;
+      if (
+        !this.closed
+        && !this.stoppingRunningTurnsForShutdown
+        && (this.liveCodexToolItemsByThread.has(threadId) || this.codexBackgroundTerminals.has(threadId))
+      ) {
+        void this.refreshCodexBackgroundTerminalsAfterTurn(threadId);
       }
     }
     if (notification.method === "turn/failed" || notification.method === "turn/cancelled") {
@@ -46849,7 +46925,11 @@ export class DesktopBackendRegistry {
       ...pendingCompactions.map((candidate) => candidate.params.threadId),
     ])];
     this.liveCodexToolItemsByThread.clear();
-    this.codexBackgroundTerminals.clear();
+    // The terminals died with the app server. Publish the clear so rows that
+    // carried their mark refresh.
+    for (const threadId of [...this.codexBackgroundTerminals.keys()]) {
+      this.publishCodexBackgroundTerminals(threadId, []);
+    }
     try {
       await Promise.all(pendingCompactions.map((candidate) => {
         const threadId = candidate.params.threadId;
