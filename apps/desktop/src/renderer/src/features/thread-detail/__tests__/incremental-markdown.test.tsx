@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { ThreadMarkdown as ProductionThreadMarkdown } from "../ThreadMarkdown";
-import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
+import { MarkdownRenderingOptionsProvider, useIncrementalMarkdownRenderer } from "../../../lib/markdown-rendering-options";
 import { advanceIncrementalParse, type AdvanceOptions, type IncrementalParseState } from "@ai-markdown/engine";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -38,8 +38,13 @@ function ThreadMarkdown(props: { text: string }) {
 }
 
 beforeAll(async () => {
-  render(<ThreadMarkdown text="Warmup" />);
-  await waitFor(() => expect(baseline.calls).toBeGreaterThan(0));
+  function Readiness() {
+    return useIncrementalMarkdownRenderer() ? "ready" : "loading";
+  }
+  const view = render(<MarkdownRenderingOptionsProvider mathEnabled={false} incrementalEnabled>
+    <Readiness />
+  </MarkdownRenderingOptionsProvider>);
+  await waitFor(() => expect(view.container.textContent).toBe("ready"));
   cleanup();
   vi.clearAllMocks();
 });

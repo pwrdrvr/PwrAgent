@@ -5,7 +5,7 @@ import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { TranscriptList } from "../TranscriptList";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 import budgets from "./fixtures/markdown-parse-budgets.json";
-import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
+import { MarkdownRenderingOptionsProvider, useIncrementalMarkdownRenderer } from "../../../lib/markdown-rendering-options";
 
 const work = vi.hoisted(() => ({ parses: 0, characters: 0, nodes: 0 }));
 
@@ -41,10 +41,13 @@ afterEach(() => {
 beforeAll(async () => {
   // Warm the shared code import, not a message cache. Budget measurements
   // start after loading so they compare admitted parser work in both modes.
-  render(<MarkdownRenderingOptionsProvider mathEnabled={false} incrementalEnabled>
-    <ThreadMarkdown text="Warmup" />
+  function Readiness() {
+    return useIncrementalMarkdownRenderer() ? "ready" : "loading";
+  }
+  const view = render(<MarkdownRenderingOptionsProvider mathEnabled={false} incrementalEnabled>
+    <Readiness />
   </MarkdownRenderingOptionsProvider>);
-  await waitFor(() => expect(work.parses).toBe(2));
+  await waitFor(() => expect(view.container.textContent).toBe("ready"));
   cleanup();
   work.parses = 0;
   work.characters = 0;

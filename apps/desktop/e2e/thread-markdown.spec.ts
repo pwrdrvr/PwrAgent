@@ -30,6 +30,14 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
     // scripts parsed before attachment, including an already-loaded renderer.
     await cdp.send("Debugger.enable");
 
+    // Wait for the provider's committed context before mounting the transcript.
+    // A parsed chunk alone does not prove the provider has adopted it, and
+    // settled documents keep the renderer they mounted with until text changes.
+    await expect(app.window.locator(".thread-view[data-markdown-renderer-available]"))
+      .toHaveAttribute("data-markdown-renderer-available", incrementalEnabled ? "incremental" : "standard");
+    await expect(app.window.getByRole("heading", { name: "Transcript heading 1", exact: true }))
+      .toHaveCount(0);
+
     await app.window
       .getByRole("button", { name: /Markdown replay thread/i })
       .first()
@@ -66,10 +74,7 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
     for (const heading of headingLocators) {
       await expect(heading).toBeVisible();
     }
-    // The incremental renderer loads lazily. Until it arrives, messages render
-    // through react-markdown, and the switch remounts every heading. A
-    // per-heading evaluate can land on a detached node, whose computed style
-    // is empty. Read all six from one snapshot of the current DOM instead.
+    // Read all six heading styles from one snapshot of the current DOM.
     await expect.poll(async () => {
       const styles = await transcript.evaluate(readTranscriptHeadingStyles);
       return {

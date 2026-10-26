@@ -3,6 +3,7 @@ import { ThreadServices } from "../federation/ThreadServices";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { useEventCallback } from "../../lib/useEventCallback";
+import { useIncrementalMarkdownRenderer } from "../../lib/markdown-rendering-options";
 import { useDismissedOperatorQuestions } from "../operator-requests/useDismissedOperatorQuestions";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
@@ -1231,6 +1232,7 @@ function findTranscriptTurnEntryIndex(
 const NO_THREAD_TODOS: ThreadTodo[] = [];
 
 export function ThreadView(props: ThreadViewProps) {
+  const incrementalMarkdownRenderer = useIncrementalMarkdownRenderer();
   const [pendingActivityEntry, setPendingActivityEntry] =
     useState<AppServerThreadActivityEntry>();
   const [pendingProtocolActivityEntry, setPendingProtocolActivityEntry] =
@@ -4730,6 +4732,7 @@ export function ThreadView(props: ThreadViewProps) {
   const serviceInstanceId = serviceTarget?.scope === "remote" ? serviceTarget.instanceId : undefined;
   return (
     <section
+      data-markdown-renderer-available={incrementalMarkdownRenderer ? "incremental" : "standard"}
       className={`thread-view${
         emptyView
           ? " thread-view--empty"
