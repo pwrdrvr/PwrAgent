@@ -380,6 +380,7 @@ function parseTurnAssistantReplyRequest(
   const request = params as Partial<FederationReadTurnAssistantReplyRequest> | undefined;
   if (
     !request
+    || typeof request.backend !== "string"
     || !isAppServerBackendKind(request.backend)
     || typeof request.threadId !== "string" || !request.threadId
     || typeof request.turnId !== "string" || !request.turnId
@@ -436,6 +437,7 @@ function localizeRefreshThreadGitWorkingStateRequest(
 ): RefreshOwnedThreadGitWorkingStateRequest {
   if (
     typeof request?.backend !== "string"
+    || typeof request.backend !== "string"
     || !isAppServerBackendKind(request.backend)
     || typeof request.threadId !== "string"
     || !request.threadId.trim()
