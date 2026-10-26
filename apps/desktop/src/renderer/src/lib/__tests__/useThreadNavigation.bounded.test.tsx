@@ -261,15 +261,14 @@ it("keeps an unpinned directory unpinned when an index read from before the unpi
     act(() => result.current.setBrowseMode("directories"));
     // A background refresh reads the index before the operator unpins.
     hold = new Promise<void>((resolve) => { finish = resolve; });
-    let refreshing: Promise<void> | undefined;
-    act(() => { refreshing = result.current.pagedNavigation.refresh(); });
+    act(() => { void result.current.pagedNavigation.refresh(); });
     await waitFor(() => expect(result.current.pagedNavigation.resources.get("directory-index")?.loading).toBe(true));
     await act(() => result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false));
     expect(rank()).toBeUndefined();
 
     // The owner's event has not arrived, so nothing fences the earlier read.
-    await act(async () => { finish(); await refreshing; });
-    expect(result.current.pagedNavigation.resources.get("directory-index")?.loading).toBe(false);
+    act(() => finish());
+    await waitFor(() => expect(result.current.pagedNavigation.resources.get("directory-index")?.loading).toBe(false));
     expect(rank()).toBeUndefined();
   } finally {
     finish?.();
