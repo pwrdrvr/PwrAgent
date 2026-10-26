@@ -114,6 +114,7 @@ import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer, type ComposerProps } from "../composer/Composer";
+import { ComposerTerminalToggle } from "../composer/ComposerTerminalToggle";
 import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
   describeLaunchpadMachineOffline,
@@ -2147,7 +2148,7 @@ export function ThreadView(props: ThreadViewProps) {
       celestialIcon: federation.celestialIcon,
     };
   }, [selectedThread?.federation]);
-  const toggleSelectedThreadTerminal = useCallback(() => {
+  const toggleSelectedThreadTerminal = useEventCallback(() => {
     if (!selectedThreadKey) return;
     if (selectedThreadTerminalDisabledReason) return;
     terminals.togglePanel(
@@ -2155,13 +2156,7 @@ export function ThreadView(props: ThreadViewProps) {
       selectedThreadTerminalCwd,
       selectedThreadTerminalRemote,
     );
-  }, [
-    selectedThreadKey,
-    selectedThreadTerminalCwd,
-    selectedThreadTerminalDisabledReason,
-    selectedThreadTerminalRemote,
-    terminals,
-  ]);
+  });
   const acceptedBranchDriftRef = useRef<string | undefined>(undefined);
   const suppressBranchDriftDialogRef = useRef(
     props.suppressBranchDriftDialog ?? false
@@ -3954,6 +3949,19 @@ export function ThreadView(props: ThreadViewProps) {
   const launchpadRunningCodexEnvironmentSetup = Boolean(
     selectedLaunchpadCodexEnvironment?.setupScript,
   );
+  const showIntegratedTerminal = Boolean(selectedThread && !composerLaunchpad);
+  const integratedTerminal = useMemo(() => showIntegratedTerminal ? {
+    open: selectedThreadTerminalOpen,
+    running: selectedThreadTerminalRunning,
+    disabledReason: selectedThreadTerminalDisabledReason,
+    onToggle: toggleSelectedThreadTerminal,
+  } : undefined, [
+    showIntegratedTerminal,
+    selectedThreadTerminalOpen,
+    selectedThreadTerminalRunning,
+    selectedThreadTerminalDisabledReason,
+    toggleSelectedThreadTerminal,
+  ]);
   // What only one mode's composer receives. Everything both modes receive is
   // written once on the `<Composer>` below, so the two cannot drift apart.
   const composerModeProps: Partial<ComponentProps<typeof Composer>> =
@@ -4148,9 +4156,16 @@ export function ThreadView(props: ThreadViewProps) {
       ) : workspaceRecoverySlot}
       {/* Second child in both modes, so React matches it by position when
           the slot itself survives. */}
-      {composerReplacedByRecovery ? null : <Composer
+      {composerReplacedByRecovery ? (
+        <div className="composer__footer">
+          <div className="composer__application-actions" aria-label="Composer tools">
+            {integratedTerminal ? <ComposerTerminalToggle {...integratedTerminal} /> : null}
+          </div>
+        </div>
+      ) : <Composer
         backends={props.backends}
         applications={props.applications}
+        integratedTerminal={integratedTerminal}
         codexFastAllowed={props.codexFastAllowed}
         desktopApi={props.desktopApi}
         onShowNotice={props.onShowNotice}
@@ -4302,13 +4317,6 @@ export function ThreadView(props: ThreadViewProps) {
       backends={props.backends}
       onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
       titleRename={props.titleRename}
-      layout={{
-        ...headerChrome.layout,
-        terminalOpen: selectedThreadTerminalOpen,
-        terminalRunning: selectedThreadTerminalRunning,
-        terminalDisabledReason: selectedThreadTerminalDisabledReason,
-        onToggleTerminal: toggleSelectedThreadTerminal,
-      }}
       rewind={
         threadRewindSupport
           ? {

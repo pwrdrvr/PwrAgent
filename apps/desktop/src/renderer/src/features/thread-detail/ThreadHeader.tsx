@@ -10,7 +10,6 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { paintsAppTitleBar } from "../../lib/window-chrome";
 import { useThreadLinkHoverSource } from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
-import { TerminalIcon } from "../../icons/TerminalIcon";
 import { HistoryIcon } from "../../icons/HistoryIcon";
 import { SubAgentsIcon } from "../../icons/SubAgentsIcon";
 import { FederationStatusControl } from "../federation-activity/FederationStatusControl";
@@ -35,18 +34,8 @@ import { threadSupportsRename } from "../navigation/thread-action-hotkeys";
 type ThreadHeaderLayoutControls = {
   sidebarOpen: boolean;
   railOpen: boolean;
-  terminalOpen: boolean;
-  /** A PTY is alive for this thread even if the panel is collapsed. */
-  terminalRunning?: boolean;
-  /**
-   * Why the terminal cannot open right now (remote thread whose peer lacks
-   * `remote_pty` or is disconnected). Renders the toggle disabled with this
-   * as its tooltip instead of hiding it.
-   */
-  terminalDisabledReason?: string;
   onToggleSidebar: () => void;
   onToggleRail: () => void;
-  onToggleTerminal: () => void;
 };
 
 /**
@@ -145,9 +134,7 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // which lose the native title bar and the menu bar inside it — that strip
   // owns everything window-scoped: the layout toggles, the Star Map, the MSG
   // chip (hidden by app.css), and the masthead actions. This header keeps only
-  // what is scoped to the THREAD: history, breadcrumb, chips, and the terminal
-  // toggle, whose state (running dot, per-thread disabled reason) is
-  // thread-scoped and would drag thread state up into a global strip.
+  // what is scoped to the THREAD: history, breadcrumb, and chips.
   const hasAppTitleBar = paintsAppTitleBar();
   const canRenameTitle = Boolean(props.titleRename)
     && threadSupportsRename(
@@ -161,10 +148,6 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   const sidebarHidden = props.layout ? !props.layout.sidebarOpen : false;
   const showMasthead =
     sidebarHidden && !hasAppTitleBar && Boolean(props.masthead);
-  // Custom viewport tooltip for the terminal toggle, so it matches the
-  // sidebar/rail toggles sitting right beside it instead of falling back to the
-  // slow, edge-clipping native `title`.
-  const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   // The title is a link back to this thread's sidebar card. While hovered or
   // keyboard-focused it lights that card up in the accent fill, the same cue
   // a transcript thread chip gives its target, so "which row is this?" is
@@ -179,18 +162,6 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   });
   const rewindTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const workflowBudgetTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  // A collapsed-but-running terminal gets its own affordance: the toggle wears
-  // a live dot and says so, otherwise the shell is invisible from here.
-  const terminalCollapsedRunning =
-    Boolean(props.layout?.terminalRunning) && !props.layout?.terminalOpen;
-  const terminalDisabledReason = props.layout?.terminalDisabledReason;
-  const terminalLabel =
-    terminalDisabledReason ??
-    (props.layout?.terminalOpen
-      ? "Hide integrated terminal"
-      : terminalCollapsedRunning
-        ? "Show running integrated terminal"
-        : "Open integrated terminal");
 
   return (
     <header className="thread-header">
@@ -373,41 +344,6 @@ export function ThreadHeader(props: ThreadHeaderProps) {
               onToggleRail={props.layout.onToggleRail}
             />
           ) : null}
-          {/* For a remote (federated) thread this attaches to a PTY running
-              on the OWNING instance over the federation transport. When the
-              peer lacks the remote_pty grant or is disconnected, the toggle
-              renders disabled with the reason as its tooltip. */}
-          {props.layout ? (
-            <button
-              type="button"
-              className={`thread-header__terminal-toggle${
-                props.layout.terminalOpen ? " is-open" : ""
-              }${terminalCollapsedRunning ? " is-running" : ""}${
-                terminalDisabledReason ? " is-disabled" : ""
-              }`}
-              aria-label={terminalLabel}
-              aria-pressed={props.layout.terminalOpen}
-              // aria-disabled (not `disabled`) so the button still receives
-              // hover/focus and can explain WHY via the tooltip.
-              aria-disabled={terminalDisabledReason ? true : undefined}
-              onClick={() => {
-                terminalTooltip.hide();
-                if (terminalDisabledReason) return;
-                props.layout?.onToggleTerminal();
-              }}
-              onMouseEnter={(event) =>
-                terminalTooltip.show(event.currentTarget, terminalLabel)
-              }
-              onMouseLeave={terminalTooltip.hide}
-              onFocus={(event) =>
-                terminalTooltip.show(event.currentTarget, terminalLabel)
-              }
-              onBlur={terminalTooltip.hide}
-            >
-              <TerminalIcon size={14} />
-            </button>
-          ) : null}
-          {terminalTooltip.tooltipNode}
           {props.starMap && !hasAppTitleBar ? (
             <FederationStatusControl desktopApi={props.desktopApi} onOpen={props.starMap.onOpen}
               onOpenSettings={props.starMap.onOpenFederationSettings} />

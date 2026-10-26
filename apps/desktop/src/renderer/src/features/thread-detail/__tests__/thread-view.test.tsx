@@ -2121,6 +2121,8 @@ describe("ThreadView", () => {
     );
 
     const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
+    expect(toggle.closest(".composer__application-actions")).not.toBeNull();
+    expect(document.querySelector(".thread-header")?.querySelector('[aria-label="Open integrated terminal"]')).toBeNull();
     expect(toggle).not.toHaveAttribute("aria-disabled");
     fireEvent.click(toggle);
 
@@ -2354,6 +2356,8 @@ describe("ThreadView", () => {
     );
 
     const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
+    expect(toggle.closest(".composer__application-actions")).not.toBeNull();
+    expect(document.querySelector(".thread-header")?.querySelector('[aria-label="Open integrated terminal"]')).toBeNull();
     expect(toggle).not.toHaveAttribute("aria-disabled");
     fireEvent.click(toggle);
 

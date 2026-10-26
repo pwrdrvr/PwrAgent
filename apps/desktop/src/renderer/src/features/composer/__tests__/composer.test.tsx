@@ -2357,6 +2357,128 @@ describe("Composer", () => {
     expect(elsewhere).toHaveFocus();
   });
 
+  describe("integrated terminal tools", () => {
+    const thread: NavigationThreadSummary = {
+      id: "terminal-thread", title: "Terminal tools", titleSource: "explicit", source: "codex",
+      executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+    };
+    const applications: ComponentProps<typeof Composer>["applications"] = {
+      editors: [{ id: "code", kind: "editor", name: "VS Code", source: "application",
+        appPath: "/Applications/Code.app", canOpenWorkspace: true }],
+      terminals: [{ id: "terminal", kind: "terminal", name: "Terminal", source: "application",
+        appPath: "/Applications/Terminal.app", canOpenWorkspace: true }],
+      preferredEditorId: { value: "code", source: "config" },
+      preferredTerminalId: { value: "terminal", source: "config" },
+      gh: { enabled: { value: false, source: "default" }, path: { value: "", source: "default" },
+        discovery: { candidates: [] } },
+      git: { path: { value: "", source: "default" }, discovery: { candidates: [] } },
+    };
+
+    it("places the toggle after Environment and Run, immediately before the application launchers", () => {
+      render(<Composer skills={[]} applications={applications}
+        integratedTerminal={{ open: false, onToggle: vi.fn() }}
+        thread={{ ...thread,
+          linkedDirectories: [{ id: "project", kind: "local", label: "Demo", path: "/repo/demo" }],
+          codexEnvironmentRuntime: { environmentId: "demo", environmentName: "Demo", executionTarget: "local" },
+          codexEnvironmentOptions: [{ id: "demo", name: "Demo", sourcePath: "/repo/demo/environment.toml",
+            actions: [{ id: "work", name: "Work", command: "pnpm dev" }] }],
+        }} />);
+      const tools = screen.getByLabelText("Composer tools");
+      const buttons = within(tools).getAllByRole("button");
+      expect(buttons.map((button) => button.getAttribute("aria-label")?.split(":")[0])).toEqual([
+        "Environment", "Run", "Environment command", "Open integrated terminal", "VS Code", "Terminal",
+      ]);
+      const toggle = within(tools).getByRole("button", { name: "Open integrated terminal" });
+      expect(toggle).toHaveClass("composer__toggle", "composer__terminal-toggle");
+      expect(toggle).toHaveTextContent("");
+      expect(toggle.querySelector("svg")).toHaveAttribute("width", "14");
+    });
+
+    it.each([
+      { open: false, running: false, label: "Open integrated terminal" },
+      { open: true, running: false, label: "Hide integrated terminal" },
+      { open: false, running: true, label: "Show running integrated terminal" },
+      { open: true, running: true, label: "Hide integrated terminal" },
+    ])("shows $label without a workspace or application launchers", ({ open, running, label }) => {
+      const onToggle = vi.fn();
+      render(<Composer skills={[]} thread={thread} integratedTerminal={{ open, running, onToggle }} />);
+      const tools = screen.getByLabelText("Composer tools");
+      const toggle = within(tools).getByRole("button", { name: label });
+      expect(within(tools).getAllByRole("button")).toEqual([toggle]);
+      expect(toggle).toHaveAttribute("aria-pressed", String(open));
+      expect(toggle).not.toHaveAttribute("aria-disabled");
+      expect(toggle.classList.contains("is-active")).toBe(open);
+      expect(toggle.classList.contains("is-running")).toBe(running && !open);
+      fireEvent.mouseEnter(toggle);
+      expect(screen.getByRole("tooltip")).toHaveTextContent(label);
+      expect(document.body.querySelector(":scope > .viewport-tooltip")).toBe(screen.getByRole("tooltip"));
+      fireEvent.click(toggle);
+      expect(onToggle).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("keeps unavailable remote terminals focusable and explains why on hover and focus", () => {
+      const onToggle = vi.fn();
+      const disabledReason = "Remote terminal not granted by Demo peer.";
+      render(<Composer skills={[]} thread={{ ...thread, federation: {
+        ref: { backend: "codex", threadId: thread.id, target: { scope: "remote", instanceId: "demo-peer" } },
+        instanceLabel: "Demo peer", peerStatus: "connected",
+      } }} integratedTerminal={{ open: false, disabledReason, onToggle }} />);
+      const toggle = screen.getByRole("button", { name: disabledReason });
+      expect(toggle).toHaveClass("is-disabled");
+      expect(toggle).toHaveAttribute("aria-disabled", "true");
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+      expect(toggle).toBeEnabled();
+      expect(toggle).not.toHaveAttribute("disabled");
+      fireEvent.mouseEnter(toggle);
+      expect(screen.getByRole("tooltip")).toHaveTextContent(disabledReason);
+      fireEvent.mouseLeave(toggle);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      act(() => toggle.focus());
+      expect(toggle).toHaveFocus();
+      expect(screen.getByRole("tooltip")).toHaveTextContent(disabledReason);
+      fireEvent.click(toggle);
+      expect(onToggle).not.toHaveBeenCalled();
+    });
+
+    it("hides the toggle in a launchpad even if terminal controls were supplied", () => {
+      render(<Composer skills={[]} integratedTerminal={{ open: false, onToggle: vi.fn() }}
+        launchpad={{ directoryKey: "demo", directoryKind: "directory", directoryLabel: "Demo",
+          directoryPath: "/repo/demo", backend: "codex", executionMode: "default", prompt: "",
+          workMode: "local", branchName: "main", createdAt: 1, updatedAt: 1 }} />);
+      expect(screen.queryByRole("button", { name: /integrated terminal/ })).toBeNull();
+      expect(screen.queryByLabelText("Composer tools")).toBeNull();
+    });
+
+    it("opens and hides the terminal while a send is being prepared", async () => {
+      const check = createDeferred<boolean>();
+      const startTurn = vi.fn();
+      function PreparingComposer() {
+        const [open, setOpen] = useState(false);
+        return <Composer skills={[]} applications={applications} desktopApi={{ startTurn }}
+          onBeforeStartTurn={() => check.promise}
+          thread={{ ...thread, linkedDirectories: [{ id: "project", kind: "local", label: "Demo", path: "/repo/demo" }] }}
+          integratedTerminal={{ open, onToggle: () => setOpen((value) => !value) }} />;
+      }
+      render(<PreparingComposer />);
+      fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "Check the demo" } });
+      await clickButton("Send");
+      expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "VS Code" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Terminal" })).toBeDisabled();
+      const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
+      expect(toggle).toBeEnabled();
+      expect(toggle.closest("fieldset")).toBeNull();
+      await clickButton("Open integrated terminal");
+      expect(screen.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute("aria-pressed", "true");
+      await clickButton("Hide integrated terminal");
+      expect(screen.getByRole("button", { name: "Open integrated terminal" })).toHaveAttribute("aria-pressed", "false");
+      await clickButton("Cancel");
+      await act(async () => { check.resolve(false); });
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+  });
+
   it("renders unavailable reason when provided", async () => {
     const unavailableReason = "Codex profile not logged in. Please check your settings.";
     render(
@@ -6654,12 +6776,11 @@ describe("Composer", () => {
     // looked editable and silently swallowed keystrokes.
     expect(container.querySelector(".composer-tiptap-input")).toHaveClass("is-readonly");
     expect(screen.getByText(/Message held while checks run/)).toBeInTheDocument();
-    // The pill is the only thing reporting the wait, so it keeps its contrast
-    // and carries the spinner while the footer group dims behind it.
+    // The pill reports the wait with a spinner at full contrast.
     const pill = container.querySelector(".composer__send-split-pill");
     expect(pill).toHaveClass("is-preparing");
     expect(pill?.querySelector(".pending-spinner")).toBeTruthy();
-    expect(container.querySelector(".composer__pending-controls--dim")).toBeTruthy();
+    expect(container.querySelector(".composer__pending-controls:disabled")).toBeTruthy();
 
     await act(async () => { check.resolve(false); });
     expect(container.querySelector(".composer-tiptap-input")).not.toHaveClass("is-readonly");

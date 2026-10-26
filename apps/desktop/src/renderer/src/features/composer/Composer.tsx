@@ -246,6 +246,10 @@ import {
 } from "./composer-image-files";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
+import {
+  ComposerTerminalToggle,
+  type ComposerTerminalToggleProps,
+} from "./ComposerTerminalToggle";
 import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./EnvironmentSetupRow";
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
@@ -572,6 +576,7 @@ export type ComposerProps = {
   providerCommands?: AppServerAvailableCommandSummary[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
+  integratedTerminal?: ComposerTerminalToggleProps;
   workspaceActionsBlocked?: boolean;
   /** Opens Settings → Environments on this workspace. Omitted, or for a
    *  thread whose environment runs on another machine, the Environment menu
@@ -14601,15 +14606,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
       </fieldset>
       <div className="composer__footer">
-        <fieldset
-          className="composer__pending-controls composer__pending-controls--dim"
-          disabled={preparingSend}
-        >
         {launchpadCodexEnvironmentOptions.length > 0 ||
         threadCodexEnvironmentOptions.length > 0 ||
         props.thread?.codexEnvironmentRuntime ||
-        (workspaceOpenPath && (editorApplication || terminalApplication)) ? (
+        (workspaceOpenPath && (editorApplication || terminalApplication)) ||
+        (props.thread && !props.launchpad && props.integratedTerminal) ? (
           <div className="composer__application-actions" aria-label="Composer tools">
+            <fieldset
+              className="composer__pending-controls composer__pending-controls--dim"
+              disabled={preparingSend}
+            >
             {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
                 ariaLabel="Environment"
@@ -14744,6 +14750,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               </div>
             ) : null}
 
+            </fieldset>
+            {/* Panel visibility stays interactive through send preparation. */}
+            {props.thread && !props.launchpad && props.integratedTerminal ? (
+              <ComposerTerminalToggle {...props.integratedTerminal} />
+            ) : null}
+            <fieldset
+              className="composer__pending-controls composer__pending-controls--dim"
+              disabled={preparingSend}
+            >
             {workspaceOpenPath && editorApplication ? (
               <ComposerApplicationButton
                 application={editorApplication}
@@ -14758,12 +14773,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 onOpen={openWorkspaceApplication}
               />
             ) : null}
+            </fieldset>
           </div>
         ) : (
           <span aria-hidden="true" className="composer__footer-spacer" />
         )}
-
-        </fieldset>
         <div className="composer__actions">
           {rewoundPromptScope === composerScopeKey ? (
             <span className="composer__rewound-chip">
