@@ -875,3 +875,42 @@ jobs:
             apps/desktop/playwright-report/
             apps/desktop/test-results/
           retention-days: 30
+
+  # TEMPORARY (remove before merge): repeat the specs whose Windows closes
+  # timed out on PR #2915 and main c180cbd05, to capture survivor snapshots.
+  windows-e2e-close-stress:
+    name: Windows E2E close stress (copy ${{ matrix.copy }})
+    runs-on: windows-latest
+    needs: [changes, windows-install-deps]
+    if: needs.changes.outputs.code_impacting == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        copy: [1, 2, 3, 4]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        with:
+          node-version: "^24.22.1"
+          working-directory: .
+          cache-electron: "true"
+
+      - name: Repeat close-sensitive specs
+        run: >-
+          pnpm --filter @pwragent/desktop test:e2e
+          e2e/composer-markdown-paste.spec.ts
+          e2e/workspace-handoff-flows.spec.ts
+          --repeat-each 4 --retries 0
+
+      - name: Upload desktop Playwright artifacts
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: desktop-e2e-windows-close-stress-${{ matrix.copy }}-artifacts
+          path: |
+            apps/desktop/test-results/
+          retention-days: 7
