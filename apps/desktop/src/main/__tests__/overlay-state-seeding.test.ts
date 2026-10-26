@@ -14,14 +14,26 @@
 // and a real sqlite file, and it costs no Electron launch.
 import os from "node:os";
 import path from "node:path";
-import { mkdtempSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
 import { StateDb } from "../state/state-db";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { seedProfileOverlayState } from "../../../e2e/fixtures/overlay-state-seeding";
 
+const homeRoots: string[] = [];
+const databases: StateDb[] = [];
+
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close();
+  for (const root of homeRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function freshHomeRoot(): string {
-  return mkdtempSync(path.join(os.tmpdir(), "overlay-seed-"));
+  const root = mkdtempSync(path.join(os.tmpdir(), "overlay-seed-"));
+  homeRoots.push(root);
+  return root;
 }
 
 function openStore(homeRoot: string): SqliteOverlayStore {
@@ -29,7 +41,9 @@ function openStore(homeRoot: string): SqliteOverlayStore {
     homeRoot,
     ".pwragent/profiles/default/state/state.db",
   );
-  return new SqliteOverlayStore(StateDb.open(dbPath, { profileName: "default" }));
+  const db = StateDb.open(dbPath, { profileName: "default" });
+  databases.push(db);
+  return new SqliteOverlayStore(db);
 }
 
 describe("seedProfileOverlayState", () => {
