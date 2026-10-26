@@ -98,13 +98,9 @@ function descriptionForOperation(
 ): string {
   switch (operation) {
     case "open_thread":
-      return [
-        "Voice manager only: select a thread in the operator's main window and bring PwrAgent to the front.",
-        "Other threads get forbidden, because it takes over the operator's screen.",
-        "Pass instanceId for a peer's thread. Success confirms the selection.",
-        "It gives no terminal or file access. Inspect a thread with read_thread,",
-        "and give the operator its threadLink to open it themselves.",
-      ].join(" ");
+      // The Voice manager loads this eagerly, inside a fixed character budget;
+      // the forbidden result carries the longer explanation for other threads.
+      return "Voice manager only: raises PwrAgent and selects a thread. Others: read_thread, then share its threadLink.";
     case "read_star_map_view":
       return [
         "Read what the operator sees on the PwrAgent Star Map right now.",

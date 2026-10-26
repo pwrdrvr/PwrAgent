@@ -761,7 +761,7 @@ describe("open_thread", () => {
   it("tells agents it moves the operator's window and belongs to the Voice manager", () => {
     const { description } = openThreadDefinition({});
     expect(description).toMatch(/Voice manager/);
-    expect(description).toMatch(/front/);
+    expect(description).toMatch(/raises PwrAgent/);
     expect(description).toMatch(/read_thread/);
   });
 
