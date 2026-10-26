@@ -87,6 +87,8 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await expect(menu).not.toBeVisible();
     await expect(chip).toHaveAccessibleName(/GPT-5.5, xhigh/);
     await expect(stack).toContainText("Picked for this card");
+    await stack.getByRole("heading", { name: "Cache the signing-key lookup", exact: true }).click();
+    await expect(app.window.locator(".data-tooltip-layer")).not.toBeVisible();
     await stack.screenshot({ path: testInfo.outputPath("todo-dispatch-after.png"), animations: "disabled" });
     await stack.getByRole("button", { name: "Start thread", exact: true }).click();
     await expect.poll(() => app.getLastStartTurn()).toMatchObject({ model: "gpt-5.5", reasoningEffort: "xhigh" });
