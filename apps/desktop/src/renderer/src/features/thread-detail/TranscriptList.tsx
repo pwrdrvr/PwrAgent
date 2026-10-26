@@ -1210,7 +1210,9 @@ export function TranscriptList(props: TranscriptListProps) {
       handledLinkedMessageRequestRef.current = requestKey;
       linkedMessageHistoryRequestRef.current = undefined;
       disableBottomGlue();
-      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      // The list item is `display: contents`: it has no box, so Chromium
+      // ignores scrollIntoView on it. Scroll the entry it holds instead.
+      (target.firstElementChild ?? target).scrollIntoView({ behavior: "smooth", block: "center" });
       setHighlightedMessageId(messageId);
       onLinkedMessageHandled?.();
       return;
