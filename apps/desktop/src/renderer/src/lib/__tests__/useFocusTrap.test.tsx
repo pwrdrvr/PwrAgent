@@ -128,6 +128,7 @@ describe("useFocusTrap", () => {
 
   it("reads shared ancestor styles once per Tab scan", () => {
     render(<Dialog open />);
+    const middle = button("Middle");
     button("Last").focus();
     const readStyle = vi.spyOn(window, "getComputedStyle");
 
@@ -135,12 +136,14 @@ describe("useFocusTrap", () => {
 
     expect(focusedLabel()).toBe("First");
     expect(readStyle.mock.calls.filter(([el]) => el === document.body)).toHaveLength(1);
+    expect(readStyle.mock.calls.filter(([el]) => el === middle)).toHaveLength(0);
     readStyle.mockClear();
 
     expect(pressTab({ shift: true }).defaultPrevented).toBe(true);
 
     expect(focusedLabel()).toBe("Last");
     expect(readStyle.mock.calls.filter(([el]) => el === document.body)).toHaveLength(1);
+    expect(readStyle.mock.calls.filter(([el]) => el === middle)).toHaveLength(0);
   });
 
   it("uses current visibility when a control appears between Tab presses", () => {

@@ -5,8 +5,14 @@ import type { NavigationDirectoryRow, NavigationQueryEntry, NavigationQueryReque
 import { createNavigationPageState, navigationIdentityKey } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
 import { Sidebar } from "../Sidebar";
+import { ThreadRow } from "../ThreadRow";
+import { memoRenderObserver } from "../../../test/memo-render-observer";
 
-afterEach(cleanup);
+const rowRenders = memoRenderObserver<{ thread: NavigationRow }>(ThreadRow, "ThreadRow");
+afterEach(() => {
+  cleanup();
+  rowRenders.restore();
+});
 
 function mount(collapsed = false, promotedGrandchild = false) {
   const directory: NavigationDirectoryRow = {
@@ -91,6 +97,20 @@ it("does not select a subthread above the clicked range when page order differs 
   expect(screen.getByRole("button", { name: "above" })).toHaveAttribute("aria-pressed", "false");
   expect(buttons.filter((button) => button.getAttribute("aria-pressed") === "true").map((button) => button.getAttribute("aria-label")))
     .toEqual(["first", "middle", "grandchild-2", "grandchild-1", "last"]);
+});
+
+it("does not render unrelated rows when batch selection changes", () => {
+  const renders = new Map<string, number>();
+  rowRenders.install(({ thread }) => renders.set(thread.id, (renders.get(thread.id) ?? 0) + 1));
+  mount();
+  const before = new Map(renders);
+
+  fireEvent.click(screen.getByRole("button", { name: "first" }));
+
+  expect(screen.getByRole("button", { name: "first" })).toHaveAttribute("aria-pressed", "true");
+  expect(renders.get("first")).toBe(before.get("first")! + 1);
+  expect(renders.get("above")).toBe(before.get("above"));
+  expect(renders.get("tail")).toBe(before.get("tail"));
 });
 
 it.each([false, true])("matches every forward and reverse visible range (collapsed=%s)", (collapsed) => {

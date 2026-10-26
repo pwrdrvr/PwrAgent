@@ -101,11 +101,11 @@ type ThreadRowProps = {
   revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
   /**
-   * The rows currently selected for a sidebar batch action. This is separate
-   * from `selectedThreadKey`, which still identifies the thread open in the
-   * detail pane while the user builds a multi-selection.
+   * This row's batch selection, projected before the memo boundary so another
+   * row's selection does not render every visible row. Undefined follows the
+   * thread open in the detail pane.
    */
-  selectedThreadKeys?: ReadonlySet<string>;
+  selected?: boolean;
   subthreadCount?: number;
   subthreadsCollapsed?: boolean;
   thinkingThreadKeys?: Record<string, boolean>;
@@ -195,9 +195,7 @@ type ThreadRowProps = {
 
 export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   const threadKey = threadSummaryIdentityKey(props.thread);
-  const selected = props.selectedThreadKeys
-    ? props.selectedThreadKeys.has(threadKey)
-    : threadKey === props.selectedThreadKey;
+  const selected = props.selected ?? threadKey === props.selectedThreadKey;
   const active = threadKey === props.selectedThreadKey;
   const isComposerSource = threadKey === props.composerSourceThreadKey;
   // A thread link elsewhere in the window (a provenance chip in the

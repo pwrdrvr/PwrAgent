@@ -374,7 +374,7 @@ export function RecentsList(props: RecentsListProps) {
               nestedDepth={trays.depth(childKey)}
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedThreadKey}
-              selectedThreadKeys={props.selectedThreadKeys}
+              selected={props.selectedThreadKeys?.has(childKey)}
               thinkingThreadKeys={props.thinkingThreadKeys}
               agentCommandThreadKeys={props.agentCommandThreadKeys}
               thread={child}
@@ -482,7 +482,7 @@ export function RecentsList(props: RecentsListProps) {
       includeLinkedDirectories: true,
       revealSelectedThreadRequest: props.revealSelectedThreadRequest,
       selectedThreadKey: props.selectedThreadKey,
-      selectedThreadKeys: props.selectedThreadKeys,
+      selected: props.selectedThreadKeys?.has(key),
       thinkingThreadKeys: props.thinkingThreadKeys,
       agentCommandThreadKeys: props.agentCommandThreadKeys,
       thread,

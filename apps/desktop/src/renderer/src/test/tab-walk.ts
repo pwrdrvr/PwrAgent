@@ -22,7 +22,7 @@ function isTabStop(el: HTMLElement, styles: Map<HTMLElement, CSSStyleDeclaration
   if (el.hasAttribute("disabled") || el.closest("[inert]") !== null) return false;
   for (let node: HTMLElement | null = el; node !== null; node = node.parentElement) {
     let style = styles.get(node);
-    if (style === undefined) {
+    if (!style) {
       style = getComputedStyle(node);
       styles.set(node, style);
     }
@@ -53,10 +53,10 @@ function keydown(key: string, shiftKey: boolean): KeyboardEvent {
 export function pressTab({ shift = false }: { shift?: boolean } = {}): KeyboardEvent {
   const event = keydown("Tab", shift);
   if (event.defaultPrevented) return event;
-  // The active stop and its successor share ancestors. Cache only within
-  // this keypress, after handlers have made any synchronous visibility edits.
+  // The active control and its next stop share ancestors. Cache only within
+  // this keypress, after key handlers have committed their visibility changes.
   const styles = new Map<HTMLElement, CSSStyleDeclaration>();
-  const isCurrentStop = (el: HTMLElement) => isTabStop(el, styles);
+  const isStop = (el: HTMLElement) => isTabStop(el, styles);
   const candidates = [...document.querySelectorAll<HTMLElement>(TABBABLE)];
   const active = document.activeElement as HTMLElement | null;
   const at = active === null ? -1 : candidates.indexOf(active);
@@ -64,13 +64,13 @@ export function pressTab({ shift = false }: { shift?: boolean } = {}): KeyboardE
   // computed styles on every Tab makes a trapped dialog pay for all the
   // settings controls behind it, even though focus never reaches them.
   let next: HTMLElement | undefined;
-  if (at !== -1 && active !== null && isCurrentStop(active)) {
+  if (at !== -1 && active !== null && isStop(active)) {
     const ordered = shift
       ? [...candidates.slice(0, at).reverse(), ...candidates.slice(at).reverse()]
       : [...candidates.slice(at + 1), ...candidates.slice(0, at + 1)];
-    next = ordered.find(isCurrentStop);
+    next = ordered.find(isStop);
   } else if (active === null || active === document.body) {
-    next = (shift ? candidates.reverse() : candidates).find(isCurrentStop);
+    next = (shift ? candidates.reverse() : candidates).find(isStop);
   } else if (shift) {
     // Focus on something that is not a stop (a tabIndex={-1} container):
     // Chromium continues from its position in the document. Its descendants
@@ -80,12 +80,12 @@ export function pressTab({ shift = false }: { shift?: boolean } = {}): KeyboardE
         Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_PRECEDING)
         && !stop.contains(active))
       .reverse()
-      .find(isCurrentStop) ?? candidates.reverse().find(isCurrentStop);
+      .find(isStop) ?? candidates.reverse().find(isStop);
   } else {
     next = candidates.find((stop) =>
       Boolean(active.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING)
-      && isCurrentStop(stop))
-      ?? candidates.find(isCurrentStop);
+      && isStop(stop))
+      ?? candidates.find(isStop);
   }
   if (next === undefined) return event;
   act(() => {
