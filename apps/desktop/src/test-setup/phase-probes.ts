@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { aroundEach } from "vitest";
 
 // Opt in with PWRAGENT_TEST_PHASES=1. Elapsed waits include React work and

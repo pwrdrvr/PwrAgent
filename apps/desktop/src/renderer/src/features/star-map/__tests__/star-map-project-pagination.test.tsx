@@ -1,12 +1,24 @@
 import "./foreground-fixture";
-import { act, fireEvent, render, waitFor } from "../../../test/phase-probes";
+import { act, cleanup, fireEvent, render, waitFor } from "../../../test/phase-probes";
 import { afterEach, expect, it, vi } from "vitest";
 import { classifyDirectory, type AgentEvent, type NavigationQueryRequest, type NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { StarMapScreen } from "../StarMapScreen";
 
-afterEach(() => window.localStorage.clear());
+// These cases exercise project discovery, cursor recovery, and the Load more
+// chips. Mounting hundreds of full card bodies (menus, metadata, tooltips and
+// drag hooks) obscures that work; StarMapThreadCard has its own component suite.
+vi.mock("../StarMapThreadCard", () => ({
+  StarMapThreadCard: ({ cardKey, thread }: { cardKey: string; thread: NavigationThreadSummary }) => (
+    <div data-thread-key={cardKey}>{thread.title}</div>
+  ),
+}));
+
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
+});
 
 it.each(["local", "remote"])("renders 15 complete project clouds and three independent card pages for %s", async (owner) => {
   window.localStorage.setItem("pwragent.starMap.viewPreferences", JSON.stringify({ layout: "orbit" }));

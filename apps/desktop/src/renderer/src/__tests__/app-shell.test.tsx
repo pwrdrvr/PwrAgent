@@ -123,9 +123,13 @@ function getComposerValueHost(textbox: HTMLElement): HTMLElement {
 }
 
 async function clickButton(name: string | RegExp): Promise<void> {
-  await waitFor(() => expect(screen.getByRole("button", { name })).toBeEnabled());
+  const button = await waitFor(() => {
+    const button = screen.getByRole("button", { name });
+    expect(button).toBeEnabled();
+    return button;
+  });
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name }));
+    fireEvent.click(button);
     await Promise.resolve();
     await Promise.resolve();
     await probe("timer", () => new Promise((resolve) => setTimeout(resolve, 0)));
@@ -6662,8 +6666,9 @@ describe("App", () => {
     // destinations before the next action consumes or replaces their entries.
     const waitForHistory = async (back?: string, forward?: string): Promise<void> => {
       await waitFor(() => {
+        const history = within(screen.getByRole("group", { name: "History navigation" }));
         for (const [name, destination] of [["Back", back], ["Forward", forward]] as const) {
-          const button = screen.getByRole("button", { name });
+          const button = history.getByRole("button", { name });
           if (destination === undefined) {
             expect(button).toBeDisabled();
           } else {
