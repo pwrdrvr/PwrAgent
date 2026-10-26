@@ -9677,7 +9677,7 @@ export class DesktopBackendRegistry {
     const sessionKey = JSON.stringify([context.backend, context.threadId]);
     const grantKey = `${group}:${access}`;
     if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(operation) === grantKey) return;
-    const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, turnId: context.turnId, requestId });
+    const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, requestId });
     const approved = await new Promise<"once" | "session" | false>((resolve, reject) => {
       const finish = (value: "once" | "session" | false, error?: unknown): void => {
         signal.removeEventListener("abort", aborted);

@@ -23,7 +23,7 @@ describe("backend forge tool dispatch", () => {
   let policy: ForgeAgentToolPolicy;
   let forgeRead: ReturnType<typeof vi.fn<ForgeReadHandler>>;
   let github: ReturnType<typeof vi.fn<GithubToolHandler>>;
-  let attach: ReturnType<typeof vi.fn>;
+  let attach: ReturnType<typeof vi.fn<(args: unknown) => Promise<unknown>>>;
   let internals: {
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
@@ -54,7 +54,7 @@ describe("backend forge tool dispatch", () => {
     github = vi.fn<GithubToolHandler>(async (operation) => operation === "create_pull_request"
       ? { created: true, url: "https://github.com/fixture/project/pull/9" }
       : { ok: true });
-    attach = vi.fn(async () => ({ ok: true }));
+    attach = vi.fn<(args: unknown) => Promise<unknown>>(async () => ({ ok: true }));
     internals.handleAttachThreadPullRequestInspectionRequest = attach;
     registry.setForgeReadHandlers(forgeRead, forgeRead);
     registry.setGithubToolHandler(github);
