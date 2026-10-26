@@ -9,7 +9,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   AgentEvent,
   AppServerReadThreadResponse,
@@ -271,12 +271,14 @@ async function findReadyTextbox(options: { name: string | RegExp }) {
 function admittingQueue(threadId: string, queueEntryId: string) {
   const entries: ThreadQueuedTurnSummary[] = [];
   let readsSinceAdmission = 0;
+  let revision = 0;
   return {
     startTurn: vi.fn(async (request: { input?: Array<{ type: string; text?: string }> }) => {
       entries.push({
         queueEntryId, origin: "manual", createdAt: 123, position: entries.length,
         displayText: request.input?.find((item) => item.type === "text")?.text ?? "",
       });
+      revision += 1;
       return {
         backend: "codex" as const,
         threadId,
@@ -289,8 +291,16 @@ function admittingQueue(threadId: string, queueEntryId: string) {
     getNavigationQueueProjection: vi.fn(async (request: Parameters<NonNullable<DesktopApi["getNavigationQueueProjection"]>>[0]) => {
       if (entries.length) readsSinceAdmission += 1;
       return {
-        protocol: 2, ref: request.ref, revision: `fifo:${entries.length}`, readiness: "ready", complete: true, entries: [...entries],
+        protocol: 2, ref: request.ref, revision: `fifo:${revision}`, readiness: "ready", complete: true, entries: [...entries],
       };
+    }),
+    setQueuedTurnPaused: vi.fn(async (request: { queueEntryId: string; paused: boolean }) => {
+      const index = entries.findIndex((candidate) => candidate.queueEntryId === request.queueEntryId);
+      if (index >= 0) {
+        entries[index] = { ...entries[index]!, paused: request.paused };
+        revision += 1;
+      }
+      return { queueEntryId: request.queueEntryId, disposition: "updated" as const, paused: request.paused };
     }),
     readsSinceAdmission: () => readsSinceAdmission,
     /**
@@ -1910,7 +1920,7 @@ describe("StarMapChatCard start-turn queue handling", () => {
       readThread: vi.fn(async () => ({
         backend: "codex",
         threadId: "t-local",
-        replay: { entries: [], messages: [], pagination: undefined },
+        replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
       })),
       ...queue.answering(overrides),
     } as unknown as Partial<DesktopApi>);
@@ -1958,16 +1968,16 @@ describe("StarMapChatCard start-turn queue handling", () => {
   });
 
   it("pauses a queued message through the owner and resumes it", async () => {
-    const setQueuedTurnPaused = vi.fn(async (request: { queueEntryId: string; paused: boolean }) => ({
-      queueEntryId: request.queueEntryId,
-      disposition: "updated" as const,
-      paused: request.paused,
-    }));
-    const { row, store } = await queueOne({ setQueuedTurnPaused } as Partial<DesktopApi>);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => vi.useRealTimers());
+    const queue = admittingQueue("t-local", "queue-owner-1");
+    const { setQueuedTurnPaused } = queue;
+    const { row, store } = await queueOne(queue);
     const scopeKey = buildThreadComposerScopeKey("codex", "t-local");
 
     await act(async () => {
       fireEvent.click(within(row).getByRole("button", { name: "Pause" }));
+      await vi.advanceTimersByTimeAsync(250);
     });
 
     expect(setQueuedTurnPaused).toHaveBeenCalledWith(
@@ -1980,6 +1990,7 @@ describe("StarMapChatCard start-turn queue handling", () => {
 
     await act(async () => {
       fireEvent.click(within(paused).getByRole("button", { name: "Resume" }));
+      await vi.advanceTimersByTimeAsync(250);
     });
 
     expect(setQueuedTurnPaused).toHaveBeenLastCalledWith(

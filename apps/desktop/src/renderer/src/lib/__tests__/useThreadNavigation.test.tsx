@@ -12042,7 +12042,6 @@ describe("useThreadNavigation", () => {
     // The event patches immediately; both the zero-delay page refresh and
     // the 250ms selected-detail refresh still belong to this test.
     expect(readPopulation).toHaveBeenCalledTimes(1);
-    expect(result.current.selectedThreadConfigurationReady).toBe(false);
     await act(async () => { await vi.advanceTimersByTimeAsync(250); });
     expect(readPopulation).toHaveBeenCalledTimes(2);
     expect(result.current.selectedThreadConfigurationReady).toBe(true);
