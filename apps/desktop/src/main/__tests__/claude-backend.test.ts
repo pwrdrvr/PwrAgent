@@ -509,6 +509,22 @@ describe("Claude SDK backend", () => {
       await backend.close();
     });
 
+    it("resolves the card's context from the pull requests the /code-review named", async () => {
+      const f = await fixture(turns(report("review-1", { level: "medium", findings })));
+      const resolveReviewContext = vi.fn().mockResolvedValue({ workspacePath: f.root });
+      const backend = new ClaudeBackend({ ...f.backendOptions, resolveReviewContext });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review medium --fix 2947,2948" }] });
+      await f.waitForTurn();
+
+      // One report covers both pull requests, and it names neither.
+      expect(resolveReviewContext).toHaveBeenCalledWith({
+        threadId, cwd: f.root, pullRequests: [{ number: 2947 }, { number: 2948 }],
+      });
+      expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1"]);
+      await backend.close();
+    });
+
     it("records a re-report's outcomes against the review it repeats", async () => {
       const f = await fixture(turns(
         report("review-1", { level: "high", findings }),

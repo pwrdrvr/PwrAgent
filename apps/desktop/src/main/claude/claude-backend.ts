@@ -34,8 +34,9 @@ import { CLAUDE_TODO_TOOL, claudeFileDiff, claudeTodoSteps, claudeToolDetail, cl
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
   CLAUDE_REPORT_FINDINGS_TOOL, claudeReportFindingsHooks, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
-  parseClaudeFindingsReport, type ClaudeFindingsReport,
+  parseClaudeCodeReviewPullRequests, parseClaudeFindingsReport, type ClaudeFindingsReport,
 } from "./claude-review-findings";
+import type { NamedReviewPullRequest } from "../../shared/review-command";
 import { formatReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
 
 export type ClaudeBackendOptions = {
@@ -57,7 +58,10 @@ export type ClaudeBackendOptions = {
   /** Overrides CLAUDE_REWIND_PREVIEW_TIMEOUT_MS. */
   rewindPreviewTimeoutMs?: number;
   /** Workspace, branch, and pull request for a review card. Never fails a review. */
-  resolveReviewContext?: (params: { threadId: string; cwd: string }) => Promise<AppServerReviewContext | undefined>;
+  /** `pullRequests` are the targets the turn's `/code-review` named, when it named any. */
+  resolveReviewContext?: (params: {
+    threadId: string; cwd: string; pullRequests?: NamedReviewPullRequest[];
+  }) => Promise<AppServerReviewContext | undefined>;
 };
 
 const claudeBackendLog = getMainLogger("pwragent:claude-backend");
@@ -2068,7 +2072,11 @@ export class ClaudeBackend {
     const output = claudeReviewOutput(report, session.cwd);
     let context: AppServerReviewContext | undefined;
     try {
-      context = await this.options.resolveReviewContext?.({ threadId, cwd: session.cwd });
+      // Claude's report names no pull request, so the prompt says which it covered.
+      const pullRequests = parseClaudeCodeReviewPullRequests(turn.titlePrompt);
+      context = await this.options.resolveReviewContext?.({
+        threadId, cwd: session.cwd, ...(pullRequests.length > 0 ? { pullRequests } : {}),
+      });
     } catch (error) {
       claudeBackendLog.warn("could not resolve review context", { error: error instanceof Error ? error.message : String(error) });
     }

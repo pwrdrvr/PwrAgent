@@ -433,3 +433,271 @@ describe("resolveReviewProvenance", () => {
     ).resolves.toBeUndefined();
   });
 });
+
+describe("resolveReviewProvenance for a review that named its pull requests", () => {
+  const CHECKED_OUT = pullRequest();
+  const OTHER = pullRequest({
+    number: 1920,
+    headRefName: "feat/rollup-chip",
+    headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    title: "Lead the rollup chip",
+    url: "https://github.com/pwrdrvr/PwrAgent/pull/1920",
+  });
+  const claudeTarget = { type: "custom", instructions: "/code-review" } as const;
+
+  it("names the pull request the review named, not the one on the checked-out branch", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      namedPullRequests: [{ number: 1920 }],
+      prs: [CHECKED_OUT, OTHER],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(CHECKED_OUT.headRefName, { head: HEAD_COMMIT }),
+      target: claudeTarget,
+    });
+
+    expect(context).toEqual({
+      workspacePath: WORKSPACE,
+      projectLabel: "PwrAgent",
+      gitBranch: "feat/rollup-chip",
+      baseBranch: "main",
+      pullRequest: expect.objectContaining({ number: 1920, title: "Lead the rollup chip" }),
+    });
+    // The workspace's HEAD is another branch's commit, and the cached head of
+    // the named pull request may not be the state the reviewer read.
+    expect(context?.headCommit).toBeUndefined();
+  });
+
+  it("keeps the checked-out branch's provenance when it carries the named pull request", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      namedPullRequests: [{ number: 1918 }],
+      prs: [CHECKED_OUT, OTHER],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(CHECKED_OUT.headRefName, { head: HEAD_COMMIT }),
+      target: claudeTarget,
+    });
+
+    expect(context).toMatchObject({
+      gitBranch: CHECKED_OUT.headRefName,
+      headCommit: HEAD_COMMIT,
+      pullRequest: expect.objectContaining({ number: 1918 }),
+    });
+    expect(context).not.toHaveProperty("pullRequests");
+  });
+
+  it("names every pull request a review of several covered, in the order named", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      namedPullRequests: [{ number: 1920 }, { number: 1918 }],
+      prs: [CHECKED_OUT, OTHER],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(CHECKED_OUT.headRefName, { head: HEAD_COMMIT }),
+      target: claudeTarget,
+    });
+
+    expect(context?.pullRequests?.map((pr) => pr.number)).toEqual([1920, 1918]);
+    expect(context?.pullRequest?.number).toBe(1920);
+    // One branch and one commit cannot describe two pull requests' diffs.
+    expect(context?.gitBranch).toBeUndefined();
+    expect(context?.headCommit).toBeUndefined();
+  });
+
+  it("matches a repository-qualified target to that repository's pull request", async () => {
+    const elsewhere = pullRequest({ repo: "PwrSnap", url: "https://github.com/pwrdrvr/PwrSnap/pull/1918" });
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{ number: 1918, org: "pwrdrvr", repo: "pwrsnap" }],
+      prs: [CHECKED_OUT, elsewhere],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner("some/other-branch"),
+      target: claudeTarget,
+    });
+
+    expect(context?.pullRequest).toMatchObject({ repo: "PwrSnap", number: 1918 });
+  });
+
+  it("prefers the workspace's own pull request when a bare number matches several repositories", async () => {
+    const elsewhere = pullRequest({
+      repo: "PwrSnap",
+      linkedDirectoryPaths: ["/Users/dev/pwrdrvr/PwrSnap"],
+      url: "https://github.com/pwrdrvr/PwrSnap/pull/1918",
+    });
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{ number: 1918 }],
+      prs: [elsewhere, CHECKED_OUT],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner("some/other-branch"),
+      target: claudeTarget,
+    });
+
+    expect(context?.pullRequest).toMatchObject({ repo: "PwrAgent", number: 1918 });
+  });
+
+  it("names a pull request given by URL even when the thread has not attached it", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{
+        number: 77, provider: "github.com", org: "pwrdrvr", repo: "PwrSnap",
+        url: "https://github.com/pwrdrvr/PwrSnap/pull/77",
+      }],
+      prs: [CHECKED_OUT],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(CHECKED_OUT.headRefName),
+      target: claudeTarget,
+    });
+
+    expect(context?.pullRequest).toEqual({
+      provider: "github.com", org: "pwrdrvr", repo: "PwrSnap", number: 77,
+      url: "https://github.com/pwrdrvr/PwrSnap/pull/77",
+    });
+  });
+
+  it("names an unattached pull request in the repository the thread's pull requests belong to", async () => {
+    // `/code-review 97` from a worktree on #96's branch, with only #96 attached.
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      namedPullRequests: [{ number: 1921 }],
+      prs: [CHECKED_OUT],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(CHECKED_OUT.headRefName, { head: HEAD_COMMIT }),
+      target: claudeTarget,
+    });
+
+    expect(context).toEqual({
+      workspacePath: WORKSPACE,
+      projectLabel: "PwrAgent",
+      pullRequest: {
+        provider: "github.com",
+        org: "pwrdrvr",
+        repo: "PwrAgent",
+        number: 1921,
+        url: "https://github.com/pwrdrvr/PwrAgent/pull/1921",
+      },
+    });
+  });
+
+  it("names an unattached pull request in the workspace's only GitHub repository", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{ number: 97 }],
+      prs: [],
+      resolveGitHubRepos: async () => [{ host: "github.com", owner: "pwrdrvr", repo: "PwrRoute" }],
+      runGit: gitRunner("feat/first-run-profile-access"),
+      target: claudeTarget,
+    });
+
+    expect(context?.pullRequest).toEqual({
+      provider: "github.com",
+      org: "pwrdrvr",
+      repo: "PwrRoute",
+      number: 97,
+      url: "https://github.com/pwrdrvr/PwrRoute/pull/97",
+    });
+  });
+
+  it("makes no pull-request or branch claim when the named pull request's repository is ambiguous", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      namedPullRequests: [{ number: 4242 }],
+      prs: [],
+      // A fork and its upstream: either could own #4242.
+      resolveGitHubRepos: async () => [
+        { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+        { host: "github.com", owner: "contributor", repo: "PwrAgent" },
+      ],
+      runGit: gitRunner("feat/elsewhere", { head: HEAD_COMMIT }),
+      target: claudeTarget,
+    });
+
+    // The checked-out branch is not evidence about what was reviewed.
+    expect(context).toEqual({ workspacePath: WORKSPACE, projectLabel: "PwrAgent" });
+  });
+
+  it("names no pull request when one of several named cannot be identified", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      linkedDirectories: [directory()],
+      namedPullRequests: [{ number: 1920 }, { number: 4242, org: "elsewhere", repo: "Other" }],
+      prs: [CHECKED_OUT, OTHER],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(CHECKED_OUT.headRefName),
+      target: claudeTarget,
+    });
+
+    // "Review of PR #1920" would read as a review of that one alone.
+    expect(context).toEqual({ workspacePath: WORKSPACE, projectLabel: "PwrAgent" });
+  });
+
+  it("names a pull request once however many ways the command wrote it", async () => {
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{ number: 1920 }, { number: 1920, org: "pwrdrvr", repo: "PwrAgent" }],
+      prs: [CHECKED_OUT, OTHER],
+      resolveGitHubRepos: noRepos,
+      runGit: gitRunner(CHECKED_OUT.headRefName),
+      target: claudeTarget,
+    });
+
+    expect(context?.pullRequest?.number).toBe(1920);
+    expect(context).not.toHaveProperty("pullRequests");
+  });
+
+  it("does not borrow an unscoped pull request's repository unless a remote here matches it", async () => {
+    const elsewhere = pullRequest({
+      repo: "PwrSnap",
+      linkedDirectoryPaths: undefined,
+      url: "https://github.com/pwrdrvr/PwrSnap/pull/12",
+    });
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{ number: 5 }],
+      prs: [elsewhere],
+      resolveGitHubRepos: async () => [
+        { host: "github.com", owner: "pwrdrvr", repo: "PwrAgent" },
+        { host: "github.com", owner: "contributor", repo: "PwrAgent" },
+      ],
+      runGit: gitRunner("feat/elsewhere"),
+      target: claudeTarget,
+    });
+
+    expect(context).not.toHaveProperty("pullRequest");
+  });
+
+  it("reads no local Git remotes for a remote workspace's named pull request", async () => {
+    let remotesRead = false;
+    const context = await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      executionTarget: "remote",
+      namedPullRequests: [{ number: 97 }],
+      prs: [],
+      resolveGitHubRepos: async () => {
+        remotesRead = true;
+        return [{ host: "github.com", owner: "pwrdrvr", repo: "PwrRoute" }];
+      },
+      target: claudeTarget,
+    });
+
+    expect(remotesRead).toBe(false);
+    expect(context).not.toHaveProperty("pullRequest");
+  });
+
+  it("does not read the checked-out branch for a pull request that has no head branch", async () => {
+    const seen: string[][] = [];
+    await resolveReviewProvenance({
+      cwd: WORKSPACE,
+      namedPullRequests: [{ number: 97 }],
+      prs: [],
+      resolveGitHubRepos: async () => [{ host: "github.com", owner: "pwrdrvr", repo: "PwrRoute" }],
+      runGit: gitRunner(CHECKED_OUT.headRefName, {}, seen),
+      target: claudeTarget,
+    });
+
+    expect(seen).toEqual([]);
+  });
+});

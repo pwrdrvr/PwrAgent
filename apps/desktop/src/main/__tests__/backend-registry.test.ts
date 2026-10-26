@@ -54492,6 +54492,41 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("names a Claude review card by the pull requests its /code-review targeted", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+    });
+    const internals = registry as unknown as {
+      claudeBackend: {
+        options: {
+          resolveReviewContext: (params: {
+            threadId: string;
+            cwd: string;
+            pullRequests?: Array<{ number: number }>;
+          }) => Promise<AppServerReviewContext | undefined>;
+        };
+      };
+      resolveReviewContext(params: unknown): Promise<AppServerReviewContext | undefined>;
+    };
+    const resolveReviewContext = vi.spyOn(internals, "resolveReviewContext")
+      .mockResolvedValue(undefined);
+
+    await internals.claudeBackend.options.resolveReviewContext({
+      threadId: "claude-1",
+      cwd: "/repo",
+      pullRequests: [{ number: 2947 }, { number: 2948 }],
+    });
+
+    expect(resolveReviewContext).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude",
+      cwd: "/repo",
+      threadId: "claude-1",
+      namedPullRequests: [{ number: 2947 }, { number: 2948 }],
+    }));
+    await registry.close();
+  });
+
   it("rewinds a Claude thread with its files, announces it, and drains replies held meanwhile", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),

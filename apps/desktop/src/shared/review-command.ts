@@ -8,6 +8,18 @@ export type ParsedReviewCommand = {
 };
 
 /**
+ * A pull request a review command named as its target, as the operator wrote
+ * it: a bare number, or one qualified by its repository or URL.
+ */
+export type NamedReviewPullRequest = {
+  number: number;
+  provider?: string;
+  org?: string;
+  repo?: string;
+  url?: string;
+};
+
+/**
  * Abbreviate a commit for display. Long enough to stay unambiguous in any
  * repository this app is pointed at, short enough to read inline.
  *

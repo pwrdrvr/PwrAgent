@@ -106,7 +106,10 @@ import type {
   CodexProtocolCaptureResult,
   CodexProtocolCaptureStatus,
 } from "../../shared/codex-protocol-capture";
-import { formatReviewCommand } from "../../shared/review-command";
+import {
+  formatReviewCommand,
+  type NamedReviewPullRequest,
+} from "../../shared/review-command";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
   findLiveProfileRuntimeMarkers,
@@ -10565,12 +10568,14 @@ export class DesktopBackendRegistry {
           method: "serverRequest/resolved", params: { threadId, turnId, requestId },
         } });
       },
-      resolveReviewContext: async ({ threadId, cwd }) => await this.resolveReviewContext({
+      resolveReviewContext: async ({ threadId, cwd, pullRequests }) => await this.resolveReviewContext({
         backend: "claude", cwd, threadId,
         overlay: await this.overlayStore.getThreadOverlayState({ backend: "claude", threadId }),
-        // `/code-review` reviews the checked-out work, so the branch and its
-        // attached pull request name the card.
+        // `/code-review` with no target reviews the checked-out work, so the
+        // branch and its attached pull request name the card. One that named
+        // pull requests is named by those.
         target: { type: "custom", instructions: "/code-review" },
+        ...(pullRequests ? { namedPullRequests: pullRequests } : {}),
       }),
       ...options?.claudeBackendOptions,
     });
@@ -22251,6 +22256,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     cwd?: string;
     executionTarget?: "local" | "remote";
+    namedPullRequests?: NamedReviewPullRequest[];
     overlay?: ThreadOverlayState;
     target: AppServerReviewTarget;
     threadId: string;
@@ -22282,6 +22288,9 @@ export class DesktopBackendRegistry {
           ...(thread?.linkedDirectories ?? []),
           ...(params.overlay?.extraLinkedDirectories ?? []),
         ],
+        ...(params.namedPullRequests
+          ? { namedPullRequests: params.namedPullRequests }
+          : {}),
         ...(params.overlay?.prs ? { prs: params.overlay.prs } : {}),
         target: params.target,
       });
