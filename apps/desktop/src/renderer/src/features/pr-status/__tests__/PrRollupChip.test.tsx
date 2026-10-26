@@ -87,6 +87,38 @@ describe("PrRollupChip", () => {
     expect(screen.queryByRole("group")).toBeNull();
   });
 
+  it("adds the behind count to the row of the PR on the thread's branch", () => {
+    const onHoverStart = vi.fn();
+    const onHoverEnd = vi.fn();
+    const { container } = render(
+      <PrRollupChip
+        prs={[passing, failing]}
+        repoPrefixedUrls=""
+        threadTitle="Orbit refactor"
+        branchDrift={{ url: failing.url, baseBranch: "main", behind: 4, ahead: 2 }}
+        onHoverStart={onHoverStart}
+        onHoverEnd={onHoverEnd}
+        onOpen={vi.fn()}
+      />,
+    );
+    const chip = container.querySelector<HTMLElement>("[data-pr-rollup]")!;
+    // The row's Git prefetch: this chip sits outside the chips line.
+    fireEvent.mouseEnter(chip.parentElement!);
+    expect(onHoverStart).toHaveBeenCalledTimes(1);
+    fireEvent.mouseLeave(chip.parentElement!);
+    expect(onHoverEnd).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(chip);
+    const rows = within(screen.getByRole("group")).getAllByRole("button");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "#11Change 11ready for review · checks failing · 4 behind main",
+      "#10Change 10ready for review · checks passing",
+    ]);
+    expect(rows[0]).toHaveAccessibleName(
+      "Open acme/orbit#11, Change 11 (ready for review · checks failing · 4 behind main) in browser",
+    );
+  });
+
   it("peeks on hover and closes after the pointer leaves both chip and list", () => {
     vi.useFakeTimers();
     const { container } = renderRollup([passing, failing]);

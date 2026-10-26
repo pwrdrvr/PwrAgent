@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -28,6 +29,7 @@ import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { PrChip } from "../pr-status/PrChip";
+import { findBranchDriftPr, type PrBranchDrift } from "../pr-status/pr-branch-drift";
 import { PrRollupChip } from "../pr-status/PrRollupChip";
 import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
@@ -309,6 +311,30 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       .map((pr) => pr.url)
       .join("\n")
     : "";
+  // The branch chip's base drift, for the hover card of the PR on that branch:
+  // Compact and Minimal hide the branch chip, and with it the only other
+  // place the counts appear. Built from scalars so the memoized chips see one
+  // object until a count moves.
+  const gitWorking = props.thread.gitWorkingState;
+  const branchDriftPrUrl = findBranchDriftPr({
+    prs,
+    branch: props.thread.observedGitBranch?.trim() || props.thread.gitBranch,
+    isThreadRepository: (pr) => isThreadRepositoryPr(props.thread, pr),
+  })?.url;
+  const driftBaseBranch = gitWorking?.baseBranch;
+  const driftBehind = gitWorking?.baseBehindCommitCount;
+  const driftAhead = gitWorking?.baseAheadCommitCount;
+  const branchDrift = useMemo<PrBranchDrift | undefined>(
+    () => branchDriftPrUrl && driftBaseBranch
+      ? {
+        url: branchDriftPrUrl,
+        baseBranch: driftBaseBranch,
+        behind: driftBehind,
+        ahead: driftAhead,
+      }
+      : undefined,
+    [branchDriftPrUrl, driftBaseBranch, driftBehind, driftAhead],
+  );
   const detachPr = useEventCallback((targetPr: PrSummary) =>
     props.onDetachPullRequest?.(props.thread, targetPr));
   const toggleReactionPicker = useCallback(
@@ -379,6 +405,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       hoverTimerRef.current = undefined;
     }
   };
+  // Stable for the memoized rollup chip, which arms the same prefetch.
+  const armRollupHoverPrefetch = useEventCallback(armHoverPrefetch);
+  const cancelRollupHoverPrefetch = useEventCallback(cancelHoverPrefetch);
 
   const toggleReaction = (emoji: string): void => {
     if (!props.onSetReaction) {
@@ -692,6 +721,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 prs={prs}
                 threadTitle={props.thread.title}
                 repoPrefixedUrls={repoPrefixedPrUrls}
+                branchDrift={branchDrift}
+                onHoverStart={armRollupHoverPrefetch}
+                onHoverEnd={cancelRollupHoverPrefetch}
                 onOpen={openPrStable}
                 onOpenContextMenu={
                   props.onOpenPullRequestContextMenu
@@ -776,6 +808,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 key={pr.url}
                 pr={pr}
                 showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
+                branchDrift={branchDrift?.url === pr.url ? branchDrift : undefined}
                 onOpen={openPrStable}
                 onOpenContextMenu={
                   props.onOpenPullRequestContextMenu
@@ -1239,6 +1272,25 @@ function needsRepoPrefix(
   }
   const firstKey = `${prs[0]!.org}/${prs[0]!.repo}`;
   return prs.some((pr) => `${pr.org}/${pr.repo}` !== firstKey);
+}
+
+/**
+ * Whether a PR belongs to the thread's checkout: its repository, or the fork
+ * it pushes to. Without a parseable origin, the head-branch match alone
+ * decides.
+ */
+function isThreadRepositoryPr(
+  thread: NavigationThreadSummary,
+  pr: PrSummary,
+): boolean {
+  const primaryRepository = parseRepositoryIdentity(thread.gitOriginUrl);
+  if (!primaryRepository) {
+    return true;
+  }
+  const primaryKey = repositoryIdentityKey(primaryRepository);
+  return repositoryIdentityKey(pr) === primaryKey
+    || (pr.sourceRepository !== undefined
+      && repositoryIdentityKey(pr.sourceRepository) === primaryKey);
 }
 
 function parseRepositoryIdentity(

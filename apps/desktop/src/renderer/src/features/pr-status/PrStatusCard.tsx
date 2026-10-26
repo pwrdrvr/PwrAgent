@@ -2,6 +2,7 @@ import type { PrSummary } from "@pwragent/shared";
 import { BranchIcon } from "../../icons";
 import { DiffStat } from "../../lib/DiffStat";
 import { formatRunningDurationMs } from "../../lib/format-duration";
+import { readPrBranchDrift, type PrBranchDrift } from "./pr-branch-drift";
 import {
   prPhaseLabel,
   prStatusLabel,
@@ -35,6 +36,12 @@ export function PrStatusCard(props: {
    * chip it is anchored to would just look broken.
    */
   withStatusPills?: boolean;
+  /**
+   * The thread branch's base drift, when this is the PR on that branch. Only
+   * the sidebar row knows the thread, so other surfaces leave it out and the
+   * card draws no Local branch section.
+   */
+  branchDrift?: PrBranchDrift;
   /** Injected by tests so age rows are deterministic. */
   now?: number;
 }) {
@@ -46,6 +53,7 @@ export function PrStatusCard(props: {
   const changes = readPrChanges(pr);
   const timeline = readPrTimeline(pr, now);
   const branch = readPrBranch(pr);
+  const drift = readBranchDriftRows(props.branchDrift);
 
   return (
     <>
@@ -113,6 +121,17 @@ export function PrStatusCard(props: {
           {changes.commits ? (
             <div className="pr-status-card__caption">{changes.commits}</div>
           ) : null}
+        </div>
+      ) : null}
+      {drift.length > 0 ? (
+        <div className="pr-status-card__section">
+          <span className="pr-status-card__section-title">Local branch</span>
+          {drift.map((row) => (
+            <div className="pr-status-card__row" key={row.label}>
+              <span className="pr-status-card__row-label">{row.label}</span>
+              <span className="pr-status-card__row-value">{row.value}</span>
+            </div>
+          ))}
         </div>
       ) : null}
       {timeline.length > 0 ? (
@@ -257,6 +276,33 @@ function readPrChanges(pr: PrSummary): PrChanges | undefined {
 }
 
 type PrTimelineRow = { label: string; value: string };
+
+/**
+ * The branch chip's "Behind base" and "Ahead of base" counts, named after the
+ * base. Compact and Minimal density hide that chip, so this is where those
+ * readers find them. A zero is shown: it is a known count, and "up to date
+ * with main" is the answer the operator came for.
+ */
+function readBranchDriftRows(drift: PrBranchDrift | undefined): PrTimelineRow[] {
+  const counts = readPrBranchDrift(drift);
+  if (!counts) {
+    return [];
+  }
+  const rows: PrTimelineRow[] = [];
+  if (counts.behind !== undefined) {
+    rows.push({
+      label: `Behind ${counts.baseBranch}`,
+      value: pluralize(counts.behind, "commit"),
+    });
+  }
+  if (counts.ahead !== undefined) {
+    rows.push({
+      label: `Ahead of ${counts.baseBranch}`,
+      value: pluralize(counts.ahead, "commit"),
+    });
+  }
+  return rows;
+}
 
 /**
  * Age rows. `createdAt` is immutable, so these stay exact against the wall

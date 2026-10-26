@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   MessagingThreadBindingSummary,
   NavigationThreadSummary,
+  PrSummary,
 } from "@pwragent/shared";
 import { ThreadRow } from "../ThreadRow";
 import { createThreadRowPointerDragPreview } from "../thread-row-drag-preview";
@@ -986,6 +987,50 @@ describe("ThreadRow chip flow", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows the branch's base drift on the card of the PR on that branch only", () => {
+    const pr = (number: number, headRefName: string): PrSummary => ({
+      provider: "github.com",
+      number,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      title: `Change ${number}`,
+      state: "pending",
+      lifecycleState: "open",
+      headRefName,
+      url: `https://github.com/pwrdrvr/PwrAgent/pull/${number}`,
+    });
+    renderRow({
+      thread: {
+        ...baseThread,
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        prs: [pr(201, "feat/chips"), pr(202, "feat/other")],
+        gitWorkingState: {
+          dirtyFiles: 0,
+          dirtyAdditions: 0,
+          dirtyDeletions: 0,
+          untrackedFiles: 0,
+          unpushedCommits: 0,
+          baseBranch: "main",
+          baseBehindCommitCount: 4,
+          baseAheadCommitCount: 2,
+          isBehindBase: true,
+        },
+      },
+    });
+
+    const localBranch = (): Element | undefined =>
+      [...screen.getByRole("tooltip").querySelectorAll(".pr-status-card__section")]
+        .find((section) => section.textContent?.startsWith("Local branch"));
+
+    const onBranch = screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#201/ });
+    fireEvent.focus(onBranch);
+    expect(localBranch()).toHaveTextContent("Behind main4 commitsAhead of main2 commits");
+    fireEvent.blur(onBranch);
+
+    fireEvent.focus(screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#202/ }));
+    expect(localBranch()).toBeUndefined();
   });
 
   it("marks Agent threads and explains their messaging role", () => {

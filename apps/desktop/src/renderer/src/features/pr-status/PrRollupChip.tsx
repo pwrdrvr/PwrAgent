@@ -20,6 +20,7 @@ import {
   prStatusLabel,
   resolvePrChipPresentation,
 } from "./pr-chip-state";
+import { prBranchBehindLabel, type PrBranchDrift } from "./pr-branch-drift";
 import { prRollupLabel, resolvePrRollup } from "./pr-rollup";
 
 type PrRollupChipProps = {
@@ -33,6 +34,14 @@ type PrRollupChipProps = {
     pr: PrSummary,
     position: { x: number; y: number; anchorTop?: number },
   ) => void;
+  /** The thread branch's base drift, for the PR on that branch. */
+  branchDrift?: PrBranchDrift;
+  /**
+   * The row's hover prefetch. The chips line arms it for the chips in the
+   * flow; this chip sits on the title line, outside that line.
+   */
+  onHoverStart?: () => void;
+  onHoverEnd?: () => void;
 };
 
 /** Hover opens a peek; a click or the keyboard keeps it open. */
@@ -55,10 +64,15 @@ export const PrRollupChip = memo(function PrRollupChip(props: PrRollupChipProps)
   if (props.prs.length === 1) {
     const pr = props.prs[0]!;
     return (
-      <span className="thread-row__pr-rollup">
+      <span
+        className="thread-row__pr-rollup"
+        onMouseEnter={props.onHoverStart}
+        onMouseLeave={props.onHoverEnd}
+      >
         <PrChip
           pr={pr}
           showRepoPrefix={props.repoPrefixedUrls.split("\n").includes(pr.url)}
+          branchDrift={props.branchDrift?.url === pr.url ? props.branchDrift : undefined}
           onOpen={props.onOpen}
           onOpenContextMenu={props.onOpenContextMenu}
         />
@@ -203,7 +217,11 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   ].join(" ");
 
   return (
-    <span className="thread-row__pr-rollup">
+    <span
+      className="thread-row__pr-rollup"
+      onMouseEnter={props.onHoverStart}
+      onMouseLeave={props.onHoverEnd}
+    >
       <span
         ref={triggerRef}
         role="button"
@@ -266,7 +284,12 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 const label = repoPrefixed.has(pr.url)
                   ? `${pr.org}/${pr.repo}#${pr.number}`
                   : `#${pr.number}`;
-                const status = prStatusLabel(pr);
+                const behind = props.branchDrift?.url === pr.url
+                  ? prBranchBehindLabel(props.branchDrift)
+                  : undefined;
+                const status = behind
+                  ? `${prStatusLabel(pr)} · ${behind}`
+                  : prStatusLabel(pr);
                 return (
                   <li key={pr.url}>
                     <button
