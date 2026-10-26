@@ -1,3 +1,4 @@
+import { probe } from "../test/phase-probes";
 import "@testing-library/jest-dom/vitest";
 import { navigationOwnerApiFixture } from "../test/navigation-owner-api-fixture";
 import type { DesktopApi } from "../lib/desktop-api";
@@ -12,7 +13,7 @@ import {
   screen,
   waitFor,
   within
-} from "@testing-library/react";
+} from "../test/phase-probes";
 import { resolveNewThreadBackend } from "@pwragent/shared";
 import type {
   AgentEvent,
@@ -127,7 +128,7 @@ async function clickButton(name: string | RegExp): Promise<void> {
     fireEvent.click(screen.getByRole("button", { name }));
     await Promise.resolve();
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await probe("timer", () => new Promise((resolve) => setTimeout(resolve, 0)));
   });
 }
 
@@ -135,7 +136,7 @@ async function flushReactUpdates(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await probe("timer", () => new Promise((resolve) => setTimeout(resolve, 0)));
   });
 }
 
@@ -290,7 +291,7 @@ describe("inferReplayCodexProfileModel", () => {
 
 describe("App", () => {
   beforeEach(() => {
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    probe("setup", () => vi.spyOn(document, "hasFocus").mockReturnValue(true));
   });
 
   afterEach(async () => {
@@ -2860,7 +2861,7 @@ describe("App", () => {
         } as DesktopSettingsSnapshot,
       });
       // Let the read land in state; React has not rendered it yet.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await probe("timer", () => new Promise((resolve) => setTimeout(resolve, 0)));
       fireEvent.click(within(context).getByRole("tab", { name: "Linked projects" }));
       fireEvent.click(screen.getAllByRole("button", { name: "Hide sidebar" })[0]!);
     });

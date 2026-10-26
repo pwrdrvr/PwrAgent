@@ -1,5 +1,5 @@
 import "./foreground-fixture";
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "../../../test/phase-probes";
 import { afterEach, expect, it, vi } from "vitest";
 import { classifyDirectory, type AgentEvent, type NavigationQueryRequest, type NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
