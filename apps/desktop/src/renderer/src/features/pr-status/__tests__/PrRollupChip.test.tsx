@@ -67,6 +67,37 @@ describe("PrRollupChip", () => {
     expect(chip).toHaveAttribute("aria-expanded", "false");
   });
 
+  it("names the only open PR and counts the finished ones", () => {
+    const closed = pr(13, { lifecycleState: "closed", state: "closed" });
+    const { container } = renderRollup([merged, failing, closed]);
+    const chip = container.querySelector("[data-pr-rollup]")!;
+    expect(chip.querySelector(".pr-chip__lead")).toHaveTextContent("#11");
+    expect(chip.querySelector(".pr-chip__more")).toHaveTextContent("+2");
+    expect(chip).toHaveClass("pr-chip--failing");
+    expect(chip).toHaveAttribute(
+      "aria-label",
+      "3 pull requests, #11 open, ready for review · checks failing",
+    );
+  });
+
+  it("keeps the draft bar under the lead PR", () => {
+    const draft = pr(14, { reviewState: "draft" });
+    const { container } = renderRollup([draft, merged]);
+    expect(container.querySelector(".pr-chip__lead .pr-chip__draft-bar")).not.toBeNull();
+  });
+
+  it("uses the lead PR's repository prefix when it needs one", () => {
+    render(
+      <PrRollupChip
+        prs={[failing, merged]}
+        repoPrefixedUrls={failing.url}
+        threadTitle="Orbit refactor"
+        onOpen={vi.fn()}
+      />,
+    );
+    expect(document.querySelector(".pr-chip__lead")).toHaveTextContent("acme/orbit#11");
+  });
+
   it("opens a list of every PR, least ready first, without selecting the row", () => {
     const { container, onOpen, onRowClick } = renderRollup([passing, merged, failing]);
     const chip = container.querySelector<HTMLElement>("[data-pr-rollup]")!;

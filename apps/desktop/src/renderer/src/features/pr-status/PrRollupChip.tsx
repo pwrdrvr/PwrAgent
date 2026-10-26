@@ -21,7 +21,7 @@ import {
   resolvePrChipPresentation,
 } from "./pr-chip-state";
 import { prBranchBehindLabel, type PrBranchDrift } from "./pr-branch-drift";
-import { prRollupLabel, resolvePrRollup } from "./pr-rollup";
+import { prNumberLabel, prRollupLabel, resolvePrRollup } from "./pr-rollup";
 
 type PrRollupChipProps = {
   prs: PrSummary[];
@@ -56,7 +56,8 @@ const VIEWPORT_MARGIN = 8;
  * One PR renders as the ordinary `PrChip`, so its hover card and context
  * menu behave as everywhere else. Several render as one chip wearing the
  * least ready PR's state (`resolvePrRollup`), with a scrollable popover that
- * lists them all. The popover opens on hover and stays open while the pointer
+ * lists them all. When exactly one of them is open, the chip names that PR
+ * and counts the rest (`#12 +3`); otherwise it shows the count. The popover opens on hover and stays open while the pointer
  * moves into it; a click or Enter keeps it open until Escape, an outside
  * click, or a choice.
  */
@@ -86,6 +87,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const rollup = resolvePrRollup(props.prs)!;
   const repoPrefixed = new Set(props.repoPrefixedUrls.split("\n"));
   const presentation = resolvePrChipPresentation(rollup.representative);
+  const leadLabel = rollup.lead
+    ? prNumberLabel(rollup.lead, repoPrefixed.has(rollup.lead.url))
+    : undefined;
   const triggerRef = useRef<HTMLSpanElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const hoverTimerRef = useRef<number | null>(null);
@@ -228,7 +232,9 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         tabIndex={0}
         aria-controls={open ? popoverId : undefined}
         aria-expanded={open}
-        aria-label={`${props.prs.length} pull requests, ${rollup.summary}`}
+        aria-label={`${props.prs.length} pull requests, ${
+          leadLabel ? `${leadLabel} open, ` : ""
+        }${rollup.summary}`}
         className={className}
         data-pr-rollup=""
         draggable={false}
@@ -253,9 +259,28 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
           if (openMode === "hover") dismissAfterGrace();
         }}
       >
-        <span className="pr-chip__dot" aria-hidden="true" />
-        <span className="pr-chip__label">{prRollupLabel(props.prs)}</span>
-        {presentation.isDraft ? <span className="pr-chip__draft-bar" aria-hidden="true" /> : null}
+        {leadLabel ? (
+          <>
+            {/* The draft bar marks the lead PR, so it centers under its
+                dot and number rather than the whole pill. */}
+            <span className="pr-chip__lead">
+              <span className="pr-chip__dot" aria-hidden="true" />
+              <span className="pr-chip__label">{leadLabel}</span>
+              {presentation.isDraft
+                ? <span className="pr-chip__draft-bar" aria-hidden="true" />
+                : null}
+            </span>
+            <span className="pr-chip__more">+{props.prs.length - 1}</span>
+          </>
+        ) : (
+          <>
+            <span className="pr-chip__dot" aria-hidden="true" />
+            <span className="pr-chip__label">{prRollupLabel(props.prs)}</span>
+            {presentation.isDraft
+              ? <span className="pr-chip__draft-bar" aria-hidden="true" />
+              : null}
+          </>
+        )}
       </span>
       {open
         ? createPortal(
@@ -281,9 +306,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
             </div>
             <ul className="pr-rollup-popover__list">
               {rollup.ordered.map((pr, index) => {
-                const label = repoPrefixed.has(pr.url)
-                  ? `${pr.org}/${pr.repo}#${pr.number}`
-                  : `#${pr.number}`;
+                const label = prNumberLabel(pr, repoPrefixed.has(pr.url));
                 const behind = props.branchDrift?.url === pr.url
                   ? prBranchBehindLabel(props.branchDrift)
                   : undefined;
