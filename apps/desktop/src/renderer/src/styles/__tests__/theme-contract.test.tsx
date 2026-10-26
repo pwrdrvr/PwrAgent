@@ -142,6 +142,15 @@ function collectRules(source: string): CssRule[] {
   return rules;
 }
 
+let appCssRules: CssRule[] | undefined;
+
+/** `collectRules(css)`, walked once: the stylesheet is over 1 MB, and the
+ *  sweeps that read it only filter the list. */
+function collectAppCssRules(): CssRule[] {
+  appCssRules ??= collectRules(css);
+  return appCssRules;
+}
+
 /**
  * The class names on each selector's subject, the compound after its last
  * combinator, one array per selector in the list. Parenthesized arguments
@@ -800,7 +809,7 @@ describe("Tangerine Terminal theme contract", () => {
     // amber tint turned the Codex config warning into a beige panel in
     // blue-light (#2620). The accent tokens follow each theme's own hue and
     // stay allowed; the update banner frames itself in them on purpose.
-    const rules = collectRules(css);
+    const rules = collectAppCssRules();
     const frames: string[][] = [];
     for (const rule of rules) {
       const fixed = /(?:^|[;{\s])position:\s*fixed\b/.test(rule.body);
@@ -846,7 +855,7 @@ describe("Tangerine Terminal theme contract", () => {
     // --status-warning is for dots, strokes, and meters (UI-THEME.md).
     // Tangerine light gives text its own darker amber, because the stroke
     // amber fails AA as type; every other theme aliases the two.
-    const offenders = collectRules(css).flatMap((rule) =>
+    const offenders = collectAppCssRules().flatMap((rule) =>
       [...rule.body.matchAll(/(?:^|[;{\s])color\s*:\s*([^;]+)/g)]
         .filter(([, value]) => /var\(--status-warning\)/.test(value))
         .map(([, value]) => `app.css:${rule.line} ${rule.selector} { color: ${value.trim()} }`),
@@ -1224,10 +1233,12 @@ describe("Tangerine Terminal theme contract", () => {
     // the header has to stop at it. Assert the exception is exactly one rule
     // and that it is platform-scoped, rather than dropping the guard.
     // Anchored at a rule boundary: unanchored, the leading `[^{}]*` retried
-    // from every character of the stylesheet and cost about 0.6s.
+    // from every character of the stylesheet and cost about 0.6s. The anchor
+    // is a lookbehind so it does not consume the previous rule's `}`, which
+    // would hide a matching rule that directly follows another match.
     const headerRailGutters = [
       ...css.matchAll(
-        /(?:^|[{}])([^{}]*\.thread-header[^{}]*)\{([^}]*padding-right:\s*calc\(var\(--context-rail-effective[^}]*)\}/g,
+        /(?<![^{}])([^{}]*\.thread-header[^{}]*)\{([^}]*padding-right:\s*calc\(var\(--context-rail-effective[^}]*)\}/g,
       ),
     ];
     expect(headerRailGutters).toHaveLength(1);
@@ -2961,7 +2972,7 @@ describe("color theme contract", () => {
     expect(activeRow).toContain("color: var(--accent-bright);");
 
     const inks = { text: new Set<string>(), mark: new Set<string>() };
-    for (const rule of collectRules(css)) {
+    for (const rule of collectAppCssRules()) {
       if (!/\.(?:composer__autocomplete|skill-origin-chip)\b/.test(rule.selector)) continue;
       for (const [, token] of rule.body.matchAll(/(?:^|[;\s])color:\s*var\(--([a-z0-9-]+)\)/g)) {
         // An icon is a non-text mark; everything else in a row is text.
@@ -2977,6 +2988,8 @@ describe("color theme contract", () => {
     // known miss: the `@` picker's `--text-muted` path on an active row,
     // 4.37:1 dark and 4.38:1 light. The `+` reference and project pickers
     // draw their paths the same way. Fixing it removes the entry.
+    const TANGERINE_TEXT_FLOOR = 4.5;
+    const TANGERINE_MARK_FLOOR = 3;
     const KNOWN_MISSES: Record<string, string[]> = {
       "tangerine-dark": ["text-muted on the active row"],
       "tangerine-light": ["text-muted on the active row"],
@@ -3000,8 +3013,8 @@ describe("color theme contract", () => {
       const misses: string[] = [];
       for (const [kind, tokens] of Object.entries(inks)) {
         const floor = kind === "text"
-          ? (tangerine ? 4.5 : TEXT_FLOOR)
-          : (tangerine ? 3 : MARK_FLOOR);
+          ? (tangerine ? TANGERINE_TEXT_FLOOR : TEXT_FLOOR)
+          : (tangerine ? TANGERINE_MARK_FLOOR : MARK_FLOOR);
         for (const token of tokens) {
           for (const [surface, background] of Object.entries(surfaces)) {
             if (contrastRatio(paint(theme, theme[token], background), background) < floor) {
