@@ -26673,6 +26673,80 @@ command = "pnpm dev"
       expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
     });
 
+    it.each(["unsupported", "failed"])("retains an ended command when its terminal read is %s", async (result) => {
+      const listBackgroundTerminals = result === "unsupported"
+        ? vi.fn(async () => ({ supported: false, terminals: [] }))
+        : vi.fn(async () => { throw new Error("terminal list failed"); });
+      const { codexClient, registry } = setup(listBackgroundTerminals);
+      await endTurnWithRunningCommands(codexClient, ["command-1"]);
+      await vi.waitFor(() => expect(listBackgroundTerminals).toHaveBeenCalledOnce());
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(1);
+      await completeCommand(codexClient, "command-1");
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+    });
+
+    it("keeps active child ownership after the parent settles a collaboration tool", async () => {
+      const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [] }));
+      const { codexClient, registry } = setup(listBackgroundTerminals);
+      await codexClient.emit({ method: "item/completed", params: {
+        threadId: "thread-1", turnId: "turn-1",
+        item: { id: "spawn-1", type: "collabAgentToolCall", tool: "spawnAgent", status: "completed",
+          receiverThreadIds: ["child-1"], agentsStates: { "child-1": { status: "running" } } },
+      } } as AppServerNotification);
+      await codexClient.emit({ method: "thread/status/changed", params: { threadId: "child-1", status: { type: "active" } } });
+      await codexClient.emit({ method: "item/started", params: {
+        threadId: "thread-1", turnId: "turn-1", item: { id: "collab-1", type: "collabAgentToolCall", status: "inProgress" },
+      } });
+      await endTurnWithRunningCommands(codexClient, []);
+      await codexClient.emit({ method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "notLoaded" } } });
+      expect(registry.getInProgressThreadSnapshotForQuit()).toMatchObject({
+        count: 1, threadIds: ["codex:thread-1"], subAgentThreadKeys: ["codex:thread-1"],
+      });
+      expect(registry.getQuitBlockerDiagnostics().contributors).toContainEqual(expect.objectContaining({
+        threadKey: "codex:thread-1", sourceThreadId: "child-1", source: "backend-active",
+      }));
+    });
+
+    it("protects a locally owned review tool at a stray idle boundary", async () => {
+      const { codexClient, registry } = setup(vi.fn(async () => ({ supported: true, terminals: [] })));
+      await codexClient.emit({ method: "turn/started", params: {
+        threadId: "thread-1", turn: { id: "review-1", status: "inProgress", items: [] },
+      } });
+      // Native review/start owns the real review turn across stray idle events.
+      const reviewKeys = (registry as unknown as { activeCodexReviewTurnKeys: Set<string> }).activeCodexReviewTurnKeys;
+      reviewKeys.add("thread-1:review-1");
+      await codexClient.emit({ method: "item/started", params: {
+        threadId: "thread-1", turnId: "review-1", item: { id: "review-tool", type: "mcpToolCall", status: "inProgress" },
+      } });
+      await codexClient.emit({ method: "thread/status/changed", params: { threadId: "thread-1", status: { type: "idle" } } });
+      expect(registry.getQuitBlockerDiagnostics().sourceCounts["live-tool-items"]).toBe(1);
+      await codexClient.emit({ method: "turn/completed", params: {
+        threadId: "thread-1", turnId: "review-1", turn: { id: "review-1", status: "completed", output: [] },
+      } });
+      expect(registry.getInProgressThreadSnapshotForQuit().count).toBe(0);
+    });
+
+    it("reports bounded blocker sources and item identities without tool input", async () => {
+      const { codexClient, registry } = setup(vi.fn(async () => ({ supported: false, terminals: [] })));
+      for (let i = 0; i < 30; i += 1) {
+        await codexClient.emit({ method: "item/started", params: {
+          threadId: `thread-${i}`, turnId: "turn-1", item: {
+            id: `mcp-${i}`, type: "mcpToolCall", status: "inProgress", arguments: "private tool input",
+          },
+        } });
+      }
+      const before = registry.getInProgressThreadSnapshotForQuit();
+      const diagnostics = registry.getQuitBlockerDiagnostics();
+      expect(diagnostics.sourceCounts["live-tool-items"]).toBe(30);
+      expect(diagnostics.contributors.length + diagnostics.omittedContributors).toBe(30);
+      expect(diagnostics.omittedContributors).toBeGreaterThan(0);
+      expect(diagnostics.contributors[0]).toMatchObject({ source: "live-tool-items", itemCount: 1,
+        items: [{ itemId: "mcp-0", type: "mcptoolcall", turnId: "turn-1", turnEnded: false }] });
+      expect(Buffer.byteLength(JSON.stringify(diagnostics), "utf8")).toBeLessThan(8_192);
+      expect(JSON.stringify(diagnostics)).not.toContain("private tool input");
+      expect(registry.getInProgressThreadSnapshotForQuit()).toEqual(before);
+    });
+
     it("does not read terminals after a turn that left no command running", async () => {
       const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [] }));
       const { codexClient, updates } = setup(listBackgroundTerminals);

@@ -801,7 +801,7 @@ const QUIT_ITEM_GROUPS: ReadonlyArray<{
   kind: QuitBlockerItem["kind"];
   heading: string;
 }> = [
-  { kind: "turn", heading: "Agent turns in progress" },
+  { kind: "turn", heading: "Thread work in progress" },
   { kind: "automation", heading: "Automations in progress" },
   { kind: "terminal", heading: "Integrated terminals" },
   { kind: "action", heading: "Environment actions" },
@@ -1487,9 +1487,9 @@ function describeQuitBlockers(options: {
 }): string {
   const parts: string[] = [];
   if (options.inProgressThreadCount === 1) {
-    parts.push("1 thread has an agent turn in progress");
+    parts.push("1 thread has work in progress");
   } else if (options.inProgressThreadCount > 1) {
-    parts.push(`${options.inProgressThreadCount} threads have agent turns in progress`);
+    parts.push(`${options.inProgressThreadCount} threads have work in progress`);
   }
   if (options.automationRunCount === 1) {
     parts.push("1 automation is running");
@@ -1530,7 +1530,7 @@ function describeQuitImpact(options: {
 }): string {
   const consequences: string[] = [];
   if (options.inProgressThreadCount > 0) {
-    consequences.push("those turns will be interrupted");
+    consequences.push("running thread work will be stopped");
   }
   if ((options.automationRunCount ?? 0) > 0) {
     consequences.push("automation runs will be interrupted");
