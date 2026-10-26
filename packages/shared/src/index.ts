@@ -102,6 +102,7 @@ export * from "./forge-product";
 export { isCodexAuthenticationFailure } from "./codex-authentication";
 
 export * from "./local-model-pricing";
+export * from "./codex-model-providers";
 
 export * from "./thread-search-query";
 

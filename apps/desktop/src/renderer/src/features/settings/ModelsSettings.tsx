@@ -11,6 +11,7 @@ import {
 import type {
   BackendModelOption,
   BackendSummary,
+  CodexModelProviderSettings,
   DesktopCodexAuthProfileCandidate,
   DesktopCodexDiscoveryCandidate,
   DesktopHelperModelSettings,
@@ -62,6 +63,7 @@ import { claudeProviderStatus } from "./claude-provider-status";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
 import { UsageAccountSettings } from "./UsageAccountSettings";
+import { CodexModelProvidersSettings } from "./CodexModelProvidersSettings";
 import {
   ManagedRuntimeProgressStrip,
   useManagedRuntimeProgress,
@@ -171,6 +173,8 @@ export function ModelsSettings(props: {
   ) => Promise<unknown>;
   onSaveUsageAccountGroups?: (groups: Record<string, string>) => Promise<unknown>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
+  /** Persist Settings → Codex → Model providers. */
+  onSaveCodexModelProviders?: (providers: CodexModelProviderSettings[]) => Promise<boolean>;
   /** Persist Defaults → Decisions and the decision provider screens. */
   onSaveDecisionModels?: (settings: DesktopDecisionModelSettings) => Promise<unknown>;
   /** Persist whether PwrAgent downloads and prefers its own Codex build. */
@@ -712,6 +716,15 @@ export function ModelsSettings(props: {
           onEditDefaults={editDefaults}
         />
         {codexSection}
+        {props.onSaveCodexModelProviders ? (
+          <CodexModelProvidersSettings
+            desktopApi={props.desktopApi}
+            providers={props.snapshot.models.codex.providers ?? []}
+            saving={props.saving}
+            onRefresh={props.onRefresh}
+            onSave={props.onSaveCodexModelProviders}
+          />
+        ) : null}
         {props.onSaveUsageAccountGroups ? (
           <UsageAccountSettings
             backend="codex"

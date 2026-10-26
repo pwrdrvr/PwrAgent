@@ -275,46 +275,44 @@ describe("MessagingStore", () => {
     }
   });
 
-  it("waits in whenIdle for a held write and for work queued while it waits", async () => {
+  it("waits in whenIdle for queued writes, including ones queued while it waits", async () => {
     const { filePath, store } = await createStore();
-    // A test's teardown removes the store directory. A write whose temp-file
-    // rename is still pending then fails with ENOENT, so whenIdle must hold
-    // until the rename has landed.
+    // An owner that removes the store's directory waits here first. A write
+    // still queued would otherwise rename its temp file into a missing
+    // directory, which fails with ENOENT on Windows.
     const internals = MessagingStore.prototype as unknown as {
       writeData: (data: unknown) => Promise<void>;
     };
     const writeData = internals.writeData;
-    const writeHeld = Promise.withResolvers<void>();
     const writing = Promise.withResolvers<void>();
     let holdNextWrite = true;
     const writeSpy = vi.spyOn(internals, "writeData").mockImplementation(async function (this: unknown, data: unknown) {
       if (holdNextWrite) {
         holdNextWrite = false;
-        writeHeld.resolve();
         await writing.promise;
       }
       await writeData.call(this, data);
     });
     try {
-      const first = store.upsertBinding(buildBinding());
+      const firstWrite = store.upsertBinding(buildBinding());
       let idle = false;
       const whenIdle = store.whenIdle().then(() => {
         idle = true;
       });
-      const second = store.upsertBinding(buildBinding({ id: "binding-2" }));
-      await writeHeld.promise;
+      // A second store on the same file shares its queue.
+      const laterWrite = new MessagingStore(filePath).upsertBinding(buildBinding({ id: "binding-2" }));
       for (let tick = 0; tick < 5; tick += 1) await new Promise((resolve) => setImmediate(resolve));
-      expect(writeSpy).toHaveBeenCalledTimes(1);
+      expect(writeSpy).toHaveBeenCalledOnce();
       expect(idle).toBe(false);
 
       writing.resolve();
       await whenIdle;
       expect(writeSpy).toHaveBeenCalledTimes(2);
-      const persisted = JSON.parse(await readFile(filePath, "utf8")) as {
+      await Promise.all([firstWrite, laterWrite]);
+      const stored = JSON.parse(await readFile(filePath, "utf8")) as {
         bindings: Record<string, unknown>;
       };
-      expect(persisted.bindings).toHaveProperty("binding-2");
-      await Promise.all([first, second]);
+      expect(Object.keys(stored.bindings).sort()).toEqual(["binding-1", "binding-2"]);
     } finally {
       writing.resolve();
       writeSpy.mockRestore();

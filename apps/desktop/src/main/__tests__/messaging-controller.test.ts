@@ -95,10 +95,9 @@ import {
 } from "../pdf/pdf-page-renderer";
 
 const tempDirs: string[] = [];
-// Teardown owns what each test leaves running: tool-update batches a flush
-// timer started, and the store writes behind them. No test step awaits these.
+// Teardown drains these before it removes tempDirs. See afterEach.
 const harnessControllers: MessagingController[] = [];
-const harnessStores: MessagingStore[] = [];
+const tempStores: MessagingStore[] = [];
 
 vi.mock("../messaging/attachment-image-normalization", () => ({
   normalizeMessagingImageAttachment: vi.fn(async () => ({
@@ -130,20 +129,8 @@ async function createStore(): Promise<MessagingStore> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-controller-"));
   tempDirs.push(tempDir);
   const store = new MessagingStore(path.join(tempDir, "messaging-state.json"));
-  harnessStores.push(store);
+  tempStores.push(store);
   return store;
-}
-
-/**
- * Waits for the work no test step awaits before afterEach removes the store
- * directories: a delivery a flush timer started can still be writing its
- * delivery record after the test has seen the message and returned.
- */
-async function settleHarnessWork(): Promise<void> {
-  await Promise.all(
-    harnessControllers.splice(0).map((controller) => controller.whenToolUpdatesSettled()),
-  );
-  await Promise.all(harnessStores.splice(0).map((store) => store.whenIdle()));
 }
 
 function createDeferred<T>(): {
@@ -155,6 +142,20 @@ function createDeferred<T>(): {
     resolve = promiseResolve;
   });
   return { promise, resolve };
+}
+
+/**
+ * A flush timer can start a delivery that no test step awaits, and that
+ * delivery writes the store after the test body returns. Stop each
+ * controller, wait for its started deliveries, then wait for the store
+ * queues, so no write renames a temp file into a removed directory.
+ */
+async function settleHarnessWork(): Promise<void> {
+  for (const controller of harnessControllers.splice(0)) {
+    controller.dispose();
+    await controller.whenToolUpdatesSettled();
+  }
+  await Promise.all(tempStores.splice(0).map((store) => store.whenIdle()));
 }
 
 afterEach(async () => {

@@ -33,7 +33,9 @@ import { ArchiveCleanupCheckpointStore, type ArchiveCleanupIntent } from "../sta
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
-import { usageAccountKey } from "../usage-account-identity";
+import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
+import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attribution";
+import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -50,6 +52,15 @@ import {
 import { resolvePullRequestReview } from "./pull-request-review";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { priceLocalModelUsage } from "@pwragent/shared";
+import {
+  attributeCodexProviderUsageLine,
+  buildCodexModelProviderConfigOverrides,
+  buildCodexModelProviderShellEnvOverrides,
+  codexModelProviderApiKeyEnv,
+  parseCodexProviderModelId,
+  resolveModelOptionReference,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared";
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
@@ -962,6 +973,8 @@ type BackendClient = {
     threadId: string;
   }): Promise<{ model?: string; reasoningEffort?: string } | undefined>;
   readThreadPricingSnapshot?: CodexAppServerClient["readThreadPricingSnapshot"];
+  /** The configured Codex model provider a thread runs on, if Codex reported one. */
+  modelProviderForThread?(threadId: string): string | undefined;
   enrichThreadDirectories?(
     threads: AppServerThreadSummary[],
     caller?: DirectoryEnrichmentCaller,
@@ -2537,8 +2550,17 @@ function mergeCommandSummaries(
 export function buildCodexClientArgs(
   env?: NodeJS.ProcessEnv,
   configOverrides: readonly string[] = [],
+  modelProviders: readonly CodexModelProviderSettings[] = [],
 ): string[] {
+  // A provider's env_key is named only when its key is in this spawn's
+  // environment; Codex would otherwise fail every request for a missing key.
+  const providerIdsWithKeys = new Set(modelProviders
+    .filter((provider) => env?.[codexModelProviderApiKeyEnv(provider.id)])
+    .map((provider) => provider.id));
   const args = [
+    // Provider tables first, so an operator's own override still wins.
+    ...buildCodexModelProviderConfigOverrides(modelProviders, providerIdsWithKeys)
+      .flatMap((override) => ["-c", override]),
     ...validateCodexConfigOverrides(configOverrides).flatMap((override) => [
       "-c", override,
     ]),
@@ -2561,6 +2583,9 @@ export function buildCodexClientArgs(
       `shell_environment_policy.set.CODEX_HOME=${formatTomlString(codexHome)}`,
     );
   }
+  // Last, so no operator override can hand a provider key to model commands.
+  args.push(...buildCodexModelProviderShellEnvOverrides(providerIdsWithKeys)
+    .flatMap((override) => ["-c", override]));
   return args;
 }
 
@@ -9685,6 +9710,9 @@ export class DesktopBackendRegistry {
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolveCodexLocalModelIdsFn: () => string[];
+  private readonly resolveCodexModelProvidersFn: () => CodexModelProviderSettings[];
+  private readonly resolveCodexModelProviderKeysFn: () => Promise<Record<string, string>>;
+  private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
@@ -9826,6 +9854,10 @@ export class DesktopBackendRegistry {
     >;
     resolveCodexFastAllowed?: () => boolean;
     resolveCodexLocalModelIds?: () => string[];
+    resolveCodexModelProviders?: () => CodexModelProviderSettings[];
+    resolveCodexModelProviderKeys?: () => Promise<Record<string, string>>;
+    /** Test seam for provider model discovery; never the network in Vitest. */
+    codexModelProviderFetch?: (input: string, init?: RequestInit) => Promise<Response>;
     resolvePdfAnalysisEnabled?: () => boolean;
     resolveTokenMiserEnabled?: () => boolean;
     resolveTokenMiserPollingReviewsEnabled?: () => boolean;
@@ -9992,6 +10024,10 @@ export class DesktopBackendRegistry {
       (() => settingsService?.resolveProviderThreadModelMigrations() ?? {});
     this.resolveCodexLocalModelIdsFn = options?.resolveCodexLocalModelIds
       ?? (() => settingsService?.resolveCodexLocalModelIds?.() ?? []);
+    this.resolveCodexModelProvidersFn = options?.resolveCodexModelProviders
+      ?? (() => settingsService?.resolveCodexModelProviders?.() ?? []);
+    this.resolveCodexModelProviderKeysFn = options?.resolveCodexModelProviderKeys
+      ?? (async () => await settingsService?.resolveCodexModelProviderKeys?.() ?? {});
     this.resolveCodexFastAllowedFn =
       options?.resolveCodexFastAllowed ??
       (() => settingsService?.resolveCodexFastAllowed() ?? true);
@@ -10179,6 +10215,7 @@ export class DesktopBackendRegistry {
           ? async (env) => buildCodexClientArgs(
               env,
               settingsService.resolveCodexConfigOverrides?.() ?? [],
+              settingsService.resolveCodexModelProviders?.() ?? [],
             )
           : undefined,
         resolveCommand: settingsService
@@ -10186,10 +10223,17 @@ export class DesktopBackendRegistry {
           : undefined,
         resolveEnv: settingsService
           ? async () => withTokenMiserBridgeDescriptorEnv(
-              await settingsService.resolveCodexSpawnEnvAsync(),
+              {
+                ...await settingsService.resolveCodexSpawnEnvAsync(),
+                // Model provider keys go to the App Server alone.
+                ...await settingsService.resolveCodexModelProviderEnv?.(),
+              },
               tokenMiserBridgeDescriptorPath,
             )
           : undefined,
+        resolveModelProviderIds: () => new Set(
+          (settingsService?.resolveCodexModelProviders?.() ?? []).map((provider) => provider.id),
+        ),
         clientVersion,
         readHelperModelSettings: () => this.resolveHelperModelSettingsFn(),
         passSetupVariablesToAgents: () => this.resolvePassSetupVariablesToAgentsFn(),
@@ -10203,6 +10247,17 @@ export class DesktopBackendRegistry {
         // may initialize this client; ordinary backend summaries are passive.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
+    if (typeof settingsService?.onCodexModelProviderKeysChanged === "function") {
+      this.unsubscribers.push(settingsService.onCodexModelProviderKeysChanged(() => {
+        this.codexModelProviderKeysRead = undefined;
+        this.codexModelProviderCatalog?.invalidate();
+        void this.invalidateProviderRuntimeSelections({ acp: false, codex: true }).catch((error) => {
+          backendRegistryLog.warn("Codex reconnect after a provider key change failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }));
+    }
     if (this.codexClient.onAppServerUnexpectedExit) {
       this.unsubscribers.push(
         this.codexClient.onAppServerUnexpectedExit(() => {
@@ -10374,7 +10429,10 @@ export class DesktopBackendRegistry {
     this.acpAvailableCommandProbeBudgetMs =
       options?.acpAvailableCommandProbeBudgetMs
       ?? ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS;
-    this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
+    this.overlayStore = wrapCodexProviderUsageAttribution(
+      options?.overlayStore ?? getDesktopOverlayStore(),
+      (line) => this.attributeCodexProviderUsage(line),
+    );
     const gatewayConnections = this.mcpConnectionService;
     if (gatewayConnections?.requestGatewayToolOperation) {
       this.mcpGatewayTools = new McpGatewayToolService({
@@ -10650,9 +10708,42 @@ export class DesktopBackendRegistry {
         : options?.codexClient || replayClients
           ? null
           : undefined;
-    this.modelCatalog = new BackendModelCatalog({
-      codex: this.codexClient,
+    this.codexModelProviderCatalog = new CodexModelProviderCatalog({
+      resolveProviders: () => this.resolveCodexModelProvidersFn(),
+      resolveKeys: () => this.resolveCodexModelProviderKeysFn(),
+      ...(options?.codexModelProviderFetch ? { fetch: options.codexModelProviderFetch } : {}),
     });
+    const codexModelClient = this.codexClient;
+    this.modelCatalog = new BackendModelCatalog({
+      codex: {
+        // Codex's own catalog, then every configured provider's models. A
+        // provider that cannot be reached must not hide Codex's models.
+        listModels: codexModelClient.listModels || this.resolveCodexModelProvidersFn().length
+          ? async (diagnostics) => [
+              ...await codexModelClient.listModels?.(diagnostics) ?? [],
+              ...await this.codexModelProviderCatalog.listModelOptions().catch((error: unknown) => {
+                backendRegistryLog.warn("Codex model provider models unavailable", {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+                return [];
+              }),
+            ]
+          : undefined,
+      },
+    });
+    let providersFingerprint = JSON.stringify(this.resolveCodexModelProvidersFn());
+    const refreshCodexProviderModels = (): void => {
+      const next = JSON.stringify(this.resolveCodexModelProvidersFn());
+      if (next === providersFingerprint) return;
+      providersFingerprint = next;
+      this.codexModelProviderCatalog.invalidate();
+      this.modelCatalog.invalidate("codex");
+    };
+    if (this.configStore) {
+      this.unsubscribers.push(this.configStore.subscribe(["models"], refreshCodexProviderModels));
+    } else if (typeof settingsService?.onConfigWritten === "function") {
+      this.unsubscribers.push(settingsService.onConfigWritten(refreshCodexProviderModels));
+    }
     this.queuedMessageTitler = new QueuedMessageTitler({
       generate: async (params) =>
         await this.generateStructuredObject({
@@ -17425,6 +17516,50 @@ export class DesktopBackendRegistry {
       analysisModelBackends: USAGE_ANALYSIS_MODEL_BACKENDS.filter((backend) =>
         backend === "codex" || hasAcpStructuredHelper(backend)) };
   }
+
+  /**
+   * Codex fixes a thread's model provider when the thread starts; turn/start
+   * cannot change it. A model from another provider would fail on the next
+   * turn, after the operator had moved on, so refuse it here with the way out.
+   */
+  private assertCodexModelKeepsThreadProvider(threadId: string, model: string): void {
+    const threadProvider = this.codexClient.modelProviderForThread?.(threadId);
+    const requestedProvider = parseCodexProviderModelId(model).providerId;
+    if (threadProvider === requestedProvider) return;
+    const providers = this.resolveCodexModelProvidersFn();
+    const label = (id: string | undefined): string =>
+      id ? providers.find((provider) => provider.id === id)?.name ?? id : "Codex's default provider";
+    throw new Error(
+      `This thread runs on ${label(threadProvider)}, so it cannot switch to a ${label(requestedProvider)} model. `
+      + "Hand the thread off to a new thread to use that model.",
+    );
+  }
+
+  /**
+   * A Codex thread on a configured model provider records usage under that
+   * provider: its own account and rates, never the OpenAI login or catalog.
+   * Returns undefined for every other line so it is written unchanged.
+   */
+  private attributeCodexProviderUsage(
+    line: ThreadUsageLineRecord,
+  ): Promise<ThreadUsageLineRecord> | undefined {
+    if (line.backend !== "codex") return undefined;
+    const providerId = (line.model ? parseCodexProviderModelId(line.model).providerId : undefined)
+      ?? this.codexClient.modelProviderForThread?.(line.threadId);
+    if (!providerId) return undefined;
+    const provider = this.resolveCodexModelProvidersFn().find((entry) => entry.id === providerId);
+    if (!provider) return undefined;
+    // Keys are decrypted once and kept until one changes, not per write.
+    this.codexModelProviderKeysRead ??= this.resolveCodexModelProviderKeysFn()
+      .catch((): Record<string, string> => ({}));
+    return this.codexModelProviderKeysRead.then((keys) => attributeCodexProviderUsageLine(
+      line,
+      provider,
+      codexModelProviderAccountKey(provider.baseUrl, keys[provider.id]),
+    ));
+  }
+
+  private codexModelProviderKeysRead?: Promise<Record<string, string>>;
 
   private async captureUsageAccount(backend: AppServerBackendKind, threadId?: string): Promise<string | undefined> {
     // Read the group synchronously: editing Settings during an in-flight turn
@@ -24910,6 +25045,9 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
+    if (params.backend === "codex" && params.model) {
+      this.assertCodexModelKeepsThreadProvider(params.threadId, params.model);
+    }
     const modelSettingsManuallyUpdatedAt =
       "model" in params || "reasoningEffort" in params
         ? Date.now()
@@ -41447,9 +41585,21 @@ export class DesktopBackendRegistry {
       const availableModels = (
         await this.getBackendLaunchpadOptions(backend, "agent-handoff")
       )?.models ?? [];
+      // An Agent may name a provider model the way a person would, such as
+      // "Refuseless / GLM-5.3 abliterated"; take it when it fits exactly one.
+      const reference = resolveModelOptionReference(availableModels, requestedModel);
+      if (reference.id && reference.id !== requestedModel) {
+        request = { ...request, args: { ...request.args, model: reference.id } };
+      }
+      if (reference.candidates.length > 1) {
+        return threadOrchestrationFailure(
+          "invalid_arguments",
+          `model="${requestedModel}" matches several models: ${reference.candidates.map((model) => model.id).join(", ")}. Pass one exact id.`,
+        );
+      }
       if (
         availableModels.length > 0
-        && !availableModels.some((model) => model.id === requestedModel)
+        && !reference.id
       ) {
         const available = availableModels.map((model) => model.id).join(", ");
         const grokGuidance =

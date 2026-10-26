@@ -140,6 +140,7 @@ function secretSnapshotPath(
     case "pwrsnapMcpCredential":
     case "pwrgitMcpCredential":
     case "mcpStdioConnectionSecrets":
+    case "codexModelProviderKeys":
       return undefined;
   }
 }

@@ -1,4 +1,4 @@
-import { codexSpeedOptions, selectedCodexSpeed } from "@pwragent/shared";
+import { codexSpeedOptions, formatModelOptionLabel, selectedCodexSpeed } from "@pwragent/shared";
 import { buildProjectPageIntent, projectPickerPageActions, FOOTER_ROW } from "./messaging-resume-browser";
 import type { MessagingBrowsePage } from "./messaging-browse-query-pool";
 import type {
@@ -1423,7 +1423,7 @@ export function buildStatusModelPickerIntent(params: {
   createdAt: number;
   currentModelId?: string;
   id: string;
-  models: Array<{ id: string; label?: string; current?: boolean }>;
+  models: Array<{ id: string; label?: string; providerLabel?: string; current?: boolean }>;
 }): MessagingSingleSelectIntent {
   // Build the full list and let applyActionCapabilityLimits drop the
   // lowest-priority entries (trailing models) on platforms with tighter
@@ -1445,7 +1445,7 @@ export function buildStatusModelPickerIntent(params: {
       [
         ...params.models.map((model, index) => ({
           id: "status:set-model",
-          label: `${model.label ?? model.id}${
+          label: `${formatModelOptionLabel(model)}${
             (params.currentModelId ? model.id === params.currentModelId : model.current)
               ? " (current)"
               : ""

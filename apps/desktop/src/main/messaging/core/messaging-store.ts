@@ -835,9 +835,11 @@ export class MessagingStore {
   }
 
   /**
-   * Resolves once every read and write queued for this file has finished,
-   * including work queued while it waits. An owner about to remove the
-   * store's directory awaits this so no temp-file rename is still pending.
+   * Resolves once every operation queued on this file has settled, including
+   * operations queued while it waits. Every store on the same path shares the
+   * queue, so an owner about to remove the file's directory waits here first;
+   * otherwise a write still in the queue renames its temp file into a
+   * directory that no longer exists.
    */
   async whenIdle(): Promise<void> {
     let queue = MessagingStore.queues.get(this.filePath);
