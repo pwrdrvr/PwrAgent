@@ -43564,7 +43564,8 @@ button.composer__subthread-source-parent:hover {
   background: var(--accent);
 }
 
-.composer__terminal-toggle.is-disabled {
+.composer__terminal-toggle.is-disabled,
+.composer__terminal-toggle.is-disabled:hover {
   opacity: 0.45;
   cursor: default;
   border-color: var(--border-subtle);

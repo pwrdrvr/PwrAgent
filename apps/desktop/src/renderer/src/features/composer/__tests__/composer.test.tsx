@@ -2385,7 +2385,7 @@ describe("Composer", () => {
         }} />);
       const tools = screen.getByLabelText("Composer tools");
       const buttons = within(tools).getAllByRole("button");
-      expect(buttons.map((button) => button.getAttribute("aria-label"))).toEqual([
+      expect(buttons.map((button) => button.getAttribute("aria-label")?.split(":")[0])).toEqual([
         "Environment", "Run", "Environment command", "Open integrated terminal", "VS Code", "Terminal",
       ]);
       const toggle = within(tools).getByRole("button", { name: "Open integrated terminal" });
@@ -2457,7 +2457,7 @@ describe("Composer", () => {
         const [open, setOpen] = useState(false);
         return <Composer skills={[]} applications={applications} desktopApi={{ startTurn }}
           onBeforeStartTurn={() => check.promise}
-          thread={{ ...thread, projectKey: "/repo/demo" }}
+          thread={{ ...thread, linkedDirectories: [{ id: "project", kind: "local", label: "Demo", path: "/repo/demo" }] }}
           integratedTerminal={{ open, onToggle: () => setOpen((value) => !value) }} />;
       }
       render(<PreparingComposer />);
@@ -2465,7 +2465,7 @@ describe("Composer", () => {
       await clickButton("Send");
       expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled();
       expect(screen.getByRole("button", { name: "VS Code" })).toBeDisabled();
-      expect(screen.getByRole("button", { name: "Terminal", exact: true })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Terminal" })).toBeDisabled();
       const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
       expect(toggle).toBeEnabled();
       expect(toggle.closest("fieldset")).toBeNull();
@@ -6776,12 +6776,11 @@ describe("Composer", () => {
     // looked editable and silently swallowed keystrokes.
     expect(container.querySelector(".composer-tiptap-input")).toHaveClass("is-readonly");
     expect(screen.getByText(/Message held while checks run/)).toBeInTheDocument();
-    // The pill is the only thing reporting the wait, so it keeps its contrast
-    // and carries the spinner while the footer group dims behind it.
+    // The pill reports the wait with a spinner at full contrast.
     const pill = container.querySelector(".composer__send-split-pill");
     expect(pill).toHaveClass("is-preparing");
     expect(pill?.querySelector(".pending-spinner")).toBeTruthy();
-    expect(container.querySelector(".composer__pending-controls--dim")).toBeTruthy();
+    expect(container.querySelector(".composer__pending-controls:disabled")).toBeTruthy();
 
     await act(async () => { check.resolve(false); });
     expect(container.querySelector(".composer-tiptap-input")).not.toHaveClass("is-readonly");
