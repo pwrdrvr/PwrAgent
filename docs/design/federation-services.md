@@ -107,7 +107,7 @@ every later one.
 | --- | --- | --- |
 | `services.v2.open` | request | Connect a stream under a viewer-chosen id; exchange initial windows and frame sizes |
 | `services.v2.renew` | request | Renew the lease and name its live streams |
-| `services.v2.data` | notification | Up to one frame of bytes, a per-direction sequence number, and an optional FIN |
+| `service_data` | binary envelope | Up to one frame of raw bytes, a per-direction sequence number, and an optional FIN |
 | `services.v2.window` | notification | Grant the sender more credit |
 | `services.v2.close` | notification | Stop the stream, with an optional error |
 
@@ -117,8 +117,18 @@ The receiver advertises a window at open (4 MiB by default) and sends
 has flushed. The sender may have the whole window in flight across many frames
 of at most 64 KiB, so per-stream throughput is about window / RTT rather than
 one chunk per round trip. The owner pushes service output as it arrives; no one
-polls. Data beyond the granted window, a sequence gap, data after FIN, or
-invalid base64 closes the stream.
+polls. Data beyond the granted window, a sequence gap, data after FIN, a frame
+larger than the agreed frame size, or a frame without binary data closes the
+stream.
+
+Data frames are not JSON. A `service_data` envelope uses the transport's binary
+envelope frame, the one turn attachments use for `blob_chunk`: the `PWRBLOB1`
+magic, a 4-byte header length, the envelope as JSON without `data`, then the
+bytes raw. The header is about 300 bytes per frame of up to 64 KiB, and tunnel
+bytes are never base64 encoded or parsed. Gateways decode and re-encode each
+frame, so the router only accepts and relays `service_data` from a connection
+that grants `service_forward_v2`; a build that predates it decodes the frame to
+nothing, and no stream opens through it in the first place.
 
 Each side bounds its receive memory: granted but unflushed bytes across all
 streams stay within one budget (32 MiB by default). A stream that cannot reach
@@ -259,18 +269,27 @@ checks that diagnostics contain no HTTP/WS body bytes.
 `federation-services-throughput.test.ts` measures the forwarder, RPC endpoint,
 routers, and owner in process, optionally with an artificial round trip, and
 through a real gateway with two Noise-encrypted clients. It is skipped unless
-`PWRAGENT_SERVICE_TUNNEL_BENCH=1`. On an 8-vCPU Linux sandbox, one TCP stream:
+`PWRAGENT_SERVICE_TUNNEL_BENCH=1`. On an 8-vCPU Linux sandbox, one TCP stream
+of random bytes unless marked text, one direction:
 
 | Path | v1 | v2 |
 | --- | --- | --- |
-| In process, no delay | 3.9 MiB/s | 760–990 MiB/s |
-| In process, 20 / 50 / 200 ms RTT | 0.70 / 0.30 / 0.078 MiB/s | 174–188 / 66–78 / 15–20 MiB/s |
-| Real gateway, Noise and brotli | 3.9 MiB/s at 121 ms CPU per MiB | 42 MiB/s at 38 ms CPU per MiB |
-| Real gateway, Noise without brotli | 3.9 MiB/s at 110 ms CPU per MiB | 66–86 MiB/s at 23–25 ms CPU per MiB |
+| In process, no delay | 3.9 MiB/s | 1,270–1,320 MiB/s at 0.8 ms CPU per MiB |
+| In process, 20 / 50 / 200 ms RTT | 0.70 / 0.30 / 0.078 MiB/s | 184–191 / 78 / 15–20 MiB/s |
+| Real gateway, Noise and brotli | 3.9 MiB/s at 121 ms CPU per MiB | 97–123 MiB/s at 9–11 ms CPU per MiB |
+| Real gateway, Noise without brotli | 3.9 MiB/s at 110 ms CPU per MiB | 145–162 MiB/s at 6–8 ms CPU per MiB |
+| Real gateway, Noise and brotli, text | | 61–90 MiB/s at 12–22 ms CPU per MiB |
 
 The gateway rows run owner, gateway, and viewer in one process, so each MiB
-pays JSON and Noise on two hops. On incompressible data brotli costs about
-40% of that CPU: base64 makes every frame look compressible.
+pays framing and Noise on two hops. With base64 inside JSON notifications the
+same v2 windows reached 38 MiB/s with brotli and 62–72 MiB/s without: JSON and
+base64 cost about 6 ms of CPU per MiB to encode and decode, where the binary frame costs
+0.4–0.8 ms. In process the link has no bandwidth limit, so compressing text
+(to about 0.15 of its size) only costs CPU here; on a slower link it sends
+about a seventh of the bytes. Before brotli compresses a frame of 32 KiB or
+more it compresses the frame's last 4 KiB, and skips the rest when that sample
+does not shrink, which cut brotli's share of main-thread time for random data
+from 22% to 9–12%.
 
 ### Deliberate v1 limits
 
