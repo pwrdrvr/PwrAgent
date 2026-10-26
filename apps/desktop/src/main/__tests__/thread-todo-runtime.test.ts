@@ -19,12 +19,13 @@ const FULL_ACCESS_SOL: HandoffSourceSettings = {
 function fakeRegistry(source: HandoffSourceSettings) {
   const registry = {
     readThreadHandoffSettings: vi.fn(async () => source),
+    readBackendModelOptions: vi.fn(async (_backend: string) => undefined),
     startThread: vi.fn(async (params: { backend: "codex" }) => ({
       backend: params.backend,
       threadId: "child-thread",
     })),
     renameThread: vi.fn(async () => undefined),
-    startTurn: vi.fn(async () => ({ turnId: "child-turn" })),
+    startTurn: vi.fn(async (_params: Record<string, unknown>) => ({ turnId: "child-turn" })),
   };
   return {
     registry,
@@ -281,5 +282,46 @@ describe("thread to-do project menu", () => {
     fake.listProjects.mockRejectedValueOnce(new Error("navigation unavailable"));
     await expect(setThreadTodoProject({ id: "todo-1", projectKey: SNAP.key }, fake))
       .rejects.toThrow("navigation unavailable");
+  });
+});
+
+describe("chosen dispatch backend", () => {
+  it("validates against the chosen catalog and drops tier and fast mode across backends", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, serviceTier: "fast", fastMode: true });
+    registry.readBackendModelOptions.mockResolvedValue({ models: [{ id: "opus", label: "Opus 5.5", reasoningEfforts: ["high"] }] } as never);
+    await runners.startThread({
+      sourceBackend: "codex", sourceThreadId: "source", cwd: "/repo", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it", workMode: "worktree" },
+      modelSettings: { backend: "claude", model: "Opus 5.5", reasoningEffort: "high" },
+    });
+    expect(registry.readBackendModelOptions).toHaveBeenCalledWith("claude");
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "claude", model: "opus", reasoningEffort: "high", executionMode: "full-access", workMode: "worktree",
+    }));
+    for (const args of [registry.startThread.mock.calls[0]![0], registry.startTurn.mock.calls[0]![0]]) {
+      expect(args).not.toHaveProperty("serviceTier");
+      expect(args).not.toHaveProperty("fastMode");
+    }
+  });
+
+  it("refuses an invalid model before starting anything", async () => {
+    const { registry, runners } = fakeRegistry(FULL_ACCESS_SOL);
+    registry.readBackendModelOptions.mockResolvedValue({ models: [{ id: "opus", reasoningEfforts: ["high"] }] } as never);
+    await expect(runners.startThread({
+      sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" },
+      modelSettings: { backend: "claude", model: "gpt-6.1-sol" },
+    })).rejects.toThrow('No model named "gpt-6.1-sol"');
+    expect(registry.startThread).not.toHaveBeenCalled();
+  });
+
+  it("keeps tier and fast mode for a same-backend pick", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, serviceTier: "fast", fastMode: true });
+    await runners.startThread({
+      sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" },
+      modelSettings: { backend: "codex", model: "other", reasoningEffort: "medium" },
+    });
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ serviceTier: "fast", fastMode: true }));
   });
 });

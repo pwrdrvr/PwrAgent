@@ -1354,7 +1354,7 @@ export type RecordRecentFileReferencesRequest = {
  * intended second, which is why the history is scoped rather than named for
  * reviews.
  */
-export type ModelSettingsRecentsScope = "review" | "composer";
+export type ModelSettingsRecentsScope = "review" | "composer" | "todo-dispatch";
 
 /**
  * One remembered provider/model/reasoning combination. Recorded only when the

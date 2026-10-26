@@ -10,7 +10,7 @@ import type {
   ThreadTodoProject,
   ThreadTodosChangedEvent,
 } from "@pwragent/shared";
-import { DEFAULT_THREAD_TODO_MERGE_METHOD, NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
+import { DEFAULT_THREAD_TODO_MERGE_METHOD, NAVIGATION_QUERY_MAX_PAGE_ROWS, resolveThreadTodoModelSettings } from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
@@ -159,6 +159,10 @@ export function installThreadTodoRuntime(params: {
   readDefaultMergeMethod = params.readDefaultMergeMethod;
   todos.setOnChanged(params.broadcast);
   todos.setRunners(createThreadTodoRunners({ registry, federation }));
+  todos.setDispatchSettingsReader(async (thread) => {
+    const settings = await registry.readThreadHandoffSettings(thread);
+    return { backend: thread.backend, model: settings.model, reasoningEffort: settings.reasoningEffort };
+  });
   // An archived thread's cards have nothing left to act on.
   unsubscribeArchive?.();
   unsubscribeArchive = registry.onEvent((event) => {
@@ -379,7 +383,7 @@ export function installThreadTodoRuntime(params: {
 /** The registry calls a to-do's Start thread makes. */
 export type ThreadTodoRunnerRegistry = Pick<
   DesktopBackendRegistry,
-  "readThreadHandoffSettings" | "renameThread" | "startThread" | "startTurn"
+  "readThreadHandoffSettings" | "readBackendModelOptions" | "renameThread" | "startThread" | "startTurn"
 >;
 
 /**
@@ -400,20 +404,31 @@ export function createThreadTodoRunners(params: {
   return {
     mergePullRequest: async (request) =>
       await new GithubPrFetcher().mergePullRequest(request),
-    startThread: async ({ sourceBackend, sourceThreadId, cwd, crossProject, action }) => {
+    startThread: async ({ sourceBackend, sourceThreadId, cwd, crossProject, action, modelSettings }) => {
       const source = await registry.readThreadHandoffSettings({
         backend: sourceBackend,
         threadId: sourceThreadId,
       });
+      const sourceSettings = {
+        backend: sourceBackend, model: source.model, reasoningEffort: source.reasoningEffort,
+      };
+      const selected = resolveThreadTodoModelSettings({ thread: sourceSettings, action, pick: modelSettings }).settings;
+      const catalog = await registry.readBackendModelOptions(selected.backend);
+      const validated = resolveThreadTodoModel(catalog, selected);
+      if (!validated.ok) throw new ThreadTodoError("invalid_arguments", validated.message);
+      const chosen = { backend: selected.backend, model: validated.model, reasoningEffort: validated.reasoningEffort };
+      const sameBackend = chosen.backend === sourceBackend;
       const settings = {
         executionMode: action.executionMode ?? source.executionMode,
-        ...optional("model", action.model ?? source.model),
-        ...optional("reasoningEffort", action.reasoningEffort ?? source.reasoningEffort),
-        ...optional("serviceTier", source.serviceTier),
-        ...optional("fastMode", source.fastMode),
+        ...optional("model", chosen.model),
+        ...optional("reasoningEffort", chosen.reasoningEffort),
+        ...(sameBackend ? {
+          ...optional("serviceTier", source.serviceTier),
+          ...optional("fastMode", source.fastMode),
+        } : {}),
       };
       const started = await registry.startThread({
-        backend: sourceBackend,
+        backend: chosen.backend,
         ...(cwd ? { cwd } : {}),
         ...settings,
         ...(action.workMode ? { workMode: action.workMode } : {}),
@@ -447,7 +462,10 @@ export function createThreadTodoRunners(params: {
         input: [{ type: "text", text: action.prompt }],
         ...settings,
       });
-      return { backend: started.backend, threadId: started.threadId };
+      return {
+        backend: started.backend, threadId: started.threadId,
+        dispatchSettings: { settings: chosen, source: sourceSettings },
+      };
     },
     ...(federation
       ? {

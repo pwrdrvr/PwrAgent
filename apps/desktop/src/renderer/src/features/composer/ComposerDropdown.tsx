@@ -80,6 +80,8 @@ export function useDismissableMenu<T extends HTMLElement>(
 
 export function ComposerDropdown(props: {
   ariaLabel: string;
+  /** Lets a containing menu include this trigger in its arrow-key walk. */
+  triggerRole?: "menuitem";
   /**
    * A change of this choice is in flight. The trigger disables, sets
    * `aria-busy`, and swaps its icon for the shared pending ring, so the chip
@@ -160,7 +162,8 @@ export function ComposerDropdown(props: {
     setOpen(false);
     setShowOther(false);
     onOpenChange?.(false);
-  }, [onOpenChange]);
+    if (props.triggerRole) buttonRef.current?.focus();
+  }, [onOpenChange, props.triggerRole]);
   const ref = useDismissableMenu<HTMLDivElement>(open, closeMenu);
   // Right-aligned to the trigger: it sits toward the window's right.
   const placeBelowMenu = useCallback((): void => {
@@ -204,6 +207,13 @@ export function ComposerDropdown(props: {
       firstOtherOptionRef.current?.focus();
     }
   }, [open, showingOther]);
+
+  useEffect(() => {
+    if (!open || !props.triggerRole) return;
+    const selected = ref.current?.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]');
+    const first = ref.current?.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled)');
+    (selected ?? first)?.focus();
+  }, [open, props.triggerRole, ref]);
 
   const renderOptions = (options: ComposerDropdownOption[], menuId: string, focusFirst: boolean) =>
     options.map((option, index) => {
@@ -361,6 +371,20 @@ export function ComposerDropdown(props: {
       ]
         .filter(Boolean)
         .join(" ")}
+      onKeyDown={props.triggerRole ? (event) => {
+        if (!open) return;
+        const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]:not(:disabled)')];
+        const at = options.indexOf(document.activeElement as HTMLButtonElement);
+        const next = event.key === "ArrowDown" ? options[(at + 1) % options.length]
+          : event.key === "ArrowUp" ? options[(at - 1 + options.length) % options.length]
+          : event.key === "Home" ? options[0]
+          : event.key === "End" ? options[options.length - 1] : undefined;
+        if (next) {
+          event.preventDefault();
+          event.stopPropagation();
+          next.focus();
+        }
+      } : undefined}
       onPointerEnter={props.onPointerEnter}
       onMouseEnter={(event) => {
         if (!open && props.tooltip) {
@@ -371,6 +395,7 @@ export function ComposerDropdown(props: {
       ref={ref}
     >
       <button
+        role={props.triggerRole}
         aria-description={props.tooltip}
         aria-describedby={visible && !open ? tooltipId : undefined}
         aria-controls={open ? listboxId : undefined}

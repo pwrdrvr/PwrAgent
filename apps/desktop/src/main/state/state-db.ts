@@ -616,6 +616,16 @@ CREATE TABLE IF NOT EXISTS thread_todo_project_prefs (
 );
 `;
 
+/** Additive learned dispatch settings, keyed by the raising thread. */
+const THREAD_TODO_THREAD_PREFS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todo_thread_prefs (
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  model_settings_json TEXT NOT NULL,
+  PRIMARY KEY (backend, thread_id)
+);
+`;
+
 /** v70: the project a card came from and the one it is for. */
 function ensureThreadTodoProjectColumns(db: BetterSqlite3.Database): void {
   if (!tableExists(db, "thread_todos")) {
@@ -2157,6 +2167,7 @@ export class StateDb {
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
       ensureThreadUsageActivitySchema(db);
+      db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
       // Additive columns on the card tables, with no version of their own so
       // no branch can claim it: one immediate transaction the first time,
       // then two table-info reads per open.

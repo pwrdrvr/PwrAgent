@@ -68,14 +68,14 @@ export const localThreadTodoOperations = {
   listTodos: async (request: ListThreadTodosRequest = {}): Promise<ListThreadTodosResponse> => {
     const todos = getThreadTodoService();
     return {
-      todos: await listThreadTodosForAvailableOwners([
+      todos: await todos.withDispatchDefaults(await listThreadTodosForAvailableOwners([
         ...todos.list(request),
         ...getThreadReviewService().list({
           ...request, status: request.status === "done" ? "handled" : request.status,
         }).map(threadReviewTodo),
       ].sort((a, b) => b.createdAt - a.createdAt), async () => (await loadLocalNavigationQueryIndex({
         callerReason: "thread-todo-owners",
-      })).threads),
+      })).threads)),
       mergeMethods: todos.mergeMethodPreferences(),
     };
   },
@@ -115,6 +115,7 @@ export const localThreadTodoOperations = {
         ? { startOnInstanceId: request.startOnInstanceId.trim() }
         : {}),
       ...(request.allowOpenItems === true ? { allowOpenItems: true } : {}),
+      ...(request.modelSettings ? { modelSettings: parseDispatchSettings(request.modelSettings) } : {}),
     }),
   }),
   listProjects: async (_request: ListThreadTodoProjectsRequest = {}): Promise<ListThreadTodoProjectsResponse> => ({
@@ -144,3 +145,17 @@ export const localThreadTodoOperations = {
     };
   },
 };
+
+function parseDispatchSettings(value: unknown): import("@pwragent/shared").ThreadTodoModelSettings {
+  if (!value || typeof value !== "object") throw new Error("Invalid dispatch model settings.");
+  const { backend, model, reasoningEffort } = value as Record<string, unknown>;
+  if (typeof backend !== "string" || !(backend === "codex" || backend === "claude" || /^acp:.+/.test(backend))
+    || (model !== undefined && (typeof model !== "string" || !model.trim()))
+    || (reasoningEffort !== undefined && (typeof reasoningEffort !== "string" || !reasoningEffort.trim()))) {
+    throw new Error("Invalid dispatch model settings.");
+  }
+  return { backend: backend as import("@pwragent/shared").AppServerBackendKind,
+    ...(typeof model === "string" ? { model } : {}),
+    ...(typeof reasoningEffort === "string" ? { reasoningEffort } : {}),
+  };
+}

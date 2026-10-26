@@ -4,6 +4,7 @@ import {
   type ThreadTodoProject,
   type ThreadTodosChangedEvent,
 } from "@pwragent/shared";
+import { listModelSettingsRecents } from "../state/model-settings-recents-store";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import {
@@ -804,4 +805,62 @@ describe("ThreadTodoService", () => {
       writes,
     });
   });
+  it("remembers successful dispatches per raising thread and records separate dispatch recents", async () => {
+    const source = { backend: "codex" as const, model: "sol", reasoningEffort: "high" };
+    const picked = { backend: "claude" as const, model: "opus", reasoningEffort: "high" };
+    const startThread = vi.fn(async (request: Parameters<ThreadTodoActionRunners["startThread"]>[0]) => ({
+      backend: request.modelSettings?.backend ?? "codex", threadId: "child",
+      dispatchSettings: { settings: request.modelSettings ?? source, source },
+    }));
+    const service = createService({ startThread, mergePullRequest: vi.fn() });
+    service.setDispatchSettingsReader(async (identity) => ({ ...source, backend: identity.backend }));
+    const add = (threadId = THREAD.threadId) => service.add({ ...THREAD, threadId,
+      input: { title: "Build it", action: { type: "start_thread", prompt: "Build it" } },
+    }).todo;
+    await service.runAction(add().id);
+    expect(new ThreadTodoStore(db).getThreadModelSettings(THREAD.backend, THREAD.threadId)).toBeUndefined();
+    expect(listModelSettingsRecents(db, "todo-dispatch")).toEqual([]);
+    await service.runAction(add().id, { modelSettings: picked });
+    const following = add();
+    const other = add("thread-b");
+    const projected = await service.withDispatchDefaults([following, other]);
+    expect(projected[0]?.dispatchDefaults).toEqual({ thread: source, lastDispatch: picked });
+    expect(projected[1]?.dispatchDefaults?.lastDispatch).toBeUndefined();
+    await service.runAction(following.id);
+    expect(startThread).toHaveBeenLastCalledWith(expect.objectContaining({ modelSettings: picked }));
+    expect(listModelSettingsRecents(db, "todo-dispatch")).toEqual([picked]);
+    expect(listModelSettingsRecents(db, "review")).toEqual([]);
+    // Resetting to the source is remembered too, so the old override stays gone.
+    await service.runAction(add().id, { modelSettings: source });
+    expect(new ThreadTodoStore(db).getThreadModelSettings(THREAD.backend, THREAD.threadId)).toEqual(source);
+  });
+
+  it("leaves memory and recents unchanged on failure and ignores a local pick for a peer", async () => {
+    const picked = { backend: "claude" as const, model: "opus" };
+    const startThread = vi.fn(async () => { throw new Error("Unavailable"); });
+    const startThreadOnInstance = vi.fn(async (_request: unknown) => ({ backend: "codex" as const, threadId: "peer-child" }));
+    const service = createService({ startThread, startThreadOnInstance, mergePullRequest: vi.fn() });
+    const { todo } = service.add({ ...THREAD, input: { title: "Build it", action: { type: "start_thread", prompt: "Build it" } } });
+    expect((await service.runAction(todo.id, { modelSettings: picked })).error).toBe("Unavailable");
+    expect(new ThreadTodoStore(db).getThreadModelSettings(THREAD.backend, THREAD.threadId)).toBeUndefined();
+    expect(listModelSettingsRecents(db, "todo-dispatch")).toEqual([]);
+    await service.runAction(todo.id, { startOnInstanceId: "peer", modelSettings: picked });
+    expect(startThreadOnInstance.mock.calls[0]?.[0]).not.toHaveProperty("modelSettings");
+    expect(new ThreadTodoStore(db).getThreadModelSettings(THREAD.backend, THREAD.threadId)).toBeUndefined();
+  });
+
+  it("budgets one changed preference and recent with no repeat preference writes", async () => {
+    const store = new ThreadTodoStore(db);
+    const source = { backend: "codex" as const, model: "sol", reasoningEffort: "high" };
+    const settings = { backend: "claude" as const, model: "opus", reasoningEffort: "high" };
+    const { writes } = await measureSqliteWrites(async () => {
+      store.rememberDispatch(THREAD.backend, THREAD.threadId, source, source);
+      store.rememberDispatch(THREAD.backend, THREAD.threadId, settings, source);
+      for (let i = 0; i < 100; i++) store.setThreadModelSettings(THREAD.backend, THREAD.threadId, settings);
+    });
+    expectSqliteWriteBudget({ scenario: "todo-dispatch-model-preference",
+      note: "One changed dispatch: preference and recent in one commit; default start and 100 identical preference writes cost zero.", writes });
+    expect(writes.commits).toBe(1);
+  });
+
 });
