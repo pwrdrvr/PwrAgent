@@ -20,9 +20,8 @@ async function openSmokeThread(page: Page) {
 }
 
 async function openIntegratedTerminal(page: Page) {
-  const toggle = page.locator('.composer__application-actions').getByRole("button", {
-    name: "Open integrated terminal", exact: true,
-  });
+  const toggle = page.locator(".composer__application-actions .composer__terminal-toggle");
+  await expect(toggle).toHaveAccessibleName("Open integrated terminal");
   await expect(page.locator(".thread-header").getByRole("button", { name: /integrated terminal/ })).toHaveCount(0);
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await toggle.click();
