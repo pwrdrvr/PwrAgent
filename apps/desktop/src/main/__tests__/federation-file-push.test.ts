@@ -52,7 +52,7 @@ describe("Federation push files", () => {
     const result = await probe("push-file", () => pushFederationFile(rpc, source));
     expect(result.path).toBe(path.join(downloads, "report (1).txt"));
     const received = await probe("read-received", () => fs.readFile(result.path));
-    probe("assert-bytes", () => expect(received).toEqual(content));
+    probe("assert-bytes", () => expect(received.equals(content)).toBe(true));
     expect(await fs.readFile(path.join(downloads, "report.txt"), "utf8")).toBe("existing");
     expect(await fs.readdir(downloads)).toEqual(["report (1).txt", "report.txt"]);
     expect(result.sha256).toBe(createHash("sha256").update(content).digest("hex"));

@@ -144,7 +144,7 @@ describe("federation turn input attachments", () => {
     });
     const receivedPath = input[0]?.type === "localFile" ? input[0].path : "";
     const received = await probe("read-received", () => readFile(receivedPath));
-    probe("assert-bytes", () => expect(received).toEqual(data));
+    probe("assert-bytes", () => expect(received.equals(data)).toBe(true));
     expect(envelopes).toHaveLength(2);
     expect(envelopes[0]?.data).toHaveLength(FEDERATION_BLOB_CHUNK_BYTES);
     expect(envelopes[1]?.data).toHaveLength(3);

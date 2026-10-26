@@ -32,12 +32,19 @@ function queries<T extends object>(value: T): T {
 export * from "@testing-library/react";
 export const screen = queries(rtl.screen);
 export const within: typeof rtl.within = (...args) => queries(rtl.within(...args));
+function profiled(ui: React.ReactNode) {
+  return enabled
+    ? createElement(Profiler, { id: "test", onRender: (_id, _phase, duration) => record("react", duration) }, ui)
+    : ui;
+}
+
 export const render = new Proxy(rtl.render, {
   apply(target, receiver, args) {
     const [ui, options] = args;
-    return queries(probe("render", () => Reflect.apply(target, receiver, [enabled
-      ? createElement(Profiler, { id: "test", onRender: (_id, _phase, duration) => record("react", duration) }, ui)
-      : ui, options])));
+    const result = probe("render", () => Reflect.apply(target, receiver, [profiled(ui), options]));
+    const rerender = result.rerender;
+    result.rerender = (next: React.ReactNode) => probe("rerender", () => rerender(profiled(next)));
+    return queries(result);
   },
 });
 export const renderHook = new Proxy(rtl.renderHook, {

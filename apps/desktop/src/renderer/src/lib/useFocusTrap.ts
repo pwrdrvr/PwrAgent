@@ -28,7 +28,9 @@ const OPEN_POPUP_TRIGGER =
  * excluded it. `opacity` is left out on purpose: a control faded to 0
  * mid-transition is still a real control.
  */
-function visible(el: HTMLElement): boolean {
+type VisibilityStyles = Map<HTMLElement, CSSStyleDeclaration>;
+
+function visible(el: HTMLElement, styles: VisibilityStyles): boolean {
   if (typeof el.checkVisibility === "function") {
     return el.checkVisibility({ visibilityProperty: true });
   }
@@ -37,18 +39,22 @@ function visible(el: HTMLElement): boolean {
     node !== null;
     node = node.parentElement
   ) {
-    const style = getComputedStyle(node);
+    let style = styles.get(node);
+    if (style === undefined) {
+      style = getComputedStyle(node);
+      styles.set(node, style);
+    }
     if (style.display === "none" || style.visibility === "hidden") return false;
   }
   return true;
 }
 
-function isStop(el: HTMLElement): boolean {
+function isStop(el: HTMLElement, styles: VisibilityStyles): boolean {
   if (el.hasAttribute("disabled") || el.getAttribute("aria-hidden") === "true") {
     return false;
   }
   if (el.tabIndex < 0 || el.hidden) return false;
-  return visible(el);
+  return visible(el, styles);
 }
 
 const SCROLLS = new Set(["auto", "scroll", "overlay"]);
@@ -91,17 +97,20 @@ function tabbable(
   { scrollers = true }: { scrollers?: boolean } = {},
 ): HTMLElement[] {
   if (root === null) return [];
+  // Sibling controls share ancestors. Read each ancestor's cascade once per
+  // scan, and discard it before the next Tab so dynamic visibility stays live.
+  const styles: VisibilityStyles = new Map();
   if (!scrollers) {
-    return [...root.querySelectorAll<HTMLElement>(TABBABLE)].filter(isStop);
+    return [...root.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => isStop(el, styles));
   }
   const all = [...root.querySelectorAll<HTMLElement>("*")];
-  const stops = new Set(all.filter((el) => el.matches(TABBABLE) && isStop(el)));
+  const stops = new Set(all.filter((el) => el.matches(TABBABLE) && isStop(el, styles)));
   // Innermost first, as Chromium decides it: a scroller holding a stop, even
   // another scroller, is not a stop itself.
   const holders = [...stops];
   for (let i = all.length - 1; i >= 0; i--) {
     const el = all[i]!;
-    if (stops.has(el) || !scrollsByKeyboard(el) || !visible(el)) continue;
+    if (stops.has(el) || !scrollsByKeyboard(el) || !visible(el, styles)) continue;
     if (holders.some((stop) => el.contains(stop))) continue;
     stops.add(el);
     holders.push(el);
