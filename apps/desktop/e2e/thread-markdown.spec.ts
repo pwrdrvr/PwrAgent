@@ -66,24 +66,28 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
     for (const heading of headingLocators) {
       await expect(heading).toBeVisible();
     }
-    const headingStyles = await Promise.all(
-      headingLocators.map((heading) =>
-        heading.evaluate((element) => {
-          const styles = getComputedStyle(element);
-          return {
-            fontSize: Number.parseFloat(styles.fontSize),
-            fontStyle: styles.fontStyle,
-          };
-        })
-      )
-    );
-    for (let index = 1; index < headingStyles.length; index += 1) {
-      expect(headingStyles[index - 1].fontSize).toBeGreaterThan(
-        headingStyles[index].fontSize
-      );
-    }
-    expect(headingStyles[4].fontStyle).toBe("italic");
-    expect(headingStyles[5].fontStyle).toBe("italic");
+    // The incremental renderer loads lazily. Until it arrives, messages render
+    // through react-markdown, and the switch remounts every heading. A
+    // per-heading evaluate can land on a detached node, whose computed style
+    // is empty. Read all six from one snapshot of the current DOM instead.
+    await expect.poll(async () => {
+      const styles = await transcript.evaluate(readTranscriptHeadingStyles);
+      return {
+        found: styles.filter(Boolean).length,
+        sizesDecrease: styles.every((style, index) =>
+          style !== null
+          && (index === 0 || styles[index - 1]!.fontSize > style.fontSize)
+        ),
+        h5FontStyle: styles[4]?.fontStyle,
+        h6FontStyle: styles[5]?.fontStyle,
+        styles,
+      };
+    }).toMatchObject({
+      found: 6,
+      sizesDecrease: true,
+      h5FontStyle: "italic",
+      h6FontStyle: "italic",
+    });
     await expect(transcript.getByText("Preserves file links")).toBeVisible();
     await expect(transcript).toContainText("Keeps");
     await expect(transcript).toContainText("inert");
@@ -93,4 +97,22 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
   } finally {
     await app.close();
   }
+}
+
+function readTranscriptHeadingStyles(transcript: Element) {
+  return [1, 2, 3, 4, 5, 6].map((level) => {
+    const heading = Array.from(
+      transcript.querySelectorAll(`h${level}.transcript-message__heading`)
+    ).find((element) =>
+      element.textContent?.includes(`Transcript heading ${level}`)
+    );
+    if (!heading) {
+      return null;
+    }
+    const styles = getComputedStyle(heading);
+    return {
+      fontSize: Number.parseFloat(styles.fontSize),
+      fontStyle: styles.fontStyle,
+    };
+  });
 }
