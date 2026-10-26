@@ -14,7 +14,10 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { BrowseMode } from "../../../lib/useThreadNavigation";
+import { createNavigationPageState } from "../../../lib/navigation-query-state";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
+import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
+import { Sidebar as PagedSidebar } from "../Sidebar";
 
 function thread(params: {
   createdAt?: number;
@@ -74,6 +77,7 @@ function renderSidebar(params: {
   directories?: NavigationDirectorySummary[];
   draftThreadKeys?: Record<string, boolean>;
   inboxThreads?: NavigationThreadSummary[];
+  onArchiveThread?: (thread: NavigationThreadSummary) => Promise<void>;
   onOpenLaunchpad?: (
     directory: NavigationDirectoryView,
   ) => Promise<void>;
@@ -105,6 +109,7 @@ function renderSidebar(params: {
       selectedItemKey={params.selectedItemKey}
       threads={params.threads}
       onBrowseModeChange={() => undefined}
+      onArchiveThread={params.onArchiveThread}
       onCreateThread={async () => undefined}
       onOpenLaunchpad={params.onOpenLaunchpad ?? (async () => undefined)}
       onReorderThreadPins={params.onReorderThreadPins}
@@ -158,6 +163,29 @@ function leaveThreadBrowser(): void {
     throw new Error("Expected the sidebar scroll region");
   }
   fireEvent.pointerLeave(scrollRegion, { pointerType: "mouse" });
+}
+
+/**
+ * Choose a context-menu item the way a mouse does: the pointer leaves the
+ * rows for the menu, and the closing menu leaves it resting on `restOn`.
+ */
+async function chooseFromMenuOverRows(
+  item: HTMLElement,
+  restOn: () => HTMLElement,
+): Promise<void> {
+  leaveThreadBrowser();
+  await act(async () => {
+    fireEvent.click(item);
+  });
+  fireEvent.pointerOver(restOn(), { pointerType: "mouse" });
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }
 
 function threadRow(title: string): HTMLElement {
@@ -927,5 +955,179 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(onOpenLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ key: collapsedDirectory.key, directoryThreadsCollapsed: true }), undefined);
 
     expect(threadTitles()).toEqual(["Charlie thread", "Alpha thread"]);
+  });
+});
+
+describe("Sidebar commands under a resting pointer", () => {
+  it("removes a thread archived from its menu without the pointer leaving", async () => {
+    const archive = deferred();
+    const onArchiveThread = vi.fn(() => archive.promise);
+    const view = render(renderSidebar({
+      browseMode: "inbox",
+      pinnedThreadsOnTop: false,
+      threads: [charlie, alpha, bravo],
+      onArchiveThread,
+    }));
+    const alphaRow = threadRow("Alpha thread");
+    fireEvent.pointerOver(alphaRow, { pointerType: "mouse" });
+    fireEvent.contextMenu(
+      within(alphaRow).getByRole("button", { name: /^Alpha thread/ }),
+    );
+    await chooseFromMenuOverRows(
+      screen.getByRole("menuitem", { name: /Archive Thread/ }),
+      () => threadRow("Charlie thread"),
+    );
+    expect(onArchiveThread).toHaveBeenCalledWith(alpha);
+
+    view.rerender(renderSidebar({
+      browseMode: "inbox",
+      pinnedThreadsOnTop: false,
+      threads: [charlie, bravo],
+      onArchiveThread,
+    }));
+    await act(async () => {
+      archive.resolve();
+    });
+
+    expect(threadTitles()).toEqual(["Charlie thread", "Bravo thread"]);
+  });
+
+  it("pins a selection from its menu without the pointer leaving", async () => {
+    const pins: Array<ReturnType<typeof deferred>> = [];
+    const onSetThreadPin = vi.fn(() => {
+      const pin = deferred();
+      pins.push(pin);
+      return pin.promise;
+    });
+    const repo = { ...directory, threadKeys: ["codex:alpha", "codex:bravo", "codex:charlie"] };
+    const view = render(renderSidebar({
+      browseMode: "directories",
+      directories: [repo],
+      threads: [alpha, bravo, charlie],
+      onSetThreadPin,
+    }));
+    expect(threadTitles()).toEqual(["Charlie thread", "Alpha thread", "Bravo thread"]);
+    fireEvent.pointerOver(threadRow("Alpha thread"), { pointerType: "mouse" });
+    fireEvent.click(screen.getByRole("button", { name: /^Alpha thread/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Bravo thread/ }), { metaKey: true });
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Bravo thread/ }));
+    await chooseFromMenuOverRows(
+      screen.getByRole("menuitem", { name: "Pin 2 Threads" }),
+      () => threadRow("Charlie thread"),
+    );
+
+    const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
+    const pinnedBravo = { ...bravo, pinnedRank: "2048" };
+    view.rerender(renderSidebar({
+      browseMode: "directories",
+      directories: [repo],
+      threads: [pinnedAlpha, bravo, charlie],
+      onSetThreadPin,
+    }));
+    await act(async () => {
+      pins[0]!.resolve();
+    });
+    view.rerender(renderSidebar({
+      browseMode: "directories",
+      directories: [repo],
+      threads: [pinnedAlpha, pinnedBravo, charlie],
+      onSetThreadPin,
+    }));
+    await act(async () => {
+      pins[1]!.resolve();
+    });
+
+    expect(onSetThreadPin).toHaveBeenCalledTimes(2);
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread", "Charlie thread"]);
+  });
+
+  it("waits for the rows to carry a landed read before freezing a directory unpin", async () => {
+    const pinnedRepo = { ...directory, pinnedRank: "1024" };
+    const other: NavigationDirectorySummary = {
+      ...directory,
+      key: "directory:/other",
+      label: "Other",
+      path: "/other",
+      threadKeys: [],
+    };
+    const unpin = deferred();
+    const onSetDirectoryPin = vi.fn(() => unpin.promise);
+    // The owner's directory index, as the window last read it. The rows the
+    // sidebar renders are built from it one render after it lands.
+    const navigation = (directories: NavigationDirectorySummary[], stale: boolean) => {
+      const request = { protocol: 2 as const, consumer: "main-sidebar" as const,
+        query: { kind: "directory-index" as const }, pageSize: 100 };
+      const page = navigationQueryFixture(request, { directories, threads: [] });
+      return { resources: new Map([["directory-index", { id: "directory-index", loading: false,
+        state: { ...createNavigationPageState(request), page, stale } }]]),
+        presentationReady: true, directories: page.directories ?? [], selectedDirectoryKeys: undefined, connected: true,
+        invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
+        rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined };
+    };
+    const sidebar = (params: {
+      directories: NavigationDirectorySummary[];
+      pagesAwaitingRows?: string[];
+      paged: ReturnType<typeof navigation>;
+    }) => (
+      <PagedSidebar
+        backends={[]}
+        browseMode="directories"
+        directories={params.directories}
+        inboxThreads={[]}
+        loading={false}
+        pagedNavigation={params.paged}
+        pagesAwaitingRows={params.pagesAwaitingRows}
+        threads={[]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onSetDirectoryPin={onSetDirectoryPin}
+        onReorderDirectoryPins={async () => undefined}
+      />
+    );
+    const pinnedKeys = () => [...document.querySelectorAll<HTMLElement>(
+      ".directory-row[data-directory-pinned=\"true\"]",
+    )].map((row) => row.dataset.directoryKey);
+    const view = render(sidebar({
+      directories: [pinnedRepo, other],
+      paged: navigation([pinnedRepo, other], false),
+    }));
+    const repoHeader = screen.getByRole("button", { name: "Repo", exact: true });
+    fireEvent.pointerOver(repoHeader, { pointerType: "mouse" });
+    fireEvent.contextMenu(repoHeader);
+    await chooseFromMenuOverRows(
+      screen.getByRole("menuitem", { name: "Unpin Directory" }),
+      () => screen.getByRole("button", { name: "Other", exact: true }),
+    );
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: pinnedRepo.key }), false);
+
+    // The unpin invalidates the index before it settles. Meanwhile rows
+    // rebuilt from an older page show the pin again.
+    view.rerender(sidebar({
+      directories: [pinnedRepo, other],
+      paged: navigation([pinnedRepo, other], true),
+    }));
+    await act(async () => {
+      unpin.resolve();
+    });
+    // The re-read lands; the rows take it one render later.
+    view.rerender(sidebar({
+      directories: [pinnedRepo, other],
+      pagesAwaitingRows: ["directory-index"],
+      paged: navigation([directory, other], false),
+    }));
+    view.rerender(sidebar({
+      directories: [directory, other],
+      paged: navigation([directory, other], false),
+    }));
+    expect(pinnedKeys()).toEqual([]);
+
+    // The result is on screen, so ordinary hover stability resumes.
+    view.rerender(sidebar({
+      directories: [pinnedRepo, other],
+      paged: navigation([pinnedRepo, other], false),
+    }));
+    expect(pinnedKeys()).toEqual([]);
   });
 });
