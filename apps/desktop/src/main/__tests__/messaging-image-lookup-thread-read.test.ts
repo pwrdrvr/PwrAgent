@@ -310,10 +310,10 @@ function mcpScreenshot(): RawItem {
   };
 }
 
-function writePng(directory: string, name: string): string {
+function writePng(directory: string, name: string, base64 = PNG_BASE64): string {
   mkdirSync(directory, { recursive: true });
   const filePath = path.join(directory, name);
-  writeFileSync(filePath, Buffer.from(PNG_BASE64, "base64"));
+  writeFileSync(filePath, Buffer.from(base64, "base64"));
   return filePath;
 }
 
@@ -533,6 +533,10 @@ const TURN_ASSISTANT_REPLY = "turn_assistant_reply" as FederationCapability;
 const READ_THREAD = "backend.readThread";
 const READ_TURN_REPLY = "backend.readTurnAssistantReply";
 const READ_IMAGE = "backend.readTranscriptImage";
+// A second 1x1 PNG. The chat dedupes identical images, so the chart must
+// differ from the tool screenshot.
+const CHART_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
 
 const overTheWire = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
@@ -719,7 +723,7 @@ function countBy(values: readonly string[]): Record<string, number> {
 
 /** A tool screenshot and a Markdown-linked file on the owner's disk. */
 function peerFinalTurn(): RawTurn {
-  const imagePath = writePng(path.join(workDir, "owner-tmp-shots"), "chart.png");
+  const imagePath = writePng(path.join(workDir, "owner-tmp-shots"), "chart.png", CHART_PNG_BASE64);
   return {
     id: FINAL_TURN_ID,
     items: [userItem(), mcpScreenshot(), finalAnswer(`Here is the chart.\n\n![Chart](${imagePath})`)],
@@ -782,7 +786,7 @@ describe("messaging final-reply images at a bound turn end on a peer-owned threa
       // Both images reach the chat as bytes the owner served.
       expect(deliveredImages(thread)).toEqual([
         expect.objectContaining({ type: "image", url: expect.stringMatching(/^data:image\/png;base64,/u) }),
-        expect.objectContaining({ type: "image", alt: "Chart", url: `data:image/png;base64,${PNG_BASE64}` }),
+        expect.objectContaining({ type: "image", alt: "Chart", url: `data:image/png;base64,${CHART_PNG_BASE64}` }),
       ]);
     } finally {
       await thread.ownerRegistry.close();
@@ -862,7 +866,7 @@ describe("messaging final-reply images at a bound turn end on a peer-owned threa
       expect(countBy(thread.peerRequests)).toEqual({ [READ_THREAD]: 1, [READ_IMAGE]: 2 });
       expect(images).toEqual([
         expect.objectContaining({ type: "image", url: expect.stringMatching(/^data:image\/png;base64,/u) }),
-        expect.objectContaining({ type: "image", alt: "Chart", url: `data:image/png;base64,${PNG_BASE64}` }),
+        expect.objectContaining({ type: "image", alt: "Chart", url: `data:image/png;base64,${CHART_PNG_BASE64}` }),
       ]);
     } finally {
       await thread.ownerRegistry.close();
