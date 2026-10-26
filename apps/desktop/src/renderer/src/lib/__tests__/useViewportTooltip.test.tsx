@@ -108,7 +108,7 @@ function BesideTooltipFixture(props: { content?: string; useTargetAnchor?: boole
     update(props.content ?? "Row details");
   }, [props.content, update]);
   return (
-    <div data-testid="list-anchor">
+    <div data-testid="list-anchor" data-anchor-top={160}>
       <button onFocus={(event) => tooltip.show(event.currentTarget, props.content ?? "Row details")}>
         Row
       </button>

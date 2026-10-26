@@ -172,6 +172,7 @@ describe("PrRollupChip", () => {
     fireEvent.mouseEnter(rows[2]!);
     expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#12");
     expect(rows[0]).not.toHaveAttribute("aria-describedby");
+    expect(rows[2]).toHaveAttribute("aria-describedby", card.id);
 
     fireEvent.mouseLeave(list);
     expect(screen.queryByRole("tooltip")).toBeNull();
