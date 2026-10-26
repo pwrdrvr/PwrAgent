@@ -1116,15 +1116,15 @@
   },
   "thread-sub-agent-upsert-flat": {
     "commits": 1,
-    "note": "one changed gate card on a thread holding 2,000 cards: its own row and the revision counter, never the parent overlay row, and equal to the same write on a thread with no cards. ~12 KB WAL: ~25 MB/day at 2,000 card writes/day, where each one rewrote the ~3.5 MB overlay row before",
-    "observedWalBytes": 12360,
+    "note": "one changed gate card on a thread holding 2,000 cards: its own row, the revision counter with its gate totals, and its lens index entry; never the parent overlay row, and equal to the same write on a thread with no cards. ~16 KB WAL: ~33 MB/day at 2,000 card writes/day (the lens index added ~8 MB/day), where each one rewrote the ~3.5 MB overlay row before",
+    "observedWalBytes": 16480,
     "rowsChanged": 1,
     "statements": 1
   },
   "thread-sub-agents-move": {
     "commits": 5,
     "note": "one-time move of 12 legacy payloads holding 40 cards each, in 36 KB slices: one commit per slice, the last one setting the marker. Runs once per profile; the 2,043-card production copy moved in 25 slices (p50 89 ms, ~195 MB WAL once)",
-    "observedWalBytes": 45320,
+    "observedWalBytes": 70040,
     "rowsChanged": 13,
     "statements": 13
   },
