@@ -1490,6 +1490,16 @@ function SettingsSectionBody(props: {
             git: { defaultMergeMethod: method },
           });
         }}
+        onAgentToolsEnabledChange={async (enabled) => {
+          await props.settings.writeConfig({
+            git: { agentTools: { enabled } },
+          });
+        }}
+        onAgentToolAccessChange={async (group, access) => {
+          await props.settings.writeConfig({
+            git: { agentTools: { access: { [group]: access } } },
+          });
+        }}
         onRefresh={props.settings.refresh}
         onGhStatusChange={(status) => props.onForgeStatusChange("github", status)}
         onGlabStatusChange={(status) => props.onForgeStatusChange("gitlab", status)}

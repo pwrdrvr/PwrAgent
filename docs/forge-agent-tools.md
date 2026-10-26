@@ -1,10 +1,107 @@
-# First-party forge read tools
+# First-party forge tools
 
-Design and API contract, 2026-10-11. These tools expose the existing PR status
-registry and forge authentication to Codex dynamic tools and ACP MCP clients.
-No Codex GitHub connector is required.
+Design and API contract, 2026-10-11, extended 2026-10-26 with the GitHub pull
+request and issue tools. These tools expose the existing PR status registry
+and forge authentication to Codex dynamic tools and ACP MCP clients. No Codex
+GitHub connector or GitHub App is required.
 
-## Contracts
+All of them live in the `forge` agent-tool catalog in the `pwragent`
+namespace. Before 2026-10-26 the read tools were part of the
+`thread_inspection` catalog, and Codex dispatch did not route them: Codex
+threads could discover them, but every call failed with "No PwrAgent handler is
+registered for this dynamic tool call". Codex dispatch now routes the whole
+catalog.
+
+## Operator policy
+
+`[git.agent_tools]` in the profile's `config.toml`, shown in **Settings → Git →
+Agent GitHub tools**:
+
+| Key | Values | Default | Governs |
+| --- | --- | --- | --- |
+| `enabled` | `true`, `false` | `true` | The whole family, including CI reads |
+| `read` | `allow`, `off` | `allow` | Every read tool below |
+| `pull_requests` | `allow`, `auto`, `ask`, `off` | `auto` | `create_pull_request`, `update_pull_request` |
+| `comments` | same | `auto` | `add_issue_comment`, `reply_to_review_comment`, `resolve_review_thread`, a `COMMENT` review |
+| `issues` | same | `auto` | `create_issue`, `update_issue` |
+| `approve_merge` | same | `ask` | `merge_pull_request`, an `APPROVE` or `REQUEST_CHANGES` review |
+
+- `allow` runs without asking. `auto` asks unless the turn has Full Access,
+  the same rule as an MCP connection's Auto tool approval. `ask` always asks.
+  `off` removes the tools.
+- A group that is off, or the family switched off, is not advertised to new
+  turns. The main process also checks the policy on every call, so a turn that
+  still holds an older schema gets `tools_disabled` naming the setting.
+- The prompt is the shipped MCP approval card (a host-owned
+  `mcpServer/elicitation/request` with `pwragent_approval_kind:
+  "mcp_tool_call"`), so desktop and messaging draw it the same way. Comments
+  and issues also offer a conversation grant, kept in memory until PwrAgent
+  restarts or that group's level changes. Opening, editing, approving and
+  merging are granted one call at a time.
+- Automations cannot answer a prompt. An `auto` or `ask` write in an
+  automation fails with `approval_required` unless the automation runs in
+  Full Access and the level is `auto`.
+- A peer's federated read of this instance's thread follows this instance's
+  `enabled` and `read` settings.
+- Messaging-started turns need **Agent: inspect threads**
+  (`tools.thread_inspection`) for reads and **Agent: change GitHub**
+  (`tools.forge_write`) for writes. `FORGE_AGENT_WRITE_TOOL_GROUPS` in
+  `@pwragent/shared` lists every write, and both gates read it.
+
+## GitHub pull request and issue tools
+
+GitHub and GitHub Enterprise only. Each acts in the calling thread's own
+repository. `repository` chooses among the thread's linked GitHub remotes and
+attached PR repositories; none of these tools accepts a thread or Federation
+target. Requests use the `gh` sign-in for the repository's host, through the
+same admission as CI reads: per-host cooldowns, three requests at a time, and
+the shared PR request budget.
+
+Reads (`read` group):
+
+- `get_pull_request`: the PR read back, with its body. Without `number` or
+  `url`, the thread's attached PR or the PR whose head is the thread's branch.
+- `list_pull_requests`, `list_pull_request_files` (optional bounded patches),
+  `list_pull_request_reviews`, `list_issue_comments`: bounded pages.
+- `get_pull_request_diff`: the unified diff, optionally only files under
+  `path`, paged from the start with `startChar` and a SHA-256 `diffSnapshot`.
+  A push between pages fails with `diff_changed`.
+- `list_pull_request_review_threads`: GraphQL review threads with resolved and
+  outdated state and up to 20 comments each. Returns the `reviewThreadId` and
+  `commentId` values the write tools take.
+- `get_issue`, `search_issues`: search is scoped by a `repo:` qualifier the
+  tool adds, and refuses `repo:`, `org:`, `user:` and `owner:` in the query.
+
+Writes:
+
+- `create_pull_request`: head defaults to the thread's branch and base to the
+  repository's default branch. Draft, labels and reviewers are optional. The
+  new PR is attached to the calling thread (`attachedToThread`).
+- `update_pull_request`: title, body, base, open or closed, draft or ready for
+  review (GraphQL), labels and reviewers.
+- `add_issue_comment`, `reply_to_review_comment`, `submit_pull_request_review`
+  (with inline comments), `resolve_review_thread`. A review thread's node is
+  checked to belong to this repository before it is resolved.
+- `create_issue`, `update_issue`.
+- `merge_pull_request`: requires `expectedHeadSha`, sent as the merge `sha`,
+  so a later push fails with `head_changed`. The method defaults to Settings →
+  Git → Default merge method. The branch is not deleted.
+
+Attachments (`create_pull_request`, `update_pull_request`, `add_issue_comment`,
+`create_issue`, `update_issue`) upload through `gh --attach`, because GitHub has
+no public upload API. Only png, jpg, gif, webp, mp4, mov and webm files up to
+25 MB, under the thread's linked directories or the temp folder, are accepted,
+and never from PwrAgent's private storage roots. A body that references an
+attachment by its exact path gets the uploaded link in place. An edit with
+attachments needs the full new body. If some uploads fail, gh still creates
+the item and the result carries `attachmentWarning`.
+
+Bodies, comments and review text are returned as untrusted data. A refused
+write returns GitHub's own reason, redacted and capped at 600 characters, and
+does not start a provider cooldown. GitLab merge request writes are not
+implemented; the CI read tools still cover GitLab.
+
+## CI read contracts
 
 - `get_forge_status`: cache-only by default, with per-observation fetched time,
   age, freshness, source and provider enablement. `refresh: true` explicitly
@@ -145,10 +242,17 @@ log pagination.
 | `get_commit_combined_status` | `get_commit_checks`, plus check runs and GitLab commit statuses |
 | `fetch_workflow_run_artifacts` | `list_ci_artifacts`, including GitLab job artifact metadata |
 | `download_workflow_artifact` | Not implemented |
-| PR diffs, changed files, review threads, issues and repository search | Not implemented by this read-tool family |
-| CI reruns, PR mutations, reviews and comments | Not implemented by this read-tool family |
+| PR info and body (`fetch_pr`, `get_pr_info`) | `get_pull_request` |
+| PR diffs and changed files | `get_pull_request_diff`, `list_pull_request_files` |
+| PR comments, reviews and review threads | `list_issue_comments`, `list_pull_request_reviews`, `list_pull_request_review_threads` |
+| Issues and issue search | `get_issue`, `list_issue_comments`, `search_issues` |
+| `create_pull_request`, PR edits, labels | `create_pull_request`, `update_pull_request`, with `gh --attach` attachments |
+| Comments, review replies and reviews | `add_issue_comment`, `reply_to_review_comment`, `submit_pull_request_review`, `resolve_review_thread` |
+| Merge | `merge_pull_request`, with a required head SHA |
+| Repository-wide search, file and commit fetch, branch and commit creation | Not implemented. Threads read and commit through their local checkout |
+| CI reruns, artifact download | Not implemented |
 
 The PwrAgent-specific capabilities remain cache freshness, explicit refresh
-costs, thread/repository authorization, owner routing and Auto-fix guidance.
-Read access remains independent of review automation. No mutation or review
-capability was enabled to close the read-side gaps.
+costs, thread/repository authorization, owner routing, Auto-fix guidance, and
+the operator policy above. Read access remains independent of review
+automation: none of these tools starts a review or an Auto-fix repair turn.

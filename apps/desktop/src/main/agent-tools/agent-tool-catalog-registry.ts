@@ -1,8 +1,10 @@
-import { buildForgeReadToolDefinitions, type ForgeReadHandler } from "./pwragent-forge-agent-tools";
+import type { ForgeReadHandler } from "./pwragent-forge-agent-tools";
+import { buildForgeToolDefinitions, type GithubToolHandler } from "./pwragent-github-agent-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
 import type {
   AgentToolCatalogId,
   AgentToolCatalogSummary,
+  ForgeAgentToolPolicy,
 } from "@pwragent/shared";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared";
 import type { DynamicToolSpec } from "@pwrdrvr/codex-app-server-protocol/v2";
@@ -70,6 +72,9 @@ export function resolveAgentToolCatalogs(params: {
   taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
   forgeReadHandler?: ForgeReadHandler;
+  githubToolHandler?: GithubToolHandler;
+  /** Omitted tools are not advertised. Without a policy every forge tool is. */
+  forgeToolPolicy?: ForgeAgentToolPolicy;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
   tokenMiserStore?: TokenMiserStore;
   tokenMiserFocused?: TokenMiserFocusedSummaries;
@@ -87,8 +92,14 @@ export function resolveAgentToolCatalogs(params: {
     buildPwrAgentToolGuideDefinition(),
   ]);
   const appDynamicTools = appRouter.buildDynamicToolSpecs();
-  const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler, { additionalDefinitions: buildForgeReadToolDefinitions(params.forgeReadHandler) });
+  const threadRouter = buildPwrAgentThreadToolRouter(params.threadInspectionHandler);
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
+  const forgeRouter = new AgentToolRouter(buildForgeToolDefinitions({
+    forgeReadHandler: params.forgeReadHandler,
+    githubToolHandler: params.githubToolHandler,
+    policy: params.forgeToolPolicy,
+  }));
+  const forgeDynamicTools = forgeRouter.buildDynamicToolSpecs();
   const messagingRouter = buildPwrAgentMessagingToolRouter(params.messagingHandler);
   const messagingDynamicTools = messagingRouter.buildDynamicToolSpecs();
   const threadOrchestrationRouter = new AgentToolRouter(
@@ -169,6 +180,25 @@ export function resolveAgentToolCatalogs(params: {
           id: "thread_inspection",
           namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: threadDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "forge",
+      dynamicTools: forgeDynamicTools,
+      router: forgeRouter,
+      summary: {
+        id: "forge",
+        namespace: PWRAGENT_TOOL_NAMESPACE,
+        enabled: forgeDynamicTools.length > 0,
+        toolCount: countDynamicTools(forgeDynamicTools),
+        ...(params.forgeToolPolicy && !params.forgeToolPolicy.enabled
+          ? { unavailableReason: "GitHub tools are off in Settings → Git." }
+          : {}),
+        fingerprint: buildCatalogFingerprint({
+          id: "forge",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tools: forgeDynamicTools,
         }),
       },
     },

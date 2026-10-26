@@ -2621,6 +2621,16 @@ describe("App", () => {
           source: "default",
         },
         defaultMergeMethod: { value: "squash", source: "default" },
+        agentTools: {
+          enabled: { value: true, source: "default" },
+          access: {
+            read: { value: "allow", source: "default" },
+            pull_requests: { value: "auto", source: "default" },
+            comments: { value: "auto", source: "default" },
+            issues: { value: "auto", source: "default" },
+            approve_merge: { value: "ask", source: "default" },
+          },
+        },
       },
       applications: {
         editors: [],
