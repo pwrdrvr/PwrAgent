@@ -552,7 +552,7 @@ describe("thread sub-agent table", () => {
      */
     function ownerService(threadId: string, live: {
       gates?: ThreadSubAgentSummary[];
-      usage?: Array<[string, { monitorUsage: { summary: string }; updatedAt: number; lines: Map<string, never> }]>;
+      usage?: Array<[string, { monitorUsage: { summary: string }; updatedAt: number; lines: ReadonlyMap<string, unknown> }]>;
     } = {}) {
       const registry = {
         getCachedThreadSummary: () => ({ id: threadId, source: "codex" }),
