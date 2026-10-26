@@ -732,45 +732,21 @@ jobs:
         timeout-minutes: 5
         run: git lfs pull
 
-      - name: Check the guest's persistent pnpm store
-        # The guest keeps its disk between jobs, so the pnpm store and the
-        # Electron download caches live outside the workspace, in a directory
-        # only this repository uses, where checkout's clean cannot delete
-        # them. A warm store skips the ~50 s restore of the 750 MB dependency
-        # cache. A cold or expired store takes the configure-nodejs path once
-        # and is then moved onto the guest. See the script for the expiry.
-        id: guest-store
-        shell: bash
-        timeout-minutes: 5
-        run: bash ./scripts/ci/macos-e2e-guest-store.sh check
-
       - name: Install Node.js and dependencies
-        if: steps.guest-store.outputs.warm != 'true'
-        uses: pwrdrvr/configure-nodejs@8876dbf3c524c8a765543dae3ae5b55d7b5ecfb3 # v1.6.0
+        # The guest keeps its disk between jobs, so the pnpm store, Corepack
+        # home, and Electron download caches live outside the workspace, in a
+        # directory only this repository uses, where checkout's clean cannot
+        # delete them. A warm store skips the ~50 s restore of the 750 MB
+        # dependency cache. A cold or expired (14-day) store restores and
+        # installs as before, then moves onto the guest.
+        # TODO: pin to the v1.7.0 release SHA once pwrdrvr/configure-nodejs#14
+        # merges. The branch reference is for trying the feature on this PR.
+        uses: pwrdrvr/configure-nodejs@feat/persistent-pnpm-store
         timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
-
-      - name: Seed the guest pnpm store
-        if: steps.guest-store.outputs.warm != 'true'
-        shell: bash
-        timeout-minutes: 5
-        run: bash ./scripts/ci/macos-e2e-guest-store.sh seed
-
-      - name: Set up Node.js
-        if: steps.guest-store.outputs.warm == 'true'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        timeout-minutes: 5
-        with:
-          node-version: "^24.22.1"
-          package-manager-cache: false
-
-      - name: Install dependencies from the guest pnpm store
-        if: steps.guest-store.outputs.warm == 'true'
-        shell: bash
-        timeout-minutes: 10
-        run: bash ./scripts/ci/macos-e2e-guest-store.sh install
+          persistent-store-dir: ~/Library/Caches/pwragent-ci
 
       - name: Clear leftover Electron state from previous jobs
         # This runner is a persistent Tart guest, not a fresh VM per job, so a
@@ -799,7 +775,9 @@ jobs:
         # builds first.
         shell: bash
         timeout-minutes: 10
-        run: node scripts/ci/desktop-out-cache.mjs prepare
+        run: >-
+          PWRAGENT_CI_CACHE_ROOT="$HOME/Library/Caches/pwragent-ci"
+          node scripts/ci/desktop-out-cache.mjs prepare
 
       - name: Run desktop replay-backed Electron tests
         # Tart's AppleParavirtGPU can reset under Electron load. The early
