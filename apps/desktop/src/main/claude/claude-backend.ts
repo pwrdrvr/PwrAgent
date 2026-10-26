@@ -32,7 +32,7 @@ import { ClaudeTaskTracker, claudeTaskRow, type ClaudeTaskSettlement } from "./c
 import { CLAUDE_TODO_TOOL, claudeFileDiff, claudeTodoSteps, claudeToolDetail, claudeTurnDiff } from "./claude-tool-activity";
 import { normalizeClaudeTitle, requestClaudeTitle, type ClaudeTitleQuery } from "./claude-titles";
 import {
-  CLAUDE_REPORT_FINDINGS_TOOL, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
+  CLAUDE_REPORT_FINDINGS_TOOL, claudeReportFindingsHooks, claudeReviewOutput, isClaudeOutcomeReport, matchClaudeFindingOutcomes,
   parseClaudeFindingsReport, type ClaudeFindingsReport,
 } from "./claude-review-findings";
 import { formatReviewOutputText, reviewEntryFindings } from "../../shared/review-output";
@@ -649,6 +649,8 @@ export class ClaudeBackend {
           request: this.options.request,
           cancelRequest: (requestId, turnId) => this.options.cancelRequest(threadId, turnId, requestId),
         }),
+        // A findings report that leaves findings skipped tells the agent they are still open.
+        hooks: claudeReportFindingsHooks(),
       };
       let releasePrompt!: () => void;
       const promptReady = new Promise<void>((resolve) => { releasePrompt = resolve; });

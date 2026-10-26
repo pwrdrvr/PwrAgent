@@ -77,6 +77,28 @@ describe("federated To-do ownership", () => {
     expect(local.updateReview).not.toHaveBeenCalled();
   });
 
+  it("sends a finding decline under the name every owner accepts, and renames an older owner's findings", async () => {
+    const { service, remoteOperations } = setup();
+    await service.request("updateReview", { id: review.id, itemId: "finding", status: "declined", note: "Intended.",
+      federationTarget: target });
+    expect(remoteOperations.updateReview).toHaveBeenLastCalledWith({ id: review.id, itemId: "finding", status: "dismissed", note: "Intended." });
+    // A whole review's own dismissal is not a finding's.
+    await service.request("updateReview", { id: review.id, status: "dismissed", note: "Superseded.", federationTarget: target });
+    expect(remoteOperations.updateReview).toHaveBeenLastCalledWith({ id: review.id, status: "dismissed", note: "Superseded." });
+
+    const older = { ...review, items: [
+      { id: "a", title: "Declined", status: "dismissed", createdAt: 1, updatedAt: 1 },
+      { id: "b", title: "Open", status: "open", createdAt: 1, updatedAt: 1 },
+    ] } as unknown as ThreadReview;
+    remoteOperations.listReviews.mockReturnValueOnce({ reviews: [older] });
+    remoteOperations.updateReview.mockReturnValueOnce({ review: older });
+    const listed = await service.request("listReviews", { backend: "codex", threadId: "same-thread" }, target);
+    expect(listed.reviews[0]!.items.map((item) => item.status)).toEqual(["declined", "open"]);
+    const updated = await service.request("updateReview", { id: review.id, itemId: "b", status: "open", federationTarget: target });
+    expect(updated.review.items.map((item) => item.status)).toEqual(["declined", "open"]);
+    expect(updated.review.federationTarget).toEqual(target);
+  });
+
   it("never falls back to a colliding local record when the owner is unavailable", async () => {
     const local = operations();
     const unavailable = vi.fn(async () => { throw new Error("Peer offline"); });

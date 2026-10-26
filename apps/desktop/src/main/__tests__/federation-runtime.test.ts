@@ -4558,6 +4558,10 @@ describe("advertised capabilities", () => {
     expect(DEFAULT_CAPABILITIES).toContain("turn_queue_pause");
   });
 
+  it("advertises bulk display reads, which viewers need before they refresh in one read", () => {
+    expect(DEFAULT_CAPABILITIES).toContain("thread_display_bulk_reads");
+  });
+
   it("advertises turn reply reads, which messaging gateways need before they skip the page", () => {
     expect(DEFAULT_CAPABILITIES).toContain("turn_assistant_reply");
   });

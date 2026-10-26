@@ -1,5 +1,5 @@
 import type { FederationCapability, FederationRemoteTarget, ThreadTodo, ListThreadTodosRequest, TodoUnavailableInstance } from "@pwragent/shared";
-import { resolveThreadTodoMergeMethod } from "@pwragent/shared";
+import { normalizeThreadReview, resolveThreadTodoMergeMethod } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 
@@ -70,6 +70,11 @@ export class FederatedThreadTodoService {
     }
     target ??= windowTarget;
     if (target) {
+      // An owner that predates `declined` accepts only `dismissed` for a
+      // finding, and every owner still takes that name, so it crosses as that.
+      if (operation === "updateReview" && request.itemId !== undefined && request.status === "declined") {
+        request.status = "dismissed";
+      }
       const response = await this.options.remote(target, operation, request as ThreadTodoOperationRequest<K>);
       if (operation === "listTodos") {
         const listed = response as ThreadTodoOperationResponse<"listTodos">;
@@ -78,9 +83,11 @@ export class FederatedThreadTodoService {
         }, target)) } as ThreadTodoOperationResponse<K>;
       }
       if ("todo" in response) return { ...response, todo: projectTodo(response.todo, target) } as ThreadTodoOperationResponse<K>;
+      // An older owner's findings can still say `dismissed`.
       if (operation === "listReviews") return { reviews: (response as ThreadTodoOperationResponse<"listReviews">).reviews
-        .map((review) => ({ ...review, federationTarget: target })) } as ThreadTodoOperationResponse<K>;
-      if (operation === "updateReview") return { review: { ...(response as ThreadTodoOperationResponse<"updateReview">).review,
+        .map((review) => ({ ...normalizeThreadReview(review), federationTarget: target })) } as ThreadTodoOperationResponse<K>;
+      if (operation === "updateReview") return { review: {
+        ...normalizeThreadReview((response as ThreadTodoOperationResponse<"updateReview">).review),
         federationTarget: target } } as ThreadTodoOperationResponse<K>;
       return response;
     }

@@ -45,6 +45,11 @@ export function threadTodosMarkdown(todos: readonly ThreadTodo[]): string {
 
 function reviewItemMarkdown(item: ThreadReviewItem): string {
   const priority = typeof item.priority === "number" ? `P${item.priority} ` : "";
-  if (item.status === "dismissed") return `- [x] ~~${priority}${item.title}~~ (declined)`;
+  if (item.status === "declined") return `- [x] ~~${priority}${item.title}~~ (declined)`;
+  // Still to do, on the card that tracks it.
+  if (item.status === "deferred") {
+    const todo = item.resolution?.todo?.title;
+    return `- [ ] ${priority}${item.title} (deferred${todo ? `: ${todo}` : ""})`;
+  }
   return `- [${item.status === "addressed" ? "x" : " "}] ${priority}${item.title}`;
 }

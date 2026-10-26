@@ -64,6 +64,13 @@ export const FEDERATION_CAPABILITIES = [
    */
   "turn_queue_pause",
   /**
+   * The owner accepts `THREAD_DISPLAY_MAX_ACCOUNTING_TURNS` turns in one
+   * accounting display read and `THREAD_DISPLAY_MAX_PAGE_ROWS` rows in one
+   * display page, so a viewer refresh is one read per resource. A viewer
+   * keeps the legacy 256-turn chunks and 20-row pages without it.
+   */
+  "thread_display_bulk_reads",
+  /**
    * The owner answers `backend.readTurnAssistantReply` with one finished
    * turn's reply, its images materialized. A messaging gateway without it
    * reads a transcript page at every bound turn end.

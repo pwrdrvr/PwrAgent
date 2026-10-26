@@ -3,6 +3,7 @@ import type { NavigationThreadSummary, SubAgentLens, PricingGateSelection } from
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import { acquireThreadDisplayResource, type DisplayResourceState, type ThreadDisplayResourceStore } from "./thread-display-resource-store";
+import { supportsBulkDisplayReads } from "./thread-display-bulk-reads";
 
 /** A mounted panel owns resource demand; sibling panels share its pages and reads. */
 export function useThreadDisplayResource(params: {
@@ -14,8 +15,9 @@ export function useThreadDisplayResource(params: {
 }) {
   const target = params.thread?.federation?.ref.target ?? readRendererFederationTarget();
   const instanceId = target?.scope === "remote" ? target.instanceId : undefined;
+  const bulkReads = supportsBulkDisplayReads(target, params.thread);
   const key = JSON.stringify([instanceId, params.thread?.source, params.thread?.id, params.resource,
-    params.resource === "subagents" ? params.subAgentLens : undefined, params.pricingGateGroup]);
+    params.resource === "subagents" ? params.subAgentLens : undefined, params.pricingGateGroup, bulkReads]);
   const current = useRef(params);
   current.current = params;
   const owner = useRef<{ key: string; store: ThreadDisplayResourceStore } | undefined>(undefined);
@@ -30,7 +32,7 @@ export function useThreadDisplayResource(params: {
         ...(resource === "subagents" && subAgentLens ? { subAgentLens } : {}),
         ...(resource === "pricing" ? { deferPricingGates: true, ...(pricingGateGroup ? { pricingGateGroup } : {}) } : {}),
       }, includeTurns: false, viewOnly: true,
-    });
+    }, { bulkReads });
     owner.current = { key, store };
     const unsubscribe = store.subscribe(() => setState({ key, ...store.getSnapshot() }));
     setState({ key, ...store.getSnapshot() });

@@ -1610,6 +1610,9 @@ function SettingsSectionBody(props: {
       onSaveUsageAccountGroups={async (usageAccountGroups) => {
         return await props.settings.writeConfig({ models: { usageAccountGroups } });
       }}
+      onSaveCodexModelProviders={async (providers) => {
+        return await props.settings.writeConfig({ models: { codex: { providers } } });
+      }}
       onSaveDecisionModels={async (decisionModels) => {
         return await props.settings.writeConfig({
           models: { decisionModels },

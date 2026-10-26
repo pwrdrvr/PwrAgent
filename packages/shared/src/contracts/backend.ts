@@ -204,6 +204,14 @@ export type ThreadRewindSupport = {
 export type BackendModelOption = {
   id: string;
   label?: string;
+  /**
+   * The Codex model provider that serves this model, when it is not Codex's
+   * default. The id is then qualified as `@<providerId>/<model>`. Absent on
+   * older peers, which list such models as plain options.
+   */
+  providerId?: string;
+  /** Display name of `providerId`, such as `Refuseless`. */
+  providerLabel?: string;
   current?: boolean;
   /** Older or secondary catalog models shown in the Other Models submenu. */
   other?: boolean;

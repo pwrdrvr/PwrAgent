@@ -190,6 +190,7 @@ import {
   type CompatibleApprovalPolicy,
   type CompatibleDynamicToolSpec,
 } from "./protocol-compatibility";
+import { CodexModelProviderTranslator } from "./codex-model-provider-translation";
 import { persistCodexFileInput } from "./codex-file-input-files";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
@@ -319,6 +320,8 @@ type CodexClientOptions = {
   readHelperModelSettings?: () => DesktopHelperModelSettings | undefined;
   /** Captures the profile's explicit group or current protocol account. */
   resolveUsageAccountKey?: () => Promise<string | undefined>;
+  /** Ids of the model providers PwrAgent configured, read per message. */
+  resolveModelProviderIds?: () => ReadonlySet<string>;
   command?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
@@ -7620,6 +7623,7 @@ export class CodexAppServerClient {
   // All ordinary RPCs, including continuations of multi-request operations,
   // pass through admission. Only lifecycle work uses the raw connection.
   private readonly connection: Pick<JsonRpcConnection, "request">;
+  private readonly modelProviderTranslator?: CodexModelProviderTranslator;
   private lifecycleBarrier: Promise<void> | null = null;
   private readonly activeRequests = new Set<Promise<unknown>>();
   private closeGeneration = 0;
@@ -7784,6 +7788,19 @@ export class CodexAppServerClient {
       createCodexObserverWithConfigReadRedaction(options.connectionObserver),
       { logContext: { backend: "codex" }, logger: getMainLogger("pwragent:json-rpc") },
     );
+    // Every request, admitted or lifecycle, reaches Codex through this one
+    // function, so qualified model ids are translated in one place.
+    const resolveModelProviderIds = options.resolveModelProviderIds;
+    if (resolveModelProviderIds) {
+      this.modelProviderTranslator = new CodexModelProviderTranslator(resolveModelProviderIds);
+      const translator = this.modelProviderTranslator;
+      const rawRequest = this.rawConnection.request.bind(this.rawConnection);
+      this.rawConnection.request = async (method, params, timeoutMs, diagnostics) => {
+        const translated = translator.translateRequest(method, params);
+        const result = await rawRequest(method, translated, timeoutMs, diagnostics);
+        return translator.observeResponse(method, translated, result);
+      };
+    }
     this.connection = {
       request: (...args) => this.requestWhenAvailable(...args),
     };
@@ -7795,7 +7812,10 @@ export class CodexAppServerClient {
             linkedDirectories: await directoryResolver(projectKey),
           })
         : enrichThreadDirectory);
-    this.rawConnection.setNotificationHandler(async (method, params) => {
+    this.rawConnection.setNotificationHandler(async (method, rawParams) => {
+      const params = this.modelProviderTranslator
+        ? this.modelProviderTranslator.translateNotification(method, rawParams)
+        : rawParams;
       if (method === "deprecationNotice") {
         // Protocol migration guidance belongs in diagnostics, not thread UI.
         const notice = asRecord(params) ?? {};
@@ -9701,6 +9721,15 @@ export class CodexAppServerClient {
       payloads: [{}],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
+  }
+
+  /**
+   * The PwrAgent-configured model provider a thread runs on, as Codex last
+   * reported it. Undefined for Codex's default provider and for threads this
+   * connection has not read yet.
+   */
+  modelProviderForThread(threadId: string): string | undefined {
+    return this.modelProviderTranslator?.providerForThread(threadId);
   }
 
   async readThreadPricingSnapshot(threadId: string): Promise<ThreadPricingSnapshot> {

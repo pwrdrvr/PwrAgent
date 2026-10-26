@@ -463,6 +463,14 @@ describe("Claude SDK backend", () => {
       return item?.type === "exitedReviewMode" ? [item] : [];
     });
 
+    it("registers the hook that tells the agent skipped findings stay open", async () => {
+      const f = await fixture();
+      const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+      await f.backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review high" }] });
+      await f.waitForTurn();
+      expect(f.queries[0]!.hooks?.PostToolUse?.map((matcher) => matcher.matcher)).toEqual(["ReportFindings"]);
+    });
+
     it("turns a ReportFindings call into a review card instead of a tool row", async () => {
       const f = await fixture(turns(report("review-1", { level: "high", findings })));
       const context = { workspacePath: f.root, gitBranch: "feature" };

@@ -628,6 +628,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_todos",
   "operator_questions",
   "operator_requests",
+  "thread_display_bulk_reads",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
 import { resolve } from "node:path";
 import { EventEmitter } from "node:events";
@@ -716,7 +716,7 @@ async function flushMicrotasks(): Promise<void> {
 }
 
 describe("bootstrapApp", () => {
-  beforeEach(() => {
+  function resetBootstrapHarness(): void {
     appEventHandlers.clear();
     powerMonitorEventHandlers.clear();
     processEventHandlers.clear();
@@ -990,15 +990,34 @@ describe("bootstrapApp", () => {
     vi.stubEnv("PWRAGENT_DISABLE_MESSAGING", undefined);
     vi.stubEnv("PWRAGENT_DEV_DISABLE_SECRET_STORAGE", undefined);
     vi.stubEnv("PWRAGENT_E2E", undefined);
-  });
+  }
 
-  afterEach(() => {
+  function restoreBootstrapHarness(): void {
     vi.clearAllMocks();
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
+  }
+
+  // The first import of the entry module transforms and loads its real
+  // graph: about 220 source files, most through the @pwragent/shared barrel,
+  // plus native addons. Every import after `vi.resetModules()` reuses that
+  // work. With a cold transform cache under CPU pressure, the first load took
+  // up to 5 s and was billed to whichever test ran first. Pay it here, as setup.
+  beforeAll(async () => {
+    resetBootstrapHarness();
+    try {
+      await import("../index");
+      await flushMicrotasks();
+    } finally {
+      restoreBootstrapHarness();
+    }
   });
+
+  beforeEach(resetBootstrapHarness);
+
+  afterEach(restoreBootstrapHarness);
 
   it.each([
     ["darwin", undefined],

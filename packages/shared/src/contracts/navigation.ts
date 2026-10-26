@@ -144,6 +144,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * ended. The thread list shows it working; the composer stays open.
    */
   hasBackgroundTasks?: boolean;
+  /**
+   * Commands the agent started are still running, but the agent will not act
+   * again on its own when they exit (a Codex background terminal such as a
+   * dev server). The row shows a quiet mark; the thread is not working.
+   */
+  hasAgentCommands?: boolean;
   inbox: ThreadInboxState;
   /**
    * Normalized host/owner/repository identity resolved from the thread's
@@ -1953,6 +1959,8 @@ export type NavigationRow = {
   hasActiveSubAgent?: boolean;
   /** Owner-projected background tasks that outlived their turn. */
   hasBackgroundTasks?: boolean;
+  /** Owner-projected commands that outlived their turn without waking the agent. */
+  hasAgentCommands?: boolean;
   inbox: ThreadInboxState;
   projectKey?: string;
   linkedDirectories: LinkedDirectorySummary[];

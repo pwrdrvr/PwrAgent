@@ -5065,6 +5065,57 @@ describe("app server ipc", () => {
     expect(getThreadTranscriptImageRoots).not.toHaveBeenCalled();
   });
 
+  it("revalidates a local display page against the viewer's known revision", async () => {
+    const { APP_SERVER_READ_THREAD_CHANNEL } = await import("../../shared/ipc");
+    const page = {
+      backend: "codex",
+      fetchedAt: 1234,
+      threadId: "thread-1",
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: false },
+      },
+      display: { revision: "pricing-r1" },
+    };
+    readThread
+      .mockResolvedValueOnce(page as never)
+      .mockResolvedValueOnce(page as never)
+      .mockResolvedValueOnce({ ...page, display: { revision: "pricing-r2" } } as never);
+    registerAppServerIpcHandlers();
+    const read = async (knownRevision: string) => await handlers.get(APP_SERVER_READ_THREAD_CHANNEL)?.(
+      {},
+      {
+        backend: "codex",
+        display: { resource: "pricing", limit: 20 },
+        includeTurns: false,
+        knownRevision,
+        threadId: "thread-1",
+        viewOnly: true,
+      },
+    ) as AppServerReadThreadResponse;
+
+    // Read all three pages before asserting, so no queued response leaks.
+    const first = await read("");
+    const second = await read(first.replayRevision ?? "missing");
+    const third = await read(first.replayRevision ?? "missing");
+
+    // A first read gets the page and the revision that names it.
+    expect(first.unchanged).toBeUndefined();
+    expect(first.display).toEqual({ revision: "pricing-r1" });
+    expect(first.replayRevision).toMatch(/^[0-9a-f]{64}$/);
+
+    // The same page again: the viewer keeps the copy it holds.
+    expect(second).toMatchObject({ unchanged: true, replayRevision: first.replayRevision });
+    expect(second.display).toBeUndefined();
+    expect(second.replay.entries).toEqual([]);
+
+    // A changed page is sent in full under a new revision.
+    expect(third.unchanged).toBeUndefined();
+    expect(third.display).toEqual({ revision: "pricing-r2" });
+    expect(third.replayRevision).not.toBe(first.replayRevision);
+  });
+
   it("strips readThread file diffs behind fetchable refs before crossing IPC", async () => {
     const {
       APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,

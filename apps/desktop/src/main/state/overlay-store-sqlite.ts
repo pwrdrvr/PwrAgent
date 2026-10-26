@@ -9,6 +9,7 @@ import { buildAppendPinRank, insertSubthreadIdAfter, sortSubthreadSummaries } fr
 import path from "node:path";
 import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromCard, ThreadSubAgentTable } from "./thread-sub-agents";
+import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
 import type {
   AppServerBackendKind,
   AppServerBackendScope,
@@ -737,6 +738,7 @@ function managedSubAgentChildKeys(overlay: Pick<ThreadOverlayState, "backend" | 
 }
 
 export class SqliteOverlayStore implements RemoteThreadTargetStore {
+  private readonly codexEnvironmentLiveOutput = new CodexEnvironmentLiveOutput();
   private managedSubAgentThreadKeysCache?: { generation: number; keys: Set<string> };
   private navigationOverlayCache?: {
     dataVersion: number;
@@ -5941,7 +5943,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
       `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
       for (const row of rows) {
-        entries.push([row.id, row.payload === null ? undefined : normalizeThreadOverlayState(JSON.parse(row.payload))]);
+        entries.push([row.id, row.payload === null ? undefined : this.withCodexEnvironmentLiveOutput(
+          normalizeThreadOverlayState(JSON.parse(row.payload)),
+        )]);
       }
     }
     return Object.fromEntries(entries);
@@ -5968,7 +5972,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
       const overlays = rows.map((row) => ({
         id: row.id,
-        overlay: row.payload === null ? undefined : normalizeThreadOverlayState(JSON.parse(row.payload)),
+        overlay: row.payload === null ? undefined : this.withCodexEnvironmentLiveOutput(
+          normalizeThreadOverlayState(JSON.parse(row.payload)),
+        ),
       }));
       // Read pending claims using the decoded identity, as getThread does.
       // Do not json_extract the full overlay in SQLite: histories can be large
@@ -7823,7 +7829,56 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     };
     this.putThread(threadKey, nextState);
+    this.codexEnvironmentLiveOutput.prune(threadKey, params.codexEnvironmentRuntime);
     return nextState;
+  }
+
+  /**
+   * Record a running action's latest output in memory. Reads of the thread
+   * see it immediately; sqlite gets it at the run's next boundary write.
+   */
+  setThreadCodexEnvironmentActionLiveOutput(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    runId: string;
+    output: string;
+  }): void {
+    this.codexEnvironmentLiveOutput.set(
+      buildThreadIdentityKey(params.backend, params.threadId),
+      params.runId,
+      params.output,
+    );
+  }
+
+  /** Forget a run's live output, for example once its exit is recorded. */
+  dropThreadCodexEnvironmentActionLiveOutput(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    runId: string;
+  }): void {
+    this.codexEnvironmentLiveOutput.drop(
+      buildThreadIdentityKey(params.backend, params.threadId),
+      params.runId,
+    );
+  }
+
+  /**
+   * Persist every live output tail that sqlite does not have yet, in one
+   * transaction. Runs at app shutdown. Returns the number of rows written.
+   */
+  flushThreadCodexEnvironmentActionLiveOutputs(): number {
+    const updates = this.codexEnvironmentLiveOutput.threadKeys().flatMap((threadKey) => {
+      const stored = this.readStoredThread(threadKey);
+      const merged = this.codexEnvironmentLiveOutput.apply(threadKey, stored);
+      return merged && merged !== stored ? [{ threadKey, state: merged }] : [];
+    });
+    if (updates.length > 0) {
+      this.stateDb.raw.transaction(() => {
+        for (const { threadKey, state } of updates) this.putThread(threadKey, state);
+      })();
+    }
+    this.codexEnvironmentLiveOutput.clear();
+    return updates.length;
   }
 
   async setThreadMessagingPdfToolCatalogVersion(params: {
@@ -8676,6 +8731,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   private getThread(threadKey: string): ThreadOverlayState | undefined {
+    return this.codexEnvironmentLiveOutput.apply(threadKey, this.readStoredThread(threadKey));
+  }
+
+  private withCodexEnvironmentLiveOutput(overlay: ThreadOverlayState): ThreadOverlayState {
+    return this.codexEnvironmentLiveOutput.apply(
+      buildThreadIdentityKey(overlay.backend, overlay.threadId),
+      overlay,
+    );
+  }
+
+  private readStoredThread(threadKey: string): ThreadOverlayState | undefined {
     const storageKey = encodeThreadIdentityKeyForStorage(threadKey);
     const row = this.stateDb.raw
       .prepare("SELECT payload FROM threads WHERE thread_id = ?")
@@ -10564,6 +10630,9 @@ export type OverlayStoreLike = Pick<
 > & {
   getThreadListingOverlayStates?: SqliteOverlayStore["getThreadListingOverlayStates"];
   setThreadCodexEnvironmentRuntime?: SqliteOverlayStore["setThreadCodexEnvironmentRuntime"];
+  setThreadCodexEnvironmentActionLiveOutput?: SqliteOverlayStore["setThreadCodexEnvironmentActionLiveOutput"];
+  dropThreadCodexEnvironmentActionLiveOutput?: SqliteOverlayStore["dropThreadCodexEnvironmentActionLiveOutput"];
+  flushThreadCodexEnvironmentActionLiveOutputs?: SqliteOverlayStore["flushThreadCodexEnvironmentActionLiveOutputs"];
   listThreadOverlaysWithCodexEnvironmentRuntime?: SqliteOverlayStore["listThreadOverlaysWithCodexEnvironmentRuntime"];
   listThreadArchiveStates?: SqliteOverlayStore["listThreadArchiveStates"];
   observeArchivedThreads?: SqliteOverlayStore["observeArchivedThreads"];
