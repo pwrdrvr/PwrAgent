@@ -1109,7 +1109,7 @@ describe("thread row to-do chip", () => {
         backend: "codex",
         threadId: "thread-b",
         messageId: "msg-2",
-        questions: [{ title: "Which region?" }],
+        questions: [{ title: "Which region?", options: [] }],
         createdAt: older.createdAt + 60_000,
       }],
       seenKeys: [],
