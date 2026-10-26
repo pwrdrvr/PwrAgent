@@ -785,7 +785,16 @@ jobs:
           # Same lane sizes as Linux and Windows; see the desktop-e2e
           # strategy comment.
           PWTEST_SHARD_WEIGHTS: "9:12:12:14"
-          NODE_OPTIONS: --require ${{ github.workspace }}/.github/scripts/node-heap-probe.cjs
+          # V8 sizes its default heap from physical RAM. The 8 GB guest gets a
+          # 2,240 MB limit, where the 16 GB hosted Linux and Windows runners
+          # get 4,288 MB. The electron-vite build that test:e2e runs first
+          # peaks near 2.6 GB of heap on Linux. At the guest's default it
+          # spent ~15% of its time in GC and once ran out of heap (run
+          # 40264629226). 4096 gives the same 4,288 MB limit as the hosted
+          # lanes. The build exits before Playwright starts Electron, and its
+          # ~3.1 GB peak RSS fits in the guest. The E2E fixture appends its
+          # own --require to this value.
+          NODE_OPTIONS: --max-old-space-size=4096 --require ${{ github.workspace }}/.github/scripts/node-heap-probe.cjs
         run: >-
           pnpm --filter @pwragent/desktop test:e2e
           --shard=${{ matrix.lane }}/4
