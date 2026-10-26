@@ -227,6 +227,14 @@ describe("GitHub attachments", () => {
     expect(result).toMatchObject({ created: true, url: "https://github.com/fixture/project/pull/44" });
   });
 
+  it("names the gh upgrade when gh is too old to attach", async () => {
+    const image = path.join(root, "shots", "after.png");
+    const runGh = vi.fn<GhRunner>(async () => ({ stdout: "", stderr: "unknown flag: --attach\n", exitCode: 1 }));
+    const { client } = harness(() => json({ number: 9 }), runGh);
+    await expect(client.execute("create_issue", { title: "Bug", attachments: [{ path: image }] }, ctx({ directories: [root] })))
+      .rejects.toMatchObject({ code: "unavailable", message: expect.stringContaining("2.99") });
+  });
+
   it("reports a partial attachment failure without losing the new item", async () => {
     const image = path.join(root, "shots", "after.png");
     const runGh = vi.fn<GhRunner>(async () => ({ stdout: "https://github.com/fixture/project/pull/9#issuecomment-5\n", stderr: "failed to upload after.png: too large\n", exitCode: 1 }));

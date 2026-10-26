@@ -257,6 +257,9 @@ export class GithubToolClient {
         providerRequests++;
         const result = await this.options.ci.withGithubAdmission(r, ctx.signal, async () => await run([...ghArgs, "-R", repoSpec, "--body-file", bodyFile, ...attachArgs], { cwd: ctx.directories[0] ?? dir, signal: ctx.signal, timeoutMs: 120_000 }));
         const url = lastUrl(result.stdout, r.host);
+        if (!url && /unknown flag:? --attach/i.test(result.stderr)) {
+          throw new ForgeReadError("unavailable", "Attaching files needs GitHub CLI 2.99 or later. Update gh (Settings → Git shows its version), or call again without attachments.");
+        }
         if (!url) throw new ForgeReadError("provider_error", `gh ${ghArgs.slice(0, 2).join(" ")} failed: ${firstLine(result.stderr) || `exit ${result.exitCode}`}`);
         // gh still prints the URL when some attachments failed to upload.
         return { url, ...(result.exitCode !== 0 ? { warning: `Some attachments did not upload: ${firstLine(result.stderr)}` } : {}) };
