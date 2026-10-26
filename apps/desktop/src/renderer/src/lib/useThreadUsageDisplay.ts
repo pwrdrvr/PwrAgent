@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppServerReadThreadResponse, AppServerThreadEntry, AppServerThreadActivityEntry, NavigationThreadSummary } from "@pwragent/shared";
+import { THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS, THREAD_DISPLAY_MAX_ACCOUNTING_TURNS } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
+import { supportsBulkDisplayReads } from "./thread-display-bulk-reads";
 
 /** Place owner-prepared usage activities next to their loaded turns. No ledger arithmetic. */
 export function applyThreadUsageDisplay(entries: AppServerThreadEntry[], activities: AppServerThreadActivityEntry[]) {
@@ -40,13 +42,16 @@ export function useThreadUsageDisplay(params: {
       const sequence = ++version;
       const turns = [...new Map(current.current.entries.flatMap((entry) => entry.turn ? [[entry.turn.id, entry.turn] as const] : [])).values()];
       const activities: AppServerThreadActivityEntry[] = [];
+      // Each read rebuilds the owner's whole thread display: ask once when it can.
+      const chunk = supportsBulkDisplayReads(effectTarget, current.current.thread)
+        ? THREAD_DISPLAY_MAX_ACCOUNTING_TURNS : THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS;
       try {
         // Loaded history, not total thread length, bounds this resource.
-        for (let offset = 0; offset < turns.length; offset += 256) {
+        for (let offset = 0; offset < turns.length; offset += chunk) {
           const response = await desktopApi.readThread!({
             backend: thread.source, threadId: thread.id,
             federationTarget: effectTarget,
-            display: { resource: "accounting", turns: turns.slice(offset, offset + 256) },
+            display: { resource: "accounting", turns: turns.slice(offset, offset + chunk) },
             includeTurns: false, viewOnly: true,
           });
           if (cancelled || sequence !== version) return;

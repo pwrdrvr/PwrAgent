@@ -63,6 +63,13 @@ export const FEDERATION_CAPABILITIES = [
    * A viewer offers no pause without it.
    */
   "turn_queue_pause",
+  /**
+   * The owner accepts `THREAD_DISPLAY_MAX_ACCOUNTING_TURNS` turns in one
+   * accounting display read and `THREAD_DISPLAY_MAX_PAGE_ROWS` rows in one
+   * display page, so a viewer refresh is one read per resource. A viewer
+   * keeps the legacy 256-turn chunks and 20-row pages without it.
+   */
+  "thread_display_bulk_reads",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";
