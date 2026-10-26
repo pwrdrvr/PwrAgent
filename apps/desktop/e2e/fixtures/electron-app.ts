@@ -1184,7 +1184,7 @@ export function configureElectronE2eSecretStorageEnv(
  * Close a Playwright-owned Electron app without letting a degraded persistent
  * runner turn one teardown into a 15-second tax. The normal path still asks
  * Electron to exit first. If the main event loop or Playwright connection is
- * wedged, the fallback snapshots and kills the complete process tree so helper
+ * wedged, the fallback kills the owned process tree so helper
  * processes cannot accumulate across jobs in the shared macOS VM.
  */
 export async function closeElectronApplication(
@@ -1365,6 +1365,7 @@ function hasExited(child: ElectronChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+/** POSIX callers must supply Playwright's dedicated process-group leader. */
 export async function killProcessTree(
   child: ElectronChildProcess,
   mainProcess?: { pid: number; startedAt: number },
@@ -1388,25 +1389,19 @@ export async function killProcessTree(
     }
     return;
   }
-  if (hasExited(child)) {
-    return;
-  }
   if (pid === undefined) {
-    if (!child.killed) child.kill("SIGKILL");
+    if (!hasExited(child) && !child.killed) child.kill("SIGKILL");
     return;
   }
 
-  // Snapshot descendants before the root exits and they reparent to launchd.
-  const descendants = await listDescendantPids(pid);
-  if (!child.killed) {
-    child.kill("SIGKILL");
-  }
-  for (const descendant of descendants) {
-    try {
-      process.kill(descendant, "SIGKILL");
-    } catch {
-      // The descendant already exited between the ps snapshot and this kill.
-    }
+  // Playwright launches POSIX Electron in a dedicated process group (PGID=pid).
+  // That group still owns orphaned descendants and their inherited stdio after
+  // the launcher exits or is signalled. Signal it atomically instead of walking
+  // parent PIDs, which are lost at reparenting and race new child creation.
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
 }
 

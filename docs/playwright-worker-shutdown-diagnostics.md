@@ -53,6 +53,13 @@ unresolved or fixture teardown exceeds its 20-second deadline. The process-tree
 snapshot cannot follow an orphan once its tracked launcher and intermediate
 parents have exited.
 
+On POSIX, Playwright launches Electron as a dedicated process-group leader.
+The abnormal-close fallback signals that group even if the launcher has already
+exited or been signalled. A parent-PID walk after exit cannot recover orphaned
+descendants holding inherited stdio. `electron-app-close.test.ts` checks real
+inherited pipes with running, exited, and signalled launchers on Linux and macOS.
+An abnormal close still fails the owning test after cleanup.
+
 The Windows reproduction left a suspended no-op `cmd.exe` from the startup
 Job-wrapper prewarm alive after the app exited. The app no longer starts this
 fire-and-forget prewarm. Vitest's separate prewarm setup still awaits its

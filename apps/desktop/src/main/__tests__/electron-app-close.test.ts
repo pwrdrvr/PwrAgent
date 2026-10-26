@@ -48,7 +48,7 @@ describe.skipIf(process.platform === "win32")("Electron POSIX process-group clea
       try {
         process.kill(-launcher.pid!, "SIGKILL");
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        expect(error).toMatchObject({ code: "ESRCH" });
       }
       await closed;
     }
