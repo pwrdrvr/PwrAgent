@@ -19084,8 +19084,8 @@ export class DesktopBackendRegistry {
   ): Promise<ForkThreadResponse> {
     this.assertNotBootstrap("forkThread");
     const backend = request.backend ?? "codex";
-    if (backend !== "codex") {
-      throw new Error("Thread forking is currently supported only by the Codex backend.");
+    if (backend !== "codex" && backend !== "claude") {
+      throw new Error("Thread forking is supported by the Codex and Claude backends.");
     }
 
     const executionMode = request.executionMode ?? "default";
@@ -19139,92 +19139,112 @@ export class DesktopBackendRegistry {
             worktreePath: request.importedWorktree?.worktreePath ?? cwd,
           })
         : buildLocalLinkedDirectory(cwd);
-    const client = this.getClient(backend, executionMode);
-    if (!client.forkThread) {
-      await preparedWorkspace.rollback?.();
-      request.onPreparedWorkspaceRollback?.(undefined);
-      throw new Error("Selected backend does not support thread/fork.");
-    }
-    const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
-    const pdfMcpRegistration =
-      sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
-        ? await this.registerPdfMcpClient({})
-        : undefined;
-    const pdfMcpConfig = sourceHasPdfMcpToolCatalog
-      ? pdfMcpRegistration
-        ? buildCodexPdfMcpConfig(pdfMcpRegistration)
-        : buildCodexPdfMcpDisabledConfig()
-      : undefined;
-    const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
-      sourceOverlay?.tokenMiserEnabled,
-    );
-    if (tokenMiserEnabled) {
-      await this.prepareTokenMiserRuntime();
-    }
-    const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
-      client,
-      enabled: tokenMiserEnabled,
-    });
-    const codexThreadConfig = mergeCodexThreadConfigs(
-      pdfMcpConfig,
-      tokenMiserConfig,
-    );
-
     let result: { threadId: string };
+    let pdfMcpRegistration: AgentToolMcpRegistration | undefined;
     let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
-    try {
+    if (backend === "claude") {
+      // Claude copies the history and forks its session at the first message.
       try {
-        const sourceRuntime = directoryKind === "workspace"
-          ? undefined
-          : Object.hasOwn(request, "codexEnvironmentRuntime")
-            ? request.codexEnvironmentRuntime
-            : sourceOverlay?.codexEnvironmentRuntime;
-        forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
-          cwd,
-          forceSetup: request.rerunCodexEnvironmentSetup,
-          onSetupProgress: request.onCodexEnvironmentSetupProgress
-            ? (event) => {
-                request.onCodexEnvironmentSetupProgress?.({
-                  directoryKey:
-                    request.codexEnvironmentSetupProgressKey ??
-                    `fork:${backend}:${request.sourceThreadId}`,
-                  ...event,
-                });
-              }
-            : undefined,
-          sourceRuntime,
-          workMode: preparedWorkspace.workMode,
+        result = await this.claudeBackend.forkThread({
+          sourceThreadId: request.sourceThreadId,
+          cwd: cwd!,
+          model: modelSettings.model,
+          executionMode,
+          linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+            linkedDirectories.map(normalizeLinkedDirectoryKind),
+          ),
         });
       } catch (error) {
-        if (!(error instanceof CodexEnvironmentStartupError)) {
-          throw error;
-        }
-        forkedCodexEnvironmentRuntime = error.runtime;
-        codexEnvironmentStartupFailure = {
-          message: error.message,
-          phase: error.phase,
-          worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
-        };
+        await preparedWorkspace.rollback?.();
+        request.onPreparedWorkspaceRollback?.(undefined);
+        throw error;
       }
-      result = await client.forkThread({
-        threadId: request.sourceThreadId,
-        ...(request.sourceThreadPath?.trim()
-          ? { path: request.sourceThreadPath.trim() }
-          : {}),
-        cwd,
-        ...modelSettings,
-        approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
-        approvalsReviewer: modeSettings.approvalsReviewer,
-        sandbox: request.sandbox ?? modeSettings.sandbox,
-        codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
-        ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
+    } else {
+      const client = this.getClient(backend, executionMode);
+      if (!client.forkThread) {
+        await preparedWorkspace.rollback?.();
+        request.onPreparedWorkspaceRollback?.(undefined);
+        throw new Error("Selected backend does not support thread/fork.");
+      }
+      const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
+      pdfMcpRegistration =
+        sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
+          ? await this.registerPdfMcpClient({})
+          : undefined;
+      const pdfMcpConfig = sourceHasPdfMcpToolCatalog
+        ? pdfMcpRegistration
+          ? buildCodexPdfMcpConfig(pdfMcpRegistration)
+          : buildCodexPdfMcpDisabledConfig()
+        : undefined;
+      const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+        sourceOverlay?.tokenMiserEnabled,
+      );
+      if (tokenMiserEnabled) {
+        await this.prepareTokenMiserRuntime();
+      }
+      const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
+        client,
+        enabled: tokenMiserEnabled,
       });
-      pdfMcpRegistration?.bindThread(result.threadId);
-    } catch (error) {
-      await preparedWorkspace.rollback?.();
-      request.onPreparedWorkspaceRollback?.(undefined);
-      throw error;
+      const codexThreadConfig = mergeCodexThreadConfigs(
+        pdfMcpConfig,
+        tokenMiserConfig,
+      );
+
+      try {
+        try {
+          const sourceRuntime = directoryKind === "workspace"
+            ? undefined
+            : Object.hasOwn(request, "codexEnvironmentRuntime")
+              ? request.codexEnvironmentRuntime
+              : sourceOverlay?.codexEnvironmentRuntime;
+          forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
+            cwd,
+            forceSetup: request.rerunCodexEnvironmentSetup,
+            onSetupProgress: request.onCodexEnvironmentSetupProgress
+              ? (event) => {
+                  request.onCodexEnvironmentSetupProgress?.({
+                    directoryKey:
+                      request.codexEnvironmentSetupProgressKey ??
+                      `fork:${backend}:${request.sourceThreadId}`,
+                    ...event,
+                  });
+                }
+              : undefined,
+            sourceRuntime,
+            workMode: preparedWorkspace.workMode,
+          });
+        } catch (error) {
+          if (!(error instanceof CodexEnvironmentStartupError)) {
+            throw error;
+          }
+          forkedCodexEnvironmentRuntime = error.runtime;
+          codexEnvironmentStartupFailure = {
+            message: error.message,
+            phase: error.phase,
+            worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
+          };
+        }
+        result = await client.forkThread({
+          threadId: request.sourceThreadId,
+          ...(request.sourceThreadPath?.trim()
+            ? { path: request.sourceThreadPath.trim() }
+            : {}),
+          cwd,
+          ...modelSettings,
+          approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+          approvalsReviewer: modeSettings.approvalsReviewer,
+          sandbox: request.sandbox ?? modeSettings.sandbox,
+          codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
+          ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
+        });
+        pdfMcpRegistration?.bindThread(result.threadId);
+      } catch (error) {
+        await preparedWorkspace.rollback?.();
+        request.onPreparedWorkspaceRollback?.(undefined);
+        throw error;
+      }
     }
     let gitBranch: string | undefined;
     try {
@@ -19276,7 +19296,7 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode,
       });
-      if (sourceOverlay?.tokenMiserEnabled !== undefined) {
+      if (backend === "codex" && sourceOverlay?.tokenMiserEnabled !== undefined) {
         await this.overlayStore.setThreadTokenMiser({
           backend,
           threadId: result.threadId,

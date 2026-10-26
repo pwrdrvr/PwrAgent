@@ -12,6 +12,11 @@ export type ClaudeSession = {
   cwd: string;
   /** Set only after the SDK confirms initialization; used by query({ resume }). */
   sdkSessionId?: string;
+  /**
+   * A fork's source session. Its first query resumes there with
+   * `forkSession`, and the session Claude creates becomes `sdkSessionId`.
+   */
+  forkFromSdkSessionId?: string;
   /** At most one native title request, including failed requests, across restarts. */
   titleGenerationAttempted?: boolean;
   modelUsage?: ClaudeUsageTotals;
