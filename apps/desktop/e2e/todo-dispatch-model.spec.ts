@@ -93,9 +93,10 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     // A scrolled card can place the chip at the viewport edge. Exercise the
     // actual Chromium layout and keyboard focus with that fixture geometry.
     await chip.evaluate((element) => {
-      element.style.position = "fixed";
-      element.style.top = `${window.innerHeight - 30}px`;
-      element.style.left = "600px";
+      const rect = element.getBoundingClientRect();
+      element.style.position = "relative";
+      element.style.top = `${window.innerHeight - 30 - rect.top}px`;
+      element.style.left = `${600 - rect.left}px`;
       element.style.zIndex = "151";
     });
     await chip.click();
