@@ -316,6 +316,60 @@ describe("turn end read budget", () => {
     expect(overlayParseBytes).toBeLessThan(overlayParses * 1_024);
   }, 60_000);
 
+  // Each display read rebuilds the thread's whole display: Token Miser
+  // accounting, every sub-agent card, the overlay, and tool accounting. A
+  // renderer refresh after a turn end therefore asks for every loaded turn
+  // and every loaded Pricing row in one read each, not in 256-turn chunks and
+  // 20-row pages.
+  async function measureRendererRefresh(historicalTurns: number) {
+    const stateDb = openInMemoryStateDb();
+    cleanups.push(() => stateDb.close());
+    const { internals, registry, store } = await setupThread({ historicalTurns, stateDb });
+    await endTurn(internals);
+    const builds = {
+      cardLists: vi.spyOn(store, "listThreadSubAgents"),
+      overlays: vi.spyOn(store, "getThreadOverlayState"),
+      tokenMiser: vi.spyOn(
+        registry as unknown as { withTokenMiserAccounting(...args: unknown[]): unknown },
+        "withTokenMiserAccounting",
+      ),
+      toolAccounting: vi.spyOn(store, "readThreadToolAccounting"),
+    };
+    const loadedTurns = [
+      ...Array.from({ length: historicalTurns }, (_, index) => `turn-${index}`),
+      FINAL_TURN_ID,
+    ].map((id) => ({ id, status: "completed" as const }));
+    const accounting = await registry.readThread({
+      backend: "codex",
+      display: { resource: "accounting", turns: loadedTurns },
+      includeTurns: false,
+      threadId: THREAD_ID,
+      viewOnly: true,
+    });
+    // Five loaded 20-row pages, or every row of a thread with fewer.
+    const pricing = await registry.readThread({
+      backend: "codex",
+      display: { resource: "pricing", limit: 100, deferPricingGates: true },
+      includeTurns: false,
+      threadId: THREAD_ID,
+      viewOnly: true,
+    });
+    const totalRows = pricing.display?.pricingPage?.totalRows ?? 0;
+    expect(accounting.replay.entries.map((entry) => entry.turn?.id).sort())
+      .toEqual(loadedTurns.map((turn) => turn.id).sort());
+    expect(pricing.display?.pricingPage?.rows).toHaveLength(Math.min(100, totalRows));
+    expect(Boolean(pricing.display?.nextCursor)).toBe(totalRows > 100);
+    vi.restoreAllMocks();
+    return Object.fromEntries(Object.entries(builds).map(([name, spy]) => [name, spy.mock.calls.length]));
+  }
+
+  it("serves a renderer refresh with one display build per resource for a small and a large thread", async () => {
+    const small = await measureRendererRefresh(20);
+    const large = await measureRendererRefresh(2_000);
+    expect(small).toEqual({ cardLists: 2, overlays: 2, tokenMiser: 2, toolAccounting: 2 });
+    expect(large).toEqual(small);
+  }, 60_000);
+
   function countPricingEmits(registry: DesktopBackendRegistry): Map<string, number> {
     const emits = new Map<string, number>();
     registry.onEvent((event) => {

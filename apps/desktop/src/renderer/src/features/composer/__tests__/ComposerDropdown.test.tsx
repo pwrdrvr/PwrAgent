@@ -169,3 +169,50 @@ describe("ComposerDropdown Other models", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
   });
 });
+
+describe("ComposerDropdown provider groups", () => {
+  it("titles each provider's models and shows the provider in the closed trigger", () => {
+    const onChange = vi.fn();
+    render(
+      <ComposerDropdown
+        ariaLabel="Model"
+        onChange={onChange}
+        optionsLabel="Codex"
+        options={[{ label: "GPT-5.5", value: "gpt-5.5" }]}
+        groups={[{
+          label: "Refuseless",
+          options: [{
+            label: "glm-5.3-abliterated",
+            selectedLabel: "Refuseless · glm-5.3-abliterated",
+            value: "@refuseless/glm-5.3-abliterated",
+          }],
+        }]}
+        value="@refuseless/glm-5.3-abliterated"
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Model: Refuseless · glm-5.3-abliterated" });
+    fireEvent.click(trigger);
+    const listbox = screen.getByRole("listbox", { name: "Model" });
+    const group = within(listbox).getByRole("group", { name: "Refuseless" });
+    expect(within(group).getByRole("option", { name: "glm-5.3-abliterated" })).toHaveAttribute("aria-selected", "true");
+    expect(listbox).toHaveTextContent("Codex");
+    fireEvent.click(within(listbox).getByRole("option", { name: "GPT-5.5" }));
+    expect(onChange).toHaveBeenCalledWith("gpt-5.5");
+  });
+
+  it("explains a filtered list in a note outside the listbox", () => {
+    render(
+      <ComposerDropdown
+        ariaLabel="Model"
+        onChange={vi.fn()}
+        options={[{ label: "glm-5.3-abliterated", value: "@refuseless/glm-5.3-abliterated" }]}
+        footnote="This thread runs on Refuseless. To use another provider, hand it off to a new thread."
+        value="@refuseless/glm-5.3-abliterated"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Model/u }));
+    const listbox = screen.getByRole("listbox", { name: "Model" });
+    expect(listbox).not.toHaveTextContent("hand it off");
+    expect(screen.getByText(/hand it off to a new thread/u)).toBeInTheDocument();
+  });
+});

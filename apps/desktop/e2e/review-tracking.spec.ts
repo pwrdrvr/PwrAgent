@@ -72,7 +72,7 @@ test("tracks a review created after tracking began, retains dismissals, and clea
 
     await card.getByRole("button", { name: "Dismiss review", exact: true }).click();
     await expect.poll(async () => (await readReviews())[0]?.status).toBe("dismissed");
-    await expect(card.getByText("Did not address", { exact: true })).toHaveCount(3);
+    await expect(card.getByText("Dismissed", { exact: true })).toHaveCount(3);
     await expect(card).toContainText("Cancel pending exports when the panel closes");
     await app.window.screenshot({ path: testInfo.outputPath("review-dismissed.png") });
     await card.getByRole("button", { name: "Reopen review", exact: true }).click();
@@ -84,14 +84,14 @@ test("tracks a review created after tracking began, retains dismissals, and clea
       return (await api.listThreadTodos!()).todos;
     });
     expect(todos.filter((todo) => todo.reviewId)).toEqual([]);
-    await expect(card).toContainText("All findings addressed or declined.");
+    await expect(card).toContainText("Every finding is addressed, declined, or deferred.");
     await app.window.screenshot({ path: testInfo.outputPath("review-handled.png") });
 
     // A renderer reload reads the same artifact again; it must retain outcomes.
     await app.window.reload();
     await expect.poll(async () => (await readReviews())[0]?.status).toBe("handled");
     const stored = (await readReviews())[0]!;
-    expect(stored.items.map((item) => item.status)).toEqual(["addressed", "dismissed"]);
+    expect(stored.items.map((item) => item.status)).toEqual(["addressed", "declined"]);
   } finally {
     await app.close();
     await rm(root, { recursive: true, force: true });

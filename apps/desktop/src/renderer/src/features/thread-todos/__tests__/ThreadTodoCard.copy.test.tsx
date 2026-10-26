@@ -108,8 +108,39 @@ describe("to-do card Markdown", () => {
       id, title: `Finding ${id}`, status, priority, createdAt: 0, updatedAt: 0,
     });
     const review = card([], { items: undefined, detail: undefined, kind: "review" });
-    expect(threadTodoMarkdown(review, [finding("a", "open", 1), finding("b", "addressed"), finding("c", "dismissed", 2)]))
-      .toBe("## Add stdio server support\n\n- [ ] P1 Finding a\n- [x] Finding b\n- [x] ~~P2 Finding c~~ (declined)");
+    const deferred: ThreadReviewItem = { ...finding("d", "deferred", 3), resolution: {
+      note: "Needs a design pass.", todo: { id: "todo-1", title: "Design the retry budget" }, actor: "agent", at: 0,
+    } };
+    expect(threadTodoMarkdown(review, [finding("a", "open", 1), finding("b", "addressed"), finding("c", "declined", 2), deferred]))
+      .toBe("## Add stdio server support\n\n- [ ] P1 Finding a\n- [x] Finding b\n- [x] ~~P2 Finding c~~ (declined)"
+        + "\n- [ ] P3 Finding d (deferred: Design the retry budget)");
+  });
+
+  it("heads prerequisites apart from the steps", () => {
+    const handoff = card([true, false], {
+      detail: undefined,
+      items: [
+        { id: "p1", text: "Clone the repository", checked: false, prerequisite: true },
+        ...card([true, false]).items!.slice(0, 2),
+      ],
+      action: { type: "start_thread", prompt: "Build the gateway." },
+    });
+    expect(threadTodoMarkdown(handoff)).toBe([
+      "## Add stdio server support",
+      "",
+      "### Before you start",
+      "",
+      "- [ ] Clone the repository",
+      "",
+      "### Steps",
+      "",
+      "- [x] Confirm the model is available",
+      "- [ ] Inspect the remote bridge branch",
+      "",
+      "### Prompt",
+      "",
+      "Build the gateway.",
+    ].join("\n"));
   });
 
   it("separates cards with a blank line", () => {
@@ -180,6 +211,21 @@ describe("to-do card copy", () => {
     fireEvent.contextMenu(screen.getByRole("heading", { name: todo.title }));
     await choose("Copy all to-dos");
     expect(copied.at(-1)).toBe(threadTodosMarkdown([todo, other]));
+  });
+
+  it("counts and copies the steps without the prerequisites", async () => {
+    const todo = card([true], {
+      items: [
+        { id: "p1", text: "Clone the repository", checked: false, prerequisite: true },
+        ...card([true]).items!,
+      ],
+    });
+    render(<ThreadTodoCard {...props(todo)} />);
+
+    fireEvent.contextMenu(screen.getByText("Clone the repository"));
+    expect(menuItems()).toEqual(["Copy step", "Copy to-do5 steps", "Copy open steps4"]);
+    await choose("Copy open steps");
+    expect(copied.at(-1)).not.toContain("Clone the repository");
   });
 
   it("leads with Copy selection when text inside the card is selected", async () => {

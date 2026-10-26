@@ -6,7 +6,7 @@ const workflow = readFileSync(new URL("../.github/workflows/linux-packaging.yml"
 
 function evaluate(expression, {
   event = "pull_request", action = "synchronize", label, labels = [], fork = false,
-  ref = "refs/heads/main", sha = "main-commit-one",
+  ref = "refs/heads/main",
 } = {}) {
   const js = expression.replace(
     "github.event.pull_request.labels.*.name",
@@ -16,7 +16,6 @@ function evaluate(expression, {
     github: {
       workflow: "Linux Packaging",
       ref,
-      sha,
       repository: "pwrdrvr/PwrAgent",
       event_name: event,
       event: event === "pull_request" ? {
@@ -70,22 +69,14 @@ test("manual packaging does not require a PR or label", () => {
   expect(packages({ event: "workflow_dispatch" })).toBe(true);
 });
 
-test("main pushes package Linux without a PR or label", () => {
-  expect(packages({ event: "push" })).toBe(true);
+test("pushes do not package Linux", () => {
+  expect(packages({ event: "push" })).toBe(false);
   expect(packages({ event: "push", ref: "refs/heads/feature" })).toBe(false);
   expect(packages({ event: "push", ref: "refs/tags/v1.2.3" })).toBe(false);
 });
 
-test("each main commit has its own packaging queue", () => {
-  const group = concurrencyGroup({ event: "push" });
-  expect(group).toBe("Linux Packaging-main-commit-one");
-  expect(concurrencyGroup({ event: "push", sha: "main-commit-two" })).not.toBe(group);
-});
-
-test("main pushes start the packaging workflow", () => {
-  const trigger = workflow.split("\n  push:\n")[1]?.split(/\n  \w/)[0];
-  expect(trigger).toMatch(/^    branches:\n      - main$/m);
-  expect(trigger).not.toMatch(/^    paths(?:-ignore)?:/m);
+test("pushes do not start the packaging workflow", () => {
+  expect(workflow).not.toMatch(/^  push:/m);
 });
 
 test("label addition, pushes, and reopens share the packaging queue", () => {

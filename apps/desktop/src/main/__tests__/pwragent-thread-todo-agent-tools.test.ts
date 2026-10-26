@@ -3,6 +3,7 @@ import type { ThreadTodo } from "@pwragent/shared";
 import {
   THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
   THREAD_TODO_MAX_ITEMS,
+  THREAD_TODO_MAX_PREREQUISITES,
 } from "@pwragent/shared";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import {
@@ -168,6 +169,21 @@ describe("checklist arguments", () => {
     }
   });
 
+  it("takes prerequisites beside the steps", () => {
+    expect(normalizeAddTodoArgs({ title: "Build", items: ["Implement"], prerequisites: [" Clone "] }))
+      .toEqual({ ok: true, value: { title: "Build", items: ["Implement"], prerequisites: ["Clone"] } });
+    expect(normalizeAddTodoArgs({ title: "Build", prerequisites: "Clone" })).toMatchObject({ ok: false });
+    // They show in full on a resting card, so they have a smaller cap.
+    const tooMany = Array.from({ length: THREAD_TODO_MAX_PREREQUISITES + 1 }, (_, index) => `P${index}`);
+    expect(normalizeAddTodoArgs({ title: "Build", prerequisites: tooMany })).toMatchObject({
+      ok: false,
+      message: `add_todo prerequisites may hold at most ${THREAD_TODO_MAX_PREREQUISITES} steps.`,
+    });
+    expect(normalizeUpdateTodoArgs({ id: "todo-1", prerequisites: [] }))
+      .toEqual({ ok: true, target: { id: "todo-1" }, value: { prerequisites: [] } });
+    expect(normalizeUpdateTodoArgs({ id: "todo-1", prerequisites: [""] })).toMatchObject({ ok: false });
+  });
+
   it("reads restated steps and step ids to tick on update", () => {
     expect(normalizeUpdateTodoArgs({ key: "ship", items: ["A"], check: ["s-1", "s-1"], uncheck: [] }))
       .toEqual({ ok: true, target: { key: "ship" }, value: { items: ["A"], check: ["s-1"] } });
@@ -188,8 +204,12 @@ describe("checklist arguments", () => {
       properties: Record<string, unknown>;
     };
     expect(Object.keys(update.properties)).toEqual(
-      expect.arrayContaining(["items", "check", "uncheck"]),
+      expect.arrayContaining(["items", "prerequisites", "check", "uncheck"]),
     );
+    expect(Object.keys(add.properties)).toContain("prerequisites");
+    // Steps on a handoff are the new thread's work; only prerequisites block.
+    expect(tool("add_todo", undefined).description)
+      .toContain("items are the new thread's plan and never block starting it");
     const resolve = tool("resolve_todo", undefined).inputSchema as {
       properties: Record<string, { type: string }>;
     };
@@ -384,6 +404,51 @@ describe("thread to-do tool dispatch", () => {
 
       await tool("update_todo", handler).dispatch({ key: "ship", check: ["id-5", "id-6"] }, CONTEXT);
       expect(await tool("resolve_todo", handler).dispatch({ key: "ship" }, CONTEXT))
+        .toMatchObject({ ok: true, data: { todo: { status: "done" } } });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("returns a handoff's prerequisites apart from its steps", async () => {
+    const db = openInMemoryStateDb();
+    try {
+      let ids = 0;
+      const service = new ThreadTodoService({
+        store: new ThreadTodoStore(db),
+        newId: () => `id-${++ids}`,
+      });
+      const handler: PwrAgentThreadTodoHandler = {
+        add: async (context, input) => service.add({ ...context, input }),
+        update: async (context, target, input) =>
+          service.update({ id: service.findForThread({ ...context, ...target }).id, ...input }),
+        list: (context, status) => service.list({ ...context, status }),
+        resolve: (context, target) => service.resolveFromThread({ ...context, ...target }),
+      };
+      const raised = await tool("add_todo", handler).dispatch({
+        key: "build",
+        title: "Build it in PwrSnap",
+        items: ["Implement", "Test"],
+        prerequisites: ["Clone PwrSnap"],
+        action: { type: "start_thread", prompt: "Build it" },
+      }, CONTEXT);
+      expect(raised).toMatchObject({
+        ok: true,
+        data: {
+          todo: {
+            items: [
+              { id: "id-3", text: "Implement", checked: false },
+              { id: "id-4", text: "Test", checked: false },
+            ],
+            prerequisites: [{ id: "id-2", text: "Clone PwrSnap", checked: false }],
+          },
+        },
+      });
+      const refused = await tool("resolve_todo", handler).dispatch({ key: "build" }, CONTEXT);
+      expect(refused.ok ? "" : refused.message).toContain('1 unchecked prerequisite: "Clone PwrSnap"');
+      await tool("update_todo", handler).dispatch({ key: "build", check: ["id-2"] }, CONTEXT);
+      // The new thread's steps do not hold the card open.
+      expect(await tool("resolve_todo", handler).dispatch({ key: "build" }, CONTEXT))
         .toMatchObject({ ok: true, data: { todo: { status: "done" } } });
     } finally {
       db.close();

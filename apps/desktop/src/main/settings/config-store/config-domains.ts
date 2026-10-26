@@ -185,6 +185,11 @@ export function normalizeConfigDomains(params: {
         configOverrides: provider === "codex"
           ? config.models?.codex?.configOverrides
           : undefined,
+        // Only what Codex launches with. Models and rates are PwrAgent's own
+        // reads and must not reconnect Codex.
+        codexModelProviders: provider === "codex"
+          ? config.models?.codex?.providers?.map((entry) => `${entry.id}\u0000${entry.name}\u0000${entry.baseUrl}`)
+          : undefined,
         commandOverride,
         enabled,
         managedBuilds:
@@ -302,6 +307,7 @@ export function providerLastKnownGoodMatchesConfig(
 
 export function providerDependencyFingerprint(params: {
   configOverrides?: readonly string[];
+  codexModelProviders?: readonly string[];
   commandOverride?: string;
   enabled: boolean;
   managedBuilds?: boolean;
@@ -312,6 +318,7 @@ export function providerDependencyFingerprint(params: {
     .update(JSON.stringify({
       arch: process.arch,
       ...(params.configOverrides?.length ? { configOverrides: params.configOverrides } : {}),
+      ...(params.codexModelProviders?.length ? { codexModelProviders: params.codexModelProviders } : {}),
       commandOverride: params.commandOverride ?? "",
       enabled: params.enabled,
       managedBuilds: params.managedBuilds ?? null,

@@ -22,7 +22,8 @@ import {
   mergeThreadTodoItems,
   threadTodoActionProject,
   threadTodoKindForAction,
-  threadTodoOpenItems,
+  threadTodoBlockingItems,
+  threadTodoItemNoun,
 } from "@pwragent/shared";
 import type { ThreadTodoStore } from "./thread-todo-store.js";
 
@@ -72,6 +73,11 @@ export type AddThreadTodoInput = {
    * out keeps the card's steps as they are.
    */
   items?: string[];
+  /**
+   * What the operator must do before the action can run, merged like
+   * `items`. Only these hold a start_thread card's Start back.
+   */
+  prerequisites?: string[];
   key?: string;
   action?: ThreadTodoAction;
   /** The project name or path the thread named, resolved by the runtime. */
@@ -97,6 +103,8 @@ export type UpdateThreadTodoInput = {
   detail?: string | null;
   /** The card's steps restated, merged as add_todo merges them; [] clears. */
   items?: string[];
+  /** The card's prerequisites restated, merged the same way; [] clears. */
+  prerequisites?: string[];
   /** Step ids to tick, and to untick. */
   check?: string[];
   uncheck?: string[];
@@ -201,9 +209,14 @@ export class ThreadTodoService {
           kind,
           title: input.title,
           detail: input.detail,
-          items: input.items === undefined
+          items: input.items === undefined && input.prerequisites === undefined
             ? existing.items
-            : mergeThreadTodoItems(existing.items, input.items, this.newId),
+            : mergeThreadTodoItems(
+                existing.items,
+                input.items,
+                this.newId,
+                input.prerequisites,
+              ),
           action: input.action,
           cwd: params.cwd,
           sourceProject,
@@ -226,7 +239,12 @@ export class ThreadTodoService {
         kind,
         title: input.title,
         detail: input.detail,
-        items: mergeThreadTodoItems(undefined, input.items ?? [], this.newId),
+        items: mergeThreadTodoItems(
+          undefined,
+          input.items ?? [],
+          this.newId,
+          input.prerequisites ?? [],
+        ),
         action: input.action,
         cwd: params.cwd,
         sourceProject,
@@ -311,7 +329,7 @@ export class ThreadTodoService {
       return current;
     }
     if (params.status === "done" && !params.allowOpenItems) {
-      assertNoOpenItems(current);
+      assertNoBlockingItems(current);
     }
     // The run would write its result over this when it ends: a dismissed
     // card would come back done, or take the run's error after resolving.
@@ -401,6 +419,8 @@ export class ThreadTodoService {
     detail?: string | null;
     /** Step texts restated; merged with the card's steps. [] clears them. */
     items?: string[];
+    /** Prerequisite texts restated, merged the same way. */
+    prerequisites?: string[];
     /** Step ids to tick and untick, after `items` is merged. */
     check?: string[];
     uncheck?: string[];
@@ -411,6 +431,7 @@ export class ThreadTodoService {
     const contentChanges = params.title !== undefined
       || params.detail !== undefined
       || params.items !== undefined
+      || params.prerequisites !== undefined
       || params.targetProject !== undefined
       || (params.action !== undefined && Object.keys(params.action).length > 0);
     // Ticking steps changes nothing a running action reads, so it is
@@ -485,15 +506,16 @@ export class ThreadTodoService {
       title?: string;
       detail?: string | null;
       items?: string[];
+      prerequisites?: string[];
       check?: string[];
       uncheck?: string[];
       targetProject?: ThreadTodoProject | null;
       action?: ThreadTodoActionPatch;
     },
   ): ThreadTodo {
-    const merged = params.items === undefined
+    const merged = params.items === undefined && params.prerequisites === undefined
       ? current.items ?? []
-      : mergeThreadTodoItems(current.items, params.items, this.newId);
+      : mergeThreadTodoItems(current.items, params.items, this.newId, params.prerequisites);
     const items = applyItemChecks(merged, params.check ?? [], params.uncheck ?? []);
     const action = patchAction(current.action, params.action);
     const targetProject = params.targetProject === undefined
@@ -541,7 +563,7 @@ export class ThreadTodoService {
       );
     }
     if (!options.allowOpenItems) {
-      assertNoOpenItems(todo);
+      assertNoBlockingItems(todo);
     }
     if (this.running.has(id)) {
       throw new ThreadTodoError("conflict", "This to-do's action is already running.");
@@ -663,17 +685,18 @@ export class ThreadTodoService {
 }
 
 /**
- * The completion rule: a card with unchecked steps is not done. The message
- * names each open step and its id, so an agent can tick the ones that are
- * finished or say why the rest no longer apply.
+ * The completion rule: a card with unchecked blocking steps is not done, and
+ * its action does not run (threadTodoBlockingItems). The message names each
+ * open step and its id, so an agent can tick the ones that are finished or
+ * say why the rest no longer apply.
  */
-function assertNoOpenItems(todo: ThreadTodo): void {
-  const open = threadTodoOpenItems(todo);
+function assertNoBlockingItems(todo: ThreadTodo): void {
+  const open = threadTodoBlockingItems(todo);
   if (open.length === 0) return;
   const steps = open.map((item) => `"${item.text}" (${item.id})`).join(", ");
   throw new ThreadTodoError(
     "open_items",
-    `This to-do has ${open.length} unchecked ${open.length === 1 ? "step" : "steps"}: ${steps}. `
+    `This to-do has ${open.length} unchecked ${threadTodoItemNoun(open)}: ${steps}. `
       + "Check finished steps with update_todo check, or pass allowOpenItems: true when the operator says the rest no longer apply.",
   );
 }

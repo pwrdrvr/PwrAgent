@@ -6,7 +6,7 @@ import type {
   ThreadReviewResolution,
   UpdateThreadReviewRequest,
 } from "@pwragent/shared";
-import { BanIcon, CheckIcon } from "../../icons";
+import { BanIcon, CheckIcon, TodoIcon } from "../../icons";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { reviewFindingTag } from "../../../../shared/review-output";
@@ -105,6 +105,42 @@ export function useTrackedReview(
   return { review, update, busy, error };
 }
 
+/**
+ * What a settled finding reads, in the words the agent tools use: one table
+ * for the transcript and the To-do card. A finding of a dismissed review
+ * reads Dismissed, the review's own outcome.
+ */
+const SETTLED_FINDING_LABELS = {
+  addressed: { label: "Addressed", Icon: CheckIcon },
+  declined: { label: "Declined", Icon: BanIcon },
+  deferred: { label: "Deferred", Icon: TodoIcon },
+  dismissed: { label: "Dismissed", Icon: BanIcon },
+} as const;
+
+export type SettledFindingStatus = keyof typeof SETTLED_FINDING_LABELS;
+
+/**
+ * A settled finding's label. A status this build does not know, from a newer
+ * peer, still reads as settled rather than failing the render.
+ */
+function settledFindingLabel(status: string) {
+  return Object.hasOwn(SETTLED_FINDING_LABELS, status)
+    ? SETTLED_FINDING_LABELS[status as SettledFindingStatus]
+    : { label: "Settled", Icon: CheckIcon };
+}
+
+/** A settled finding's status as labelled, or undefined while it is open. */
+export function settledFindingStatus(review: ThreadReview, item: ThreadReviewItem): string | undefined {
+  if (review.status === "dismissed") return "dismissed";
+  return item.status === "open" ? undefined : item.status;
+}
+
+/** A settled finding's glyph and label. */
+export function SettledFindingLabel(props: { status: string; size: number }) {
+  const { label, Icon } = settledFindingLabel(props.status);
+  return <><Icon size={props.size} />{label}</>;
+}
+
 /** Open findings first, then by priority; ties keep the reviewer's order. */
 export function orderReviewItems(items: readonly ThreadReviewItem[]): ThreadReviewItem[] {
   const rank = (item: ThreadReviewItem): number => item.priority ?? 9;
@@ -124,7 +160,7 @@ export function openReviewItems(review: ThreadReview): ThreadReviewItem[] {
 /**
  * The reply the review card's Fix button sends to the review's own thread:
  * the findings the operator picked, by title. `list_reviews` returns their
- * details and ids, and with them how to mark each one addressed.
+ * details and ids, and with them how to settle each one.
  */
 export function fixReviewFindingsPrompt(reviewTitle: string, items: readonly ThreadReviewItem[]): string {
   const findings = items.map((item, index) => {
@@ -186,6 +222,12 @@ function ResolutionDetails(props: { outcome: string; resolution: ThreadReviewRes
   return (
     <>
       <span className="review-status__note">{describeResolution(props.outcome, resolution)}</span>
+      {resolution.todo ? (
+        <span className="review-status__todo" title={resolution.todo.title}>
+          <TodoIcon size={12} />
+          <span className="review-status__todo-title">{resolution.todo.title}</span>
+        </span>
+      ) : null}
       {resolution.url ? (
         <a
           className="review-status__link"
@@ -220,7 +262,7 @@ export function ReviewStatusRow(props: { review: ThreadReview; busy: boolean; up
         </span>
         <span className="review-status__note">
           {open > 0
-            ? "Tracked in To-dos until each finding is addressed or declined."
+            ? "Tracked in To-dos until each finding is addressed, declined, or deferred."
             : "No findings left open. Mark it handled once you are done with it."}
         </span>
         <div className="review-status__actions">
@@ -255,7 +297,7 @@ export function ReviewStatusRow(props: { review: ThreadReview; busy: boolean; up
     <div className="review-status" data-status={review.status}>
       <span className="review-status__state" data-status={review.status}>
         {dismissed ? <BanIcon size={12} /> : <CheckIcon size={12} />}
-        {dismissed ? "Did not address" : "Handled"}
+        {dismissed ? "Dismissed" : "Handled"}
       </span>
       {review.resolution ? (
         <ResolutionDetails outcome={dismissed ? "Dismissed" : "Handled"} resolution={review.resolution} />
@@ -278,12 +320,11 @@ export function ReviewStatusRow(props: { review: ThreadReview; busy: boolean; up
 
 /** A settled finding's label in its head; a whole-review dismissal labels every finding. */
 export function ReviewFindingState(props: { review: ThreadReview; item: ThreadReviewItem }) {
-  const status = props.review.status === "dismissed" ? "dismissed" : props.item.status;
-  if (status === "open") return null;
+  const status = settledFindingStatus(props.review, props.item);
+  if (!status) return null;
   return (
     <span className="review-finding-state" data-status={status}>
-      {status === "addressed" ? <CheckIcon size={12} /> : <BanIcon size={12} />}
-      {status === "addressed" ? "Addressed" : "Did not address"}
+      <SettledFindingLabel status={status} size={12} />
     </span>
   );
 }
@@ -312,7 +353,7 @@ export function ReviewFindingActions(props: TranscriptFindingControlsProps) {
         className="button review-status__button review-status__button--quiet"
         aria-label={`Decline finding: ${title}`}
         disabled={busy}
-        onClick={() => void update({ itemId: item.id, status: "dismissed" })}
+        onClick={() => void update({ itemId: item.id, status: "declined" })}
       >
         Decline
       </button>
@@ -337,7 +378,7 @@ export function ReviewFindingResolution(props: TranscriptFindingControlsProps) {
   return (
     <div className="review-status" data-status={item.status}>
       <ResolutionDetails
-        outcome={item.status === "addressed" ? "Addressed" : "Declined"}
+        outcome={settledFindingLabel(item.status).label}
         resolution={item.resolution}
       />
       <div className="review-status__actions">

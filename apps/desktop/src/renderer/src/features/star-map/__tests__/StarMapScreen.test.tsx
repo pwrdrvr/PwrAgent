@@ -10,6 +10,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
+  type AppServerBackendKind,
   type NavigationQueryPage,
   type NavigationQueryRequest,
   type NavigationThreadSummary,
@@ -1831,6 +1832,166 @@ describe("StarMapScreen", () => {
       expect(Boolean(card.querySelector(".thread-row__chip--backend"))).toBe(shown);
     },
   );
+
+  describe("provider chip across the fleet", () => {
+    const peerTarget = { scope: "remote" as const, instanceId: "pwr_peer" };
+
+    function peerThread(id: string): NavigationThreadSummary {
+      return {
+        ...unreadThread(id),
+        federation: {
+          instanceLabel: "Studio Mac",
+          ref: { backend: "codex" as const, target: peerTarget, threadId: id },
+        },
+      } as NavigationThreadSummary;
+    }
+
+    /**
+     * A desktop API whose owner-matched local feed and, when `peer` is set,
+     * one connected peer each answer the whole-map page with their own
+     * threads. `backends` is what that owner's counts report; `undefined`
+     * is an owner too old to report the list.
+     */
+    function fleetApi(feeds: {
+      local: { threads: NavigationThreadSummary[]; backends?: AppServerBackendKind[] };
+      peer?: { threads: NavigationThreadSummary[]; backends?: AppServerBackendKind[] };
+    }): DesktopApi {
+      const getNavigationQueryPage = vi.fn(async (request: NavigationQueryRequest) => {
+        const feed = request.federationTarget?.scope === "remote" ? feeds.peer : feeds.local;
+        if (!feed) return queryPage(request, []);
+        if (request.query.kind === "exact") {
+          const asked = new Set(request.query.identities.map((ref) => ref.threadId));
+          return queryPage(request, feed.threads.filter((thread) => asked.has(thread.id)));
+        }
+        if (request.query.kind !== "star-map") return queryPage(request, []);
+        const page = queryPage(request, feed.threads);
+        return feed.backends
+          ? { ...page, counts: { ...page.counts, backends: feed.backends } }
+          : page;
+      });
+      return {
+        readFederationHealth: vi.fn(async () => ({
+          health: feeds.peer
+            ? {
+                enabled: true,
+                role: "gateway" as const,
+                status: "listening" as const,
+                instanceId: "pwr_local",
+                localLabel: "Local Mac",
+                peers: [{
+                  id: "pwr_peer",
+                  label: "Studio Mac",
+                  role: "client" as const,
+                  status: "connected" as const,
+                  capabilities: ["thread_navigation" as const],
+                  navigationQueryProtocol: 2 as const,
+                }],
+              }
+            : {
+                enabled: false,
+                role: "client" as const,
+                status: "disabled" as const,
+                instanceId: "pwr_local",
+                localLabel: "Local Mac",
+                peers: [],
+              },
+        })),
+        getNavigationQueryPage,
+        onAgentEvent: vi.fn(() => () => undefined),
+      } as unknown as DesktopApi;
+    }
+
+    function renderFleet(desktopApi: DesktopApi) {
+      window.localStorage.setItem(
+        "pwragent.starMap.viewPreferences",
+        JSON.stringify({ cardFields: { provider: true } }),
+      );
+      render(
+        <StarMapScreen
+          desktopApi={desktopApi}
+          sessionKeys={{}}
+          onOpenLocalThread={() => undefined}
+          onFocusLocalInstance={() => undefined}
+        />,
+      );
+    }
+
+    async function findCards(...threadIds: string[]): Promise<void> {
+      for (const threadId of threadIds) {
+        await screen.findByRole("button", { name: `Open thread: Thread ${threadId}` });
+      }
+    }
+
+    function providerChipShown(threadId: string): boolean {
+      const card = starMapCard(
+        screen.getByRole("button", { name: `Open thread: Thread ${threadId}` }),
+      );
+      return Boolean(card.querySelector(".thread-row__chip--backend"));
+    }
+
+    it.each([
+      { label: "hides", reports: "only OpenAI", backends: ["codex"], shown: false },
+      // A Claude thread that is not on the loaded page still counts.
+      { label: "shows", reports: "a second provider", backends: ["claude", "codex"], shown: true },
+      { label: "shows", reports: "no provider list", backends: undefined, shown: true },
+    ] as const)(
+      "$label the chip when the owner-matched local page reports $reports",
+      async ({ backends, shown }) => {
+        renderFleet(fleetApi({
+          local: {
+            threads: [unreadThread("local-0"), unreadThread("local-1")],
+            backends: backends && [...backends],
+          },
+        }));
+
+        await findCards("local-0", "local-1");
+        await waitFor(() => {
+          expect(providerChipShown("local-0")).toBe(shown);
+          expect(providerChipShown("local-1")).toBe(shown);
+        });
+      },
+    );
+
+    it("shows the chip on every card once a peer reports a second provider", async () => {
+      // Every loaded card is OpenAI. Only the peer's counts say it also has
+      // a Claude thread.
+      renderFleet(fleetApi({
+        local: { threads: [unreadThread("local-0")], backends: ["codex"] },
+        peer: { threads: [peerThread("peer-0")], backends: ["claude", "codex"] },
+      }));
+
+      await findCards("local-0", "peer-0");
+      await waitFor(() => {
+        expect(providerChipShown("local-0")).toBe(true);
+        expect(providerChipShown("peer-0")).toBe(true);
+      });
+    });
+
+    it("hides the chip when the peer reports the same one provider", async () => {
+      renderFleet(fleetApi({
+        local: { threads: [unreadThread("local-0")], backends: ["codex"] },
+        peer: { threads: [peerThread("peer-0")], backends: ["codex"] },
+      }));
+
+      // The peer's card and its counts arrive on the same page.
+      await findCards("local-0", "peer-0");
+      expect(providerChipShown("local-0")).toBe(false);
+      expect(providerChipShown("peer-0")).toBe(false);
+    });
+
+    it("shows the chip on every card when a peer answers without a provider list", async () => {
+      renderFleet(fleetApi({
+        local: { threads: [unreadThread("local-0")], backends: ["codex"] },
+        peer: { threads: [peerThread("peer-0")] },
+      }));
+
+      await findCards("local-0", "peer-0");
+      await waitFor(() => {
+        expect(providerChipShown("local-0")).toBe(true);
+        expect(providerChipShown("peer-0")).toBe(true);
+      });
+    });
+  });
 
   it("hides offline instances when the view option is set", async () => {
     window.localStorage.clear();

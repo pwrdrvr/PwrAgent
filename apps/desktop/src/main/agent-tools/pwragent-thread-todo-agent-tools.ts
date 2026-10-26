@@ -13,9 +13,12 @@ import {
   THREAD_TODO_DETAIL_MAX_LENGTH,
   THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
   THREAD_TODO_MAX_ITEMS,
+  THREAD_TODO_MAX_PREREQUISITES,
   THREAD_TODO_PROMPT_MAX_LENGTH,
   THREAD_TODO_TITLE_MAX_LENGTH,
   parseThreadTodoItemTexts,
+  threadTodoPrerequisites,
+  threadTodoSteps,
 } from "@pwragent/shared";
 import type {
   AgentToolCallContext,
@@ -245,11 +248,9 @@ export function normalizeAddTodoArgs(
       message: `add_todo project must be at most ${PROJECT_MAX_LENGTH} characters.`,
     };
   }
-  const items = args.items === undefined
-    ? undefined
-    : parseThreadTodoItemTexts(args.items, "add_todo items");
-  if (items && !items.ok) {
-    return items;
+  const checklist = readChecklistTexts(args, "add_todo");
+  if (!checklist.ok) {
+    return checklist;
   }
   const action = normalizeAction(args.action);
   if (action && !action.ok) {
@@ -260,7 +261,7 @@ export function normalizeAddTodoArgs(
     value: {
       title,
       ...(detail ? { detail } : {}),
-      ...(items ? { items: items.value } : {}),
+      ...checklist.value,
       ...(key ? { key } : {}),
       ...(project ? { project } : {}),
       ...(action ? { action: action.value } : {}),
@@ -345,6 +346,29 @@ function normalizeAction(
 }
 
 /**
+ * The card's step and prerequisite texts, each left out when absent so a
+ * restated card keeps that list. Prerequisites have their own, smaller cap.
+ */
+function readChecklistTexts(
+  args: Record<string, unknown>,
+  operation: "add_todo" | "update_todo",
+):
+  | { ok: true; value: { items?: string[]; prerequisites?: string[] } }
+  | { ok: false; message: string } {
+  const value: { items?: string[]; prerequisites?: string[] } = {};
+  for (const [field, maxItems] of [
+    ["items", THREAD_TODO_MAX_ITEMS],
+    ["prerequisites", THREAD_TODO_MAX_PREREQUISITES],
+  ] as const) {
+    if (args[field] === undefined) continue;
+    const texts = parseThreadTodoItemTexts(args[field], `${operation} ${field}`, maxItems);
+    if (!texts.ok) return texts;
+    value[field] = texts.value;
+  }
+  return { ok: true, value };
+}
+
+/**
  * update_todo's fields are a patch: an absent field is left alone, and an
  * empty string clears an optional one back to its default. That keeps
  * "use another model" from making the thread restate the whole card.
@@ -379,11 +403,9 @@ export function normalizeUpdateTodoArgs(
   const project = readClearable(args.project, "project", PROJECT_MAX_LENGTH);
   if (project && !project.ok) return project;
   if (project) value.project = project.value;
-  if (args.items !== undefined) {
-    const items = parseThreadTodoItemTexts(args.items, "update_todo items");
-    if (!items.ok) return items;
-    value.items = items.value;
-  }
+  const checklist = readChecklistTexts(args, "update_todo");
+  if (!checklist.ok) return checklist;
+  Object.assign(value, checklist.value);
   for (const field of ["check", "uncheck"] as const) {
     if (args[field] === undefined) continue;
     const ids = readItemIds(args[field], field);
@@ -446,12 +468,12 @@ function readItemIds(
 ): { ok: true; value: string[] } | { ok: false; message: string } {
   if (
     !Array.isArray(value)
-    || value.length > THREAD_TODO_MAX_ITEMS
+    || value.length > THREAD_TODO_MAX_ITEMS + THREAD_TODO_MAX_PREREQUISITES
     || !value.every((entry) => typeof entry === "string" && entry.trim())
   ) {
     return {
       ok: false,
-      message: `update_todo ${name} must be an array of at most ${THREAD_TODO_MAX_ITEMS} step ids.`,
+      message: `update_todo ${name} must be an array of at most ${THREAD_TODO_MAX_ITEMS + THREAD_TODO_MAX_PREREQUISITES} step ids.`,
     };
   }
   return { ok: true, value: [...new Set(value.map((entry: string) => entry.trim()))] };
@@ -525,7 +547,7 @@ function summarizeTodo(todo: ThreadTodo): Record<string, unknown> {
     status: todo.status,
     title: todo.title,
     ...(todo.detail ? { detail: todo.detail } : {}),
-    ...(todo.items ? { items: todo.items } : {}),
+    ...summarizeItems(todo),
     ...(todo.action ? { action: todo.action } : {}),
     ...(todo.targetProject
       ? { project: { label: todo.targetProject.label, path: todo.targetProject.path } }
@@ -533,6 +555,18 @@ function summarizeTodo(todo: ThreadTodo): Record<string, unknown> {
     ...(todo.result ? { result: todo.result } : {}),
     ...(todo.error ? { error: todo.error } : {}),
     createdAt: new Date(todo.createdAt).toISOString(),
+  };
+}
+
+/** Steps and prerequisites as two lists, each in the order the thread gave. */
+function summarizeItems(todo: ThreadTodo): Record<string, unknown> {
+  if (!todo.items) return {};
+  const steps = threadTodoSteps(todo).map(({ id, text, checked }) => ({ id, text, checked }));
+  const prerequisites = threadTodoPrerequisites(todo)
+    .map(({ id, text, checked }) => ({ id, text, checked }));
+  return {
+    ...(steps.length > 0 ? { items: steps } : {}),
+    ...(prerequisites.length > 0 ? { prerequisites } : {}),
   };
 }
 
@@ -552,7 +586,13 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Do not use cards for progress updates.",
         "Pass a stable key to update one card instead of adding another each turn.",
         "For a multi-step follow-up, raise one card with items, its checkable steps, rather than one card per step.",
-        "A card with unchecked steps cannot be marked done until they are checked.",
+        "On a start_thread card, items are the new thread's plan and never block starting it.",
+        "The new thread does not see the card, so its prompt must carry those steps too.",
+        "Use prerequisites only for what the operator must do before the thread can start.",
+        "Cloning a repository the thread will work in is one example.",
+        "Leave prerequisites out when the thread can start right away.",
+        "On any other card, items are the operator's steps.",
+        "A card with unchecked blocking steps cannot be marked done until they are checked.",
         "Re-adding a key with items keeps the id and checked state of every step whose text is unchanged.",
         "Use update_todo to change some fields of a card you already raised.",
         "Pass project when the work is for another project, and raise one card per project.",
@@ -565,7 +605,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Fields you omit stay as they are.",
         "Pass an empty string to clear an optional field back to its default.",
         "Use it when the operator asks to change a card, such as its model, effort or permissions.",
-        "Pass check or uncheck with step ids to tick steps as you finish them.",
+        "Pass check or uncheck with step or prerequisite ids to tick them as they are finished.",
         "A model may be named by id or by its display name, and the card stores the id.",
       ].join(" ");
     case "list_todos":
@@ -575,6 +615,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Mark one of this thread's to-do cards done or dismissed, by id or key.",
         "Use it when a card no longer applies.",
         "Marking a card done fails while any of its steps is unchecked, and the error names them.",
+        "On a start_thread card only its prerequisites count.",
         "Check finished steps with update_todo first.",
         "Dismiss works regardless.",
       ].join(" ");
@@ -611,6 +652,20 @@ function inputSchemaForOperation(
               "A step whose text is unchanged keeps its id and checked state.",
               "A new text starts unchecked, and a step you leave out is removed.",
               "Omit items to keep the card's steps as they are.",
+              "On a start_thread card these are the new thread's steps, and they do not block the start.",
+            ].join(" "),
+          },
+          prerequisites: {
+            type: "array",
+            maxItems: THREAD_TODO_MAX_PREREQUISITES,
+            items: { type: "string", maxLength: THREAD_TODO_ITEM_TEXT_MAX_LENGTH },
+            description: [
+              "Checkable steps the operator must finish before the card's action runs.",
+              "Use them only for work the operator has to do first.",
+              "Cloning a repository and pointing the card at it is one example.",
+              "The operator is asked to confirm before starting while one is unchecked.",
+              "They are shown above the steps and merged like items.",
+              `A card holds at most ${THREAD_TODO_MAX_PREREQUISITES} prerequisites.`,
             ].join(" "),
           },
           key: {
@@ -687,6 +742,15 @@ function inputSchemaForOperation(
               "The card's steps, restated in full.",
               "An unchanged text keeps its id and checked state, as with add_todo.",
               "An empty array removes every step.",
+            ].join(" "),
+          },
+          prerequisites: {
+            type: "array",
+            maxItems: THREAD_TODO_MAX_PREREQUISITES,
+            items: { type: "string", maxLength: THREAD_TODO_ITEM_TEXT_MAX_LENGTH },
+            description: [
+              "The card's prerequisites, restated in full, merged like items.",
+              "An empty array removes every prerequisite.",
             ].join(" "),
           },
           check: {

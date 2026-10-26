@@ -107,11 +107,17 @@ export const THREAD_TODO_ACTION_TYPES = [
 /**
  * One step of a multi-step card. The id is minted by the main process, so
  * an agent checks a step by the id it was handed back, never by position.
+ *
+ * A prerequisite is something the operator must do before the card's action
+ * can run, such as cloning a repository the new thread will work in. Plain
+ * steps on a start_thread card are the new thread's work, so they never hold
+ * the start back; see threadTodoBlockingItems.
  */
 export type ThreadTodoItem = {
   id: string;
   text: string;
   checked: boolean;
+  prerequisite?: true;
 };
 
 export type ThreadTodo = {
@@ -137,8 +143,10 @@ export type ThreadTodo = {
   title: string;
   detail?: string;
   /**
-   * Checkable steps, in the thread's order. A card with an unchecked step
-   * is not done: resolving it done takes an explicit `allowOpenItems`.
+   * Checkable steps, prerequisites first, then in the thread's order. A card
+   * with an unchecked blocking step (threadTodoBlockingItems) is not done:
+   * resolving it done or running its action takes an explicit
+   * `allowOpenItems`.
    */
   items?: ThreadTodoItem[];
   action?: ThreadTodoAction;
@@ -171,6 +179,11 @@ export const THREAD_TODO_DETAIL_MAX_LENGTH = 1_000;
 export const THREAD_TODO_PROMPT_MAX_LENGTH = 20_000;
 /** Steps one card may hold; a longer plan belongs in more than one card. */
 export const THREAD_TODO_MAX_ITEMS = 20;
+/**
+ * Prerequisites one card may hold. They show in full above the resting
+ * card's step window, so the cap bounds the card's resting height too.
+ */
+export const THREAD_TODO_MAX_PREREQUISITES = 5;
 export const THREAD_TODO_ITEM_TEXT_MAX_LENGTH = 200;
 
 /**
@@ -180,14 +193,15 @@ export const THREAD_TODO_ITEM_TEXT_MAX_LENGTH = 200;
 export function parseThreadTodoItemTexts(
   value: unknown,
   field = "items",
+  maxItems = THREAD_TODO_MAX_ITEMS,
 ): { ok: true; value: string[] } | { ok: false; message: string } {
   if (!Array.isArray(value)) {
     return { ok: false, message: `${field} must be an array of step texts.` };
   }
-  if (value.length > THREAD_TODO_MAX_ITEMS) {
+  if (value.length > maxItems) {
     return {
       ok: false,
-      message: `${field} may hold at most ${THREAD_TODO_MAX_ITEMS} steps.`,
+      message: `${field} may hold at most ${maxItems} steps.`,
     };
   }
   const texts: string[] = [];
@@ -216,20 +230,40 @@ export function parseThreadTodoItemTexts(
  * does not undo the operator's ticks; each existing step matches at most
  * once, in order. New texts start unchecked, and steps the thread left out
  * are dropped.
+ *
+ * Steps and prerequisites merge separately: `texts` restates the plain
+ * steps and `prerequisites` the prerequisites. A list left undefined keeps
+ * the card's entries of that kind as they are. Prerequisites come first.
  */
 export function mergeThreadTodoItems(
   existing: readonly ThreadTodoItem[] | undefined,
-  texts: readonly string[],
+  texts: readonly string[] | undefined,
   newId: () => string,
+  prerequisites?: readonly string[],
 ): ThreadTodoItem[] {
-  const unmatched = [...(existing ?? [])];
-  return texts.map((text) => {
-    const index = unmatched.findIndex((item) => item.text === text);
-    const match = index === -1 ? undefined : unmatched.splice(index, 1)[0];
-    return match
-      ? { id: match.id, text, checked: match.checked }
-      : { id: newId(), text, checked: false };
-  });
+  const current = existing ?? [];
+  const merge = (
+    kept: readonly ThreadTodoItem[],
+    restated: readonly string[] | undefined,
+    prerequisite: boolean,
+  ): ThreadTodoItem[] => {
+    if (restated === undefined) return [...kept];
+    const unmatched = [...kept];
+    return restated.map((text) => {
+      const index = unmatched.findIndex((item) => item.text === text);
+      const match = index === -1 ? undefined : unmatched.splice(index, 1)[0];
+      return {
+        id: match ? match.id : newId(),
+        text,
+        checked: match ? match.checked : false,
+        ...(prerequisite ? { prerequisite: true as const } : {}),
+      };
+    });
+  };
+  return [
+    ...merge(current.filter((item) => item.prerequisite), prerequisites, true),
+    ...merge(current.filter((item) => !item.prerequisite), texts, false),
+  ];
 }
 
 export function threadTodoOpenItems(
@@ -238,13 +272,55 @@ export function threadTodoOpenItems(
   return (todo.items ?? []).filter((item) => !item.checked);
 }
 
+/** The card's plain steps, without its prerequisites. */
+export function threadTodoSteps(
+  todo: Pick<ThreadTodo, "items">,
+): ThreadTodoItem[] {
+  return (todo.items ?? []).filter((item) => !item.prerequisite);
+}
+
+export function threadTodoPrerequisites(
+  todo: Pick<ThreadTodo, "items">,
+): ThreadTodoItem[] {
+  return (todo.items ?? []).filter((item) => item.prerequisite === true);
+}
+
+/**
+ * Unchecked steps that hold the card back: its action does not run, and it
+ * is not done, while any is open, unless the operator overrides.
+ *
+ * On a start_thread card only prerequisites block. Its plain steps are the
+ * plan the new thread carries out, so asking the operator to tick them
+ * before the thread exists would read them as chores. Every other card is
+ * the operator's own work, so every open step blocks.
+ */
+export function threadTodoBlockingItems(
+  todo: Pick<ThreadTodo, "items" | "action">,
+): ThreadTodoItem[] {
+  const open = threadTodoOpenItems(todo);
+  return todo.action?.type === "start_thread"
+    ? open.filter((item) => item.prerequisite === true)
+    : open;
+}
+
+/**
+ * What a list of open entries is called in a question or an error:
+ * "prerequisite(s)" when every one is a prerequisite, else "step(s)".
+ */
+export function threadTodoItemNoun(items: readonly ThreadTodoItem[]): string {
+  const prerequisites = items.length > 0 && items.every((item) => item.prerequisite);
+  const noun = prerequisites ? "prerequisite" : "step";
+  return items.length === 1 ? noun : `${noun}s`;
+}
+
 /** "2 of 4" for a card with steps; undefined for one without. */
 export function threadTodoItemProgress(
   todo: Pick<ThreadTodo, "items">,
 ): { checked: number; total: number } | undefined {
-  const total = todo.items?.length ?? 0;
+  const steps = threadTodoSteps(todo);
+  const total = steps.length;
   if (total === 0) return undefined;
-  return { checked: total - threadTodoOpenItems(todo).length, total };
+  return { checked: steps.filter((item) => item.checked).length, total };
 }
 
 export type ListThreadTodosRequest = {

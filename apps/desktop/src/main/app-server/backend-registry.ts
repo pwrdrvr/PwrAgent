@@ -36,7 +36,9 @@ import { ArchiveCleanupCheckpointStore, type ArchiveCleanupIntent } from "../sta
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
-import { usageAccountKey } from "../usage-account-identity";
+import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
+import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attribution";
+import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -53,6 +55,15 @@ import {
 import { resolvePullRequestReview } from "./pull-request-review";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import { priceLocalModelUsage } from "@pwragent/shared";
+import {
+  attributeCodexProviderUsageLine,
+  buildCodexModelProviderConfigOverrides,
+  buildCodexModelProviderShellEnvOverrides,
+  codexModelProviderApiKeyEnv,
+  parseCodexProviderModelId,
+  resolveModelOptionReference,
+  type CodexModelProviderSettings,
+} from "@pwragent/shared";
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
@@ -970,6 +981,8 @@ type BackendClient = {
     threadId: string;
   }): Promise<{ model?: string; reasoningEffort?: string } | undefined>;
   readThreadPricingSnapshot?: CodexAppServerClient["readThreadPricingSnapshot"];
+  /** The configured Codex model provider a thread runs on, if Codex reported one. */
+  modelProviderForThread?(threadId: string): string | undefined;
   enrichThreadDirectories?(
     threads: AppServerThreadSummary[],
     caller?: DirectoryEnrichmentCaller,
@@ -2004,6 +2017,9 @@ function normalizePositivePullRequestNumber(value: unknown): number | undefined 
   return value;
 }
 
+/** A started Codex tool item; `itemType` is lowercased with separators removed. */
+type LiveCodexToolItem = { turnId: string; itemType: string };
+
 type PendingServerRequest = {
   backend: AppServerBackendKind;
   notification: AppServerPendingRequestNotification;
@@ -2545,8 +2561,17 @@ function mergeCommandSummaries(
 export function buildCodexClientArgs(
   env?: NodeJS.ProcessEnv,
   configOverrides: readonly string[] = [],
+  modelProviders: readonly CodexModelProviderSettings[] = [],
 ): string[] {
+  // A provider's env_key is named only when its key is in this spawn's
+  // environment; Codex would otherwise fail every request for a missing key.
+  const providerIdsWithKeys = new Set(modelProviders
+    .filter((provider) => env?.[codexModelProviderApiKeyEnv(provider.id)])
+    .map((provider) => provider.id));
   const args = [
+    // Provider tables first, so an operator's own override still wins.
+    ...buildCodexModelProviderConfigOverrides(modelProviders, providerIdsWithKeys)
+      .flatMap((override) => ["-c", override]),
     ...validateCodexConfigOverrides(configOverrides).flatMap((override) => [
       "-c", override,
     ]),
@@ -2569,6 +2594,9 @@ export function buildCodexClientArgs(
       `shell_environment_policy.set.CODEX_HOME=${formatTomlString(codexHome)}`,
     );
   }
+  // Last, so no operator override can hand a provider key to model commands.
+  args.push(...buildCodexModelProviderShellEnvOverrides(providerIdsWithKeys)
+    .flatMap((override) => ["-c", override]));
   return args;
 }
 
@@ -5846,6 +5874,11 @@ function turnIdFromStartedNotification(
   },
 ): string {
   return notification.params.turnId ?? notification.params.turn.id;
+}
+
+/** Usage figures change on every read; only identities make a membership. */
+function backgroundTerminalMembership(terminals: CodexBackgroundTerminal[]): string {
+  return terminals.map((terminal) => `${terminal.itemId}\u0000${terminal.processId}`).sort().join("\n");
 }
 
 function turnIdFromTerminalNotification(
@@ -9134,7 +9167,7 @@ export class DesktopBackendRegistry {
    */
   private readonly backendActiveCodexThreadIds = new Set<string>();
   /** Started Codex tool items can keep running after their parent turn ends. */
-  private readonly liveCodexToolItemsByThread = new Map<string, Map<string, string>>();
+  private readonly liveCodexToolItemsByThread = new Map<string, Map<string, LiveCodexToolItem>>();
   private readonly codexBackgroundTerminals = new Map<string, CodexBackgroundTerminal[]>();
   /**
    * Latest revision per thread with a list read in flight. An entry lives
@@ -9688,6 +9721,9 @@ export class DesktopBackendRegistry {
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolveCodexLocalModelIdsFn: () => string[];
+  private readonly resolveCodexModelProvidersFn: () => CodexModelProviderSettings[];
+  private readonly resolveCodexModelProviderKeysFn: () => Promise<Record<string, string>>;
+  private readonly codexModelProviderCatalog: CodexModelProviderCatalog;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
@@ -9829,6 +9865,10 @@ export class DesktopBackendRegistry {
     >;
     resolveCodexFastAllowed?: () => boolean;
     resolveCodexLocalModelIds?: () => string[];
+    resolveCodexModelProviders?: () => CodexModelProviderSettings[];
+    resolveCodexModelProviderKeys?: () => Promise<Record<string, string>>;
+    /** Test seam for provider model discovery; never the network in Vitest. */
+    codexModelProviderFetch?: (input: string, init?: RequestInit) => Promise<Response>;
     resolvePdfAnalysisEnabled?: () => boolean;
     resolveTokenMiserEnabled?: () => boolean;
     resolveTokenMiserPollingReviewsEnabled?: () => boolean;
@@ -9995,6 +10035,10 @@ export class DesktopBackendRegistry {
       (() => settingsService?.resolveProviderThreadModelMigrations() ?? {});
     this.resolveCodexLocalModelIdsFn = options?.resolveCodexLocalModelIds
       ?? (() => settingsService?.resolveCodexLocalModelIds?.() ?? []);
+    this.resolveCodexModelProvidersFn = options?.resolveCodexModelProviders
+      ?? (() => settingsService?.resolveCodexModelProviders?.() ?? []);
+    this.resolveCodexModelProviderKeysFn = options?.resolveCodexModelProviderKeys
+      ?? (async () => await settingsService?.resolveCodexModelProviderKeys?.() ?? {});
     this.resolveCodexFastAllowedFn =
       options?.resolveCodexFastAllowed ??
       (() => settingsService?.resolveCodexFastAllowed() ?? true);
@@ -10182,6 +10226,7 @@ export class DesktopBackendRegistry {
           ? async (env) => buildCodexClientArgs(
               env,
               settingsService.resolveCodexConfigOverrides?.() ?? [],
+              settingsService.resolveCodexModelProviders?.() ?? [],
             )
           : undefined,
         resolveCommand: settingsService
@@ -10189,10 +10234,17 @@ export class DesktopBackendRegistry {
           : undefined,
         resolveEnv: settingsService
           ? async () => withTokenMiserBridgeDescriptorEnv(
-              await settingsService.resolveCodexSpawnEnvAsync(),
+              {
+                ...await settingsService.resolveCodexSpawnEnvAsync(),
+                // Model provider keys go to the App Server alone.
+                ...await settingsService.resolveCodexModelProviderEnv?.(),
+              },
               tokenMiserBridgeDescriptorPath,
             )
           : undefined,
+        resolveModelProviderIds: () => new Set(
+          (settingsService?.resolveCodexModelProviders?.() ?? []).map((provider) => provider.id),
+        ),
         clientVersion,
         readHelperModelSettings: () => this.resolveHelperModelSettingsFn(),
         passSetupVariablesToAgents: () => this.resolvePassSetupVariablesToAgentsFn(),
@@ -10206,6 +10258,17 @@ export class DesktopBackendRegistry {
         // may initialize this client; ordinary backend summaries are passive.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
+    if (typeof settingsService?.onCodexModelProviderKeysChanged === "function") {
+      this.unsubscribers.push(settingsService.onCodexModelProviderKeysChanged(() => {
+        this.codexModelProviderKeysRead = undefined;
+        this.codexModelProviderCatalog?.invalidate();
+        void this.invalidateProviderRuntimeSelections({ acp: false, codex: true }).catch((error) => {
+          backendRegistryLog.warn("Codex reconnect after a provider key change failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      }));
+    }
     if (this.codexClient.onAppServerUnexpectedExit) {
       this.unsubscribers.push(
         this.codexClient.onAppServerUnexpectedExit(() => {
@@ -10377,7 +10440,10 @@ export class DesktopBackendRegistry {
     this.acpAvailableCommandProbeBudgetMs =
       options?.acpAvailableCommandProbeBudgetMs
       ?? ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS;
-    this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
+    this.overlayStore = wrapCodexProviderUsageAttribution(
+      options?.overlayStore ?? getDesktopOverlayStore(),
+      (line) => this.attributeCodexProviderUsage(line),
+    );
     const gatewayConnections = this.mcpConnectionService;
     if (gatewayConnections?.requestGatewayToolOperation) {
       this.mcpGatewayTools = new McpGatewayToolService({
@@ -10653,9 +10719,42 @@ export class DesktopBackendRegistry {
         : options?.codexClient || replayClients
           ? null
           : undefined;
-    this.modelCatalog = new BackendModelCatalog({
-      codex: this.codexClient,
+    this.codexModelProviderCatalog = new CodexModelProviderCatalog({
+      resolveProviders: () => this.resolveCodexModelProvidersFn(),
+      resolveKeys: () => this.resolveCodexModelProviderKeysFn(),
+      ...(options?.codexModelProviderFetch ? { fetch: options.codexModelProviderFetch } : {}),
     });
+    const codexModelClient = this.codexClient;
+    this.modelCatalog = new BackendModelCatalog({
+      codex: {
+        // Codex's own catalog, then every configured provider's models. A
+        // provider that cannot be reached must not hide Codex's models.
+        listModels: codexModelClient.listModels || this.resolveCodexModelProvidersFn().length
+          ? async (diagnostics) => [
+              ...await codexModelClient.listModels?.(diagnostics) ?? [],
+              ...await this.codexModelProviderCatalog.listModelOptions().catch((error: unknown) => {
+                backendRegistryLog.warn("Codex model provider models unavailable", {
+                  error: error instanceof Error ? error.message : String(error),
+                });
+                return [];
+              }),
+            ]
+          : undefined,
+      },
+    });
+    let providersFingerprint = JSON.stringify(this.resolveCodexModelProvidersFn());
+    const refreshCodexProviderModels = (): void => {
+      const next = JSON.stringify(this.resolveCodexModelProvidersFn());
+      if (next === providersFingerprint) return;
+      providersFingerprint = next;
+      this.codexModelProviderCatalog.invalidate();
+      this.modelCatalog.invalidate("codex");
+    };
+    if (this.configStore) {
+      this.unsubscribers.push(this.configStore.subscribe(["models"], refreshCodexProviderModels));
+    } else if (typeof settingsService?.onConfigWritten === "function") {
+      this.unsubscribers.push(settingsService.onConfigWritten(refreshCodexProviderModels));
+    }
     this.queuedMessageTitler = new QueuedMessageTitler({
       generate: async (params) =>
         await this.generateStructuredObject({
@@ -17516,6 +17615,50 @@ export class DesktopBackendRegistry {
         backend === "codex" || hasAcpStructuredHelper(backend)) };
   }
 
+  /**
+   * Codex fixes a thread's model provider when the thread starts; turn/start
+   * cannot change it. A model from another provider would fail on the next
+   * turn, after the operator had moved on, so refuse it here with the way out.
+   */
+  private assertCodexModelKeepsThreadProvider(threadId: string, model: string): void {
+    const threadProvider = this.codexClient.modelProviderForThread?.(threadId);
+    const requestedProvider = parseCodexProviderModelId(model).providerId;
+    if (threadProvider === requestedProvider) return;
+    const providers = this.resolveCodexModelProvidersFn();
+    const label = (id: string | undefined): string =>
+      id ? providers.find((provider) => provider.id === id)?.name ?? id : "Codex's default provider";
+    throw new Error(
+      `This thread runs on ${label(threadProvider)}, so it cannot switch to a ${label(requestedProvider)} model. `
+      + "Hand the thread off to a new thread to use that model.",
+    );
+  }
+
+  /**
+   * A Codex thread on a configured model provider records usage under that
+   * provider: its own account and rates, never the OpenAI login or catalog.
+   * Returns undefined for every other line so it is written unchanged.
+   */
+  private attributeCodexProviderUsage(
+    line: ThreadUsageLineRecord,
+  ): Promise<ThreadUsageLineRecord> | undefined {
+    if (line.backend !== "codex") return undefined;
+    const providerId = (line.model ? parseCodexProviderModelId(line.model).providerId : undefined)
+      ?? this.codexClient.modelProviderForThread?.(line.threadId);
+    if (!providerId) return undefined;
+    const provider = this.resolveCodexModelProvidersFn().find((entry) => entry.id === providerId);
+    if (!provider) return undefined;
+    // Keys are decrypted once and kept until one changes, not per write.
+    this.codexModelProviderKeysRead ??= this.resolveCodexModelProviderKeysFn()
+      .catch((): Record<string, string> => ({}));
+    return this.codexModelProviderKeysRead.then((keys) => attributeCodexProviderUsageLine(
+      line,
+      provider,
+      codexModelProviderAccountKey(provider.baseUrl, keys[provider.id]),
+    ));
+  }
+
+  private codexModelProviderKeysRead?: Promise<Record<string, string>>;
+
   private async captureUsageAccount(backend: AppServerBackendKind, threadId?: string): Promise<string | undefined> {
     // Read the group synchronously: editing Settings during an in-flight turn
     // must affect the next request, never this one.
@@ -19976,8 +20119,10 @@ export class DesktopBackendRegistry {
 
   /**
    * Navigation and shutdown share runtime worker ownership, never durable
-   * history. Background tasks that outlive a turn mark the row as working too,
-   * the same tasks the quit prompt counts.
+   * history. Claude background tasks that outlive a turn mark the row as
+   * working, because Claude takes another turn when one finishes. Codex
+   * background terminals mark it with a running command instead. The quit
+   * prompt counts both.
    */
   withNavigationSubAgentActivity(
     threads: NavigationThreadSummary[],
@@ -19988,20 +20133,28 @@ export class DesktopBackendRegistry {
         .backgroundTaskThreadIds()
         .map((threadId) => buildThreadIdentityKey("claude", threadId)),
     );
+    // A Codex terminal never wakes the agent when it exits, so it marks the
+    // row with a running command rather than as working.
+    const agentCommandOwners = new Set(
+      [...this.codexBackgroundTerminals.keys()].map((threadId) => buildThreadIdentityKey("codex", threadId)),
+    );
     return threads.map((thread) => {
       if (thread.federation) return thread;
       const key = buildThreadIdentityKey(thread.source, thread.id);
       const hasActiveSubAgent = activeOwners.has(key);
       const hasBackgroundTasks = backgroundTaskOwners.has(key);
+      const hasAgentCommands = agentCommandOwners.has(key);
       if (
         thread.hasActiveSubAgent === hasActiveSubAgent
         && Boolean(thread.hasBackgroundTasks) === hasBackgroundTasks
+        && Boolean(thread.hasAgentCommands) === hasAgentCommands
       ) return thread;
-      const { hasBackgroundTasks: _previous, ...rest } = thread;
+      const { hasBackgroundTasks: _previous, hasAgentCommands: _previousCommands, ...rest } = thread;
       return {
         ...rest,
         hasActiveSubAgent,
         ...(hasBackgroundTasks ? { hasBackgroundTasks: true } : {}),
+        ...(hasAgentCommands ? { hasAgentCommands: true } : {}),
       };
     });
   }
@@ -24990,6 +25143,9 @@ export class DesktopBackendRegistry {
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
+    if (params.backend === "codex" && params.model) {
+      this.assertCodexModelKeepsThreadProvider(params.threadId, params.model);
+    }
     const modelSettingsManuallyUpdatedAt =
       "model" in params || "reasoningEffort" in params
         ? Date.now()
@@ -26435,25 +26591,101 @@ export class DesktopBackendRegistry {
     // quit and auto-archive like a Codex background terminal.
     if (request.backend === "claude") return this.claudeBackend.listBackgroundTasks(request.threadId);
     if (request.backend !== "codex") return { supported: false, terminals: [] };
+    return (await this.readCodexBackgroundTerminals(request.threadId)).response;
+  }
+
+  /** `applied` is false when an item or status event raced the read. */
+  private async readCodexBackgroundTerminals(
+    threadId: string,
+  ): Promise<{ response: ListBackgroundTerminalsResponse; applied: boolean }> {
     const generation = this.backgroundTerminalGeneration;
     const revision = ++this.backgroundTerminalReadCounter;
-    this.backgroundTerminalReadRevisions.set(request.threadId, revision);
+    this.backgroundTerminalReadRevisions.set(threadId, revision);
     try {
-      const response = await this.withCodexThreadClient(request.threadId, async (client) =>
-        client.listBackgroundTerminals?.(request.threadId) ?? { supported: false, terminals: [] },
+      const response = await this.withCodexThreadClient(threadId, async (client) =>
+        client.listBackgroundTerminals?.(threadId) ?? { supported: false, terminals: [] },
         undefined, false,
       );
-      if (!this.closed && response.supported && generation === this.backgroundTerminalGeneration
-        && revision === this.backgroundTerminalReadRevisions.get(request.threadId)) {
-        if (response.terminals.length) this.codexBackgroundTerminals.set(request.threadId, response.terminals);
-        else this.codexBackgroundTerminals.delete(request.threadId);
+      const applied = !this.closed && response.supported && generation === this.backgroundTerminalGeneration
+        && revision === this.backgroundTerminalReadRevisions.get(threadId);
+      if (applied) {
+        this.publishCodexBackgroundTerminals(threadId, response.terminals);
+        this.pruneUnlistedCodexCommands(threadId, response.terminals);
       }
-      return response;
+      return { response, applied };
     } finally {
-      if (this.backgroundTerminalReadRevisions.get(request.threadId) === revision) {
-        this.backgroundTerminalReadRevisions.delete(request.threadId);
+      if (this.backgroundTerminalReadRevisions.get(threadId) === revision) {
+        this.backgroundTerminalReadRevisions.delete(threadId);
       }
     }
+  }
+
+  /**
+   * The list names every command that outlived its turn, so a command from a
+   * finished turn that it omits is done even if Codex never sent its
+   * `item/completed`. Without this a missed completion holds the thread in
+   * the quit prompt and blocks a runtime restart forever. Commands in a live
+   * turn may not have a session yet, and other tool kinds never appear in the
+   * list, so both are kept.
+   */
+  private pruneUnlistedCodexCommands(threadId: string, terminals: CodexBackgroundTerminal[]): void {
+    const items = this.liveCodexToolItemsByThread.get(threadId);
+    if (!items || this.backendActiveCodexThreadIds.has(threadId)) return;
+    const listed = new Set(terminals.map((terminal) => terminal.itemId));
+    let pruned = false;
+    for (const [itemId, { turnId, itemType }] of items) {
+      if (
+        itemType === "commandexecution"
+        && !listed.has(itemId)
+        && !this.activeTurnKeys.has(buildActiveTurnKey("codex", threadId, turnId))
+      ) {
+        items.delete(itemId);
+        pruned = true;
+      }
+    }
+    if (!pruned) return;
+    if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
+    void this.maybeRestartCodexForManagedRuntimeChange();
+  }
+
+  /**
+   * A Codex turn can end with commands still running. Codex announces no
+   * terminal set, so read it once the turn ends, and read again if a
+   * completion raced the read: navigation has no other way to learn of it.
+   */
+  private async refreshCodexBackgroundTerminalsAfterTurn(threadId: string): Promise<void> {
+    try {
+      for (let attempt = 0; attempt < 3 && !this.closed; attempt += 1) {
+        const { response, applied } = await this.readCodexBackgroundTerminals(threadId);
+        if (applied || !response.supported) return;
+      }
+    } catch (error) {
+      backendRegistryLog.debug("background terminal read after turn failed", {
+        threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Codex has no push event for background terminals, so the registry
+   * publishes `thread/backgroundTasks/updated` itself whenever a thread's set
+   * changes: a list read, a command's `item/completed`, or the thread
+   * unloading. Navigation refreshes on that event, so the row mark clears.
+   * Usage figures change on every read and are not a membership change.
+   */
+  private publishCodexBackgroundTerminals(threadId: string, terminals: CodexBackgroundTerminal[]): void {
+    const previous = this.codexBackgroundTerminals.get(threadId) ?? [];
+    if (terminals.length) this.codexBackgroundTerminals.set(threadId, terminals);
+    else this.codexBackgroundTerminals.delete(threadId);
+    if (backgroundTerminalMembership(previous) === backgroundTerminalMembership(terminals) || this.closed) return;
+    void this.emit({
+      backend: "codex",
+      notification: { method: "thread/backgroundTasks/updated", params: { threadId, tasks: terminals } },
+    }).catch((error) => backendRegistryLog.warn("background terminal update emit failed", {
+      threadId,
+      error: error instanceof Error ? error.message : String(error),
+    }));
   }
 
   async terminateBackgroundTerminal(request: TerminateBackgroundTerminalRequest): Promise<TerminateBackgroundTerminalResponse> {
@@ -26847,6 +27079,13 @@ export class DesktopBackendRegistry {
               message: error instanceof Error ? error.message : String(error),
             },
           );
+        } finally {
+          // Also covers a run that was evicted or a thread that is gone.
+          this.overlayStore.dropThreadCodexEnvironmentActionLiveOutput?.({
+            backend: params.backend,
+            threadId: params.threadId,
+            runId: params.runId,
+          });
         }
       },
     );
@@ -26855,10 +27094,23 @@ export class DesktopBackendRegistry {
   /**
    * Called periodically (throttled to ~500ms) while a detached env-action
    * child is running, with a snapshot of its accumulated stdout+stderr.
-   * Patches the matching run's `output` on the overlay so the renderer's
-   * anchored UI shows live output. Does not change `status` — that stays
+   * Records the matching run's `output` in the overlay store's memory and
+   * emits it, so the renderer's anchored UI and peers show live output.
+   * Sqlite gets the tail at the run's boundaries (exit, stop, failure and
+   * shutdown), never per snapshot. Does not change `status` — that stays
    * "started" until the child closes.
    */
+  /** Shutdown is a boundary for running actions: persist their output tails. */
+  private flushCodexEnvironmentActionLiveOutputsForShutdown(): void {
+    try {
+      this.overlayStore.flushThreadCodexEnvironmentActionLiveOutputs?.();
+    } catch (error) {
+      backendRegistryLog.warn("codex-environment-action-output-flush-failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private async handleCodexEnvironmentActionDetachedOutput(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -26912,12 +27164,27 @@ export class DesktopBackendRegistry {
             ...current,
             actionRuns: nextRuns,
           };
-          await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
-            backend: params.backend,
-            threadId: params.threadId,
-            codexEnvironmentRuntime: next,
-          });
-          this.invalidateThreadListCache(params.backend);
+          const setLiveOutput = this.overlayStore.setThreadCodexEnvironmentActionLiveOutput;
+          if (!ambiguousTerminalFailure && setLiveOutput) {
+            // Shutdown already flushed the running tails; nothing is left to
+            // persist or show this one.
+            if (this.closed) return;
+            setLiveOutput.call(this.overlayStore, {
+              backend: params.backend,
+              threadId: params.threadId,
+              runId: params.runId,
+              output: params.event.output,
+            });
+          } else {
+            // A status change is a boundary. Stores without the memory layer
+            // (test doubles) keep persisting every snapshot.
+            await this.overlayStore.setThreadCodexEnvironmentRuntime?.({
+              backend: params.backend,
+              threadId: params.threadId,
+              codexEnvironmentRuntime: next,
+            });
+            this.invalidateThreadListCache(params.backend);
+          }
           await this.emitCodexEnvironmentRuntimeUpdated({
             backend: params.backend,
             threadId: params.threadId,
@@ -27511,6 +27778,7 @@ export class DesktopBackendRegistry {
       for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     }
     this.closed = true;
+    this.flushCodexEnvironmentActionLiveOutputsForShutdown();
     this.threadTurnQueue.close();
     this.queuedMessageTitler.close();
     await this.archiveCleanupQueue.close();
@@ -41482,9 +41750,21 @@ export class DesktopBackendRegistry {
       const availableModels = (
         await this.getBackendLaunchpadOptions(backend, "agent-handoff")
       )?.models ?? [];
+      // An Agent may name a provider model the way a person would, such as
+      // "Refuseless / GLM-5.3 abliterated"; take it when it fits exactly one.
+      const reference = resolveModelOptionReference(availableModels, requestedModel);
+      if (reference.id && reference.id !== requestedModel) {
+        request = { ...request, args: { ...request.args, model: reference.id } };
+      }
+      if (reference.candidates.length > 1) {
+        return threadOrchestrationFailure(
+          "invalid_arguments",
+          `model="${requestedModel}" matches several models: ${reference.candidates.map((model) => model.id).join(", ")}. Pass one exact id.`,
+        );
+      }
       if (
         availableModels.length > 0
-        && !availableModels.some((model) => model.id === requestedModel)
+        && !reference.id
       ) {
         const available = availableModels.map((model) => model.id).join(", ");
         const grokGuidance =
@@ -46872,7 +47152,7 @@ export class DesktopBackendRegistry {
         this.backgroundTerminalReadRevisions.set(threadIdForRevision, ++this.backgroundTerminalReadCounter);
       }
       if (notification.method === "thread/status/changed" && readRecord(params?.status)?.type === "notLoaded") {
-        this.codexBackgroundTerminals.delete(threadIdForRevision);
+        this.publishCodexBackgroundTerminals(threadIdForRevision, []);
       }
     }
     if (notification.method === "item/completed") {
@@ -46881,9 +47161,25 @@ export class DesktopBackendRegistry {
       const threadId = notification.params.threadId;
       const terminals = this.codexBackgroundTerminals.get(threadId);
       if (terminals && itemId) {
-        const remaining = terminals.filter((terminal) => terminal.itemId !== itemId);
-        if (remaining.length) this.codexBackgroundTerminals.set(threadId, remaining);
-        else this.codexBackgroundTerminals.delete(threadId);
+        this.publishCodexBackgroundTerminals(threadId, terminals.filter((terminal) => terminal.itemId !== itemId));
+      }
+    }
+    if (
+      notification.method === "turn/completed"
+      || notification.method === "turn/failed"
+      || notification.method === "turn/cancelled"
+    ) {
+      // A command still live when its turn ends is a background terminal. A
+      // later turn can also stop or start one, so recheck a thread with some.
+      // Quit stops turns on purpose; reading then would only query a closing
+      // app server.
+      const threadId = notification.params.threadId;
+      if (
+        !this.closed
+        && !this.stoppingRunningTurnsForShutdown
+        && (this.liveCodexToolItemsByThread.has(threadId) || this.codexBackgroundTerminals.has(threadId))
+      ) {
+        void this.refreshCodexBackgroundTerminalsAfterTurn(threadId);
       }
     }
     if (notification.method === "turn/failed" || notification.method === "turn/cancelled") {
@@ -46895,8 +47191,8 @@ export class DesktopBackendRegistry {
         this.liveCodexToolItemsByThread.delete(threadId);
         return;
       }
-      for (const [itemId, itemTurnId] of items) {
-        if (itemTurnId === turnId) items.delete(itemId);
+      for (const [itemId, item] of items) {
+        if (item.turnId === turnId) items.delete(itemId);
       }
       if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
       return;
@@ -46918,8 +47214,8 @@ export class DesktopBackendRegistry {
       if (item?.status !== "inProgress" && item?.status !== "in_progress") return;
       const turnId = readOptionalString(readRecord(notification.params), ["turnId", "turn_id"]);
       if (!turnId) return;
-      const items = this.liveCodexToolItemsByThread.get(threadId) ?? new Map<string, string>();
-      items.set(itemId, turnId);
+      const items = this.liveCodexToolItemsByThread.get(threadId) ?? new Map<string, LiveCodexToolItem>();
+      items.set(itemId, { turnId, itemType });
       this.liveCodexToolItemsByThread.set(threadId, items);
       return;
     }
@@ -46944,7 +47240,11 @@ export class DesktopBackendRegistry {
       ...pendingCompactions.map((candidate) => candidate.params.threadId),
     ])];
     this.liveCodexToolItemsByThread.clear();
-    this.codexBackgroundTerminals.clear();
+    // The terminals died with the app server. Publish the clear so rows that
+    // carried their mark refresh.
+    for (const threadId of [...this.codexBackgroundTerminals.keys()]) {
+      this.publishCodexBackgroundTerminals(threadId, []);
+    }
     try {
       await Promise.all(pendingCompactions.map((candidate) => {
         const threadId = candidate.params.threadId;

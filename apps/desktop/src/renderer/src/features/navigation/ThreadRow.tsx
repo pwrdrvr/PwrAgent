@@ -211,8 +211,11 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
   // A command that outlived its turn. The scanner already says "working"
   // during a turn, so the mark only shows once the thread is otherwise idle.
+  // The owner's row flag covers threads this window has never listed; the
+  // window's own map covers the moment before the owner's list read lands.
   const agentCommandRunning =
-    status !== "thinking" && props.agentCommandThreadKeys?.[threadKey] === true;
+    status !== "thinking"
+    && (props.thread.hasAgentCommands === true || props.agentCommandThreadKeys?.[threadKey] === true);
   // Saved pins and selection-retained rows share the heading control's
   // space, but only a saved pin offers Unpin or reports itself as pinned.
   const isPinnedRow =

@@ -1,7 +1,7 @@
 {
   "name": "@pwragent/desktop",
   "productName": "PwrAgent",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "private": true,
   "description": "Thread-centric coding agent desktop app",
   "homepage": "https://pwragent.ai",
@@ -47,6 +47,7 @@
     "preview": "node ../../scripts/linux-sandbox.mjs --warn && electron-vite preview",
     "probe:quit-reentry": "node scripts/ensure-electron-runtime.mjs && electron ./scripts/electron-quit-reentry-probe.mjs",
     "test:e2e": "playwright test -c playwright.config.ts",
+    "test:e2e:prebuilt": "node scripts/ensure-electron-runtime.mjs && node ../../scripts/ci/desktop-out-cache.mjs verify && playwright test -c playwright.config.ts",
     "inspect:e2e:branch-drift": "node scripts/ensure-electron-runtime.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.inspect.config.ts e2e/thread-branch-drift.inspect.spec.ts --headed --timeout=0",
     "inspect:e2e:workspace-handoff": "node scripts/ensure-electron-runtime.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.inspect.config.ts e2e/workspace-handoff-dialog.inspect.spec.ts --headed --timeout=0",
     "inspect:e2e:markdown-table": "node scripts/ensure-electron-runtime.mjs && pnpm build && PWRAGENT_E2E_INSPECT=1 playwright test -c playwright.inspect.config.ts e2e/markdown-findings-table.inspect.spec.ts --headed --timeout=0",

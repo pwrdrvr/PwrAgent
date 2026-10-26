@@ -9,33 +9,72 @@ Each record has a stable review id, source artifact key, owning backend and
 thread, findings, status, creation and last-update timestamps, and optional
 source URL and workspace/PR provenance. Findings have stable ids and their own
 status, last update, and resolution. A resolution records its reason, optional
-HTTP(S) evidence link, actor, and date.
+HTTP(S) evidence link, actor, and date. A deferred finding's resolution also
+names the to-do card that tracks it, by id and its title at the time.
 
 The stored text is capped excerpts kept so To-dos and the agent tools work
 without the transcript. The transcript's review card renders from its own
 entry and reads only state from this table. This is a documented exception to
 [thread-history-persistence.md](thread-history-persistence.md#tracked-review-findings).
 
-Findings are `open`, `addressed`, or `dismissed`. Reviews are `open`, `handled`,
-or `dismissed`. Settling the last open finding automatically handles its review.
-An agent cannot mark a review handled while findings are still open. It can
-then document the whole outcome with a final note and link. Reopening a finding
-reopens the review. Whole-review dismissal overrides its findings without
-overwriting their individually recorded outcomes. The transcript labels it
-**Did not address**, and reopening restores the findings that were still open.
+## Finding outcomes
+
+One vocabulary names a finding's outcome in the agent tools, their results,
+the transcript, the To-do card, and this document. Each name says what was
+done:
+
+| Status | Meaning | Requires | Label |
+| --- | --- | --- | --- |
+| `open` | Still waiting on work. | Nothing. | No label; **Select**, **Fix now**, **Decline**. |
+| `addressed` | Fixed. | A note on what changed; a commit or PR link when there is one. | **Addressed** |
+| `declined` | Will not be fixed. | A note giving the reason. | **Declined** |
+| `deferred` | Left for later, on a to-do card. | The card's `todoId` from `add_todo`, and a note on why it waits. | **Deferred**, with the card's title |
+
+A deferral must name a to-do card that the same thread raised; the tool
+refuses any other id. That keeps the work on the operator's list after the
+finding leaves it. The repository's "Deferred work" rule in `AGENTS.md` gives
+such a card a `start_thread` action whose prompt stands alone.
+
+`update_review_item` also accepts other names. `dismissed` is the older name
+for declined. Claude Code's code review reports `fixed`, `no_change_needed`,
+and `skipped`, and treats all three as settled. `fixed` means addressed. The
+other two mean declined: `skipped` is Claude Code's "real but not applied".
+The tool keeps its name: a second name for the same tool would put two
+entries in the catalog for one action.
+
+Builds before this vocabulary stored a declined finding as `dismissed`. Each
+open of the state database renames those in place, in its one schema
+transaction; a profile with none left writes nothing. Reads also rename any
+that an older build sharing the profile writes later. Over federation, a
+peer's reviews are renamed as they arrive, and the Decline control sends
+`dismissed` for a finding, which an owner of every version accepts. An older
+viewer of a newer owner shows a declined or deferred finding as settled but
+without its new label.
+
+Reviews are `open`, `handled`, or `dismissed`. Settling the last open finding
+automatically handles its review. An agent cannot mark a review handled while
+findings are still open. It can then document the whole outcome with a final
+note and link. Reopening a finding reopens the review. Whole-review dismissal
+overrides its findings without overwriting their individually recorded
+outcomes. The transcript labels the review and each of its findings
+**Dismissed**, and reopening restores the findings that were still open.
+
+## Agent tools
 
 The shared dynamic-tool and MCP catalog exposes four thread-scoped tools:
 
 | Tool | Purpose |
 | --- | --- |
 | `record_review` | Track external or manually written findings using a stable `sourceKey`. |
-| `list_reviews` | Read reviews and findings with ids and resolutions; defaults to open. Use `status: "all"` to inspect dismissals. While a finding is open, the result carries `guidance`: work on findings only when the operator asks, and mark a fixed one addressed with `update_review_item`. |
-| `update_review_item` | Set a finding's status, with a `note` and optional `url` documenting its outcome. |
+| `list_reviews` | Read reviews and findings with ids and resolutions; defaults to open. Use `status: "all"` to inspect dismissals. While a finding is open, the result carries `guidance`: work on findings only when the operator asks, and settle each one as addressed, declined, or deferred with `update_review_item`. |
+| `update_review_item` | Settle a finding as `addressed`, `declined`, or `deferred` (with `todoId`), or reopen it, with a `note` and optional `url` documenting the outcome. |
 | `update_review` | Dismiss, reopen, or document a handled review with a `note` and optional `url`. |
 
 The trusted calling context supplies backend and thread identity. An agent
 cannot inspect or mutate another thread's review by passing its id. Reusing a
 source key returns the existing record and never reopens settled findings.
+
+## Import and the queue
 
 Final native and managed review events are imported automatically. Tracking
 starts once per profile, with a persistent timestamp shared across instances
@@ -115,13 +154,24 @@ by location and title, then by location, then by position when both lists have
 the same length. Position alone pairs only within the review's own turn; a
 later turn's report must also match one finding's location. It publishes
 `thread/review/outcomesReported`. Tracking marks `fixed` findings addressed
-and `no_change_needed` findings dismissed, with the agent as the actor, in one
-commit. `skipped` findings stay open. A reported
-outcome never overrides an outcome already recorded for that finding. An
+and `no_change_needed` and `skipped` findings declined, with the agent as the
+actor, in one commit. That matches Claude Code, which counts all three as
+settled. Each note names the reported word ("Addressed automatically: the code
+review reported it `fixed`."), so an agent reading `list_reviews` can tell an
+automatic outcome from one it recorded. A reported outcome never overrides an
+outcome already recorded for that finding. An
 outcome report that matches no earlier review is recorded as a new review with
 those outcomes. The checked-in `thread-review-reported-outcomes` budget
 measures one commit per settling report (~8 KB WAL, about 0.8 MB/day at 100
-reports per day). Repeats and skipped-only reports make no commits.
+reports per day). Repeats make no commits.
+
+A `skipped` finding is real, and the report gives no reason for it. A
+`PostToolUse` hook on `ReportFindings` (`claudeReportFindingsHooks`) therefore
+adds context to the tool result when a report has any. It lists them (ten at
+most) and says they were recorded as declined with no reason. It tells the
+agent how to defer one worth doing later to an `add_todo` card, or document a
+decline, through `update_review_item`. A report without `skipped` findings
+gets no added context.
 
 ## Controls
 
@@ -131,8 +181,8 @@ total, the way a card with steps does, but a finding row has no box: a tick
 there would read as "done" on one card and "include" on the other. A row
 shows only its priority and title at rest. Hovering it, or moving focus into
 it, raises its chips. An open row offers **Select**, **Fix now**, and
-**Decline**; a settled row reads **Addressed** or **Did not address** and
-offers **Reopen**. Declining is a final outcome the agent can see in
+**Decline**; a settled row reads **Addressed**, **Declined**, or **Deferred**
+and offers **Reopen**. Declining is a final outcome the agent can see in
 `list_reviews`, not a hidden row. The head's dismiss control dismisses the
 whole review, and the stack's **Undo** reopens it.
 
@@ -154,7 +204,8 @@ ending or cancelling the turn re-enables fixes for findings that remain open.
 The transcript review keeps the record. A status row under the verdict gives
 the open count, or how the review was handled or dismissed. Each finding's
 footer holds its two actions, or a resolution line naming the outcome, the
-actor, the agent's note, the evidence link, and the time. An operator's own
+actor, the agent's note, the to-do card a deferral waits on, the evidence
+link, and the time. An operator's own
 click shows "by you" without its stock note. Status tone is carried on the
 glyph and label only.
 

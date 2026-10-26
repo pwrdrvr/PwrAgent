@@ -1304,6 +1304,18 @@ export type RenameThreadResponse = {
   renamedAt: number;
 };
 
+/**
+ * Request bounds for display reads. Each read rebuilds the thread's whole
+ * display on the owner, so a viewer refresh asks for every loaded turn or row
+ * at once. Owners without the `thread_display_bulk_reads` federation
+ * capability accept only the legacy bounds; a larger `limit` is clamped there,
+ * and more than 256 accounting turns is rejected.
+ */
+export const THREAD_DISPLAY_MAX_ACCOUNTING_TURNS = 4_096;
+export const THREAD_DISPLAY_LEGACY_MAX_ACCOUNTING_TURNS = 256;
+export const THREAD_DISPLAY_MAX_PAGE_ROWS = 1_000;
+export const THREAD_DISPLAY_LEGACY_MAX_PAGE_ROWS = 50;
+
 /** Display resources have independent pages. Transcript loads never carry accounting ledgers. */
 export type ThreadDisplayRead = {
   subAgentLens?: SubAgentLens;
@@ -2491,8 +2503,9 @@ export type AppServerNotification =
   | {
       /**
        * The full set of commands and sub-agents a backend reports running for
-       * the thread. Replaces the previous set. Claude only; Codex terminals
-       * are read on demand.
+       * the thread. Replaces the previous set. Claude publishes its task set.
+       * Codex has no such event, so the desktop registry publishes a Codex
+       * thread's background terminals whenever their membership changes.
        */
       method: "thread/backgroundTasks/updated";
       params: {

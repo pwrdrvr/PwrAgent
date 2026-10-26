@@ -15,6 +15,7 @@ import { archiveCandidateProtectionReason } from "../app-server/thread-archive-s
 import { USAGE_ACTIVITY_READ_CHANNEL } from "../../shared/ipc";
 import { THREAD_FAMILY_PRICING_READ_CHANNEL } from "../../shared/ipc";
 import { readThreadFamilyPricing } from "../app-server/thread-family-pricing";
+import { conditionalThreadRead } from "../app-server/conditional-thread-read";
 import { USAGE_ACTIVITY_OPEN_THREAD_CHANNEL, USAGE_ACTIVITY_OPEN_WINDOW_CHANNEL } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 import { showUsageActivityWindow } from "../usage-activity-window";
@@ -1737,7 +1738,11 @@ class DesktopAppServerService {
     );
     // Transcript bodies are lossless. Character cuts can split Markdown tables,
     // code fences, and cross-thread message arguments in the middle.
-    return shapeReadThreadFileDiffsForRenderer(materialized);
+    // A viewer holding this exact page keeps it, as federation owners allow.
+    return conditionalThreadRead(
+      shapeReadThreadFileDiffsForRenderer(materialized),
+      request.knownRevision,
+    );
   }
 
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {

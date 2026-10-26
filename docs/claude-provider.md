@@ -196,10 +196,14 @@ message, leaving the session and its settings as they were. MCP grants the
 registry issues for a turn are revoked when the session that uses them
 closes, not when the turn ends.
 
-Between turns the thread reads as idle in the thread list and Attention. The
-quit prompt and auto-archive still count it as busy, as they count a Codex
-thread with a background terminal, and archiving refuses until its tasks are
-stopped. The tool row of a background call stays running until its
+Between turns the thread's status stays idle, so the composer sends instead of
+queueing. Its row still shows the working scanner and the thread stays in
+Attention, because a finished task wakes Claude for a follow-up turn. A Codex
+background terminal never wakes the agent, so a Codex row shows a quiet `>_`
+mark instead and its turn ends normally. The registry publishes a Codex
+thread's terminals as `thread/backgroundTasks/updated` when their membership
+changes, since Codex announces none. The quit prompt and auto-archive count
+both kinds as busy, and archiving refuses until the tasks are stopped. The tool row of a background call stays running until its
 notification, then shows the task's summary in the turn that made the call.
 A permission request or MCP elicitation from a task between turns belongs to
 the latest turn. Running tasks are published as

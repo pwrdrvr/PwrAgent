@@ -20,12 +20,15 @@ import type {
 import {
   THREAD_TODO_MERGE_METHODS,
   resolveThreadTodoMergeMethod,
+  threadTodoBlockingItems,
+  threadTodoItemNoun,
   threadTodoItemProgress,
   threadTodoOpenItems,
+  threadTodoPrerequisites,
+  threadTodoSteps,
 } from "@pwragent/shared";
 import {
   ArrowUpIcon,
-  BanIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -55,6 +58,7 @@ import type {
   ThreadTodoRunOptions,
 } from "./thread-todos-view";
 import {
+  SettledFindingLabel,
   fixReviewFindingsPrompt,
   orderReviewItems,
   useTrackedReview,
@@ -158,11 +162,15 @@ type OpenStepsConfirmation = {
  * kind glyph, age and the icon tools; the pager leads the footer and the
  * card's own action trails it, the way out last.
  *
- * A card with steps is done when every step is checked. Checking the last
- * step never resolves the card by itself: Done, or the card's action, stays
- * the operator's click. Anything that would complete the card while steps
- * are open asks first ("2 steps still open"), and only a confirmed click
- * sends `allowOpenItems`. Dismiss never asks.
+ * A card with steps is done when every blocking step is checked
+ * (threadTodoBlockingItems). Checking the last step never resolves the card
+ * by itself: Done, or the card's action, stays the operator's click.
+ * Anything that would complete the card while blocking steps are open asks
+ * first ("2 steps still open"), and only a confirmed click sends
+ * `allowOpenItems`. Dismiss never asks.
+ *
+ * A start_thread card's plain steps are the new thread's plan, so only its
+ * prerequisites ask; the steps go along with the thread.
  */
 export function ThreadTodoCard(props: ThreadTodoCardProps) {
   return props.todo.reviewId ? <TrackedReviewCard {...props} /> : <ActionThreadTodoCard {...props} />;
@@ -349,6 +357,8 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
           >
             {shown.map((item) => {
               const isSelected = item.status === "open" && selected.has(item.id);
+              // The card labels each finding by its own outcome.
+              const settled = item.status === "open" ? undefined : item.status;
               return (
                 <li
                   key={item.id}
@@ -359,8 +369,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
                   <ReviewTodoFindingLabel item={item} ranked={ranked} />
                   <span className="review-todo__state">
                     {isSelected ? "Selected" : null}
-                    {item.status === "addressed" ? <><CheckIcon size={11} />Addressed</> : null}
-                    {item.status === "dismissed" ? <><BanIcon size={11} />Did not address</> : null}
+                    {settled ? <SettledFindingLabel status={settled} size={11} /> : null}
                   </span>
                   <span className="review-todo__chips">
                     {item.status === "open" ? (
@@ -390,7 +399,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
                           className="review-todo__chip"
                           aria-label={`Decline finding: ${item.title}`}
                           disabled={busy}
-                          onClick={() => void tracking.update({ itemId: item.id, status: "dismissed" })}
+                          onClick={() => void tracking.update({ itemId: item.id, status: "declined" })}
                         >
                           Decline
                         </button>
@@ -575,8 +584,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const facts = buildFacts(todo);
   const runningLabel = action?.type === "merge_pull_request" ? "Merging…" : "Starting…";
   const progress = threadTodoItemProgress(todo);
-  const openSteps = threadTodoOpenItems(todo).length;
-  const openStepsText = `${openSteps} ${openSteps === 1 ? "step" : "steps"} still open.`;
+  const prerequisites = threadTodoPrerequisites(todo);
+  const blocking = threadTodoBlockingItems(todo);
+  const openSteps = blocking.length;
+  const openStepsText = `${openSteps} ${threadTodoItemNoun(blocking)} still open.`;
   // Ticking the last step while the question is up answers it: the card
   // goes back to its buttons instead of asking about "0 steps".
   const stepsConfirmation = openSteps > 0 ? confirmingSteps : undefined;
@@ -603,15 +614,22 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   }, [stepsConfirmation]);
 
   /**
-   * Runs `complete` now when every step is checked; otherwise asks first and
-   * runs it with `allowOpenItems` once the operator confirms.
+   * Runs `complete` now when no blocking step is open; otherwise asks first
+   * and runs it with `allowOpenItems` once the operator confirms.
    */
   const completeCard = (
     confirmation: Omit<OpenStepsConfirmation, "proceed">,
     complete: (allowOpenItems: boolean) => void,
   ): void => {
     if (openSteps === 0) {
-      complete(false);
+      // A start_thread card's open steps do not block here. A federation
+      // peer on an older version blocks on every open step, so the
+      // override goes along to a peer's card. A local card's owner applies
+      // the same rule as this card, and still refuses a prerequisite added
+      // since it rendered.
+      complete(
+        todo.federationTarget !== undefined && threadTodoOpenItems(todo).length > 0,
+      );
       return;
     }
     setConfirmingSteps({ ...confirmation, proceed: () => complete(true) });
@@ -848,7 +866,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         )}
       />
 
-      {todo.detail || progress || facts.length > 0 || prompt || todo.error ? (
+      {todo.detail || progress || prerequisites.length > 0 || facts.length > 0 || prompt || todo.error ? (
         <div
           id={resting.bodyId}
           className={`thread-todo-card__body${resting.expanded ? " is-expanded" : ""}`}
@@ -861,13 +879,38 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               {todo.detail}
             </p>
           ) : null}
+          {prerequisites.length > 0 ? (
+            <>
+              <p className="thread-todo-card__group-label" aria-hidden="true">
+                Before you start
+              </p>
+              <ThreadTodoChecklist
+                todo={todo}
+                label="Before you start"
+                items={prerequisites}
+                progress={{
+                  checked: prerequisites.filter((item) => item.checked).length,
+                  total: prerequisites.length,
+                }}
+                onSetItemChecked={props.onSetItemChecked}
+              />
+            </>
+          ) : null}
           {resting.steps.length > 0 && progress ? (
-            <ThreadTodoChecklist
-              todo={todo}
-              items={resting.steps}
-              progress={progress}
-              onSetItemChecked={props.onSetItemChecked}
-            />
+            <>
+              {action?.type === "start_thread" ? (
+                <p className="thread-todo-card__group-label" aria-hidden="true">
+                  For the new thread
+                </p>
+              ) : null}
+              <ThreadTodoChecklist
+                todo={todo}
+                label={action?.type === "start_thread" ? "Steps for the new thread" : "Steps"}
+                items={resting.steps}
+                progress={progress}
+                onSetItemChecked={props.onSetItemChecked}
+              />
+            </>
           ) : null}
           {facts.length > 0 ? (
             <dl className="thread-todo-card__facts">
@@ -994,11 +1037,12 @@ function useTodoCopy(
       if (selection) {
         items.push({ label: "Copy selection", action: () => copy(selection) });
       }
-      const steps = todo.items ?? [];
+      const steps = threadTodoSteps(todo);
       const stepId = event.target instanceof Element
         ? event.target.closest("[data-todo-item-id]")?.getAttribute("data-todo-item-id")
         : undefined;
-      const step = steps.find((item) => item.id === stepId);
+      // A prerequisite copies as a step too; the counts below are steps only.
+      const step = todo.items?.find((item) => item.id === stepId);
       if (step) {
         items.push({ label: "Copy step", action: () => copy(step.text) });
       }
@@ -1082,7 +1126,9 @@ function restingStepStart(items: ThreadTodoItem[]): number {
  * happened, and the window moves on once every step in it is checked.
  */
 function useRestingCard(todo: ThreadTodo) {
-  const items = todo.items ?? [];
+  // Prerequisites always show in full above the window; they are few, and
+  // they are what holds the card back.
+  const items = threadTodoSteps(todo);
   const [expanded, setExpanded] = useState(false);
   const [anchor, setAnchor] = useState(() => restingStepStart(items));
   const [detailCut, setDetailCut] = useState(false);
@@ -1138,6 +1184,8 @@ function resolveOptions(allowOpenItems: boolean): ThreadTodoResolveOptions | und
  */
 function ThreadTodoChecklist(props: {
   todo: ThreadTodo;
+  /** The list's accessible name, before its count. */
+  label: string;
   items: ThreadTodoItem[];
   progress: { checked: number; total: number };
   onSetItemChecked: ThreadTodoCardHandlers["onSetItemChecked"];
@@ -1146,7 +1194,7 @@ function ThreadTodoChecklist(props: {
   return (
     <ul
       className="thread-todo-checklist"
-      aria-label={`Steps, ${props.progress.checked} of ${props.progress.total} checked`}
+      aria-label={`${props.label}, ${props.progress.checked} of ${props.progress.total} checked`}
     >
       {props.items.map((item) => (
         <li key={item.id} className="thread-todo-checklist__item" data-todo-item-id={item.id}>
