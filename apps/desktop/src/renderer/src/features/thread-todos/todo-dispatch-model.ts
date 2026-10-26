@@ -10,7 +10,16 @@ export function formatTodoDispatchSettings(settings: ThreadTodoModelSettings, ba
 
 export function todoDispatchRecentResolves(settings: ThreadTodoModelSettings, backends: BackendSummary[]): boolean {
   const backend = backends.find((entry) => entry.kind === settings.backend && entry.available && entry.capabilities.createThread);
-  return Boolean(backend && (!settings.model || backend.launchpadOptions?.models?.some((model) => model.id === settings.model)));
+  if (!backend) return false;
+  const models = backend.launchpadOptions?.models ?? [];
+  const model = settings.model ? models.find((entry) => entry.id === settings.model)
+    : models.find((entry) => entry.current) ?? models[0];
+  if (settings.model && !model) return false;
+  if (!settings.reasoningEffort) return true;
+  if (model?.supportsReasoning === false) return false;
+  const efforts = model?.reasoningEfforts ?? backend.launchpadOptions?.reasoningEfforts ?? [];
+  return efforts.length === 0
+    || efforts.some((effort) => effort.toLowerCase() === settings.reasoningEffort!.toLowerCase());
 }
 
 /** Custom changes choose valid defaults for the new provider/model. */

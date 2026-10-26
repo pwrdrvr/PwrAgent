@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ModelSettingsRecent, ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared";
 import { resolveThreadTodoModelSettings, sameThreadTodoModelSettings } from "@pwragent/shared";
@@ -8,6 +8,8 @@ import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
 import { useTodoDispatchBackends, useTodoDispatchContext } from "./TodoDispatchProvider";
 import { customTodoDispatchSettings, formatTodoDispatchSettings, todoDispatchRecentResolves } from "./todo-dispatch-model";
+
+import { placeTodoModelMenu } from "./todo-model-menu-placement";
 
 type PickerProps = {
   todo: ThreadTodo;
@@ -22,7 +24,7 @@ export function TodoModelPicker(props: PickerProps) {
   const [open, setOpen] = useState(false);
   const [recents, setRecents] = useState<ModelSettingsRecent[]>([]);
   const [error, setError] = useState<string>();
-  const [position, setPosition] = useState({ left: 0, top: 0 });
+  const [position, setPosition] = useState<{ left: number; top: number; maxHeight?: number }>({ left: 0, top: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -42,24 +44,46 @@ export function TodoModelPicker(props: PickerProps) {
     void context.api?.listModelSettingsRecents?.({ scope: "todo-dispatch", federationTarget: todo.federationTarget })
       .then((response) => { if (!cancelled) setRecents(response.recents); })
       .catch(() => { if (!cancelled) setError("Recent settings could not be loaded."); });
-    const place = () => {
-      const rect = triggerRef.current?.getBoundingClientRect();
-      if (rect) setPosition({ left: Math.max(8, Math.min(rect.left, window.innerWidth - 348)), top: rect.bottom + 6 });
-    };
-    place();
     const outside = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node) && !triggerRef.current?.contains(event.target as Node)) close();
     };
     document.addEventListener("pointerdown", outside, true);
-    window.addEventListener("resize", place);
-    window.addEventListener("scroll", place, true);
     return () => {
       cancelled = true;
       document.removeEventListener("pointerdown", outside, true);
+    };
+  }, [open, context.api, todo.federationTarget]);
+
+  const place = useCallback(() => {
+    const trigger = triggerRef.current?.getBoundingClientRect();
+    const menu = menuRef.current;
+    if (!trigger || !menu) return;
+    const next = placeTodoModelMenu({
+      trigger,
+      menuHeight: menu.scrollHeight + menu.offsetHeight - menu.clientHeight,
+      menuWidth: menu.offsetWidth || 340,
+      viewportHeight: window.innerHeight,
+      viewportWidth: window.innerWidth,
+    });
+    setPosition((current) => current.left === next.left && current.top === next.top && current.maxHeight === next.maxHeight
+      ? current : next);
+  }, []);
+
+  // Content can grow after Recents loads, or wrap when Custom changes provider.
+  useLayoutEffect(() => { if (open) place(); });
+  useLayoutEffect(() => {
+    if (!open) return;
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(place);
+    if (triggerRef.current) observer?.observe(triggerRef.current);
+    if (menuRef.current) observer?.observe(menuRef.current);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      observer?.disconnect();
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [open, context.api, todo.federationTarget]);
+  }, [open, place]);
 
   const pickRow = (settings: ThreadTodoModelSettings) => { props.onPick(settings); close(); };
   const row = (settings: ThreadTodoModelSettings, detail?: string, key?: string) => (
@@ -91,7 +115,7 @@ export function TodoModelPicker(props: PickerProps) {
       </button>
       {open ? createPortal(
         <div ref={menuRef} id={id} className="todo-split__menu todo-model-picker__menu"
-          style={{ ...position, maxHeight: `calc(100dvh - ${position.top + 8}px)` }} role="menu" aria-label="Model for the new thread" tabIndex={-1}>
+          style={position} role="menu" aria-label="Model for the new thread" tabIndex={-1}>
           {row(thread, "This thread")}
           {hasSuggestion ? row(suggested, "Suggested") : null}
           {recentRows.length ? <div className="composer-dropdown__group-label"><span>Recent</span><span>all threads</span></div> : null}

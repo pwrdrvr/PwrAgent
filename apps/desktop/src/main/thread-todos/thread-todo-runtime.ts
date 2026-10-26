@@ -384,7 +384,7 @@ export function installThreadTodoRuntime(params: {
 /** The registry calls a to-do's Start thread makes. */
 export type ThreadTodoRunnerRegistry = Pick<
   DesktopBackendRegistry,
-  "readThreadHandoffSettings" | "readBackendModelOptions" | "renameThread" | "startThread" | "startTurn"
+  "readThreadHandoffSettings" | "readBackendModelOptions" | "listBackends" | "renameThread" | "startThread" | "startTurn"
 >;
 
 /**
@@ -419,8 +419,20 @@ export function createThreadTodoRunners(params: {
       if (!validated.ok) throw new ThreadTodoError("invalid_arguments", validated.message);
       const chosen = { backend: selected.backend, model: validated.model, reasoningEffort: validated.reasoningEffort };
       const sameBackend = chosen.backend === sourceBackend;
+      let executionMode = action.executionMode ?? source.executionMode;
+      if (!sameBackend && action.executionMode === undefined) {
+        const { backends } = await registry.listBackends({ includeUnavailable: true });
+        const destination = backends.find((backend) => backend.kind === chosen.backend);
+        if (destination && !destination.executionModes.some((mode) => mode.mode === executionMode && mode.available)) {
+          // An inherited mode must never raise access to make a provider fit.
+          if (!destination.executionModes.some((mode) => mode.mode === "default" && mode.available)) {
+            throw new ThreadTodoError("invalid_arguments", `${destination.label} cannot use the inherited access mode or Default Access.`);
+          }
+          executionMode = "default";
+        }
+      }
       const settings = {
-        executionMode: action.executionMode ?? source.executionMode,
+        executionMode,
         ...optional("model", chosen.model),
         ...optional("reasoningEffort", chosen.reasoningEffort),
         ...(sameBackend ? {

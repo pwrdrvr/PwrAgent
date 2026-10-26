@@ -20,6 +20,12 @@ function fakeRegistry(source: HandoffSourceSettings) {
   const registry = {
     readThreadHandoffSettings: vi.fn(async () => source),
     readBackendModelOptions: vi.fn(async (_backend: string) => undefined),
+    listBackends: vi.fn(async () => ({ fetchedAt: 0, backends: ["codex", "claude", "acp:kimi"].map((kind) => ({
+      kind, label: kind, executionModes: [
+        { mode: "default", available: true }, { mode: "full-access", available: true },
+        ...(kind.startsWith("acp:") ? [] : [{ mode: "auto", available: true }]),
+      ],
+    })) })),
     startThread: vi.fn(async (params: { backend: "codex" }) => ({
       backend: params.backend,
       threadId: "child-thread",
@@ -323,5 +329,45 @@ describe("chosen dispatch backend", () => {
       modelSettings: { backend: "codex", model: "other", reasoningEffort: "medium" },
     });
     expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ serviceTier: "fast", fastMode: true }));
+  });
+});
+
+describe("dispatch access mode compatibility", () => {
+  it.each(["codex", "claude"] as const)("starts on ACP Default Access when inheriting %s Auto", async (sourceBackend) => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
+    await runners.startThread({ sourceBackend, sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "acp:kimi" } });
+    expect(registry.listBackends).toHaveBeenCalledWith({ includeUnavailable: true });
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ backend: "acp:kimi", executionMode: "default" }));
+    expect(registry.startTurn).toHaveBeenCalledWith(expect.objectContaining({ executionMode: "default" }));
+  });
+
+  it("keeps Auto when the destination advertises it", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
+    await runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "claude" } });
+    expect(registry.startThread).toHaveBeenCalledWith(expect.objectContaining({ executionMode: "auto" }));
+    expect(registry.startTurn).toHaveBeenCalledWith(expect.objectContaining({ executionMode: "auto" }));
+  });
+
+  it("does not substitute Full Access when the inherited mode and Default Access are unavailable", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
+    registry.listBackends.mockResolvedValue({ fetchedAt: 0, backends: [{ kind: "acp:kimi", label: "Kimi", executionModes: [
+      { mode: "default", available: false }, { mode: "full-access", available: true },
+    ] }] });
+    await expect(runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" }, modelSettings: { backend: "acp:kimi" } })).rejects.toThrow("Default Access");
+    expect(registry.startThread).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit card access and same-backend inheritance", async () => {
+    const { registry, runners } = fakeRegistry({ ...FULL_ACCESS_SOL, executionMode: "auto" });
+    await runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it", executionMode: "full-access" }, modelSettings: { backend: "acp:kimi" } });
+    expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ executionMode: "full-access" }));
+    await runners.startThread({ sourceBackend: "codex", sourceThreadId: "source", crossProject: false,
+      action: { type: "start_thread", prompt: "Build it" } });
+    expect(registry.startThread).toHaveBeenLastCalledWith(expect.objectContaining({ executionMode: "auto" }));
+    expect(registry.listBackends).not.toHaveBeenCalled();
   });
 });

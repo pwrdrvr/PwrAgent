@@ -90,6 +90,29 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await stack.getByRole("heading", { name: "Cache the signing-key lookup", exact: true }).click();
     await expect(app.window.locator(".data-tooltip-layer")).not.toBeVisible();
     await stack.screenshot({ path: testInfo.outputPath("todo-dispatch-after.png"), animations: "disabled" });
+    // A scrolled card can place the chip at the viewport edge. Exercise the
+    // actual Chromium layout and keyboard focus with that fixture geometry.
+    await chip.evaluate((element) => {
+      element.style.position = "fixed";
+      element.style.top = `${window.innerHeight - 30}px`;
+      element.style.left = "600px";
+      element.style.zIndex = "151";
+    });
+    await chip.click();
+    await expect(menu).toBeVisible();
+    await expect.poll(async () => {
+      const bounds = await menu.boundingBox();
+      const anchor = await chip.boundingBox();
+      const viewportHeight = await app.window.evaluate(() => window.innerHeight);
+      return Boolean(bounds && anchor && bounds.y >= 8 && bounds.y + bounds.height <= viewportHeight - 8
+        && bounds.y + bounds.height <= anchor.y);
+    }).toBe(true);
+    await menu.getByRole("menuitemradio").first().press("End");
+    await expect(menu.getByRole("menuitem", { name: /To-do reasoning:/ })).toBeFocused();
+    await app.window.keyboard.press("Escape");
+    await chip.evaluate((element) => {
+      for (const property of ["position", "top", "left", "z-index"]) element.style.removeProperty(property);
+    });
     await stack.getByRole("button", { name: "Start thread", exact: true }).click();
     await expect.poll(() => app.getLastStartTurn()).toMatchObject({ model: "gpt-5.5", reasoningEffort: "xhigh" });
     await expect(stack).toContainText("Last used in this thread");

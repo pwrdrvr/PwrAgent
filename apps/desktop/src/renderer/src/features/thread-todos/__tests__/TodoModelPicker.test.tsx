@@ -16,7 +16,7 @@ const base: ThreadTodo = { id: "card", backend: "claude", threadId: "thread-a", 
   title: "Cache the signing-key lookup", createdAt: 0, updatedAt: 0,
   action: { type: "start_thread", prompt: "Cache the key", workMode: "worktree" }, dispatchDefaults: { thread } };
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 function setup(todo = base, recents = [codex]) {
   const onRun = vi.fn();
@@ -48,6 +48,22 @@ describe("to-do dispatch model picker", () => {
     expect(api.listModelSettingsRecents).toHaveBeenCalledWith({ scope: "todo-dispatch", federationTarget: undefined });
     expect(screen.queryByText("Picked for this card")).toBeNull();
     expect(document.activeElement).toBe(within(menu).getAllByRole("menuitemradio")[0]);
+  });
+
+  it("places a bottom-edge menu above its chip and follows scroll geometry", async () => {
+    let top = window.innerHeight - 30;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => new DOMRect(200, top, 160, 22));
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(300);
+    setup();
+    const menu = await openPicker();
+    expect(Number.parseFloat(menu.style.top)).toBe(top - 306);
+    expect(Number.parseFloat(menu.style.maxHeight)).toBeGreaterThan(300);
+    top = -50;
+    fireEvent.scroll(window);
+    expect(menu.style.top).toBe("8px");
+    top = 10;
+    fireEvent.resize(window);
+    expect(menu.style.top).toBe("38px");
   });
 
   it("picks a recent for just this card, survives paging, and dispatches it", async () => {
@@ -124,7 +140,10 @@ describe("to-do dispatch model picker", () => {
 
   it("filters missing models/providers, caps Recent at five, and closes on an outside pointer", async () => {
     setup(base, [{ backend: "claude", model: "removed" }, { backend: "acp:missing" },
-      ...Array.from({ length: 7 }, (_, index) => ({ ...codex, reasoningEffort: `effort-${index}` }))]);
+      { ...codex, reasoningEffort: "removed-effort" },
+      codex, { ...codex, reasoningEffort: "medium" }, { ...codex, reasoningEffort: undefined },
+      thread, { ...thread, reasoningEffort: "medium" }, { ...thread, reasoningEffort: "xhigh" },
+      { ...thread, reasoningEffort: undefined }]);
     const menu = await openPicker();
     expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(6);
     fireEvent.pointerDown(document.body);
