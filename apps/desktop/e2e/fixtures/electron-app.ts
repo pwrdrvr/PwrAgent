@@ -56,7 +56,10 @@ import {
 } from "./electron-shutdown-policy";
 import { removeTempRoot } from "./temp-root-cleanup";
 import { tolerateTransientRpcFailure } from "./transient-rpc-poll";
-import { reportWindowsCloseSurvivors } from "./windows-close-survivors";
+import {
+  reportWindowsCloseSurvivors,
+  watchWindowsLauncherCloseGap,
+} from "./windows-close-survivors";
 
 const fixtureDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -1217,6 +1220,13 @@ export async function closeElectronApplication(
   await captureElectronMainProcess(electronApp);
   const mainProcess = electronMainProcesses.get(electronApp);
   const quitStartedAt = Date.now();
+  const closeGapWatch = process.platform === "win32" && !hasExited(child)
+    ? watchWindowsLauncherCloseGap(child, {
+        launchId: options.launchId,
+        mainProcess,
+        quitStartedAt,
+      })
+    : undefined;
   const execution = await executeElectronClose({
     now: performance.now.bind(performance),
     requestQuit: async () => {
@@ -1254,6 +1264,7 @@ export async function closeElectronApplication(
         // removes the evidence.
         await reportWindowsCloseSurvivors({
           launchId: options.launchId,
+          reason: "graceful-close-timeout",
           launcherPid: child.pid,
           mainProcess,
           quitStartedAt,
@@ -1266,6 +1277,7 @@ export async function closeElectronApplication(
       ELECTRON_FORCE_EXIT_TIMEOUT_MS,
     ),
   });
+  await closeGapWatch?.settled();
   return recordElectronCloseSummary(execution, options);
 }
 

@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import type { ChildProcess } from "node:child_process";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildWindowsCloseSurvivorReport,
   parseWindowsProcessSnapshot,
   selectWindowsCloseSurvivors,
   summarizeWindowsCommandLine,
+  watchWindowsLauncherCloseGap,
   type WindowsProcessRow,
 } from "../../../e2e/fixtures/windows-close-survivors";
 
@@ -80,6 +83,7 @@ describe("Windows close survivor snapshot", () => {
   it("builds a bounded report with quit-relative timings", () => {
     const report = buildWindowsCloseSurvivorReport({
       launchId: "launch-1",
+      reason: "graceful-close-timeout",
       rows: [
         row(10, 1, 89_900, "cmd.exe"),
         row(21, 20, 101_000, "git.exe", "git.exe -C D:\\repo status"),
@@ -92,6 +96,7 @@ describe("Windows close survivor snapshot", () => {
 
     expect(report).toEqual({
       launchId: "launch-1",
+      reason: "graceful-close-timeout",
       launcherAlive: true,
       mainAlive: false,
       snapshotAfterQuitMs: 6_500,
@@ -133,5 +138,50 @@ describe("Windows close survivor snapshot", () => {
         `21\t20\t95000\tgit.exe\t${command}\r\nnot a row\r\n\r\n`,
       ),
     ).toEqual([row(21, 20, 95_000, "git.exe", "git.exe status")]);
+  });
+
+  describe("launcher close gap", () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function fakeLauncher(): ChildProcess {
+      return Object.assign(new EventEmitter(), { pid: 10 }) as unknown as ChildProcess;
+    }
+
+    it("takes no snapshot when the launcher closes promptly after exit", async () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const launcher = fakeLauncher();
+      const watch = watchWindowsLauncherCloseGap(launcher, {
+        launchId: "launch-1",
+        quitStartedAt: Date.now(),
+      });
+      launcher.emit("exit", 0, null);
+      launcher.emit("close", 0, null);
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await watch.settled();
+      expect(log).not.toHaveBeenCalled();
+      expect(launcher.listenerCount("exit")).toBe(0);
+      expect(launcher.listenerCount("close")).toBe(0);
+    });
+
+    it("reports once when the launcher's pipes stay open past the gap", async () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const launcher = fakeLauncher();
+      const watch = watchWindowsLauncherCloseGap(launcher, {
+        launchId: "launch-2",
+        quitStartedAt: Date.now(),
+      });
+      launcher.emit("exit", 0, null);
+      await new Promise((resolve) => setTimeout(resolve, 1_100));
+      await watch.settled();
+      expect(log).toHaveBeenCalledTimes(1);
+      const line = String(log.mock.calls[0]?.[0]);
+      expect(line.startsWith("[pwragent-e2e-close-survivors] ")).toBe(true);
+      expect(JSON.parse(line.slice(line.indexOf("{")))).toMatchObject({
+        launchId: "launch-2",
+        reason: "launcher-close-gap",
+      });
+    }, 10_000);
   });
 });

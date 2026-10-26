@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, type ChildProcess } from "node:child_process";
 
 /**
  * Names the processes that keep a Windows Electron close from completing.
@@ -7,9 +7,13 @@ import { execFile } from "node:child_process";
  * `electronApp.close()` on that launcher's `close` event, which waits until
  * every holder of its stdio pipes is gone. Electron's Node children inherit
  * those pipes, so a child that outlives quit holds the close open. The
- * shutdown summary reports only that the close timed out. This snapshot runs
- * on that timeout path, before the force-kill, and records which processes
- * were still alive and how they relate to the launch.
+ * shutdown summary reports only that the close timed out. A snapshot runs on
+ * that timeout path, before the force-kill, and records which processes were
+ * still alive and how they relate to the launch.
+ *
+ * A fatal timeout is rare, but the same holder also delays the launcher's
+ * `close` without failing the test. A healthy launcher closes within about
+ * 50 ms of its `exit`, so a longer gap also takes a snapshot.
  */
 
 export type WindowsProcessRow = {
@@ -36,8 +40,13 @@ export type WindowsCloseSurvivor = {
   command: string;
 };
 
+export type WindowsCloseSurvivorReason =
+  | "graceful-close-timeout"
+  | "launcher-close-gap";
+
 export type WindowsCloseSurvivorReport = {
   launchId: string;
+  reason: WindowsCloseSurvivorReason;
   launcherAlive: boolean;
   mainAlive: boolean;
   snapshotAfterQuitMs: number;
@@ -49,6 +58,7 @@ const PROCESS_START_TOLERANCE_MS = 2_000;
 const MAX_REPORTED_SURVIVORS = 24;
 const MAX_COMMAND_CHARS = 240;
 const SNAPSHOT_TIMEOUT_MS = 5_000;
+export const LAUNCHER_CLOSE_GAP_SNAPSHOT_MS = 1_000;
 
 /**
  * Select the launch's processes from one whole-system snapshot.
@@ -145,6 +155,7 @@ export function summarizeWindowsCommandLine(commandLine: string): string {
 
 export function buildWindowsCloseSurvivorReport(params: {
   launchId: string;
+  reason: WindowsCloseSurvivorReason;
   rows: WindowsProcessRow[];
   launcherPid?: number;
   mainProcess?: { pid: number; startedAt: number };
@@ -154,6 +165,7 @@ export function buildWindowsCloseSurvivorReport(params: {
   const selected = selectWindowsCloseSurvivors(params.rows, params);
   return {
     launchId: params.launchId,
+    reason: params.reason,
     launcherAlive: selected.some((row) => row.relation === "launcher"),
     mainAlive: selected.some((row) => row.relation === "main"),
     snapshotAfterQuitMs: params.snapshotAt - params.quitStartedAt,
@@ -217,6 +229,7 @@ async function queryWindowsProcesses(): Promise<WindowsProcessRow[]> {
  */
 export async function reportWindowsCloseSurvivors(params: {
   launchId?: string;
+  reason: WindowsCloseSurvivorReason;
   launcherPid?: number;
   mainProcess?: { pid: number; startedAt: number };
   quitStartedAt: number;
@@ -233,4 +246,43 @@ export async function reportWindowsCloseSurvivors(params: {
   } catch {
     // Diagnostics must not replace the close result with their own failure.
   }
+}
+
+/**
+ * Snapshot once if the launcher exits but its pipes stay open past the gap.
+ * `settled()` resolves after any snapshot it started has printed.
+ */
+export function watchWindowsLauncherCloseGap(
+  launcher: ChildProcess,
+  params: {
+    launchId?: string;
+    mainProcess?: { pid: number; startedAt: number };
+    quitStartedAt: number;
+  },
+): { settled(): Promise<void> } {
+  let report: Promise<void> | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  const onExit = () => {
+    timer = setTimeout(() => {
+      report = reportWindowsCloseSurvivors({
+        ...params,
+        reason: "launcher-close-gap",
+        launcherPid: launcher.pid,
+      });
+    }, LAUNCHER_CLOSE_GAP_SNAPSHOT_MS);
+  };
+  const onClose = () => clearTimeout(timer);
+  const stop = () => {
+    clearTimeout(timer);
+    launcher.removeListener("exit", onExit);
+    launcher.removeListener("close", onClose);
+  };
+  launcher.once("exit", onExit);
+  launcher.once("close", onClose);
+  return {
+    async settled() {
+      stop();
+      await report;
+    },
+  };
 }
