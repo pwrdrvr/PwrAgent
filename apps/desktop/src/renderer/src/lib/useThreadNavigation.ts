@@ -3226,6 +3226,11 @@ export function useThreadNavigation(
   ) => Promise<void>;
   loadedRows?: NavigationLoadedRows;
   pagedNavigation: ReturnType<typeof useBoundedNavigationWindow>;
+  /**
+   * Paged resources whose landed page `threads` and `directories` do not
+   * carry yet. The rows take a page one render after it lands.
+   */
+  pagesAwaitingRows: readonly string[];
   selectedLaunchpadConfigurationReady: boolean;
   selectedLaunchpadConfigurationError?: string;
   refreshSelectedLaunchpadConfiguration: () => Promise<void>;
@@ -3751,6 +3756,14 @@ export function useThreadNavigation(
       setState((current) => ({ ...current, loading, refreshing, error }));
     }
   }, [boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
+  // The effect above folds a landed page into the rows, so a render in which
+  // a page lands still shows the rows from before it. In that render the page
+  // is not stale, yet nothing built from the rows reflects it. A selection's
+  // exact page can even hold an older copy of its directory than the index,
+  // so the rows can briefly show a pin the owner has already removed.
+  const pagesAwaitingRows = [...boundedNavigation.resources]
+    .filter(([id, resource]) => resource.state.page && acceptedPagesRef.current.get(id) !== resource.state.page)
+    .map(([id]) => id);
 
   const performRefresh = useCallback(async (
     preferredSelectionKey?: string, preferredOptimisticThread?: NavigationThreadSummary, forcePreferredSelection = false,
@@ -9582,6 +9595,7 @@ export function useThreadNavigation(
     setDirectoryThreadsCollapsed,
     loadedRows: state.rows,
     pagedNavigation: boundedNavigation,
+    pagesAwaitingRows,
     selectedLaunchpadConfigurationReady: Boolean(activeFederatedLaunchpad) || launchpadConfiguration.ready,
     selectedLaunchpadConfigurationError: activeFederatedLaunchpad ? undefined : launchpadConfiguration.error,
     refreshSelectedLaunchpadConfiguration,
