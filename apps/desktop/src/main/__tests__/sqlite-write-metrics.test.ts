@@ -1282,17 +1282,22 @@ describe("sqlite write metrics", () => {
 
     it("budgets the shutdown write of a running action's output", async () => {
       const { print, registry, start } = await createActionRegistry();
-      await start();
-      const { writes } = await measureSqliteWrites(async () => {
-        await print();
+      try {
+        await start();
+        const { writes } = await measureSqliteWrites(async () => {
+          await print();
+          await registry.close();
+        });
+        expect(storedLastSnapshot()).toBe(1);
+        expectSqliteWriteBudget({
+          note: `${SNAPSHOTS} output snapshots from a running environment action, then app shutdown`,
+          scenario: "codex-environment-action-output-shutdown",
+          writes,
+        });
+      } finally {
+        // close() is idempotent; this covers a failure before the measured close.
         await registry.close();
-      });
-      expect(storedLastSnapshot()).toBe(1);
-      expectSqliteWriteBudget({
-        note: `${SNAPSHOTS} output snapshots from a running environment action, then app shutdown`,
-        scenario: "codex-environment-action-output-shutdown",
-        writes,
-      });
+      }
     });
   });
 

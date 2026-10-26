@@ -26839,6 +26839,9 @@ export class DesktopBackendRegistry {
           };
           const setLiveOutput = this.overlayStore.setThreadCodexEnvironmentActionLiveOutput;
           if (!ambiguousTerminalFailure && setLiveOutput) {
+            // Shutdown already flushed the running tails; nothing is left to
+            // persist or show this one.
+            if (this.closed) return;
             setLiveOutput.call(this.overlayStore, {
               backend: params.backend,
               threadId: params.threadId,
