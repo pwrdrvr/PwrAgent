@@ -1,4 +1,5 @@
 import { act } from "@testing-library/react";
+import { isElementVisible, withVisibilityReadScope } from "../lib/dom-visibility";
 
 /**
  * Tab and Escape as the operator presses them, for jsdom.
@@ -17,36 +18,10 @@ const TABBABLE =
   "a[href],area[href],button,input,select,textarea,summary,iframe,object,embed,"
   + "[contenteditable],[tabindex]";
 
-let visibilityWalk: {
-  values: Map<HTMLElement, boolean>;
-  observer: MutationObserver;
-} | undefined;
-
 function isTabStop(el: HTMLElement, styles: Map<HTMLElement, CSSStyleDeclaration>): boolean {
   if (el.tabIndex < 0 || el.hidden) return false;
   if (el.hasAttribute("disabled") || el.closest("[inert]") !== null) return false;
-  // Without author styles, focus alone cannot change display/visibility.
-  // Inline and UA visibility changes have DOM attributes; invalidate those
-  // synchronously, before choosing the next stop, even within one Tab walk.
-  const walk = visibilityWalk;
-  const cache = walk && document.styleSheets.length === 0
-    && (document.adoptedStyleSheets?.length ?? 0) === 0 ? walk.values : undefined;
-  if (walk?.observer.takeRecords().length) walk.values.clear();
-  const cached = cache?.get(el);
-  if (cached !== undefined) return cached;
-  for (let node: HTMLElement | null = el; node !== null; node = node.parentElement) {
-    let style = styles.get(node);
-    if (!style) {
-      style = getComputedStyle(node);
-      styles.set(node, style);
-    }
-    if (style.display === "none" || style.visibility === "hidden") {
-      cache?.set(el, false);
-      return false;
-    }
-  }
-  cache?.set(el, true);
-  return true;
+  return isElementVisible(el, styles);
 }
 
 export function documentTabStops(): HTMLElement[] {
@@ -134,17 +109,9 @@ export function walkTab(
   count = 60,
   { shift = false, stopAtCycle = false }: { shift?: boolean; stopAtCycle?: boolean } = {},
 ): Element[] {
-  const visited: Element[] = [];
-  const seen = stopAtCycle ? new Set([document.activeElement ?? document.body]) : undefined;
-  const previous = visibilityWalk;
-  const values = new Map<HTMLElement, boolean>();
-  const observer = new MutationObserver(() => values.clear());
-  observer.observe(document.documentElement, {
-    subtree: true, childList: true, attributes: true,
-    attributeFilter: ["style", "hidden", "open", "type"],
-  });
-  visibilityWalk = { values, observer };
-  try {
+  return withVisibilityReadScope(() => {
+    const visited: Element[] = [];
+    const seen = stopAtCycle ? new Set([document.activeElement ?? document.body]) : undefined;
     for (let i = 0; i < count; i++) {
       pressTab({ shift });
       const active = document.activeElement ?? document.body;
@@ -152,11 +119,8 @@ export function walkTab(
       if (seen?.has(active)) break;
       seen?.add(active);
     }
-  } finally {
-    observer.disconnect();
-    visibilityWalk = previous;
-  }
-  return visited;
+    return visited;
+  });
 }
 
 /**

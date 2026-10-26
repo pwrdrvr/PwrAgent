@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
+import { isElementVisible as visible } from "./dom-visibility";
 
 /**
  * Everything tabbable, in DOM order. `tabindex="-1"` is filtered out below
@@ -28,25 +29,6 @@ const OPEN_POPUP_TRIGGER =
  * excluded it. `opacity` is left out on purpose: a control faded to 0
  * mid-transition is still a real control.
  */
-function visible(el: HTMLElement, styles: Map<HTMLElement, CSSStyleDeclaration>): boolean {
-  if (typeof el.checkVisibility === "function") {
-    return el.checkVisibility({ visibilityProperty: true });
-  }
-  for (
-    let node: HTMLElement | null = el;
-    node !== null;
-    node = node.parentElement
-  ) {
-    let style = styles.get(node);
-    if (!style) {
-      style = getComputedStyle(node);
-      styles.set(node, style);
-    }
-    if (style.display === "none" || style.visibility === "hidden") return false;
-  }
-  return true;
-}
-
 function isStop(el: HTMLElement, styles: Map<HTMLElement, CSSStyleDeclaration>): boolean {
   if (el.hasAttribute("disabled") || el.getAttribute("aria-hidden") === "true") {
     return false;

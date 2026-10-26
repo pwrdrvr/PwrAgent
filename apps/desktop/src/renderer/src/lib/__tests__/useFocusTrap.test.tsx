@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useFocusTrap } from "../useFocusTrap";
-import { pressTab, tabEscapes } from "../../test/tab-walk";
+import { pressTab, tabEscapes, walkTab } from "../../test/tab-walk";
 
 let opener: HTMLButtonElement;
 
@@ -144,6 +144,16 @@ describe("useFocusTrap", () => {
     expect(focusedLabel()).toBe("Last");
     expect(readStyle.mock.calls.filter(([el]) => el === document.body)).toHaveLength(1);
     expect(readStyle.mock.calls.filter(([el]) => el === middle)).toHaveLength(0);
+  });
+
+  it("shares fallback visibility reads across a synchronous keyboard walk", () => {
+    render(<Dialog open />);
+    const dialog = screen.getByRole("dialog");
+    const readStyle = vi.spyOn(window, "getComputedStyle");
+
+    expect(walkTab(60).every((element) => dialog.contains(element))).toBe(true);
+
+    expect(readStyle.mock.calls.filter(([el]) => el === document.body)).toHaveLength(1);
   });
 
   it("uses current visibility when a control appears between Tab presses", () => {

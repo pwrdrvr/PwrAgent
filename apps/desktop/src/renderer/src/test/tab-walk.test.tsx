@@ -85,3 +85,28 @@ it("invalidates visibility during a synchronous walk when an ancestor changes", 
     document.removeEventListener("keydown", changeVisibility);
   }
 });
+
+it("reads author stylesheet changes even when they make no DOM mutation", () => {
+  render(<>
+    <style data-testid="styles">{".unrelated {}"}</style>
+    <div className="first-parent"><button>First</button></div>
+    <button>Second</button>
+  </>);
+  const first = screen.getByRole("button", { name: "First" });
+  const sheet = (screen.getByTestId("styles") as HTMLStyleElement).sheet!;
+  first.focus();
+  const focusFirst = vi.spyOn(first, "focus").mockImplementation(() => {});
+  let steps = 0;
+  const changeStylesheet = () => {
+    steps += 1;
+    if (steps === 2) sheet.insertRule(".first-parent { visibility: hidden; }", sheet.cssRules.length);
+    if (steps === 3) sheet.deleteRule(sheet.cssRules.length - 1);
+  };
+  document.addEventListener("keydown", changeStylesheet);
+  try {
+    walkTab(3);
+    expect(focusFirst).toHaveBeenCalledTimes(1);
+  } finally {
+    document.removeEventListener("keydown", changeStylesheet);
+  }
+});
