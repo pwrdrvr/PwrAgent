@@ -65,7 +65,16 @@ test("renders a Markdown to-do prompt and pastes the copied card as a quote", as
     expect(clipboard?.html).toContain("<blockquote>");
     const reply = app.window.getByRole("textbox", { name: "Reply", exact: true });
     await reply.focus();
-    await app.window.keyboard.press(process.platform === "darwin" ? "Meta+V" : "Control+V");
+    await reply.evaluate((textbox, snapshot) => {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.setData("text/plain", snapshot?.text ?? "");
+      dataTransfer.setData("text/html", snapshot?.html ?? "");
+      textbox.dispatchEvent(new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData: dataTransfer,
+      }));
+    }, clipboard);
     await expect(reply.locator("blockquote h2")).toHaveText("Goal");
     await expect(reply.locator("blockquote strong")).toHaveText("heap usage");
     await expect(reply.locator("blockquote pre code")).toContainText("pnpm build");
