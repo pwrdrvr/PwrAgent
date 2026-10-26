@@ -898,7 +898,7 @@ test.describe("federation remote window", () => {
       // dialog must route both the terminal reveal and the thread selection
       // back to this viewer, with the owning federation instance preserved.
       const mountedTerminalToggle = window.locator(
-        ".thread-header__terminal-toggle",
+        ".composer__terminal-toggle",
       );
       await mountedTerminalToggle.click();
       await expect(
@@ -1017,7 +1017,7 @@ test.describe("federation remote window", () => {
       await expect(
         remote.getByText(/Remote transcript for Remote gateway thread one/),
       ).toBeVisible({ timeout: 30_000 });
-      const terminalToggle = remote.locator(".thread-header__terminal-toggle");
+      const terminalToggle = remote.locator(".composer__terminal-toggle");
       await expect(terminalToggle).toBeVisible();
       await expect(terminalToggle).not.toHaveClass(/is-disabled/);
 

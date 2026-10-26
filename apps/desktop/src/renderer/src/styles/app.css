@@ -3216,7 +3216,6 @@ textarea,
   pointer-events: none;
 }
 
-.thread-header__terminal-toggle,
 .thread-header__rewind-toggle {
   display: inline-flex;
   width: 24px;
@@ -3237,37 +3236,27 @@ textarea,
     border-color 80ms ease;
 }
 
-.thread-header__terminal-toggle,
-.thread-header__terminal-toggle *,
 .thread-header__rewind-toggle,
 .thread-header__rewind-toggle * {
   -webkit-app-region: no-drag;
 }
 
-.thread-header__terminal-toggle:hover,
 .thread-header__rewind-toggle:hover {
   background: var(--bg-row-active);
   color: var(--text-primary);
 }
 
-.thread-header__terminal-toggle:focus-visible,
 .thread-header__rewind-toggle:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
-/* Remote thread whose peer lacks remote_pty or is disconnected: the toggle
-   stays visible (the terminal exists as a concept) but reads inert, with the
-   tooltip carrying the reason. aria-disabled, not disabled, so hover still
-   reaches it and the tooltip can explain why. */
-.thread-header__terminal-toggle.is-disabled,
 .thread-header__rewind-toggle.is-disabled {
   color: var(--text-muted);
   opacity: 0.45;
   cursor: default;
 }
 
-.thread-header__terminal-toggle.is-disabled:hover,
 .thread-header__rewind-toggle.is-disabled:hover {
   background: transparent;
   color: var(--text-muted);
@@ -3280,33 +3269,6 @@ textarea,
   .thread-header__rewind-toggle--thread {
     display: none;
   }
-}
-
-.thread-header__terminal-toggle.is-open {
-  color: var(--accent-bright);
-}
-
-.thread-header__terminal-toggle.is-open:hover {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent-bright);
-}
-
-/* A shell is running behind a collapsed panel. Without this the terminal is
-   invisible from the thread — the toggle looks identical to "no terminal". */
-.thread-header__terminal-toggle.is-running {
-  position: relative;
-  color: var(--accent);
-}
-
-.thread-header__terminal-toggle.is-running::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--accent);
 }
 
 /* Browser-style Back/Forward pair at the leading edge of the thread/search
@@ -43584,6 +43546,35 @@ button.composer__subthread-source-parent:hover {
 .composer__toggle:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+/* A shell remains alive behind a collapsed integrated terminal panel. */
+.composer__terminal-toggle.is-running {
+  color: var(--accent);
+}
+
+.composer__terminal-toggle.is-running::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.composer__terminal-toggle.is-disabled {
+  opacity: 0.45;
+  cursor: default;
+  border-color: var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+}
+
+.composer__terminal-toggle.is-disabled:focus-visible {
+  opacity: 1;
+  color: var(--text-subtle);
 }
 
 .composer__autocomplete {

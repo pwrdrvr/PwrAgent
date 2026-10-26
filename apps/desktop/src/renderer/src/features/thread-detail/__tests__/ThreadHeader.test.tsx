@@ -206,24 +206,20 @@ describe("ThreadHeader", () => {
     );
   });
 
-  it("renders the terminal toggle as an icon-only affordance with a tooltip", () => {
+  it("leaves the integrated terminal control to the composer", () => {
     render(
       <ThreadHeader
         thread={thread}
         layout={{
           railOpen: true,
           sidebarOpen: true,
-          terminalOpen: false,
           onToggleRail: vi.fn(),
           onToggleSidebar: vi.fn(),
-          onToggleTerminal: vi.fn(),
         }}
       />,
     );
 
-    const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    expect(toggle).toHaveTextContent("");
+    expect(screen.queryByRole("button", { name: /integrated terminal/i })).toBeNull();
   });
 
   it("opens the thread rewind from the header control", () => {
