@@ -10234,6 +10234,7 @@ export class DesktopBackendRegistry {
       });
     if (typeof settingsService?.onCodexModelProviderKeysChanged === "function") {
       this.unsubscribers.push(settingsService.onCodexModelProviderKeysChanged(() => {
+        this.codexModelProviderKeysRead = undefined;
         this.codexModelProviderCatalog?.invalidate();
         void this.invalidateProviderRuntimeSelections({ acp: false, codex: true }).catch((error) => {
           backendRegistryLog.warn("Codex reconnect after a provider key change failed", {
@@ -17499,14 +17500,17 @@ export class DesktopBackendRegistry {
     if (!providerId) return undefined;
     const provider = this.resolveCodexModelProvidersFn().find((entry) => entry.id === providerId);
     if (!provider) return undefined;
-    return this.resolveCodexModelProviderKeysFn()
-      .catch((): Record<string, string> => ({}))
-      .then((keys) => attributeCodexProviderUsageLine(
-        line,
-        provider,
-        codexModelProviderAccountKey(provider.baseUrl, keys[provider.id]),
-      ));
+    // Keys are decrypted once and kept until one changes, not per write.
+    this.codexModelProviderKeysRead ??= this.resolveCodexModelProviderKeysFn()
+      .catch((): Record<string, string> => ({}));
+    return this.codexModelProviderKeysRead.then((keys) => attributeCodexProviderUsageLine(
+      line,
+      provider,
+      codexModelProviderAccountKey(provider.baseUrl, keys[provider.id]),
+    ));
   }
+
+  private codexModelProviderKeysRead?: Promise<Record<string, string>>;
 
   private async captureUsageAccount(backend: AppServerBackendKind, threadId?: string): Promise<string | undefined> {
     // Read the group synchronously: editing Settings during an in-flight turn

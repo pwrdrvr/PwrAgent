@@ -106,3 +106,21 @@ describe("CodexModelProviderTranslator request copies", () => {
     expect(params).toEqual({ threadId: "t1" });
   });
 });
+
+describe("CodexModelProviderTranslator default-provider threads", () => {
+  it("refuses to move a thread on Codex's default provider onto a configured one", () => {
+    const configured = new Set(["refuseless"]);
+    const t = new CodexModelProviderTranslator(() => configured);
+    t.observeResponse("thread/read", { threadId: "t1" }, { thread: { id: "t1", modelProvider: "openai", model: "gpt-5.5" } });
+    expect(t.providerForThread("t1")).toBeUndefined();
+    expect(() => t.translateRequest("thread/resume", { threadId: "t1", model: "@refuseless/glm" }))
+      .toThrow(/runs on Codex's default provider/);
+    expect(() => t.translateRequest("turn/start", { threadId: "t1", model: "@refuseless/glm" }))
+      .toThrow(/default provider/);
+    expect(t.translateRequest("turn/start", { threadId: "t1", model: "gpt-5.5" }))
+      .toEqual({ threadId: "t1", model: "gpt-5.5" });
+    // A fork starts a new thread, so it may take another provider.
+    expect(t.translateRequest("thread/fork", { threadId: "t1", model: "@refuseless/glm" }))
+      .toEqual({ threadId: "t1", model: "glm", modelProvider: "refuseless" });
+  });
+});

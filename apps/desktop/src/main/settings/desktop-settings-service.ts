@@ -3165,6 +3165,18 @@ export class DesktopSettingsService {
     if (key && (key.length > 4096 || /[\0\r\n]/.test(key))) {
       throw new Error("The API key must be one line.");
     }
+    // Every provider's key lives in one secret, so writes take turns: two
+    // overlapping read-modify-writes would each drop the other's change.
+    const write = this.codexModelProviderKeyWrites
+      .catch(() => undefined)
+      .then(() => this.writeCodexModelProviderApiKey(providerId, key));
+    this.codexModelProviderKeyWrites = write;
+    await write;
+  }
+
+  private codexModelProviderKeyWrites: Promise<void> = Promise.resolve();
+
+  private async writeCodexModelProviderApiKey(providerId: string, key: string | undefined): Promise<void> {
     const keys = await this.resolveCodexModelProviderKeys();
     if (key) {
       keys[providerId] = key;

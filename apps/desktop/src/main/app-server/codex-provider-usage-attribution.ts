@@ -21,6 +21,15 @@ export function wrapCodexProviderUsageAttribution<T extends object>(
   store: T,
   attribute: CodexProviderUsageAttributor,
 ): T {
+  // Attributed writes wait on an async read, so they are issued in arrival
+  // order through one chain. Two upserts of the same line (a live update,
+  // then the turn's completion) must reach the store in the order sent.
+  let attributedWrites: Promise<unknown> = Promise.resolve();
+  const inOrder = <R>(write: () => Promise<R>): Promise<R> => {
+    const next = attributedWrites.catch(() => undefined).then(write);
+    attributedWrites = next;
+    return next;
+  };
   return new Proxy(store, {
     get(target, property, receiver) {
       // Read the method at each access, so a later replacement on the store
@@ -32,7 +41,7 @@ export function wrapCodexProviderUsageAttribution<T extends object>(
         return (params: { line: ThreadUsageLineRecord }) => {
           const pending = attribute(params.line);
           return pending
-            ? pending.then((line) => single.call(target, { ...params, line }))
+            ? inOrder(async () => await single.call(target, { ...params, line: await pending }))
             : single.call(target, params);
         };
       }
@@ -43,8 +52,10 @@ export function wrapCodexProviderUsageAttribution<T extends object>(
           if (pending.every((entry) => entry === undefined)) {
             return batch.call(target, params);
           }
-          return Promise.all(pending.map((entry, index) => entry ?? params.lines[index]))
-            .then((lines) => batch.call(target, { ...params, lines }));
+          return inOrder(async () => await batch.call(target, {
+            ...params,
+            lines: await Promise.all(pending.map((entry, index) => entry ?? params.lines[index])),
+          }));
         };
       }
       return (value as (...args: unknown[]) => unknown).bind(target);

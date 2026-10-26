@@ -10,6 +10,7 @@ import {
   type DesktopCodexModelProvider,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { cleanComposerErrorMessage } from "../composer/composer-error-message";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import { SettingsSwitch } from "./SettingsSwitch";
@@ -706,8 +707,6 @@ export function slugifyProviderId(name: string): string {
 }
 
 function describeError(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  // Main-process errors arrive wrapped by IPC.
-  return message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, "");
+  return cleanComposerErrorMessage(error instanceof Error ? error.message : String(error));
 }
 

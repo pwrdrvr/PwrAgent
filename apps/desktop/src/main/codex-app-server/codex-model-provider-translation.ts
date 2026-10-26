@@ -24,7 +24,7 @@ export class CodexModelProviderTranslator {
     private readonly maxTrackedThreads = 5_000,
   ) {}
 
-  /** The configured provider a thread runs on, when Codex has reported it. */
+  /** The configured provider a thread runs on, when Codex has reported one. */
   providerForThread(threadId: string): string | undefined {
     const provider = this.threadProviders.get(threadId);
     return provider && this.resolveProviderIds().has(provider) ? provider : undefined;
@@ -47,17 +47,23 @@ export class CodexModelProviderTranslator {
       throw new Error("A request named models from more than one model provider.");
     }
     const [requestedProvider] = requested;
-    const threadProvider = threadId ? this.threadProviders.get(threadId) : undefined;
+    // A thread keeps its provider. Resume would otherwise re-pin it, and Codex
+    // would send one provider's history to another. A fork is a new thread.
+    // An unqualified model on a provider thread stays on that provider below.
+    if (threadId && requestedProvider && THREAD_PROVIDER_METHODS.has(method)
+      && this.threadProviders.has(threadId)) {
+      const threadProvider = this.providerForThread(threadId);
+      if (requestedProvider !== threadProvider) {
+        throw new Error(`This thread runs on ${threadProvider ?? "Codex's default provider"}. `
+          + `Hand it off to a new thread to use a ${requestedProvider} model.`);
+      }
+    }
     if (PROVIDER_PINNING_METHODS.has(method)) {
       const provider = requestedProvider ?? (method === "thread/start" ? undefined : this.providerForThread(threadId ?? ""));
       // A copy: the caller's params may be reused for a retry.
       return provider && translated.modelProvider === undefined
         ? { ...translated, modelProvider: provider }
         : translated;
-    }
-    // turn/start and settings updates cannot change a thread's provider.
-    if (requestedProvider && threadProvider && requestedProvider !== threadProvider) {
-      throw new Error(`This thread runs on ${threadProvider}. Hand it off to use a ${requestedProvider} model.`);
     }
     return translated;
   }
@@ -112,11 +118,12 @@ export class CodexModelProviderTranslator {
     return { ...thread, model: formatCodexProviderModelId(provider, thread.model) };
   }
 
+  /**
+   * Every reported provider is kept, Codex's default included, so a request
+   * can be checked against the thread's provider whichever it is.
+   * `providerForThread` still answers only for configured providers.
+   */
   private remember(threadId: string, provider: string): void {
-    if (!this.resolveProviderIds().has(provider)) {
-      this.threadProviders.delete(threadId);
-      return;
-    }
     this.threadProviders.delete(threadId);
     this.threadProviders.set(threadId, provider);
     if (this.threadProviders.size > this.maxTrackedThreads) {
@@ -127,6 +134,8 @@ export class CodexModelProviderTranslator {
 }
 
 const PROVIDER_PINNING_METHODS = new Set(["thread/start", "thread/resume", "thread/fork"]);
+/** Requests that run on an existing thread, which keeps its provider. */
+const THREAD_PROVIDER_METHODS = new Set(["thread/resume", "turn/start", "thread/settings/update"]);
 const REQUEST_METHODS = new Set([
   ...PROVIDER_PINNING_METHODS,
   "turn/start",

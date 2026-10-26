@@ -1854,8 +1854,7 @@ export function registerSettingsIpcHandlers(
     ): Promise<SetCodexModelProviderApiKeyResponse> => {
       const activeService = getService(service);
       await activeService.setCodexModelProviderApiKey(request.providerId, request.apiKey);
-      const keys = await activeService.resolveCodexModelProviderKeys();
-      return { providerId: request.providerId, hasApiKey: Boolean(keys[request.providerId]) };
+      return { providerId: request.providerId, hasApiKey: Boolean(request.apiKey?.trim()) };
     },
   );
 
@@ -1870,8 +1869,14 @@ export function registerSettingsIpcHandlers(
       // Validate the draft exactly as a save would, so a test cannot reach a
       // URL that Settings would refuse to store.
       const [provider] = validateCodexModelProviders([request.provider]);
+      // A stored key goes only to the URL it was saved with. A draft that
+      // points somewhere else must bring its own key.
+      const saved = activeService.resolveCodexModelProviders()
+        .find((entry) => entry.id === provider.id);
       const apiKey = request.apiKey?.trim()
-        || (await activeService.resolveCodexModelProviderKeys())[provider.id];
+        || (saved?.baseUrl === provider.baseUrl
+          ? (await activeService.resolveCodexModelProviderKeys())[provider.id]
+          : undefined);
       return await new CodexModelProviderCatalog({
         resolveProviders: () => [provider],
         resolveKeys: async () => (apiKey ? { [provider.id]: apiKey } : {}),
