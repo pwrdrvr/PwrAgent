@@ -71,7 +71,7 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
       return (await api.listBackends!()).backends.find((backend) => backend.kind === "codex")?.available;
     })).toBe(true);
     if (process.env.PWRAGENT_TODO_DISPATCH_BEFORE === "1") {
-      await app.window.screenshot({ path: testInfo.outputPath("todo-dispatch-before.png") });
+      await stack.screenshot({ path: testInfo.outputPath("todo-dispatch-before.png"), animations: "disabled" });
       return;
     }
     const chip = stack.getByRole("button", { name: /Model for the new thread:/ });
@@ -80,14 +80,14 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     const menu = app.window.getByRole("menu", { name: "Model for the new thread", exact: true });
     await expect(menu.getByRole("menuitemradio").first()).toBeFocused();
     await expect(menu).toContainText("GPT-5.4");
-    await app.window.screenshot({ path: testInfo.outputPath("todo-dispatch-popover.png") });
+    await menu.screenshot({ path: testInfo.outputPath("todo-dispatch-popover.png"), animations: "disabled" });
     await menu.getByRole("menuitemradio").first().press("ArrowDown");
     await expect(menu.getByRole("menuitemradio", { name: /GPT-5.5 · xhigh/ })).toBeFocused();
     await app.window.keyboard.press("Enter");
     await expect(menu).not.toBeVisible();
     await expect(chip).toHaveAccessibleName(/GPT-5.5, xhigh/);
     await expect(stack).toContainText("Picked for this card");
-    await app.window.screenshot({ path: testInfo.outputPath("todo-dispatch-after.png") });
+    await stack.screenshot({ path: testInfo.outputPath("todo-dispatch-after.png"), animations: "disabled" });
     await stack.getByRole("button", { name: "Start thread", exact: true }).click();
     await expect.poll(() => app.getLastStartTurn()).toMatchObject({ model: "gpt-5.5", reasoningEffort: "xhigh" });
     await expect(stack).toContainText("Last used in this thread");
