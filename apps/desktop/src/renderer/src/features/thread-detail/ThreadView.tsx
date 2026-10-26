@@ -154,7 +154,7 @@ import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptError } from "./TranscriptError";
-import { TranscriptList } from "./TranscriptList";
+import { TranscriptList, transcriptItemBox } from "./TranscriptList";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { ThreadRewindConfirm, type ThreadRewindPreview } from "./ThreadRewindConfirm";
 import {
@@ -1187,11 +1187,7 @@ function scrollRenderedTranscriptToTurn(
     return false;
   }
 
-  // The `.transcript-list__item` wrapper is `display: contents` (no box),
-  // so scrolling IT is a no-op and its rect is empty. Scroll a real child
-  // element into view instead — the same approach the find bar uses.
-  const anchor = target.querySelector("*") ?? target;
-  anchor.scrollIntoView({ block: "center", behavior: "smooth" });
+  transcriptItemBox(target).scrollIntoView({ block: "center", behavior: "smooth" });
   return true;
 }
 
