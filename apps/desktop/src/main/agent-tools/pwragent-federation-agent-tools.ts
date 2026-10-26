@@ -17,6 +17,7 @@ import type {
 import {
   FEDERATION_SEARCH_SCOPES,
   isAppServerBackendKind,
+  NAVIGATION_QUERY_MAX_PAGE_ROWS,
   PWRAGENT_FEDERATION_OPERATION_NAMES,
   PWRAGENT_TOOL_NAMESPACE,
 } from "@pwragent/shared";
@@ -39,6 +40,17 @@ const INSTANCE_THREAD_GROUPING_MODES = ["none", "subthread"] as const;
 export type PwrAgentFederationHandler = (
   request: PwrAgentFederationRequest,
 ) => PwrAgentFederationResponse | Promise<PwrAgentFederationResponse>;
+
+/** Internal UI callers must obey the same argument contract as agent tools. */
+export function normalizePwrAgentFederationRequest(request: PwrAgentFederationRequest):
+  | { ok: true; request: PwrAgentFederationRequest }
+  | { ok: false; error: { code: "invalid_arguments"; message: string } } {
+  const args = normalizeArgsForOperation(request.operation, request.args);
+  if (!args) {
+    return { ok: false, error: { code: "invalid_arguments", message: invalidArgumentsMessageForOperation(request.operation) } };
+  }
+  return { ok: true, request: { ...request, args } as PwrAgentFederationRequest };
+}
 
 export function buildPwrAgentFederationToolRouter(
   handler: PwrAgentFederationHandler | undefined,
@@ -178,7 +190,7 @@ function inputSchemaForOperation(
           limit: {
             type: "integer",
             minimum: 1,
-            maximum: 100,
+            maximum: NAVIGATION_QUERY_MAX_PAGE_ROWS,
             description: "Page size. Defaults to 25.",
           },
           cursor: {
@@ -200,7 +212,7 @@ function inputSchemaForOperation(
         required: ["instanceId"],
         properties: {
           cursor: { type: "string", description: "Continuation from the previous bounded project page." },
-          limit: { type: "integer", minimum: 1, maximum: 100, description: "Maximum project descriptors, default 100." },
+          limit: { type: "integer", minimum: 1, maximum: NAVIGATION_QUERY_MAX_PAGE_ROWS, description: "Maximum project descriptors, default 100." },
           instanceId: {
             type: "string",
             description:
@@ -283,7 +295,7 @@ function inputSchemaForOperation(
           limit: {
             type: "integer",
             minimum: 1,
-            maximum: 100,
+            maximum: NAVIGATION_QUERY_MAX_PAGE_ROWS,
             description: "Maximum rows per instance. Defaults to 25.",
           },
         },
@@ -419,7 +431,7 @@ function invalidArgumentsMessageForOperation(
     case "list_federation_instances":
       return "list_federation_instances accepts an optional non-empty query, an integer limit between 1 and 100, an optional non-empty cursor, and an optional boolean includeLoad.";
     case "list_instance_projects":
-      return "list_instance_projects requires a non-empty instanceId string.";
+      return "list_instance_projects requires a non-empty instanceId string, an integer limit between 1 and 100, and an optional non-empty cursor.";
     case "create_instance_thread":
       return "create_instance_thread requires non-empty instanceId and projectKey strings, and accepts only known backend, workMode, and groupingMode values.";
     case "list_attention_threads":
@@ -441,7 +453,7 @@ function normalizeListAttentionThreadsArgs(
   }
   const limit = args.limit;
   if (limit !== undefined
-    && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)) {
+    && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > NAVIGATION_QUERY_MAX_PAGE_ROWS)) {
     return undefined;
   }
   return {
@@ -464,7 +476,7 @@ function normalizeListFederationInstancesArgs(
       typeof args.limit !== "number"
       || !Number.isInteger(args.limit)
       || args.limit < 1
-      || args.limit > 100
+      || args.limit > NAVIGATION_QUERY_MAX_PAGE_ROWS
     ) {
       return undefined;
     }
@@ -496,7 +508,7 @@ function normalizeListInstanceProjectsArgs(
   const cursor = readTrimmedString(args.cursor);
   if (args.cursor !== undefined && (!cursor || cursor.length > 4096)) return undefined;
   const limit = args.limit;
-  if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 100)) return undefined;
+  if (limit !== undefined && (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > NAVIGATION_QUERY_MAX_PAGE_ROWS)) return undefined;
   return { instanceId, ...(cursor ? { cursor } : {}), ...(typeof limit === "number" ? { limit } : {}) };
 }
 

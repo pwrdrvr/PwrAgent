@@ -19,6 +19,7 @@ import type {
   NavigationQueryPage,
   SearchFederationThreadsResult,
 } from "@pwragent/shared";
+import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import { projectNavigationQuery } from "../app-server/navigation-query-projection";
 import { claudeModelOptions } from "../claude/claude-models";
 import {
@@ -103,6 +104,7 @@ function buildRuntime(overrides: Partial<DesktopFederationRuntime>): () =>
       const projected = projectNavigationQuery({ index: population, request });
       const offset = Number(request.cursor ?? 0);
       const limit = request.pageSize ?? 100;
+      expect(Number.isSafeInteger(limit) && limit >= 1 && limit <= NAVIGATION_QUERY_MAX_PAGE_ROWS).toBe(true);
       const directoryQuery = request.query.kind === "directory-index";
       const total = directoryQuery ? projected.directories.length : projected.entries.length;
       return { ...projected, protocol: 2, ownerEpoch: "owner", generation: "fixture", countsRevision: "revision",
@@ -131,6 +133,18 @@ function buildRuntime(overrides: Partial<DesktopFederationRuntime>): () =>
 }
 
 describe("federation agent tools service", () => {
+  describe.each(["list_instance_projects", "list_attention_threads", "list_federation_instances"] as const)("%s internal limits", (operation) => {
+    it.each([0, -1, 101, 500, 1.5, NaN, Infinity])("rejects limit %s before reading an owner", async (limit) => {
+      const runtime = vi.fn<() => DesktopFederationRuntime>();
+      const handler = createFederationAgentToolsHandler({ runtime });
+      const response = operation === "list_instance_projects"
+        ? await handler({ operation, context, args: { instanceId: "pwr_local", limit } })
+        : await handler({ operation, context, args: { limit } });
+      expect(response).toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+      expect(runtime).not.toHaveBeenCalled();
+    });
+  });
+
   it("lists just the local instance when federation is disabled", async () => {
     const handler = createFederationAgentToolsHandler({
       // Never let unit tests mint a machine-id in the real PwrAgent root.
@@ -1801,6 +1815,20 @@ it("returns one bounded project page and requires an explicit continuation", asy
     args: { instanceId: "pwr_local", limit: 10, cursor: page.nextCursor } });
   expect((next as { ok: true; data: ListInstanceProjectsResult }).data.projects[0]?.key).toBe("directory:10");
   expect(readPopulation).toHaveBeenCalledTimes(2);
+});
+
+it.each([1, NAVIGATION_QUERY_MAX_PAGE_ROWS])("honors a valid project page limit of %s without hiding continuation", async (limit) => {
+  const readPopulation = vi.fn(async () => buildSnapshot({ directories: Array.from({ length: 101 }, (_, index) => ({
+    key: `directory:${index}`, kind: "directory", label: `Project ${index}`, threadKeys: [], needsAttentionCount: 0,
+  })) }));
+  const handler = createFederationAgentToolsHandler({ collectHostInfo: async () => localHostInfo,
+    runtime: buildRuntime({ health: async () => buildHealth(), localBackend: (() => ({ readPopulation })) as never }) });
+  const response = await handler({ operation: "list_instance_projects", context, args: { instanceId: "pwr_local", limit } });
+  expect(response.ok).toBe(true);
+  const page = (response as { ok: true; data: ListInstanceProjectsResult }).data;
+  expect(page.projects).toHaveLength(limit);
+  expect(page.complete).toBe(false);
+  expect(page.nextCursor).toBe(String(limit));
 });
 
 
