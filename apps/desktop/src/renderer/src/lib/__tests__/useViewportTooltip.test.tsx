@@ -96,6 +96,27 @@ function HorizontallyBoundedTooltipFixture() {
   );
 }
 
+function BesideTooltipFixture(props: { content?: string; useTargetAnchor?: boolean }) {
+  const tooltip = useViewportTooltip({
+    className: "pr-status-card",
+    placement: "beside",
+    getAnchorRect: props.useTargetAnchor ? undefined : (target) =>
+      target.parentElement!.getBoundingClientRect(),
+  });
+  const update = tooltip.update;
+  useEffect(() => {
+    update(props.content ?? "Row details");
+  }, [props.content, update]);
+  return (
+    <div data-testid="list-anchor">
+      <button onFocus={(event) => tooltip.show(event.currentTarget, props.content ?? "Row details")}>
+        Row
+      </button>
+      {tooltip.tooltipNode}
+    </div>
+  );
+}
+
 function AnchorLifecycleFixture(props: {
   anchorKey?: string;
   anchorLabel?: string;
@@ -832,6 +853,109 @@ function PointerTooltipFixture() {
     </div>
   );
 }
+
+describe("beside viewport tooltips", () => {
+  const list = { top: 100, right: 356, bottom: 260, left: 16 };
+
+  function mockPlacement(options: {
+    anchor?: typeof list;
+    rowTop?: number;
+    viewportWidth?: number;
+    viewportHeight?: number;
+    cardHeight?: number;
+    shellTop?: number;
+  } = {}) {
+    vi.stubGlobal("innerWidth", options.viewportWidth ?? 1200);
+    vi.stubGlobal("innerHeight", options.viewportHeight ?? 900);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === "list-anchor") return rectangle(options.anchor ?? list);
+      if (this.classList.contains("app-shell")) return rectangle({ top: options.shellTop ?? 0 });
+      if (this.tagName === "BUTTON") return rectangle({ top: options.rowTop ?? 160, left: 32, width: 300, height: 32 });
+      if (this.getAttribute("role") === "tooltip") return rectangle({ width: 272, height: options.cardHeight ?? 300 });
+      return rectangle({});
+    });
+  }
+
+  it("sits right of the anchor, level with the target", () => {
+    mockPlacement();
+    render(<BesideTooltipFixture />);
+    fireEvent.focus(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveStyle({ top: "160px", left: "366px" });
+  });
+
+  it("uses the target rectangle when no separate anchor is supplied", () => {
+    mockPlacement();
+    render(<BesideTooltipFixture useTargetAnchor />);
+    fireEvent.focus(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveStyle({ top: "160px", left: "342px" });
+  });
+
+  it("flips left when the window has no room on the right", () => {
+    mockPlacement({ anchor: { top: 100, right: 1180, bottom: 260, left: 840 } });
+    render(<BesideTooltipFixture />);
+    fireEvent.focus(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveStyle({ top: "160px", left: "558px" });
+  });
+
+  it("keeps the card on screen when the target is near the bottom", () => {
+    mockPlacement({ rowTop: 800 });
+    render(<BesideTooltipFixture />);
+    fireEvent.focus(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveStyle({ top: "588px", left: "366px" });
+  });
+
+  it.each([
+    { anchor: list, viewportHeight: 900, top: 270, left: 16 },
+    { anchor: { top: 500, right: 356, bottom: 700, left: 16 }, viewportHeight: 900, top: 190, left: 16 },
+    { anchor: list, viewportHeight: 400, top: 88, left: 12 },
+  ])("falls below, above, then clamps when neither side fits ($top)", (example) => {
+    mockPlacement({ ...example, viewportWidth: 600 });
+    render(<BesideTooltipFixture />);
+    fireEvent.focus(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveStyle({ top: `${example.top}px`, left: `${example.left}px` });
+  });
+
+  it("keeps the card below the app shell boundary even in a short window", () => {
+    mockPlacement({ rowTop: 0, viewportHeight: 250, shellTop: 40 });
+    const shell = document.createElement("div");
+    shell.className = "app-shell";
+    document.body.appendChild(shell);
+    try {
+      render(<BesideTooltipFixture />);
+      fireEvent.focus(screen.getByRole("button"));
+      expect(screen.getByRole("tooltip")).toHaveStyle({ top: "52px" });
+    } finally {
+      shell.remove();
+    }
+  });
+
+  it("re-reads both rectangles when the target's ancestor finishes moving", async () => {
+    const geometry = { anchor: { ...list }, rowTop: 160 };
+    mockPlacement(geometry);
+    const animation = stubAncestorAnimation();
+    render(<BesideTooltipFixture />);
+    fireEvent.focus(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveStyle({ top: "160px", left: "366px" });
+    geometry.anchor.right += 40;
+    geometry.rowTop += 40;
+    await act(async () => {
+      animation.finish();
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("tooltip")).toHaveStyle({ top: "200px", left: "406px" });
+  });
+
+  it("re-measures the card after its content changes", () => {
+    mockPlacement({ rowTop: 800 });
+    const { rerender } = render(<BesideTooltipFixture />);
+    fireEvent.focus(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveStyle({ top: "588px" });
+    mockPlacement({ rowTop: 800, cardHeight: 400 });
+    rerender(<BesideTooltipFixture content="Larger card" />);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Larger card");
+    expect(screen.getByRole("tooltip")).toHaveStyle({ top: "488px" });
+  });
+});
 
 describe("pointer-anchored viewport tooltips", () => {
   function sizeTooltip(width: number, height: number) {
