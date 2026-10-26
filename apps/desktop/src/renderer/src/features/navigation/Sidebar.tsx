@@ -237,6 +237,8 @@ type SidebarProps = {
   error?: string;
   inboxThreads?: NavigationThreadSummary[];
   pagedNavigation?: ReturnType<typeof useBoundedNavigationWindow>;
+  /** Paged resources whose landed page `threads` and `directories` lack. */
+  pagesAwaitingRows?: readonly string[];
   selectedThreadDirectoryKeys?: readonly string[];
   recentThreads?: NavigationThreadSummary[];
   /**
@@ -463,7 +465,7 @@ type SidebarProps = {
    * threads; deletes the registered launchpad overlay row that keeps the empty
    * row visible.
    */
-  onRemoveDirectory?: (directory: NavigationDirectorySummary) => void;
+  onRemoveDirectory?: (directory: NavigationDirectorySummary) => void | Promise<void>;
   /**
    * Called by thread rows when the user hovers a non-merged PR chip
    * (or the row itself, depending on chip strategy). Used to prefetch
@@ -808,9 +810,14 @@ export function Sidebar(props: SidebarProps) {
     // not the command's reply, carries the new order. A failed read stays
     // stale, so it counts as landed: waiting on it would leave the list
     // following background updates under the pointer until it leaves.
-    outstandingReads: [...props.pagedNavigation?.resources.values() ?? []]
-      .filter((resource) => resource.state.stale && !resource.state.error)
-      .map((resource) => resource.id),
+    // A read has landed only once the rows carry it. Freezing in the render
+    // where its page arrives would hold the rows from before that page.
+    outstandingReads: [
+      ...[...props.pagedNavigation?.resources.values() ?? []]
+        .filter((resource) => resource.state.stale && !resource.state.error)
+        .map((resource) => resource.id),
+      ...props.pagesAwaitingRows ?? [],
+    ],
     value: {
       directories: props.directories,
       threads: props.threads,
@@ -953,15 +960,18 @@ export function Sidebar(props: SidebarProps) {
   //
   // A pin also opens a closed Pinned group: selection follows the thread
   // into the group, and a closed group would hide the selected row.
+  function revealPinChange<Result>(operation: () => Result): Result {
+    return lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop)
+      ? revealHoverStableSnapshot(operation)
+      : operation();
+  }
   const setThreadPin = useStableRowCallback(
     props.onSetThreadPin
       ? (thread: NavigationThreadSummary, pinned: boolean): Promise<void> => {
           if (pinned && pinnedGroupShown && props.pinnedGroupCollapsed) {
             props.onSetPinnedGroupCollapsed?.(false);
           }
-          return lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop)
-            ? revealHoverStableSnapshot(() => props.onSetThreadPin!(thread, pinned))
-            : props.onSetThreadPin!(thread, pinned);
+          return revealPinChange(() => props.onSetThreadPin!(thread, pinned));
         }
       : undefined,
   );
@@ -1750,8 +1760,7 @@ export function Sidebar(props: SidebarProps) {
     options?: ArchiveThreadOptions,
   ): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
-    void archiveThreads([thread], options);
+    void revealHoverStableSnapshot(() => archiveThreads([thread], options));
   };
 
   const createSubthreadFromContextMenu = (
@@ -1760,8 +1769,7 @@ export function Sidebar(props: SidebarProps) {
     machine?: SubthreadMachine,
   ): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
-    void (machine
+    void revealHoverStableSnapshot(() => machine
       ? props.onCreateSubthread?.(thread, mode, machine)
       : props.onCreateSubthread?.(thread, mode));
   };
@@ -1771,18 +1779,14 @@ export function Sidebar(props: SidebarProps) {
     mode: ThreadWorkspaceMode,
   ): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
-    void props.onForkThread?.(thread, mode);
+    void revealHoverStableSnapshot(() => props.onForkThread?.(thread, mode));
   };
 
   const unlinkSubthreadFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
-    if (props.onUnlinkThreads) {
-      void props.onUnlinkThreads([thread]);
-      return;
-    }
-    void props.onSetThreadParent?.(thread, undefined);
+    void revealHoverStableSnapshot(() => props.onUnlinkThreads
+      ? props.onUnlinkThreads([thread])
+      : props.onSetThreadParent?.(thread, undefined));
   };
 
   // Pinned and Keep at Top are checkable items: a toggle leaves the menu
@@ -1809,24 +1813,21 @@ export function Sidebar(props: SidebarProps) {
 
   const markUnreadFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
-    void props.onMarkThreadUnread?.(thread);
+    void revealHoverStableSnapshot(() => props.onMarkThreadUnread?.(thread));
   };
 
   const markReadFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
-    void props.onMarkThreadsSeen?.([thread]);
+    void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.([thread]));
   };
 
   const removeRemotePinFromContextMenu = (
     thread: NavigationThreadSummary,
   ): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
     // Viewer-side delete only: works while the owner is unreachable and
     // never archives the owner's thread.
-    void props.onRemoveRemoteThreadPin?.(thread);
+    void revealHoverStableSnapshot(() => props.onRemoveRemoteThreadPin?.(thread));
   };
 
   const openDirectoryContextMenu = (
@@ -1896,8 +1897,7 @@ export function Sidebar(props: SidebarProps) {
     directory: NavigationDirectorySummary,
   ): void => {
     setDirectoryContextMenu(undefined);
-    hoverStableSnapshot.release();
-    props.onRemoveDirectory?.(directory);
+    void revealHoverStableSnapshot(() => props.onRemoveDirectory?.(directory));
   };
 
   const markSelectedDirectoryThreadsRead = (): void => {
@@ -1908,8 +1908,7 @@ export function Sidebar(props: SidebarProps) {
     if (props.onMarkDirectoriesSeen) {
       const keys = directoryContextMenu.directories.map((directory) => directory.key);
       setDirectoryContextMenu(undefined);
-      hoverStableSnapshot.release();
-      void props.onMarkDirectoriesSeen(keys);
+      void revealHoverStableSnapshot(() => props.onMarkDirectoriesSeen!(keys));
       return;
     }
 
@@ -2019,55 +2018,47 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
-    void archiveThreads(threads);
+    void revealHoverStableSnapshot(() => archiveThreads(threads));
   };
 
   const unlinkThreadsFromContextMenu = (
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
-    if (props.onUnlinkThreads) {
-      void props.onUnlinkThreads(threads);
-      return;
-    }
-    void (async () => {
+    void revealHoverStableSnapshot(async () => {
+      if (props.onUnlinkThreads) {
+        await props.onUnlinkThreads(threads);
+        return;
+      }
       for (const thread of threads) {
         await props.onSetThreadParent?.(thread, undefined);
       }
-    })();
+    });
   };
 
   const pinThreadsFromContextMenu = (
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    if (lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop)) {
-      hoverStableSnapshot.release();
-    }
     // Selection follows a pinned thread into the group; a closed group
     // would hide it.
     if (pinnedGroupShown && props.pinnedGroupCollapsed) {
       props.onSetPinnedGroupCollapsed?.(false);
     }
-    void (async () => {
+    void revealPinChange(async () => {
       for (const thread of threads) {
         await props.onSetThreadPin?.(thread, true);
       }
-    })();
+    });
   };
 
   const unpinThreadsFromContextMenu = (
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    if (lensShowsPinOrder(props.browseMode, pinnedThreadsOnTop)) {
-      hoverStableSnapshot.release();
-    }
-    void Promise.all(
+    void revealPinChange(() => Promise.all(
       threads.map((thread) => props.onSetThreadPin?.(thread, false)),
-    );
+    ));
   };
 
   const copyFromContextMenu = (value: string): void => {
@@ -2177,7 +2168,6 @@ export function Sidebar(props: SidebarProps) {
           && threadCanRouteRemoteCapability(candidate, "turn_control"));
         handled = archivable.length > 0;
         if (!handled) break;
-        hoverStableSnapshot.release();
         if (targets?.source === "rows") {
           // Focus moves to the row that takes this one's place, so a run of
           // archives needs no mouse.
@@ -2199,7 +2189,7 @@ export function Sidebar(props: SidebarProps) {
               ?.focus();
           });
         }
-        void archiveThreads(archivable);
+        void revealHoverStableSnapshot(() => archiveThreads(archivable));
         break;
       }
       case "threads.toggle_pin": {
@@ -2224,12 +2214,12 @@ export function Sidebar(props: SidebarProps) {
       case "threads.toggle_unread":
         if (single && thread.inbox.inInbox) {
           handled = Boolean(props.onMarkThreadsSeen) && !(thread.federation && !federationTarget);
-          if (handled) void props.onMarkThreadsSeen?.([thread]);
+          if (handled) void revealHoverStableSnapshot(() => props.onMarkThreadsSeen?.([thread]));
         } else if (single) {
           handled = Boolean(props.onMarkThreadUnread)
             && thread.updatedAt !== undefined
             && threadCanRouteRemoteCapability(thread, "thread_navigation");
-          if (handled) void props.onMarkThreadUnread?.(thread);
+          if (handled) void revealHoverStableSnapshot(() => props.onMarkThreadUnread?.(thread));
         } else {
           handled = false;
         }
@@ -4038,8 +4028,7 @@ export function Sidebar(props: SidebarProps) {
                     .filter((directory) => directory.kind === "directory" || directory.kind === "workspace")
                     .map((directory) => directory.key);
                   setDirectoryContextMenu(undefined);
-                  hoverStableSnapshot.release();
-                  void props.onArchiveDirectories?.(keys);
+                  void revealHoverStableSnapshot(() => props.onArchiveDirectories?.(keys));
                 }}
               >
                 {directoryContextMenuDirectories.some((directory) => directory.kind === "directory")

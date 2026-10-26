@@ -4121,6 +4121,7 @@ function DesktopAppShell(props: {
           threadLensesEmpty={navigation.threadLensesEmpty}
           creatingThread={navigation.creatingThread}
           pagedNavigation={navigation.pagedNavigation}
+          pagesAwaitingRows={navigation.pagesAwaitingRows}
           selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
           directories={navigation.directories}
           error={navigation.error}
@@ -4308,9 +4309,8 @@ function DesktopAppShell(props: {
           onSetDirectoryThreadsCollapsed={
             navigation.setDirectoryThreadsCollapsed
           }
-          onRemoveDirectory={(directory) => {
-            void navigation.removeDirectory(directory.key);
-          }}
+          onRemoveDirectory={(directory) =>
+            navigation.removeDirectory(directory.key)}
           onPrefetchPullRequests={pullRequests.prefetch}
           onPrefetchGitWorkingState={gitWorkingState.prefetch}
           onDetachPullRequest={detachThreadPullRequest}
