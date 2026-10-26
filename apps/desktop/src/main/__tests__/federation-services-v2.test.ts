@@ -231,7 +231,7 @@ describe("windowed flow control", () => {
     let release!: () => void;
     const released = new Promise<void>((resolve) => { release = resolve; });
     let sent = 0;
-    let forwarder!: FederationServiceForwarder;
+    const forwarder = viewer();
     const receivedBytes = (): number => forwarder.list(1, "owner", thread)[0]?.receivedBytes ?? 0;
     const server = createHttpServer((request, response) => {
       request.resume();
@@ -254,7 +254,6 @@ describe("windowed flow control", () => {
     cleanups.push(() => release());
     const service = owner();
     const declaration = await service.advertise(thread, { port, name: "bulk", protocol: "http" });
-    forwarder = viewer();
     const { rpc, router } = serviceLink(service, forwarder, { viaGateway: true });
     router.registerHandler("fixture.control", () => ({ responsive: true }));
     const forward = await forwarder.connect(1, declaration, rpc, { streams: 2 });
