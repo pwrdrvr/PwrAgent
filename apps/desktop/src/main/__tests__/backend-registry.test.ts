@@ -26335,6 +26335,15 @@ command = "pnpm dev"
       expect(updates).toEqual([]);
     });
 
+    it("does not read terminals for turns that quit is stopping", async () => {
+      const listBackgroundTerminals = vi.fn(async () => ({ supported: true, terminals: [terminal] }));
+      const { codexClient, registry, updates } = setup(listBackgroundTerminals);
+      (registry as unknown as { stoppingRunningTurnsForShutdown: boolean }).stoppingRunningTurnsForShutdown = true;
+      await endTurnWithRunningCommands(codexClient, ["command-1"]);
+      expect(listBackgroundTerminals).not.toHaveBeenCalled();
+      expect(updates).toEqual([]);
+    });
+
     it.each([
       ["the thread unloads", async (codexClient: MockBackendClient) => {
         await codexClient.emit({ method: "thread/status/changed", params: {

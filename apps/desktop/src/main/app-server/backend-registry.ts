@@ -5837,6 +5837,11 @@ function turnIdFromStartedNotification(
   return notification.params.turnId ?? notification.params.turn.id;
 }
 
+/** Usage figures change on every read; only identities make a membership. */
+function backgroundTerminalMembership(terminals: CodexBackgroundTerminal[]): string {
+  return terminals.map((terminal) => `${terminal.itemId}\u0000${terminal.processId}`).sort().join("\n");
+}
+
 function turnIdFromTerminalNotification(
   notification: {
     params: {
@@ -26323,9 +26328,7 @@ export class DesktopBackendRegistry {
     const previous = this.codexBackgroundTerminals.get(threadId) ?? [];
     if (terminals.length) this.codexBackgroundTerminals.set(threadId, terminals);
     else this.codexBackgroundTerminals.delete(threadId);
-    const membership = (items: CodexBackgroundTerminal[]) =>
-      items.map((terminal) => `${terminal.itemId}\u0000${terminal.processId}`).sort().join("\n");
-    if (membership(previous) === membership(terminals) || this.closed) return;
+    if (backgroundTerminalMembership(previous) === backgroundTerminalMembership(terminals) || this.closed) return;
     void this.emit({
       backend: "codex",
       notification: { method: "thread/backgroundTasks/updated", params: { threadId, tasks: terminals } },
@@ -46731,8 +46734,14 @@ export class DesktopBackendRegistry {
     ) {
       // A command still live when its turn ends is a background terminal. A
       // later turn can also stop or start one, so recheck a thread with some.
+      // Quit stops turns on purpose; reading then would only query a closing
+      // app server.
       const threadId = notification.params.threadId;
-      if (this.liveCodexToolItemsByThread.has(threadId) || this.codexBackgroundTerminals.has(threadId)) {
+      if (
+        !this.closed
+        && !this.stoppingRunningTurnsForShutdown
+        && (this.liveCodexToolItemsByThread.has(threadId) || this.codexBackgroundTerminals.has(threadId))
+      ) {
         void this.refreshCodexBackgroundTerminalsAfterTurn(threadId);
       }
     }
