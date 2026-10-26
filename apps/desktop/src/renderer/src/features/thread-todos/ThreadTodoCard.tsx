@@ -17,6 +17,7 @@ import type {
   ThreadTodoKind,
   ThreadTodoMergeMethod,
   ThreadTodoMergeMethodPreferences,
+  ThreadTodoModelSettings,
   ThreadTodoResolution,
 } from "@pwragent/shared";
 import {
@@ -567,14 +568,14 @@ function ThreadTodoCardPager(props: { pager: NonNullable<ThreadTodoCardProps["pa
 function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const { todo } = props;
   const dispatch = useTodoDispatchContext();
-  const [localPick, setLocalPick] = useState<import("@pwragent/shared").ThreadTodoModelSettings>();
+  const [localPick, setLocalPick] = useState<ThreadTodoModelSettings>();
   const selection = resolveThreadTodoModelSettings({
     thread: todo.dispatchDefaults?.thread ?? { backend: todo.backend },
     action: todo.action,
     lastDispatch: todo.dispatchDefaults?.lastDispatch,
     pick: dispatch.picks.get(todoDispatchPickKey(todo)) ?? localPick,
   });
-  const pickModel = (settings: import("@pwragent/shared").ThreadTodoModelSettings) => {
+  const pickModel = (settings: ThreadTodoModelSettings) => {
     dispatch.pick(todo, settings);
     setLocalPick(settings);
   };

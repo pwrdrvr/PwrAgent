@@ -20,7 +20,7 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     metadata: { backend: "codex", scenario: "todo-dispatch-model", threadId: source },
     steps: [
       { id: "initialize", kind: "response", method: "initialize", result: {
-        serverInfo: { name: "Replay Codex", version: "1.0.0" }, methods: ["thread/list", "thread/read", "skills/list"],
+        serverInfo: { name: "Replay Codex", version: "1.0.0" }, methods: ["thread/list", "thread/read", "thread/start", "turn/start", "skills/list"],
       } },
       { id: "threads", kind: "response", method: "thread/list", result: [
         { id: source, title: "Webhook delivery hardening", summary: "Cache signing keys and bound delivery retries", source: "codex",

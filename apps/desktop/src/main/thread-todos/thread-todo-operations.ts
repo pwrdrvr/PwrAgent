@@ -1,4 +1,6 @@
 import type {
+  AppServerBackendKind,
+  ThreadTodoModelSettings,
   ListThreadTodoProjectsResponse,
   ListThreadTodoProjectsRequest,
   ListThreadTodosRequest,
@@ -146,7 +148,7 @@ export const localThreadTodoOperations = {
   },
 };
 
-function parseDispatchSettings(value: unknown): import("@pwragent/shared").ThreadTodoModelSettings {
+function parseDispatchSettings(value: unknown): ThreadTodoModelSettings {
   if (!value || typeof value !== "object") throw new Error("Invalid dispatch model settings.");
   const { backend, model, reasoningEffort } = value as Record<string, unknown>;
   if (typeof backend !== "string" || !(backend === "codex" || backend === "claude" || /^acp:.+/.test(backend))
@@ -154,7 +156,7 @@ function parseDispatchSettings(value: unknown): import("@pwragent/shared").Threa
     || (reasoningEffort !== undefined && (typeof reasoningEffort !== "string" || !reasoningEffort.trim()))) {
     throw new Error("Invalid dispatch model settings.");
   }
-  return { backend: backend as import("@pwragent/shared").AppServerBackendKind,
+  return { backend: backend as AppServerBackendKind,
     ...(typeof model === "string" ? { model } : {}),
     ...(typeof reasoningEffort === "string" ? { reasoningEffort } : {}),
   };
