@@ -4,6 +4,12 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerBackendKind, NavigationThreadSummary } from "@pwragent/shared";
 import { ThreadRow } from "../ThreadRow";
+import { StartingThreadRow } from "../StartingThreadRow";
+import { SubthreadDraftRow } from "../SubthreadDraftRow";
+import type {
+  PendingLaunchpadCreation,
+  SubthreadLaunchpadDraft,
+} from "../../../lib/useThreadNavigation";
 import { ThreadHeader } from "../../thread-detail/ThreadHeader";
 import { ThreadPlaceholderHeader } from "../../thread-detail/ThreadPlaceholderHeader";
 import {
@@ -123,5 +129,79 @@ describe("provider chip in the launchpad header", () => {
     )));
 
     expect(container.querySelector(".chip--backend")).toHaveTextContent("Claude");
+  });
+});
+
+const PROJECT_KEY = "directory:/Users/fixture-user/pwrdrvr/PwrSnap";
+
+const launchpad = {
+  backend: "codex",
+  directoryKey: PROJECT_KEY,
+  directoryKind: "directory",
+  directoryLabel: "PwrSnap",
+  directoryPath: "/Users/fixture-user/pwrdrvr/PwrSnap",
+  executionMode: "default",
+  prompt: "Add a crop tool",
+  workMode: "worktree",
+} as PendingLaunchpadCreation["launchpad"];
+
+const startingCreation: PendingLaunchpadCreation = {
+  selectionKey: "starting-launchpad:1",
+  directoryKey: PROJECT_KEY,
+  directoryLabel: "PwrSnap",
+  launchpad,
+  composerScopeKey: `launchpad:starting:1:${PROJECT_KEY}`,
+  setupProgressKey: "starting-launchpad:1",
+  title: "Add a crop tool",
+  input: [],
+};
+
+const subthreadDraft: SubthreadLaunchpadDraft = {
+  kind: "subthread-draft",
+  selectionKey: "launchpad:subthread:codex:Parent",
+  directoryKey: "subthread:codex:Parent",
+  directoryLabel: "PwrSnap",
+  launchpad: {
+    ...launchpad,
+    prompt: "",
+    parentThreadId: "Parent",
+    parentThreadTitle: "Parent",
+  } as SubthreadLaunchpadDraft["launchpad"],
+  parentThreadKey: "codex:Parent",
+  sourceThreadKey: "codex:Parent",
+  parentThreadTitle: "Parent",
+};
+
+describe.each([
+  {
+    row: "a starting thread row",
+    element: (
+      <StartingThreadRow creation={startingCreation} locationMode="label" selected={false} />
+    ),
+  },
+  {
+    row: "a sub-thread draft row",
+    element: (
+      <SubthreadDraftRow draft={subthreadDraft} locationMode="label" selected={false} />
+    ),
+  },
+])("provider chip on $row", ({ element }) => {
+  it("drops the provider chip when only its provider has threads", () => {
+    const { container } = render(withProviders(["codex"], element));
+
+    expect(container.querySelector(".thread-row__chip--backend")).toBeNull();
+    expect(screen.queryByText("OpenAI")).not.toBeInTheDocument();
+  });
+
+  it("keeps the provider chip when threads span providers", () => {
+    const { container } = render(withProviders(["claude", "codex"], element));
+
+    expect(container.querySelector(".thread-row__chip--backend")).toHaveTextContent("OpenAI");
+  });
+
+  it("keeps the provider chip when no provider list is available", () => {
+    const { container } = render(withProviders(undefined, element));
+
+    expect(container.querySelector(".thread-row__chip--backend")).toHaveTextContent("OpenAI");
   });
 });
