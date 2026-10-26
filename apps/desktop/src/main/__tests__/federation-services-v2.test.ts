@@ -288,9 +288,8 @@ describe("windowed stream lifecycle", () => {
     const forward = await forwarder.connect(1, declaration, rpc, { streams: 2 });
     const local = client(forward.localPort);
     await vi.waitFor(() => expect(local.received().toString()).toBe("hello"));
-    const closed = once(local.socket, "close");
     allowed = false; // The owner's reaper notices without another request.
-    await closed;
+    await local.ended;
     expect(forwarder.list(1, "owner", thread)[0]?.error).toContain("revoked");
   });
 
@@ -335,8 +334,10 @@ describe("windowed stream lifecycle", () => {
 
 describe("windowed stream endpoint", () => {
   async function endpoint(window: number) {
-    const server = createServer((socket) => { socket.on("error", () => undefined); socket.resume(); });
+    const accepted = new Set<Socket>();
+    const server = createServer((socket) => { accepted.add(socket); socket.on("error", () => undefined); socket.resume(); });
     const port = await listen(server);
+    cleanups.push(() => { for (const socket of accepted) socket.destroy(); });
     const socket = connect({ host: "127.0.0.1", port });
     socket.on("error", () => undefined);
     await once(socket, "connect");
@@ -367,7 +368,8 @@ describe("windowed stream endpoint", () => {
   });
 
   it("grants credit back as the local socket drains, in batches", async () => {
-    const { stream, sent } = await endpoint(4096);
+    const { stream, sent, socket } = await endpoint(4096);
+    cleanups.push(() => { socket.destroy(); });
     stream.receiveData({ seq: 0, data: b64(1024) });
     await vi.waitFor(() => expect(sent.filter((entry) => entry.method === FRAMES.window)).toEqual([
       { method: FRAMES.window, params: { streamId: "s", bytes: 1024 } },

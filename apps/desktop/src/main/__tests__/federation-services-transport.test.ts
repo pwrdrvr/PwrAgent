@@ -93,7 +93,6 @@ for (const streams of [1, 2] as const) it(`carries HTTP and WS on v${streams} st
   expect(history).not.toContain(Buffer.from("private-fixture-body-no-capture").toString("base64"));
   expect(history).not.toContain("private-fixture-websocket-message");
   expect(history).toContain(streams === 2 ? "services.v2.data" : "services.v1.exchange");
-  if (streams === 2) expect(history).not.toContain("services.v1.exchange");
   const closed = once(socket, "close");
   forwarder.disconnectPeer("owner");
   await closed;

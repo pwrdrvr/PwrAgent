@@ -289,6 +289,9 @@ export class ServiceStreamEndpoint {
     catch (error) { this.abort(message(error, "Service forwarding permission expired or was revoked.")); return false; }
     const take = Math.min(this.socket.readableLength, this.sendCredit, this.sendFrameBytes);
     const chunk = take > 0 ? this.socket.read(take) as Buffer | null : null;
+    // Reading exactly what is left never emits `end`, and no `readable`
+    // follows an EOF that already arrived: ask once more so the FIN goes out.
+    if (chunk && this.socket.readableLength === 0) this.socket.read(0);
     const bytes = chunk?.length ?? 0;
     const fin = this.socket.readableEnded && this.socket.readableLength === 0;
     if (!bytes && !fin) return false;
