@@ -2148,7 +2148,7 @@ export function ThreadView(props: ThreadViewProps) {
       celestialIcon: federation.celestialIcon,
     };
   }, [selectedThread?.federation]);
-  const toggleSelectedThreadTerminal = useCallback(() => {
+  const toggleSelectedThreadTerminal = useEventCallback(() => {
     if (!selectedThreadKey) return;
     if (selectedThreadTerminalDisabledReason) return;
     terminals.togglePanel(
@@ -2156,13 +2156,7 @@ export function ThreadView(props: ThreadViewProps) {
       selectedThreadTerminalCwd,
       selectedThreadTerminalRemote,
     );
-  }, [
-    selectedThreadKey,
-    selectedThreadTerminalCwd,
-    selectedThreadTerminalDisabledReason,
-    selectedThreadTerminalRemote,
-    terminals,
-  ]);
+  });
   const acceptedBranchDriftRef = useRef<string | undefined>(undefined);
   const suppressBranchDriftDialogRef = useRef(
     props.suppressBranchDriftDialog ?? false
@@ -3955,12 +3949,19 @@ export function ThreadView(props: ThreadViewProps) {
   const launchpadRunningCodexEnvironmentSetup = Boolean(
     selectedLaunchpadCodexEnvironment?.setupScript,
   );
-  const integratedTerminal = selectedThread && !composerLaunchpad ? {
+  const showIntegratedTerminal = Boolean(selectedThread && !composerLaunchpad);
+  const integratedTerminal = useMemo(() => showIntegratedTerminal ? {
     open: selectedThreadTerminalOpen,
     running: selectedThreadTerminalRunning,
     disabledReason: selectedThreadTerminalDisabledReason,
     onToggle: toggleSelectedThreadTerminal,
-  } : undefined;
+  } : undefined, [
+    showIntegratedTerminal,
+    selectedThreadTerminalOpen,
+    selectedThreadTerminalRunning,
+    selectedThreadTerminalDisabledReason,
+    toggleSelectedThreadTerminal,
+  ]);
   // What only one mode's composer receives. Everything both modes receive is
   // written once on the `<Composer>` below, so the two cannot drift apart.
   const composerModeProps: Partial<ComponentProps<typeof Composer>> =
