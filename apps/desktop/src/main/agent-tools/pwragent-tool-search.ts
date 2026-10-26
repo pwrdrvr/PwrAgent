@@ -11,7 +11,7 @@ Search when the user wants to:
 - Create or attach a worktree, link another project/repository directory, detach a directory, or move this thread into another project folder or existing checkout.
 - Run work on another machine or instance through Federation; discover connected machines, their load and projects; find remote threads or create work there.
 - Work with messaging in Telegram, Discord, Slack, LINE, Lark/Feishu, or Mattermost: inspect the current conversation, attach a thread or native child topic, rename a conversation, send a requested file or private response, or inspect/render PDF attachments. Search does not authorize sending messages.
-- Open, edit, read back, comment on, review, approve or merge GitHub pull requests, with screenshot or video attachments; read PR diffs, changed files, reviews and inline review threads; reply to or resolve review comments; search, open, edit or comment on GitHub issues.
+- Open, edit, read back, comment on, review, approve or merge GitHub pull requests and GitLab merge requests, with screenshot or video attachments; read PR/MR diffs, changed files, reviews and inline review threads; reply to or resolve review comments; search, open, edit or comment on GitHub and GitLab issues.
 - Read forge cache, PR/MR status, GitHub Actions workflow runs/jobs, GitLab CI pipelines and failure logs; attach or watch pull requests; wait for another thread's turn or PR prerequisite with durable dependencies; or explicitly request a code review; record reviews, list unresolved findings, and settle each finding as addressed, declined, or deferred.
 - Inspect automations, schedules, runs, alerts, artifacts, or failures; inspect PwrAgent version, updates, restart, or shutdown.
 - Manage PwrAgent MCP connections and app access; inspect what connections a thread received.
@@ -31,24 +31,24 @@ const SEARCH_ALIASES: Record<string, string> = {
   read_ci_job_log: "github actions gitlab ci failure pipeline logs trace failed job earlier paging large output",
   get_commit_checks: "github gitlab commit checks check runs status contexts external ci failures",
   list_ci_artifacts: "github actions gitlab ci pipeline workflow artifacts metadata expiry sizes reports",
-  get_pull_request: "github pr pull request read back fetch view body description details head sha mergeable",
-  list_pull_requests: "github pr pull requests list open branch",
-  list_pull_request_files: "github pr pull request changed files filenames list",
-  get_pull_request_diff: "github pr pull request diff patch changes",
-  list_pull_request_reviews: "github pr pull request reviews approved changes requested",
-  list_pull_request_review_threads: "github pr pull request review comments threads inline unresolved feedback",
-  get_issue: "github issue read fetch view",
-  list_issue_comments: "github issue pr pull request conversation comments",
-  search_issues: "github search issues pull requests prs find",
-  create_pull_request: "github pr open create new pull request draft attach screenshot image video",
-  update_pull_request: "github pr edit update pull request title body description ready draft close reopen labels reviewers attach screenshot",
-  add_issue_comment: "github pr pull request issue comment post reply attach screenshot",
-  reply_to_review_comment: "github pr pull request review comment reply respond feedback",
-  submit_pull_request_review: "github pr pull request review approve request changes inline comments",
-  resolve_review_thread: "github pr pull request review thread resolve unresolve conversation",
-  create_issue: "github issue open create new file bug",
-  update_issue: "github issue edit update close reopen labels",
-  merge_pull_request: "github pr pull request merge squash rebase land",
+  get_pull_request: "github gitlab mr merge request pr pull request read back fetch view body description details head sha mergeable",
+  list_pull_requests: "github gitlab mr merge request pr pull requests list open branch",
+  list_pull_request_files: "github gitlab mr merge request pr pull request changed files filenames list",
+  get_pull_request_diff: "github gitlab mr merge request pr pull request diff patch changes",
+  list_pull_request_reviews: "github gitlab mr merge request pr pull request reviews approved changes requested",
+  list_pull_request_review_threads: "github gitlab mr merge request pr pull request review comments threads inline unresolved feedback",
+  get_issue: "github gitlab issue read fetch view",
+  list_issue_comments: "github gitlab issue pr pull request conversation comments",
+  search_issues: "github gitlab search issues pull requests prs find",
+  create_pull_request: "github gitlab mr merge request pr open create new pull request draft attach screenshot image video",
+  update_pull_request: "github gitlab mr merge request pr edit update pull request title body description ready draft close reopen labels reviewers attach screenshot",
+  add_issue_comment: "github gitlab pr pull request issue comment post reply attach screenshot",
+  reply_to_review_comment: "github gitlab mr merge request pr pull request review comment reply respond feedback",
+  submit_pull_request_review: "github gitlab mr merge request pr pull request review approve request changes inline comments",
+  resolve_review_thread: "github gitlab mr merge request pr pull request review thread resolve unresolve conversation",
+  create_issue: "github gitlab issue open create new file bug",
+  update_issue: "github gitlab issue edit update close reopen labels",
+  merge_pull_request: "github gitlab mr merge request pr pull request merge squash rebase land",
   handoff_task: "delegate delegation child subagent split parallel tasks worktree",
   create_monitor_delegation: "job monitor polling long running command parallel tasks collect results",
   manage_thread_dependencies: "wait waiting prerequisite dependency dependencies dag notify notification continue after turn completion CI PR remind reminder operator todo",

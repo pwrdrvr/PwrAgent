@@ -2,11 +2,12 @@ import { FORGE_AGENT_WRITE_TOOL_GROUPS, type ForgeAgentToolGroup, type ForgeAgen
 import { ForgeReadError, type ForgeRepository } from "./forge-tool-contract";
 
 /**
- * GitHub pull request and issue tools. Each acts in the calling thread's own
- * repository (the `repository` argument only chooses among its linked
- * remotes), so no tool here accepts a thread or Federation target.
+ * Pull request (GitLab merge request) and issue tools for GitHub and GitLab.
+ * Each acts in the calling thread's own repository (the `repository` argument
+ * only chooses among its linked remotes), so no tool here accepts a thread or
+ * Federation target. Names say "pull request" for both providers.
  */
-export const GITHUB_READ_OPERATIONS = [
+export const FORGE_PR_READ_OPERATIONS = [
   "get_pull_request",
   "list_pull_requests",
   "list_pull_request_files",
@@ -17,14 +18,14 @@ export const GITHUB_READ_OPERATIONS = [
   "list_issue_comments",
   "search_issues",
 ] as const;
-export const GITHUB_WRITE_OPERATIONS = Object.keys(FORGE_AGENT_WRITE_TOOL_GROUPS) as ForgeAgentWriteToolName[];
-export const GITHUB_TOOL_OPERATIONS = [...GITHUB_READ_OPERATIONS, ...GITHUB_WRITE_OPERATIONS] as const;
-export type GithubReadOperation = typeof GITHUB_READ_OPERATIONS[number];
-export type GithubToolOperation = GithubReadOperation | ForgeAgentWriteToolName;
+export const FORGE_PR_WRITE_OPERATIONS = Object.keys(FORGE_AGENT_WRITE_TOOL_GROUPS) as ForgeAgentWriteToolName[];
+export const FORGE_PR_TOOL_OPERATIONS = [...FORGE_PR_READ_OPERATIONS, ...FORGE_PR_WRITE_OPERATIONS] as const;
+export type ForgePrReadOperation = typeof FORGE_PR_READ_OPERATIONS[number];
+export type ForgePrToolOperation = ForgePrReadOperation | ForgeAgentWriteToolName;
 
-export type GithubAttachment = { path: string; alt?: string };
-export type GithubReviewComment = { path: string; line: number; side?: "LEFT" | "RIGHT"; startLine?: number; startSide?: "LEFT" | "RIGHT"; body: string };
-export type GithubToolArgs = {
+export type ForgeAttachment = { path: string; alt?: string };
+export type ForgeReviewComment = { path: string; line: number; side?: "LEFT" | "RIGHT"; startLine?: number; startSide?: "LEFT" | "RIGHT"; body: string };
+export type ForgePrToolArgs = {
   repository?: ForgeRepository;
   number?: number;
   url?: string;
@@ -46,7 +47,7 @@ export type GithubToolArgs = {
   title?: string;
   body?: string;
   draft?: boolean;
-  attachments?: GithubAttachment[];
+  attachments?: ForgeAttachment[];
   addLabels?: string[];
   removeLabels?: string[];
   reviewers?: string[];
@@ -55,7 +56,7 @@ export type GithubToolArgs = {
   reviewThreadId?: string;
   resolved?: boolean;
   event?: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
-  comments?: GithubReviewComment[];
+  comments?: ForgeReviewComment[];
   commitId?: string;
   method?: "merge" | "squash" | "rebase";
   expectedHeadSha?: string;
@@ -63,12 +64,12 @@ export type GithubToolArgs = {
   commitMessage?: string;
 };
 
-export const GITHUB_BODY_MAX_CHARS = 65_000;
-export const GITHUB_ATTACHMENTS_MAX = 10;
+export const FORGE_BODY_MAX_CHARS = 65_000;
+export const FORGE_ATTACHMENTS_MAX = 10;
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const LABEL_MAX = 50;
 
-const FIELDS: Record<GithubToolOperation, string[]> = {
+const FIELDS: Record<ForgePrToolOperation, string[]> = {
   get_pull_request: ["number", "url", "branch"],
   list_pull_requests: ["state", "head", "base", "page", "perPage"],
   list_pull_request_files: ["number", "includePatch", "page", "perPage"],
@@ -76,19 +77,19 @@ const FIELDS: Record<GithubToolOperation, string[]> = {
   list_pull_request_reviews: ["number", "page", "perPage"],
   list_pull_request_review_threads: ["number", "unresolvedOnly", "perPage", "after"],
   get_issue: ["number"],
-  list_issue_comments: ["number", "page", "perPage"],
+  list_issue_comments: ["number", "kind", "page", "perPage"],
   search_issues: ["query", "kind", "state", "page", "perPage"],
   create_pull_request: ["title", "body", "head", "base", "draft", "attachments", "addLabels", "reviewers"],
   update_pull_request: ["number", "title", "body", "base", "state", "draft", "attachments", "addLabels", "removeLabels", "reviewers"],
-  add_issue_comment: ["number", "body", "attachments"],
-  reply_to_review_comment: ["number", "commentId", "body"],
+  add_issue_comment: ["number", "kind", "body", "attachments"],
+  reply_to_review_comment: ["number", "commentId", "reviewThreadId", "body"],
   submit_pull_request_review: ["number", "event", "body", "comments", "commitId"],
-  resolve_review_thread: ["reviewThreadId", "resolved"],
+  resolve_review_thread: ["reviewThreadId", "resolved", "number"],
   create_issue: ["title", "body", "attachments", "addLabels"],
   update_issue: ["number", "title", "body", "state", "stateReason", "attachments", "addLabels", "removeLabels"],
   merge_pull_request: ["number", "method", "expectedHeadSha", "commitTitle", "commitMessage"],
 };
-const REQUIRED: Partial<Record<GithubToolOperation, string[]>> = {
+const REQUIRED: Partial<Record<ForgePrToolOperation, string[]>> = {
   list_pull_request_files: ["number"],
   get_pull_request_diff: ["number"],
   list_pull_request_reviews: ["number"],
@@ -99,7 +100,7 @@ const REQUIRED: Partial<Record<GithubToolOperation, string[]>> = {
   create_pull_request: ["title"],
   update_pull_request: ["number"],
   add_issue_comment: ["number", "body"],
-  reply_to_review_comment: ["number", "commentId", "body"],
+  reply_to_review_comment: ["number", "body"],
   submit_pull_request_review: ["number", "event"],
   resolve_review_thread: ["reviewThreadId", "resolved"],
   create_issue: ["title"],
@@ -107,17 +108,17 @@ const REQUIRED: Partial<Record<GithubToolOperation, string[]>> = {
   merge_pull_request: ["number", "expectedHeadSha"],
 };
 
-export function githubToolRequiredFields(operation: GithubToolOperation): string[] {
+export function forgePrToolRequiredFields(operation: ForgePrToolOperation): string[] {
   return REQUIRED[operation] ?? [];
 }
 
-export function isGithubToolOperation(value: string): value is GithubToolOperation {
-  return (GITHUB_TOOL_OPERATIONS as readonly string[]).includes(value);
+export function isForgePrToolOperation(value: string): value is ForgePrToolOperation {
+  return (FORGE_PR_TOOL_OPERATIONS as readonly string[]).includes(value);
 }
 
 /** The policy group that governs one call. Approving or blocking a PR is a merge-class decision. */
-export function githubToolGroup(operation: GithubToolOperation, args: Pick<GithubToolArgs, "event">): ForgeAgentToolGroup {
-  if ((GITHUB_READ_OPERATIONS as readonly string[]).includes(operation)) return "read";
+export function forgePrToolGroup(operation: ForgePrToolOperation, args: Pick<ForgePrToolArgs, "event">): ForgeAgentToolGroup {
+  if ((FORGE_PR_READ_OPERATIONS as readonly string[]).includes(operation)) return "read";
   if (operation === "submit_pull_request_review" && args.event && args.event !== "COMMENT") return "approve_merge";
   return FORGE_AGENT_WRITE_TOOL_GROUPS[operation as ForgeAgentWriteToolName];
 }
@@ -150,13 +151,13 @@ export function isSafeRefName(value: string): boolean {
   return value.length <= 255 && !/[\s~^:?*[\\\x00-\x1f\x7f]|\.\.|@\{|^[-/.]|[/.]$|\/\/|\.lock$/.test(value);
 }
 
-export function validateGithubToolArgs(operation: string, value: unknown): asserts value is GithubToolArgs {
-  if (!isGithubToolOperation(operation) || !value || typeof value !== "object" || Array.isArray(value)) fail("Provide a known GitHub tool operation and an argument object.");
+export function validateForgePrToolArgs(operation: string, value: unknown): asserts value is ForgePrToolArgs {
+  if (!isForgePrToolOperation(operation) || !value || typeof value !== "object" || Array.isArray(value)) fail("Provide a known GitHub tool operation and an argument object.");
   const args = value as Record<string, unknown>;
   const allowed = ["repository", ...FIELDS[operation]];
   const unknown = Object.keys(args).find((key) => !allowed.includes(key));
   if (unknown) fail(`Unknown argument for ${operation}: ${unknown}.`);
-  for (const key of githubToolRequiredFields(operation)) if (args[key] === undefined) fail(`${operation} requires ${key}.`);
+  for (const key of forgePrToolRequiredFields(operation)) if (args[key] === undefined) fail(`${operation} requires ${key}.`);
   integer(args, "number", 1, Number.MAX_SAFE_INTEGER);
   integer(args, "commentId", 1, Number.MAX_SAFE_INTEGER);
   integer(args, "page", 1, 1000);
@@ -172,10 +173,10 @@ export function validateGithubToolArgs(operation: string, value: unknown): asser
   text(args, "after", 500);
   text(args, "query", 256);
   text(args, "title", 256);
-  text(args, "body", GITHUB_BODY_MAX_CHARS, { allowEmpty: operation === "update_pull_request" || operation === "update_issue" || operation === "create_pull_request" || operation === "create_issue" });
+  text(args, "body", FORGE_BODY_MAX_CHARS, { allowEmpty: operation === "update_pull_request" || operation === "update_issue" || operation === "create_pull_request" || operation === "create_issue" });
   text(args, "reviewThreadId", 200);
   text(args, "commitTitle", 256);
-  text(args, "commitMessage", GITHUB_BODY_MAX_CHARS, { allowEmpty: true });
+  text(args, "commitMessage", FORGE_BODY_MAX_CHARS, { allowEmpty: true });
   if (args.diffSnapshot !== undefined && (typeof args.diffSnapshot !== "string" || !/^[a-f0-9]{64}$/.test(args.diffSnapshot))) fail("diffSnapshot must come from next.diffSnapshot.");
   if ((args.startChar !== undefined && args.startChar !== 0) !== (args.diffSnapshot !== undefined)) fail("Pass both startChar and diffSnapshot from the previous diff page.");
   for (const key of ["commitId", "expectedHeadSha"]) if (args[key] !== undefined && (typeof args[key] !== "string" || !SHA.test(args[key] as string))) fail(`${key} must be a full commit SHA.`);
@@ -189,7 +190,7 @@ export function validateGithubToolArgs(operation: string, value: unknown): asser
   if (typeof args.query === "string" && /(^|\s)-?(?:repo|org|user|owner):/i.test(args.query)) fail("query searches this thread's repository only; remove repo:, org:, user: and owner: qualifiers.");
   if (args.attachments !== undefined) {
     const attachments = args.attachments;
-    if (!Array.isArray(attachments) || attachments.length > GITHUB_ATTACHMENTS_MAX) fail(`attachments must be a list of at most ${GITHUB_ATTACHMENTS_MAX} files.`);
+    if (!Array.isArray(attachments) || attachments.length > FORGE_ATTACHMENTS_MAX) fail(`attachments must be a list of at most ${FORGE_ATTACHMENTS_MAX} files.`);
     for (const item of attachments) {
       const a = item as Record<string, unknown>;
       if (!a || typeof a !== "object" || Array.isArray(a) || Object.keys(a).some((key) => key !== "path" && key !== "alt")
@@ -208,7 +209,7 @@ export function validateGithubToolArgs(operation: string, value: unknown): asser
         || typeof c.path !== "string" || !c.path || c.path.length > 4096 || !Number.isSafeInteger(c.line) || Number(c.line) < 1
         || (c.startLine !== undefined && (!Number.isSafeInteger(c.startLine) || Number(c.startLine) < 1 || Number(c.startLine) >= Number(c.line)))
         || (c.side !== undefined && c.side !== "LEFT" && c.side !== "RIGHT") || (c.startSide !== undefined && c.startSide !== "LEFT" && c.startSide !== "RIGHT")
-        || typeof c.body !== "string" || !c.body.trim() || c.body.length > GITHUB_BODY_MAX_CHARS) {
+        || typeof c.body !== "string" || !c.body.trim() || c.body.length > FORGE_BODY_MAX_CHARS) {
         fail("Each review comment needs path, line (startLine below line for a range), optional LEFT/RIGHT side, and a nonempty body.");
       }
     }
@@ -216,6 +217,7 @@ export function validateGithubToolArgs(operation: string, value: unknown): asser
   if (operation === "submit_pull_request_review" && args.event !== "APPROVE" && !(typeof args.body === "string" && args.body.trim()) && !(Array.isArray(args.comments) && args.comments.length)) {
     fail("A COMMENT or REQUEST_CHANGES review needs a body or inline comments.");
   }
+  if (operation === "reply_to_review_comment" && (args.commentId === undefined) === (args.reviewThreadId === undefined)) fail("reply_to_review_comment needs exactly one of commentId or reviewThreadId.");
   if (operation === "update_pull_request" && !["title", "body", "base", "state", "draft", "attachments", "addLabels", "removeLabels", "reviewers"].some((key) => args[key] !== undefined)) fail("update_pull_request needs at least one change.");
   if (operation === "update_issue" && !["title", "body", "state", "stateReason", "attachments", "addLabels", "removeLabels"].some((key) => args[key] !== undefined)) fail("update_issue needs at least one change.");
   if (operation === "get_pull_request" && args.url !== undefined && args.number !== undefined) fail("Pass number or url, not both.");

@@ -1,5 +1,5 @@
 import type { ForgeReadHandler } from "./pwragent-forge-agent-tools";
-import { buildForgeToolDefinitions, type GithubToolHandler } from "./pwragent-github-agent-tools";
+import { buildForgeToolDefinitions, type ForgePrToolHandler } from "./pwragent-forge-pr-agent-tools";
 import type { TokenMiserFocusedSummaries } from "../token-miser/token-miser-focused";
 import type {
   AgentToolCatalogId,
@@ -72,7 +72,7 @@ export function resolveAgentToolCatalogs(params: {
   taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
   forgeReadHandler?: ForgeReadHandler;
-  githubToolHandler?: GithubToolHandler;
+  forgePrToolHandler?: ForgePrToolHandler;
   /** Omitted tools are not advertised. Without a policy every forge tool is. */
   forgeToolPolicy?: ForgeAgentToolPolicy;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
@@ -96,7 +96,7 @@ export function resolveAgentToolCatalogs(params: {
   const threadDynamicTools = threadRouter.buildDynamicToolSpecs();
   const forgeRouter = new AgentToolRouter(buildForgeToolDefinitions({
     forgeReadHandler: params.forgeReadHandler,
-    githubToolHandler: params.githubToolHandler,
+    forgePrToolHandler: params.forgePrToolHandler,
     policy: params.forgeToolPolicy,
   }));
   const forgeDynamicTools = forgeRouter.buildDynamicToolSpecs();
@@ -193,7 +193,7 @@ export function resolveAgentToolCatalogs(params: {
         enabled: forgeDynamicTools.length > 0,
         toolCount: countDynamicTools(forgeDynamicTools),
         ...(params.forgeToolPolicy && !params.forgeToolPolicy.enabled
-          ? { unavailableReason: "GitHub tools are off in Settings → Git." }
+          ? { unavailableReason: "Forge tools are off in Settings → Git." }
           : {}),
         fingerprint: buildCatalogFingerprint({
           id: "forge",

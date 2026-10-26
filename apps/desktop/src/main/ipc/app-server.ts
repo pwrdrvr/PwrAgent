@@ -1,10 +1,11 @@
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
 import { ForgeReadService, repositoryFromPr } from "../pr-status/forge-read-service";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
-import { GithubToolClient } from "../pr-status/github-tool-client";
-import { GithubToolService } from "../pr-status/github-tool-service";
-import type { GithubToolArgs, GithubToolOperation } from "../pr-status/github-tool-contract";
-import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation } from "../pr-status/forge-tool-contract";
+import { GithubPrToolClient } from "../pr-status/github-pr-tool-client";
+import { ForgePrToolService, type ForgePrToolScope } from "../pr-status/forge-pr-tool-service";
+import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
+import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
+import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes } from "../pr-status/git-remote";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "../federation/federated-forge-read-service";
@@ -4007,7 +4008,8 @@ class DesktopAppServerService {
   }
 
   private forgeCiClient?: ForgeCiClient;
-  private githubToolClient?: GithubToolClient;
+  private githubPrToolClient?: GithubPrToolClient;
+  private gitlabPrToolClient?: GitlabPrToolClient;
 
   private getForgeCiClient(): ForgeCiClient {
     this.forgeCiClient ??= new ForgeCiClient({
@@ -4032,19 +4034,33 @@ class DesktopAppServerService {
     return { backend, thread, overlay, directories, remotes, attached: overlay?.prs ?? [], branch: thread.observedGitBranch ?? thread.gitBranch };
   }
 
-  /** GitHub pull request and issue tools act only in the calling thread's own repositories. */
-  async runGithubToolForAgent(operation: GithubToolOperation, args: GithubToolArgs, context: AgentToolCallContext): Promise<unknown> {
+  /** The calling thread's repositories, PRs, branch and directories. */
+  private async forgePrToolScope(context: AgentToolCallContext): Promise<ForgePrToolScope> {
     const scope = await this.resolveForgeThreadScope(context.backend, context.threadId);
-    this.githubToolClient ??= new GithubToolClient({ ci: this.getForgeCiClient() });
-    const service = new GithubToolService({
-      enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
-      client: this.githubToolClient,
-      defaultMergeMethod: () => getDesktopSettingsService().resolveDefaultMergeMethod(),
-    });
-    const result = await service.execute(operation, args, {
+    return {
       remotes: scope.remotes, attached: scope.attached, branch: scope.branch, directories: scope.directories,
       privateRoots: getDesktopBackendRegistry().getLocalFilePrivateStorageRoots(),
-    }, context.signal);
+    };
+  }
+
+  private forgePrToolService(): ForgePrToolService {
+    this.githubPrToolClient ??= new GithubPrToolClient({ ci: this.getForgeCiClient() });
+    this.gitlabPrToolClient ??= new GitlabPrToolClient({ gitlab: this.getPrFetcher().gitlab });
+    return new ForgePrToolService({
+      enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
+      clients: { github: this.githubPrToolClient, gitlab: this.gitlabPrToolClient },
+      defaultMergeMethod: () => getDesktopSettingsService().resolveDefaultMergeMethod(),
+    });
+  }
+
+  /** The GitHub or GitLab repository a call would act in, so an approval prompt can name it. */
+  async resolveForgePrRepositoryForAgent(args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgeRepository> {
+    return this.forgePrToolService().resolveRepository(args, await this.forgePrToolScope(context));
+  }
+
+  /** Pull request and issue tools act only in the calling thread's own repositories. */
+  async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
+    const result = await this.forgePrToolService().execute(operation, args, await this.forgePrToolScope(context), context.signal);
     return { ...(result as Record<string, unknown>), backend: context.backend, threadId: context.threadId };
   }
 
@@ -8903,8 +8919,9 @@ export function registerAppServerIpcHandlers(): void {
     runtime: getDesktopFederationRuntime,
     targetStore: getDesktopOverlayStore(),
   }));
-  getDesktopBackendRegistry().setGithubToolHandler(
-    async (operation, args, context) => await appServerService.runGithubToolForAgent(operation, args, context),
+  getDesktopBackendRegistry().setForgePrToolHandler(
+    async (operation, args, context) => await appServerService.runForgePrToolForAgent(operation, args, context),
+    async (args, context) => await appServerService.resolveForgePrRepositoryForAgent(args, context),
   );
   getDesktopBackendRegistry().setForgeToolPolicyResolver(
     () => getDesktopSettingsService().resolveForgeAgentToolPolicy(),

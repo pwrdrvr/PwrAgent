@@ -11,8 +11,9 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
-import type { GithubToolHandler } from "../agent-tools/pwragent-github-agent-tools";
+import type { ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
+import { ForgeReadError } from "../pr-status/forge-tool-contract";
 
 type DynamicResult = { success: boolean; contentItems: Array<{ type: string; text?: string }> };
 
@@ -22,7 +23,7 @@ describe("backend forge tool dispatch", () => {
   let registry: DesktopBackendRegistry;
   let policy: ForgeAgentToolPolicy;
   let forgeRead: ReturnType<typeof vi.fn<ForgeReadHandler>>;
-  let github: ReturnType<typeof vi.fn<GithubToolHandler>>;
+  let github: ReturnType<typeof vi.fn<ForgePrToolHandler>>;
   let attach: ReturnType<typeof vi.fn<(args: unknown) => Promise<unknown>>>;
   let internals: {
     activeTurnKeys: Set<string>;
@@ -51,13 +52,13 @@ describe("backend forge tool dispatch", () => {
     internals.activeCodexTurnModes.set("thread-1:turn-1", "default");
     policy = structuredClone(DEFAULT_FORGE_AGENT_TOOL_POLICY);
     forgeRead = vi.fn<ForgeReadHandler>(async () => ({ source: "cache", observations: [] }));
-    github = vi.fn<GithubToolHandler>(async (operation) => operation === "create_pull_request"
+    github = vi.fn<ForgePrToolHandler>(async (operation) => operation === "create_pull_request"
       ? { created: true, url: "https://github.com/fixture/project/pull/9" }
       : { ok: true });
     attach = vi.fn<(args: unknown) => Promise<unknown>>(async () => ({ ok: true }));
     internals.handleAttachThreadPullRequestInspectionRequest = attach;
     registry.setForgeReadHandlers(forgeRead, forgeRead);
-    registry.setGithubToolHandler(github);
+    registry.setForgePrToolHandler(github);
     registry.setForgeToolPolicyResolver(() => policy);
   });
 
@@ -124,6 +125,27 @@ describe("backend forge tool dispatch", () => {
     expect(result.success).toBe(true);
     expect(text(result)).toMatch(/"attachedToThread":\s*true/);
     expect(attach).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", url: "https://github.com/fixture/project/pull/9" });
+  });
+
+  it("names the GitLab repository and merge request on the card", async () => {
+    registry.setForgePrToolHandler(github, async () => ({ provider: "gitlab", host: "gitlab.example.test", owner: "group/sub", repo: "project" }));
+    const prompt = nextApproval();
+    const pending = internals.handleServerRequest("codex", request("merge_pull_request", { number: 4, expectedHeadSha: "b".repeat(40) }, "call-gitlab"));
+    const notification = await prompt;
+    expect(notification.params).toMatchObject({ serverName: "GitLab", message: "Allow the agent to merge merge request !4 on GitLab?" });
+    expect(notification.params._meta).toMatchObject({ connector_name: "group/sub/project" });
+    await answer(notification, "decline");
+    expect(text(await pending)).toContain("declined");
+  });
+
+  it("fails a write with no single target before asking", async () => {
+    const prompts = vi.fn();
+    registry.onEvent((event) => { if (event.notification.method === "mcpServer/elicitation/request") prompts(); });
+    registry.setForgePrToolHandler(github, async () => { throw new ForgeReadError("ambiguous_repository", "Select repository from: github:github.com/a/b, gitlab:gitlab.com/a/b."); });
+    const result = await internals.handleServerRequest("codex", request("create_issue", { title: "Bug" }, "call-ambiguous"));
+    expect(text(result)).toContain("ambiguous_repository");
+    expect(prompts).not.toHaveBeenCalled();
+    expect(github).not.toHaveBeenCalled();
   });
 
   it("does not run a declined write", async () => {

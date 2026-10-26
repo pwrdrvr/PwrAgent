@@ -5,10 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_FORGE_AGENT_TOOL_POLICY, FORGE_AGENT_WRITE_TOOL_GROUPS, permissionForDynamicTool, type ForgeAgentToolPolicy } from "@pwragent/shared";
 import { ForgeCiClient } from "../pr-status/forge-ci-client";
 import { ForgeReadError, type ForgeRepository } from "../pr-status/forge-tool-contract";
-import { GithubToolClient, validateGithubAttachments, type GhRunner, type GithubToolContext } from "../pr-status/github-tool-client";
-import { GITHUB_WRITE_OPERATIONS, githubToolGroup, validateGithubToolArgs } from "../pr-status/github-tool-contract";
-import { GithubToolService } from "../pr-status/github-tool-service";
-import { buildForgeToolDefinitions, buildGithubToolDefinitions } from "../agent-tools/pwragent-github-agent-tools";
+import { GithubPrToolClient, validateForgeAttachments, type GhRunner, type ForgePrToolContext } from "../pr-status/github-pr-tool-client";
+import { FORGE_PR_WRITE_OPERATIONS, forgePrToolGroup, validateForgePrToolArgs } from "../pr-status/forge-pr-tool-contract";
+import { ForgePrToolService } from "../pr-status/forge-pr-tool-service";
+import { buildForgeToolDefinitions, buildForgePrToolDefinitions } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import { searchPwrAgentTools } from "../agent-tools/pwragent-tool-search";
 
@@ -30,38 +30,38 @@ function harness(routes: (call: Call) => Response | Promise<Response>, runGh?: G
     return await routes(call);
   }) as unknown as typeof fetch;
   const ci = new ForgeCiClient({ fetch: fetcher, githubToken: async () => "fixture-secret", gitlab: { readApi: vi.fn() }, enabled: () => true, takeToken: () => true });
-  const client = new GithubToolClient({ ci, runGh, tempRoots: [os.tmpdir()] });
+  const client = new GithubPrToolClient({ ci, runGh, tempRoots: [os.tmpdir()] });
   return { calls, client };
 }
-const ctx = (extra: Partial<GithubToolContext> = {}): GithubToolContext => ({
+const ctx = (extra: Partial<ForgePrToolContext> = {}): ForgePrToolContext => ({
   repository: repo, branch: "topic", directories: [], attached: [], privateRoots: [], defaultMergeMethod: () => "squash", ...extra,
 });
 
 describe("GitHub tool contract", () => {
   it("rejects unknown fields, missing requirements and cross-repository search", () => {
-    expect(() => validateGithubToolArgs("create_pull_request", { title: "x", threadId: "other" })).toThrow(/Unknown argument/);
-    expect(() => validateGithubToolArgs("merge_pull_request", { number: 1 })).toThrow(/requires expectedHeadSha/);
-    expect(() => validateGithubToolArgs("search_issues", { query: "repo:other/thing bug" })).toThrow(/this thread's repository only/);
-    expect(() => validateGithubToolArgs("create_pull_request", { title: "x", head: "topic; rm -rf" })).toThrow(/valid branch/);
-    expect(() => validateGithubToolArgs("update_pull_request", { number: 1, attachments: [{ path: "/tmp/a.png" }] })).toThrow(/full new body/);
-    expect(() => validateGithubToolArgs("add_issue_comment", { number: 1, body: "x", attachments: [{ path: "relative.png" }] })).toThrow(/absolute path/);
-    expect(() => validateGithubToolArgs("submit_pull_request_review", { number: 1, event: "REQUEST_CHANGES" })).toThrow(/needs a body/);
-    expect(() => validateGithubToolArgs("get_pull_request_diff", { number: 1, startChar: 10 })).toThrow(/diffSnapshot/);
-    expect(() => validateGithubToolArgs("submit_pull_request_review", { number: 1, event: "APPROVE" })).not.toThrow();
+    expect(() => validateForgePrToolArgs("create_pull_request", { title: "x", threadId: "other" })).toThrow(/Unknown argument/);
+    expect(() => validateForgePrToolArgs("merge_pull_request", { number: 1 })).toThrow(/requires expectedHeadSha/);
+    expect(() => validateForgePrToolArgs("search_issues", { query: "repo:other/thing bug" })).toThrow(/this thread's repository only/);
+    expect(() => validateForgePrToolArgs("create_pull_request", { title: "x", head: "topic; rm -rf" })).toThrow(/valid branch/);
+    expect(() => validateForgePrToolArgs("update_pull_request", { number: 1, attachments: [{ path: "/tmp/a.png" }] })).toThrow(/full new body/);
+    expect(() => validateForgePrToolArgs("add_issue_comment", { number: 1, body: "x", attachments: [{ path: "relative.png" }] })).toThrow(/absolute path/);
+    expect(() => validateForgePrToolArgs("submit_pull_request_review", { number: 1, event: "REQUEST_CHANGES" })).toThrow(/needs a body/);
+    expect(() => validateForgePrToolArgs("get_pull_request_diff", { number: 1, startChar: 10 })).toThrow(/diffSnapshot/);
+    expect(() => validateForgePrToolArgs("submit_pull_request_review", { number: 1, event: "APPROVE" })).not.toThrow();
   });
 
   it("maps each write to a policy group, and an approving review to approve and merge", () => {
-    expect(githubToolGroup("get_pull_request_diff", {})).toBe("read");
-    expect(githubToolGroup("submit_pull_request_review", { event: "COMMENT" })).toBe("comments");
-    expect(githubToolGroup("submit_pull_request_review", { event: "REQUEST_CHANGES" })).toBe("approve_merge");
-    expect(githubToolGroup("merge_pull_request", {})).toBe("approve_merge");
-    expect(new Set(GITHUB_WRITE_OPERATIONS)).toEqual(new Set(Object.keys(FORGE_AGENT_WRITE_TOOL_GROUPS)));
+    expect(forgePrToolGroup("get_pull_request_diff", {})).toBe("read");
+    expect(forgePrToolGroup("submit_pull_request_review", { event: "COMMENT" })).toBe("comments");
+    expect(forgePrToolGroup("submit_pull_request_review", { event: "REQUEST_CHANGES" })).toBe("approve_merge");
+    expect(forgePrToolGroup("merge_pull_request", {})).toBe("approve_merge");
+    expect(new Set(FORGE_PR_WRITE_OPERATIONS)).toEqual(new Set(Object.keys(FORGE_AGENT_WRITE_TOOL_GROUPS)));
   });
 
   it("gates messaging-started writes on their own permission", () => {
     expect(permissionForDynamicTool("forge", "get_pull_request")).toBe("tools.thread_inspection");
     expect(permissionForDynamicTool("forge", "list_ci_runs")).toBe("tools.thread_inspection");
-    for (const tool of GITHUB_WRITE_OPERATIONS) expect(permissionForDynamicTool("forge", tool)).toBe("tools.forge_write");
+    for (const tool of FORGE_PR_WRITE_OPERATIONS) expect(permissionForDynamicTool("forge", tool)).toBe("tools.forge_write");
   });
 });
 
@@ -93,7 +93,7 @@ describe("GitHub tool catalog", () => {
 
   it("rejects bad arguments before the handler runs", async () => {
     const handler = vi.fn();
-    const definition = buildGithubToolDefinitions(handler).find((d) => d.name === "merge_pull_request")!;
+    const definition = buildForgePrToolDefinitions(handler).find((d) => d.name === "merge_pull_request")!;
     const result = await definition.dispatch({ number: 3, expectedHeadSha: "short" }, { backend: "codex", threadId: "t", transport: "codex_dynamic_tool" });
     expect(result).toMatchObject({ ok: false, code: "invalid_arguments" });
     expect(handler).not.toHaveBeenCalled();
@@ -205,10 +205,10 @@ describe("GitHub attachments", () => {
   it("accepts images in the thread's directories and refuses everything else", async () => {
     const options = { directories: [root], privateRoots: [], tempRoots: [] };
     const image = path.join(root, "shots", "after.png");
-    await expect(validateGithubAttachments([{ path: image, alt: "After" }], options)).resolves.toEqual(["--attach", `${image}#After`]);
-    await expect(validateGithubAttachments([{ path: path.join(outside, "secret.png") }], options)).rejects.toMatchObject({ code: "forbidden" });
-    await expect(validateGithubAttachments([{ path: path.join(root, "notes.txt") }], options)).rejects.toThrow(/not an image or video/);
-    await expect(validateGithubAttachments([{ path: image }], { ...options, privateRoots: [root] })).rejects.toMatchObject({ code: "forbidden" });
+    await expect(validateForgeAttachments([{ path: image, alt: "After" }], options)).resolves.toEqual(["--attach", `${image}#After`]);
+    await expect(validateForgeAttachments([{ path: path.join(outside, "secret.png") }], options)).rejects.toMatchObject({ code: "forbidden" });
+    await expect(validateForgeAttachments([{ path: path.join(root, "notes.txt") }], options)).rejects.toThrow(/not an image or video/);
+    await expect(validateForgeAttachments([{ path: image }], { ...options, privateRoots: [root] })).rejects.toMatchObject({ code: "forbidden" });
   });
 
   it("uploads through gh with a body file and reads the new pull request back", async () => {
@@ -245,13 +245,23 @@ describe("GitHub attachments", () => {
   });
 });
 
-describe("GitHub tool service", () => {
-  it("acts only on a linked GitHub repository and refuses GitLab-only threads", async () => {
-    const execute = vi.fn(async () => ({}));
-    const service = new GithubToolService({ enabled: () => true, client: { execute }, defaultMergeMethod: () => "merge" });
-    await service.execute("get_issue", { number: 1 }, { remotes: [{ host: "github.com", owner: "fixture", repo: "project" }, { host: "gitlab.com", owner: "group", repo: "project" }], attached: [], directories: [], privateRoots: [] });
-    expect(execute).toHaveBeenCalledWith("get_issue", { number: 1 }, expect.objectContaining({ repository: repo }));
-    await expect(service.execute("get_issue", { number: 1 }, { remotes: [{ host: "gitlab.com", owner: "group", repo: "project" }], attached: [], directories: [], privateRoots: [] })).rejects.toMatchObject({ code: "unsupported_provider" });
-    await expect(service.execute("get_issue", { number: 1, repository: { ...repo, owner: "elsewhere" } }, { remotes: [{ host: "github.com", owner: "fixture", repo: "project" }], attached: [], directories: [], privateRoots: [] })).rejects.toBeInstanceOf(ForgeReadError);
+describe("forge tool service", () => {
+  const remotes = { github: { host: "github.com", owner: "fixture", repo: "project" }, gitlab: { host: "gitlab.com", owner: "group/sub", repo: "project" } };
+  const scope = (list: Array<{ host: string; owner: string; repo: string }>) => ({ remotes: list, attached: [], directories: [], privateRoots: [] });
+  it("sends each call to its repository's provider and refuses repositories outside the thread", async () => {
+    const github = { execute: vi.fn(async () => ({ via: "github" })) };
+    const gitlab = { execute: vi.fn(async () => ({ via: "gitlab" })) };
+    const service = new ForgePrToolService({ enabled: () => true, clients: { github, gitlab }, defaultMergeMethod: () => "merge" });
+    await expect(service.execute("get_issue", { number: 1 }, scope([remotes.github]))).resolves.toEqual({ via: "github" });
+    expect(github.execute).toHaveBeenCalledWith("get_issue", { number: 1 }, expect.objectContaining({ repository: repo }));
+    await expect(service.execute("get_issue", { number: 1 }, scope([remotes.gitlab]))).resolves.toEqual({ via: "gitlab" });
+    expect(gitlab.execute).toHaveBeenCalledWith("get_issue", { number: 1 }, expect.objectContaining({ repository: { provider: "gitlab", ...remotes.gitlab } }));
+    await expect(service.execute("get_issue", { number: 1 }, scope([remotes.github, remotes.gitlab]))).rejects.toMatchObject({ code: "ambiguous_repository" });
+    await expect(service.execute("get_issue", { number: 1, repository: { ...repo, owner: "elsewhere" } }, scope([remotes.github]))).rejects.toBeInstanceOf(ForgeReadError);
+    expect(service.resolveRepository({}, scope([remotes.gitlab]))).toMatchObject({ provider: "gitlab", owner: "group/sub" });
+  });
+  it("honors a provider switched off in Settings → Git", async () => {
+    const service = new ForgePrToolService({ enabled: (provider) => provider === "github", clients: { github: { execute: vi.fn() }, gitlab: { execute: vi.fn() } }, defaultMergeMethod: () => "merge" });
+    await expect(service.execute("get_issue", { number: 1 }, scope([remotes.gitlab]))).rejects.toMatchObject({ code: "provider_disabled" });
   });
 });

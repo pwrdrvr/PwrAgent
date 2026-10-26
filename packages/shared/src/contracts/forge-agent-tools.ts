@@ -1,6 +1,6 @@
 /**
  * Operator policy for PwrAgent's own forge tools: the CI reads, the GitHub
- * pull request and issue reads, and the GitHub writes. Stored in config.toml
+ * pull request and issue reads, and the GitHub and GitLab writes. Stored in config.toml
  * `[git.agent_tools]` and enforced by the main process on every call, so a
  * change applies to the next call even in a turn that already holds a schema.
  */

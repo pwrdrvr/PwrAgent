@@ -77,7 +77,7 @@ export type MessagingPermissionId =
   | "tools.thread_inspection"
   | "tools.thread_orchestration"
   | "tools.instance_management"
-  // Publishes as the operator's GitHub account: pull requests, comments,
+  // Publishes as the operator's GitHub or GitLab account: pull and merge requests, comments,
   // reviews, issues and merges through PwrAgent's own forge tools.
   | "tools.forge_write"
   // Escalation-equivalent — near-complete control of the host. Danger.
@@ -295,9 +295,9 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
   },
   {
     id: "tools.forge_write",
-    label: "Agent: change GitHub",
+    label: "Agent: change GitHub and GitLab",
     description:
-      "Let the agent open and edit pull requests and issues, comment, review and merge as the operator's GitHub account.",
+      "Let the agent open and edit pull requests, merge requests and issues, comment, review and merge as the operator's GitHub or GitLab account.",
     group: "tools",
     danger: "med",
   },

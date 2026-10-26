@@ -98,10 +98,10 @@ const FORGE_TOOL_ACCESS_DESCRIPTIONS: Record<ForgeAgentToolAccess, string> = {
 
 const FORGE_TOOL_GROUP_SUBS: Record<ForgeAgentToolGroup, string> = {
   read: "Pull requests, diffs, files, reviews, review threads, issues, CI runs and logs.",
-  pull_requests: "Open, edit, close and reopen, mark ready or draft, labels, attachments.",
+  pull_requests: "Open, edit, close and reopen pull and merge requests, mark ready or draft, labels, attachments.",
   comments: "Comment, reply to review comments, comment-only reviews, resolve threads.",
   issues: "Open, edit, close and label issues.",
-  approve_merge: "Approving or requesting changes in a review, and merging a pull request.",
+  approve_merge: "Approving or requesting changes in a review, and merging a pull or merge request.",
 };
 
 const MERGE_METHOD_OPTIONS: Array<{ label: string; value: ThreadTodoMergeMethod }> = [
@@ -528,9 +528,9 @@ export function GitSettings(props: {
         </div>
       </SettingsSection>
       <SettingsSection
-        eyebrow="GitHub"
-        title="Agent GitHub tools"
-        description="PwrAgent's own tools let agents read and change pull requests and issues in their thread's repository. They use your GitHub CLI sign-in, and no GitHub App or connector is involved."
+        eyebrow="Git"
+        title="Agent forge tools"
+        description="PwrAgent's own tools let agents read and change GitHub pull requests, GitLab merge requests and issues in their thread's repository. They use your gh or glab sign-in, and no GitHub App or connector is involved."
         chip={agentTools.enabled.value ? "On" : "Off"}
         chipKind={agentTools.enabled.value ? "ok" : "default"}
       >
@@ -538,7 +538,7 @@ export function GitSettings(props: {
           <ToggleField
             checked={agentTools.enabled.value}
             disabled={props.saving}
-            label="Offer GitHub tools to threads"
+            label="Offer forge tools to threads"
             sub="Off hides every tool, including CI reads. A turn that already holds one gets a refusal naming this setting."
             source={sourceBadge(agentTools.enabled)}
             onChange={(enabled) => props.onAgentToolsEnabledChange(enabled)}
