@@ -39,7 +39,7 @@ export const DENSITY_CHOICES: readonly DensityChoice[] = [
     label: "Minimal",
     title: "One line per thread",
     desc: (key) =>
-      `The title, one chip for all of a thread's pull requests showing the one that needs you most, and anything waiting on you. Hold ${key} to x-ray every chip; press ${key} twice to keep them showing.`,
+      `One line: the title, a pencil for an unsent draft, reactions, and one chip for all of a thread's pull requests that shows the one needing you most. Hold ${key} to x-ray every chip; press ${key} twice to keep them showing.`,
     hint: "Best for: long thread lists and small windows.",
   },
 ];
