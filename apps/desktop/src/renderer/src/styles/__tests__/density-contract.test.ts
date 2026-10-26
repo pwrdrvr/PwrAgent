@@ -44,6 +44,34 @@ describe("density rules", () => {
     });
   }
 
+  // The Directories and Pinned group headers are `.thread-row` buttons too.
+  // A density rule that reached them moved their caret 8px right, and X-ray
+  // moved it back.
+  for (const density of ["compact", "minimal"]) {
+    it(`keeps ${density}'s row rules off the directory and Pinned group headers`, () => {
+      const rowRules = rulesMentioning(`[data-density="${density}"]`).filter((rule) =>
+        rule.selectors.some((selector) => /\.thread-row(?![\w-])/.test(selector)));
+      expect(rowRules.length).toBeGreaterThan(0);
+      for (const rule of rowRules) {
+        for (const selector of rule.selectors) {
+          expect(selector).toContain(":not(.directory-row__summary)");
+        }
+      }
+    });
+  }
+
+  it("tightens the title line only through the density row rules", () => {
+    for (const density of ["compact", "minimal"]) {
+      const row = rulesMentioning(`[data-density="${density}"]`).find((rule) =>
+        /--thread-row-header-gap/.test(rule.body));
+      expect(row?.body).toMatch(/--thread-row-header-gap:\s*4px/);
+      expect(row?.body).toMatch(/--thread-row-action-gap:\s*2px/);
+    }
+    const header = rulesMentioning(".thread-row__header").find((rule) =>
+      rule.selectors.includes(".thread-row__header"));
+    expect(header?.body).toMatch(/gap:\s*var\(--thread-row-header-gap, 12px\)/);
+  });
+
   it("keeps only essential chips in Minimal's flow", () => {
     const flow = rulesMentioning(".thread-row__chips:not(.density-preview *) > :not(.thread-row__chip--essential)");
     expect(flow).toHaveLength(1);
