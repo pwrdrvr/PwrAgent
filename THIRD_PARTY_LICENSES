@@ -940,7 +940,7 @@ MIT
 - ee-first@1.1.1 | jonathanong/ee-first
 - electron@44.9.3 | https://github.com/electron/electron
 - electron-log@5.4.4 | megahertz/electron-log
-- electron-updater@6.8.9 | https://github.com/electron-userland/electron-builder
+- electron-updater@6.8.10 | https://github.com/electron-userland/electron-builder
 - emojilib@2.4.0 | https://github.com/muan/emojilib
 - emoticon@4.1.0 | wooorm/emoticon
 - encodeurl@2.0.0 | pillarjs/encodeurl
@@ -5996,7 +5996,7 @@ builder-util-runtime@9.7.0 (MIT)
 
 Applies to:
 - builder-util-runtime@9.7.0 (MIT)
-- electron-updater@6.8.9 (MIT)
+- electron-updater@6.8.10 (MIT)
 
 Representative file: builder-util-runtime@9.7.0/LICENSE
 
