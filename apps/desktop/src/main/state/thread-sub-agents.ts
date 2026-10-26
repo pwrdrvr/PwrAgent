@@ -442,11 +442,13 @@ export class ThreadSubAgentTable {
   lensCounts(storageKey: string, visibleSince: number, excludeMonitorIds: readonly string[] = []): Record<SubAgentLens, number> {
     const counts: Record<SubAgentLens, number> = { harness: 0, "token-miser": 0, pwragent: 0 };
     const excluded = JSON.stringify([...new Set(excludeMonitorIds)]);
-    const rows = this.db.prepare(`SELECT lens, count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
-      WHERE thread_id = ? AND lens IN ('token-miser', 'pwragent')
-        AND monitor_id NOT IN (SELECT value FROM json_each(?))
-      GROUP BY lens`).all(storageKey, excluded) as Array<{ lens: SubAgentLens; count: number }>;
-    for (const row of rows) counts[row.lens] = row.count;
+    // Counted per lens without selecting it: SQLite reads a generated column
+    // from the table row, not the index, so naming it would visit every row.
+    const count = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
+      WHERE thread_id = ? AND lens = ? AND monitor_id NOT IN (SELECT value FROM json_each(?))`);
+    for (const lens of ["token-miser", "pwragent"] as const) {
+      counts[lens] = (count.get(storageKey, lens, excluded) as { count: number }).count;
+    }
     counts.harness = (this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens
       WHERE thread_id = ? AND lens = 'harness'
         AND monitor_id NOT IN (SELECT value FROM json_each(?)) AND ${HARNESS_VISIBLE}`)

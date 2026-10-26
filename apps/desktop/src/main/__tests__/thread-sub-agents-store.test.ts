@@ -397,6 +397,7 @@ describe("thread sub-agent table", () => {
 
     it("keeps gate totals equal to a sum over the cards through every kind of write", async () => {
       const { dbPath, stateDb, store } = openStore();
+      await store.setThreadReaction({ backend: "codex", emoji: "👀", present: true, threadId: "thread-1" });
       await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1", subAgents: mixedGates() });
       await storedTotalsMatchCards(store, "thread-1");
 
@@ -421,6 +422,7 @@ describe("thread sub-agent table", () => {
 
       stateDb.raw.prepare("DELETE FROM thread_sub_agents WHERE monitor_id = ?").run(card(2).monitorId);
       await storedTotalsMatchCards(store, "thread-1");
+      // Gates 1, 3, 4 and the older build's 6; the review card is not one.
       expect((await store.readThreadTokenMiserGateTotals({ backend: "codex", threadId: "thread-1" })).gateCount).toBe(4);
     });
 
@@ -487,8 +489,9 @@ describe("thread sub-agent table", () => {
         expect(plan, sql).not.toMatch(/SCAN thread_sub_agents\b|TEMP B-TREE/);
         expect(plan, sql).toMatch(/SEARCH (thread_sub_agents|thread_sub_agent_revisions) USING/);
       }
-      const counts = reads.find((sql) => sql.includes("GROUP BY lens"))!;
-      expect((stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${counts}`).all(null, null) as Array<{ detail: string }>)
+      // The two lenses that never age out are counted from the index alone.
+      const counts = reads.find((sql) => sql.startsWith("SELECT count(*)") && !sql.includes("harness"))!;
+      expect((stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${counts}`).all(null, null, null) as Array<{ detail: string }>)
         .map((row) => row.detail).join("\n")).toMatch(/USING COVERING INDEX thread_sub_agents_by_lens/);
     });
 
