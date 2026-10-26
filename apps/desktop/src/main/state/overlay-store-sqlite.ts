@@ -60,8 +60,10 @@ import type {
   StarMapWorkspaceSnapshot,
   StarMapWorkspaceState,
   ThreadQuestionnaireActivity,
+  SubAgentLens,
   ThreadRewindRecord,
   ThreadSubAgentSummary,
+  TokenMiserGateAccountingTotals,
   ThreadTurnFailure,
   ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
@@ -3899,6 +3901,51 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }): Promise<ThreadSubAgentSummary[]> {
     const storageKey = this.subAgentStorageKey(params);
     return this.subAgentTable.list(storageKey, { excludeTokenMiser: params.excludeTokenMiser });
+  }
+
+  /** The named cards that exist, in no particular order; one keyed read. */
+  async getThreadSubAgents(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    monitorIds: readonly string[];
+  }): Promise<ThreadSubAgentSummary[]> {
+    if (params.monitorIds.length === 0) return [];
+    return this.subAgentTable.getMany(this.subAgentStorageKey(params), params.monitorIds);
+  }
+
+  /**
+   * The sub-agents panel's lens counts and one lens page, from the lens index.
+   * `excludeMonitorIds` leaves out cards the caller replaces with live state.
+   * `visibleSince` is the oldest activity a finished native worker can have
+   * and still show; see `isThreadSubAgentVisibleInPanel`.
+   */
+  async readThreadSubAgentLensCounts(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    visibleSince: number;
+    excludeMonitorIds?: readonly string[];
+  }): Promise<Record<SubAgentLens, number>> {
+    return this.subAgentTable.lensCounts(this.subAgentStorageKey(params), params.visibleSince, params.excludeMonitorIds);
+  }
+
+  async listThreadSubAgentLensPage(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    lens: SubAgentLens;
+    visibleSince: number;
+    excludeMonitorIds?: readonly string[];
+    offset: number;
+    limit: number;
+  }): Promise<ThreadSubAgentSummary[]> {
+    return this.subAgentTable.lensPage({ ...params, storageKey: this.subAgentStorageKey(params) });
+  }
+
+  /** Sums over every Token Miser gate card, kept on write; reads no card. */
+  async readThreadTokenMiserGateTotals(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<TokenMiserGateAccountingTotals> {
+    return this.subAgentTable.gateTotals(this.subAgentStorageKey(params));
   }
 
   /** Cards whose `monitorId` starts with `monitorIdPrefix`, keyed by thread id. */
@@ -10590,6 +10637,10 @@ export type OverlayStoreLike = Pick<
   | "listActiveThreadSubAgents"
   | "readThreadSubAgentRevision"
   | "listThreadSubAgentsByMonitorIdPrefix"
+  | "getThreadSubAgents"
+  | "readThreadSubAgentLensCounts"
+  | "listThreadSubAgentLensPage"
+  | "readThreadTokenMiserGateTotals"
   | "setThreadReaction"
   | "setThreadLock"
   | "setThreadArchiveTombstone"

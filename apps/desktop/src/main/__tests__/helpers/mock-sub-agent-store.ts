@@ -1,7 +1,12 @@
-import type {
-  AppServerBackendKind,
-  ThreadOverlayState,
-  ThreadSubAgentSummary,
+import {
+  CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
+  isThreadSubAgentVisibleInPanel,
+  subAgentLens,
+  totalTokenMiserGateAccountings,
+  type AppServerBackendKind,
+  type SubAgentLens,
+  type ThreadOverlayState,
+  type ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import type { OverlayStoreLike } from "../../state/overlay-store-sqlite";
 import { TOKEN_MISER_MONITOR_ID_PREFIX } from "../../state/thread-sub-agents";
@@ -37,8 +42,19 @@ export function mockSubAgentReads(read: ReadOverlay) {
     [...(read(backend, threadId)?.subAgents ?? [])].sort(
       (left, right) =>
         right.createdAt - left.createdAt
-        || left.monitorId.localeCompare(right.monitorId),
+        // SQLite's BINARY collation, as `ORDER BY monitor_id` uses.
+        || (left.monitorId < right.monitorId ? -1 : left.monitorId > right.monitorId ? 1 : 0),
     );
+  // The panel's retention window, from its `visibleSince` cutoff.
+  const visibleCards = (params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    visibleSince: number;
+    excludeMonitorIds?: readonly string[];
+  }) =>
+    cards(params.backend, params.threadId).filter((card) =>
+      !params.excludeMonitorIds?.includes(card.monitorId)
+      && isThreadSubAgentVisibleInPanel(card, params.visibleSince + CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS));
   return {
     getThreadSubAgent: async (params: {
       backend: AppServerBackendKind;
@@ -80,6 +96,44 @@ export function mockSubAgentReads(read: ReadOverlay) {
           card.completedAt === undefined
           || card.status === "failed"
           || card.status === "failure",
+      ),
+    getThreadSubAgents: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      monitorIds: readonly string[];
+    }) =>
+      cards(params.backend, params.threadId).filter((card) =>
+        params.monitorIds.includes(card.monitorId)),
+    readThreadSubAgentLensCounts: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      visibleSince: number;
+      excludeMonitorIds?: readonly string[];
+    }) => {
+      const counts: Record<SubAgentLens, number> = { harness: 0, "token-miser": 0, pwragent: 0 };
+      for (const card of visibleCards(params)) counts[subAgentLens(card)] += 1;
+      return counts;
+    },
+    listThreadSubAgentLensPage: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      lens: SubAgentLens;
+      visibleSince: number;
+      excludeMonitorIds?: readonly string[];
+      offset: number;
+      limit: number;
+    }) =>
+      visibleCards(params)
+        .filter((card) => subAgentLens(card) === params.lens)
+        .slice(params.offset, params.offset + params.limit),
+    readThreadTokenMiserGateTotals: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+    }) =>
+      totalTokenMiserGateAccountings(
+        cards(params.backend, params.threadId)
+          .filter((card) => card.monitorId.startsWith(TOKEN_MISER_MONITOR_ID_PREFIX))
+          .map((card) => card.tokenMiserAccounting),
       ),
     readThreadSubAgentRevision: async (params: {
       backend: AppServerBackendKind;

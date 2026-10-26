@@ -3,6 +3,7 @@ import {
   aggregateToolAccounting,
   anchorTurnUsageEntries,
   buildThreadPricingDisplay,
+  CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
   isThreadSubAgentVisibleInPanel,
   subAgentLens,
   type SubAgentLens,
@@ -14,40 +15,43 @@ import {
   type AppServerReadThreadResponse,
   type AppServerThreadMessageEntry,
   type NavigationThreadSummary,
+  type ThreadDisplayRead,
+  type ThreadSubAgentSummary,
   type ThreadUsageLineRecord,
+  type TokenMiserGateAccountingTotals,
   THREAD_DISPLAY_MAX_ACCOUNTING_TURNS,
   THREAD_DISPLAY_MAX_PAGE_ROWS,
 } from "@pwragent/shared";
 
-/** One owner projection for local IPC and federation; no provider data is needed on the viewer. */
-export function projectThreadDisplay(
-  response: AppServerReadThreadResponse,
-  request: AppServerReadThreadRequest,
-  thread?: Pick<NavigationThreadSummary, "subAgents" | "turnFailureLog" | "reasoningEffort"> & { activeTurnId?: string },
-): AppServerReadThreadResponse {
-  const demand = request.display;
-  if (!demand) return response;
-  if (demand.pricingGateGroup && (demand.resource !== "pricing"
-    || typeof demand.pricingGateGroup.usageLineId !== "string" || !demand.pricingGateGroup.usageLineId
-    || !["primary", "small"].includes(demand.pricingGateGroup.filter))) throw new Error("Invalid pricing gate group.");
-  const visibleSubAgents = (thread?.subAgents ?? [])
-    .filter((agent) => isThreadSubAgentVisibleInPanel(agent, response.fetchedAt))
-    .sort((left, right) => right.createdAt - left.createdAt);
-  const subAgentCounts: Record<SubAgentLens, number> = { harness: 0, "token-miser": 0, pwragent: 0 };
-  for (const agent of visibleSubAgents) subAgentCounts[subAgentLens(agent)] += 1;
-  const selectedLens = demand.subAgentLens && subAgentCounts[demand.subAgentLens] > 0 ? demand.subAgentLens
-    : subAgentCounts.harness > 0 ? "harness" : subAgentCounts.pwragent > 0 ? "pwragent" : "token-miser";
-  const subAgents = visibleSubAgents.filter((agent) => subAgentLens(agent) === selectedLens);
-  const revisionSource = demand.resource === "tools" ? response.toolAccounting
-    : demand.resource === "subagents" || demand.resource === "subagent" ? { visibleSubAgents, selectedLens }
-      : { pricing: response.pricing, tokenMiser: response.toolAccounting?.tokenMiser,
-        subAgents: thread?.subAgents, turnFailures: thread?.turnFailureLog,
-        reasoningEffort: thread?.reasoningEffort, activeTurnId: thread?.activeTurnId };
-  // Transcript/accounting revisions describe the visible totals below. Hashing
-  // the complete overlay or internal ledger evidence invalidates an identical
-  // transcript after selected-thread enrichment and ordinary metadata updates.
-  const revision = demand.resource === "transcript" || demand.resource === "accounting" ? undefined
+/** One page of the sub-agents panel, read from the card table by `readThreadSubAgentPanel`. */
+export type ThreadSubAgentPanel = {
+  subAgents: ThreadSubAgentSummary[];
+  subAgentCounts: Record<SubAgentLens, number>;
+  subAgentLens: SubAgentLens;
+  /** What the page's revision hashes; never the cards themselves. */
+  revisionSource: unknown;
+};
+
+/** The cards a display read needs, already narrowed by the owner. None of them is every card. */
+export type ThreadDisplayCards = {
+  /** The cards the pricing ledger's lines name, with live state merged in. */
+  pricingSubAgents?: ThreadSubAgentSummary[];
+  /** Sums over every gate card, for the savings fallback the named cards cannot give. */
+  tokenMiserGateTotals?: TokenMiserGateAccountingTotals;
+  /** The `subagents` resource's page. */
+  subAgentPanel?: ThreadSubAgentPanel;
+  /** The `subagent` resource's card. */
+  subAgent?: ThreadSubAgentSummary;
+};
+
+/** The revision a paged display resource's cursors carry. Transcript and accounting have none. */
+export function threadDisplayRevision(demand: ThreadDisplayRead, revisionSource: unknown): string | undefined {
+  return demand.resource === "transcript" || demand.resource === "accounting" ? undefined
     : createHash("sha256").update(JSON.stringify([demand.resource, demand.deferPricingGates, demand.pricingGateGroup, revisionSource])).digest("base64url");
+}
+
+/** The page a demand asks for, once its cursor is checked against the revision it was issued under. */
+export function threadDisplayPage(demand: ThreadDisplayRead, revision: string | undefined): { offset: number; limit: number } {
   let offset = 0;
   if (demand.cursor) {
     const [cursorRevision, cursorOffset] = demand.cursor.split(":");
@@ -58,9 +62,90 @@ export function projectThreadDisplay(
   // A viewer refresh re-reads all its loaded rows in one page.
   const limit = Math.min(THREAD_DISPLAY_MAX_PAGE_ROWS, Math.max(1, Math.floor(demand.limit ?? 20)));
   if (!Number.isFinite(limit)) throw new Error("Invalid thread display page size.");
+  return { offset, limit };
+}
+
+const compareNewestFirst = (left: ThreadSubAgentSummary, right: ThreadSubAgentSummary) =>
+  (right.createdAt ?? 0) - (left.createdAt ?? 0)
+  || (left.monitorId < right.monitorId ? -1 : left.monitorId > right.monitorId ? 1 : 0);
+
+/**
+ * The sub-agents panel page: lens counts and one lens page from the card
+ * table, newest first (`createdAt` descending, then monitor id). Live cards,
+ * which only the owner's memory holds, replace their stored rows and merge
+ * into the page in order; they are at most a turn's worth.
+ */
+export async function readThreadSubAgentPanel(params: {
+  demand: ThreadDisplayRead;
+  now: number;
+  /** Changes on every stored card write; see `readThreadSubAgentRevision`. */
+  storedRevision: unknown;
+  live: { monitorIds: readonly string[]; cards: readonly ThreadSubAgentSummary[] };
+  reader: {
+    counts(params: { visibleSince: number; excludeMonitorIds: readonly string[] }): Promise<Record<SubAgentLens, number>>;
+    page(params: { lens: SubAgentLens; visibleSince: number; excludeMonitorIds: readonly string[]; offset: number; limit: number }): Promise<ThreadSubAgentSummary[]>;
+  };
+}): Promise<ThreadSubAgentPanel> {
+  const { demand, live, reader } = params;
+  const visibleSince = params.now - CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS;
+  const excludeMonitorIds = live.monitorIds;
+  const liveCards = live.cards.filter((card) => isThreadSubAgentVisibleInPanel(card, params.now));
+  const subAgentCounts = await reader.counts({ visibleSince, excludeMonitorIds });
+  for (const card of liveCards) subAgentCounts[subAgentLens(card)] += 1;
+  const selectedLens = demand.subAgentLens && subAgentCounts[demand.subAgentLens] > 0 ? demand.subAgentLens
+    : subAgentCounts.harness > 0 ? "harness" : subAgentCounts.pwragent > 0 ? "pwragent" : "token-miser";
+  const revisionSource = { stored: params.storedRevision, live: live.cards, selectedLens, subAgentCounts };
+  const { offset, limit } = threadDisplayPage(demand, threadDisplayRevision(demand, revisionSource));
+  const liveInLens = liveCards.filter((card) => subAgentLens(card) === selectedLens).sort(compareNewestFirst);
+  const storedInLens = subAgentCounts[selectedLens] - liveInLens.length;
+  const read = (from: number, count: number) =>
+    reader.page({ lens: selectedLens, visibleSince, excludeMonitorIds, offset: from, limit: count });
+  let subAgents: ThreadSubAgentSummary[];
+  if (liveInLens.length === 0) {
+    subAgents = await read(offset, limit);
+  } else {
+    // Each live card ahead of a stored row moves it down one place, so the
+    // stored rows on this page start at most that many places earlier.
+    let start = Math.max(0, offset - liveInLens.length);
+    if (start >= storedInLens) start = 0;
+    const stored = await read(start, offset + limit - start);
+    const first = stored[0];
+    const ahead = start === 0 || !first ? [] : liveInLens.filter((card) => compareNewestFirst(card, first) < 0);
+    const merged = [...stored, ...liveInLens.filter((card) => !ahead.includes(card))].sort(compareNewestFirst);
+    const base = start + ahead.length;
+    subAgents = merged.slice(offset - base, offset - base + limit);
+  }
+  return { subAgents, subAgentCounts, subAgentLens: selectedLens, revisionSource };
+}
+
+/** One owner projection for local IPC and federation; no provider data is needed on the viewer. */
+export function projectThreadDisplay(
+  response: AppServerReadThreadResponse,
+  request: AppServerReadThreadRequest,
+  thread?: Pick<NavigationThreadSummary, "turnFailureLog" | "reasoningEffort"> & ThreadDisplayCards & { activeTurnId?: string },
+): AppServerReadThreadResponse {
+  const demand = request.display;
+  if (!demand) return response;
+  if (demand.pricingGateGroup && (demand.resource !== "pricing"
+    || typeof demand.pricingGateGroup.usageLineId !== "string" || !demand.pricingGateGroup.usageLineId
+    || !["primary", "small"].includes(demand.pricingGateGroup.filter))) throw new Error("Invalid pricing gate group.");
+  const panel = thread?.subAgentPanel;
+  const revisionSource = demand.resource === "tools" ? response.toolAccounting
+    : demand.resource === "subagents" ? panel?.revisionSource
+      : demand.resource === "subagent" ? thread?.subAgent
+        : { pricing: response.pricing, tokenMiser: response.toolAccounting?.tokenMiser,
+          subAgents: thread?.pricingSubAgents, gateTotals: thread?.tokenMiserGateTotals,
+          turnFailures: thread?.turnFailureLog,
+          reasoningEffort: thread?.reasoningEffort, activeTurnId: thread?.activeTurnId };
+  // Transcript/accounting revisions describe the visible totals below. Hashing
+  // the complete overlay or internal ledger evidence invalidates an identical
+  // transcript after selected-thread enrichment and ordinary metadata updates.
+  const revision = threadDisplayRevision(demand, revisionSource);
+  const { offset, limit } = threadDisplayPage(demand, revision);
   const pricing = buildThreadPricingDisplay({
     pricing: response.pricing,
-    subAgents: thread?.subAgents,
+    subAgents: thread?.pricingSubAgents,
+    tokenMiserGateTotals: thread?.tokenMiserGateTotals,
     tokenMiserAccounting: response.toolAccounting?.tokenMiser,
     turnFailures: thread?.turnFailureLog,
     threadReasoningEffort: thread?.reasoningEffort,
@@ -166,7 +251,7 @@ export function projectThreadDisplay(
   const toolsPage = demand.resource === "tools" && tools
     ? { summaries: tools.summaries, alerts: tools.alerts, invocations: tools.invocations.slice(offset, offset + limit) }
     : undefined;
-  const totalRows = demand.resource === "pricing" ? pricing.totalRows : demand.resource === "subagents" ? subAgents.length : tools?.invocations.length ?? 0;
+  const totalRows = demand.resource === "pricing" ? pricing.totalRows : demand.resource === "subagents" ? panel?.subAgentCounts[panel.subAgentLens] ?? 0 : tools?.invocations.length ?? 0;
   return {
     backend: response.backend,
     fetchedAt: response.fetchedAt,
@@ -185,8 +270,12 @@ export function projectThreadDisplay(
     },
     display: {
       pricing: pricingSummary,
-      ...(demand.resource === "subagents" ? { subAgents: subAgents.slice(offset, offset + limit), subAgentCounts, subAgentLens: selectedLens } : {}),
-      ...(demand.resource === "subagent" ? { subAgent: thread?.subAgents?.find((agent) => agent.monitorId === demand.monitorId) } : {}),
+      ...(demand.resource === "subagents" ? {
+        subAgents: panel?.subAgents ?? [],
+        subAgentCounts: panel?.subAgentCounts ?? { harness: 0, "token-miser": 0, pwragent: 0 },
+        subAgentLens: panel?.subAgentLens ?? "token-miser",
+      } : {}),
+      ...(demand.resource === "subagent" ? { subAgent: thread?.subAgent } : {}),
       ...(demand.resource === "incident" && tools ? { incident: buildThreadIncidentSummary({
         backend: response.backend, threadId: response.threadId, accounting: tools,
         usageLines: response.pricing?.lines, firstWarningAt: demand.firstWarningAt,
