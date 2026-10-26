@@ -143,7 +143,7 @@ describe("GitLab write transport", () => {
     writeFileSync(file, "png");
     const run = vi.fn(async (_command: string, args: string[]) => args[0] === "config" ? "glpat-fixture\n" : "");
     const fetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer glpat-fixture");
+      expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBe("Bearer glpat-fixture");
       expect(init?.body).toBeInstanceOf(FormData);
       return new Response(JSON.stringify({ url: "/uploads/abc/shot.png", markdown: "![shot](/uploads/abc/shot.png)" }), { status: 201 });
     });
