@@ -370,6 +370,33 @@ async function resolveFederationTurnInput(
 }
 
 /** Durable v1 cannot verify owner-local references or rewrite hashed inputs. */
+/**
+ * A missing turn id would list the whole thread's items, which is what this
+ * request exists to avoid, so a malformed request is refused outright.
+ */
+function parseTurnAssistantReplyRequest(
+  params: unknown,
+): FederationReadTurnAssistantReplyRequest {
+  const request = params as Partial<FederationReadTurnAssistantReplyRequest> | undefined;
+  if (
+    !request
+    || !isAppServerBackendKind(request.backend)
+    || typeof request.threadId !== "string" || !request.threadId
+    || typeof request.turnId !== "string" || !request.turnId
+    || (request.itemId !== undefined && typeof request.itemId !== "string")
+    || typeof request.text !== "string"
+  ) {
+    throw new Error("Invalid turn reply request.");
+  }
+  return {
+    backend: request.backend,
+    threadId: request.threadId,
+    turnId: request.turnId,
+    ...(request.itemId ? { itemId: request.itemId } : {}),
+    text: request.text,
+  };
+}
+
 function assertDurableFederationTurnInput(input: unknown): void {
   if (!Array.isArray(input)) throw new DurableTurnRequestError("request_invalid");
   for (const item of input) {
@@ -1453,7 +1480,7 @@ export function registerFederationBackendHandlers(params: {
       FEDERATION_BACKEND_METHODS.readTurnAssistantReply,
       async (envelope) =>
         await params.backend.readTurnAssistantReply!(
-          envelope.params as FederationReadTurnAssistantReplyRequest,
+          parseTurnAssistantReplyRequest(envelope.params),
         ),
     );
   }

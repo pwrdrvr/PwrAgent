@@ -556,8 +556,9 @@ function turnsInPeerResult(method: string | undefined, result: unknown): number 
 
 async function createPeerBoundThread(
   turns: RawTurn[],
-  options: { ownerAdvertisesTurnReply: boolean },
+  options: { ownerAdvertisesTurnReply: boolean; ownerHandlesTurnReply?: boolean },
 ) {
+  const ownerHandlesTurnReply = options.ownerHandlesTurnReply ?? options.ownerAdvertisesTurnReply;
   // The owner.
   const codex = createFakeCodexClient(turns);
   const store = new SqliteOverlayStore(db);
@@ -578,7 +579,7 @@ async function createPeerBoundThread(
       await readTranscriptImageProtocolRequest(url),
     resolveThreadAdmissionState: async (request: { backend: "codex"; threadId: string }) =>
       await ownerBridge.getThreadAdmissionState(request),
-    ...(options.ownerAdvertisesTurnReply
+    ...(ownerHandlesTurnReply
       ? {
         readTurnAssistantReply: async (request: Parameters<typeof readTurnAssistantReplyForPeer>[1]) =>
           await readTurnAssistantReplyForPeer(ownerRegistry, request),
@@ -850,6 +851,25 @@ describe("messaging final-reply images at a bound turn end on a peer-owned threa
     }
   });
 
+  it("reads the last page when a hop on the route refuses the turn request", async () => {
+    const turn = peerFinalTurn();
+    const thread = await createPeerBoundThread(
+      [...historyTurns(3), turn],
+      { ownerAdvertisesTurnReply: true, ownerHandlesTurnReply: false },
+    );
+    try {
+      await finishPeerTurn(thread, turn);
+      expect(thread.peerRequests.filter((method) => method !== READ_IMAGE && method !== "backend.resolveThreadAdmissionState"))
+        .toEqual([READ_TURN_REPLY, READ_THREAD]);
+      expect(deliveredImages(thread)).toEqual([
+        expect.objectContaining({ type: "image", url: expect.stringMatching(/^data:image\/png;base64,/u) }),
+        expect.objectContaining({ type: "image", alt: "Chart", url: `data:image/png;base64,${CHART_PNG_BASE64}` }),
+      ]);
+    } finally {
+      await thread.ownerRegistry.close();
+    }
+  });
+
   it("still reads the last page for a peer's resume repost, which has no turn", async () => {
     const turn = peerFinalTurn();
     const thread = await createPeerBoundThread(
@@ -908,6 +928,53 @@ describe("an owner's turn reply read for a peer", () => {
         expect.objectContaining({ type: "image", url: "https://example.com/final.png" }),
       ]),
     }));
+  });
+
+  it("finds the reply in the last page when the turn read fails", async () => {
+    const registry = ownerRegistry(undefined);
+    registry.readThreadTurnReplay.mockRejectedValueOnce(new Error("thread/items/list timed out"));
+    const response = await readTurnAssistantReplyForPeer(registry as never, {
+      backend: "codex",
+      itemId: "assistant-final",
+      text: "Final screenshot.",
+      threadId: THREAD_ID,
+      turnId: FINAL_TURN_ID,
+    });
+    expect(registry.readThread).toHaveBeenCalledTimes(1);
+    expect(response.message?.id).toBe("assistant-final");
+  });
+
+  it("refuses a request without a turn instead of reading the whole thread", async () => {
+    const registry = ownerRegistry(undefined);
+    const router = new FederationRouter({
+      localInstanceId: OWNER_INSTANCE_ID,
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    const rpc = new FederationRpcEndpoint({
+      localInstanceId: GATEWAY_INSTANCE_ID,
+      remoteInstanceId: OWNER_INSTANCE_ID,
+      sendEnvelope: (envelope: FederationProtocolEnvelope) => {
+        void router.routeEnvelope({ sourcePeerId: GATEWAY_INSTANCE_ID, envelope: overTheWire(envelope) });
+      },
+    });
+    router.registerConnection({
+      peerId: GATEWAY_INSTANCE_ID,
+      capabilities: ["thread_detail"],
+      sendEnvelope: (envelope: FederationProtocolEnvelope) => rpc.receiveEnvelope(overTheWire(envelope)),
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: {
+        readTurnAssistantReply: async (request: Parameters<typeof readTurnAssistantReplyForPeer>[1]) =>
+          await readTurnAssistantReplyForPeer(registry as never, request),
+      } as unknown as FederationBackendOperations,
+    });
+    await expect(rpc.request({
+      method: READ_TURN_REPLY,
+      params: { backend: "codex", text: "Final screenshot.", threadId: THREAD_ID },
+    })).rejects.toThrow(/Invalid turn reply request/u);
+    expect(registry.readThreadTurnReplay).not.toHaveBeenCalled();
+    expect(registry.readThread).not.toHaveBeenCalled();
   });
 
   it("never reads images from the peer's text", async () => {

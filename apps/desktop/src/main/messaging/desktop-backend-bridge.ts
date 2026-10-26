@@ -94,6 +94,7 @@ import { getMainLogger } from "../log";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
+import { hasFederationErrorCode } from "../federation/federation-rpc";
 import { findAssistantMessageForText } from "./find-assistant-reply-message";
 import { buildMessagingBindingsByThreadKey } from "./messaging-bindings-snapshot";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
@@ -894,14 +895,21 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       && remote.readTurnAssistantReply
       && this.peerAdvertises(target, "turn_assistant_reply")
     ) {
-      const response = await remote.readTurnAssistantReply({
-        backend: request.backend,
-        threadId: request.threadId,
-        turnId: request.turnId,
-        ...(request.itemId ? { itemId: request.itemId } : {}),
-        text: request.text,
-      });
-      return response.message ?? undefined;
+      try {
+        const response = await remote.readTurnAssistantReply({
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: request.turnId,
+          ...(request.itemId ? { itemId: request.itemId } : {}),
+          text: request.text,
+        });
+        return response.message ?? undefined;
+      } catch (error) {
+        // A hop on the route can predate the method the owner advertises.
+        if (!hasFederationErrorCode(error, "method_not_found")) {
+          throw error;
+        }
+      }
     }
     const response = await remote.readThread({
       backend: request.backend,

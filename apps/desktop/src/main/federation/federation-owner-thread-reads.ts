@@ -3,14 +3,18 @@ import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerThreadMessage,
+  AppServerThreadReplay,
 } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { getMainLogger } from "../log";
 import { findAssistantMessageForText } from "../messaging/find-assistant-reply-message";
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import type {
   FederationReadTurnAssistantReplyRequest,
   FederationReadTurnAssistantReplyResponse,
 } from "./federation-backend-bridge";
+
+const log = getMainLogger("pwragent:federation-owner-thread-reads");
 
 /** The registry reads an owner answers a peer's transcript requests with. */
 export type FederationOwnerThreadReadRegistry = Pick<
@@ -76,14 +80,25 @@ export async function readTurnAssistantReplyForPeer(
   registry: FederationOwnerThreadReadRegistry,
   request: FederationReadTurnAssistantReplyRequest,
 ): Promise<FederationReadTurnAssistantReplyResponse> {
-  // Only Codex reads a single turn. Another backend's reply is found in the
-  // last page, as the gateway's transcript read found it, but only the
-  // message crosses the wire.
-  const replay = await registry.readThreadTurnReplay({
-    backend: request.backend,
-    threadId: request.threadId,
-    turnId: request.turnId,
-  }) ?? (await registry.readThread({
+  // Only Codex reads a single turn. Another backend's reply, or one whose
+  // turn read failed, is found in the last page, as the gateway's transcript
+  // read found it, but only the message crosses the wire.
+  let replay: AppServerThreadReplay | undefined;
+  try {
+    replay = await registry.readThreadTurnReplay({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: request.turnId,
+    });
+  } catch (error) {
+    log.warn("peer reply turn read failed; reading the last page", {
+      backend: request.backend,
+      error: error instanceof Error ? error.message : String(error),
+      threadId: request.threadId,
+      turnId: request.turnId,
+    });
+  }
+  replay ??= (await registry.readThread({
     backend: request.backend,
     includeAccounting: false,
     limit: 20,
