@@ -52,6 +52,10 @@ test("restores a native Claude transcript after switching threads", async () => 
       expectStableSeries(samples, "native Claude near-bottom viewport restore");
       expect(Math.max(...samples.map((top) => Math.abs(top - saved.scrollTop)))).toBeLessThanOrEqual(4);
     }
+    await app.window.getByRole("button", { name: /Claude companion/ }).first().click();
+    await app.window.getByRole("button", { name: /Claude scroll restoration/ }).first().click();
+    const rapidSamples = await collectScrollSamples(list);
+    expect(Math.max(...rapidSamples.map((top) => Math.abs(top - saved.scrollTop)))).toBeLessThanOrEqual(4);
   } finally {
     await app.close();
   }
