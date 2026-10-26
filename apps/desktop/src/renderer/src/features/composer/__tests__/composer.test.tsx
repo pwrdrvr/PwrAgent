@@ -4106,6 +4106,41 @@ describe("Composer", () => {
     });
   });
 
+  it("takes a rewound prompt back out once its rewind is undone, and nothing else", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-undone",
+      title: "Undone thread",
+      titleSource: "explicit",
+      source: "claude",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const props = {
+      desktopApi: { onAgentEvent: () => () => undefined },
+      disabled: false,
+      skills: [],
+      thread,
+      threads: [thread],
+    };
+    const restore = (id: number, kind: "rewound-prompt" | "rewound-prompt-undone", text = "") => ({
+      id, threadId: thread.id, backend: "claude" as const, text, kind,
+    });
+    const { rerender } = render(
+      <Composer {...props} draftRestore={restore(1, "rewound-prompt", "Try holding the lock instead.")} />,
+    );
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    await waitFor(() => expect(textbox).toHaveTextContent("Try holding the lock instead."));
+
+    rerender(<Composer {...props} draftRestore={restore(2, "rewound-prompt-undone")} />);
+    await waitFor(() => expect(textbox).toHaveTextContent(""));
+    expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+
+    // A draft the operator wrote after clearing the chip is theirs.
+    fireEvent.change(textbox, { target: { value: "Something else" } });
+    rerender(<Composer {...props} draftRestore={restore(3, "rewound-prompt-undone")} />);
+    expect(textbox).toHaveTextContent("Something else");
+  });
+
   it("forgets cold `#` anchors when the draft is cleared", async () => {
     const currentThread: NavigationThreadSummary = {
       id: "thread-current",

@@ -2166,18 +2166,21 @@ export class ClaudeBackend {
       if (params.mode === "conversation-and-files") {
         // Files first: a refusal leaves the conversation as it was.
         const backup = rewindId ? this.store.rewindBackupDirectory(threadId, rewindId) : undefined;
-        const result = await this.withRewindQuery(session, async (control) => {
-          // Keep what the rewind is about to overwrite, so it can be undone.
-          if (backup) {
-            const dryRun = await control.rewindFiles(point.promptUuid, { dryRun: true });
-            fileBackup = dryRun.canRewind
-              && await backUpRewindFiles(backup, (dryRun.filesChanged ?? []).map((file) => path.resolve(session.cwd, file)));
-          }
-          return await control.rewindFiles(point.promptUuid);
-        });
-        if (!result.canRewind) {
+        let result: Awaited<ReturnType<Query["rewindFiles"]>>;
+        try {
+          result = await this.withRewindQuery(session, async (control) => {
+            // Keep what the rewind is about to overwrite, so it can be undone.
+            if (backup) {
+              const dryRun = await control.rewindFiles(point.promptUuid, { dryRun: true });
+              fileBackup = dryRun.canRewind
+                && await backUpRewindFiles(backup, (dryRun.filesChanged ?? []).map((file) => path.resolve(session.cwd, file)));
+            }
+            return await control.rewindFiles(point.promptUuid);
+          });
+          if (!result.canRewind) throw new Error(claudeFilesUnavailableReason(result.error));
+        } catch (error) {
           if (backup) await rm(backup, { recursive: true, force: true });
-          throw new Error(claudeFilesUnavailableReason(result.error));
+          throw error;
         }
         restoredFiles = result.filesChanged ?? [];
         if (backup && fileBackup) {

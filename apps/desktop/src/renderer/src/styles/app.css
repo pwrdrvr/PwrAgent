@@ -42921,7 +42921,7 @@ button.composer__subthread-source-parent:hover {
   cursor: pointer;
 }
 
-.transcript-rewind-marker__undo:hover:not(:disabled) {
+.transcript-rewind-marker__undo:hover:not([aria-disabled="true"]) {
   text-decoration: underline;
 }
 
@@ -42930,7 +42930,7 @@ button.composer__subthread-source-parent:hover {
   outline-offset: 2px;
 }
 
-.transcript-rewind-marker__undo:disabled {
+.transcript-rewind-marker__undo[aria-disabled="true"] {
   opacity: 0.52;
   cursor: not-allowed;
 }

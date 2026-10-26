@@ -1368,7 +1368,7 @@ export function ThreadView(props: ThreadViewProps) {
     federationTarget?: FederationTarget;
     text: string;
     imageAttachments: RewoundPrompt["imageAttachments"];
-    kind: "rewound-prompt";
+    kind: "rewound-prompt" | "rewound-prompt-undone";
   }>();
   const [rewindUndoBusyId, setRewindUndoBusyId] = useState<string>();
   const [workflowBudgetDialog, setWorkflowBudgetDialog] =
@@ -1773,28 +1773,40 @@ export function ThreadView(props: ThreadViewProps) {
     const { desktopApi, thread } = rewindUndoContextRef.current;
     const undoThreadRewind = desktopApi?.undoThreadRewind;
     if (!thread || !undoThreadRewind) return;
+    const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
     setRewindUndoBusyId(rewindId);
-    void undoThreadRewind({
-      backend: thread.source,
-      federationTarget: thread.federation?.ref.target ?? readRendererFederationTarget(),
-      threadId: thread.id,
-      rewindId,
-    }).then(
-      async () => {
-        await onRefreshNavigationAfterRewind?.();
-        await onReloadThreadAfterRewind?.();
-      },
-      (error: unknown) => {
+    void (async () => {
+      try {
+        await undoThreadRewind({ backend: thread.source, federationTarget, threadId: thread.id, rewindId });
+      } catch (error) {
         onShowRewindNotice?.({
           id: `rewind-undo:${thread.id}`,
           title: "Rewind not undone",
           message: error instanceof Error ? error.message : String(error),
           tone: "warning",
         });
-      },
-    ).finally(() => {
-      setRewindUndoBusyId((current) => current === rewindId ? undefined : current);
-    });
+        return;
+      } finally {
+        setRewindUndoBusyId((current) => current === rewindId ? undefined : current);
+      }
+      // The prompt is back in the transcript, so the composer's copy goes.
+      rewoundPromptRestoreId.current += 1;
+      setRewoundPromptRestore({
+        id: rewoundPromptRestoreId.current,
+        threadId: thread.id,
+        backend: thread.source,
+        federationTarget,
+        text: "",
+        imageAttachments: [],
+        kind: "rewound-prompt-undone",
+      });
+      try {
+        await onRefreshNavigationAfterRewind?.();
+        await onReloadThreadAfterRewind?.();
+      } catch {
+        // The thread/rewound event refreshes the thread as well.
+      }
+    })();
   }, [onRefreshNavigationAfterRewind, onReloadThreadAfterRewind, onShowRewindNotice]);
   const canUndoRewind = Boolean(threadRewindSupport?.undo && rewindDesktopApi?.undoThreadRewind);
   const rewindUndo = useMemo(

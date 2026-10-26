@@ -41,7 +41,8 @@ window's.
   the renderer and sent as `removedTurnCount`), how many files it restored,
   and whether the provider can undo it. A Codex revert in flight is
   announced by the registry alone, after its record, rather than by Codex's
-  own notification.
+  own notification. A revert Codex reported is still announced when the
+  request then fails, since the history changed.
 - `UndoThreadRewindRequest` names a rewind by its `rewindId`.
   `DesktopBackendRegistry.undoThreadRewind` refuses one the log does not
   mark undoable, asks the provider (Claude only), marks the record undone,
@@ -81,4 +82,6 @@ left out and a notice says how many to attach again.
 One marker row stands where a rewind removed turns (`rewind-marker-entries.ts`),
 placed by the time of the rewind: "Rewound 2 turns · restored 2 files". It
 offers Undo on the latest rewind only, while its provider can undo it and no
-message has followed it. An undone rewind has no marker.
+message has followed it. An undone rewind has no marker, and its prompt
+leaves the composer if the Rewound prompt chip still marks it, parked in the
+recovery journal, so it is not sent twice.

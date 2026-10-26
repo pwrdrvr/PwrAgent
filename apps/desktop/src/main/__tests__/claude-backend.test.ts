@@ -3034,6 +3034,33 @@ describe("Claude thread rewind", () => {
     expect((await f.backend.readThread(threadId)).entries).toHaveLength(2);
   });
 
+  it("drops a file rewind's copies when Claude fails it, and explains copies that are gone", async () => {
+    const prompts: SDKUserMessage[] = [];
+    let fail = true;
+    const f = await fixture(promptRecorder(prompts), {
+      rewindFiles: vi.fn(async (_id: string, options?: { dryRun?: boolean }) => {
+        if (!options?.dryRun && fail) throw new Error("Claude exited");
+        return { canRewind: true, filesChanged: ["lock.ts"] };
+      }),
+    });
+    Object.assign(f.backendOptions, { getSessionMessages: sessionMessages(prompts) });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt", "Second prompt"]);
+    await writeFile(path.join(f.root, "lock.ts"), "edited");
+    const target = { messageId: `user:${turnIds[1]}`, turnId: turnIds[1] };
+    const rewindId = "0b7f1c52-6a52-4c5e-9f0e-3b0f2f0c9e15";
+
+    await expect(f.backend.rewindThread({ threadId, target, mode: "conversation-and-files", rewindId }))
+      .rejects.toThrow("Claude exited");
+    await expect(readFile(path.join(f.store.rewindBackupDirectory(threadId, rewindId), "manifest.json")))
+      .rejects.toMatchObject({ code: "ENOENT" });
+
+    fail = false;
+    await f.backend.rewindThread({ threadId, target, mode: "conversation-and-files", rewindId });
+    await rm(f.store.rewindBackupDirectory(threadId, rewindId), { recursive: true, force: true });
+    await expect(f.backend.undoRewind({ threadId, rewindId }))
+      .rejects.toThrow("no longer has the files this rewind replaced");
+  });
+
   it("holds a message sent during a rewind for the queue", async () => {
     const prompts: SDKUserMessage[] = [];
     const f = await fixture(promptRecorder(prompts));

@@ -71,10 +71,17 @@ export async function recordRewoundFiles(directory: string, changed: readonly st
 
 /**
  * Put back the files as they were before the rewind. Refuses, changing
- * nothing, when a file changed after the rewind restored it.
+ * nothing, when a file changed after the rewind restored it, or when the
+ * copies are gone.
  */
-export async function restoreRewindFiles(directory: string): Promise<number> {
-  const manifest = await readManifest(directory);
+export async function restoreRewindFiles(directory: string): Promise<void> {
+  let manifest: BackupManifest;
+  try {
+    manifest = await readManifest(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    throw new Error("PwrAgent no longer has the files this rewind replaced, so it cannot be undone.");
+  }
   for (const file of manifest.files) {
     if (file.after === undefined || await fileHash(file.path) !== file.after) {
       throw new Error(`${path.basename(file.path)} changed after the rewind, so PwrAgent cannot put it back.`);
@@ -89,7 +96,6 @@ export async function restoreRewindFiles(directory: string): Promise<number> {
       await rm(file.path, { force: true });
     }
   }
-  return manifest.files.length;
 }
 
 async function fileHash(filePath: string): Promise<string | null> {

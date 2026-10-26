@@ -11,6 +11,7 @@ type TranscriptRewindMarkerProps = {
 /** The row that stands where a rewind removed turns. */
 export function TranscriptRewindMarker(props: TranscriptRewindMarkerProps) {
   const undo = props.undo;
+  const unavailable = Boolean(undo?.busy || undo?.disabledReason);
   return (
     <div className="transcript-rewind-marker">
       <span>
@@ -18,15 +19,19 @@ export function TranscriptRewindMarker(props: TranscriptRewindMarkerProps) {
         {undo ? (
           <>
             {" · "}
+            {/* aria-disabled, as the prompt's rewind button: a disabled
+                button takes no hover, which would hide the reason. */}
             <button
+              aria-disabled={unavailable ? true : undefined}
               aria-label="Undo rewind"
               className={undo.disabledReason
                 ? "transcript-rewind-marker__undo tooltip-target"
                 : "transcript-rewind-marker__undo"}
               data-tooltip={undo.disabledReason}
-              disabled={undo.busy || Boolean(undo.disabledReason)}
               type="button"
-              onClick={undo.onUndo}
+              onClick={() => {
+                if (!unavailable) undo.onUndo();
+              }}
             >
               {undo.busy ? "Undoing..." : "Undo"}
             </button>

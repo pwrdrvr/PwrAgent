@@ -786,6 +786,27 @@ describe("ThreadView", () => {
 
     const marker = screen.getByText(/Rewound 2 turns \u00b7 restored 2 files/).closest(".transcript-rewind-marker") as HTMLElement;
     expect(marker).not.toBeNull();
+    // While a turn runs, Undo keeps its reason reachable and does nothing.
+    rerender(
+      <ThreadView
+        {...props}
+        selectedThread={{ ...rewindThread("claude"), rewindLog }}
+        threadBusy
+        transcriptEntries={kept}
+      />,
+    );
+    const busyUndo = screen.getByRole("button", { name: "Undo rewind" });
+    expect(busyUndo).toHaveAttribute("aria-disabled", "true");
+    expect(busyUndo).toHaveAttribute("data-tooltip", "Wait for the active turn to finish before rewinding");
+    fireEvent.click(busyUndo);
+    expect(undoThreadRewind).not.toHaveBeenCalled();
+    rerender(
+      <ThreadView
+        {...props}
+        selectedThread={{ ...rewindThread("claude"), rewindLog }}
+        transcriptEntries={kept}
+      />,
+    );
     fireEvent.click(within(marker).getByRole("button", { name: "Undo rewind" }));
     await waitFor(() => {
       expect(undoThreadRewind).toHaveBeenCalledWith(expect.objectContaining({

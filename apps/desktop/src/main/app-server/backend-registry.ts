@@ -9146,8 +9146,11 @@ export class DesktopBackendRegistry {
    * revert (its thread/reverted, normalized to thread/rewound). The registry
    * announces only a revert Codex did not, so windows reload once.
    */
-  /** Codex threads this registry is reverting; it announces each revert itself. */
-  private readonly codexRevertsInFlight = new Set<string>();
+  /**
+   * Codex threads this registry is reverting, and whether Codex has reported
+   * the revert. The registry announces each revert itself.
+   */
+  private readonly codexRevertsInFlight = new Map<string, { reported: boolean }>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new ActiveTurnKeySet();
   private readonly threadHandoffReservations = new Set<string>();
@@ -23568,7 +23571,8 @@ export class DesktopBackendRegistry {
     // Hold the start reservation so no turn or compaction begins on this
     // thread while Codex replaces its history.
     this.reservedCodexStartThreadIds.add(params.threadId);
-    this.codexRevertsInFlight.add(params.threadId);
+    const revert = { reported: false };
+    this.codexRevertsInFlight.set(params.threadId, revert);
     try {
       await this.withCodexThreadClient(params.threadId, async (client) => {
         if (!client.revertThread) {
@@ -23576,6 +23580,16 @@ export class DesktopBackendRegistry {
         }
         await client.revertThread({ threadId: params.threadId, beforeTurnId });
       });
+    } catch (error) {
+      // Codex changed the history before the request failed; readers still
+      // need to reload it.
+      if (revert.reported) {
+        await this.emit({
+          backend: "codex",
+          notification: { method: "thread/rewound", params: { threadId: params.threadId, updatedAt: Date.now() } },
+        });
+      }
+      throw error;
     } finally {
       this.codexRevertsInFlight.delete(params.threadId);
       this.reservedCodexStartThreadIds.delete(params.threadId);
@@ -29347,11 +29361,13 @@ export class DesktopBackendRegistry {
         logBackendLifecycleNotification(backend, notification);
         // The registry announces its own revert once the rewind is recorded,
         // so the marker arrives with the event.
-        if (
-          backend === "codex"
-          && notification.method === "thread/rewound"
-          && this.codexRevertsInFlight.has(notification.params.threadId)
-        ) return;
+        if (backend === "codex" && notification.method === "thread/rewound") {
+          const revert = this.codexRevertsInFlight.get(notification.params.threadId);
+          if (revert) {
+            revert.reported = true;
+            return;
+          }
+        }
         // Match the client's running-turn ownership before the first await;
         // exit can arrive while lifecycle delivery is still in progress.
         if (backend === "codex" && notification.method === "turn/started") {

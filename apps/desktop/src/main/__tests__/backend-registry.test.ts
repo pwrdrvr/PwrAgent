@@ -54383,6 +54383,41 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("announces a Codex revert that Codex reported even when the request then fails", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read", "thread/resume"] },
+    });
+    const revertThread = vi.fn(async (params: { threadId: string }) => {
+      await codexClient.emit({
+        method: "thread/rewound",
+        params: { threadId: params.threadId, updatedAt: 1_234 },
+      });
+      throw new Error("connection lost");
+    });
+    Object.assign(codexClient, { revertThread });
+    const overlayStore = createOverlayStoreMock({ executionMode: "default" });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    await expect(registry.rewindThread({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { messageId: "user-2", turnId: "turn-2" },
+      mode: "conversation",
+    })).rejects.toThrow("connection lost");
+    await flushAsync();
+
+    expect(events.filter((event) => event.notification.method === "thread/rewound")).toHaveLength(1);
+    // Nothing recorded: the request did not succeed.
+    expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.rewindLog)
+      .toBeUndefined();
+
+    await registry.close();
+  });
+
   it("rewinds a Claude thread with its files, announces it, and drains replies held meanwhile", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),

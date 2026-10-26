@@ -393,8 +393,12 @@ export type ComposerProps = {
     federationTarget?: FederationTarget;
     text: string;
     imageAttachments?: NavigationLaunchpadImageAttachment[];
-    /** Marks the composer with a Rewound prompt chip until it is cleared. */
-    kind?: "rewound-prompt";
+    /**
+     * `rewound-prompt` marks the composer with a Rewound prompt chip until it
+     * is cleared. `rewound-prompt-undone` takes that prompt back out, parked
+     * in the recovery journal, once its rewind is undone; `text` is ignored.
+     */
+    kind?: "rewound-prompt" | "rewound-prompt-undone";
   };
   /**
    * Focus the input once this composer shows the named thread and can take
@@ -4322,6 +4326,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     if (props.disabled) return;
     appliedDraftRestoreId.current = restore.id;
+    if (restore.kind === "rewound-prompt-undone") {
+      // The prompt is back in the transcript; sending this copy would send
+      // it twice. Only a composer still marked with the chip holds it.
+      if (rewoundPromptScope !== composerScopeKey) return;
+      abandonComposerDraftSnapshot(composerScopeKey);
+      pendingProgrammaticComposerChangeRef.current = {
+        expectedDraft: "",
+        expectedSkillTokensSignature: getComposerSkillTokensSignature([]),
+        staleDraft: draft,
+        staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+      };
+      setComposerDraftFromCanonical("");
+      setImageAttachments([]);
+      setRewoundPromptScope(undefined);
+      return;
+    }
     // A draft in progress is parked in the recovery journal, where ArrowUp
     // brings it back, rather than overwritten by the restored prompt.
     abandonComposerDraftSnapshot(composerScopeKey);
