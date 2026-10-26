@@ -2035,7 +2035,7 @@ describe("Sidebar", () => {
     ]);
   });
 
-  it("keeps a child's sub-agents with it when it is unlinked from its parent", () => {
+  it("keeps a child's sub-agents with it when it is unlinked from its parent", async () => {
     const onUnlinkThreads = vi.fn(async () => undefined);
     const renderSidebar = (threads: NavigationThreadSummary[]) => (
       <Sidebar
@@ -2060,9 +2060,11 @@ describe("Sidebar", () => {
     fireEvent.contextMenu(
       screen.getByRole("button", { name: "Review the rollout" }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Unlink from Parent" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Unlink from Parent" }),
+      );
+    });
     expect(onUnlinkThreads).toHaveBeenCalledWith([
       expect.objectContaining({ id: nativeChildThread.id }),
     ]);
@@ -2101,7 +2103,7 @@ describe("Sidebar", () => {
     expect(within(parentList).queryByText("child-scout")).not.toBeInTheDocument();
   });
 
-  it("opens worktree sub-thread launchpads from the thread context menu", () => {
+  it("opens worktree sub-thread launchpads from the thread context menu", async () => {
     const onCreateSubthread = vi.fn(async () => undefined);
     render(
       <Sidebar
@@ -2122,7 +2124,9 @@ describe("Sidebar", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Cross-project cleanup/ }));
     expect(screen.queryByRole("menuitem", { name: "Sub-thread in This Directory" })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }));
+    });
 
     expect(onCreateSubthread).toHaveBeenCalledWith(sharedThread, "same-worktree");
   });
@@ -2191,9 +2195,11 @@ describe("Sidebar", () => {
     fireEvent.contextMenu(
       screen.getByRole("button", { name: "Remote pinned thread" }),
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: /Remove from My List/ }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: /Remove from My List/ }),
+      );
+    });
     expect(onRemoveRemoteThreadPin).toHaveBeenCalledWith(remotePinnedThread);
   });
 
@@ -2352,7 +2358,7 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("offers Local and New Worktree sub-thread launchpads for local parents", () => {
+  it("offers Local and New Worktree sub-thread launchpads for local parents", async () => {
     const onCreateSubthread = vi.fn(async () => undefined);
     render(
       <Sidebar
@@ -2373,17 +2379,21 @@ describe("Sidebar", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
     expect(screen.queryByRole("menuitem", { name: "Sub-thread in Same Worktree" })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in This Directory" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in This Directory" }));
+    });
 
     expect(onCreateSubthread).toHaveBeenCalledWith(localThread, "local");
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" }));
+    });
 
     expect(onCreateSubthread).toHaveBeenCalledWith(localThread, "new-worktree");
   });
 
-  it("cascades a new-workspace machine list from the second sub-thread row", () => {
+  it("cascades a new-workspace machine list from the second sub-thread row", async () => {
     const onCreateSubthread = vi.fn(async () => undefined);
     render(
       <Sidebar
@@ -2439,10 +2449,14 @@ describe("Sidebar", () => {
       item.querySelector(".new-thread-menu__target-dot")?.getAttribute("data-availability")))
       .toEqual(["available", "available", "offline"]);
 
-    fireEvent.click(machines[2]!);
+    await act(async () => {
+      fireEvent.click(machines[2]!);
+    });
     expect(onCreateSubthread).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(machines[1]!);
+    await act(async () => {
+      fireEvent.click(machines[1]!);
+    });
     expect(onCreateSubthread).toHaveBeenLastCalledWith(
       localThread,
       "new-workspace",
@@ -2565,7 +2579,9 @@ describe("Sidebar", () => {
     }
     expect(onCreateSubthread).not.toHaveBeenCalled();
 
-    fireEvent.click(machines[1]!);
+    await act(async () => {
+      fireEvent.click(machines[1]!);
+    });
     expect(onCreateSubthread).toHaveBeenLastCalledWith(
       localThread,
       "new-worktree",
@@ -2574,7 +2590,9 @@ describe("Sidebar", () => {
 
     flyout = openFlyout();
     await act(async () => {});
-    fireEvent.click(within(flyout).getAllByRole("menuitem")[0]!);
+    await act(async () => {
+      fireEvent.click(within(flyout).getAllByRole("menuitem")[0]!);
+    });
     expect(onCreateSubthread).toHaveBeenLastCalledWith(
       localThread,
       "new-worktree",
@@ -2639,7 +2657,9 @@ describe("Sidebar", () => {
       "codex/thread-centric-ui",
     ]]);
 
-    fireEvent.click(machines[1]!);
+    await act(async () => {
+      fireEvent.click(machines[1]!);
+    });
     expect(onCreateSubthread).toHaveBeenLastCalledWith(
       remoteParent,
       "new-worktree",
@@ -2647,7 +2667,7 @@ describe("Sidebar", () => {
     );
   });
 
-  it("keeps the machine list reachable while the owner's worktree check runs", () => {
+  it("keeps the machine list reachable while the owner's worktree check runs", async () => {
     const onCreateSubthread = vi.fn(async () => undefined);
     render(
       <Sidebar
@@ -2678,7 +2698,9 @@ describe("Sidebar", () => {
 
     fireEvent.mouseEnter(row.parentElement!);
     const flyout = screen.getByRole("menu", { name: "New workspace on" });
-    fireEvent.click(within(flyout).getByRole("menuitem", { name: "Studio Mac / work" }));
+    await act(async () => {
+      fireEvent.click(within(flyout).getByRole("menuitem", { name: "Studio Mac / work" }));
+    });
     expect(onCreateSubthread).toHaveBeenCalledWith(
       localThread,
       "new-workspace",
@@ -2850,7 +2872,7 @@ describe("Sidebar", () => {
 
   it.each([undefined, { currentBranch: "main", worktreeCreationAvailable: false }])(
     "offers workspace actions without worktrees when Git creation is unavailable (%j)",
-    (gitStatus) => {
+    async (gitStatus) => {
       const workspaceThread = {
         ...localThread,
         gitBranch: undefined,
@@ -2878,21 +2900,29 @@ describe("Sidebar", () => {
       const openMenu = () => fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
       openMenu();
       expect(screen.queryAllByRole("menuitem", { name: /Worktree/ })).toHaveLength(0);
-      fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in This Directory" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in This Directory" }));
+      });
       expect(onCreateSubthread).toHaveBeenCalledWith(workspaceThread, "local");
       openMenu();
-      fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in New Workspace" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in New Workspace" }));
+      });
       expect(onCreateSubthread).toHaveBeenCalledWith(workspaceThread, "new-workspace");
       openMenu();
-      fireEvent.click(screen.getByRole("menuitem", { name: "Fork in This Directory" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: "Fork in This Directory" }));
+      });
       expect(onForkThread).toHaveBeenCalledWith(workspaceThread, "local");
       openMenu();
-      fireEvent.click(screen.getByRole("menuitem", { name: "Fork in New Workspace" }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: "Fork in New Workspace" }));
+      });
       expect(onForkThread).toHaveBeenCalledWith(workspaceThread, "new-workspace");
     },
   );
 
-  it("forks a Codex thread from the thread context menu", () => {
+  it("forks a Codex thread from the thread context menu", async () => {
     const onForkThread = vi.fn(async () => undefined);
     const forkBackends: BackendSummary[] = [
       {
@@ -2921,12 +2951,14 @@ describe("Sidebar", () => {
     );
 
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Cross-project cleanup/ }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Fork into New Worktree" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Fork into New Worktree" }));
+    });
 
     expect(onForkThread).toHaveBeenCalledWith(sharedThread, "new-worktree");
   });
 
-  it("offers Local and New Worktree forks for local parent threads", () => {
+  it("offers Local and New Worktree forks for local parent threads", async () => {
     const onForkThread = vi.fn(async () => undefined);
     const forkBackends: BackendSummary[] = [
       {
@@ -2956,12 +2988,16 @@ describe("Sidebar", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
     expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Fork in This Directory" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Fork in This Directory" }));
+    });
 
     expect(onForkThread).toHaveBeenCalledWith(localThread, "local");
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Fork into New Worktree" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Fork into New Worktree" }));
+    });
 
     expect(onForkThread).toHaveBeenCalledWith(localThread, "new-worktree");
   });
@@ -2992,7 +3028,7 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menuitem", { name: "Fork in This Directory" })).toBeNull();
   });
 
-  it("exposes sub-thread and fork actions on a child card", () => {
+  it("exposes sub-thread and fork actions on a child card", async () => {
     const onCreateSubthread = vi.fn(async () => undefined);
     const onForkThread = vi.fn(async () => undefined);
     const forkBackends: BackendSummary[] = [
@@ -3029,15 +3065,19 @@ describe("Sidebar", () => {
     // A child card now offers the same spawn actions; the parent hook
     // re-parents the result to the group root, so the menu can stay open.
     fireEvent.contextMenu(screen.getByRole("button", { name: "Child cleanup" }));
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Sub-thread in Same Worktree" }),
+      );
+    });
     expect(onCreateSubthread).toHaveBeenCalledWith(childThread, "same-worktree");
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Child cleanup" }));
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Fork into Same Worktree" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Fork into Same Worktree" }),
+      );
+    });
     expect(onForkThread).toHaveBeenCalledWith(childThread, "same-worktree");
   });
 
@@ -4892,7 +4932,7 @@ describe("Sidebar", () => {
     ]);
   });
 
-  it("opens thread actions from the row overflow button", () => {
+  it("opens thread actions from the row overflow button", async () => {
     const onArchiveThread = vi.fn(async () => undefined);
 
     render(
@@ -4916,7 +4956,9 @@ describe("Sidebar", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Open thread actions" })
     );
-    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
+    });
 
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
   });
@@ -5019,7 +5061,7 @@ describe("Sidebar", () => {
     expect(openButton).toHaveFocus();
   });
 
-  it("supports Cmd, Shift, and Cmd+Shift thread selections for batch actions", () => {
+  it("supports Cmd, Shift, and Cmd+Shift thread selections for batch actions", async () => {
     const copyText = vi.fn(async () => undefined);
     const onArchiveThread = vi.fn(async () => undefined);
     const onReorderThreadPins = vi.fn(async () => undefined);
@@ -5126,15 +5168,17 @@ describe("Sidebar", () => {
     );
 
     fireEvent.contextMenu(secondButton, { clientX: 48, clientY: 64 });
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Archive 3 Threads" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Archive 3 Threads" }),
+      );
+    });
     expect(onArchiveThread).toHaveBeenCalledWith(firstThread);
     expect(onArchiveThread).toHaveBeenCalledWith(secondThread);
     expect(onArchiveThread).toHaveBeenCalledWith(thirdThread);
   });
 
-  it("limits each batch action to its compatible thread subset", () => {
+  it("limits each batch action to its compatible thread subset", async () => {
     const onSetThreadParent = vi.fn(async () => undefined);
     const onSetThreadPin = vi.fn(async () => undefined);
     const onReorderThreadPins = vi.fn(async () => undefined);
@@ -5204,13 +5248,17 @@ describe("Sidebar", () => {
       screen.getByRole("menuitem", { name: "Unlink 1 Thread from Parent" }),
     ).toBeInTheDocument();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Unlink 1 Thread from Parent" }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Unlink 1 Thread from Parent" }),
+      );
+    });
     expect(onSetThreadParent).toHaveBeenCalledWith(childThread, undefined);
 
     fireEvent.contextMenu(pinnedButton, { clientX: 48, clientY: 64 });
-    fireEvent.click(screen.getByRole("menuitem", { name: "Unpin 1 Thread" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Unpin 1 Thread" }));
+    });
     expect(onSetThreadPin).toHaveBeenCalledWith(pinnedThread, false);
   });
 
@@ -5282,7 +5330,7 @@ describe("Sidebar", () => {
     for (const button of [first, middle, last]) expect(button).toHaveAttribute("aria-pressed", "true");
   });
 
-  it.each([false, true])("keeps shared-thread ranges in the clicked project (shared anchor: %s)", (sharedAnchor) => {
+  it.each([false, true])("keeps shared-thread ranges in the clicked project (shared anchor: %s)", async (sharedAnchor) => {
     const x = { ...sharedThread, id: "only-a", title: "Only A" };
     const y = { ...sharedThread, id: "only-b", title: "Only B" };
     const projects = [
@@ -5312,7 +5360,9 @@ describe("Sidebar", () => {
     expect(xRow).toHaveAttribute("aria-pressed", "false");
     for (const row of sharedRows) expect(row).toHaveAttribute("aria-pressed", "true");
     fireEvent.contextMenu(yRow);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 2 Threads" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Archive 2 Threads" }));
+    });
     expect(onArchiveThread.mock.calls.map(([thread]) => (thread as NavigationThreadSummary).id))
       .toEqual([y.id, sharedThread.id]);
 
@@ -5324,12 +5374,14 @@ describe("Sidebar", () => {
     expect(xRow).toHaveAttribute("aria-pressed", "true");
     expect(yRow).toHaveAttribute("aria-pressed", "true");
     fireEvent.contextMenu(yRow);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Archive 3 Threads" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Archive 3 Threads" }));
+    });
     expect(onArchiveThread.mock.calls.map(([thread]) => (thread as NavigationThreadSummary).id))
       .toEqual([y.id, sharedThread.id, x.id]);
   });
 
-  it("archives selected projects through complete owner membership", () => {
+  it("archives selected projects through complete owner membership", async () => {
     const onArchiveDirectories = vi.fn(async () => undefined);
     const projects = [0, 1].map((index) => ({ ...directories[0]!,
       key: `directory:/project-${index}`, label: `Project ${index}`, path: `/project-${index}`, threadKeys: [],
@@ -5344,11 +5396,13 @@ describe("Sidebar", () => {
     fireEvent.click(first, { metaKey: true });
     fireEvent.click(last, { shiftKey: true });
     fireEvent.contextMenu(last);
-    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Threads and Remove Projects" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Archive Threads and Remove Projects" }));
+    });
     expect(onArchiveDirectories).toHaveBeenCalledWith(projects.map((project) => project.key));
   });
 
-  it("marks unread threads read across a Shift-selected range of collapsed directories", () => {
+  it("marks unread threads read across a Shift-selected range of collapsed directories", async () => {
     const onMarkThreadsSeen = vi.fn(async () => undefined);
     const onSetDirectoryPin = vi.fn(async () => undefined);
     const firstThread = {
@@ -5472,7 +5526,9 @@ describe("Sidebar", () => {
     expect(
       within(menu).queryByRole("menuitem", { name: "Pin Directory" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(within(menu).getByRole("menuitem", { name: "Mark Read" }));
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Mark Read" }));
+    });
 
     expect(onMarkThreadsSeen).toHaveBeenCalledWith([
       firstThread,
@@ -5543,7 +5599,7 @@ describe("Sidebar", () => {
     ).toHaveLength(3);
   });
 
-  it("splits parent archive actions between ungrouping children and archiving the group", () => {
+  it("splits parent archive actions between ungrouping children and archiving the group", async () => {
     const onArchiveThread = vi.fn(async () => undefined);
     const childThread = {
       ...sharedThread,
@@ -5586,11 +5642,13 @@ describe("Sidebar", () => {
       }),
     ).toBeInTheDocument();
 
-    fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: "Archive Thread Only. Ungroup 1 sub-thread",
-      }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", {
+          name: "Archive Thread Only. Ungroup 1 sub-thread",
+        }),
+      );
+    });
 
     // The open thread goes, so the row after it opens: here the child,
     // which the archive ungroups rather than removes.
@@ -5600,7 +5658,7 @@ describe("Sidebar", () => {
     });
   });
 
-  it("archives the whole group from the parent row menu", () => {
+  it("archives the whole group from the parent row menu", async () => {
     const onArchiveThread = vi.fn(async () => undefined);
     const childThread = {
       ...sharedThread,
@@ -5631,18 +5689,20 @@ describe("Sidebar", () => {
     fireEvent.click(
       screen.getAllByRole("button", { name: "Open thread actions" })[0]!
     );
-    fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: "Archive Thread and Sub-Threads. Archive 2 threads",
-      }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", {
+          name: "Archive Thread and Sub-Threads. Archive 2 threads",
+        }),
+      );
+    });
 
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread, {
       includeSubthreads: true,
     });
   });
 
-  it("offers both parent archives on a collapsed parent whose sub-threads are not loaded", () => {
+  it("offers both parent archives on a collapsed parent whose sub-threads are not loaded", async () => {
     const onArchiveThread = vi.fn(async () => undefined);
     // Collapsed: the owner reports six sub-threads, none of them in the list.
     const collapsedParent = {
@@ -5682,11 +5742,13 @@ describe("Sidebar", () => {
       }),
     ).toBeInTheDocument();
     // Unloaded sub-threads may have sub-threads of their own.
-    fireEvent.click(
-      screen.getByRole("menuitem", {
-        name: "Archive Thread and Sub-Threads. Archive at least 7 threads",
-      }),
-    );
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", {
+          name: "Archive Thread and Sub-Threads. Archive at least 7 threads",
+        }),
+      );
+    });
 
     expect(onArchiveThread).toHaveBeenCalledWith(collapsedParent, {
       includeSubthreads: true,
@@ -8300,7 +8362,7 @@ describe("Sidebar", () => {
     expect(screen.getByText("Cross-project cleanup")).toBeInTheDocument();
   });
 
-  it("archives directly from the thread context menu", () => {
+  it("archives directly from the thread context menu", async () => {
     const onArchiveThread = vi.fn(async () => undefined);
 
     render(
@@ -8323,7 +8385,9 @@ describe("Sidebar", () => {
 
     const threadRowCard = threadCard(screen.getByText("Cross-project cleanup"));
     fireEvent.contextMenu(threadRowCard, { clientX: 12, clientY: 34 });
-    fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Archive Thread" }));
+    });
 
     expect(screen.queryByRole("dialog", { name: "Archive Thread" })).not.toBeInTheDocument();
     expect(onArchiveThread).toHaveBeenCalledWith(sharedThread);
@@ -9879,7 +9943,7 @@ describe("Sidebar thread pinning Move items", () => {
   });
 });
 
-it("marks an unloaded directory through owner membership rather than a visible row allowlist", () => {
+it("marks an unloaded directory through owner membership rather than a visible row allowlist", async () => {
   const onMarkDirectoriesSeen = vi.fn(async () => undefined);
   const onMarkThreadsSeen = vi.fn(async () => undefined);
   const directory: NavigationDirectorySummary = { key: "directory:/unloaded", kind: "directory", label: "Unloaded project",
@@ -9891,7 +9955,9 @@ it("marks an unloaded directory through owner membership rather than a visible r
   const summary = screen.getAllByRole("button", { name: "Unloaded project" }).find((button) => button.hasAttribute("aria-expanded"));
   expect(summary).toBeDefined();
   fireEvent.contextMenu(summary!, { clientX: 48, clientY: 64 });
-  fireEvent.click(screen.getByRole("menuitem", { name: "Mark Read" }));
+  await act(async () => {
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark Read" }));
+  });
   expect(onMarkDirectoriesSeen).toHaveBeenCalledWith([directory.key]);
   expect(onMarkThreadsSeen).not.toHaveBeenCalled();
 });
@@ -10383,6 +10449,12 @@ describe("Sidebar thread shortcuts", () => {
       target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
     });
   };
+  // A command the shortcut runs reveals its result once its promise settles.
+  const pressAndSettle = async (target: EventTarget, init: KeyboardEventInit) => {
+    await act(async () => {
+      target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init }));
+    });
+  };
 
   it("renames the open thread in its row from the Rename shortcut", () => {
     const onRenameThread = vi.fn(async () => undefined);
@@ -10410,13 +10482,13 @@ describe("Sidebar thread shortcuts", () => {
     expect(onRenameThread).toHaveBeenCalledWith(secondThread, "Saved on blur");
   });
 
-  it("acts on the focused row rather than the open thread", () => {
+  it("acts on the focused row rather than the open thread", async () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     renderShortcutSidebar({ onSetThreadPin });
 
     const secondRow = screen.getByRole("button", { name: "Second thread" });
     secondRow.focus();
-    press(secondRow, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true });
+    await pressAndSettle(secondRow, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true });
 
     expect(onSetThreadPin).toHaveBeenCalledTimes(1);
     expect(onSetThreadPin).toHaveBeenCalledWith(secondThread, true);
@@ -10563,7 +10635,7 @@ describe("Sidebar thread shortcuts", () => {
       field.focus();
       press(field, { key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true });
       expect(onArchiveThread).not.toHaveBeenCalled();
-      press(document.body, { key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true });
+      await pressAndSettle(document.body, { key: "Backspace", code: "Backspace", keyCode: 8, ctrlKey: true });
       expect(onArchiveThread).toHaveBeenCalledTimes(1);
     } finally {
       act(() => _resetKeybindingsStoreForTests());
@@ -10584,7 +10656,7 @@ describe("Sidebar thread shortcuts", () => {
     }
   });
 
-  it("fires from the composer, where the chord cannot edit text", () => {
+  it("fires from the composer, where the chord cannot edit text", async () => {
     const onSetThreadPin = vi.fn(async () => undefined);
     renderShortcutSidebar({ onSetThreadPin });
     const composer = document.createElement("form");
@@ -10594,7 +10666,7 @@ describe("Sidebar thread shortcuts", () => {
     document.body.append(composer);
     try {
       field.focus();
-      press(field, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true });
+      await pressAndSettle(field, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true });
       expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
     } finally {
       composer.remove();
@@ -10619,7 +10691,7 @@ describe("Sidebar thread shortcuts", () => {
       renderShortcutSidebar({ onSetThreadPin });
       press(document.body, { key: "P", code: "KeyP", ctrlKey: true, shiftKey: true });
       expect(onSetThreadPin).not.toHaveBeenCalled();
-      press(document.body, { key: "π", code: "KeyP", altKey: true });
+      await pressAndSettle(document.body, { key: "π", code: "KeyP", altKey: true });
       expect(onSetThreadPin).toHaveBeenCalledWith(sharedThread, true);
     } finally {
       act(() => _resetKeybindingsStoreForTests());
