@@ -376,7 +376,8 @@ it("keeps loaded sub-threads in place without inserting loading text on refresh"
       onBrowseModeChange={navigation.setBrowseMode} onSelectThread={navigation.selectThread}
       onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
   }
-  const mounted = render(<Window />);
+  let mounted!: ReturnType<typeof render>;
+  await act(async () => { mounted = render(<Window />); });
   await screen.findByRole("button", { name: "child" });
   holdChildren = true;
   let refresh!: Promise<void>;

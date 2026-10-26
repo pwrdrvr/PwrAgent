@@ -155,6 +155,30 @@ async function flushReactUpdates(): Promise<void> {
   });
 }
 
+async function renderThreadApp(): Promise<void> {
+  const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+  const record = api.recordStartupProfileEvent;
+  let ready!: () => void;
+  let failed!: (error: Error) => void;
+  const imported = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject; });
+  void imported.catch(() => undefined);
+  api.recordStartupProfileEvent = (type, detail) => {
+    record?.(type, detail);
+    if (type === "thread-view-import:end") ready();
+    if (type === "thread-view-import:error") failed(new Error(String(detail?.error)));
+  };
+  onTestFinished(() => { api.recordStartupProfileEvent = record; });
+  await act(async () => { render(<App />); });
+  // App defers detail through two paints and a task. Commit that readiness
+  // before awaiting its import, or act would hold the effect that starts it.
+  await act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  await act(async () => { await imported; });
+}
+
 function createDeferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -370,7 +394,7 @@ describe("App", () => {
         }),
       }),
     });
-    await renderApp();
+    await renderThreadApp();
     fireEvent.click(await screen.findByRole("link", { name: "report" }));
     await screen.findByRole("heading", { name: "Stable report" });
     const dialog = screen.getByRole("dialog", { name: "Markdown document: report" });
@@ -6620,7 +6644,7 @@ describe("App", () => {
       }
       return response;
     };
-    await act(async () => { render(<App />); });
+    await renderThreadApp();
     await screen.findByRole("heading", { level: 2, name: "First thread" });
     const row = screen.getByRole("button", { name: rapid ? "First thread" : "Double-click thread" });
     const card = row.closest(".thread-row")!;
@@ -6849,7 +6873,7 @@ describe("App", () => {
       }
       return response;
     };
-    await act(async () => { render(<App />); });
+    await renderThreadApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -7190,7 +7214,7 @@ describe("App", () => {
       }),
     });
 
-    await act(async () => { render(<App />); });
+    await renderThreadApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -7425,7 +7449,7 @@ describe("App", () => {
   it("renames the selected thread from the sidebar actions menu", async () => {
     const { renameThread } = installRenamableThreadFixture();
 
-    await renderApp();
+    await renderThreadApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -7567,7 +7591,7 @@ describe("App", () => {
   it("renames the open thread from its title strip on double-click", async () => {
     const { renameThread } = installRenamableThreadFixture();
 
-    await renderApp();
+    await renderThreadApp();
 
     const title = await screen.findByRole("heading", {
       level: 2,
