@@ -49,13 +49,15 @@ describe("overlay row write cost", () => {
 
   it.each([11_000, 25_000])("updates an existing %i-byte row without reallocating it", async (size) => {
     const results = [];
-    for (const replace of [true, false]) {
+    for (const recursive of [false, true]) for (const pending of [false, true]) for (const replace of [true, false]) {
       const { stateDb, dbPath, store } = open();
       const db = stateDb.raw;
+      db.pragma(`recursive_triggers = ${recursive ? "ON" : "OFF"}`);
       const state = {
         backend: "codex", threadId: "existing", executionMode: "default", extraLinkedDirectories: [],
         directoryPath: "/contrived/project", lastSeenAt: 1_800_000_000_000, lastSeenUpdatedAt: 1_800_000_000_000,
         handoffOrigin: { groupingMode: "subthread", sourceBackend: "codex", sourceThreadId: "parent" },
+        ...(pending ? { threadSpendAlertPending: { alertId: "contrived", kind: "thread-spend" } } : {}),
         padding: "",
       };
       state.padding = "x".repeat(size - Buffer.byteLength(JSON.stringify(state)));
@@ -94,16 +96,18 @@ describe("overlay row write cost", () => {
         expect(wal.causes["sqlite_autoindex_threads_1:leaf"]).toBeUndefined();
         expect(wal.causes["thread_navigation_relationships:leaf"]).toBeUndefined();
         expectSqliteWriteBudget({
-          scenario: `overlay-row-update-${size}`,
-          note: `one seen-watermark write on an existing ${size}-byte overlay; rowid and overflow chain retained, at most four WAL frames including unchanged directory/dismissed index entries`,
+          scenario: `overlay-row-update-${size}${pending ? "-pending" : ""}`,
+          note: `one seen-watermark write on an existing ${size}-byte overlay${pending ? " with a pending spend alert" : ""}; rowid and overflow chain retained, at most four WAL frames including unchanged index entries`,
           writes,
         });
       } else {
         expect(rowid()).not.toEqual(initialRowid);
       }
-      results.push({ replace, size, ...wal });
+      results.push({ replace, recursive, pending, size, ...wal });
     }
-    expect(results[1].frames).toBeLessThan(results[0].frames);
+    for (let index = 0; index < results.length; index += 2) {
+      expect(results[index + 1].frames).toBeLessThan(results[index].frames);
+    }
     const report = process.env.PWRAGENT_OVERLAY_ROW_COST_REPORT;
     if (report) appendFileSync(report, `${JSON.stringify(results)}\n`);
   });
