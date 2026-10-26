@@ -236,6 +236,47 @@ it("keeps an unpinned directory unpinned while another page lands before the ind
   }
 });
 
+it("keeps an unpinned directory unpinned when an index read from before the unpin lands", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  const key = "directory:/project";
+  let ownerRank: string | undefined = "1024";
+  let hold: Promise<void> | undefined;
+  let finish!: () => void;
+  f.read.mockImplementation(async (request) => {
+    const pinnedRank = ownerRank;
+    if (hold && request.query.kind === "directory-index") await hold;
+    const page = await originalRead(request);
+    return request.query.kind === "directory-index" ? { ...page, directories: [{ key, kind: "directory", label: "Project",
+      path: "/project", counts, pinnedRootCount: 1, unpinnedRootCount: 999, launchpadPresent: false, pinnedRank }] } : page;
+  });
+  const setDirectoryPin = vi.fn<NonNullable<DesktopApi["setDirectoryPin"]>>(async () => {
+    ownerRank = undefined;
+    return { directoryKey: key, pinnedRank: undefined };
+  });
+  const { result, unmount } = renderHook(() => useThreadNavigation({ ...f.api, setDirectoryPin }));
+  const rank = () => result.current.directories.find((directory) => directory.key === key)?.pinnedRank;
+  try {
+    await waitFor(() => expect(rank()).toBe("1024"));
+    act(() => result.current.setBrowseMode("directories"));
+    // A background refresh reads the index before the operator unpins.
+    hold = new Promise<void>((resolve) => { finish = resolve; });
+    let refreshing: Promise<void> | undefined;
+    act(() => { refreshing = result.current.pagedNavigation.refresh(); });
+    await waitFor(() => expect(result.current.pagedNavigation.resources.get("directory-index")?.loading).toBe(true));
+    await act(() => result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false));
+    expect(rank()).toBeUndefined();
+
+    // The owner's event has not arrived, so nothing fences the earlier read.
+    await act(async () => { finish(); await refreshing; });
+    expect(result.current.pagedNavigation.resources.get("directory-index")?.loading).toBe(false);
+    expect(rank()).toBeUndefined();
+  } finally {
+    finish?.();
+    unmount();
+  }
+});
+
 it("loads one owner lens page and exact selection, preserving complete counts independently", async () => {
   const f = fixture();
   const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
