@@ -1,11 +1,10 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb } from "./sqlite-test-utils";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -51,9 +50,10 @@ describe("generic search through the owner adapter, registry and real SQLite", (
 
   beforeEach(() => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-    root = mkdtempSync(path.join(os.tmpdir(), "pwragent-search-integration-"));
+    const fixture = createTempStateDb("pwragent-search-integration-");
+    root = fixture.tempDir;
     // A write budget records WAL growth, which only a real file has.
-    db = StateDb.open(path.join(root, "state.db"));
+    db = StateDb.open(fixture.dbPath);
     store = new SqliteOverlayStore(db);
     sessions = new AcpSessionStore(db);
     rows = [];

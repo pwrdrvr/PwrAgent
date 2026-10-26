@@ -1036,7 +1036,7 @@ describe("PluginsSettings", () => {
       const sandboxer = managed({
         id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
         serverUrl: "sandboxer:compute", sandboxerRole: "compute", sandboxerCliState: "signed_in",
-        enabled: false, selectForNewThreads: false, toolApproval: "prompt",
+        enabled: false, selectForNewThreads: false, toolApproval: "approve",
         detail: "Signed in through the Sandboxer CLI.",
         sandboxerAccount: { email: "operator@example.com", planDollars: 20, creditBalanceHours: 21.4 },
       });
@@ -1049,7 +1049,7 @@ describe("PluginsSettings", () => {
       expect(within(row).queryByRole("button", { name: "Disconnect" })).toBeNull();
       expect(within(row).queryByRole("button", { name: "Remove" })).toBeNull();
       expect(within(row).getByRole("button", { name: "Test connection" })).toBeInTheDocument();
-      expect(within(row).getByText(/starts billing, so this defaults to asking\. Full Access threads never ask/)).toBeInTheDocument();
+      expect(within(row).getByText(/allows its sandbox tools, including commands and file writes/)).toBeInTheDocument();
       // The account that pays, and what it has left.
       expect(within(row).getByText("operator@example.com")).toBeInTheDocument();
       expect(within(row).getByText(/\$20\/month · 21\.4 h credit left/)).toBeInTheDocument();

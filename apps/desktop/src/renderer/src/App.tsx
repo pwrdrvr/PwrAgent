@@ -2497,13 +2497,6 @@ function DesktopAppShell(props: {
   const threadProviders = useStableThreadProviders(
     navigation.pagedNavigation.resources.get("directory-index")?.state.page?.counts.backends,
   );
-  const operatorWaitsContext = useMemo(
-    () => operatorRequests.ready ? {
-      waitsByThreadKey: operatorRequests.waitsByThreadKey,
-      seenKeys: operatorRequests.seenKeys,
-    } : undefined,
-    [operatorRequests.ready, operatorRequests.waitsByThreadKey, operatorRequests.seenKeys],
-  );
   const localThreadTitles = useMemo(() => {
     const titles = new Map<string, string>();
     for (const thread of navigation.threads) {
@@ -2626,6 +2619,33 @@ function DesktopAppShell(props: {
   useEffect(() => {
     selectedThreadKeyRef.current = navigation.selectedThreadKey;
   }, [navigation.selectedThreadKey]);
+  // The To-dos panel's rows and the sidebar's Question chip both open here.
+  const openOperatorWait = useCallback((wait: OperatorWait) => {
+    // A question opens on its card, as a message link does.
+    const messageId = wait.question?.messageId;
+    if (messageId && wait.threadKey === selectedThreadKeyRef.current) {
+      // Already selected: scroll only. Selecting it again would refresh
+      // its git status and clear its errors for nothing. The chip is
+      // reachable from Search, so bring the thread view back too.
+      queueMessageLinkRequest({ backend: wait.backend, threadId: wait.threadId, messageId, instanceId: wait.federationTarget?.instanceId });
+      setMainView("thread");
+      return;
+    }
+    showThreadFromLink({
+      backend: wait.backend,
+      threadId: wait.threadId,
+      ...(messageId ? { messageId } : {}),
+      ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
+    });
+  }, [queueMessageLinkRequest, setMainView, showThreadFromLink]);
+  const operatorWaitsContext = useMemo(
+    () => operatorRequests.ready ? {
+      waitsByThreadKey: operatorRequests.waitsByThreadKey,
+      seenKeys: operatorRequests.seenKeys,
+      openWait: openOperatorWait,
+    } : undefined,
+    [openOperatorWait, operatorRequests.ready, operatorRequests.waitsByThreadKey, operatorRequests.seenKeys],
+  );
   const offscreenQuestionAnswers = useOffscreenQuestionAnswers({
     submitThreadReply: desktopApi?.submitThreadReply,
     findThread: (threadKey) => navigation.threads.find((candidate) =>
@@ -2727,22 +2747,7 @@ function DesktopAppShell(props: {
       },
       dismissQuestion: operatorRequests.dismissQuestion,
       dismissedQuestionKeys: operatorRequests.dismissedQuestionKeys,
-      openWait: (wait) => {
-        // A question opens on its card, as a message link does.
-        const messageId = wait.question?.messageId;
-        if (messageId && wait.threadKey === selectedThreadKeyRef.current) {
-          // Already on screen: scroll only. Selecting it again would refresh
-          // its git status and clear its errors for nothing.
-          queueMessageLinkRequest({ backend: wait.backend, threadId: wait.threadId, messageId, instanceId: wait.federationTarget?.instanceId });
-          return;
-        }
-        showThreadFromLink({
-          backend: wait.backend,
-          threadId: wait.threadId,
-          ...(messageId ? { messageId } : {}),
-          ...(wait.federationTarget ? { instanceId: wait.federationTarget.instanceId } : {}),
-        });
-      },
+      openWait: openOperatorWait,
       ...offscreenQuestionAnswers,
       threadTitleForKey: waitThreadTitle,
       threadProjectForKey: (threadKey) => localThreadProjects.get(threadKey),
@@ -2753,8 +2758,8 @@ function DesktopAppShell(props: {
     localThreadProjects,
     localThreadTitles,
     offscreenQuestionAnswers,
+    openOperatorWait,
     operatorRequests,
-    queueMessageLinkRequest,
     submitServerRequest,
     requestTodoExecutionMode,
     showThreadFromLink,

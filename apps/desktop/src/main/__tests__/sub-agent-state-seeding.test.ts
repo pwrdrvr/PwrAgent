@@ -10,27 +10,35 @@
 //
 // It lives here rather than beside the fixture because `e2e/` is Playwright's;
 // this needs vitest and a real sqlite file, and it costs no Electron launch.
-import os from "node:os";
-import path from "node:path";
-import { mkdtempSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import {
   buildAuditSubAgents,
   seedThreadSubAgents,
 } from "../../../e2e/fixtures/sub-agent-state-seeding";
 
+const tempDirs: string[] = [];
+const databases: StateDb[] = [];
+
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close();
+  for (const dir of tempDirs.splice(0)) removeTempStateDbDir(dir);
+});
+
 function freshStateDbPath(): string {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "sub-agent-seed-"));
-  const dbPath = path.join(dir, "state.db");
+  const { dbPath, tempDir } = createTempStateDb("sub-agent-seed-");
+  tempDirs.push(tempDir);
   // Create the schema the way the app does, then close over the same file.
-  StateDb.open(dbPath, { profileName: "default" });
+  StateDb.open(dbPath, { profileName: "default" }).close();
   return dbPath;
 }
 
 function openStore(dbPath: string): SqliteOverlayStore {
-  return new SqliteOverlayStore(StateDb.open(dbPath, { profileName: "default" }));
+  const db = StateDb.open(dbPath, { profileName: "default" });
+  databases.push(db);
+  return new SqliteOverlayStore(db);
 }
 
 describe("seedThreadSubAgents", () => {

@@ -89,6 +89,7 @@ import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb } from "./sqlite-test-utils";
 import {
   inspectPdfDocument,
   renderPdfPages,
@@ -2094,7 +2095,7 @@ describe("MessagingController", () => {
   it("budgets SQLite writes for initial and completed progressive browse publications", async () => {
     const previous = process.env[SQLITE_WRITE_METRICS_ENV];
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-browse-writes-"));
+    const { tempDir } = createTempStateDb("pwragent-browse-writes-");
     tempDirs.push(tempDir);
     // A write budget records WAL growth, which only a real file has.
     const db = StateDb.open(path.join(tempDir, "state.db"));
@@ -5598,7 +5599,7 @@ describe("MessagingController", () => {
   it("budgets the binding write for an agent-driven conversation rename", async () => {
     const previousMetricsSetting = process.env[SQLITE_WRITE_METRICS_ENV];
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-rename-writes-"));
+    const { tempDir } = createTempStateDb("pwragent-rename-writes-");
     tempDirs.push(tempDir);
     // A write budget records WAL growth, which only a real file has.
     const stateDb = StateDb.open(path.join(tempDir, "state.db"));
@@ -6667,7 +6668,7 @@ describe("MessagingController", () => {
   it.each(["idle", "active", "waiting"] as const)("budgets SQLite writes for attaching a turn (state=%s)", async (state) => {
     const previous = process.env[SQLITE_WRITE_METRICS_ENV];
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-attach-writes-"));
+    const { tempDir } = createTempStateDb("pwragent-attach-writes-");
     tempDirs.push(tempDir);
     const db = StateDb.open(path.join(tempDir, "state.db"));
     try {
@@ -12276,7 +12277,7 @@ describe("MessagingController", () => {
   it("budgets SQLite writes for a bus-driven binding revoke", async () => {
     const previousMetricsSetting = process.env[SQLITE_WRITE_METRICS_ENV];
     process.env[SQLITE_WRITE_METRICS_ENV] = "1";
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-detach-writes-"));
+    const { tempDir } = createTempStateDb("pwragent-detach-writes-");
     tempDirs.push(tempDir);
     // A write budget records WAL growth, which only a real file has.
     const stateDb = StateDb.open(path.join(tempDir, "state.db"));
@@ -25304,7 +25305,7 @@ describe("MessagingController", () => {
     navigation.directories.push(...Array.from({ length: 18 }, (_, index) => ({
       ...navigation.directories[0]!, key: `directory:demo-${index}`, label: `Demo ${index}`, path: `/projects/demo-${index}`,
     })));
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-project-picker-"));
+    const { tempDir } = createTempStateDb("pwragent-project-picker-");
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const db = StateDb.open(path.join(tempDir, "state.db"));
     const harness = await createHarness({

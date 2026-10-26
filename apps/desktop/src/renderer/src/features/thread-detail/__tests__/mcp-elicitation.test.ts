@@ -60,6 +60,18 @@ describe("MCP elicitation helpers", () => {
     expect(() => buildMcpElicitationResponse(state, "accept", "always")).toThrow(/persistence/);
   });
 
+  it.each(["codex_approval_kind", "pwragent_approval_kind"])("accepts server conversation consent only for a host gateway request: %s", (kind) => {
+    const state = createMcpElicitationState(buildRequest({
+      _meta: { [kind]: "mcp_tool_call", persist: ["session", "server-session"] },
+    }))!;
+    if (kind === "pwragent_approval_kind") {
+      expect(buildMcpElicitationResponse(state, "accept", "server-session")._meta).toEqual({ persist: "server-session" });
+    } else {
+      expect(readMcpApprovalPersistence(state)).toEqual([]);
+      expect(() => buildMcpElicitationResponse(state, "accept", "server-session")).toThrow(/persistence/);
+    }
+  });
+
   it.each([
     { persist: "session", expected: ["session"] },
     { persist: "always", expected: ["always"] },

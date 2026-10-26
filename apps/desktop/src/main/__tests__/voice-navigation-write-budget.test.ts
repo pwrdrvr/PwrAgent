@@ -1,7 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { rmSync } from "node:fs";
 import type { WebContents } from "electron";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -9,6 +7,7 @@ import { createOpenThreadInUi } from "../native-voice/open-thread-in-ui";
 import { publishOperatorFocus, resetOperatorFocusRegistry } from "../native-voice/operator-focus-registry";
 import { ensureWindowThreadMounted } from "../../renderer/src/lib/ensure-window-thread-mounted";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb } from "./sqlite-test-utils";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
@@ -22,8 +21,9 @@ let root: string;
 let db: StateDb;
 beforeEach(() => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  root = mkdtempSync(path.join(os.tmpdir(), "pwragent-voice-navigation-"));
-  db = StateDb.open(path.join(root, "state.db"));
+  const fixture = createTempStateDb("pwragent-voice-navigation-");
+  root = fixture.tempDir;
+  db = StateDb.open(fixture.dbPath);
   resetOperatorFocusRegistry();
 });
 afterEach(() => {

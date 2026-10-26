@@ -4,7 +4,7 @@ import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition"
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildMcpGatewayToolDefinitions } from "../agent-tools/pwragent-mcp-gateway-tools";
 import { McpGatewayToolService } from "../mcp-connections/mcp-gateway-tool-service";
-import { gatewayToolRequiresApproval, gatewayToolRevision, validateGatewayArguments, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
+import { gatewayCatalogRevision, gatewayToolRequiresApproval, gatewayToolRevision, validateGatewayArguments, type McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import { gatewayInvocationName } from "../mcp-connections/mcp-gateway-attribution";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -39,6 +39,15 @@ function fixture() {
 afterEach(() => vi.restoreAllMocks());
 
 describe("fixed MCP gateway tools", () => {
+  it("binds server consent to every tool revision, independent of listing order", () => {
+    const first = tool("one", "lookup");
+    const second = tool("one", "write");
+    const revision = gatewayCatalogRevision([first, second]);
+    expect(gatewayCatalogRevision([second, first])).toBe(revision);
+    expect(gatewayCatalogRevision([first])).not.toBe(revision);
+    expect(gatewayCatalogRevision([first, { ...second, schemaRevision: "changed-authorization-or-schema" }])).not.toBe(revision);
+  });
+
   it("serves late additions to an already initialized ACP MCP client", async () => {
     const f = fixture();
     const server = new AgentToolMcpServer({
@@ -60,7 +69,7 @@ describe("fixed MCP gateway tools", () => {
         connectionId: entry.connectionId, toolName: entry.toolName, schemaRevision: entry.schemaRevision, arguments: { id: "x" },
       } });
       expect(called._meta?.["pwragent/source"]).toMatchObject({ connectionId: "one", toolName: "late_tool" });
-      expect(f.approve).toHaveBeenCalledWith(expect.objectContaining({ toolName: "late_tool" }), expect.objectContaining({ backend: "acp:fixture", threadId: "thread-a", turnId: "turn-a" }), expect.any(AbortSignal), undefined);
+      expect(f.approve).toHaveBeenCalledWith(expect.objectContaining({ toolName: "late_tool" }), expect.objectContaining({ backend: "acp:fixture", threadId: "thread-a", turnId: "turn-a" }), expect.any(AbortSignal), undefined, gatewayCatalogRevision([entry]));
     } finally {
       await client.close();
       await server.close();

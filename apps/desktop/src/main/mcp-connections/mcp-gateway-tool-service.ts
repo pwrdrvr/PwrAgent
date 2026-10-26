@@ -1,7 +1,7 @@
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { McpConnectionGatewayService } from "./mcp-connection-gateway-service";
-import { validateGatewayArguments, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource } from "./mcp-gateway-catalog";
+import { gatewayCatalogRevision, validateGatewayArguments, type McpGatewayInvocation, type McpGatewayTool, type McpGatewaySource } from "./mcp-gateway-catalog";
 import { MCP_GATEWAY_TOOL_SEARCH_TIMEOUT_MS, MCP_CONNECTION_TOOL_TIMEOUT_MS, MCP_DISCOVERY_RESPONSE_GRACE_MS } from "./mcp-connection-timeouts";
 
 export type McpGatewayCallArgs = Omit<McpGatewayInvocation, "serverName">;
@@ -22,10 +22,10 @@ export type McpGatewayToolServiceOptions = {
   /** Must check active turn, actor permissions and the latest saved selection. */
   selectedConnections: (context: AgentToolCallContext) => Promise<string[]>;
   /** `annotations` are the listed tool's own hints, under its exact schema revision. */
-  approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations: Tool["annotations"]) => Promise<McpGatewayApproval>;
+  approve: (invocation: McpGatewayInvocation, context: AgentToolCallContext, signal: AbortSignal, annotations: Tool["annotations"], catalogRevision: string) => Promise<McpGatewayApproval>;
 };
 
-/** No disk catalog or connection-wide permissions. Every invocation revalidates
+/** No disk catalog. Every invocation revalidates
  * its current source on the owner broker after scoped approval has completed.
  */
 export class McpGatewayToolService {
@@ -125,7 +125,7 @@ export class McpGatewayToolService {
         toolName: tool.toolName, schemaRevision: tool.schemaRevision,
       };
       const invocation = { ...source, arguments: args.arguments };
-      const approval = await this.options.approve(invocation, context, signal, tool.definition.annotations);
+      const approval = await this.options.approve(invocation, context, signal, tool.definition.annotations, gatewayCatalogRevision(tools));
       if (!approval) throw new Error("The MCP tool invocation was not approved.");
       await this.requireSelected(args.connectionId, context, signal);
       // The owner lists and validates again, preventing schema/auth changes while

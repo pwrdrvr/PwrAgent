@@ -201,6 +201,8 @@ function sameWaits(left: readonly OperatorWait[], right: readonly OperatorWait[]
 export type OperatorWaitsContextValue = {
   waitsByThreadKey: ReadonlyMap<string, OperatorWait[]>;
   seenKeys: ReadonlySet<string>;
+  /** Shows a wait's thread, on its card for a question, as its To-dos row does. */
+  openWait?: (wait: OperatorWait) => void;
 };
 
 /**

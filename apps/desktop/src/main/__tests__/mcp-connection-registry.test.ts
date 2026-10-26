@@ -27,7 +27,7 @@ describe("McpConnectionRegistry", () => {
     const registry = new McpConnectionRegistry({ configPath: target, randomId: () => "custom" });
     expect(registry.get("builtin:sandboxer")).toMatchObject({
       kind: "sandboxer", authMode: "local_cli", sandboxerRole: "compute",
-      enabled: false, selectForNewThreads: false, toolApproval: "prompt",
+      enabled: false, selectForNewThreads: false, toolApproval: "approve",
     });
     expect(registry.get("pwrsnap")?.toolApproval).toBe("auto");
     expect(registry.get("pwrgit")?.toolApproval).toBe("auto");
@@ -39,8 +39,11 @@ describe("McpConnectionRegistry", () => {
     registry.setEnabled("builtin:sandboxer", false);
     expect(registry.get("builtin:sandboxer")?.selectForNewThreads).toBe(true);
     registry.setToolApproval("builtin:sandboxer", "prompt");
-    expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer_tool_approval");
+    expect(fs.readFileSync(target, "utf8")).toContain("sandboxer_tool_approval = \"prompt\"");
     expect(registry.get("builtin:sandboxer")?.toolApproval).toBe("prompt");
+    registry.setToolApproval("builtin:sandboxer", "approve");
+    expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer_tool_approval");
+    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:sandboxer")?.toolApproval).toBe("approve");
     expect(() => registry.remove("builtin:sandboxer")).toThrow("Built-in");
     expect(() => registry.update({ connectionId: "builtin:sandboxer", serverUrl: "https://example.com" })).toThrow("Built-in");
     expect(registry.create({ displayName: "Sandboxer", serverUrl: "https://example.com/mcp" }).id).toBe("sandboxer");
