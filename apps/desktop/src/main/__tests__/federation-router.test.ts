@@ -7,6 +7,36 @@ import {
 import { FederationRouter } from "../federation/federation-router";
 
 describe("FederationRouter", () => {
+  it("gates binary service data on service_forward_v2, relays it, and dispatches it in order", async () => {
+    const replies: FederationProtocolEnvelope[] = [];
+    const relayed: FederationProtocolEnvelope[] = [];
+    const handled: number[] = [];
+    const router = new FederationRouter({ localInstanceId: "gateway_one" });
+    router.registerServiceDataHandler((envelope) => { handled.push(envelope.seq); });
+    router.registerConnection({ peerId: "client_one", capabilities: ["gateway_relay"],
+      sendEnvelope: (envelope) => replies.push(envelope) });
+    router.registerConnection({ peerId: "client_two", capabilities: ["gateway_relay", "service_forward_v2"],
+      sendEnvelope: (envelope) => relayed.push(envelope) });
+    const frame = (source: string, target: string, seq: number) => ({
+      id: `service-data-${seq}`, kind: "service_data" as const, streamId: "stream-1", seq, data: Buffer.from([seq]),
+      protocolVersion: 1 as const, sourceInstanceId: source, targetInstanceId: target, createdAt: 1_000,
+    });
+
+    await expect(router.routeEnvelope({ sourcePeerId: "client_one", envelope: frame("client_one", "client_two", 0) }))
+      .resolves.toMatchObject({ status: "rejected", code: "capability_denied" });
+    expect(relayed).toEqual([]);
+    expect(replies).toMatchObject([{ kind: "error", error: { code: "capability_denied" } }]);
+
+    await expect(router.routeEnvelope({ sourcePeerId: "client_two", envelope: frame("client_two", "client_one", 0) }))
+      .resolves.toMatchObject({ status: "relayed" });
+    expect(replies.at(-1)).toMatchObject({ kind: "service_data", seq: 0, hopCount: 1 });
+
+    // Local frames reach the handler before routeEnvelope yields, in arrival order.
+    void router.routeEnvelope({ sourcePeerId: "client_two", envelope: frame("client_two", "gateway_one", 1) });
+    void router.routeEnvelope({ sourcePeerId: "client_two", envelope: frame("client_two", "gateway_one", 2) });
+    expect(handled).toEqual([1, 2]);
+  });
+
   it("handles local requests and replies to the source peer", async () => {
     const replies: FederationProtocolEnvelope[] = [];
     const router = new FederationRouter({

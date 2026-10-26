@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Socket } from "node:net";
 import type {
   AdvertiseServiceArgs, FederationCapability, ServiceThread, ThreadService,
-  ServiceExchange, ServiceExchangeResult, ServiceStreamOpen, ServiceStreamOpened, ServiceStreamRenew,
+  ServiceExchange, ServiceExchangeResult, ServiceStreamData, ServiceStreamOpen, ServiceStreamOpened, ServiceStreamRenew,
 } from "@pwragent/shared";
 import {
   FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, FEDERATION_SERVICE_V2_CAPABILITY,
@@ -23,10 +23,16 @@ export const SERVICE_METHOD_CAPABILITIES = {
   ...Object.fromEntries(Object.values(FEDERATION_SERVICE_V2_METHODS).map((method) => [method, FEDERATION_SERVICE_V2_CAPABILITY])),
 } as Record<string, FederationCapability>;
 
-/** Send one service stream notification to a peer. A promise is transport backpressure. */
-export type ServiceNotify = (peerId: string, method: string, params: unknown) => void | Promise<void>;
-/** Viewer-side receiver for frames an owner sends. */
-export type ServiceNotificationReceiver = { receiveNotification(peerId: string, method: string, params: unknown): boolean };
+/** One-way windowed-stream frames to a peer. A promise is transport backpressure. */
+export type ServiceStreamLink = {
+  notify(peerId: string, method: string, params: unknown): void | Promise<void>;
+  sendData(peerId: string, frame: ServiceStreamData): void | Promise<void>;
+};
+/** Receives windowed-stream frames; false when no stream of that peer has the id. */
+export type ServiceStreamReceiver = {
+  receiveNotification(peerId: string, method: string, params: unknown): boolean;
+  receiveData(peerId: string, frame: ServiceStreamData): boolean;
+};
 
 type Lease = { leaseId: string; peerId: string; service: ThreadService; expiresAt: number };
 type Stream = {
@@ -77,7 +83,7 @@ export class FederationServices {
   private disposed = false;
   private checking = false;
   private nextThreadCheckAt = 0;
-  private notify?: ServiceNotify;
+  private link?: ServiceStreamLink;
   /** One per viewer, so one viewer's transport backpressure never stalls another's streams. */
   private readonly schedulers = new Map<string, ServiceStreamScheduler>();
   private readonly budget: ServiceStreamBudget;
@@ -98,8 +104,8 @@ export class FederationServices {
     this.timer.unref();
   }
 
-  /** Enables windowed streams; frames to viewers leave through `notify`. */
-  setNotifier(notify: ServiceNotify): void { this.notify = notify; }
+  /** Enables windowed streams; frames to viewers leave through `link`. */
+  setStreamLink(link: ServiceStreamLink): void { this.link = link; }
 
   async advertise(threadInput: ServiceThread, argsInput: AdvertiseServiceArgs): Promise<ThreadService> {
     const thread = serviceThread(threadInput);
@@ -193,8 +199,8 @@ export class FederationServices {
 
   /** Open a windowed stream under the viewer's stream id and start pushing service output. */
   async openStream(peerId: string, input: ServiceStreamOpen): Promise<ServiceStreamOpened> {
-    const notify = this.notify;
-    if (!notify) throw new Error("Windowed service streams are unavailable.");
+    const link = this.link;
+    if (!link) throw new Error("Windowed service streams are unavailable.");
     const lease = this.getLease(peerId, id(input.leaseId));
     const streamId = id(input.streamId);
     if (!isServiceStreamSize(input.window, SERVICE_STREAM_MAX_WINDOW_BYTES)
@@ -211,7 +217,8 @@ export class FederationServices {
     await this.connect(peerId, stream);
     const endpoint = new ServiceStreamEndpoint({
       streamId, socket, scheduler: this.scheduler(peerId), budget: this.budget, frameBytes, window: this.options.streamWindow,
-      send: (method, params) => notify(peerId, method, params),
+      send: (method, params) => link.notify(peerId, method, params),
+      sendData: (frame) => link.sendData(peerId, frame),
       authorize: () => { this.getLease(peerId, lease.leaseId); },
       onClosed: () => { if (this.streams.get(streamId) === stream) this.streams.delete(streamId); },
     });
@@ -235,21 +242,34 @@ export class FederationServices {
    * that peer has the id, so a viewer-side receiver may claim it.
    */
   receiveNotification(peerId: string, method: string, params: unknown): boolean {
-    const streamId = (params as { streamId?: unknown } | undefined)?.streamId;
+    const endpoint = this.receivingEndpoint(peerId, params);
+    if (endpoint === false) return false;
+    const frame = params as Record<string, never>;
+    if (method === FEDERATION_SERVICE_V2_NOTIFICATIONS.window) endpoint?.receiveWindow(frame);
+    else if (method === FEDERATION_SERVICE_V2_NOTIFICATIONS.close) endpoint?.receiveClose(frame);
+    return true;
+  }
+
+  /** Route a windowed-stream data frame from `peerId`, as `receiveNotification` does. */
+  receiveData(peerId: string, frame: ServiceStreamData): boolean {
+    const endpoint = this.receivingEndpoint(peerId, frame);
+    if (endpoint === false) return false;
+    endpoint?.receiveData(frame);
+    return true;
+  }
+
+  /** False when the frame is not for this owner; undefined when it closed the stream. */
+  private receivingEndpoint(peerId: string, frame: unknown): ServiceStreamEndpoint | false | undefined {
+    const streamId = (frame as { streamId?: unknown } | undefined)?.streamId;
     if (typeof streamId !== "string") return false;
     const stream = this.streams.get(streamId);
     if (!stream?.windowed || stream.lease.peerId !== peerId) return false;
     try { this.getLease(peerId, stream.lease.leaseId); }
-    catch (error) { this.close(peerId, streamId, error instanceof Error ? error.message : undefined); return true; }
-    const endpoint = stream.endpoint;
+    catch (error) { this.close(peerId, streamId, error instanceof Error ? error.message : undefined); return undefined; }
     // Only a cancellation can precede the open result.
-    if (!endpoint) { this.close(peerId, streamId); return true; }
+    if (!stream.endpoint) { this.close(peerId, streamId); return undefined; }
     stream.touchedAt = this.now();
-    const frame = params as Record<string, never>;
-    if (method === FEDERATION_SERVICE_V2_NOTIFICATIONS.data) endpoint.receiveData(frame);
-    else if (method === FEDERATION_SERVICE_V2_NOTIFICATIONS.window) endpoint.receiveWindow(frame);
-    else if (method === FEDERATION_SERVICE_V2_NOTIFICATIONS.close) endpoint.receiveClose(frame);
-    return true;
+    return stream.endpoint;
   }
 
   private scheduler(peerId: string): ServiceStreamScheduler {
@@ -407,22 +427,22 @@ export class FederationServices {
 }
 
 /**
- * Serve v1 always. With `notify`, also serve windowed streams and route their
+ * Serve v1 always. With `link`, also serve windowed streams and route their
  * frames: to this owner's streams first, then to `viewer`, this instance's
  * forwarder, for streams it opened on other owners.
  */
 export function registerFederationServices(router: FederationRouter, service: FederationServices, options: {
-  notify?: ServiceNotify;
-  viewer?: ServiceNotificationReceiver;
+  link?: ServiceStreamLink;
+  viewer?: ServiceStreamReceiver;
 } = {}): void {
-  if (options.notify) {
-    service.setNotifier(options.notify);
+  if (options.link) {
+    service.setStreamLink(options.link);
     router.registerHandler(FEDERATION_SERVICE_V2_METHODS.open, (envelope) =>
       service.openStream(id(envelope.sourceInstanceId), envelope.params as ServiceStreamOpen));
     router.registerHandler(FEDERATION_SERVICE_V2_METHODS.renew, (envelope) =>
       service.renewStreams(id(envelope.sourceInstanceId), envelope.params as ServiceStreamRenew));
   }
-  if (options.notify || options.viewer) {
+  if (options.link || options.viewer) {
     for (const method of Object.values(FEDERATION_SERVICE_V2_NOTIFICATIONS)) {
       router.registerNotificationHandler(method, (envelope) => {
         const peerId = envelope.sourceInstanceId;
@@ -430,6 +450,11 @@ export function registerFederationServices(router: FederationRouter, service: Fe
         if (!service.receiveNotification(peerId, method, envelope.params)) options.viewer?.receiveNotification(peerId, method, envelope.params);
       });
     }
+    router.registerServiceDataHandler((envelope) => {
+      const peerId = envelope.sourceInstanceId;
+      if (typeof peerId !== "string") return;
+      if (!service.receiveData(peerId, envelope)) options.viewer?.receiveData(peerId, envelope);
+    });
   }
   for (const [action, method] of Object.entries(FEDERATION_SERVICE_METHODS)) {
     router.registerHandler(method, (envelope) => {

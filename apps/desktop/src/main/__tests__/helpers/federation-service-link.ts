@@ -1,7 +1,8 @@
 import type {
-  FederationCapability, FederationNotificationEnvelope, FederationProtocolEnvelope,
+  FederationCapability, FederationNotificationEnvelope, FederationProtocolEnvelope, FederationServiceDataEnvelope,
+  ServiceStreamData,
 } from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION, FEDERATION_SERVICE_V2_NOTIFICATIONS } from "@pwragent/shared";
+import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
 import { registerFederationServices, SERVICE_METHOD_CAPABILITIES, type FederationServices } from "../../federation/federation-services";
 import type { FederationServiceForwarder } from "../../federation/federation-service-forwarder";
 import { FederationRouter } from "../../federation/federation-router";
@@ -28,9 +29,9 @@ export class ServiceLinkGate {
   open(): void { this.held = false; this.flush(); }
 
   pass(envelope: FederationProtocolEnvelope, deliver: () => void): void {
-    const data = envelope.kind === "notification" && envelope.method === FEDERATION_SERVICE_V2_NOTIFICATIONS.data;
+    const data = envelope.kind === "service_data";
     if (!this.held || (!data && !this.queue.length)) { deliver(); return; }
-    if (data) this.bytes += Buffer.from((envelope.params as { data: string }).data, "base64").length;
+    if (data) this.bytes += envelope.data.byteLength;
     this.queue.push(deliver);
   }
 }
@@ -38,6 +39,14 @@ export class ServiceLinkGate {
 export function serviceNotification(source: string, target: string, method: string, params: unknown): FederationNotificationEnvelope {
   return {
     id: `fixture-notification:${Math.random()}`, kind: "notification", method, params,
+    protocolVersion: FEDERATION_PROTOCOL_VERSION, sourceInstanceId: source, targetInstanceId: target, createdAt: Date.now(),
+  };
+}
+
+export function serviceData(source: string, target: string, frame: ServiceStreamData): FederationServiceDataEnvelope {
+  return {
+    id: `fixture-data:${Math.random()}`, kind: "service_data", streamId: frame.streamId, seq: frame.seq,
+    ...(frame.fin ? { fin: true } : {}), data: frame.data,
     protocolVersion: FEDERATION_PROTOCOL_VERSION, sourceInstanceId: source, targetInstanceId: target, createdAt: Date.now(),
   };
 }
@@ -67,6 +76,7 @@ export function serviceLink(service: FederationServices, forwarder: FederationSe
     } });
   const toViewer = (envelope: FederationProtocolEnvelope): void => down.pass(envelope, () => {
     if (envelope.kind === "notification") forwarder.receiveNotification(envelope.sourceInstanceId, envelope.method, envelope.params);
+    else if (envelope.kind === "service_data") forwarder.receiveData(envelope.sourceInstanceId, envelope);
     else rpc.receiveEnvelope(envelope);
   });
   const ownerUplink = viaGateway ? "gateway" : "viewer";
@@ -81,8 +91,9 @@ export function serviceLink(service: FederationServices, forwarder: FederationSe
     if (envelope.sourceInstanceId === "gateway") frames.push(envelope);
     toViewer(envelope);
   } });
-  registerFederationServices(router, service, options.ownerWindowed === false ? {} : {
+  registerFederationServices(router, service, options.ownerWindowed === false ? {} : { link: {
     notify: (peerId, method, params) => { router.sendToPeer(ownerUplink, serviceNotification("owner", peerId, method, params)); },
-  });
+    sendData: (peerId, frame) => { router.sendToPeer(ownerUplink, serviceData("owner", peerId, frame)); },
+  } });
   return { rpc, router, frames, up, down };
 }

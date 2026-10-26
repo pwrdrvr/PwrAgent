@@ -147,10 +147,19 @@ export class FederationFrameTooLargeError extends Error {
   }
 }
 
+/**
+ * Binary envelope frame: magic, uint32 header length, the JSON envelope
+ * without `data`, then `data` raw. Carries every envelope kind with a byte
+ * payload. A build that predates a kind decodes its frame to nothing.
+ */
 const FEDERATION_BLOB_FRAME_MAGIC = Buffer.from("PWRBLOB1", "ascii");
 const FEDERATION_BLOB_FRAME_PREFIX_BYTES =
   FEDERATION_BLOB_FRAME_MAGIC.byteLength + 4;
 const FEDERATION_BLOB_FRAME_MAX_HEADER_BYTES = 64 * 1024;
+const FEDERATION_BINARY_ENVELOPE_KINDS: ReadonlySet<string> = new Set<FederationProtocolEnvelope["kind"]>([
+  "blob_chunk",
+  "service_data",
+]);
 export const FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES = 2 * 1024 * 1024;
 const FEDERATION_SEND_BUFFER_POLL_MS = 5;
 const FEDERATION_SEND_BUFFER_DRAIN_GUARD_MS = 250;
@@ -1748,7 +1757,8 @@ function encodeRawFederationSocketPayload(
 ): Buffer {
   if (
     message.kind !== "envelope"
-    || message.envelope.kind !== "blob_chunk"
+    || (message.envelope.kind !== "blob_chunk"
+      && message.envelope.kind !== "service_data")
   ) {
     return Buffer.from(JSON.stringify(message), "utf8");
   }
@@ -1763,7 +1773,7 @@ function encodeRawFederationSocketPayload(
   const prefix = Buffer.allocUnsafe(FEDERATION_BLOB_FRAME_PREFIX_BYTES);
   FEDERATION_BLOB_FRAME_MAGIC.copy(prefix, 0);
   prefix.writeUInt32BE(header.byteLength, FEDERATION_BLOB_FRAME_MAGIC.byteLength);
-  return Buffer.concat([prefix, header, Buffer.from(data)]);
+  return Buffer.concat([prefix, header, data]);
 }
 
 function decodeFederationSocketPayload(payload: Buffer): FederationSocketMessage | undefined {
@@ -1801,7 +1811,7 @@ function decodeRawFederationSocketPayload(
     if (
       parsed.kind === "envelope"
       && parsed.envelope
-      && parsed.envelope.kind !== "blob_chunk"
+      && !FEDERATION_BINARY_ENVELOPE_KINDS.has(parsed.envelope.kind)
     ) {
       return parsed as FederationSocketEnvelopeMessage;
     }
@@ -1836,7 +1846,7 @@ function decodeFederationBlobSocketPayload(
     if (
       header.kind !== "envelope"
       || !header.envelope
-      || header.envelope.kind !== "blob_chunk"
+      || !FEDERATION_BINARY_ENVELOPE_KINDS.has(header.envelope.kind)
       || Object.hasOwn(header.envelope, "data")
     ) {
       return undefined;

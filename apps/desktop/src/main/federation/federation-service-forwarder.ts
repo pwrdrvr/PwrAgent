@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
 import type {
-  ServiceForward, ServiceThread, ThreadService, ServiceExchangeResult, ServiceStreamOpen, ServiceStreamOpened,
+  ServiceForward, ServiceThread, ThreadService, ServiceExchangeResult, ServiceStreamData, ServiceStreamOpen,
+  ServiceStreamOpened,
 } from "@pwragent/shared";
 import {
   FEDERATION_SERVICE_METHODS as METHODS, FEDERATION_SERVICE_V2_METHODS as V2,
@@ -16,8 +17,9 @@ import {
 
 export type ServiceRpc = {
   request<T>(params: { method: string; params: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<T>;
-  /** One-way frames for windowed streams. Without it the forward uses v1 exchanges. */
+  /** One-way frames for windowed streams. Without both the forward uses v1 exchanges. */
   notify?(method: string, params: unknown): void | Promise<void>;
+  sendServiceData?(frame: ServiceStreamData): void | Promise<void>;
 };
 type Forward = {
   windowId: number; view: ServiceForward; rpc: ServiceRpc; server: Server;
@@ -53,14 +55,24 @@ export class FederationServiceForwarder {
 
   /** Route a windowed-stream frame from owner `peerId`. False when no stream claims it. */
   receiveNotification(peerId: string, method: string, params: unknown): boolean {
-    const streamId = (params as { streamId?: unknown } | undefined)?.streamId;
-    const stream = typeof streamId === "string" ? this.streams.get(streamId) : undefined;
-    if (!stream || stream.forward.view.service.ownerInstanceId !== peerId) return false;
+    const endpoint = this.receivingEndpoint(peerId, params);
+    if (!endpoint) return false;
     const frame = params as Record<string, never>;
-    if (method === FRAMES.data) stream.endpoint.receiveData(frame);
-    else if (method === FRAMES.window) stream.endpoint.receiveWindow(frame);
-    else if (method === FRAMES.close) stream.endpoint.receiveClose(frame);
+    if (method === FRAMES.window) endpoint.receiveWindow(frame);
+    else if (method === FRAMES.close) endpoint.receiveClose(frame);
     return true;
+  }
+
+  receiveData(peerId: string, frame: ServiceStreamData): boolean {
+    const endpoint = this.receivingEndpoint(peerId, frame);
+    endpoint?.receiveData(frame);
+    return endpoint !== undefined;
+  }
+
+  private receivingEndpoint(peerId: string, frame: unknown): ServiceStreamEndpoint | undefined {
+    const streamId = (frame as { streamId?: unknown } | undefined)?.streamId;
+    const stream = typeof streamId === "string" ? this.streams.get(streamId) : undefined;
+    return stream?.forward.view.service.ownerInstanceId === peerId ? stream.endpoint : undefined;
   }
 
   list(windowId: number, instanceId: string, thread: ServiceThread): ServiceForward[] {
@@ -76,7 +88,7 @@ export class FederationServiceForwarder {
     if (existing?.localPort === 0) throw new Error("Service connection is already pending.");
     if (existing) return existing;
     if (this.forwards.size >= 16) throw new Error("Local forwarding limit reached.");
-    const version = options.streams === 2 && rpc.notify ? 2 : 1;
+    const version = options.streams === 2 && rpc.notify && rpc.sendServiceData ? 2 : 1;
     const frameBytes = this.options.streamFrameBytes ?? SERVICE_STREAM_FRAME_BYTES;
     const server = createServer({ allowHalfOpen: true, highWaterMark: version === 2 ? 2 * frameBytes : 32 * 1024, pauseOnConnect: true });
     const forward: Forward = {
@@ -187,11 +199,11 @@ export class FederationServiceForwarder {
   /** Windowed stream: frames flow as credit allows, with no exchange per chunk. */
   private async pumpWindowed(forward: Forward, socket: Socket): Promise<void> {
     const streamId = randomUUID();
-    const notify = forward.rpc.notify!.bind(forward.rpc);
     const endpoint = new ServiceStreamEndpoint({
       streamId, socket, scheduler: this.scheduler(forward.view.service.ownerInstanceId), budget: this.budget,
       window: this.options.streamWindow, frameBytes: this.options.streamFrameBytes,
-      send: notify,
+      send: forward.rpc.notify!.bind(forward.rpc),
+      sendData: forward.rpc.sendServiceData!.bind(forward.rpc),
       onTransfer: (sent, received) => {
         forward.view.sentBytes += sent;
         forward.view.receivedBytes += received;

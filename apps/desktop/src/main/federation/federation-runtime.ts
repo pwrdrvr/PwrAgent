@@ -9,7 +9,7 @@ import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, re
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type { ServiceThread, ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
 import {
-  FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, FEDERATION_SERVICE_V2_CAPABILITY, FEDERATION_SERVICE_V2_NOTIFICATIONS,
+  FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, FEDERATION_SERVICE_V2_CAPABILITY,
 } from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES, serviceThread } from "./federation-services";
 import { FederationServiceForwarder } from "./federation-service-forwarder";
@@ -94,6 +94,7 @@ import type {
   FederationInstanceRole,
   FederationLoadStatus,
   FederationNotificationEnvelope,
+  FederationServiceDataEnvelope,
   FederationPeerSummary,
   TodoUnavailableInstance,
   FederationPinDisposition,
@@ -2802,7 +2803,7 @@ export class DesktopFederationRuntime {
         sendEnvelope: (envelope) => {
           this.sendEnvelopeToTarget(target.instanceId, envelope);
         },
-        sendNotification: (envelope) => this.sendServiceFrame(target.instanceId, envelope),
+        sendOneWay: (envelope) => this.sendServiceFrame(target.instanceId, envelope),
       });
       this.rpcByPeer.set(target.instanceId, rpc);
     }
@@ -3672,16 +3673,30 @@ export class DesktopFederationRuntime {
     this.releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(this.ptyService);
     registerFederationPtyHandlers({ router, service: this.ptyService });
     registerFederationServices(router, this.threadServices(), {
-      notify: (peerId, method, params) => this.sendServiceFrame(peerId, {
-        id: `federation-service:${randomUUID()}`,
-        kind: "notification",
-        method,
-        params,
-        protocolVersion: FEDERATION_PROTOCOL_VERSION,
-        sourceInstanceId: this.ensureLocalInstanceId(),
-        targetInstanceId: peerId,
-        createdAt: Date.now(),
-      }),
+      link: {
+        notify: (peerId, method, params) => this.sendServiceFrame(peerId, {
+          id: `federation-service:${randomUUID()}`,
+          kind: "notification",
+          method,
+          params,
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: this.ensureLocalInstanceId(),
+          targetInstanceId: peerId,
+          createdAt: Date.now(),
+        }),
+        sendData: (peerId, frame) => this.sendServiceFrame(peerId, {
+          id: `federation-service:${randomUUID()}`,
+          kind: "service_data",
+          streamId: frame.streamId,
+          seq: frame.seq,
+          ...(frame.fin ? { fin: true } : {}),
+          data: frame.data,
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: this.ensureLocalInstanceId(),
+          targetInstanceId: peerId,
+          createdAt: Date.now(),
+        }),
+      },
       viewer: this.serviceForwarder,
     });
     this.router = router;
@@ -4791,9 +4806,9 @@ export class DesktopFederationRuntime {
    */
   private sendServiceFrame(
     targetInstanceId: FederationInstanceId,
-    envelope: FederationNotificationEnvelope,
+    envelope: FederationNotificationEnvelope | FederationServiceDataEnvelope,
   ): void | Promise<void> {
-    if (envelope.method === FEDERATION_SERVICE_V2_NOTIFICATIONS.data) {
+    if (envelope.kind === "service_data") {
       return this.sendEnvelopeToTargetWithBackpressure(targetInstanceId, envelope);
     }
     this.sendEnvelopeToTarget(targetInstanceId, envelope);

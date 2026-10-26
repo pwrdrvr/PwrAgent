@@ -224,6 +224,37 @@ describe("federation transport", () => {
     expect(federationTransportCodecForTest.decodeEnvelope(jsonWire)).toBeUndefined();
   });
 
+  it("carries service stream bytes raw after the header, never as JSON", () => {
+    const data = Buffer.from([0, 1, 2, 0xff, 0x7b]);
+    const envelope = {
+      id: "service-codec",
+      kind: "service_data" as const,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "client_two",
+      createdAt: 1_000,
+      streamId: "stream-1",
+      seq: 3,
+      fin: true,
+      data,
+    };
+
+    const wire = federationTransportCodecForTest.encodeEnvelope(envelope);
+    expect(wire.subarray(0, 8).toString("ascii")).toBe("PWRBLOB1");
+    const headerLength = wire.readUInt32BE(8);
+    const header = JSON.parse(wire.subarray(12, 12 + headerLength).toString("utf8"));
+    expect(header.envelope).not.toHaveProperty("data");
+    expect(wire.subarray(12 + headerLength)).toEqual(data);
+    expect(federationTransportCodecForTest.decodeEnvelope(wire)).toEqual(envelope);
+    // An empty FIN frame is still a binary frame.
+    const fin = { ...envelope, seq: 4, data: new Uint8Array(0) };
+    expect(federationTransportCodecForTest.decodeEnvelope(federationTransportCodecForTest.encodeEnvelope(fin)))
+      .toMatchObject({ kind: "service_data", seq: 4, data: Buffer.alloc(0) });
+
+    const jsonWire = Buffer.from(JSON.stringify({ kind: "envelope", envelope }), "utf8");
+    expect(federationTransportCodecForTest.decodeEnvelope(jsonWire)).toBeUndefined();
+  });
+
   it("negotiates shutdown notices and delivers the deadline before a Going Away close", async () => {
     const clientKeys = generateFederationIdentityKeyPair();
     const invite = createFederationEnrollmentInvite({

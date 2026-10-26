@@ -14,7 +14,7 @@ import { generateFederationIdentityKeyPair } from "../federation/federation-iden
 import { generateNoiseStaticKeyPair } from "../federation/federation-noise";
 import { createFederationEnrollmentInvite } from "../federation/federation-enrollment";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
-import { serviceNotification } from "./helpers/federation-service-link";
+import { serviceData, serviceNotification } from "./helpers/federation-service-link";
 import { setFederationTrafficCapture, snapshotFederationTrafficHistory } from "../federation/federation-traffic-capture";
 
 vi.mock("../log", () => ({ getMainLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }) }));
@@ -33,9 +33,10 @@ for (const streams of [1, 2] as const) it(`carries HTTP and WS on v${streams} st
   const service = new FederationServices({ instanceId: "owner", allowForwarding: () => true, threadExists: async () => true });
   cleanups.push(() => service.dispose());
   const clients = new Map<string, Awaited<ReturnType<typeof connectFederationClient>>>();
-  registerFederationServices(owner, service, {
+  registerFederationServices(owner, service, { link: {
     notify: (peerId, method, params) => clients.get("owner")!.sendEnvelopeWithBackpressure!(serviceNotification("owner", peerId, method, params)),
-  });
+    sendData: (peerId, frame) => clients.get("owner")!.sendEnvelopeWithBackpressure!(serviceData("owner", peerId, frame)),
+  } });
   const forwarder = new FederationServiceForwarder();
   cleanups.push(() => forwarder.dispose());
   const server = new FederationGatewayWebSocketServer({
@@ -49,7 +50,7 @@ for (const streams of [1, 2] as const) it(`carries HTTP and WS on v${streams} st
   cleanups.push(() => server.stop());
   const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
     sendEnvelope: (envelope) => clients.get("viewer")!.sendEnvelope(envelope),
-    sendNotification: (envelope) => clients.get("viewer")!.sendEnvelopeWithBackpressure!(envelope) });
+    sendOneWay: (envelope) => clients.get("viewer")!.sendEnvelopeWithBackpressure!(envelope) });
   cleanups.push(() => rpc.rejectAll(new Error("Fixture stopped")));
   for (const peerId of ["owner", "viewer"]) {
     const identity = generateFederationIdentityKeyPair();
@@ -62,6 +63,7 @@ for (const streams of [1, 2] as const) it(`carries HTTP and WS on v${streams} st
       onEnvelope: (envelope) => {
         if (peerId === "owner") void owner.routeEnvelope({ envelope, sourcePeerId: "gateway" });
         else if (envelope.kind === "notification") forwarder.receiveNotification(envelope.sourceInstanceId, envelope.method, envelope.params);
+        else if (envelope.kind === "service_data") forwarder.receiveData(envelope.sourceInstanceId, envelope);
         else rpc.receiveEnvelope(envelope);
       },
     });
@@ -92,7 +94,7 @@ for (const streams of [1, 2] as const) it(`carries HTTP and WS on v${streams} st
   expect(history).not.toContain("private-fixture-body-no-capture");
   expect(history).not.toContain(Buffer.from("private-fixture-body-no-capture").toString("base64"));
   expect(history).not.toContain("private-fixture-websocket-message");
-  expect(history).toContain(streams === 2 ? "services.v2.data" : "services.v1.exchange");
+  expect(history).toContain(streams === 2 ? "\"envelopeKind\":\"service_data\"" : "services.v1.exchange");
   const closed = once(socket, "close");
   forwarder.disconnectPeer("owner");
   await closed;

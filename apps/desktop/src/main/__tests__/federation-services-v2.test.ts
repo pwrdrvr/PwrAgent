@@ -78,13 +78,14 @@ for (const viaGateway of [false, true]) describe(viaGateway ? "windowed streams 
     socket.send("refresh");
     expect(String((await message)[0])).toBe("hmr:refresh");
     expect(methods(frames)).toContain(V2.open);
-    expect(methods(frames)).toContain(FRAMES.data);
     expect(methods(frames)).not.toContain(METHODS.exchange);
     expect(methods(frames)).not.toContain(METHODS.open);
-    for (const frame of frames) {
-      if (frame.kind === "notification" && frame.method === FRAMES.data) {
-        expect(Buffer.from((frame.params as { data: string }).data, "base64").length).toBeLessThanOrEqual(SERVICE_STREAM_FRAME_BYTES);
-      }
+    // Bytes travel raw in binary frames, never as base64 inside JSON.
+    const data = frames.flatMap((frame) => frame.kind === "service_data" ? [frame] : []);
+    expect(data.length).toBeGreaterThan(0);
+    for (const frame of data) {
+      expect(frame.data).toBeInstanceOf(Uint8Array);
+      expect(frame.data.byteLength).toBeLessThanOrEqual(SERVICE_STREAM_FRAME_BYTES);
     }
     const closed = once(socket, "close");
     forwarder.disconnect(1, forward.forwardId);
@@ -298,7 +299,7 @@ describe("windowed stream lifecycle", () => {
     const port = await listen(server);
     const service = owner({ now: () => now });
     const sent: Array<{ method: string; params: unknown }> = [];
-    service.setNotifier((_peerId, method, params) => { sent.push({ method, params }); });
+    service.setStreamLink({ notify: (_peerId, method, params) => { sent.push({ method, params }); }, sendData: () => undefined });
     const declaration = await service.advertise(thread, { port, name: "idle", protocol: "tcp" });
     const { leaseId } = await service.lease("viewer", thread, declaration.serviceId);
     for (const streamId of ["stream-named", "stream-forgotten"]) {
@@ -343,16 +344,17 @@ describe("windowed stream endpoint", () => {
     const sent: Array<{ method: string; params: Record<string, unknown> }> = [];
     const budget = new ServiceStreamBudget();
     const stream = new ServiceStreamEndpoint({ streamId: "s", socket, scheduler: new ServiceStreamScheduler(), budget, window,
-      send: (method, params) => { sent.push({ method, params: params as Record<string, unknown> }); } });
+      send: (method, params) => { sent.push({ method, params: params as Record<string, unknown> }); }, sendData: () => undefined });
     stream.start(window, 16_384);
     return { stream, socket, sent, budget };
   }
-  const b64 = (bytes: number): string => Buffer.alloc(bytes, 1).toString("base64");
+  const bytes = (length: number): Uint8Array => Buffer.alloc(length, 1);
   const violations: Array<[string, (stream: ServiceStreamEndpoint) => void, string]> = [
-    ["data beyond the granted window", (stream) => stream.receiveData({ seq: 0, data: b64(8192) }), "window"],
-    ["a frame out of sequence", (stream) => stream.receiveData({ seq: 1, data: b64(16) }), "sequence"],
-    ["invalid base64", (stream) => stream.receiveData({ seq: 0, data: "!!!!" }), "Invalid service stream frame"],
-    ["data after FIN", (stream) => { stream.receiveData({ seq: 0, data: "", fin: true }); stream.receiveData({ seq: 1, data: b64(3) }); }, "after FIN"],
+    ["data beyond the granted window", (stream) => stream.receiveData({ seq: 0, data: bytes(8192) }), "window"],
+    ["a frame out of sequence", (stream) => stream.receiveData({ seq: 1, data: bytes(16) }), "sequence"],
+    ["a frame without binary data", (stream) => stream.receiveData({ seq: 0, data: "AAAA" as never }), "Invalid service stream frame"],
+    ["a frame larger than the frame size", (stream) => stream.receiveData({ seq: 0, data: bytes(SERVICE_STREAM_FRAME_BYTES + 1) }), "Invalid service stream frame"],
+    ["data after FIN", (stream) => { stream.receiveData({ seq: 0, data: bytes(0), fin: true }); stream.receiveData({ seq: 1, data: bytes(3) }); }, "after FIN"],
     ["credit past the ceiling", (stream) => stream.receiveWindow({ bytes: SERVICE_STREAM_MAX_WINDOW_BYTES }), "window"],
   ];
   for (const [name, violate, error] of violations) it(`closes the stream on ${name}`, async () => {
@@ -376,14 +378,14 @@ describe("windowed stream endpoint", () => {
     socket.on("error", () => undefined);
     await once(socket, "connect");
     const stream = new ServiceStreamEndpoint({ streamId: "s", socket, scheduler: new ServiceStreamScheduler(),
-      budget: new ServiceStreamBudget(window), window, send: () => undefined });
+      budget: new ServiceStreamBudget(window), window, send: () => undefined, sendData: () => undefined });
     stream.start(window, 16_384);
     await vi.waitFor(() => expect(accepted.size).toBe(1));
     const [reader] = [...accepted];
-    const frame = Buffer.alloc(SERVICE_STREAM_FRAME_BYTES, 7).toString("base64");
+    const frame = Buffer.alloc(SERVICE_STREAM_FRAME_BYTES, 7);
     const frames = window / SERVICE_STREAM_FRAME_BYTES;
     for (let seq = 0; seq < frames; seq += 1) stream.receiveData({ seq, data: frame });
-    stream.receiveData({ seq: frames, data: "", fin: true });
+    stream.receiveData({ seq: frames, data: new Uint8Array(0), fin: true });
     // The reader is paused, so most of the window is still queued locally.
     expect(socket.writableLength).toBeGreaterThan(0);
     stream.receiveClose({ streamId: "s" });
@@ -399,12 +401,12 @@ describe("windowed stream endpoint", () => {
   it("grants credit back as the local socket drains, in batches", async () => {
     const { stream, sent, socket } = await endpoint(4096);
     cleanups.push(() => { socket.destroy(); });
-    stream.receiveData({ seq: 0, data: b64(1024) });
+    stream.receiveData({ seq: 0, data: bytes(1024) });
     await vi.waitFor(() => expect(sent.filter((entry) => entry.method === FRAMES.window)).toEqual([
       { method: FRAMES.window, params: { streamId: "s", bytes: 1024 } },
     ]));
     expect(stream.peerCredit).toBe(4096);
-    stream.receiveData({ seq: 1, data: b64(512) });
+    stream.receiveData({ seq: 1, data: bytes(512) });
     await settle();
     // Below a quarter of the window: no grant yet.
     expect(sent.filter((entry) => entry.method === FRAMES.window)).toHaveLength(1);

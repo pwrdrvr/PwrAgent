@@ -3,7 +3,8 @@
 //   PWRAGENT_SERVICE_TUNNEL_BENCH=1 pnpm test apps/desktop/src/main/__tests__/federation-services-throughput.test.ts
 // Each scenario writes one JSON line to stderr (vitest swallows console.log).
 // PWRAGENT_SERVICE_TUNNEL_BENCH_FILTER narrows the matrix by a substring of the
-// scenario name, such as "routed v1".
+// scenario name, such as "routed v1". Scenarios marked "text" send compressible
+// text instead of random bytes.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { once } from "node:events";
 import { createServer, connect, type AddressInfo, type Server, type Socket } from "node:net";
@@ -11,12 +12,17 @@ import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } 
 import { randomBytes } from "node:crypto";
 import { Session } from "node:inspector/promises";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import type { FederationCapability, FederationNotificationEnvelope, FederationProtocolEnvelope, ServiceThread } from "@pwragent/shared";
+import type {
+  FederationCapability, FederationNotificationEnvelope, FederationProtocolEnvelope, FederationServiceDataEnvelope,
+  ServiceStreamData, ServiceThread,
+} from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES } from "../federation/federation-services";
 import { FederationServiceForwarder } from "../federation/federation-service-forwarder";
 import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint } from "../federation/federation-rpc";
-import { FederationGatewayWebSocketServer, connectFederationClient } from "../federation/federation-transport";
+import {
+  FederationGatewayWebSocketServer, connectFederationClient, federationTransportCodecForTest,
+} from "../federation/federation-transport";
 import { FederationStore } from "../federation/federation-store";
 import { generateFederationIdentityKeyPair } from "../federation/federation-identity";
 import { generateNoiseStaticKeyPair, NoiseIKHandshake } from "../federation/federation-noise";
@@ -35,6 +41,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) awai
 
 type Direction = "upload" | "download" | "duplex";
 type Path = "routed" | "gateway" | "gateway-plain";
+type Payload = "random" | "text";
 type Fixture = { rpc: FederationRpcEndpoint; frames: () => number };
 
 function report(line: Record<string, unknown>): void {
@@ -51,10 +58,16 @@ function notification(source: string, target: string, method: string, params: un
   return { id: `bench:${Math.random()}`, kind: "notification", method, params, protocolVersion: 1, sourceInstanceId: source, targetInstanceId: target, createdAt: Date.now() };
 }
 
+function serviceData(source: string, target: string, frame: ServiceStreamData): FederationServiceDataEnvelope {
+  return { id: `bench:${Math.random()}`, kind: "service_data", streamId: frame.streamId, seq: frame.seq, ...(frame.fin ? { fin: true } : {}),
+    data: frame.data, protocolVersion: 1, sourceInstanceId: source, targetInstanceId: target, createdAt: Date.now() };
+}
+
 /** Owner-to-viewer delivery: windowed frames to the forwarder, the rest to the RPC endpoint. */
 function viewerReceiver(rpc: FederationRpcEndpoint, forwarder: FederationServiceForwarder) {
   return (envelope: FederationProtocolEnvelope): void => {
     if (envelope.kind === "notification") forwarder.receiveNotification(envelope.sourceInstanceId, envelope.method, envelope.params);
+    else if (envelope.kind === "service_data") forwarder.receiveData(envelope.sourceInstanceId, envelope);
     else rpc.receiveEnvelope(envelope);
   };
 }
@@ -74,9 +87,10 @@ function routedFixture(service: FederationServices, forwarder: FederationService
     sendEnvelope: (envelope) => { frames += 1; void gateway.routeEnvelope({ envelope, sourcePeerId: "owner" }); } });
   gateway.registerConnection({ peerId: "owner", capabilities, sendEnvelope: (envelope) => { void owner.routeEnvelope({ envelope, sourcePeerId: "gateway" }); } });
   gateway.registerConnection({ peerId: "viewer", capabilities, sendEnvelope: (envelope) => delayed(rttMs, () => toViewer(envelope)) });
-  registerFederationServices(owner, service, {
+  registerFederationServices(owner, service, { link: {
     notify: (peerId, method, params) => { owner.sendToPeer("gateway", notification("owner", peerId, method, params)); },
-  });
+    sendData: (peerId, frame) => { owner.sendToPeer("gateway", serviceData("owner", peerId, frame)); },
+  } });
   cleanups.push(() => rpc.rejectAll(new Error("Bench complete")));
   return { rpc, frames: () => frames };
 }
@@ -110,7 +124,7 @@ async function gatewayFixture(service: FederationServices, forwarder: Federation
   };
   const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner", defaultTimeoutMs: 30_000,
     sendEnvelope: (envelope) => { frames += 1; delayed(rttMs, () => clients.get("viewer")!.sendEnvelope(envelope)); },
-    sendNotification: viewerSend });
+    sendOneWay: viewerSend });
   const toViewer = viewerReceiver(rpc, forwarder);
   cleanups.push(() => rpc.rejectAll(new Error("Bench complete")));
   for (const peerId of ["owner", "viewer"]) {
@@ -131,9 +145,14 @@ async function gatewayFixture(service: FederationServices, forwarder: Federation
   }
   owner.registerConnection({ peerId: "gateway", capabilities,
     sendEnvelope: (envelope) => { frames += 1; clients.get("owner")!.sendEnvelope(envelope); } });
-  registerFederationServices(owner, service, {
-    notify: (peerId, method, params) => { frames += 1; return clients.get("owner")!.sendEnvelopeWithBackpressure!(notification("owner", peerId, method, params)); },
-  });
+  const ownerSend = (envelope: FederationProtocolEnvelope): Promise<void> => {
+    frames += 1;
+    return clients.get("owner")!.sendEnvelopeWithBackpressure!(envelope);
+  };
+  registerFederationServices(owner, service, { link: {
+    notify: (peerId, method, params) => ownerSend(notification("owner", peerId, method, params)),
+    sendData: (peerId, frame) => ownerSend(serviceData("owner", peerId, frame)),
+  } });
   return { rpc, frames: () => frames };
 }
 /** Write until stopped, honoring the socket's own backpressure. */
@@ -155,8 +174,17 @@ async function listen(server: Server): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
-async function measure(params: { path: Path; protocol: 1 | 2; rttMs: number; direction: Direction; seconds: number }): Promise<Record<string, unknown>> {
-  const chunk = randomBytes(64 * 1024);
+/** Dev-server-like text: compresses about 4:1 at brotli quality 1. */
+function textChunk(bytes: number): Buffer {
+  let text = "";
+  for (let index = 0; text.length < bytes; index += 1) {
+    text += `export const value${index} = compute(${index * 7919 % 1000}, "row-${index % 97}");\n`;
+  }
+  return Buffer.from(text).subarray(0, bytes);
+}
+
+async function measure(params: { path: Path; protocol: 1 | 2; rttMs: number; direction: Direction; seconds: number; payload: Payload }): Promise<Record<string, unknown>> {
+  const chunk = params.payload === "text" ? textChunk(64 * 1024) : randomBytes(64 * 1024);
   const counts = { up: 0, down: 0 };
   const serverSockets = new Set<Socket>();
   const stops: Array<() => void> = [];
@@ -265,7 +293,7 @@ function codecMicrobench(): Record<string, unknown> {
     initiator.readMessage2(responder.writeMessage2(Buffer.alloc(0)));
     return { send: initiator.split(), receive: responder.split() };
   };
-  const text = Buffer.from("<div class=\"row\">const value = compute(index);</div>\n".repeat(400)).subarray(0, chunkBytes);
+  const text = textChunk(chunkBytes);
   const result: Record<string, unknown> = {};
   for (const [kind, data] of [["random", randomBytes(chunkBytes)], ["text", text]] as const) {
     const cell = (label: string, run: () => void): void => {
@@ -286,6 +314,16 @@ function codecMicrobench(): Record<string, unknown> {
     cell("brotliDecompress", () => { brotliDecompressSync(compressed); });
     cell("noiseEncryptDecrypt", () => { noise.receive.decrypt(noise.send.encrypt(json)); });
     result[`${kind}.brotliRatio`] = +(compressed.length / json.length).toFixed(3);
+    // The v2 data frame: a JSON header, then the raw bytes.
+    const envelope = serviceData("owner", "viewer", { streamId: "0b7c3a52-5f0e-4d43-9a8c-2f6d0f4a9e11", seq: 1, data });
+    const binary = federationTransportCodecForTest.encodeEnvelope(envelope);
+    const binaryCompressed = brotliCompressSync(binary, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 1 } });
+    cell("binaryFrameEncode", () => { federationTransportCodecForTest.encodeEnvelope(envelope); });
+    cell("binaryFrameDecode", () => { federationTransportCodecForTest.decodeEnvelope(binary); });
+    cell("binaryBrotliQ1Compress", () => { brotliCompressSync(binary, { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 1 } }); });
+    cell("binaryBrotliDecompress", () => { brotliDecompressSync(binaryCompressed); });
+    result[`${kind}.binaryOverheadBytes`] = binary.length - data.length;
+    result[`${kind}.binaryBrotliRatio`] = +(binaryCompressed.length / binary.length).toFixed(3);
   }
   return result;
 }
@@ -295,19 +333,20 @@ describe.skipIf(!BENCH)("service tunnel throughput (measurement only)", () => {
     report({ scenario: "codec cpu ms per MiB, 16 KiB chunks", ...codecMicrobench() });
   });
 
-  const matrix: Array<{ path: Path; rttMs: number }> = [
+  const matrix: Array<{ path: Path; rttMs: number; payload?: Payload }> = [
     { path: "routed", rttMs: 0 }, { path: "routed", rttMs: 1 }, { path: "routed", rttMs: 20 },
     { path: "routed", rttMs: 50 }, { path: "routed", rttMs: 200 },
     { path: "gateway", rttMs: 0 }, { path: "gateway", rttMs: 20 }, { path: "gateway-plain", rttMs: 0 },
+    { path: "gateway", rttMs: 0, payload: "text" }, { path: "gateway-plain", rttMs: 0, payload: "text" },
   ];
   for (const protocol of [1, 2] as const) {
-    for (const { path, rttMs } of matrix) {
+    for (const { path, rttMs, payload = "random" } of matrix) {
       for (const direction of ["upload", "download", "duplex"] as const) {
-        const scenario = `${path} v${protocol} rtt=${rttMs}ms ${direction}`;
+        const scenario = `${path} v${protocol} rtt=${rttMs}ms ${direction}${payload === "text" ? " text" : ""}`;
         it.skipIf(FILTER !== "" && !scenario.includes(FILTER))(scenario, async () => {
           const seconds = rttMs >= 50 ? 4 : 2;
-          const line = await measure({ path, protocol, rttMs, direction, seconds });
-          report({ scenario, path, protocol, rttMs, direction, seconds, ...line });
+          const line = await measure({ path, protocol, rttMs, direction, seconds, payload });
+          report({ scenario, path, protocol, rttMs, direction, payload, seconds, ...line });
           expect(line).toBeDefined();
         }, 60_000);
       }

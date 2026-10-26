@@ -3,6 +3,7 @@ import type { ServiceStreamClose, ServiceStreamData, ServiceStreamWindow } from 
 import { FEDERATION_SERVICE_V2_NOTIFICATIONS as FRAMES } from "@pwragent/shared";
 
 const MiB = 1024 * 1024;
+const EMPTY = new Uint8Array(0);
 /** Largest data frame this build sends and accepts. */
 export const SERVICE_STREAM_FRAME_BYTES = 64 * 1024;
 /** Ceiling on a frame size a peer may ask for. */
@@ -16,24 +17,19 @@ export const SERVICE_STREAM_BUDGET_BYTES = 32 * MiB;
 /** Send more credit once this share of the window has drained. */
 const GRANT_FRACTION = 4;
 
-/** Send one notification. A returned promise is transport backpressure. */
+/** Send one control notification. */
 export type ServiceStreamSend = (method: string, params: unknown) => void | Promise<void>;
+/** Send one binary data frame. A returned promise is transport backpressure. */
+export type ServiceStreamSendData = (frame: ServiceStreamData) => void | Promise<void>;
 
 function message(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-/** Strict base64 at O(1) beyond the decode: skipped characters shorten the output. */
-export function decodeServiceStreamData(value: unknown, maxBytes: number): Buffer {
-  if (typeof value !== "string" || value.length % 4 !== 0 || value.length > Math.ceil(maxBytes / 3) * 4) {
-    throw new Error("Invalid service stream frame.");
-  }
-  const bytes = Buffer.from(value, "base64");
-  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
-  if (bytes.length !== (value.length / 4) * 3 - padding || bytes.length > maxBytes) {
-    throw new Error("Invalid service stream frame.");
-  }
-  return bytes;
+/** The frame's bytes, unless it is not binary or exceeds `maxBytes`. */
+export function serviceStreamFrameBytes(value: unknown, maxBytes: number): Uint8Array {
+  if (!(value instanceof Uint8Array) || value.byteLength > maxBytes) throw new Error("Invalid service stream frame.");
+  return value;
 }
 
 export function isServiceStreamSize(value: unknown, max: number): value is number {
@@ -133,6 +129,7 @@ export type ServiceStreamEndpointOptions = {
   scheduler: ServiceStreamScheduler;
   budget: ServiceStreamBudget;
   send: ServiceStreamSend;
+  sendData: ServiceStreamSendData;
   /** Target receive window. */
   window?: number;
   /** Largest frame this side sends and accepts. */
@@ -207,13 +204,13 @@ export class ServiceStreamEndpoint {
 
   receiveData(frame: Partial<ServiceStreamData>): void {
     if (this.closed || this.peerClosed) return;
-    let bytes: Buffer;
+    let bytes: Uint8Array;
     try {
       if (frame.seq !== this.receiveSeq || (frame.fin !== undefined && typeof frame.fin !== "boolean")) {
         throw new Error("Invalid service stream sequence.");
       }
       if (this.remoteFin) throw new Error("Service sent data after FIN.");
-      bytes = decodeServiceStreamData(frame.data, this.frameBytes);
+      bytes = serviceStreamFrameBytes(frame.data, this.frameBytes);
       if (bytes.length > this.peerCredit) throw new Error("Service exceeded its stream window.");
     } catch (error) {
       this.abort(message(error, "Invalid service stream frame."));
@@ -299,10 +296,10 @@ export class ServiceStreamEndpoint {
     if (!bytes && !fin) return false;
     this.sendCredit -= bytes;
     this.finSent = fin;
-    const frame: ServiceStreamData = { streamId: this.streamId, seq: this.sendSeq, data: chunk ? chunk.toString("base64") : "" };
+    const frame: ServiceStreamData = { streamId: this.streamId, seq: this.sendSeq, data: chunk ?? EMPTY };
     if (fin) frame.fin = true;
     this.sendSeq += 1;
-    try { await this.options.send(FRAMES.data, frame); }
+    try { await this.options.sendData(frame); }
     catch { this.cleanup("Service stream peer is unavailable."); return false; }
     if (this.closed) return false;
     if (bytes) this.options.onTransfer?.(bytes, 0);

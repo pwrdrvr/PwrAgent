@@ -6,6 +6,8 @@ import type {
   FederationProtocolEnvelope,
   FederationRequestEnvelope,
   FederationResponseEnvelope,
+  FederationServiceDataEnvelope,
+  ServiceStreamData,
 } from "@pwragent/shared";
 import { FEDERATION_PROTOCOL_VERSION } from "@pwragent/shared";
 
@@ -55,8 +57,10 @@ export class FederationRpcEndpoint {
       localInstanceId: FederationInstanceId;
       remoteInstanceId: FederationInstanceId;
       sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
-      /** Notification path that may wait for transport capacity. Defaults to `sendEnvelope`. */
-      sendNotification?: (envelope: FederationNotificationEnvelope) => void | Promise<void>;
+      /** One-way path that may wait for transport capacity. Defaults to `sendEnvelope`. */
+      sendOneWay?: (
+        envelope: FederationNotificationEnvelope | FederationServiceDataEnvelope,
+      ) => void | Promise<void>;
       now?: () => number;
       defaultTimeoutMs?: number;
     },
@@ -147,7 +151,24 @@ export class FederationRpcEndpoint {
       targetInstanceId: this.options.remoteInstanceId,
       createdAt: this.now(),
     };
-    return (this.options.sendNotification ?? this.options.sendEnvelope)(envelope);
+    return (this.options.sendOneWay ?? this.options.sendEnvelope)(envelope);
+  }
+
+  /** One binary service stream frame. A returned promise is transport backpressure. */
+  sendServiceData(frame: ServiceStreamData): void | Promise<void> {
+    const envelope: FederationServiceDataEnvelope = {
+      id: `${this.notificationPrefix}${(this.notificationCount += 1)}`,
+      kind: "service_data",
+      streamId: frame.streamId,
+      seq: frame.seq,
+      ...(frame.fin ? { fin: true } : {}),
+      data: frame.data,
+      protocolVersion: FEDERATION_PROTOCOL_VERSION,
+      sourceInstanceId: this.options.localInstanceId,
+      targetInstanceId: this.options.remoteInstanceId,
+      createdAt: this.now(),
+    };
+    return (this.options.sendOneWay ?? this.options.sendEnvelope)(envelope);
   }
 
   receiveEnvelope(envelope: FederationProtocolEnvelope): boolean {
