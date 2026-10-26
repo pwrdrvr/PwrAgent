@@ -4,11 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
-import { placeRowCard, PrRollupChip } from "../PrRollupChip";
+import { PrRollupChip } from "../PrRollupChip";
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function pr(number: number, overrides: Partial<PrSummary> = {}): PrSummary {
@@ -171,6 +172,7 @@ describe("PrRollupChip", () => {
     fireEvent.mouseEnter(rows[2]!);
     expect(screen.getByRole("tooltip")).toHaveTextContent("acme/orbit#12");
     expect(rows[0]).not.toHaveAttribute("aria-describedby");
+    expect(rows[2]).toHaveAttribute("aria-describedby", card.id);
 
     fireEvent.mouseLeave(list);
     expect(screen.queryByRole("tooltip")).toBeNull();
@@ -196,6 +198,67 @@ describe("PrRollupChip", () => {
 
     fireEvent.keyDown(rows[1]!, { key: "Escape" });
     expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("cancels the first card when the pointer leaves or the list scrolls", () => {
+    vi.useFakeTimers();
+    const { container } = renderRollup([passing, failing]);
+    fireEvent.click(container.querySelector<HTMLElement>("[data-pr-rollup]")!);
+    const list = screen.getByRole("group");
+    const row = within(list).getAllByRole("button")[0]!;
+    fireEvent.mouseEnter(row);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS - 1));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.mouseLeave(list);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(row).not.toHaveAttribute("aria-describedby");
+
+    fireEvent.mouseEnter(row);
+    fireEvent.scroll(within(list).getByRole("list"));
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+
+    fireEvent.mouseEnter(row);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    fireEvent.scroll(within(list).getByRole("list"));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(row).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("cancels a pending card when the list closes", () => {
+    vi.useFakeTimers();
+    const { container } = renderRollup([passing, failing]);
+    const chip = container.querySelector<HTMLElement>("[data-pr-rollup]")!;
+    fireEvent.click(chip);
+    fireEvent.mouseEnter(within(screen.getByRole("group")).getAllByRole("button")[0]!);
+    fireEvent.click(chip);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(screen.queryByRole("group")).toBeNull();
+  });
+
+  it("updates an open card from live PR and branch drift data", () => {
+    const props = {
+      prs: [passing, failing],
+      repoPrefixedUrls: "",
+      threadTitle: "Orbit refactor",
+      branchDrift: { url: failing.url, baseBranch: "main", behind: 4, ahead: 2 },
+      onOpen: vi.fn(),
+    };
+    const { container, rerender } = render(<PrRollupChip {...props} />);
+    fireEvent.click(container.querySelector<HTMLElement>("[data-pr-rollup]")!);
+    const row = within(screen.getByRole("group")).getAllByRole("button")[0]!;
+    fireEvent.focus(row);
+    const cardId = screen.getByRole("tooltip").id;
+    rerender(<PrRollupChip {...props}
+      prs={[passing, { ...failing, title: "Updated change" }]}
+      branchDrift={{ ...props.branchDrift, behind: 6 }}
+    />);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Updated change");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Behind main6 commits");
+    expect(row).toHaveAttribute("aria-describedby", cardId);
   });
 
   it("peeks on hover and closes after the pointer leaves both chip and list", () => {
@@ -256,38 +319,5 @@ describe("PrRollupChip", () => {
     // Shift+Tab stops on the chip itself.
     expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
     expect(chip).toHaveFocus();
-  });
-});
-
-describe("placeRowCard", () => {
-  // A 340px list at the sidebar's left edge, rows from y=120.
-  const list = { top: 100, right: 356, bottom: 260, left: 16 };
-  const card = { rowTop: 160, width: 272, height: 300 };
-
-  it("sits right of the list, level with the row", () => {
-    expect(placeRowCard({ ...card, list, viewport: { width: 1200, height: 900 } }))
-      .toEqual({ top: 160, left: 362 });
-  });
-
-  it("flips left of the list when the window has no room on the right", () => {
-    const rightList = { top: 100, right: 1180, bottom: 260, left: 840 };
-    expect(placeRowCard({ ...card, list: rightList, viewport: { width: 1200, height: 900 } }))
-      .toEqual({ top: 160, left: 562 });
-  });
-
-  it("keeps the card on screen when the row is near the bottom", () => {
-    expect(placeRowCard({ ...card, rowTop: 800, list, viewport: { width: 1200, height: 900 } }).top)
-      .toBe(592);
-  });
-
-  it("goes below, then above, the list before overlapping it in a narrow window", () => {
-    expect(placeRowCard({ ...card, list, viewport: { width: 600, height: 900 } }))
-      .toEqual({ top: 266, left: 16 });
-    const lowList = { top: 500, right: 356, bottom: 700, left: 16 };
-    expect(placeRowCard({ ...card, rowTop: 560, list: lowList, viewport: { width: 600, height: 900 } }))
-      .toEqual({ top: 194, left: 16 });
-    // No room anywhere: beside the row, clamped on screen.
-    expect(placeRowCard({ ...card, list, viewport: { width: 600, height: 400 } }))
-      .toEqual({ top: 92, left: 8 });
   });
 });
