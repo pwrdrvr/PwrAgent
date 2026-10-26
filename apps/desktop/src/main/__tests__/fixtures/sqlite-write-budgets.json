@@ -365,6 +365,7 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "forge-create-pull-request-attach": {"commits":1,"note":"One allowed create_pull_request through registry dispatch and real SQLite attachment: 1 commit/16,480 bytes WAL; 20 PR creations/day = 0.3296 MB/day. Provider creation is stubbed; setup and overlay verification are excluded.","observedWalBytes":16480,"rowsChanged":1,"statements":1},
   "global-search-active-and-archived": {"commits": 1, "note": "Two global searches with active and archived fixtures: one initial index transaction, unchanged repeat search writes nothing; no background writes.", "observedWalBytes": 37080, "rowsChanged": 4, "statements": 6},
   "held-scheduled-action-retry": {
     "commits": 3,
