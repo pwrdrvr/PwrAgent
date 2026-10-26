@@ -14693,6 +14693,80 @@ describe("useThreadSessionState", () => {
     expect(entry.type === "review" && entry.context?.pullRequest).toBeNull();
   });
 
+  it("keeps every pull request a live review of several named", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventHandler = listener;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "claude",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const pr = (number: number) => ({
+      provider: "github.com",
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number,
+      url: `https://github.com/pwrdrvr/PwrAgent/pull/${number}`,
+    });
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review-4",
+            item: {
+              id: "review-several",
+              type: "exitedReviewMode",
+              review: "No findings.",
+              data: {
+                context: {
+                  workspacePath: "/Users/dev/pwrdrvr/PwrAgent",
+                  pullRequest: pr(2947),
+                  pullRequests: [pr(2947), { number: "bad" }, pr(2948)],
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+    const entry = result.current.entries[0];
+    expect(entry.type === "review"
+      && entry.context?.pullRequests?.map((reviewed) => reviewed.number))
+      .toEqual([2947, 2948]);
+  });
+
   it.each([
     ["Review changes against main", "Review changes against main"],
     [`Review ${pullRequestReviewUrl}`, pullRequestReviewPrompt],

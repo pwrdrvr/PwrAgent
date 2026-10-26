@@ -5,6 +5,7 @@ import type {
   AppServerReviewFindingOutcome,
   AppServerReviewOutput,
 } from "@pwragent/shared";
+import type { NamedReviewPullRequest } from "../../shared/review-command";
 import { normalizeReviewCategory } from "../../shared/review-output";
 
 /**
@@ -62,6 +63,58 @@ export function parseClaudeFindingsReport(input: unknown): ClaudeFindingsReport 
     });
   }
   return { ...(text(record.level) ? { level: text(record.level) } : {}), findings };
+}
+
+const CODE_REVIEW_COMMAND = /^\/code-review(?:\s+([\s\S]*))?$/;
+const CODE_REVIEW_LEVELS = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
+/** Flags that take the next argument as their value. */
+const CODE_REVIEW_VALUE_FLAGS = new Set(["--max-findings"]);
+const PULL_REQUEST_NUMBER = /^#?([1-9][0-9]*)$/;
+const REPOSITORY_PULL_REQUEST = /^([\w.-]+)\/([\w.-]+)#([1-9][0-9]*)$/;
+const GITHUB_PULL_REQUEST_URL = /^https:\/\/(github\.com)\/([^/]+)\/([^/]+)\/pull\/([1-9][0-9]*)(?:[/?#].*)?$/;
+
+/**
+ * The pull requests a `/code-review` prompt targets, in the order named.
+ * Claude's findings report carries no pull request, so the prompt is the only
+ * record of which ones a review covered. A target that is a branch or a path
+ * names no list at all: the review then covered something besides those pull
+ * requests, and naming only them would leave it out.
+ */
+export function parseClaudeCodeReviewPullRequests(prompt: string | undefined): NamedReviewPullRequest[] {
+  const args = CODE_REVIEW_COMMAND.exec(prompt?.trim() ?? "")?.[1]?.trim();
+  if (!args) return [];
+  const targets: NamedReviewPullRequest[] = [];
+  const tokens = args.split(/\s+/);
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.startsWith("--")) {
+      if (CODE_REVIEW_VALUE_FLAGS.has(token)) index += 1;
+      continue;
+    }
+    if (CODE_REVIEW_LEVELS.has(token.toLowerCase())) continue;
+    for (const part of token.split(",").filter(Boolean)) {
+      const target = parseCodeReviewPullRequest(part);
+      if (!target) return [];
+      const duplicate = targets.some((existing) => existing.number === target.number
+        && existing.org?.toLowerCase() === target.org?.toLowerCase()
+        && existing.repo?.toLowerCase() === target.repo?.toLowerCase());
+      if (!duplicate) targets.push(target);
+    }
+  }
+  return targets;
+}
+
+function parseCodeReviewPullRequest(token: string): NamedReviewPullRequest | undefined {
+  const number = PULL_REQUEST_NUMBER.exec(token);
+  if (number) return { number: Number(number[1]) };
+  const qualified = REPOSITORY_PULL_REQUEST.exec(token);
+  if (qualified) return { number: Number(qualified[3]), org: qualified[1], repo: qualified[2] };
+  const url = GITHUB_PULL_REQUEST_URL.exec(token);
+  if (url) {
+    const [, provider, org, repo, value] = url;
+    return { number: Number(value), provider, org, repo, url: `https://${provider}/${org}/${repo}/pull/${value}` };
+  }
+  return undefined;
 }
 
 /** Titles the skipped-findings guidance lists before it summarizes the rest. */

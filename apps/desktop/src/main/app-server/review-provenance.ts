@@ -5,7 +5,10 @@ import type {
   LinkedDirectorySummary,
   PrSummary,
 } from "@pwragent/shared";
-import { normalizeFullRef } from "../../shared/review-command";
+import {
+  normalizeFullRef,
+  type NamedReviewPullRequest,
+} from "../../shared/review-command";
 import { runGitCommand } from "./git-executable";
 import {
   normalizeWorkspacePath,
@@ -173,6 +176,68 @@ async function selectPullRequestForBranch(params: {
   return ranked.reduce((best, pr) => (pr.number > best.number ? pr : best));
 }
 
+function sameRepositoryName(left: string | undefined, right: string): boolean {
+  return left === undefined || left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+
+/**
+ * The attached pull request a review command named, or, for a target given by
+ * URL, the identity the URL spells out. A bare number that several of the
+ * thread's repositories carry resolves the way a branch match does: this
+ * workspace's own pull request, then the one in its Git remotes. Still
+ * ambiguous, it names nothing rather than picking one.
+ */
+async function resolveNamedPullRequest(params: {
+  cwd: string;
+  named: NamedReviewPullRequest;
+  prs: PrSummary[];
+  resolveGitHubRepos: (cwd: string) => Promise<GitHubRepoRef[]>;
+}): Promise<AppServerReviewPullRequest | undefined> {
+  const { named } = params;
+  let candidates = params.prs.filter((pr) =>
+    pr.number === named.number
+    && sameRepositoryName(named.provider, pr.provider)
+    && sameRepositoryName(named.org, pr.org)
+    && sameRepositoryName(named.repo, pr.repo)
+  );
+  if (candidates.length > 1) {
+    const inWorkspace = candidates.filter((pr) => prBelongsToWorkspace(pr, params.cwd));
+    if (inWorkspace.length > 0) candidates = inWorkspace;
+  }
+  if (candidates.length > 1) {
+    const repositories = await params.resolveGitHubRepos(params.cwd).catch(
+      () => [] as GitHubRepoRef[],
+    );
+    const inRepository = candidates.filter((pr) =>
+      repositories.some((repo) => prMatchesRepository(pr, repo))
+    );
+    if (inRepository.length > 0) candidates = inRepository;
+  }
+  if (candidates.length === 1) {
+    return toReviewPullRequest(candidates[0]);
+  }
+  if (candidates.length === 0 && named.provider && named.org && named.repo && named.url) {
+    return {
+      provider: named.provider,
+      org: named.org,
+      repo: named.repo,
+      number: named.number,
+      url: named.url,
+    };
+  }
+  return undefined;
+}
+
+function samePullRequest(
+  left: AppServerReviewPullRequest,
+  right: AppServerReviewPullRequest,
+): boolean {
+  return left.number === right.number
+    && left.provider.toLowerCase() === right.provider.toLowerCase()
+    && left.org.toLowerCase() === right.org.toLowerCase()
+    && left.repo.toLowerCase() === right.repo.toLowerCase();
+}
+
 /**
  * Freezes what a review card needs to say what it reviewed. Returns undefined
  * only when there is no workspace to name at all — every other unknown is
@@ -183,6 +248,8 @@ export async function resolveReviewProvenance(params: {
   cwd?: string;
   executionTarget?: "local" | "remote";
   linkedDirectories?: LinkedDirectorySummary[];
+  /** Pull requests the review command named as its targets. */
+  namedPullRequests?: NamedReviewPullRequest[];
   prs?: PrSummary[];
   resolveGitHubRepos?: (cwd: string) => Promise<GitHubRepoRef[]>;
   runGit?: ReviewGitRunner;
@@ -232,6 +299,48 @@ export async function resolveReviewProvenance(params: {
   // did not look at, and the pull-request match rests on the same signal.
   if (params.target.type === "commit") {
     return context;
+  }
+
+  // A review command that named its pull requests reviewed those, whatever
+  // the workspace has checked out.
+  const namedPullRequests = params.namedPullRequests ?? [];
+  if (namedPullRequests.length > 0) {
+    const resolveGitHubRepos =
+      params.resolveGitHubRepos ?? resolveGitHubReposForDirectory;
+    const resolved = (await Promise.all(namedPullRequests.map((named) =>
+      resolveNamedPullRequest({
+        cwd,
+        named,
+        prs: params.prs ?? [],
+        resolveGitHubRepos,
+      })
+    ))).flatMap((match) => match ? [match] : []);
+    if (namedPullRequests.length > 1) {
+      // One branch and one commit cannot describe several diffs, so the card
+      // names the pull requests alone.
+      return resolved.length > 0
+        ? { ...context, pullRequest: resolved[0], pullRequests: resolved }
+        : context;
+    }
+    const [named] = resolved;
+    if (!named) {
+      return context;
+    }
+    const checkedOut = await resolveReviewProvenance({
+      ...params,
+      namedPullRequests: undefined,
+    });
+    if (checkedOut?.pullRequest && samePullRequest(checkedOut.pullRequest, named)) {
+      return checkedOut;
+    }
+    // The workspace's HEAD belongs to another branch, and the pull request's
+    // cached head may not be the state the reviewer read, so no commit.
+    return {
+      ...context,
+      ...(named.headRefName ? { gitBranch: named.headRefName } : {}),
+      ...(named.baseRefName ? { baseBranch: named.baseRefName } : {}),
+      pullRequest: named,
+    };
   }
 
   // Local Git is the only workspace inspection available here. A remote

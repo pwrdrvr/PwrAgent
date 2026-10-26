@@ -297,8 +297,19 @@ export type AppServerReviewContext = {
    * Never a list. A pull request that is not on the reviewed branch is not
    * evidence about the reviewed diff, and printing the thread's other PRs here
    * would imply a connection that does not exist.
+   *
+   * A review whose command named its pull requests (`/code-review 12,13`)
+   * names those instead of the checked-out branch's. When it named several,
+   * this is the first and `pullRequests` holds them all.
    */
   pullRequest?: AppServerReviewPullRequest | null;
+  /**
+   * Every pull request a review of several named, in the order named. Absent
+   * for a review of one. A reviewer that reports one set of findings for all
+   * of them does not say which pull request each finding belongs to, so the
+   * card names them together rather than splitting the findings by guess.
+   */
+  pullRequests?: AppServerReviewPullRequest[];
 };
 
 export type LinkedDirectorySummary = {

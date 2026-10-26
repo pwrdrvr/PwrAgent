@@ -128,6 +128,10 @@ export function normalizeThreadReview<T extends Pick<ThreadReview, "items">>(rev
 export function threadReviewDisplayTitle(review: Pick<ThreadReview, "title" | "context">): string {
   // An agent's own title for a recorded review says more than either.
   if (review.title !== "Code review") return review.title;
+  const pullRequests = review.context?.pullRequests;
+  if (pullRequests && pullRequests.length > 1) {
+    return `Review of PRs ${pullRequests.map((pr) => `#${pr.number}`).join(", ")}`;
+  }
   const pullRequest = review.context?.pullRequest;
   if (pullRequest) return `Review of PR #${pullRequest.number}`;
   const branch = review.context?.gitBranch;

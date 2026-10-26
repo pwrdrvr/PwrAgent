@@ -8,6 +8,7 @@ import {
   claudeSkippedFindingsGuidance,
   isClaudeOutcomeReport,
   matchClaudeFindingOutcomes,
+  parseClaudeCodeReviewPullRequests,
   parseClaudeFindingsReport,
 } from "../claude/claude-review-findings";
 import { normalizeReviewOutputRecord } from "../../shared/review-command";
@@ -250,5 +251,47 @@ describe("Claude ReportFindings outcomes", () => {
       expect(await run(CLAUDE_REPORT_FINDINGS_TOOL, "not a report")).toEqual({});
       expect(await run("Bash", skipped)).toEqual({});
     });
+  });
+});
+
+describe("Claude /code-review pull request targets", () => {
+  it("reads every pull request a comma-separated target names", () => {
+    expect(parseClaudeCodeReviewPullRequests("/code-review medium --fix 2947,2948")).toEqual([
+      { number: 2947 }, { number: 2948 },
+    ]);
+  });
+
+  it("reads space-separated, #-prefixed, repo-qualified, and URL targets", () => {
+    expect(parseClaudeCodeReviewPullRequests(
+      "/code-review high #12 pwrdrvr/PwrAgent#13 https://github.com/pwrdrvr/PwrSnap/pull/14/files",
+    )).toEqual([
+      { number: 12 },
+      { number: 13, org: "pwrdrvr", repo: "PwrAgent" },
+      {
+        number: 14, provider: "github.com", org: "pwrdrvr", repo: "PwrSnap",
+        url: "https://github.com/pwrdrvr/PwrSnap/pull/14",
+      },
+    ]);
+  });
+
+  it("names each pull request once", () => {
+    expect(parseClaudeCodeReviewPullRequests("/code-review 7, 7 #7")).toEqual([{ number: 7 }]);
+  });
+
+  it("does not read a flag's value as a pull request", () => {
+    expect(parseClaudeCodeReviewPullRequests("/code-review --max-findings 20 --comment 31")).toEqual([{ number: 31 }]);
+    expect(parseClaudeCodeReviewPullRequests("/code-review --max-findings 20")).toEqual([]);
+  });
+
+  it("names nothing when the review has no pull request target", () => {
+    expect(parseClaudeCodeReviewPullRequests("/code-review")).toEqual([]);
+    expect(parseClaudeCodeReviewPullRequests("/code-review high --fix")).toEqual([]);
+    expect(parseClaudeCodeReviewPullRequests("Review 2947 please")).toEqual([]);
+    expect(parseClaudeCodeReviewPullRequests("/code-reviewer 2947")).toEqual([]);
+  });
+
+  it("names nothing when a target is a branch or path, which a pull request list cannot describe", () => {
+    expect(parseClaudeCodeReviewPullRequests("/code-review 2947 feat/other-branch")).toEqual([]);
+    expect(parseClaudeCodeReviewPullRequests("/code-review apps/desktop")).toEqual([]);
   });
 });
