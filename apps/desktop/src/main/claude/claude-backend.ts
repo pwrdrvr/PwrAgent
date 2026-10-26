@@ -517,8 +517,14 @@ export class ClaudeBackend {
     linkedDirectories?: AppServerThreadSummary["linkedDirectories"];
   }): Promise<{ threadId: string }> {
     await this.requireInstallation();
+    // A running turn's entries are unfinished, and would stay so in the fork.
+    const live = this.sessions.get(params.sourceThreadId);
+    if (live?.turn || (!live && this.starting.has(params.sourceThreadId))) {
+      throw new Error("Wait for the active Claude turn to finish before forking.");
+    }
     const source = await this.store.read(params.sourceThreadId);
-    const forkFromSdkSessionId = source.sdkSessionId;
+    // A fork that has not sent a message yet still continues its source's session.
+    const forkFromSdkSessionId = source.sdkSessionId ?? source.forkFromSdkSessionId;
     if (!forkFromSdkSessionId) throw new Error("This Claude thread has no conversation to fork yet.");
     const id = randomUUID();
     const now = Date.now();

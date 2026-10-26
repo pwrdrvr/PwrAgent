@@ -2031,6 +2031,23 @@ describe("Claude SDK backend", () => {
     expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", additionalDirectories: [attached] });
   });
 
+  it("refuses to fork a thread while its turn is running", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      await gate;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await expect(f.backend.forkThread({ sourceThreadId: threadId, cwd: f.root, executionMode: "default" }))
+      .rejects.toThrow("finish before forking");
+    finish();
+    await f.waitForTurn();
+    await expect(f.backend.forkThread({ sourceThreadId: threadId, cwd: f.root, executionMode: "default" })).resolves.toBeDefined();
+  });
+
   it("forks a thread: copies its history and continues its session in a new one", async () => {
     let call = 0;
     const usage = vi.fn().mockResolvedValue({ session: { model_usage: { opus: {
@@ -2056,6 +2073,10 @@ describe("Claude SDK backend", () => {
     expect(fork.lastUserMessage).toBe("Remember PINEAPPLE");
     expect(fork.lastAssistantMessage).toBe("Reply 1");
     expect((await f.store.read(threadId)).thread).toMatchObject({ title: expect.stringContaining("(fork)"), executionMode: "auto" });
+    // A fork of a fork that has not sent anything continues the same source.
+    const { threadId: nestedId } = await f.backend.forkThread({ sourceThreadId: threadId, cwd: forkCwd, executionMode: "default" });
+    expect((await f.store.read(nestedId)).forkFromSdkSessionId).toBe("5a85c1ad-85c1-4930-ae19-50f721ad13dd");
+    expect((await f.backend.readThread(nestedId)).lastAssistantMessage).toBe("Reply 1");
 
     await f.backend.startTurn({ threadId, input: [{ type: "text", text: "What did I ask?" }] });
     await f.waitForTurn();
