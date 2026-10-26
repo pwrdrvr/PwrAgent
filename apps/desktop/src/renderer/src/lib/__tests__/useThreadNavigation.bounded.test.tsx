@@ -216,18 +216,19 @@ it("keeps an unpinned directory unpinned while another page lands before the ind
     hold = new Promise<void>((resolve) => { finish = resolve; });
     await act(() => result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false));
     expect(rank()).toBeUndefined();
-    // The owner's event invalidates every page. The index re-read is held,
-    // so the other pages land first.
+    // The owner's event invalidates every page. The directory index reads
+    // are held, so the other pages land first.
     act(() => listener?.({ backend: "codex", notification: { method: "directory/pin/removed",
       params: { directoryKey: key } } } as AgentEvent));
-    await waitFor(() => expect([...result.current.pagedNavigation.resources.values()]
-      .filter((resource) => resource.id !== "directory-index")
+    const resources = () => [...result.current.pagedNavigation.resources.values()];
+    const indexes = () => resources().filter((resource) => resource.state.request.query.kind === "directory-index");
+    await waitFor(() => expect(resources().filter((resource) => !indexes().includes(resource))
       .every((resource) => !resource.state.stale && !resource.loading)).toBe(true));
-    expect(result.current.pagedNavigation.resources.get("directory-index")?.state.stale).toBe(true);
+    expect(indexes().every((resource) => resource.state.stale)).toBe(true);
     expect(rank()).toBeUndefined();
 
     await act(async () => finish());
-    await waitFor(() => expect(result.current.pagedNavigation.resources.get("directory-index")?.state.stale).toBe(false));
+    await waitFor(() => expect(indexes().some((resource) => resource.state.stale)).toBe(false));
     expect(rank()).toBeUndefined();
   } finally {
     finish?.();
