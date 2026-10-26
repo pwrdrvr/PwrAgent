@@ -5,7 +5,6 @@ import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
 import { useHoverStableSnapshot } from "../../features/navigation/useHoverStableSnapshot";
-import type { PointerEvent } from "react";
 
 const counts = { total: 1000, active: 40, unread: 90, review: 50 };
 const row = (id: string): NavigationRow => ({ id, source: "codex", title: id, titleSource: "fallback", ref: { backend: "codex", threadId: id },
@@ -89,57 +88,61 @@ it("publishes identical accepted pages and freezes hover again after a revealed 
   });
   const api = { ...f.api, setThreadPin };
   const loadingFlags: Array<{ loading: boolean; refreshing: boolean }> = [];
-  const { result, unmount } = renderHook(() => {
-    const navigation = useThreadNavigation(api);
-    loadingFlags.push({ loading: navigation.loading, refreshing: navigation.refreshing });
-    const hover = useHoverStableSnapshot({
-      scope: navigation.browseMode,
+  let navigation!: ReturnType<typeof useThreadNavigation>;
+  let hover!: ReturnType<typeof useHoverStableSnapshot<(typeof navigation)["threads"]>>;
+  // Sidebar owns hover state in a child: a reveal render must not rerender
+  // the navigation owner and accidentally clear its stale page IDs.
+  function HoverRows({ current }: { current: typeof navigation }) {
+    hover = useHoverStableSnapshot({
+      scope: current.browseMode,
       outstandingReads: [
-        ...[...navigation.pagedNavigation.resources.values()]
+        ...[...current.pagedNavigation.resources.values()]
           .filter((resource) => resource.state.stale && !resource.state.error)
           .map((resource) => resource.id),
-        ...navigation.pagesAwaitingRows,
+        ...current.pagesAwaitingRows,
       ],
-      value: navigation.threads,
+      value: current.threads,
     });
-    return { navigation, hover };
-  });
-  await waitFor(() => expect(result.current.navigation.selectedThreadConfigurationReady).toBe(true));
-  const hoveredRow = document.createElement("div");
-  hoveredRow.setAttribute("data-hover-stable-row", "");
-  act(() => result.current.hover.onPointerOver({
-    pointerType: "mouse", target: hoveredRow,
-  } as unknown as PointerEvent<HTMLDivElement>));
+    return <div onPointerOver={hover.onPointerOver}><div data-hover-stable-row>Hovered row</div></div>;
+  }
+  function NavigationWindow() {
+    navigation = useThreadNavigation(api);
+    loadingFlags.push({ loading: navigation.loading, refreshing: navigation.refreshing });
+    return <HoverRows current={navigation} />;
+  }
+  const { unmount } = render(<NavigationWindow />);
+  await waitFor(() => expect(navigation.selectedThreadConfigurationReady).toBe(true));
+  fireEvent.pointerOver(screen.getByText("Hovered row"), { pointerType: "mouse" });
 
   await act(async () => {
-    await result.current.hover.reveal(() => result.current.navigation.setThreadPin(
-      result.current.navigation.threads.find((thread) => thread.id === "thread-1")!, true,
+    await hover.reveal(() => navigation.setThreadPin(
+      navigation.threads.find((thread) => thread.id === "thread-1")!, true,
     ));
-    await result.current.navigation.pagedNavigation.refresh();
+    await navigation.pagedNavigation.refresh();
   });
   expect(setThreadPin).toHaveBeenCalledOnce();
-  expect(result.current.hover.value.find((thread) => thread.id === "thread-1")?.pinnedRank).toBe("1024");
+  expect(hover.value.find((thread) => thread.id === "thread-1")?.pinnedRank).toBe("1024");
 
-  const threads = result.current.navigation.threads;
-  const directories = result.current.navigation.directories;
-  const pages = [...result.current.navigation.pagedNavigation.resources.values()].map((resource) => resource.state.page);
+  const threads = navigation.threads;
+  const directories = navigation.directories;
+  const pages = [...navigation.pagedNavigation.resources.values()].map((resource) => resource.state.page);
   loadingFlags.length = 0;
   // Immediate read start/completion batch together: row identities and both
   // loading flags stay unchanged, but the newly accepted pages must publish.
-  await act(async () => { await result.current.navigation.pagedNavigation.refresh(); });
-  expect(result.current.navigation.loading).toBe(false);
-  expect(result.current.navigation.refreshing).toBe(false);
+  await act(async () => { await navigation.pagedNavigation.refresh(); });
+  expect(navigation.loading).toBe(false);
+  expect(navigation.refreshing).toBe(false);
   expect(loadingFlags.every(({ loading, refreshing }) => !loading && !refreshing)).toBe(true);
-  expect([...result.current.navigation.pagedNavigation.resources.values()].some((resource, index) => resource.state.page !== pages[index])).toBe(true);
-  expect(result.current.navigation.threads).toBe(threads);
-  expect(result.current.navigation.directories).toBe(directories);
-  const awaitingRows = result.current.navigation.pagesAwaitingRows;
+  expect([...navigation.pagedNavigation.resources.values()].some((resource, index) => resource.state.page !== pages[index])).toBe(true);
+  expect(navigation.threads).toBe(threads);
+  expect(navigation.directories).toBe(directories);
+  const awaitingRows = navigation.pagesAwaitingRows;
 
   removeLast = true;
-  await act(async () => { await result.current.navigation.pagedNavigation.refresh(); });
-  expect(result.current.navigation.threads.some((thread) => thread.id === "thread-9")).toBe(false);
-  expect(result.current.hover.value).toBe(threads);
-  expect(result.current.hover.value.some((thread) => thread.id === "thread-9")).toBe(true);
+  await act(async () => { await navigation.pagedNavigation.refresh(); });
+  expect(navigation.threads.some((thread) => thread.id === "thread-9")).toBe(false);
+  expect(hover.value).toBe(threads);
+  expect(hover.value.some((thread) => thread.id === "thread-9")).toBe(true);
   expect(awaitingRows).toEqual([]);
   unmount();
 });
