@@ -1,6 +1,7 @@
 import { FederationShutdown } from "../federation/federation-shutdown";
 import { setFederationTrafficCapture, snapshotFederationTrafficHistory } from "../federation/federation-traffic-capture";
 import net from "node:net";
+import { EventEmitter } from "node:events";
 import http from "node:http";
 import WebSocket, { WebSocketServer } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1987,6 +1988,27 @@ describe("federation send backpressure", () => {
     await vi.advanceTimersByTimeAsync(5);
     await waiting;
     expect(resolved).toBe(true);
+  });
+
+  it("waits for the raw socket to drain instead of polling", async () => {
+    const raw = new EventEmitter();
+    const socket = {
+      bufferedAmount: FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES + 1,
+      readyState: WebSocket.OPEN,
+      _socket: raw,
+    };
+    let resolved = false;
+    const waiting = waitForFederationSendCapacity(socket).then(() => {
+      resolved = true;
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(resolved).toBe(false);
+    socket.bufferedAmount = 0;
+    raw.emit("drain");
+    await waiting;
+    expect(resolved).toBe(true);
+    expect(raw.listenerCount("drain")).toBe(0);
+    expect(raw.listenerCount("close")).toBe(0);
   });
 });
 

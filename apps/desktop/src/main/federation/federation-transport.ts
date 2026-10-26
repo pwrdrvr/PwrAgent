@@ -153,6 +153,7 @@ const FEDERATION_BLOB_FRAME_PREFIX_BYTES =
 const FEDERATION_BLOB_FRAME_MAX_HEADER_BYTES = 64 * 1024;
 export const FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES = 2 * 1024 * 1024;
 const FEDERATION_SEND_BUFFER_POLL_MS = 5;
+const FEDERATION_SEND_BUFFER_DRAIN_GUARD_MS = 250;
 
 /**
  * The socket surface the keepalive watchdog needs. Structural (rather than
@@ -1649,16 +1650,38 @@ async function sendFrameWithBackpressure(
   return sendFrame(socket, message, transport, options, context);
 }
 
+/** The ws client's underlying TCP or TLS socket: ws keeps it on `_socket`. */
+type FederationRawSocket = {
+  once(event: "drain" | "close", listener: () => void): unknown;
+  off(event: "drain" | "close", listener: () => void): unknown;
+};
+
+/**
+ * Wait until the WebSocket buffer is below the high-water mark. Past that mark
+ * ws has written to a full TCP socket, so the socket emits `drain` as it
+ * empties; wait for that rather than polling. A socket without one (a test
+ * double) is polled.
+ */
 export async function waitForFederationSendCapacity(
-  socket: Pick<WebSocket, "bufferedAmount" | "readyState">,
+  socket: Pick<WebSocket, "bufferedAmount" | "readyState"> & { _socket?: FederationRawSocket | null },
 ): Promise<void> {
   while (
     socket.readyState === WebSocket.OPEN
     && socket.bufferedAmount > FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES
   ) {
+    const raw = socket._socket;
     await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, FEDERATION_SEND_BUFFER_POLL_MS);
+      const done = (): void => {
+        clearTimeout(timer);
+        raw?.off("drain", done);
+        raw?.off("close", done);
+        resolve();
+      };
+      // With a raw socket this is only a guard against a missed event.
+      const timer = setTimeout(done, raw ? FEDERATION_SEND_BUFFER_DRAIN_GUARD_MS : FEDERATION_SEND_BUFFER_POLL_MS);
       timer.unref?.();
+      raw?.once("drain", done);
+      raw?.once("close", done);
     });
   }
 }

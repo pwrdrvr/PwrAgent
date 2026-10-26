@@ -8,7 +8,9 @@ import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, re
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type { ServiceThread, ServiceUiRequest, ServiceUiResponse } from "@pwragent/shared";
-import { FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, FEDERATION_SERVICE_V2_CAPABILITY } from "@pwragent/shared";
+import {
+  FEDERATION_SERVICE_METHODS, FEDERATION_SERVICE_CAPABILITY, FEDERATION_SERVICE_V2_CAPABILITY, FEDERATION_SERVICE_V2_NOTIFICATIONS,
+} from "@pwragent/shared";
 import { FederationServices, registerFederationServices, SERVICE_METHOD_CAPABILITIES, serviceThread } from "./federation-services";
 import { FederationServiceForwarder } from "./federation-service-forwarder";
 import type {
@@ -91,6 +93,7 @@ import type {
   FederationInstanceId,
   FederationInstanceRole,
   FederationLoadStatus,
+  FederationNotificationEnvelope,
   FederationPeerSummary,
   TodoUnavailableInstance,
   FederationPinDisposition,
@@ -2799,8 +2802,7 @@ export class DesktopFederationRuntime {
         sendEnvelope: (envelope) => {
           this.sendEnvelopeToTarget(target.instanceId, envelope);
         },
-        sendNotification: (envelope) =>
-          this.sendEnvelopeToTargetWithBackpressure(target.instanceId, envelope),
+        sendNotification: (envelope) => this.sendServiceFrame(target.instanceId, envelope),
       });
       this.rpcByPeer.set(target.instanceId, rpc);
     }
@@ -3670,7 +3672,7 @@ export class DesktopFederationRuntime {
     this.releaseWorktreeTerminalOwner = registerWorktreeTerminalOwner(this.ptyService);
     registerFederationPtyHandlers({ router, service: this.ptyService });
     registerFederationServices(router, this.threadServices(), {
-      notify: (peerId, method, params) => this.sendEnvelopeToTargetWithBackpressure(peerId, {
+      notify: (peerId, method, params) => this.sendServiceFrame(peerId, {
         id: `federation-service:${randomUUID()}`,
         kind: "notification",
         method,
@@ -4781,6 +4783,20 @@ export class DesktopFederationRuntime {
     }
 
     throw new FederationPeerUnavailableError(targetInstanceId);
+  }
+
+  /**
+   * Service stream data waits for transport capacity; its credit and close
+   * frames do not, because holding back credit stalls the other side.
+   */
+  private sendServiceFrame(
+    targetInstanceId: FederationInstanceId,
+    envelope: FederationNotificationEnvelope,
+  ): void | Promise<void> {
+    if (envelope.method === FEDERATION_SERVICE_V2_NOTIFICATIONS.data) {
+      return this.sendEnvelopeToTargetWithBackpressure(targetInstanceId, envelope);
+    }
+    this.sendEnvelopeToTarget(targetInstanceId, envelope);
   }
 
   private async sendEnvelopeToTargetWithBackpressure(
