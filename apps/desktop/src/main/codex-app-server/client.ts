@@ -9082,7 +9082,9 @@ export class CodexAppServerClient {
     threadId: string;
     turnId: string;
     timeoutMs: number;
+    signal?: AbortSignal;
   }): Promise<Extract<HelperTurnResult, { status: "ok" }>> {
+    params.signal?.throwIfAborted();
     const key = buildHelperTurnKey(params.threadId, params.turnId);
     const completed = this.completedHelperTurnResults.get(key);
     if (completed) {
@@ -9096,13 +9098,21 @@ export class CodexAppServerClient {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.helperTurnWaiters.delete(key);
+        params.signal?.removeEventListener("abort", aborted);
         reject(new Error("codex_title_turn_timeout"));
       }, Math.max(100, params.timeoutMs));
       this.helperTurnWaiters.set(key, {
-        resolve,
-        reject,
+        resolve: (result) => { params.signal?.removeEventListener("abort", aborted); resolve(result); },
+        reject: (error) => { params.signal?.removeEventListener("abort", aborted); reject(error); },
         timer,
       });
+      const aborted = (): void => {
+        clearTimeout(timer);
+        this.helperTurnWaiters.delete(key);
+        reject(params.signal?.reason ?? new Error("Helper cancelled"));
+      };
+      params.signal?.addEventListener("abort", aborted, { once: true });
+      if (params.signal?.aborted) aborted();
     });
   }
 
@@ -10706,6 +10716,7 @@ export class CodexAppServerClient {
     system?: string;
     /** Explicitly remove execution and delegation tools for data-only helpers. */
     disableExecution?: boolean;
+    signal?: AbortSignal;
     isMatch: StructuredRecordPredicate;
     timeoutMs?: number;
     turnTimeoutMs?: number;
@@ -10821,6 +10832,7 @@ export class CodexAppServerClient {
     schema?: Record<string, unknown>;
     system?: string;
     disableExecution?: boolean;
+    signal?: AbortSignal;
     isMatch?: StructuredRecordPredicate;
     /**
      * PwrAgent tools this helper may call. Supplying these also supplies
@@ -10843,7 +10855,9 @@ export class CodexAppServerClient {
      */
     turnTimeoutMs?: number;
   }): Promise<ThreadTitleAdapterResult> {
+    params.signal?.throwIfAborted();
     await this.ensureInitialized();
+    params.signal?.throwIfAborted();
 
     let helperThreadId: string | undefined;
     let helperTurnId: string | undefined;
@@ -10856,6 +10870,7 @@ export class CodexAppServerClient {
       model: params.model,
       reasoningEffort: params.reasoningEffort,
     });
+    params.signal?.throwIfAborted();
     const helperModel = selection.model;
     if (!helperModel) {
       return { status: "unavailable", reason: "codex_helper_no_available_model" };
@@ -10879,6 +10894,7 @@ export class CodexAppServerClient {
         helperWorkspaceDir,
         timeoutMs,
       );
+      params.signal?.throwIfAborted();
       const helperConfig = buildCodexHelperConfig(
         CODEX_THREAD_TITLE_CONFIG,
         mcpServerNames,
@@ -10931,6 +10947,7 @@ export class CodexAppServerClient {
           reason: "codex_title_thread_start_missing_thread_id",
         };
       }
+      params.signal?.throwIfAborted();
       const instructionSources = readThreadInstructionSources(threadStartResult);
       if (!instructionSources) {
         return {
@@ -10962,6 +10979,7 @@ export class CodexAppServerClient {
           threadId: helperThreadId,
         });
       }
+      params.signal?.throwIfAborted();
       this.helperThreadPredicates.set(helperThreadId, helperPredicate);
       if (params.onToolCall) {
         // Registered only after the attestation above proves this thread has
@@ -11000,6 +11018,7 @@ export class CodexAppServerClient {
         timeoutMs: Math.max(timeoutMs, turnTimeoutMs),
       });
       helperTurnId = extractTurnIdFromValue(turnStartResult);
+      params.signal?.throwIfAborted();
       const immediateObject = findStructuredRecord(turnStartResult, helperPredicate);
       if (immediateObject) {
         helperTurnCompleted = true;
@@ -11028,6 +11047,7 @@ export class CodexAppServerClient {
         threadId: helperThreadId,
         turnId: helperTurnId,
         timeoutMs: turnTimeoutMs,
+        signal: params.signal,
       });
       helperTurnCompleted = true;
       const accountKey = await accountKeyRead;

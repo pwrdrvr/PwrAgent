@@ -28,17 +28,51 @@ its runtime mode selector when present, otherwise its session execution mode.
 Selection, actor permissions, connection authorization and schema validation
 still apply to every call. No permission is cached for the generic wrapper.
 
-Default and Auto access follow the connection's tool-approval policy. The
+Default and Auto access first follow the connection's tool-approval policy. The
 built-in Sandboxer defaults to allowing tools: enabling and selecting remote
 compute authorizes sandbox commands, file writes and lifecycle operations.
 Other connections default to the server's annotation-based policy, which runs
 read-only tools without confirmation. An explicit `prompt` policy also asks
 for reads; an explicit `approve` policy allows every tool on that connection.
 When required, confirmation shows the original connection, tool and complete
-arguments. Codex's App Server does not expose an
-API for submitting host-owned dynamic calls to its Auto reviewer. Auto gateway
-calls that need approval require human confirmation; PwrAgent does not use a model to choose MCP
-consent or its persistence scope.
+arguments.
+
+In an active Codex Auto turn, calls still needing approval under the `auto`
+connection policy receive a **PwrAgent MCP review**. The reviewer uses the
+existing structured helper (`thread/start` with `ephemeral: true`, then
+`turn/start` with `outputSchema`), not Codex Guardian. Its model is configurable
+in Settings → AI Providers → Helper models → MCP approval reviews. It runs in
+the helper scratch directory with execution, delegation, hooks, plugins and
+configured MCP servers disabled. It receives only the exact owner-listed tool
+definition, source identity, arguments, and user messages read through the
+source turn's App Server protocol. Arguments and server descriptions cannot
+supply user authorization.
+
+Approval requires low or medium risk, scoped user intent and a verbatim user
+message passage supporting it. High risk, missing/oversized context, malformed
+results, timeouts, missing helper support and uncertain decisions require human
+confirmation. Explicit reviewer denial rejects the call. The transcript shows
+PwrAgent review activity and its outcome; an unavailable reviewer never appears
+as an approval. Cancellation interrupts the helper turn and cannot authorize
+the invocation. Current-turn context intentionally excludes earlier turns;
+when earlier authorization is needed the operator can grant explicit consent.
+
+Reviews approve one exact invocation only. They never manufacture `session`,
+`server-session` or `always` grants. An explicit connection `prompt` policy
+continues to require human confirmation, including in Auto mode. Default mode
+and ACP gateway calls keep their existing connection policy. Selecting a server
+alone is not authorization for external writes. Owner-side selection, schema,
+argument and actor checks still run after a review and on every released call.
+Federation continues to execute and validate on the owning instance; no caller
+may submit a different thread's transcript as review evidence.
+
+The installed App Server protocol exposes Guardian review notifications and
+`thread/approveGuardianDeniedAction` (overriding a denial), but no request for
+submitting a host-owned call to Guardian. `review/start` is code review, not
+approval review. The [official App Server documentation](https://developers.openai.com/codex/app-server/)
+documents the supported ephemeral thread, structured turn and review surfaces.
+This implementation uses those ordinary helper APIs and makes no Guardian claim.
+
 Headless calls without Full Access or an automation MCP grant decline because
 they cannot obtain it.
 Native invocation remains available under the backend's own policy; inherited
@@ -61,7 +95,12 @@ all tools in that connection's current catalog with any arguments, for this
 backend and thread only. Consent is recorded in memory after the owner accepts
 the invocation. It ends on shutdown, selection revocation, or a changed catalog
 revision, which includes every tool's schema and authorization revision. Tool
-listing order does not affect consent. Ordinary upstream MCP elicitation still
+listing order does not affect consent. After a successful owner invocation records
+conversation consent, equivalent pending host approvals in that conversation
+are resolved too. Tool grants release only that tool; connection grants require
+the same connection/catalog and selection revision. Pending calls still perform
+their own owner validation. A once-only response, failed invocation, cancellation,
+revoked selection or changed catalog cannot release other calls. Ordinary upstream MCP elicitation still
 requires its own response.
 
 ### Automation MCP grants
