@@ -254,7 +254,8 @@ it("keeps an unpinned directory unpinned when an index read from before the unpi
     ownerRank = undefined;
     return { directoryKey: key, pinnedRank: undefined };
   });
-  const { result, unmount } = renderHook(() => useThreadNavigation({ ...f.api, setDirectoryPin }));
+  const api = { ...f.api, setDirectoryPin };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
   const rank = () => result.current.directories.find((directory) => directory.key === key)?.pinnedRank;
   try {
     await waitFor(() => expect(rank()).toBe("1024"));
