@@ -8,6 +8,7 @@ import {
   SQLITE_AUTO_VACUUM_INCREMENTAL,
   StateDb,
 } from "../state/state-db";
+import { createTempStateDb, openInMemoryStateDb } from "./sqlite-test-utils";
 
 const tempRoots: string[] = [];
 
@@ -21,6 +22,12 @@ function createTempRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-migration-"));
   tempRoots.push(root);
   return root;
+}
+
+function createTempDbPath(): string {
+  const { dbPath, tempDir } = createTempStateDb("pwragent-migration-");
+  tempRoots.push(tempDir);
+  return dbPath;
 }
 
 function readAutoVacuum(dbPath: string): number {
@@ -46,9 +53,7 @@ function readProfileName(dbPath: string): string {
 
 describe("state migration", () => {
   it("initializes automation scheduling tables in the profile database", () => {
-    const root = createTempRoot();
-    const dbPath = path.join(root, "state.db");
-    const stateDb = StateDb.open(dbPath);
+    const stateDb = openInMemoryStateDb();
     try {
       expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
         CURRENT_STATE_DB_USER_VERSION,
@@ -66,8 +71,7 @@ describe("state migration", () => {
   });
 
   it("upgrades an existing database that predates the source_event_key column", () => {
-    const root = createTempRoot();
-    const dbPath = path.join(root, "state.db");
+    const dbPath = createTempDbPath();
     // Build a current DB, then roll it back to look like a pre-v23 database
     // without the source_event_key column/index.
     StateDb.open(dbPath).close();
@@ -105,8 +109,7 @@ describe("state migration", () => {
   });
 
   it("replaces the v30 turn-keyed message origin table", () => {
-    const root = createTempRoot();
-    const dbPath = path.join(root, "state.db");
+    const dbPath = createTempDbPath();
     StateDb.open(dbPath).close();
     const raw = new Database(dbPath);
     raw.exec(`
@@ -146,8 +149,7 @@ VALUES ('codex', 'thread-1', 'turn-1', 1000, '{"kind":"messaging"}');
   });
 
   it("adds default Agent assignments after the current-main v32 schema", () => {
-    const root = createTempRoot();
-    const dbPath = path.join(root, "state.db");
+    const dbPath = createTempDbPath();
     StateDb.open(dbPath).close();
     const raw = new Database(dbPath);
     raw.exec("DROP TABLE messaging_default_agent_assignments");
@@ -174,8 +176,7 @@ VALUES ('codex', 'thread-1', 'turn-1', 1000, '{"kind":"messaging"}');
   });
 
   it("runs both v54 and v55 migrations when upgrading a v53 database", () => {
-    const root = createTempRoot();
-    const dbPath = path.join(root, "state.db");
+    const dbPath = createTempDbPath();
     StateDb.open(dbPath).close();
     const raw = new Database(dbPath);
     raw.exec("DROP TABLE thread_compactions");

@@ -15,6 +15,7 @@ import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-per
 import { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import { CodexDiscoveryCoordinator } from "../codex-discovery-coordinator";
 import { StateDb } from "../state/state-db";
+import { createTempStateDb } from "./sqlite-test-utils";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
@@ -454,7 +455,9 @@ describe("DesktopSettingsService", () => {
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(configPath, "", "utf8");
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-    const db = StateDb.open(path.join(root, "state.db"));
+    const { dbPath, tempDir } = createTempStateDb("pwragent-settings-db-");
+    tempRoots.push(tempDir);
+    const db = StateDb.open(dbPath);
     const configStore = new DesktopConfigStore({ configPath, stateDb: db });
     const automatic = path.join(root, "auto-codex");
     const standalone = path.join(root, "standalone-codex");

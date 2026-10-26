@@ -1,37 +1,36 @@
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { buildOwnedComposerScopeKey } from "@pwragent/shared";
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { rmSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ComposerDraftSnapshotRecord } from "@pwragent/shared";
 import { ComposerDraftRecoveryStore } from "../state/composer-draft-recovery-store";
 import { CURRENT_STATE_DB_USER_VERSION, StateDb } from "../state/state-db";
+import { createTempStateDb, openInMemoryStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
 let store: ComposerDraftRecoveryStore;
-let tempDir: string;
+let tempDir: string | undefined;
 
 beforeEach(() => {
-  // Both tests below reopen this database to measure a write budget:
-  // the budget needs a WAL file, and the reopen needs a path that persists.
-  tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-composer-drafts-"));
-  stateDb = StateDb.open(path.join(tempDir, "state.db"));
+  stateDb = openInMemoryStateDb();
   store = new ComposerDraftRecoveryStore(stateDb);
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
   stateDb.close();
-  rmSync(tempDir, { recursive: true, force: true });
+  if (tempDir) rmSync(tempDir, { recursive: true, force: true });
+  tempDir = undefined;
 });
 
 describe("ComposerDraftRecoveryStore", () => {
   it("imports viewer-local legacy launchpad drafts once without overwriting recovery history", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     stateDb.close();
-    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    const fixture = createTempStateDb("pwragent-composer-drafts-");
+    tempDir = fixture.tempDir;
+    stateDb = StateDb.open(fixture.dbPath);
     store = new ComposerDraftRecoveryStore(stateDb);
     for (const name of ["recover", "newer", "cleared"]) {
       const key = `directory:/${name}`;
@@ -60,7 +59,9 @@ describe("ComposerDraftRecoveryStore", () => {
   it("budgets known-owner migration as one transaction and zero writes on repeat", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     stateDb.close();
-    stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    const fixture = createTempStateDb("pwragent-composer-drafts-");
+    tempDir = fixture.tempDir;
+    stateDb = StateDb.open(fixture.dbPath);
     store = new ComposerDraftRecoveryStore(stateDb);
     for (let index = 0; index < 3; index += 1) {
       store.save({ draft: buildDraft({ scopeKey: `thread:codex:thread-${index}`, threadId: `thread-${index}`, text: `Draft ${index}`,
