@@ -108,7 +108,7 @@ describe.each<DesktopAppearanceDensity>(["minimal", "mission-control"])("%s PR h
       expect(screen.getByRole("tooltip")).toHaveTextContent("merged");
     } else {
       expect(screen.getByRole("group", { name: "Pull requests for PR hover refresh" }))
-        .toHaveTextContent("2 merged");
+        .toHaveTextContent("all merged");
     }
   });
 
