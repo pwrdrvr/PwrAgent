@@ -138,6 +138,7 @@ const RENDERER_DOM_TS_TESTS = [
   "apps/desktop/src/renderer/src/lib/__tests__/tildify-path.test.ts",
   "apps/desktop/src/renderer/src/lib/__tests__/useScheduledThreadActionProjection.test.ts",
   "apps/desktop/src/renderer/src/lib/__tests__/window-frame.test.ts",
+  "apps/desktop/src/renderer/src/styles/__tests__/css-property-cascade.test.ts",
   "apps/desktop/src/renderer/src/test/outbound-fetch-guard.test.ts",
 ];
 
