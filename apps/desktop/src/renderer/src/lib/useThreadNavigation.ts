@@ -3673,6 +3673,9 @@ export function useThreadNavigation(
     const loading = enabled && primary.some((resource) => !resource.state.page && !resource.state.error);
     if (changed && pages.size) {
       const changedPages = [...pages].filter(([id, page]) => acceptedPagesRef.current.get(id) !== page);
+      const changedDirectoryKeys = new Set(changedPages.flatMap(([, page]) =>
+        [...page.directories ?? [], ...page.selectionDirectory ? [page.selectionDirectory] : []])
+        .map((directory) => directory.key));
       const retainedKeys = new Set([...pages.values()].flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
       acceptedPagesRef.current = pages;
       acceptedDefaultsRef.current = launchpadConfiguration.value;
@@ -3742,6 +3745,19 @@ export function useThreadNavigation(
           if (previous) nextDirectoryRows.set(selectedDirectoryKey, descriptor
             ? { ...previous, ...descriptor, gitStatus: descriptor.gitStatus ? { ...previous.gitStatus, ...descriptor.gitStatus } : previous.gitStatus }
             : previous);
+        }
+        // A command or canonical event patches a directory's pin and
+        // disclosure between reads. A page that did not change in this pass
+        // predates that patch, so another page landing must not rebuild the
+        // directory from it: that showed a removed pin again until the index
+        // re-read landed.
+        if (previousOwner === currentOwner) {
+          for (const [key, directory] of nextDirectoryRows) {
+            const previous = current.rows?.directoryRows.get(key);
+            if (!previous || changedDirectoryKeys.has(key)) continue;
+            nextDirectoryRows.set(key, { ...directory, pinnedRank: previous.pinnedRank,
+              directoryThreadsCollapsed: previous.directoryThreadsCollapsed });
+          }
         }
         const next: NavigationLoadedRows = { threadRows, directoryRows: nextDirectoryRows,
           launchpadDefaults: launchpadConfiguration.value?.defaults, federationTarget: rendererFederationTarget };
