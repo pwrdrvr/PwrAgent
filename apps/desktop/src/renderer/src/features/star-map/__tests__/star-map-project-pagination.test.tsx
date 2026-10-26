@@ -1,5 +1,5 @@
 import "./foreground-fixture";
-import { act, cleanup, fireEvent, render, waitFor } from "../../../test/phase-probes";
+import { act, cleanup, fireEvent, probe, render, waitFor } from "../../../test/phase-probes";
 import { afterEach, expect, it, vi } from "vitest";
 import { classifyDirectory, type AgentEvent, type NavigationQueryRequest, type NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -24,12 +24,12 @@ it.each(["local", "remote"])("renders 15 complete project clouds and three indep
   window.localStorage.setItem("pwragent.starMap.viewPreferences", JSON.stringify({ layout: "orbit" }));
   // Project 0 outruns one click's block, so a second click continues an
   // already-continued range. Every other project fits in one.
-  const threads: NavigationThreadSummary[] = Array.from({ length: 15 }, (_, project) =>
+  const threads: NavigationThreadSummary[] = probe("setup", () => Array.from({ length: 15 }, (_, project) =>
     Array.from({ length: project === 0 ? 123 : 23 }, (_, card) => ({
       id: `p${project}-c${card}`, source: "codex" as const, title: `Project ${project} card ${card}`,
       titleSource: "derived" as const, inbox: { inInbox: false }, updatedAt: 1000 - card,
       linkedDirectories: [{ id: `d${project}`, kind: "local" as const, path: `/repos/project-${project}`, label: `project-${project}` }],
-    }))).flat();
+    }))).flat());
   const directories = Array.from({ length: 15 }, (_, index) => classifyDirectory(threads.find((thread) =>
     thread.linkedDirectories[0]!.label === `project-${index}`)!.linkedDirectories[0]!));
   let expired = false;
