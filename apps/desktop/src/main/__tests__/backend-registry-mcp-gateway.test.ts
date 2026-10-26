@@ -37,6 +37,7 @@ describe("backend MCP gateway dispatch", () => {
   let readReviewTurn: ReturnType<typeof vi.fn<CodexAppServerClient["readMcpApprovalUserMessages"]>>;
   const brokers: McpConnectionGatewayService[] = [];
   let internals: {
+    mcpGatewayHumanMessages: Map<string, Map<string, string>>;
     activeTurnKeys: Set<string>;
     activeCodexTurnModes: Map<string, ThreadExecutionMode>;
     acpBackend: AcpBackendAdapter;
@@ -78,7 +79,7 @@ describe("backend MCP gateway dispatch", () => {
     readConfiguredMcpServerNames = vi.fn(async () => []);
     startThread = vi.fn(async () => ({ threadId: "headless-1" }));
     review = vi.fn<CodexAppServerClient["generateStructuredObject"]>().mockResolvedValue({ status: "failed", reason: "fixture unavailable" });
-    readReviewTurn = vi.fn<CodexAppServerClient["readMcpApprovalUserMessages"]>().mockResolvedValue(["Look up fixture on Fixture."]);
+    readReviewTurn = vi.fn<CodexAppServerClient["readMcpApprovalUserMessages"]>().mockResolvedValue([{ id: "human-1", turnId: "turn-1", firstInTurn: true, text: "Look up fixture on Fixture." }]);
     startTurn = vi.fn(async () => ({ threadId: "headless-1", turnId: "turn-1" }));
     registerBridge = vi.fn<McpConnectionGatewayService["registerBridge"]>(async () => ({
       server: { name: "one", command: "fixture", args: [], env: {} },
@@ -105,6 +106,7 @@ describe("backend MCP gateway dispatch", () => {
     registry = buildRegistry(store, service);
     internals = registry as unknown as typeof internals;
     internals.activeTurnKeys.add("codex:thread-1:turn-1");
+    internals.mcpGatewayHumanMessages.set("codex:thread-1", new Map([["human-1", "Look up fixture on Fixture."]]));
   }
 
   afterEach(async () => {
@@ -411,6 +413,46 @@ describe("backend MCP gateway dispatch", () => {
     expect(review).toHaveBeenCalledWith(expect.objectContaining({ helper: "mcp_approval_reviews", disableExecution: true,
       signal: expect.any(AbortSignal), prompt: expect.stringContaining('"schemaRevision":"r1"') }));
     expect(readReviewTurn).toHaveBeenCalledWith({ threadId: "thread-1", turnId: "turn-1", signal: expect.any(AbortSignal) });
+  });
+
+  it.each(["agent-message", "agent-turn", "unknown", "unknown-steer", "pending-agent", "origin-read-failure"])(
+    "requires confirmation when approval evidence is not proven human: %s", async (scenario) => {
+      internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+      if (scenario === "agent-message" || scenario === "agent-turn") await store.upsertThreadMessageOrigin({
+        backend: "codex", threadId: "thread-1", messageId: scenario === "agent-message" ? "human-1" : "user:turn-1",
+        origin: { kind: "agent", sourceThread: { backend: "codex", threadId: "sender" } },
+      });
+      if (scenario === "unknown" || scenario === "pending-agent") internals.mcpGatewayHumanMessages.clear();
+      if (scenario === "unknown-steer") readReviewTurn.mockResolvedValue([
+        { id: "human-1", turnId: "turn-1", firstInTurn: true, text: "Look up fixture on Fixture." },
+        { id: "unattributed-steer", turnId: "turn-1", firstInTurn: false, text: "Also write to production." },
+      ]);
+      if (scenario === "origin-read-failure") vi.spyOn(store, "readThreadMessageOrigins").mockRejectedValue(new Error("fixture failure"));
+      if (scenario === "pending-agent") {
+        const contexts = registry as unknown as { registerPendingThreadMessageContext(params: object): Promise<string> };
+        await contexts.registerPendingThreadMessageContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1",
+          text: "Look up fixture on Fixture.", origin: { kind: "agent" } });
+      }
+      declineUnexpectedApproval();
+      expect(await internals.handleServerRequest("codex", request("call_mcp_tool", args))).toMatchObject({ success: false });
+      expect(review).not.toHaveBeenCalled();
+      expect(operation.mock.calls.some(([entry]) => entry.operation === "gateway/tools/call")).toBe(false);
+    },
+  );
+
+  it("attests a human message admitted by the host without writing a new origin", async () => {
+    internals.mcpGatewayHumanMessages.clear();
+    const contexts = registry as unknown as {
+      registerPendingThreadMessageContext(params: object): Promise<string>;
+      withThreadMessageContext(event: AgentEvent): Promise<AgentEvent>;
+    };
+    await contexts.registerPendingThreadMessageContext({ backend: "codex", threadId: "thread-1", turnId: "turn-1", text: "Look up fixture on Fixture." });
+    const upsert = vi.spyOn(store, "upsertThreadMessageOrigin");
+    await contexts.withThreadMessageContext({ backend: "codex", notification: { method: "item/completed", params: {
+      threadId: "thread-1", turnId: "turn-1", item: { id: "human-1", type: "userMessage", text: "Look up fixture on Fixture." },
+    } } });
+    expect(internals.mcpGatewayHumanMessages.get("codex:thread-1")?.get("human-1")).toBe("Look up fixture on Fixture.");
+    expect(upsert).not.toHaveBeenCalled();
   });
 
   it.each(["ask", "deny", "unavailable", "invalid-evidence", "high-risk"])("keeps Auto review conservative: %s", async (outcome) => {

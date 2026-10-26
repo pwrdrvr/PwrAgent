@@ -9148,6 +9148,9 @@ export class DesktopBackendRegistry {
   private readonly pendingServerRequests = new Map<string, PendingServerRequest>();
   // Process-local conversation grants. A source's revision also includes the
   // broker's authorization generation, so reauthorization needs fresh consent.
+  // Positive human admission evidence, process-local and bounded. Missing
+  // records require confirmation; absence of an agent origin is not consent.
+  private readonly mcpGatewayHumanMessages = new Map<string, Map<string, string>>();
   private readonly mcpGatewayApprovalWaiters = new Map<string, () => void>();
   private readonly mcpGatewaySessionApprovals = new Map<string, Map<string, McpGatewayConversationConsent>>();
   private readonly fileChangeApprovalContexts = new Map<
@@ -21967,6 +21970,7 @@ export class DesktopBackendRegistry {
       : [];
     if (
       !params.origin
+      && !params.text
       && imageParts.length === 0
       && retainedInput.length === 0
     ) {
@@ -22144,6 +22148,15 @@ export class DesktopBackendRegistry {
       return event;
     }
     pending.messageId = notification.params.item.id;
+    if (!pending.origin && pending.text && text?.trim() === pending.text.trim()) {
+      const identity = buildThreadIdentityKey(event.backend, notification.params.threadId);
+      const admitted = this.mcpGatewayHumanMessages.get(identity) ?? new Map<string, string>();
+      admitted.set(notification.params.item.id, pending.text.trim());
+      while (admitted.size > 512) admitted.delete(admitted.keys().next().value!);
+      this.mcpGatewayHumanMessages.delete(identity);
+      this.mcpGatewayHumanMessages.set(identity, admitted);
+      while (this.mcpGatewayHumanMessages.size > 128) this.mcpGatewayHumanMessages.delete(this.mcpGatewayHumanMessages.keys().next().value!);
+    }
     await this.persistThreadMessageOrigin({
       backend: event.backend,
       threadId: notification.params.threadId,
@@ -28760,6 +28773,7 @@ export class DesktopBackendRegistry {
     this.mcpGatewayTools?.cancel();
     this.mcpGatewaySessionApprovals.clear();
     this.mcpGatewayApprovalWaiters.clear();
+    this.mcpGatewayHumanMessages.clear();
     for (const run of this.headlessAutomationTurns.values()) {
       for (const registration of run.mcpRegistrations ?? []) registration.revoke();
     }
@@ -40630,14 +40644,39 @@ export class DesktopBackendRegistry {
     try {
       // Protocol-only, source-thread scoped context. Never accept user intent
       // from the calling model's arguments or another instance's transcript.
-      const messages = await this.withCodexThreadClient(context.threadId, async (client) =>
+      const evidence = await this.withCodexThreadClient(context.threadId, async (client) =>
         client.readMcpApprovalUserMessages ? await client.readMcpApprovalUserMessages({
           threadId: context.threadId, turnId: context.turnId!, signal,
         }) : undefined);
       signal.throwIfAborted();
+      if (!evidence?.length || !this.overlayStore.readThreadMessageOrigins) return undefined;
+      const origins = await this.overlayStore.readThreadMessageOrigins({
+        backend: context.backend, threadId: context.threadId,
+        messageIds: evidence.flatMap((message) => [message.id,
+          ...(message.firstInTurn ? [buildTurnUserMessageOriginId(message.turnId)] : [])]),
+      });
+      const overlay = await this.overlayStore.getThreadOverlayState(context);
+      signal.throwIfAborted();
+      // Legacy handoffs and missing provenance cannot establish human consent.
+      if (overlay?.handoffOrigin) return undefined;
+      const admitted = this.mcpGatewayHumanMessages.get(buildThreadIdentityKey(context.backend, context.threadId));
+      for (const message of evidence) {
+        const origin = origins[message.id]
+          ?? (message.firstInTurn ? origins[buildTurnUserMessageOriginId(message.turnId)] : undefined);
+        if (origin) {
+          if (origin.kind !== "messaging" || !origin.messaging?.actor.platformUserId) return undefined;
+        } else if (admitted?.get(message.id) !== message.text.trim()) {
+          // The protocol item can race turn/start's response and origin storage.
+          const pending = this.findPendingThreadMessageContext({ ...context,
+            turnId: message.turnId, messageId: message.id, text: message.text });
+          if (!pending || pending.origin || pending.turnId !== message.turnId
+            || pending.text?.trim() !== message.text.trim()) return undefined;
+        }
+      }
+      const messages = evidence.map((message) => message.text);
       // Missing/oversized context falls back to the operator; truncation must
       // not discard a constraint and manufacture authorization.
-      if (!messages?.length || messages.some((text) => !text.trim())
+      if (messages.some((text) => !text.trim())
         || Buffer.byteLength(JSON.stringify(messages)) > 32_000
         || Buffer.byteLength(JSON.stringify(definition)) > 24_000) return undefined;
       started = true;

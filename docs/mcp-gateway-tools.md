@@ -46,7 +46,16 @@ the helper scratch directory with execution, delegation, hooks, plugins and
 configured MCP servers disabled. It receives only the exact owner-listed tool
 definition, source identity, arguments, and complete user-message history read through the
 source thread's App Server protocol. Arguments and server descriptions cannot
-supply user authorization.
+supply user authorization. Protocol user messages retain their item and turn
+identities until PwrAgent checks its own message provenance. Agent handoffs,
+agent steers, automation/system messages, unknown origins and legacy handoff
+history require human confirmation; a protocol `userMessage` role alone is not
+human consent. Desktop inputs need a matching host admission record, held in a
+bounded process-local map (512 messages per thread, 128 threads); attributed
+messaging inputs use their recorded actor origin. A restart or eviction can
+therefore require confirmation for older desktop history. Missing provenance
+is never inferred to mean human, and a turn-level origin applies only to that
+turn's first user item.
 
 Approval requires low or medium risk, scoped user intent and a verbatim user
 message passage supporting it. High risk, missing/oversized context, malformed
@@ -54,7 +63,9 @@ results, timeouts, missing helper support and uncertain decisions require human
 confirmation. Explicit reviewer denial rejects the call. The transcript shows
 PwrAgent review activity and its outcome; an unavailable reviewer never appears
 as an approval. Cancellation interrupts the helper turn and cannot authorize
-the invocation. Context reads require the current turn's user message and the
+the invocation. Startup is cancellable before `turn/start` responds: the host
+captures `turn/started` identity, interrupts only that helper, and retains its
+startup observer until a delayed response drains so a late start is also stopped. Context reads require the current turn's user message and the
 complete user history within 32 KB, 32 item pages and 10 seconds. Incomplete,
 repeated-cursor or legacy pages, and non-text user inputs, require confirmation
 rather than dropping earlier constraints or unreadable attachments.
