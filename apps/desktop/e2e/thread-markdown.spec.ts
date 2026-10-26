@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { mastheadAction } from "./fixtures/window-chrome";
 import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 
 const threadMarkdownSpecDir = path.dirname(fileURLToPath(import.meta.url));
@@ -30,13 +31,19 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
     // scripts parsed before attachment, including an already-loaded renderer.
     await cdp.send("Debugger.enable");
 
+    // Startup may already have opened the replay thread. Leave it explicitly
+    // so the assertions below exercise a fresh transcript mount in either case.
+    await mastheadAction(app.window, "New thread").click();
+    await expect(app.window.getByRole("heading", { level: 2, name: "New thread" }))
+      .toBeVisible();
+    await expect(app.window.getByRole("heading", { name: "Transcript heading 1", exact: true }))
+      .toHaveCount(0);
+
     // Wait for the provider's committed context before mounting the transcript.
     // A parsed chunk alone does not prove the provider has adopted it, and
     // settled documents keep the renderer they mounted with until text changes.
     await expect(app.window.locator(".thread-view[data-markdown-renderer-available]"))
       .toHaveAttribute("data-markdown-renderer-available", incrementalEnabled ? "incremental" : "standard");
-    await expect(app.window.getByRole("heading", { name: "Transcript heading 1", exact: true }))
-      .toHaveCount(0);
 
     await app.window
       .getByRole("button", { name: /Markdown replay thread/i })
