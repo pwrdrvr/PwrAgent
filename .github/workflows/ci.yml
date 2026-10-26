@@ -534,19 +534,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y openbox x11-utils
 
-      - name: Report Node heap limit (measurement, temporary)
-        shell: bash
-        run: >-
-          node -e 'const os=require("os"),v8=require("v8");
-          console.log("[node-heap] platform=%s ram_mb=%d heap_size_limit_mb=%d",
-          process.platform, os.totalmem()/2**20, v8.getHeapStatistics().heap_size_limit/2**20)'
-
       - name: Run desktop replay-backed Electron tests
         timeout-minutes: 10
         env:
           # Lane sizes by test count; see the strategy comment above.
           PWTEST_SHARD_WEIGHTS: "9:12:12:14"
-          NODE_OPTIONS: --require ${{ github.workspace }}/.github/scripts/node-heap-probe.cjs
         # Wide-layout specs request 1440px windows. Keep the virtual desktop
         # larger so Openbox does not constrain them to Xvfb's default width.
         # Keep Xvfb from resetting while short-lived readiness probes disconnect
@@ -765,13 +757,6 @@ jobs:
         timeout-minutes: 5
         run: bash ./scripts/ci/macos-e2e-pre-run-cleanup.sh
 
-      - name: Report Node heap limit (measurement, temporary)
-        shell: bash
-        run: >-
-          node -e 'const os=require("os"),v8=require("v8");
-          console.log("[node-heap] platform=%s ram_mb=%d heap_size_limit_mb=%d",
-          process.platform, os.totalmem()/2**20, v8.getHeapStatistics().heap_size_limit/2**20)'
-
       - name: Run desktop replay-backed Electron tests
         # Tart's AppleParavirtGPU can reset under Electron load. The early
         # PWRAGENT_E2E_DISABLE_GPU gate selects software rendering before
@@ -794,7 +779,7 @@ jobs:
           # lanes. The build exits before Playwright starts Electron, and its
           # ~3.1 GB peak RSS fits in the guest. The E2E fixture appends its
           # own --require to this value.
-          NODE_OPTIONS: --max-old-space-size=4096 --require ${{ github.workspace }}/.github/scripts/node-heap-probe.cjs
+          NODE_OPTIONS: --max-old-space-size=4096
         run: >-
           pnpm --filter @pwragent/desktop test:e2e
           --shard=${{ matrix.lane }}/4
@@ -849,13 +834,6 @@ jobs:
           node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
-
-      - name: Report Node heap limit (measurement, temporary)
-        shell: bash
-        run: >-
-          node -e 'const os=require("os"),v8=require("v8");
-          console.log("[node-heap] platform=%s ram_mb=%d heap_size_limit_mb=%d",
-          process.platform, os.totalmem()/2**20, v8.getHeapStatistics().heap_size_limit/2**20)'
 
       - name: Run desktop replay-backed Electron tests
         # windows-latest provides an interactive desktop session, so unlike the
