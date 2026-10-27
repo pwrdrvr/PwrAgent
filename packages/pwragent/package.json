@@ -31,7 +31,8 @@
     "examples",
     "README.md",
     "LICENSE",
-    "dist"
+    "dist",
+    "licenses"
   ],
   "publishConfig": {
     "access": "public",
@@ -52,6 +53,10 @@
   "devDependencies": {
     "@pwragent/federation": "workspace:*",
     "@pwragent/shared": "workspace:*",
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.1",
+    "@pwragent/agent-tools": "workspace:*"
+  },
+  "dependencies": {
+    "node-pty": "1.2.0-beta.15"
   }
 }

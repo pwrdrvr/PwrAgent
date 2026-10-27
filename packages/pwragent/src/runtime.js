@@ -1,10 +1,21 @@
+import { OutpostProjects } from "./projects.js";
+import path from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMessagingDynamicToolCall } from "../dist/federation-core.js";
 import { Codex } from "./codex.js";
-import { ACTIVE, digest, validId } from "./store.js";
+import { ACTIVE, atomicJson, digest, privateDirectory, validId } from "./store.js";
 
 export class Runtime {
   constructor({ store, workspace, home, command, onFailure }) {
     this.store = store;
     this.workspace = workspace;
+    this.projects = new OutpostProjects(path.dirname(store.directory), workspace);
+    this.messagingTools = new AgentToolRouter(buildPwrAgentMessagingToolDefinitions((request) => this.messagingRequest(request))
+      .filter((definition) => ["get_current_location", "get_current_messaging_surface", "send_private_response", "rename_current_messaging_conversation", "attach_thread_here", "list_messaging_surfaces", "attach_thread_to_surface"].includes(definition.name)));
+    this.toolLedgerDirectory = path.join(path.dirname(store.directory), "tool-calls");
+    privateDirectory(this.toolLedgerDirectory);
+    this.toolLedger = new Map();
+    this.toolLedgerCount = readdirSync(this.toolLedgerDirectory).filter((name) => /^[a-f0-9]{64}\.json$/.test(name)).length;
     this.loadedThreads = new Set();
     this.onFailure = onFailure;
     this.codex = new Codex({
@@ -30,6 +41,11 @@ export class Runtime {
     if (this.stopping) throw new Error("Daemon is stopping");
     switch (method) {
       case "status": return { version: 1, ready: true, pid: process.pid, activeJob: this.active || null, workspace: this.workspace };
+      case "project-list": return this.projects.list();
+      case "project-create": case "project-clone": return this.projects.create(params);
+      case "project-add": return this.projects.add(params);
+      case "project-remove": return this.projects.remove(params.path, this.listOwnedThreads?.() || []);
+      case "git-auth-configure": return this.projects.git.configure(params);
       case "list": return [...this.store.jobs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100);
       case "show": return this.store.get(params.id);
       case "submit": return this.submit(params);
@@ -73,17 +89,21 @@ export class Runtime {
     if (threadId !== null && (typeof threadId !== "string" || (!this.ownsThread?.(threadId) && ![...this.store.jobs.values()].some((job) => job.threadId === threadId)))) {
       throw new Error("Only threads created by this headless profile may be continued");
     }
+    if (threadId && this.threadLocked?.(threadId)) throw new Error("Thread handoff is in progress");
     // Preserve fingerprints created before optional turn settings were added.
-    const fingerprint = digest({ prompt, threadId, model, sandbox, ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}) });
+    const cwd = this.projects.resolve(threadId ? this.threadCwd?.(threadId) || params.cwd || this.workspace : params.cwd);
+    if (threadId && params.cwd && params.cwd !== cwd) throw new Error("Turn cwd differs from its owner thread project");
+    const fingerprint = digest({ prompt, threadId, model, sandbox, ...(cwd !== this.workspace ? { cwd } : {}), ...(params.messageOrigin ? { messageOrigin: params.messageOrigin } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}) });
     const prior = this.store.jobs.get(id);
     if (prior) {
       if (prior.fingerprint !== fingerprint) throw new Error("Job ID was already used with different input");
       return prior;
     }
+    if (this.intakeBusy) throw new Error("Outpost thread intake is in progress; no job was queued");
     if (this.active) throw new Error(`Daemon is busy with job ${this.active}; no job was queued`);
     if (this.store.jobs.size >= 10000) throw new Error("Job retention limit reached (10000); use a new profile");
     const job = this.save({ version: 1, id, fingerprint, status: "starting", threadId,
-      model, sandbox, reasoningEffort, serviceTier, createdAt: new Date().toISOString() });
+      model, sandbox, cwd, messageOrigin: params.messageOrigin, reasoningEffort, serviceTier, createdAt: new Date().toISOString() });
     this.active = id;
     this.earlyCompletion = null;
     this.blockedReason = null;
@@ -98,12 +118,13 @@ export class Runtime {
   }
 
   async start(job, prompt) {
-    const params = { cwd: this.workspace, approvalPolicy: "never", sandbox: job.sandbox,
+    const cwd = this.projects.resolve(job.cwd || this.workspace);
+    const params = { cwd, approvalPolicy: "never", sandbox: job.sandbox,
       ...(job.model ? { model: job.model } : {}) };
     const result = job.threadId && this.loadedThreads.has(job.threadId) ? { thread: { id: job.threadId } }
       : await this.codex.request(job.threadId ? "thread/resume" : "thread/start", {
         ...params,
-        ...(job.threadId ? { threadId: job.threadId } : { ephemeral: false }),
+        ...(job.threadId ? { threadId: job.threadId } : { ephemeral: false, dynamicTools: this.messagingTools.buildDynamicToolSpecs() }),
       });
     if (typeof result?.thread?.id !== "string" || !result.thread.id || result.thread.id.length > 256
       || (job.threadId && result.thread.id !== job.threadId)) {
@@ -114,10 +135,10 @@ export class Runtime {
     const turn = await this.codex.request("turn/start", {
       threadId: result.thread.id,
       input: [{ type: "text", text: prompt, text_elements: [] }],
-      cwd: this.workspace,
+      cwd,
       approvalPolicy: "never",
       sandboxPolicy: job.sandbox === "workspace-write"
-        ? { type: "workspaceWrite", writableRoots: [this.workspace], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
+        ? { type: "workspaceWrite", writableRoots: [cwd], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true }
         : { type: "readOnly", networkAccess: false },
       ...(job.model ? { model: job.model } : {}),
       ...(job.reasoningEffort ? { effort: job.reasoningEffort } : {}),
@@ -156,7 +177,47 @@ export class Runtime {
       this.blockedReason || params.turn.error?.message);
   }
 
+  async dispatchTool(message, call) {
+    const job = this.active && this.store.get(this.active);
+    if (!job || job.threadId !== call.threadId || (job.turnId && job.turnId !== call.turnId)) throw new Error("Dynamic tool call does not belong to the active outpost turn");
+    const key = digest([call.threadId, call.turnId, call.callId]);
+    const fingerprint = digest([call.namespace, call.tool, call.arguments]);
+    const file = path.join(this.toolLedgerDirectory, `${key}.json`);
+    let prior = this.toolLedger.get(key);
+    if (!prior) {
+      try { prior = JSON.parse(readFileSync(file, "utf8")); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+    }
+    if (prior) {
+      if (prior.fingerprint !== fingerprint) throw new Error("Tool call identity was reused with different input");
+      if (prior.result) return prior.result;
+      throw new Error("Original tool outcome is uncertain; reconcile it with the messaging owner. No send was replayed.");
+    }
+    if (this.toolLedgerCount >= 10000) throw new Error("Tool-call retention limit reached");
+    this.toolLedger.set(key, { fingerprint });
+    atomicJson(file, { fingerprint });
+    this.toolLedgerCount++;
+    const result = await this.messagingTools.handleDynamicToolCall({ backend: "codex", call });
+    this.toolLedger.set(key, { fingerprint, result });
+    atomicJson(file, { fingerprint, result });
+    return result;
+  }
+
+  async messagingRequest(request) {
+    const job = this.active && this.store.get(this.active);
+    if (!job || job.threadId !== request.context.threadId || (job.turnId && job.turnId !== request.context.turnId)) return { ok: false, error: { code: "forbidden", message: "Messaging call does not belong to the active outpost turn" } };
+    const origin = job.messageOrigin;
+    return await this.requestMessaging?.({ ...request, context: { ...request.context, causalMessagingSource: origin?.causalMessagingSource, causalMessagingAmbiguous: origin?.causalMessagingAmbiguous } })
+      || { ok: false, error: { code: "peer_unavailable", message: "The original messaging owner is unavailable" } };
+  }
+
   serverRequest(message) {
+    const call = readPwrAgentMessagingDynamicToolCall(message);
+    if (call) {
+      void this.dispatchTool(message, call).then((result) => this.codex.send({ id: message.id, result }),
+        (error) => this.codex.send({ id: message.id, result: { success: false, contentItems: [{ type: "inputText", text: error.message }] } }));
+      return;
+    }
     // Never grant unattended approvals or invent answers to user questions.
     const method = message.method;
     let result;

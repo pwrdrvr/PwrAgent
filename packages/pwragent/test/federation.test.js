@@ -179,11 +179,11 @@ test("ungranted mutation capabilities and wrong pinned keys fail closed", { time
   const second = decodeFederationInvite((await h.rpc("federation-invite", { port: Number(new URL(invite.gatewayUrl).port) })).invite);
   await assert.rejects(viewer({ ...second, gatewayPublicKeyPem: generateFederationIdentityKeyPair().publicKeyPem }), /Invalid federation auth challenge/);
   assert.equal(h.calls().filter((message) => message.method === "thread/start").length, 0);
-  const limited = await viewer(second, undefined, "enroll", [...HEADLESS_CAPABILITIES, "durable_turn_requests_v1", "remote_pty"]);
+  const limited = await viewer(second, undefined, "enroll", [...HEADLESS_CAPABILITIES, "durable_turn_requests_v1"]);
   t.after(() => limited.connection.close());
   assert.deepEqual(limited.connection.capabilities, HEADLESS_CAPABILITIES);
   limited.connection.close();
-  const reconnected = await viewer(second, limited.identity, "reconnect", [...HEADLESS_CAPABILITIES, "remote_pty"]);
+  const reconnected = await viewer(second, limited.identity, "reconnect", HEADLESS_CAPABILITIES);
   t.after(() => reconnected.connection.close());
   assert.deepEqual(reconnected.connection.capabilities, HEADLESS_CAPABILITIES);
 });
@@ -236,7 +236,7 @@ test("leave removes the upstream router entry and subscriptions before asynchron
   const client = { close: () => { closed = true; } };
   const federation = Object.assign(Object.create(HeadlessFederation.prototype), {
     state: { instanceId: randomUUID(), gateway: { gatewayInstanceId: id } }, client,
-    generation: 0, connections: new Map([[id, client]]), subscriptions: new Map([["viewer", { via: id }]]),
+    generation: 0, ptyRoutes: new Map(), endpoints: new Map(), pty: { notifyPeerDisconnected() {} }, connections: new Map([[id, client]]), subscriptions: new Map([["viewer", { via: id }]]),
     router: { unregisterConnection: (peer) => { assert.equal(peer, id); unregistered = true; } }, save: () => {},
   });
   const status = await federation.leave();

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Codex } from "../src/codex.js";
 import { Runtime } from "../src/runtime.js";
 
@@ -12,6 +15,32 @@ function runningRuntime(request) {
   });
 }
 
+test("tool-call receipts survive cold restart without replaying successful or uncertain sends", async (t) => {
+  const local = fileURLToPath(new URL("../../../.local/", import.meta.url));
+  mkdirSync(local, { recursive: true });
+  const directory = mkdtempSync(path.join(local, "tool-receipts-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const runtime = runningRuntime(async () => ({}));
+  runtime.toolLedgerDirectory = directory;
+  runtime.toolLedger = new Map();
+  runtime.toolLedgerCount = 0;
+  let sends = 0;
+  runtime.messagingTools = { handleDynamicToolCall: async () => { sends++; throw new Error("Owner disconnected after accepting the send"); } };
+  const call = { threadId: "thread", turnId: "turn", callId: "uncertain", namespace: "pwragent", tool: "send_private_response", arguments: { text: "mock reply" } };
+  await assert.rejects(runtime.dispatchTool({}, call), /disconnected/);
+  runtime.toolLedger = new Map();
+  await assert.rejects(runtime.dispatchTool({}, call), /uncertain/);
+  assert.equal(sends, 1);
+  await assert.rejects(runtime.dispatchTool({}, { ...call, arguments: { text: "different" } }), /different input/);
+  const response = { success: true, contentItems: [{ type: "inputText", text: "delivered" }] };
+  runtime.messagingTools = { handleDynamicToolCall: async () => { sends++; return response; } };
+  const accepted = { ...call, callId: "confirmed" };
+  assert.deepEqual(await runtime.dispatchTool({}, accepted), response);
+  runtime.toolLedger = new Map();
+  assert.deepEqual(await runtime.dispatchTool({}, accepted), response);
+  assert.equal(sends, 2);
+});
+
 test("loaded threads start turns directly, and closed threads resume from the provider", async () => {
   const methods = [];
   const runtime = runningRuntime(async (method) => {
@@ -19,6 +48,7 @@ test("loaded threads start turns directly, and closed threads resume from the pr
     return method === "thread/resume" ? { thread: { id: "thread" } } : { turn: { id: "next-turn", status: "inProgress" } };
   });
   runtime.workspace = "/fixture";
+  runtime.projects = { resolve: (cwd) => cwd };
   runtime.loadedThreads.add("thread");
   await runtime.start({ ...runtime.store.get("job"), sandbox: "read-only" }, "first turn");
   assert.deepEqual(methods, ["turn/start"], "a new thread has no persisted rollout to resume yet");
