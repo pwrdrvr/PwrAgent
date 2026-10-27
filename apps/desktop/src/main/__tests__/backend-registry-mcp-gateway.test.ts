@@ -17,6 +17,7 @@ import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition"
 import type { McpGatewayInvocation, McpGatewayTool } from "../mcp-connections/mcp-gateway-catalog";
 import type { McpGatewayApproval } from "../mcp-connections/mcp-gateway-tool-service";
 import { buildMcpElicitationResponse, createMcpElicitationState, readMcpApprovalPersistence } from "../../renderer/src/features/thread-detail/mcp-elicitation";
+import { nativeCodexMcpApprovalFixture } from "./fixtures/native-codex-mcp-approval";
 
 type McpApprovalEvent = Pick<AgentEvent, "backend"> & { notification: AppServerMcpElicitationRequestNotification };
 
@@ -528,12 +529,54 @@ select_for_new_threads = true
     },
   });
 
+  function nativeConsent(): AppServerPendingRequestNotification {
+    const wire = nativeCodexMcpApprovalFixture();
+    return { method: wire.method, params: {
+      ...wire.params, threadId: "headless-1", turnId: "turn-1", serverName: "one", requestId: String(wire.id),
+    } };
+  }
+
   async function startApprovedAutomation(toolAllowlist = ["lookup"]) {
     await registry.startAutomationHeadlessTurn({
       backend: "codex", agentThreadId: "thread-1", automationRunId: "run-1", cwd: directory,
       mcpAllowlist: ["one"], toolAllowlist, input: [{ type: "text", text: "Look up the fixture." }],
     });
   }
+
+  it.each(["lookup", "mcp__one__lookup", "mcp__Fixture__lookup"])("cancels native consent without exact identity for allowlisted %s", async (tool) => {
+    await startApprovedAutomation([tool]);
+    const events = declineUnexpectedApproval();
+    expect(await internals.handleServerRequest("codex", nativeConsent())).toEqual({ action: "cancel", content: null, _meta: null });
+    expect(events).toEqual([]);
+    expect(internals.pendingServerRequests.size).toBe(0);
+  });
+
+  it.each(["allowed", "unknown-server", "revoked-server", "ended-run", "permanent-only"])("checks server-wide native consent when the grant is %s", async (scenario) => {
+    await startApprovedAutomation([]);
+    const consent = nativeConsent();
+    if (scenario === "unknown-server") consent.params.serverName = "other";
+    if (scenario === "revoked-server") {
+      await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+    }
+    if (scenario === "ended-run") {
+      const readSelection = registry.readThreadMcpConnections.bind(registry);
+      vi.spyOn(registry, "readThreadMcpConnections").mockImplementationOnce(async (request) => {
+        const selected = await readSelection(request);
+        internals.headlessAutomationTurns.clear();
+        return selected;
+      });
+    }
+    if (scenario === "permanent-only") {
+      consent.params._meta = { ...consent.params._meta as Record<string, unknown>, persist: "always" };
+    }
+    const events = declineUnexpectedApproval();
+    const accepted = scenario === "allowed" || scenario === "permanent-only";
+    expect(await internals.handleServerRequest("codex", consent)).toEqual(accepted
+      ? { action: "accept", content: {}, _meta: scenario === "allowed" ? { persist: "session" } : null }
+      : { action: "cancel", content: null, _meta: null });
+    expect(events).toEqual([]);
+    expect(internals.pendingServerRequests.size).toBe(0);
+  });
 
   it("answers an automation's preauthorized native consent with the advertised run scope", async () => {
     await startApprovedAutomation();
