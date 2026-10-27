@@ -4163,6 +4163,7 @@ export function useThreadNavigation(
           || method === "thread/prAutoDispatch/pendingUpdated"
           || method === "thread/prAutoDispatch/updated"
           || method === "thread/status/changed"
+          || method === "thread/subAgents/updated"
           || method === "turn/cancelled"
           || method === "turn/completed"
           || method === "turn/failed"
