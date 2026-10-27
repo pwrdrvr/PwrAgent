@@ -51,8 +51,16 @@ if mode == "finder" {
     }
     collect(AXUIElementCreateApplication(pid), 0)
   }
+  // An on-demand agent such as UserNotificationCenter starts to show its
+  // alert, so its start time dates the alert.
+  var info = kinfo_proc()
+  var size = MemoryLayout<kinfo_proc>.stride
+  var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+  let started: Any = sysctl(&mib, 4, &info, &size, nil, 0) == 0 && size > 0
+    ? Double(info.kp_proc.p_un.__p_starttime.tv_sec) : NSNull()
   let row: [String: Any] = [
     "pid": pid,
+    "startedAt": started,
     "bundle": app?.bundleIdentifier ?? NSNull(),
     "name": app?.localizedName ?? NSNull(),
     "windows": windows,

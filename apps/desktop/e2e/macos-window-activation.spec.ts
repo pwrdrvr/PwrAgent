@@ -80,13 +80,35 @@ test.describe("native macOS window activation", () => {
       await expect.poll(active.read).toBe(true).catch(async (error: unknown) => {
         // Record who kept activation and what it is showing before failing.
         test.setTimeout(testInfo.timeout + 60_000);
-        traces.push({ mode: "activation-refused", holder: JSON.parse((await native("holder")).stdout) as unknown });
+        const holder = JSON.parse((await native("holder")).stdout) as { startedAt?: number };
+        traces.push({ mode: "activation-refused", holder });
+        // The log around the moment the holder started shows who asked it to
+        // put up the alert.
+        const local = (seconds: number) => {
+          const d = new Date(seconds * 1000);
+          const pad = (n: number) => String(n).padStart(2, "0");
+          return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        };
+        const started = holder.startedAt ?? Date.now() / 1000 - 600;
         const log = await run("/usr/bin/log", [
-          "show", "--last", "6h", "--style", "compact", "--predicate",
-          'process == "UserNotificationCenter" OR (process == "tccd" AND eventMessage CONTAINS[c] "prompt")',
+          "show", "--info", "--style", "compact",
+          "--start", local(started - 60), "--end", local(started + 120),
+          "--predicate",
+          'process == "UserNotificationCenter"'
+          + ' OR eventMessage CONTAINS "CFUserNotification"'
+          + ' OR (process == "tccd" AND (eventMessage CONTAINS "AUTHREQ" OR eventMessage CONTAINS[c] "prompting")'
+          + ' AND NOT eventMessage CONTAINS "Platform binary prompting")',
+        ], { timeout: 50_000, maxBuffer: 64 * 1024 * 1024 }).then((result) => result.stdout, (failure: unknown) => String(failure));
+        const around = await run("/usr/bin/log", [
+          "show", "--info", "--style", "compact",
+          "--start", local(started - 3), "--end", local(started + 3),
         ], { timeout: 50_000, maxBuffer: 64 * 1024 * 1024 }).then((result) => result.stdout, (failure: unknown) => String(failure));
         const logPath = testInfo.outputPath("activation-holder-log.txt");
-        await writeFile(logPath, log.split("\n").slice(-400).map((line) => line.slice(0, 600)).join("\n"));
+        await writeFile(logPath, [
+          ...log.split("\n").slice(0, 400),
+          "==== every process, 3 s either side of the holder's start ====",
+          ...around.split("\n").slice(0, 1500),
+        ].map((line) => line.slice(0, 600)).join("\n"));
         await testInfo.attach("activation-holder-log", { path: logPath, contentType: "text/plain" });
         return active.rethrowWithLastFailure(error);
       });
