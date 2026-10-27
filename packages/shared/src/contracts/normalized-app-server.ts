@@ -782,7 +782,8 @@ export type AppServerThreadMessagePart =
   | AppServerThreadImagePart
   | AppServerThreadFilePart;
 
-export type AppServerTranscriptPhase = "commentary" | "final";
+/** Partial answers are interim output; only final identifies a terminal answer. */
+export type AppServerTranscriptPhase = "commentary" | "partial" | "final";
 
 export type AppServerThreadTurnStatus =
   | "in_progress"

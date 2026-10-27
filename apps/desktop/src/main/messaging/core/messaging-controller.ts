@@ -2085,6 +2085,24 @@ export class MessagingController {
         }
       }
 
+      if (isNonFinalAssistantTextForBackendEvent(event)) {
+        // A provider may reveal the phase only at item completion. Keep the
+        // legacy unphased live path, but do not flush its interim accumulator
+        // as an answer on a later terminal event.
+        const itemId = (event.notification.params as { item?: { id?: string } }).item?.id;
+        await this.waitForAssistantStreamDeliveriesForEvent(event, binding);
+        for (const key of this.assistantStreamBufferKeysForEvent(event, binding)) {
+          const buffer = this.assistantStreamBuffers.get(key);
+          if (itemId && buffer?.itemId === itemId) {
+            this.assistantStreamBuffers.delete(key);
+            this.assistantStreamDeliveryQueues.delete(key);
+            this.assistantStreamCancellationSignals.delete(
+              this.turnProseKey(binding.id, buffer.turnId),
+            );
+          }
+        }
+      }
+
       const assistantDelta = assistantDeltaForBackendEvent(event);
       if (
         assistantDelta
@@ -2201,7 +2219,7 @@ export class MessagingController {
             }
           }
         } else if (!automationTurnEvent) {
-          // NON-final agentMessage completions (e.g. Codex "commentary" phases
+          // NON-final agentMessage completions (commentary and partial answers
           // the agent emits while thinking) are the agent's in-turn prose. They
           // flow through the Working Updates dial: suppressed at None, coalesced
           // into batches at Less/Some/More, sent individually at All — the same
@@ -23309,7 +23327,13 @@ function assistantDeltaForBackendEvent(
     threadId?: unknown;
     turnId?: unknown;
   };
-  if (params.phase === "commentary") {
+  // Interim prose is delivered at item completion through Working Updates.
+  // Never accumulate it in the answer stream or a terminal fallback can post it.
+  if (
+    params.phase === "commentary"
+    || params.phase === "partial"
+    || params.phase === "partial_answer"
+  ) {
     return undefined;
   }
   if (

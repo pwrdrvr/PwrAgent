@@ -63,6 +63,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessagePart,
   AppServerThreadMessageEntry,
+  AppServerTranscriptPhase,
   AppServerThreadPlanEntry,
   AppServerThreadReviewEntry,
   AppServerThreadPlanStep,
@@ -1393,9 +1394,16 @@ function normalizeFailedTurnCompletedNotification(
   };
 }
 
+type LiveAgentMessagePhase = {
+  threadId: string;
+  turnId?: string;
+  phase: AppServerTranscriptPhase;
+};
+
 function normalizeServerNotification(
   method: string,
   params: unknown,
+  liveMessagePhases: Map<string, LiveAgentMessagePhase>,
 ): AppServerNotification {
   const autoReview = normalizeAutoReviewNotification(method, params);
   if (autoReview) return autoReview;
@@ -1404,6 +1412,20 @@ function normalizeServerNotification(
   }
 
   const record = asRecord(params) ?? {};
+  const metadata = extractRequestMetadata(params);
+  if (
+    metadata.threadId
+    && (method === "turn/completed" || method === "turn/failed" || method === "thread/closed")
+  ) {
+    for (const [key, value] of liveMessagePhases) {
+      if (
+        value.threadId === metadata.threadId
+        && (method === "thread/closed" || value.turnId === metadata.turnId)
+      ) {
+        liveMessagePhases.delete(key);
+      }
+    }
+  }
   // A revert from any client replaces the thread's history. Downstream
   // consumers already reload a thread on PwrAgent's provider-neutral rewind.
   if (method === "thread/reverted" && typeof record.threadId === "string") {
@@ -1421,8 +1443,6 @@ function normalizeServerNotification(
       presentation: "activity-only",
     } };
   }
-  const metadata = extractRequestMetadata(params);
-
   // Codex reports a failed turn as `turn/completed` whose `turn.status` is
   // "failed" (with the provider error in `turn.error`), not as a distinct
   // `turn/failed` method. Re-map it here, at the adapter boundary, so the rest
@@ -1444,6 +1464,24 @@ function normalizeServerNotification(
     itemRecord && (method === "item/started" || method === "item/completed")
       ? normalizeLiveNotificationItem(itemRecord)
       : undefined;
+  // Codex deltas omit phase. Carry the item's phase so every live consumer
+  // applies the same interim-answer policy as thread/read replay.
+  const itemId = normalizedItem?.type === "agentMessage"
+    ? pickString(normalizedItem, ["id"])
+    : method === "item/agentMessage/delta" ? pickString(record, ["itemId"]) : undefined;
+  const phaseKey = metadata.threadId && itemId
+    ? JSON.stringify([metadata.threadId, metadata.turnId, itemId])
+    : undefined;
+  const phase = normalizeAgentMessagePhase(
+    pickString(normalizedItem ?? record, ["phase"]),
+  ) ?? (phaseKey ? liveMessagePhases.get(phaseKey)?.phase : undefined);
+  if (phaseKey && metadata.threadId && phase) {
+    rememberBoundedMap(liveMessagePhases, phaseKey, {
+      threadId: metadata.threadId,
+      turnId: metadata.turnId,
+      phase,
+    }, 1_000);
+  }
 
   const configWarningMetadata =
     method === "configWarning"
@@ -1455,7 +1493,12 @@ function normalizeServerNotification(
     params: {
       ...record,
       ...(configWarningMetadata ?? {}),
-      ...(normalizedItem ? { item: normalizedItem } : {}),
+      ...(normalizedItem ? {
+        item: normalizedItem.type === "agentMessage" && phase
+          ? { ...normalizedItem, phase }
+          : normalizedItem,
+      } : {}),
+      ...(method === "item/agentMessage/delta" && phase ? { phase } : {}),
       ...(metadata.threadId ? { threadId: metadata.threadId } : {}),
       ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
       ...(metadata.requestId ? { requestId: metadata.requestId } : {}),
@@ -1579,6 +1622,10 @@ function normalizeLiveNotificationItem(
   item: Record<string, unknown>
 ): Record<string, unknown> {
   const normalized = { ...item };
+  if (item.type === "agentMessage") {
+    const phase = normalizeAgentMessagePhase(pickString(item, ["phase"]));
+    if (phase) normalized.phase = phase;
+  }
   const functionName =
     pickString(item, ["toolName", "tool_name", "name"]) ??
     undefined;
@@ -2197,9 +2244,12 @@ function normalizeConversationRole(
 
 function normalizeAgentMessagePhase(
   value: string | undefined
-): "commentary" | "final" | undefined {
+): AppServerTranscriptPhase | undefined {
   if (value === "commentary") {
     return "commentary";
+  }
+  if (value === "partial" || value === "partial_answer") {
+    return "partial";
   }
   if (value === "final" || value === "final_answer") {
     return "final";
@@ -7767,6 +7817,7 @@ export class CodexAppServerClient {
 
   /** Unknown notification methods already warned about on this connection. */
   private readonly reportedUnknownNotificationMethods = new Set<string>();
+  private readonly liveMessagePhases = new Map<string, LiveAgentMessagePhase>();
 
   constructor(private readonly options: CodexClientOptions = {}) {
     this.restartPolicy = new CodexAppServerRestartPolicy(options.appServerRestartPolicy);
@@ -7902,6 +7953,7 @@ export class CodexAppServerClient {
       const normalized = normalizeServerNotification(
         method,
         params,
+        this.liveMessagePhases,
       );
       if (navigationQueryEventRequiresRefresh(method)) this.invalidateThreadListings(normalized);
       const helperThreadId = extractThreadIdFromNotification(normalized, params);
@@ -8199,6 +8251,7 @@ export class CodexAppServerClient {
     this.tokenMiserActivationNegotiated = false;
     this.runningTurnIdsByThread.clear();
     this.liveUsageSnapshots.clear();
+    this.liveMessagePhases.clear();
     this.initializationPromise = null;
     this.initializeResult = null;
     this.availableHelperModels = [];

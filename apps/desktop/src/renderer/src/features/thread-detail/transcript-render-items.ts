@@ -366,7 +366,7 @@ function buildCommentaryOnlyGroups(
   for (const entry of entries) {
     if (
       !staysInView(entry, alwaysVisibleEntryIds)
-      && isAssistantCommentaryMessage(entry)
+      && isAssistantInterimMessage(entry)
       && !isLiveInProgressTurn(entry.turn, completedTurnIds)
     ) {
       currentMessages.push(entry);
@@ -474,13 +474,13 @@ function isAssistantMessage(
   return entry.type === "message" && entry.role === "assistant";
 }
 
-function isAssistantCommentaryMessage(
+function isAssistantInterimMessage(
   entry: AppServerThreadEntry | undefined
 ): entry is AppServerThreadMessageEntry {
   return (
     entry?.type === "message" &&
     entry.role === "assistant" &&
-    entry.phase === "commentary"
+    (entry.phase === "commentary" || entry.phase === "partial")
   );
 }
 
@@ -503,7 +503,7 @@ function isWorkPhaseEntry(
     return true;
   }
 
-  return isAssistantCommentaryMessage(entry);
+  return isAssistantInterimMessage(entry);
 }
 
 function hasConcreteWork(entries: AppServerThreadEntry[]): boolean {

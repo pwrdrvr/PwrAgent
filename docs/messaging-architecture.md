@@ -192,6 +192,16 @@ Adapter->>Platform: send message / edit / pin
 
 **Key invariant:** the producer never sees the adapter, the channel kind, or any provider name. It receives a `MessagingCapabilityProfile` describing what the destination supports and adapts content to fit. Producers thread through the controller's `this.capabilityProfile`, which the controller reads once at construction from `options.adapter.capabilityProfile`.
 
+Codex message phases normalize to `commentary`, `partial` (wire
+`partial_answer`), and `final` (wire `final_answer`). Commentary and partial
+answers are interim prose: desktop shows them during the turn and folds them
+with completed work; messaging delivers completed interim items through the
+Working Updates setting. Their deltas never enter the live answer stream.
+The Codex adapter carries each item's phase onto its phase-less deltas in
+memory until the turn ends. Unphased messages retain legacy answer-stream
+behavior. An item completing, including a final answer item, does not complete
+the turn; turn lifecycle events remain authoritative.
+
 Cross-thread work uses explicit message origins, independently of the queue's
 `origin` scheduling category. Queue-start notifications carry a display-only
 `incomingWork` summary built from each grouped contribution and its own sender;
