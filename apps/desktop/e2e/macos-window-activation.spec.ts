@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,8 +94,10 @@ test.describe("native macOS window activation", () => {
         }
       }
     } finally {
+      const tracePath = testInfo.outputPath("native-activation-events.json");
+      await writeFile(tracePath, JSON.stringify(traces, null, 2));
       await testInfo.attach("native-activation-events", {
-        body: JSON.stringify(traces, null, 2), contentType: "application/json",
+        path: tracePath, contentType: "application/json",
       });
       await fixture.close();
       await rm(root, { recursive: true, force: true });
