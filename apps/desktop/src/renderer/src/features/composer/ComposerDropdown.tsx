@@ -366,7 +366,7 @@ export function ComposerDropdown(props: {
   // trigger, under the pointer. The command goes to the far end instead:
   // above the list when it opens up, below it when it opens down.
   const actionAfterList = props.menuPlacement === "below";
-  const menuAction = props.menuAction ? (
+  const menuActionRow = props.menuAction ? (
     <div className="composer-dropdown__menu-action">
       {actionAfterList ? (
         <div aria-hidden="true" className="composer-dropdown__separator" />
@@ -487,19 +487,19 @@ export function ComposerDropdown(props: {
           `aria-input-field-name` failure on every dropdown in the app. */}
       {open && (props.menuAction || props.footnote) ? (
         <div
-          className={`composer-dropdown__menu composer-dropdown__menu--with-footer${
+          className={`composer-dropdown__menu${
             props.menuPlacement === "below" ? " composer-dropdown__menu--below" : ""
           }`}
           style={props.menuPlacement === "below" ? belowMenuPosition : undefined}
         >
-          {menuAction && !actionAfterList ? menuAction : null}
+          {menuActionRow && !actionAfterList ? menuActionRow : null}
           <div aria-label={props.ariaLabel} id={listboxId} role="listbox">
             {listContent}
           </div>
           {props.footnote ? (
             <p className="composer-dropdown__footnote">{props.footnote}</p>
           ) : null}
-          {menuAction && actionAfterList ? menuAction : null}
+          {menuActionRow && actionAfterList ? menuActionRow : null}
         </div>
       ) : open ? (
         <div
