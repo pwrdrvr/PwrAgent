@@ -112,3 +112,19 @@ it("keeps navigationChanged:false peer events out of row overlays and navigation
   expect(f.read).toHaveBeenCalledTimes(readsBefore);
   unmount();
 });
+
+it("refreshes mounted navigation for a peer sub-agent invalidation without a payload", async () => {
+  const f = fixture();
+  const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.threads).toHaveLength(3));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  const before = result.current.threads;
+  const readsBefore = f.read.mock.calls.length;
+  f.holdPages();
+
+  await act(async () => { f.emit(studio, {}); });
+
+  await waitFor(() => expect(f.read.mock.calls.length).toBeGreaterThan(readsBefore));
+  expect(result.current.threads).toEqual(before);
+  unmount();
+});
