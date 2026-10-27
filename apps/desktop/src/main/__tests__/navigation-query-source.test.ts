@@ -255,6 +255,94 @@ describe("owner index source event admission", () => {
   });
 });
 
+describe("membership-only owner index reads", () => {
+  // Each scan stays open until the test has emitted its event, the way a
+  // busy owner's live turns land while a slow listing is in flight.
+  function createBusySource() {
+    const scans: Array<() => void> = [];
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const listThreads = vi.fn(() => new Promise<[]>((resolve) => { scans.push(() => resolve([])); }));
+    const registry = {
+      listThreads,
+      onEvent: (listener: (event: AgentEvent) => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      hydrateThreadGitWorkingStates: async (threads: []) => threads,
+      withNavigationSubAgentActivity: (threads: []) => threads,
+      getNavigationInputRequestThreadKeys: () => new Set<string>(),
+    } as unknown as DesktopBackendRegistry;
+    const emit = (method: string, params: Record<string, unknown> = { threadId: "thread" }) => {
+      const event = { backend: "codex", notification: { method, params } } as AgentEvent;
+      for (const listener of listeners) listener(event);
+    };
+    const settleScan = async () => {
+      await vi.waitFor(() => expect(scans.length).toBeGreaterThan(0));
+      scans.shift()!();
+    };
+    return { listThreads, listeners, registry, emit, settleScan, scanCount: () => listThreads.mock.calls.length };
+  }
+
+  it("finishes while live turns keep changing rows", async () => {
+    const source = createBusySource();
+    let settled = false;
+    const read = loadLocalNavigationQueryIndex({
+      registry: source.registry, callerReason: "thread-todo-owners", membershipOnly: true,
+    }).finally(() => { settled = true; });
+    // Three scans is the read pool's whole budget, so a read that restarts
+    // for these rows fails here with navigation_busy.
+    for (let scan = 1; scan <= 3 && !settled; scan += 1) {
+      await vi.waitFor(() => expect(source.scanCount()).toBe(scan));
+      source.emit("turn/started");
+      source.emit("thread/status/changed");
+      source.emit("navigation/threadGitWorkingState/updated", { worktreePath: "/repo" });
+      source.emit("navigation/invalidated", { sourceMethod: "turn/completed" });
+      await source.settleScan();
+      await vi.waitFor(() => expect(settled || source.scanCount() > scan).toBe(true));
+    }
+    await expect(read).resolves.toMatchObject({ threads: [] });
+    expect(source.scanCount()).toBe(1);
+    source.emit("thread/archived");
+    expect(source.listeners.size).toBe(0);
+  });
+
+  it("restarts for a change that can add or remove a thread", async () => {
+    const source = createBusySource();
+    const read = loadLocalNavigationQueryIndex({
+      registry: source.registry, callerReason: "thread-todo-owners", membershipOnly: true,
+    });
+    await vi.waitFor(() => expect(source.scanCount()).toBe(1));
+    source.emit("thread/archived");
+    await source.settleScan();
+    await vi.waitFor(() => expect(source.scanCount()).toBe(2));
+    source.emit("navigation/invalidated", {});
+    await source.settleScan();
+    await vi.waitFor(() => expect(source.scanCount()).toBe(3));
+    await source.settleScan();
+    await expect(read).resolves.toMatchObject({ threads: [] });
+    source.emit("thread/started");
+  });
+
+  it("does not let a row read's restarts cost a membership read", async () => {
+    const source = createBusySource();
+    const rows = loadLocalNavigationQueryIndex({ registry: source.registry, callerReason: "rows" });
+    const membership = loadLocalNavigationQueryIndex({
+      registry: source.registry, callerReason: "thread-todo-owners", membershipOnly: true,
+    });
+    await vi.waitFor(() => expect(source.scanCount()).toBe(2));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      source.emit("thread/status/changed");
+      await source.settleScan();
+      if (attempt === 0) await source.settleScan();
+      if (attempt < 2) await vi.waitFor(() => expect(source.scanCount()).toBe(attempt + 3));
+    }
+    await expect(rows).rejects.toThrow(/changed repeatedly/);
+    await expect(membership).resolves.toMatchObject({ threads: [] });
+    source.emit("thread/started");
+  });
+});
+
 it.each([
   ["Inbox lens", { kind: "lens", lens: "inbox" }],
   ["selected thread's exact row", { kind: "exact", identities: [{ backend: "codex", threadId: "bound" }] }],
