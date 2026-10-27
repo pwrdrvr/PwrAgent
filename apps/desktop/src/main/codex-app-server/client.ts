@@ -8146,7 +8146,7 @@ export class CodexAppServerClient {
     };
   }
 
-  onAppServerUnexpectedExit(listener: () => void): () => void {
+  onAppServerUnexpectedExit(listener: (threadIds?: ReadonlySet<string>) => void): () => void {
     this.unexpectedExitListeners.add(listener);
     return () => {
       this.unexpectedExitListeners.delete(listener);

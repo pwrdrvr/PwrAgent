@@ -37,6 +37,8 @@ type ProviderDraft = {
   rates: Record<string, RateDraft>;
   /** The Codex config provider this draft was prefilled from. */
   imported?: CodexModelProviderImportCandidate;
+  compatibility?: "bonsai";
+  catalogPath?: string;
 };
 
 const EMPTY_RATE: RateDraft = { input: "", output: "", cached: "" };
@@ -538,7 +540,7 @@ function ProviderEditor(props: {
       {props.canTest ? (
         <SettingsField
           label="Connection test"
-          sub="Reads /models and sends one short request to /responses, which the provider may bill."
+          sub="Reads /models and checks a short /responses request with instructions and namespaced tools, which the provider may bill. A passing check does not validate a full PwrAgent turn."
           control={
             <>
               <div className="settings-inline-actions">
@@ -639,7 +641,7 @@ function ProviderTestResult(props: {
           ? `Answered with ${responses.model}`
           : responses.error ?? "Failed"}
         {!responses.ok && !responses.skipped
-          ? " Codex needs the Responses API; an endpoint that serves only Chat Completions cannot run threads."
+          ? " Codex needs Responses API compatibility for instructions and namespaced function tools."
           : null}
       </li>
     </ul>
@@ -651,6 +653,7 @@ function providerChips(provider: DesktopCodexModelProvider): SettingsPathRowChip
   const chips: SettingsPathRowChip[] = [
     { key: "key", label: provider.hasApiKey ? "key" : "no key", tone: provider.hasApiKey ? "muted" : "warn" },
   ];
+  if (provider.compatibility) chips.push({ key: "runtime", label: "isolated runtime", tone: "muted" });
   if (modelCount > 0 || provider.discoverModels !== false) {
     chips.push({
       key: "models",
@@ -707,6 +710,8 @@ function draftFromImport(
     models: candidate.models.join("\n"),
     local: candidate.local,
     imported: candidate,
+    compatibility: candidate.compatibility,
+    catalogPath: candidate.catalogPath,
   };
 }
 
@@ -746,6 +751,8 @@ function draftFromProvider(provider: DesktopCodexModelProvider): ProviderDraft {
     discoverModels: provider.discoverModels !== false,
     local: provider.local === true,
     rates,
+    compatibility: provider.compatibility,
+    catalogPath: provider.catalogPath,
   };
 }
 
@@ -784,6 +791,8 @@ function providerFromDraft(draft: ProviderDraft): CodexModelProviderSettings {
     ...(draft.discoverModels ? {} : { discoverModels: false }),
     ...(draft.local ? { local: true } : {}),
     ...(rates.length ? { rates } : {}),
+    ...(draft.compatibility ? { compatibility: draft.compatibility } : {}),
+    ...(draft.catalogPath ? { catalogPath: draft.catalogPath } : {}),
   };
 }
 
