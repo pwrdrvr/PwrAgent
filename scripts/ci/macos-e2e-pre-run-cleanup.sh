@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Clear the two kinds of state a previous job leaves behind on the persistent
-# macOS E2E guest: orphaned Electron process trees, and macOS saved
-# application state for the Electron bundle. Report what was found either way.
+# Clear the state a previous job leaves behind on the persistent macOS E2E
+# guest: orphaned Electron process trees, macOS saved application state for
+# the Electron bundle, and the crash dialog an Electron crash leaves up.
+# Report what was found either way.
 #
 # The macOS Desktop E2E lane runs on a persistent Tart guest, not a fresh VM
 # per job, so anything a previous job left behind survives into the next one.

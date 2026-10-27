@@ -775,14 +775,6 @@ jobs:
         timeout-minutes: 5
         run: bash ./scripts/ci/macos-e2e-pre-run-cleanup.sh
 
-      - name: TEMPORARY reset the DialogType an earlier probe wrote
-        shell: bash
-        continue-on-error: true
-        run: |
-          echo "DialogType before: $(defaults read com.apple.CrashReporter DialogType 2>&1)"
-          defaults delete com.apple.CrashReporter DialogType 2>/dev/null || true
-          echo "DialogType after: $(defaults read com.apple.CrashReporter DialogType 2>&1)"
-
       - name: Build or restore apps/desktop/out
         # A guest usually runs two lanes of one commit, and a re-run repeats
         # all four, so the electron-vite build is kept on the guest, keyed on
