@@ -206,6 +206,14 @@ describe("shared owner index reads", () => {
     });
   });
 
+  it("rejects instead of hanging when a snapshot cannot be retained", async () => {
+    const pool = new NavigationIndexReadPool(1_000);
+    const unsizable = { ...index, localInstanceId: 1n } as unknown as NavigationQueryIndex;
+    await expect(pool.read("owner", async () => unsizable)).rejects.toThrow(/BigInt/);
+    expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
+    expect(pool.retainedUsage()).toEqual({ entries: 0, bytes: 0 });
+  });
+
   it("retains physical admission for non-cooperative work after zero-ref cancellation", async () => {
     const pool = new NavigationIndexReadPool();
     const pending = deferred();

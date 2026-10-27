@@ -48,23 +48,20 @@ export async function loadLocalNavigationQueryIndex(params: {
   const overlayStore = getDesktopOverlayStore();
   const backend = params.backend ?? "all";
   // A refresh reads under its own key: it must not be served a retained or
-  // in-flight index that predates it, nor cost other readers a retry.
+  // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   const version = overlayStore.readNavigationSourceVersion?.();
-  let subscribed = false;
   return indexReads.read(key, async (signal, checkpoint) => {
     // An event during a scan stops later readers from joining it; they share
-    // one follow-up scan. The pool owns retries: there are none.
-    if (!subscribed) {
-      subscribed = true;
-      const unsubscribe = registry.onEvent?.((event) => {
-        if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) indexReads.invalidate(key);
-      });
-      // The pool owns this listener through its bounded completed reuse window.
-      // Eviction/expiry/cancellation aborts the lifetime and releases it.
-      signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
-    }
+    // one follow-up scan. Each run owns its listener, because the pool can
+    // run this same load again for a follow-up.
+    const unsubscribe = registry.onEvent?.((event) => {
+      if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) indexReads.invalidate(key);
+    });
+    // The pool owns this listener through its bounded completed reuse window.
+    // Eviction/expiry/cancellation aborts the lifetime and releases it.
+    signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
     const index = await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint });
     // Only the whole-owner index is what viewers read as its directory set.
     if (backend === "all" && !params.registry) {

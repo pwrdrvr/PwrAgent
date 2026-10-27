@@ -114,8 +114,12 @@ export class NavigationIndexReadPool {
     const traced = listingDiagnostics.trace("index", {}, () => owned.load(owned.controller.signal, checkpoint));
     listingDiagnostics.remember(owned.promise, traced);
     traced.then((index) => {
-      if (!owned.stale) this.retain(key, index, owned);
-      settle.resolve(index);
+      try {
+        if (!owned.stale) this.retain(key, index, owned);
+        settle.resolve(index);
+      } catch (error) {
+        settle.reject(error);
+      }
     }, (error: unknown) => {
       if (!(error instanceof HandOff) || !owned.members.size) return settle.reject(error);
       // The follow-up's own readers may have left since the checkpoint.
