@@ -772,6 +772,12 @@ jobs:
         timeout-minutes: 5
         run: bash ./scripts/ci/macos-e2e-pre-run-cleanup.sh
 
+      - name: TEMPORARY crash dialog probe
+        shell: bash
+        timeout-minutes: 5
+        continue-on-error: true
+        run: node scripts/ci/probe-macos-crash-dialog.mjs
+
       - name: Build or restore apps/desktop/out
         # A guest usually runs two lanes of one commit, and a re-run repeats
         # all four, so the electron-vite build is kept on the guest, keyed on
