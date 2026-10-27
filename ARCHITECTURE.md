@@ -432,7 +432,9 @@ a process-local `-c model_providers.<id>.*` override with
 as a process argument or in `config.toml`. Codex passes `*KEY*` variables to
 the commands a model runs by default (`ignore_default_excludes = true`), so a
 `shell_environment_policy.set.<VAR>=""` override blanks each key for them. Changing a provider's endpoint or
-key reconnects Codex when it is idle; its models and rates do not.
+key reconnects Codex when it is idle; ordinary provider model lists and rates
+do not. An isolated provider's model or catalog path also changes its runtime
+fingerprint, while executable discovery remains valid.
 
 Ordinary providers share the primary App Server. `compatibility = "bonsai"`
 selects a separate `CodexAppServerClient` and process through
