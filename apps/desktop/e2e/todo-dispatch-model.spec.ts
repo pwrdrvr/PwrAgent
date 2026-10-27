@@ -139,7 +139,12 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     const panel = app.window.getByRole("tabpanel", { name: /^To-dos/ });
     await expect(panel.locator(".thread-todo-card")).toHaveCount(2);
     const firstPanelChip = panel.getByRole("button", { name: /^Model for the new thread:/ }).first();
-    expectChipHugsLabel(await measureModelChip(firstPanelChip));
+    // The rail's width follows the window: about 220px in CI's 1024px
+    // window, which truncates the label. Either way the chip stays in its
+    // column, and it hugs the label whenever the label fits.
+    const panelLayout = await measureModelChip(firstPanelChip);
+    expect(panelLayout.chipRight).toBeLessThanOrEqual(panelLayout.valueRight + 0.5);
+    if (!panelLayout.labelTruncated) expectChipHugsLabel(panelLayout);
     await panel.locator(".thread-todo-card").first().screenshot({
       path: testInfo.outputPath("todo-dispatch-panel.png"), animations: "disabled",
     });
