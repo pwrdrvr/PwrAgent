@@ -2003,8 +2003,16 @@ function normalizePositivePullRequestNumber(value: unknown): number | undefined 
   return value;
 }
 
+type QuitThreadSource = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  threadKey: string;
+  source: string;
+  turnId?: string;
+};
+
 /** A started Codex tool item; `itemType` is lowercased with separators removed. */
-type LiveCodexToolItem = { turnId: string; itemType: string };
+type LiveCodexToolItem = { turnId: string; itemType: string; turnEnded?: boolean };
 
 type PendingServerRequest = {
   backend: AppServerBackendKind;
@@ -9161,7 +9169,7 @@ export class DesktopBackendRegistry {
    * original `turn/started` notification.
    */
   private readonly backendActiveCodexThreadIds = new Set<string>();
-  /** Started Codex tool items can keep running after their parent turn ends. */
+  /** Commands may outlive their turn; other tools belong to that turn only. */
   private readonly liveCodexToolItemsByThread = new Map<string, Map<string, LiveCodexToolItem>>();
   private readonly codexBackgroundTerminals = new Map<string, CodexBackgroundTerminal[]>();
   /**
@@ -20365,7 +20373,69 @@ export class DesktopBackendRegistry {
     return this.getInProgressThreadSnapshot();
   }
 
-  private getInProgressThreadSnapshot(): {
+  /** On-demand only: no timers, persistence, tool arguments, or transcript text. */
+  getQuitBlockerDiagnostics() {
+    const contributors: Record<string, unknown>[] = [];
+    const sourceCounts: Record<string, number> = {};
+    let omittedContributors = 0;
+    let bytes = 0;
+    const bounded = (value: string) => value.slice(0, 100);
+    this.getInProgressThreadSnapshot((entry) => {
+      sourceCounts[entry.source] = (sourceCounts[entry.source] ?? 0) + 1;
+      if (contributors.length >= 20) {
+        omittedContributors += 1;
+        return;
+      }
+      const tools = entry.source === "live-tool-items"
+        ? this.liveCodexToolItemsByThread.get(entry.threadId)
+        : undefined;
+      const terminals = entry.source === "background-terminals"
+        ? this.codexBackgroundTerminals.get(entry.threadId)
+        : undefined;
+      const detail = {
+        threadKey: bounded(entry.threadKey),
+        sourceThreadId: bounded(entry.threadId),
+        source: entry.source,
+        sourceBackend: entry.backend,
+        ...(entry.turnId ? { turnId: bounded(entry.turnId) } : {}),
+        ...(entry.backend === "codex" ? {
+          observedStatus: this.observedCodexThreadStatuses.get(entry.threadId)?.status,
+        } : {}),
+        ...(tools ? {
+          itemCount: tools.size,
+          items: (() => {
+            const sample = [];
+            for (const [itemId, item] of tools) {
+              sample.push({
+                itemId: bounded(itemId), turnId: bounded(item.turnId),
+                type: bounded(item.itemType), turnEnded: Boolean(item.turnEnded),
+              });
+              if (sample.length === 4) break;
+            }
+            return sample;
+          })(),
+        } : {}),
+        ...(terminals ? {
+          terminalCount: terminals.length,
+          terminals: terminals.slice(0, 4).map((terminal) => ({
+            itemId: bounded(terminal.itemId), processId: bounded(terminal.processId),
+          })),
+        } : {}),
+      };
+      const size = Buffer.byteLength(JSON.stringify(detail), "utf8");
+      // Leave room for the fixed source counts and omission counters within
+      // an 8 KiB log field, even with non-ASCII protocol identifiers.
+      if (bytes + size > 6_500) {
+        omittedContributors += 1;
+        return;
+      }
+      contributors.push(detail);
+      bytes += size;
+    });
+    return { sourceCounts, contributors, omittedContributors };
+  }
+
+  private getInProgressThreadSnapshot(onSource?: (entry: QuitThreadSource) => void): {
     count: number;
     threadIds: string[];
     subAgentThreadKeys?: string[];
@@ -20408,10 +20478,11 @@ export class DesktopBackendRegistry {
         });
       }
     }
-    const addThread = (backend: AppServerBackendKind, threadId: string): void => {
+    const addThread = (backend: AppServerBackendKind, threadId: string, source: string, turnId?: string): void => {
       const owner = this.resolveSubAgentThreadOwner({ backend, threadId });
       const threadKey = formatQuitThreadKey(owner.backend, owner.threadId);
       if (!automationExecutionThreadKeys.has(threadKey)) {
+        onSource?.({ backend, threadId, threadKey, source, turnId });
         threadKeys.add(threadKey);
         if (owner.isSubAgent) {
           subAgentThreadKeys.add(threadKey);
@@ -20423,45 +20494,45 @@ export class DesktopBackendRegistry {
       }
     };
     for (const threadId of this.backendActiveCodexThreadIds) {
-      addThread("codex", threadId);
+      addThread("codex", threadId, "backend-active");
     }
     for (const threadId of this.codexBackgroundTerminals.keys()) {
-      addThread("codex", threadId);
+      addThread("codex", threadId, "background-terminals");
     }
     // A Claude session outlives its turn while background tasks run.
     for (const threadId of this.claudeBackend.liveSessionThreadIds()) {
-      addThread("claude", threadId);
+      addThread("claude", threadId, "live-session");
     }
     for (const threadId of this.liveCodexToolItemsByThread.keys()) {
-      addThread("codex", threadId);
+      addThread("codex", threadId, "live-tool-items");
     }
     for (const key of this.activeTurnKeys) {
       const parsed = parseActiveTurnKey(key);
       if (parsed) {
-        addThread(parsed.backend, parsed.threadId);
+        addThread(parsed.backend, parsed.threadId, "active-turn", parsed.turnId);
       }
     }
     for (const key of this.activeCodexTurnModes.keys()) {
       const threadId = parseThreadIdFromThreadTurnKeyBody(key);
       if (threadId) {
-        addThread("codex", threadId);
+        addThread("codex", threadId, "turn-mode", parseThreadTurnKeyBody(key)?.turnId);
       }
     }
     for (const threadId of this.reservedCodexStartThreadIds) {
-      addThread("codex", threadId);
+      addThread("codex", threadId, "start-reservation");
     }
     for (const key of this.reservedAcpStartThreadKeys) {
       const parsed = parseReservedAcpStartThreadKey(key);
       if (parsed) {
-        addThread(parsed.backend, parsed.threadId);
+        addThread(parsed.backend, parsed.threadId, "start-reservation");
       }
     }
     for (const entry of this.threadTurnQueue.getAllQueuedEntries()) {
-      addThread(entry.backend, entry.threadId);
+      addThread(entry.backend, entry.threadId, "queued-turn");
     }
     for (const move of this.pendingThreadWorkspaceMoves.values()) {
       if (move.status === "queued" || move.status === "running") {
-        addThread(move.backend, move.threadId);
+        addThread(move.backend, move.threadId, "workspace-move");
       }
     }
     const threadIds = [...threadKeys].sort();
@@ -26957,18 +27028,19 @@ export class DesktopBackendRegistry {
    * `item/completed`. Without this a missed completion holds the thread in
    * the quit prompt and blocks a runtime restart forever. Commands in a live
    * turn may not have a session yet, and other tool kinds never appear in the
-   * list, so both are kept.
+   * list, so both are kept. Absence from the active-turn maps alone cannot
+   * establish completion: a new turn's bookkeeping may still be pending.
    */
   private pruneUnlistedCodexCommands(threadId: string, terminals: CodexBackgroundTerminal[]): void {
     const items = this.liveCodexToolItemsByThread.get(threadId);
-    if (!items || this.backendActiveCodexThreadIds.has(threadId)) return;
+    if (!items) return;
     const listed = new Set(terminals.map((terminal) => terminal.itemId));
     let pruned = false;
-    for (const [itemId, { turnId, itemType }] of items) {
+    for (const [itemId, { itemType, turnEnded }] of items) {
       if (
         itemType === "commandexecution"
         && !listed.has(itemId)
-        && !this.activeTurnKeys.has(buildActiveTurnKey("codex", threadId, turnId))
+        && turnEnded
       ) {
         items.delete(itemId);
         pruned = true;
@@ -47253,22 +47325,43 @@ export class DesktopBackendRegistry {
     return emitted;
   }
 
+  /** A successful turn may leave commands, but cannot leave an MCP/search call running. */
+  private settleCodexToolItems(
+    threadId: string,
+    belongsToEndedTurn: (item: LiveCodexToolItem) => boolean,
+    interrupted = false,
+  ): void {
+    const items = this.liveCodexToolItemsByThread.get(threadId);
+    if (!items) return;
+    for (const [itemId, item] of items) {
+      if (!belongsToEndedTurn(item)) continue;
+      if (item.itemType === "commandexecution" && !interrupted) {
+        // Set this at notification ingress, before asynchronous lifecycle
+        // bookkeeping. An immediate list response can then prune the ended
+        // command even while activeTurnKeys still contains its parent turn.
+        item.turnEnded = true;
+      } else {
+        items.delete(itemId);
+      }
+    }
+    if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
+  }
+
   private trackLiveCodexToolItem(event: AgentEvent): void {
     if (event.backend !== "codex") return;
     const notification = event.notification;
     const params = readRecord(notification.params);
     const threadIdForRevision = readOptionalString(params, ["threadId"]);
-    if (threadIdForRevision && ["item/started", "item/completed", "thread/status/changed"].includes(notification.method)) {
-      // Invalidate only a read in flight; with none, there is nothing stale.
-      if (this.backgroundTerminalReadRevisions.has(threadIdForRevision)) {
-        this.backgroundTerminalReadRevisions.set(threadIdForRevision, ++this.backgroundTerminalReadCounter);
-      }
-      if (notification.method === "thread/status/changed" && readRecord(params?.status)?.type === "notLoaded") {
-        this.publishCodexBackgroundTerminals(threadIdForRevision, []);
-      }
+    if (threadIdForRevision && [
+      "item/started", "item/completed", "thread/status/changed", "turn/started",
+      "turn/completed", "turn/failed", "turn/cancelled",
+    ].includes(notification.method)) {
+      // Removing the token invalidates only reads already in flight. A newer
+      // read receives a fresh counter value; no invalidated token is retained.
+      this.backgroundTerminalReadRevisions.delete(threadIdForRevision);
     }
     if (notification.method === "item/completed") {
-      const item = readRecord(readRecord(notification.params)?.item);
+      const item = readRecord(params?.item);
       const itemId = readOptionalString(item, ["id", "itemId", "item_id", "callId", "call_id"]);
       const threadId = notification.params.threadId;
       const terminals = this.codexBackgroundTerminals.get(threadId);
@@ -47276,37 +47369,35 @@ export class DesktopBackendRegistry {
         this.publishCodexBackgroundTerminals(threadId, terminals.filter((terminal) => terminal.itemId !== itemId));
       }
     }
+    if (notification.method === "thread/status/changed") {
+      const threadId = notification.params.threadId;
+      const status = readStatusType(notification.params.status);
+      if (status === "notLoaded") {
+        // The unloaded thread owns no processes. Child threads have their own
+        // runtime entries and are deliberately untouched by this boundary.
+        this.liveCodexToolItemsByThread.delete(threadId);
+        this.publishCodexBackgroundTerminals(threadId, []);
+      } else if (status === "idle") {
+        this.settleCodexToolItems(threadId, (item) =>
+          !this.threadHasActiveCodexReviewTurn(threadId)
+          || (!this.activeTurnKeys.has(buildActiveTurnKey("codex", threadId, item.turnId))
+            && !this.activeCodexTurnModes.has(buildActiveTurnModeKey(threadId, item.turnId))),
+        );
+      }
+    }
     if (
       notification.method === "turn/completed"
       || notification.method === "turn/failed"
       || notification.method === "turn/cancelled"
     ) {
-      // A command still live when its turn ends is a background terminal. A
-      // later turn can also stop or start one, so recheck a thread with some.
-      // Quit stops turns on purpose; reading then would only query a closing
-      // app server.
-      const threadId = notification.params.threadId;
-      if (
-        !this.closed
-        && !this.stoppingRunningTurnsForShutdown
-        && (this.liveCodexToolItemsByThread.has(threadId) || this.codexBackgroundTerminals.has(threadId))
-      ) {
-        void this.refreshCodexBackgroundTerminalsAfterTurn(threadId);
-      }
-    }
-    if (notification.method === "turn/failed" || notification.method === "turn/cancelled") {
       const threadId = notification.params.threadId;
       const turnId = turnIdFromTerminalNotification(notification);
-      const items = this.liveCodexToolItemsByThread.get(threadId);
-      if (!items) return;
-      if (!turnId) {
-        this.liveCodexToolItemsByThread.delete(threadId);
-        return;
-      }
-      for (const [itemId, item] of items) {
-        if (item.turnId === turnId) items.delete(itemId);
-      }
-      if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
+      this.settleCodexToolItems(threadId, (item) => turnId
+        ? item.turnId === turnId
+        : !this.activeTurnKeys.has(buildActiveTurnKey("codex", threadId, item.turnId))
+          && !this.activeCodexTurnModes.has(buildActiveTurnModeKey(threadId, item.turnId)),
+        notification.method !== "turn/completed",
+      );
       return;
     }
     if (notification.method !== "item/started" && notification.method !== "item/completed") {
@@ -48121,6 +48212,25 @@ export class DesktopBackendRegistry {
           requestId: event.notification.params.requestId,
           threadId: event.notification.params.threadId,
         });
+      }
+    }
+
+    if (event.backend === "codex" && event.notification.method === "thread/status/changed"
+      && ["idle", "notLoaded"].includes(readStatusType(event.notification.params.status) ?? "")) {
+      void this.maybeRestartCodexForManagedRuntimeChange();
+    }
+
+    if (event.backend === "codex" && (
+      event.notification.method === "turn/completed"
+      || event.notification.method === "turn/failed"
+      || event.notification.method === "turn/cancelled"
+      || (event.notification.method === "thread/status/changed"
+        && readStatusType(event.notification.params.status) === "idle")
+    )) {
+      const threadId = event.notification.params.threadId;
+      if (!this.closed && !this.stoppingRunningTurnsForShutdown
+        && (this.liveCodexToolItemsByThread.has(threadId) || this.codexBackgroundTerminals.has(threadId))) {
+        void this.refreshCodexBackgroundTerminalsAfterTurn(threadId);
       }
     }
 

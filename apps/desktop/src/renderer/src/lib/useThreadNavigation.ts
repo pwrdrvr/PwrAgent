@@ -3674,7 +3674,7 @@ export function useThreadNavigation(
   const ownerIndexPage = boundedNavigation.resources.get("directory-index")?.state.page;
   const threadLensesEmpty = ownerIndexPage?.counts.total === 0 && ownerIndexPage.coverage.state !== "checking";
   const shownBrowseMode: BrowseMode = threadLensesEmpty ? "directories" : browseMode;
-  const acceptedPagesRef = useRef(new Map<string, unknown>());
+  const [acceptedPages, setAcceptedPages] = useState(() => new Map<string, unknown>());
   // Each resource's read when a command or event last patched a directory
   // row. A page from a read that began no later predates that patch.
   const directoryPatchReadsRef = useRef(new Map<string, ReadonlyMap<string, { request: unknown; sequence: number }>>());
@@ -3689,8 +3689,8 @@ export function useThreadNavigation(
   const acceptedDraftHydrationRef = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
     const pages = new Map([...boundedNavigation.resources].flatMap(([id, resource]) => resource.state.page ? [[id, resource.state.page] as const] : []));
-    const changed = pages.size !== acceptedPagesRef.current.size
-      || [...pages].some(([id, page]) => acceptedPagesRef.current.get(id) !== page)
+    const changed = pages.size !== acceptedPages.size
+      || [...pages].some(([id, page]) => acceptedPages.get(id) !== page)
       || acceptedDefaultsRef.current !== launchpadConfiguration.value
       || acceptedDraftHydrationRef.current !== draftStore?.hydrationVersion;
     const resources = [...boundedNavigation.resources.values()];
@@ -3702,7 +3702,7 @@ export function useThreadNavigation(
       : browseMode === "drafts" ? resource.id.startsWith("drafts:") : isLensCollectionId(resource.id));
     const loading = enabled && primary.some((resource) => !resource.state.page && !resource.state.error);
     if (changed && pages.size) {
-      const changedPages = [...pages].filter(([id, page]) => acceptedPagesRef.current.get(id) !== page);
+      const changedPages = [...pages].filter(([id, page]) => acceptedPages.get(id) !== page);
       // Directories this pass may rebuild: those in a page that landed now,
       // from a read that began after the directory's last patch. An earlier
       // read can still land between an unpin and the owner's event.
@@ -3717,7 +3717,9 @@ export function useThreadNavigation(
           .map((directory) => directory.key);
       }));
       const retainedKeys = new Set([...pages.values()].flatMap((page) => page.entries.map(({ row }) => threadSummaryIdentityKey(row))));
-      acceptedPagesRef.current = pages;
+      // Acceptance must publish even when reconciliation retains every row
+      // and the loading flags are unchanged after a batched refresh.
+      setAcceptedPages(pages);
       acceptedDefaultsRef.current = launchpadConfiguration.value;
       acceptedDraftHydrationRef.current = draftStore?.hydrationVersion;
       const directoryRows = indexLoadedDirectoryRows(boundedNavigation.directories.filter((directory) => !removedDirectoryKeysRef.current.has(directory.key)).map((directory) => ({ ...directory,
@@ -3818,14 +3820,14 @@ export function useThreadNavigation(
       setState((current) => current.loading === loading && current.refreshing === refreshing && current.error === error
         ? current : { ...current, loading, refreshing, error });
     }
-  }, [boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
+  }, [acceptedPages, boundedNavigation.resources, boundedNavigation.directories, boundedNavigation.admissionError, boundedNavigation.connectionError, launchpadConfiguration.value, rendererFederationTarget, enabled, browseMode, draftStore, getLaunchpadSelectionDirectoryKey]);
   // The effect above folds a landed page into the rows, so a render in which
   // a page lands still shows the rows from before it. In that render the page
   // is not stale, yet nothing built from the rows reflects it. A selection's
   // exact page can even hold an older copy of its directory than the index,
   // so the rows can briefly show a pin the owner has already removed.
   const pagesAwaitingRows = [...boundedNavigation.resources]
-    .filter(([id, resource]) => resource.state.page && acceptedPagesRef.current.get(id) !== resource.state.page)
+    .filter(([id, resource]) => resource.state.page && acceptedPages.get(id) !== resource.state.page)
     .map(([id]) => id);
 
   const performRefresh = useCallback(async (

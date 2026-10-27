@@ -14,7 +14,7 @@ const GROUPS: ReadonlyArray<{
   kind: QuitBlockerKind;
   heading: string;
 }> = [
-  { kind: "turn", heading: "Agent turns in progress" },
+  { kind: "turn", heading: "Thread work in progress" },
   { kind: "automation", heading: "Automations in progress" },
   { kind: "terminal", heading: "Integrated terminals" },
   { kind: "action", heading: "Environment actions" },
