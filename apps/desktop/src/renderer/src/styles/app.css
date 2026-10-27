@@ -41646,19 +41646,38 @@ button.composer__subthread-source-parent:hover {
   line-height: 1.4;
 }
 
-/* A command under the list (Edit environments…), outside the listbox. */
-.composer-dropdown__footer {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.composer-dropdown__footer .composer-dropdown__footer-action {
+/* A command outside the listbox (Edit environments…), at the end of the menu
+   farthest from the trigger. Its divider is a `__separator`. */
+.composer-dropdown__menu-action .composer-dropdown__menu-action-button {
   color: var(--text-secondary);
 }
 
-.composer-dropdown__footer-action .composer-dropdown__check {
+.composer-dropdown__menu-action-button .composer-dropdown__check {
   color: var(--text-muted);
+}
+
+/* A short list of plain names (the Environment chip) takes the thread
+   options menu's density: the same 4px frame, and the rows and separator
+   below `.composer-thread-options__menu`. */
+.composer-dropdown--dense .composer-dropdown__menu {
+  padding: 4px;
+}
+
+.composer-dropdown--dense
+  .composer-dropdown__menu:not(.composer-dropdown__menu--below, .composer-dropdown__menu--other) {
+  min-width: max(100%, 204px);
+}
+
+.composer-dropdown--dense .composer-dropdown__option {
+  gap: 8px;
+}
+
+.composer-dropdown--dense .composer-dropdown__check {
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 16px;
 }
 
 /* Opens downward from a trigger near the top of the window; the component
@@ -41779,8 +41798,10 @@ button.composer__subthread-source-parent:hover {
 
 /* An action menu, so it takes the thread context menu's native density
    rather than the composer pickers' 40px option rows. Scoped to the menu so
-   every row in it, including "Use default for monitor suggestions", matches. */
-.composer-thread-options__menu .composer-dropdown__option {
+   every row in it, including "Use default for monitor suggestions", matches.
+   A `dense` dropdown (the Environment chip) shares these rows. */
+.composer-thread-options__menu .composer-dropdown__option,
+.composer-dropdown--dense .composer-dropdown__option {
   min-height: 24px;
   padding: 4px 8px;
   border-radius: 4px;
@@ -41788,7 +41809,8 @@ button.composer__subthread-source-parent:hover {
   line-height: 16px;
 }
 
-.composer-thread-options__menu .composer-dropdown__separator {
+.composer-thread-options__menu .composer-dropdown__separator,
+.composer-dropdown--dense .composer-dropdown__separator {
   margin: 4px 8px;
 }
 

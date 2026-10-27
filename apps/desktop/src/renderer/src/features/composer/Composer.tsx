@@ -11232,7 +11232,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ? props.launchpad.directoryPath
         : props.thread?.codexEnvironmentRuntime?.cwd ?? threadWorkspace?.sourcePath;
   const onEditEnvironments = props.onEditEnvironments;
-  const environmentFooterAction = environmentEditPath && onEditEnvironments
+  const environmentMenuAction = environmentEditPath && onEditEnvironments
     ? {
         label: "Edit environments…",
         icon: PencilIcon,
@@ -14624,8 +14624,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   && props.environmentSetup.status === "running"
                 }
                 compact
+                dense
                 disabled={launchpadSubmitting}
-                footerAction={environmentFooterAction}
+                menuAction={environmentMenuAction}
                 icon={FileCodeIcon}
                 value={props.launchpad.codexEnvironmentId ?? ""}
                 options={[
@@ -14655,8 +14656,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ariaLabel="Environment"
                 busy={threadEnvironmentBusy}
                 compact
+                dense
                 disabled={!props.desktopApi?.setCodexThreadEnvironment}
-                footerAction={environmentFooterAction}
+                menuAction={environmentMenuAction}
                 icon={FileCodeIcon}
                 value={threadEnvironmentValue}
                 options={[

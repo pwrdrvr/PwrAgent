@@ -3812,7 +3812,7 @@ describe("Composer", () => {
     expect(runCodexEnvironmentAction).not.toHaveBeenCalled();
   });
 
-  it("offers Edit environments… below the Environment list for the thread's workspace", () => {
+  it("offers Edit environments… above the Environment list for the thread's workspace", () => {
     const onEditEnvironments = vi.fn();
     const thread = {
       id: "thread-1",
@@ -3850,10 +3850,17 @@ describe("Composer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Environment(?::|$)/ }));
     const listbox = screen.getByRole("listbox", { name: "Environment" });
-    // A button after the list, not an option, so choosing it never changes
+    // A button outside the list, not an option, so choosing it never changes
     // the selection.
     expect(within(listbox).queryByText("Edit environments…")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Edit environments…" }));
+    const editEnvironments = screen.getByRole("button", { name: "Edit environments…" });
+    // The menu opens up from the composer footer, so the command sits above
+    // the list, away from the trigger and the pointer.
+    expect(
+      editEnvironments.compareDocumentPosition(listbox) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(listbox.closest(".composer-dropdown")).toHaveClass("composer-dropdown--dense");
+    fireEvent.click(editEnvironments);
 
     expect(onEditEnvironments).toHaveBeenCalledWith("/repo/.worktrees/abc/repo");
     expect(screen.queryByRole("listbox", { name: "Environment" })).not.toBeInTheDocument();
