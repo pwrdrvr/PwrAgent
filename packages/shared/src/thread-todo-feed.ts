@@ -12,7 +12,7 @@ export function compareThreadTodosNewestFirst(left: ThreadTodo, right: ThreadTod
 /** The cards after a delta, newest first. A delta with no card change returns `todos`. */
 export function applyThreadTodoFeedDelta(
   todos: ThreadTodo[],
-  delta: Pick<ThreadTodoFeedDelta, "upserts" | "removedIds">,
+  delta: ThreadTodoFeedDelta,
 ): ThreadTodo[] {
   if (!delta.upserts?.length && !delta.removedIds?.length) return todos;
   const byId = new Map(todos.map((todo) => [todo.id, todo]));
