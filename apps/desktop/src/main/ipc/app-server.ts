@@ -1283,6 +1283,10 @@ type PrLookupRefreshParams = {
   lookupKey: string;
   lookupDirectoryPaths: string[];
   previousPrs: PrSummary[];
+  // When this thread's own overlay last answered this lookup. It counts
+  // toward this thread's refresh cooldown only and never enters the shared
+  // lookup registry.
+  threadLookupObservedAt?: number;
 };
 
 type PendingPrLookupRefresh = {
@@ -4769,6 +4773,9 @@ class DesktopAppServerService {
       lookupKey,
       lookupDirectoryPaths,
       previousPrs: knownPrs,
+      ...(existingLookupMatches && existing?.prsFetchedAt
+        ? { threadLookupObservedAt: existing.prsFetchedAt }
+        : {}),
     });
 
     return {
@@ -4969,6 +4976,7 @@ class DesktopAppServerService {
           prKeys: params.previousPrs.map(getPrStatusKey),
           threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)],
         },
+        params.threadLookupObservedAt,
       );
       if (claim.skippedReason) {
         // Not recorded as activity. A cooldown skip means the data is seconds
@@ -5315,6 +5323,7 @@ class DesktopAppServerService {
     provider: string,
     terminalOnly: boolean,
     activityContext?: { prKeys: string[]; threadKeys: string[] },
+    threadLookupObservedAt = 0,
   ): PrLookupRefreshClaim {
     const now = Date.now();
     const minInterval =
@@ -5333,6 +5342,7 @@ class DesktopAppServerService {
     const lastRequestedAt = Math.max(
       entry?.[timestampField] ?? 0,
       entry?.fetchedAt ?? 0,
+      threadLookupObservedAt,
     );
     const ageMs = now - lastRequestedAt;
     const slack = trigger === "scheduled" ? SCHEDULED_THREAD_PR_REFRESH_SLACK_MS : 0;
