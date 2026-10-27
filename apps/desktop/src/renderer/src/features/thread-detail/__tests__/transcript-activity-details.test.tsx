@@ -89,6 +89,33 @@ it("fetches nothing while collapsed, shares repeated expansion reads and keeps l
   expect(readThread).toHaveBeenCalledTimes(1);
 });
 
+it("forwards exact group IDs and retains the base row's timestamps and completed status", async () => {
+  const entry = activity();
+  entry.createdAt = 1234;
+  entry.turn = { id: "turn", status: "completed", startedAt: 1000, completedAt: 2000 };
+  entry.detailsRef!.itemIds = ["command"];
+  const response = full();
+  const returned = response.replay.entries[0] as AppServerThreadActivityEntry;
+  returned.createdAt = 9999;
+  returned.turn = { id: "turn", status: "in_progress" };
+  returned.status = "in_progress";
+  const readThread = vi.fn(async () => response);
+  const { useTranscriptActivityDetails } = await import("../../../lib/useTranscriptActivityDetails");
+  let resolved: AppServerThreadActivityEntry | undefined;
+  function Probe() {
+    const details = useTranscriptActivityDetails({ entry, expanded: true, desktopApi: { readThread } });
+    resolved = details.entry;
+    return <span>{details.entry.detailsRef ? "Loading" : "Loaded"}</span>;
+  }
+  render(<Probe />);
+  await screen.findByText("Loaded");
+  expect(readThread).toHaveBeenCalledExactlyOnceWith({
+    backend: "codex", threadId: "thread", viewOnly: true,
+    display: { resource: "activity", activity: { turnId: "turn", entryId: "activity-command", itemIds: ["command"] } },
+  });
+  expect(resolved).toEqual({ ...entry, details: returned.details, detailsRef: undefined });
+});
+
 it("copies the existing activity summary without fetching hidden details", async () => {
   const readThread = vi.fn(async () => full());
   const copyText = vi.fn(async () => undefined);

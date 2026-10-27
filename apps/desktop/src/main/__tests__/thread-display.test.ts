@@ -112,6 +112,7 @@ it("defers completed provider activity bodies only for a viewer that can resolve
   const output = "Full command output\n".repeat(20_000);
   const activity = {
     type: "activity" as const, id: "activity-command", summary: "Ran a command", status: "completed" as const,
+    itemIds: ["command"],
     turn: { id: "turn", status: "completed" as const },
     details: [{ id: "command", kind: "command" as const, label: "test", command: { displayCommand: "pnpm test", rawCommand: "bash -c pnpm test", output } }],
   };
@@ -120,7 +121,7 @@ it("defers completed provider activity bodies only for a viewer that can resolve
   const request = { threadId: "fixture", display: { resource: "transcript" as const, deferActivityDetails: true } };
   const projected = projectThreadDisplay(data, request);
   expect(projected.replay.entries[0]).toMatchObject({ summary: activity.summary,
-    detailsRef: { threadId: "fixture", backend: "codex", entryId: activity.id, turnId: "turn" },
+    detailsRef: { threadId: "fixture", backend: "codex", entryId: activity.id, turnId: "turn", itemIds: ["command"] },
     details: [{ id: "command", kind: "command", label: "test", command: { output: undefined, rawCommand: undefined } }],
   });
   expect(Buffer.byteLength(JSON.stringify(projected))).toBeLessThan(2_000);

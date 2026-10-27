@@ -36,7 +36,9 @@ export function useTranscriptActivityDetails(params: {
         const response = await desktopApi.readThread({
           backend: entry.detailsRef!.backend, threadId: entry.detailsRef!.threadId,
           ...(instanceId ? { federationTarget: { scope: "remote", instanceId } as const } : {}),
-          display: { resource: "activity", activity: { turnId: entry.detailsRef!.turnId, entryId: entry.id } },
+          display: { resource: "activity", activity: { turnId: entry.detailsRef!.turnId, entryId: entry.id,
+            ...(entry.detailsRef!.itemIds ? { itemIds: entry.detailsRef!.itemIds } : {}),
+          } },
           viewOnly: true,
         });
         const full = response.replay.entries.find((item): item is AppServerThreadActivityEntry => item.type === "activity" && item.id === entry.id);
