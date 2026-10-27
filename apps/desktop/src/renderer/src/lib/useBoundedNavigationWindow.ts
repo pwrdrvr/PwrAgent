@@ -2,13 +2,13 @@ import { createNavigationDiagnosticView } from "./navigation-listing-diagnostics
 import type { NavigationDiagnosticCause } from "../../../shared/navigation-diagnostic-cause";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { classifyDirectory } from "@pwragent/shared";
-import type { AgentEvent, FederationTarget, NavigationDirectoryRow, NavigationQueryAnchor } from "@pwragent/shared";
+import type { AgentEvent, FederationTarget, NavigationDirectoryRow, NavigationQueryAnchor, NavigationQueryPage } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
 import { addVisibleMountedOwnerDemand, buildNavigationWindowDemand, visibleDisclosedNavigationParents } from "./navigation-window-demand";
-import { navigationIdentityKey } from "./navigation-query-state";
+import { navigationIdentitiesEqual, navigationIdentityKey } from "./navigation-query-state";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
-import { navigationDemandKey, NavigationWindowQueries, type NavigationWindowQueriesState } from "./navigation-window-queries";
+import { prepareNavigationDemand, NavigationWindowQueries, type NavigationWindowQueriesState } from "./navigation-window-queries";
 
 type Demand = Omit<Parameters<typeof buildNavigationWindowDemand>[0], "directories">;
 const EMPTY: NavigationWindowQueriesState = { resources: new Map() };
@@ -29,8 +29,23 @@ export function useBoundedNavigationWindow(params: Demand & {
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const [connection, setConnection] = useState<{ target: string; connected: boolean; error?: string }>();
-  const targetKey = JSON.stringify(params.target ?? { scope: "local" });
+  const pagesRef = useRef<ReadonlyMap<string, NavigationQueryPage>>(new Map());
+  const pages = useMemo(() => {
+    let count = 0;
+    let same = true;
+    for (const [id, resource] of state.resources) {
+      if (!resource.state.page) continue;
+      count += 1;
+      if (pagesRef.current.get(id) !== resource.state.page) same = false;
+    }
+    if (same && count === pagesRef.current.size) return pagesRef.current;
+    return new Map([...state.resources].flatMap(([id, resource]) => resource.state.page ? [[id, resource.state.page] as const] : []));
+  }, [state.resources]);
+  pagesRef.current = pages;
+  const targetKey = useMemo(() => JSON.stringify(params.target ?? { scope: "local" }),
+    [params.target?.scope, params.target?.scope === "remote" ? params.target.instanceId : undefined]);
   const connected = connection?.target !== targetKey || connection.connected;
+  const directoriesRef = useRef<NavigationDirectoryRow[]>([]);
   const directories = useMemo(() => {
     // Later sources replace earlier ones, except that a page awaiting its
     // re-read never replaces a descriptor from a page that has re-read.
@@ -56,20 +71,23 @@ export function useBoundedNavigationWindow(params: Demand & {
       const directory = resource?.state.page?.selectionDirectory;
       if (directory) offer(directory, Boolean(resource?.state.stale));
     }
-    return [...descriptors.values()].map(({ directory }) => directory);
+    const next = [...descriptors.values()].map(({ directory }) => directory);
+    return next.length === directoriesRef.current.length && next.every((directory, index) => directory === directoriesRef.current[index])
+      ? directoriesRef.current : next;
   }, [state.resources, params.target]);
+  directoriesRef.current = directories;
   const selectedResource = state.resources.get("selected-context");
   const selectedQuery = selectedResource?.state.request.query;
   const selectedContext = params.selectedRef && selectedQuery?.kind === "exact"
     && selectedQuery.identities.length === 1
-    && navigationIdentityKey(selectedQuery.identities[0]!) === navigationIdentityKey(params.selectedRef)
+    && navigationIdentitiesEqual(selectedQuery.identities[0]!, params.selectedRef)
     ? selectedResource?.state.page : undefined;
   const remoteViewerSelection = Boolean(params.selectedRef?.ownerInstanceId) && params.target?.scope !== "remote";
   const mountResource = state.resources.get("selected-viewer-mount");
   const mountQuery = mountResource?.state.request.query;
   const selectedMount = params.selectedRef && mountQuery?.kind === "exact"
     && mountQuery.identities.length === 1
-    && navigationIdentityKey(mountQuery.identities[0]!) === navigationIdentityKey(params.selectedRef)
+    && navigationIdentitiesEqual(mountQuery.identities[0]!, params.selectedRef)
     ? mountResource?.state.page : undefined;
   // The owner's inventory cannot supply a root owned by this viewer. Reveal
   // and range seeking must use the same ancestry as directory presentation.
@@ -78,30 +96,40 @@ export function useBoundedNavigationWindow(params: Demand & {
   const selectedHome = presentedSelection?.selectionDirectory;
   // While the viewer mount loads, neither owner-linked paths nor detail
   // fallback paths can identify a directory in the viewer inventory.
-  const selectedDirectoryKeys = selectedHome ? [selectedHome.key] : remoteViewerSelection ? []
+  const selectedDirectoryKeys = useMemo(() => selectedHome ? [selectedHome.key] : remoteViewerSelection ? []
     : selectedRoot?.row.linkedDirectories.length
-      ? selectedRoot.row.linkedDirectories.map((directory) => classifyDirectory(directory).key) : params.selectedDirectoryKeys;
-  const demandParams = { ...params, directories, selectedDirectoryKeys,
-    selectedRootRef: selectedRoot?.row.ref, selectedContextReady: Boolean(presentedSelection),
-    indexedDirectoryKeys: new Set((state.resources.get("directory-index")?.state.page?.directories ?? []).map((directory) => directory.key)),
-  };
-  const collections = buildNavigationWindowDemand({ ...demandParams, disclosedParents: [] });
-  const pages = new Map([...state.resources].flatMap(([id, resource]) => resource.state.page ? [[id, resource.state.page] as const] : []));
-  const disclosedParents = visibleDisclosedNavigationParents({ collectionIds: collections.keys(), pages,
-    disclosedParents: params.disclosedParents ?? [],
-  });
-  const demand = buildNavigationWindowDemand({ ...demandParams, disclosedParents });
-  addVisibleMountedOwnerDemand({ demand, pages, target: params.target, selectedRef: params.selectedRef });
-  const demandKey = JSON.stringify([...demand].map(([id, request]) => [id, navigationDemandKey(request)]));
+      ? selectedRoot.row.linkedDirectories.map((directory) => classifyDirectory(directory).key) : params.selectedDirectoryKeys,
+  [selectedHome?.key, remoteViewerSelection, selectedRoot?.row.linkedDirectories, params.selectedDirectoryKeys]);
+  const indexedDirectories = state.resources.get("directory-index")?.state.page?.directories;
+  const selectedContextReady = Boolean(presentedSelection);
+  const demand = useMemo(() => {
+    const demandParams = { browseMode: params.browseMode, target: params.target, attentionView: params.attentionView,
+      expandedByKey: params.expandedByKey, unpinnedExpandedByKey: params.unpinnedExpandedByKey,
+      selectedRef: params.selectedRef, removedDirectoryKeys: params.removedDirectoryKeys, draftRefs: params.draftRefs,
+      pinnedThreadsOnTop: params.pinnedThreadsOnTop, directories, selectedDirectoryKeys,
+      selectedRootRef: selectedRoot?.row.ref, selectedContextReady,
+      indexedDirectoryKeys: new Set((indexedDirectories ?? []).map((directory) => directory.key)),
+    };
+    const collections = buildNavigationWindowDemand({ ...demandParams, disclosedParents: [] });
+    const disclosedParents = visibleDisclosedNavigationParents({ collectionIds: collections.keys(), pages,
+      disclosedParents: params.disclosedParents ?? [],
+    });
+    const requests = buildNavigationWindowDemand({ ...demandParams, disclosedParents });
+    addVisibleMountedOwnerDemand({ demand: requests, pages, target: params.target, selectedRef: params.selectedRef });
+    return prepareNavigationDemand(requests);
+  }, [params.browseMode, params.target, params.attentionView, params.expandedByKey, params.unpinnedExpandedByKey,
+    params.selectedRef, params.removedDirectoryKeys, params.draftRefs, params.pinnedThreadsOnTop, params.disclosedParents,
+    directories, selectedDirectoryKeys, selectedRoot?.row.ref, selectedContextReady, indexedDirectories, pages]);
   // A previous lens can still own the snapshot during the render that changes
   // demand. Empty Drafts and collapsed Directories are ready only after that
   // transition, just like lenses with collection pages.
-  const presentationReady = state.resources.size === demand.size
-    && [...demand].every(([id, request]) => {
-      const resource = state.resources.get(id);
-      return resource && navigationDemandKey(resource.state.request) === navigationDemandKey(request)
-        && Boolean(resource.state.page || resource.state.error);
-    });
+  const presentationReady = useMemo(() => {
+    if (!controllerRef.current?.matchesDemand(demand, state)) return false;
+    for (const resource of state.resources.values()) {
+      if (!(resource.state.page || resource.state.error)) return false;
+    }
+    return true;
+  }, [state, demand]);
   const demandRef = useRef(demand);
   demandRef.current = demand;
 
@@ -114,7 +142,7 @@ export function useBoundedNavigationWindow(params: Demand & {
     const unsubscribe = controller.subscribe(() => setState(controller.getSnapshot()));
     const current = paramsRef.current;
     controller.setVisible(current.enabled && current.visible);
-    controller.setDemand(demandRef.current);
+    controller.setPreparedDemand(demandRef.current);
     setState(controller.getSnapshot());
     return () => {
       unsubscribe();
@@ -127,8 +155,8 @@ export function useBoundedNavigationWindow(params: Demand & {
     const controller = controllerRef.current;
     if (!controller) return;
     controller.setVisible(enabled && visible && connected);
-    controller.setDemand(demandRef.current);
-  }, [desktopApi, demandKey, enabled, visible, connected]);
+    controller.setPreparedDemand(demandRef.current);
+  }, [desktopApi, demand, enabled, visible, connected]);
 
   useEffect(() => {
     const controller = controllerRef.current;

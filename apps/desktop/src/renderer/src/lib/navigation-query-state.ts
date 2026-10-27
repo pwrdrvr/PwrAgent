@@ -69,6 +69,11 @@ export function navigationIdentityKey(ref: NavigationIdentity): string {
   return JSON.stringify([ref.ownerInstanceId ?? null, ref.backend, ref.threadId]);
 }
 
+export function navigationIdentitiesEqual(left: NavigationIdentity, right: NavigationIdentity): boolean {
+  return left.backend === right.backend && left.threadId === right.threadId
+    && (left.ownerInstanceId ?? null) === (right.ownerInstanceId ?? null);
+}
+
 /** UI selection keys are distinct from the collision-free JSON keys used by query resources. */
 export function navigationThreadSelectionKey(ref: NavigationIdentity): string {
   return ref.ownerInstanceId
