@@ -7,6 +7,8 @@ import type {
   AgentEvent,
   AppServerBackendKind,
   AppServerNotification,
+  AppServerReadThreadRequest,
+  AppServerReadThreadResponse,
   AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerPendingRequestNotification,
@@ -19,7 +21,7 @@ import type {
   ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
-import { SANDBOXER_MCP_CONNECTION_ID } from "@pwragent/shared";
+import { buildThreadPricingDisplay, SANDBOXER_MCP_CONNECTION_ID } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
@@ -1683,10 +1685,9 @@ describe("ThreadView", () => {
     });
   });
 
-  it("pages past a same-turn usage overlay to load historical tool output", async () => {
+  it("loads historical Codex tool output directly despite a same-turn usage overlay", async () => {
     const targetTime = 1_800_000_000_000;
     const loadOlder = vi.fn();
-    let loadedPageCount = 0;
     const recentEntries: AppServerThreadEntry[] = [
       {
         type: "activity",
@@ -1761,96 +1762,81 @@ describe("ThreadView", () => {
       ],
     };
 
-    function Harness() {
-      const [entries, setEntries] = useState<AppServerThreadEntry[]>(recentEntries);
-      const [hasPreviousPage, setHasPreviousPage] = useState(true);
-      return (
-        <ThreadView
-          activeContextTab="tool-calls"
-          addOptimisticUserMessage={(_text) => "optimistic-1"}
-          backends={[]}
-          clearPendingRequest={() => undefined}
-          composerDisabled={false}
-          contextRailPinned
-          desktopApi={{}}
-          loading={false}
-          loadingMore={false}
-          messageCount={entries.length}
-          onLoadOlder={async () => {
-            loadOlder();
-            loadedPageCount += 1;
-            if (loadedPageCount === 1) {
-              setEntries((current) => [
-                {
-                  type: "message",
-                  id: "message-intermediate",
-                  role: "assistant",
-                  text: "Intermediate older page",
-                  turn: {
-                    id: "turn-intermediate",
-                    status: "completed",
-                    completedAt: targetTime - 1,
-                  },
-                },
-                ...current,
-              ]);
-              return;
-            }
-            setEntries((current) => [
-              {
-                type: "activity",
-                id: "activity-tool-old-1",
-                summary: "Ran historical command",
-                details: [
-                  {
-                    id: "tool-old-1-1",
-                    kind: "command",
-                    label: "old historical command",
-                    command: {
-                      displayCommand: "old historical command",
-                      rawCommand: "/bin/zsh -lc 'old historical command'",
-                      output: "historical captured output",
-                      exitCode: 0,
-                    },
-                  },
-                ],
-                turn: {
-                  id: "turn-target",
-                  status: "completed",
-                  completedAt: targetTime,
-                },
-              },
-              ...current,
-            ]);
-            setHasPreviousPage(false);
-          }}
-          removeOptimisticMessage={(_id) => undefined}
-          selectedThread={selectedThread}
-          skills={[]}
-          threadToolAccountingEnabled
-          toolAccounting={toolAccounting}
-          transcriptEntries={entries}
-          transcriptPagination={{
-            supportsPagination: true,
-            hasPreviousPage,
-            previousCursor: hasPreviousPage ? "cursor-1" : undefined,
-          }}
-        />
-      );
-    }
+    const readThread = vi.fn(async (request: AppServerReadThreadRequest): Promise<AppServerReadThreadResponse> => ({
+      backend: "codex",
+      threadId: selectedThread.id,
+      fetchedAt: targetTime,
+      replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+      ...(request.display?.resource === "activity" ? {
+        toolInvocationDetails: {
+          turnId: "turn-target",
+          itemId: "tool-old-1",
+          details: [{
+            id: "tool-old-1-1",
+            kind: "command",
+            label: "old historical command",
+            command: {
+              displayCommand: "old historical command",
+              rawCommand: "/bin/zsh -lc 'old historical command'",
+              output: "historical captured output",
+              exitCode: 0,
+            },
+          }],
+        },
+      } : {
+        display: { pricing: buildThreadPricingDisplay({}), revision: "tools-1", toolsPage: toolAccounting },
+      }),
+    }));
+    const { container } = render(
+      <ThreadView
+        activeContextTab="tool-calls"
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        contextRailPinned
+        desktopApi={{ readThread }}
+        loading={false}
+        loadingMore={false}
+        messageCount={recentEntries.length}
+        onLoadOlder={loadOlder}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={selectedThread}
+        skills={[]}
+        threadToolAccountingEnabled
+        toolAccounting={toolAccounting}
+        transcriptEntries={recentEntries}
+        transcriptPagination={{
+          supportsPagination: true,
+          hasPreviousPage: true,
+          previousCursor: "cursor-1",
+        }}
+      />,
+    );
+    const transcriptRows = () => Array.from(container.querySelectorAll(".transcript-list [data-entry-id]"), (row) => ({
+      id: row.getAttribute("data-entry-id"), turnId: row.getAttribute("data-turn-id"),
+      turnTime: row.getAttribute("data-turn-time"), text: row.textContent,
+    }));
+    const summaryDetails = await screen.findByRole("button", { name: "Details" });
+    const transcriptBefore = transcriptRows();
 
-    render(<Harness />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    fireEvent.click(summaryDetails);
     const instances = screen.getByRole("list", { name: "Command instances" });
     fireEvent.click(within(instances).getByRole("button", { name: "Details" }));
 
     expect(screen.getByText("Loading captured output…")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(loadOlder).toHaveBeenCalledTimes(2);
-    });
     expect(await screen.findByText(/historical captured output/)).toBeInTheDocument();
     expect(screen.queryByText(/unavailable in transcript history/)).not.toBeInTheDocument();
+    expect(readThread.mock.calls.filter(([request]) => request.display?.resource === "activity").map(([request]) => request))
+      .toEqual([{
+        backend: "codex", threadId: selectedThread.id, viewOnly: true,
+        display: { resource: "activity", activity: {
+          turnId: "turn-target", entryId: "activity-tool-old-1", invocationItemId: "tool-old-1",
+        } },
+      }]);
+    expect(loadOlder).not.toHaveBeenCalled();
+    expect(transcriptBefore.length).toBeGreaterThan(0);
+    expect(transcriptRows()).toEqual(transcriptBefore);
   });
 
   it("pages manual find through hidden in-memory transcript history", async () => {
