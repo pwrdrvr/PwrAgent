@@ -77,7 +77,19 @@ test.describe("native macOS window activation", () => {
         frontmost: JSON.parse((await native("frontmost")).stdout) as unknown,
       });
       await native("activate", String(pid));
-      await expect.poll(active.read).toBe(true).catch(active.rethrowWithLastFailure);
+      await expect.poll(active.read).toBe(true).catch(async (error: unknown) => {
+        // Record who kept activation and what it is showing before failing.
+        test.setTimeout(testInfo.timeout + 60_000);
+        traces.push({ mode: "activation-refused", holder: JSON.parse((await native("holder")).stdout) as unknown });
+        const log = await run("/usr/bin/log", [
+          "show", "--last", "6h", "--style", "compact", "--predicate",
+          'process == "UserNotificationCenter" OR (process == "tccd" AND eventMessage CONTAINS[c] "prompt")',
+        ], { timeout: 50_000, maxBuffer: 64 * 1024 * 1024 }).then((result) => result.stdout, (failure: unknown) => String(failure));
+        const logPath = testInfo.outputPath("activation-holder-log.txt");
+        await writeFile(logPath, log.split("\n").slice(-400).map((line) => line.slice(0, 600)).join("\n"));
+        await testInfo.attach("activation-holder-log", { path: logPath, contentType: "text/plain" });
+        return active.rethrowWithLastFailure(error);
+      });
       for (const mode of ["activate", "reopen"]) {
         for (const [target, nativeId] of [[ids.local, ids.nativeLocal], [ids.viewer, ids.nativeViewer]]) {
           await fixture.electronApp.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.focus(), target!);
