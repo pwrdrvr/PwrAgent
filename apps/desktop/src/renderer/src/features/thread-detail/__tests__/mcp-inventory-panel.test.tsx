@@ -65,7 +65,7 @@ describe("McpInventoryPanel", () => {
     });
   });
 
-  it("names Claude's own config and offers no Codex reload", async () => {
+  it("names Claude's own MCPs and offers no Codex reload", async () => {
     const listThreadMcpServers = vi.fn(async () => ({
       backend: "claude" as const,
       threadId: "thread-1",
@@ -83,8 +83,8 @@ describe("McpInventoryPanel", () => {
     );
 
     expect(await screen.findByRole("complementary", {
-      name: "Claude MCP config · 1 server · 1 tool",
-    })).toHaveTextContent("Gateway connections are under PwrAgent access.");
+      name: "Claude MCPs · 1 server · 1 tool",
+    })).toHaveTextContent("Gateway connections are under PwrAgent MCPs.");
     expect(screen.queryByRole("button", { name: "Reload Config" })).not.toBeInTheDocument();
     expect(listThreadMcpServers).toHaveBeenCalledWith({
       backend: "claude",
@@ -209,7 +209,7 @@ describe("McpInventoryPanel", () => {
     );
 
     const panel = await screen.findByRole("complementary", {
-      name: "Codex MCP config · 1 server · 10 tools",
+      name: "Codex MCPs · 1 server · 10 tools",
     });
     expect(panel).toHaveTextContent("tool-8");
     expect(panel).not.toHaveTextContent("tool-9");

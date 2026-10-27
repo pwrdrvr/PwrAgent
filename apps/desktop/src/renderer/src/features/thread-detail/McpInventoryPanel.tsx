@@ -133,9 +133,9 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
     0,
   );
   // Name the owner: these are the agent's own servers, not the PwrAgent
-  // gateway connections chosen under PwrAgent access.
+  // gateway connections chosen under PwrAgent MCPs.
   const isClaude = props.thread.source === "claude";
-  const heading = isClaude ? "Claude MCP config" : "Codex MCP config";
+  const heading = isClaude ? "Claude MCPs" : "Codex MCPs";
   const title = loading
     ? heading
     : `${heading} · ${servers.length} server${servers.length === 1 ? "" : "s"}`
@@ -215,7 +215,7 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
           {isClaude
             ? "Servers Claude Code loads from its own settings, .mcp.json and plugins."
             : "Servers Codex loads from its own config."}
-          {" Gateway connections are under PwrAgent access."}
+          {" Gateway connections are under PwrAgent MCPs."}
         </p>
         {loading ? (
           <p className="mcp-inventory-panel__state" role="status">

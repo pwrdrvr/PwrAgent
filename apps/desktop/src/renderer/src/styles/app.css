@@ -41831,11 +41831,6 @@ button.composer__subthread-source-parent:hover {
   font-weight: 400;
 }
 
-/* Aligns the group label with the menu's 8px row inset. */
-.composer-thread-options__group-label {
-  padding: 6px 8px 3px;
-}
-
 /* "· this thread" beside a menu item whose per-thread override is set, so an
    override is visibly different from following the global setting. */
 .composer-thread-options__note {

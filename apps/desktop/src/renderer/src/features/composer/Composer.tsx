@@ -2262,19 +2262,11 @@ function ComposerThreadOptionsMenu(props: {
               ) : null}
             </>
           ) : null}
+          {/* Two kinds of MCP servers reach a thread: PwrAgent gateway
+              connections and the agent's own config. Each row names its
+              owner so the two cannot be mistaken for each other. */}
           {props.onShowMcpAccess || props.onShowMcpInventory ? (
-            <>
-              <div className="composer-dropdown__separator" role="separator" />
-              {/* Two kinds of MCP servers reach a thread: PwrAgent gateway
-                  connections and the agent's own config. Each row names its
-                  owner so the two cannot be mistaken for each other. */}
-              <div
-                aria-hidden="true"
-                className="composer-dropdown__group-label composer-thread-options__group-label"
-              >
-                MCP
-              </div>
-            </>
+            <div className="composer-dropdown__separator" role="separator" />
           ) : null}
           {props.onShowMcpAccess ? (
             <button
@@ -2293,7 +2285,7 @@ function ComposerThreadOptionsMenu(props: {
               onMouseLeave={hideMenuTooltip}
             >
               <span className="composer-thread-options__label">
-                PwrAgent access&hellip;
+                PwrAgent MCPs&hellip;
                 <span className="composer-thread-options__note">
                   {props.mcpConnectionCount === undefined
                     ? ""
@@ -2327,7 +2319,7 @@ function ComposerThreadOptionsMenu(props: {
             >
               <span className="composer-thread-options__label">
                 {props.mcpInventoryAgent === "claude" ? "Claude" : "Codex"}
-                {" config"}&hellip;
+                {" MCPs"}&hellip;
               </span>
             </button>
           ) : null}
