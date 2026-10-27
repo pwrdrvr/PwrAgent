@@ -19,6 +19,7 @@ describe("federated thread origin hydration", () => {
       resolveInstance: () => ({ label: "Owner" }),
       response: { backend: "codex", fetchedAt: 1, threadId: "recipient", replay: {
         entries: messages.map((message) => ({ ...message, type: "message" as const })), messages,
+        pagination: { supportsPagination: false, hasPreviousPage: false },
       } },
     });
     expect(resolveThread).toHaveBeenCalledTimes(1);
