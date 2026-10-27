@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,8 +33,11 @@ try {
   const packedPackage = JSON.parse(unpacked("package.json"));
   assert.deepEqual(releaseMetadata(packedPackage), releaseMetadata(pkg));
   assert.equal(unpacked("LICENSE"), readFileSync(path.join(root, "LICENSE"), "utf8"));
-  assert.equal(unpacked("dist/ws-LICENSE"), readFileSync(path.join(root, "dist/ws-LICENSE"), "utf8"));
-  assert.match(unpacked("dist/ws-LICENSE"), /MIT License/);
+  const require = createRequire(import.meta.url);
+  const federationRequire = createRequire(require.resolve("@pwragent/federation/federation-transport"));
+  const wsPackage = federationRequire.resolve("ws/package.json");
+  assert.equal(JSON.parse(readFileSync(wsPackage, "utf8")).license, "MIT");
+  assert.equal(unpacked("dist/ws-LICENSE"), readFileSync(path.join(path.dirname(wsPackage), "LICENSE"), "utf8"));
   assert.match(unpacked("bin/pwragent.js"), /^#!\/usr\/bin\/env node\n/);
   assert.ok(packed.files.find((file) => file.path === "bin/pwragent.js").mode & 0o111, "CLI must be executable");
   const home = path.join(temporary, "home");
