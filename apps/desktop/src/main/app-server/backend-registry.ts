@@ -1,3 +1,4 @@
+import { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
@@ -1082,8 +1083,11 @@ type BackendClient = {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadForkParams["config"];
   }): Promise<{ threadId: string }>;
+  readTurnRoot?(params: { threadId: string; turnId: string }): Promise<string | undefined>;
   startTurn(params: {
     threadId: string;
+    parentTurnId?: string;
+    rootTurnId?: string;
     input: AppServerTurnInputItem[];
     onInputTextPrepared?: (text: string | undefined) => void;
     cwd?: string;
@@ -3171,6 +3175,7 @@ type TaskMonitorDelegationRecord = {
   parentBackend: AppServerBackendKind;
   parentThreadId: string;
   parentTurnId: string;
+  rootTurnId?: string;
   heartbeatIntervalSeconds: number;
   pollIntervalSeconds: number;
   preferredModel: string;
@@ -3221,6 +3226,7 @@ type ReviewTerminal = {
 };
 
 type PendingReviewStartRecord = {
+  turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
   pendingReviewId: string;
   backend: AppServerBackendKind;
   threadId: string;
@@ -20968,6 +20974,8 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
+    agentMessageOrigins?: AppServerThreadMessageOrigin[];
+    agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
@@ -21003,6 +21011,8 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
+    agentMessageOrigins?: AppServerThreadMessageOrigin[];
+    agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     if (!this.tokenMiserServerCapabilitiesForTurn.getStore()) {
@@ -21449,6 +21459,8 @@ export class DesktopBackendRegistry {
           );
           const started = await client.startTurn({
             threadId: params.threadId,
+            ...delegatedTurnAttribution(params.messageOrigin,
+              params.agentMessages?.map((message) => message.origin) ?? params.agentMessageOrigins),
             input,
             ...(pendingMessageContextId ? {
               onInputTextPrepared: (text: string | undefined) => {
@@ -21982,12 +21994,16 @@ export class DesktopBackendRegistry {
     return { ...params, cwd, target };
   }
 
-  async startReview(params: StartReviewRequest, trustedSnapshot = false): Promise<StartReviewResponse> {
+  async startReview(
+    params: StartReviewRequest,
+    trustedSnapshot = false,
+    turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
+  ): Promise<StartReviewResponse> {
     // Retain terminal evidence only for the lifetime of this start request.
     const terminals = new Map<string, ReviewTerminal>();
     this.pendingReviewTerminals.add(terminals);
     try {
-      return await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot);
+      return await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution);
     } finally {
       this.pendingReviewTerminals.delete(terminals);
     }
@@ -21997,6 +22013,7 @@ export class DesktopBackendRegistry {
     params: StartReviewRequest,
     terminals: Map<string, ReviewTerminal>,
     trustedSnapshot: boolean,
+    turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
   ): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
     await this.assertThreadNotLocked(params.backend, params.threadId);
@@ -22215,6 +22232,7 @@ export class DesktopBackendRegistry {
 
       result = managedMode
         ? await this.startManagedReviewChild({
+            turnAttribution,
             backend: reviewBackend,
             cwd,
             // The parent thread's persisted Codex environment only describes
@@ -22350,6 +22368,7 @@ export class DesktopBackendRegistry {
   }
 
   private async startManagedReviewChild(params: {
+    turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
     /** Backend that runs the review — the reviewer override when set. */
     backend: AppServerBackendKind;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
@@ -22388,6 +22407,7 @@ export class DesktopBackendRegistry {
       const turn = await this.startAcpTurn({
         backend: params.backend,
         threadId: thread.threadId,
+        ...params.turnAttribution,
         input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
         model: params.modelSettings.model,
         reasoningEffort: params.modelSettings.reasoningEffort,
@@ -22697,6 +22717,7 @@ export class DesktopBackendRegistry {
   }
 
   private scheduleReviewStart(params: {
+    turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
     invokingTurnId: string;
     request: StartReviewRequest;
     idempotencyKey?: string;
@@ -22727,6 +22748,7 @@ export class DesktopBackendRegistry {
 
     const now = Date.now();
     const pending: PendingReviewStartRecord = {
+      ...(params.turnAttribution ? { turnAttribution: params.turnAttribution } : {}),
       pendingReviewId: `pending-review:${randomUUID()}`,
       backend: params.request.backend,
       threadId: params.request.threadId,
@@ -22813,7 +22835,7 @@ export class DesktopBackendRegistry {
       };
       this.pendingReviewStarts.set(candidate.pendingReviewId, starting);
       try {
-        const response = await this.startReview(starting.request, true);
+        const response = await this.startReview(starting.request, true, starting.turnAttribution);
         this.pendingReviewStarts.set(candidate.pendingReviewId, {
           ...starting,
           status: "started",
@@ -34041,6 +34063,8 @@ export class DesktopBackendRegistry {
       && existing
       && existing.status === status
       && existing.agentName === agentName
+      && (!model || existing.preferredModel === model)
+      && (!reasoningEffort || existing.preferredReasoningEffort === reasoningEffort)
       && (!params.call.parentTurnId || existing.monitorTurnId === params.call.parentTurnId)
     ) {
       return;
@@ -40269,6 +40293,7 @@ export class DesktopBackendRegistry {
     try {
       const pending = this.scheduleReviewStart({
         invokingTurnId,
+        turnAttribution: await this.readDelegatedTurnAncestry(request.context),
         idempotencyKey: request.context.callId,
         request: await this.prepareReviewRequest({
           backend: request.context.backend,
@@ -41321,6 +41346,20 @@ export class DesktopBackendRegistry {
     });
   }
 
+  /** Exact provenance only. Failure to learn a root leaves it unknown. */
+  private async readDelegatedTurnAncestry(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId?: string;
+  }): Promise<{ parentTurnId?: string; rootTurnId?: string }> {
+    if (params.backend !== "codex" || !params.turnId) return {};
+    const turnId = params.turnId;
+    const rootTurnId = await this.withCodexThreadClient(params.threadId,
+      async (client) => await client.readTurnRoot?.({ threadId: params.threadId, turnId }),
+      undefined, false).catch(() => undefined);
+    return { parentTurnId: turnId, ...(rootTurnId ? { rootTurnId } : {}) };
+  }
+
   private async buildAgentMessageOrigin(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -41329,12 +41368,15 @@ export class DesktopBackendRegistry {
     const causalContext = await this.readCausalMessagingContext(params);
     const sourceThread = await this.resolveThread(params).catch(() => undefined);
     const sourceTitle = sourceThread?.title.trim();
+    const ancestry = await this.readDelegatedTurnAncestry(params);
     return {
       kind: "agent",
       ...causalContext,
       sourceThread: {
         backend: params.backend,
         threadId: params.threadId,
+        ...(ancestry.parentTurnId ? { turnId: ancestry.parentTurnId } : {}),
+        ...(ancestry.rootTurnId ? { rootTurnId: ancestry.rootTurnId } : {}),
         ...(sourceTitle && sourceThread?.titleSource !== "fallback"
           ? { title: sourceTitle }
           : {}),
@@ -42619,12 +42661,17 @@ export class DesktopBackendRegistry {
       context: request.args.context,
       codexEnvironmentStartupFailure,
     });
+    const ancestry = await this.readDelegatedTurnAncestry({
+      backend: sourceBackend, threadId: sourceThreadId, turnId: sourceTurnId,
+    });
     const messageOrigin: AppServerThreadMessageOrigin = {
       kind: "agent",
       ...causalContext,
       sourceThread: {
         backend: sourceBackend,
         threadId: sourceThreadId,
+        ...(ancestry.parentTurnId ? { turnId: ancestry.parentTurnId } : {}),
+        ...(ancestry.rootTurnId ? { rootTurnId: ancestry.rootTurnId } : {}),
         ...(sourceThread?.title ? { title: sourceThread.title } : {}),
       },
     };
@@ -43289,8 +43336,10 @@ export class DesktopBackendRegistry {
           : {}),
       });
     }
+    const ancestry = await this.readDelegatedTurnAncestry(context);
     const record: TaskMonitorDelegationRecord = {
       causalContext,
+      ...(ancestry.rootTurnId ? { rootTurnId: ancestry.rootTurnId } : {}),
       activeCommandCount: 0,
       backend: context.backend,
       createdAt: Date.now(),
@@ -43327,6 +43376,7 @@ export class DesktopBackendRegistry {
     try {
       startedMonitor = await this.startManagedTaskMonitor({
         context,
+        ...(record.rootTurnId ? { rootTurnId: record.rootTurnId } : {}),
         causalContext,
         cwd: args.cwd,
         monitorId,
@@ -43718,6 +43768,7 @@ export class DesktopBackendRegistry {
   }
 
   private async startManagedTaskMonitor(params: {
+    rootTurnId?: string;
     causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
     context: TaskMonitorRequest<"create_monitor_delegation">["context"];
     cwd?: string;
@@ -43871,6 +43922,8 @@ export class DesktopBackendRegistry {
     try {
       turn = await client.startTurn({
         threadId: thread.threadId,
+        parentTurnId: params.context.turnId,
+        ...(params.rootTurnId ? { rootTurnId: params.rootTurnId } : {}),
         input: [{ type: "text", text: params.prompt }],
         ...(cwd ? { cwd } : {}),
         approvalPolicy: modeSettings.approvalPolicy,
@@ -44386,6 +44439,8 @@ export class DesktopBackendRegistry {
       const client = this.getClient("codex", executionMode);
       const turn = await client.startTurn({
         threadId: record.monitorThreadId,
+        parentTurnId: record.parentTurnId,
+        ...(record.rootTurnId ? { rootTurnId: record.rootTurnId } : {}),
         input: [
           {
             type: "text",

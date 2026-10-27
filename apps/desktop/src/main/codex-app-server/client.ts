@@ -1384,6 +1384,8 @@ function normalizeFailedTurnCompletedNotification(
       turn: {
         id: turnId,
         status: "failed",
+        ...(typeof turn.rootTurnId === "string" || turn.rootTurnId === null
+          ? { rootTurnId: turn.rootTurnId } : {}),
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(completedAt !== undefined ? { completedAt } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
@@ -2870,6 +2872,8 @@ function extractTurnMetadata(
   return {
     id,
     ...(status ? { status } : {}),
+    ...(typeof turn.rootTurnId === "string" || turn.rootTurnId === null
+      ? { rootTurnId: turn.rootTurnId } : {}),
     ...(startedAt ? { startedAt } : {}),
     ...(completedAt ? { completedAt } : {}),
     ...(typeof durationMs === "number" ? { durationMs } : {}),
@@ -7162,6 +7166,8 @@ function formatCodexFileReference(
 
 function buildTurnStartPayload(params: {
   threadId: string;
+  parentTurnId?: string;
+  rootTurnId?: string;
   input: CodexUserInput[];
   cwd?: string;
   model?: string;
@@ -7181,6 +7187,10 @@ function buildTurnStartPayload(params: {
     input: params.input,
   };
 
+  if (compatibility.supportsTurnAncestry && params.parentTurnId) {
+    base.parentTurnId = params.parentTurnId;
+    if (params.rootTurnId) base.rootTurnId = params.rootTurnId;
+  }
   if (params.cwd?.trim()) {
     base.cwd = params.cwd.trim();
   }
@@ -7637,6 +7647,7 @@ export class CodexAppServerClient {
   private pendingCloses = 0;
   private serverGeneration = 0;
   private readonly runningTurnIdsByThread = new Map<string, string>();
+  private readonly turnRoots = new Map<string, string | null>();
   private readonly liveUsageSnapshots = new Map<string, {
     tokens: ThreadUsageTokenBreakdown;
     model?: string;
@@ -7952,6 +7963,10 @@ export class CodexAppServerClient {
       const observedTurnId = turnMetadata.turnId
         ?? pickString(asRecord(asRecord(normalized.params)?.turn) ?? {}, ["id"]);
       if (turnMetadata.threadId && observedTurnId) {
+        const turn = asRecord(asRecord(normalized.params)?.turn);
+        if (typeof turn?.rootTurnId === "string" || turn?.rootTurnId === null) {
+          rememberBoundedMap(this.turnRoots, `${turnMetadata.threadId}:${observedTurnId}`, turn.rootTurnId, 1_000);
+        }
         if (normalized.method === "turn/started") {
           this.runningTurnIdsByThread.set(turnMetadata.threadId, observedTurnId);
         } else if (normalized.method === "turn/completed" || normalized.method === "turn/failed") {
@@ -9801,6 +9816,36 @@ export class CodexAppServerClient {
     }
   }
 
+  /** Exact server-reported ancestry, using live metadata before metadata-only history pages. */
+  async readTurnRoot(params: { threadId: string; turnId: string }): Promise<string | undefined> {
+    await this.ensureInitialized();
+    const key = `${params.threadId}:${params.turnId}`;
+    if (this.turnRoots.has(key)) return this.turnRoots.get(key) ?? undefined;
+    if (!this.getProtocolCompatibility().supportsTurnAncestry) return undefined;
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    do {
+      const page = await this.connection.request("thread/turns/list", {
+        threadId: params.threadId,
+        ...(cursor ? { cursor } : {}),
+        limit: CODEX_THREAD_HISTORY_PAGE_SIZE,
+        sortDirection: "desc",
+        itemsView: "notLoaded",
+      } satisfies CodexThreadTurnsListParams,
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) as CodexThreadTurnsListResponse;
+      const turn = page.data.find((turn) => turn.id === params.turnId);
+      if (turn) {
+        const root = typeof turn.rootTurnId === "string" ? turn.rootTurnId : null;
+        rememberBoundedMap(this.turnRoots, key, root, 1_000);
+        return root ?? undefined;
+      }
+      cursor = page.nextCursor ?? undefined;
+      if (!cursor || seen.has(cursor)) return undefined;
+      seen.add(cursor);
+    } while (cursor);
+    return undefined;
+  }
+
   /**
    * One turn's replay, normalized through the same adapter as a history page,
    * so its messages carry the same parts: a turn's tool screenshots attach to
@@ -10303,6 +10348,9 @@ export class CodexAppServerClient {
 
   async startTurn(params: {
     threadId: string;
+    /** Delegation attribution only. */
+    parentTurnId?: string;
+    rootTurnId?: string;
     input: AppServerTurnInputItem[];
     onInputTextPrepared?: (text: string | undefined) => void;
     cwd?: string;
@@ -10430,6 +10478,8 @@ export class CodexAppServerClient {
           {
             threadId: params.threadId,
             input: codexInput,
+            parentTurnId: params.parentTurnId,
+            rootTurnId: params.rootTurnId,
             cwd: params.cwd,
             model: params.model,
             reasoningEffort: params.reasoningEffort,
@@ -10455,6 +10505,10 @@ export class CodexAppServerClient {
 
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
+    const turn = asRecord(asRecord(result)?.turn);
+    if (typeof turn?.rootTurnId === "string" || turn?.rootTurnId === null) {
+      rememberBoundedMap(this.turnRoots, `${threadId}:${turnId}`, turn.rootTurnId, 1_000);
+    }
     this.threadsAwaitingFirstTurn.delete(params.threadId);
     this.freshNativeVoiceThreads.delete(params.threadId);
     this.admittedNativeVoiceThreads.delete(params.threadId);

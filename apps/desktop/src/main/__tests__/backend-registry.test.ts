@@ -1834,6 +1834,8 @@ class MockBackendClient {
     config?: CodexThreadForkParams["config"];
   };
   lastStartTurnParams?: {
+    parentTurnId?: string;
+    rootTurnId?: string;
     backend?: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -2302,6 +2304,8 @@ class MockBackendClient {
   }
 
   async startTurn(params: {
+    parentTurnId?: string;
+    rootTurnId?: string;
     backend?: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
@@ -36297,9 +36301,19 @@ command = "pnpm dev"
       await emitActivity("started");
       await emitActivity("interacted");
       expect(upsertSubAgent).not.toHaveBeenCalled();
+      await codexClient.emit({
+        method: "item/completed", params: { threadId: "thread-parent", turnId: "turn-review",
+          item: { type: "subAgentActivity", id: "activity-started", kind: "started",
+            agentThreadId: "worker-review", agentPath: "/root/review_savers",
+            model: "resolved-model", reasoningEffort: "high" },
+        },
+      } as AppServerNotification);
+      overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-parent" });
+      expect(overlay?.subAgents?.[0]).toMatchObject({ preferredModel: "resolved-model", preferredReasoningEffort: "high" });
+      upsertSubAgent.mockClear();
       await emitActivity("completed");
       overlay = await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-parent" });
-      expect(overlay?.subAgents?.[0]).toMatchObject({ status: "success", outcome: "success" });
+      expect(overlay?.subAgents?.[0]).toMatchObject({ status: "success", outcome: "success", preferredModel: "resolved-model", preferredReasoningEffort: "high" });
       upsertSubAgent.mockClear();
       await emitActivity("started");
       await emitActivity("completed");
@@ -45033,6 +45047,29 @@ script = "printf setup"
     await expect(registry.readQueuedTurn(request)).rejects.toThrow("no longer waiting");
   });
 
+  it.each(["original-root", undefined])("keeps queued delegation ancestry exact: %s", async (rootTurnId) => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    try {
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/started", params: { threadId: "recipient", turn: { id: "busy" } },
+      } });
+      await registry.submitTurn({ backend: "codex", threadId: "recipient", delivery: "new_turn",
+        input: [{ type: "text", text: "Delegated work" }], messageOrigin: {
+          kind: "agent", sourceThread: { backend: "codex", threadId: "sender", turnId: "invoking-turn", rootTurnId },
+        },
+      });
+      expect(codexClient.startTurnCalls).toHaveLength(0);
+      await registry.publishLocalEvent({ backend: "codex", notification: {
+        method: "turn/completed", params: { threadId: "recipient", turnId: "busy", turn: { id: "busy", status: "completed", output: [] } },
+      } });
+      await waitForCondition(() => codexClient.startTurnCalls.length === 1);
+      expect(codexClient.lastStartTurnParams).toMatchObject({ parentTurnId: "invoking-turn" });
+      expect(codexClient.lastStartTurnParams?.rootTurnId).toBe(rootTurnId);
+      expect(codexClient.lastStartTurnParams?.approvalPolicy).toBe("on-request");
+    } finally { await registry.close(); }
+  });
+
   it("sends a follow-up prompt to another thread from an active turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -45050,6 +45087,8 @@ script = "printf setup"
         linkedDirectories: [],
       }],
     });
+    const readTurnRoot = vi.fn(async () => "root-original");
+    Object.assign(codexClient, { readTurnRoot });
     const overlayStore = createOverlayStoreMock();
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -45141,7 +45180,9 @@ script = "printf setup"
         sandbox: "danger-full-access",
       },
     });
+    expect(readTurnRoot).toHaveBeenCalledWith({ threadId: "parent-thread", turnId: "turn-1" });
     expect(codexClient.lastStartTurnParams).toMatchObject({
+      parentTurnId: "turn-1", rootTurnId: "root-original",
       threadId: "target-thread",
       input: [{ type: "text", text: "Please pick up the CI failure." }],
       model: "gpt-5.5",

@@ -26,6 +26,9 @@ export type SubAgentActivityReport = {
   agentPath: string;
   /** The last segment of `agentPath`, which is the worker's name. */
   agentName?: string;
+  /** Resolved server metadata; absent in older records and non-creation reports. */
+  model?: string;
+  reasoningEffort?: string;
 };
 
 export function readSubAgentActivity(
@@ -56,6 +59,9 @@ export function readSubAgentActivity(
     agentThreadId: item.agentThreadId,
     agentPath: item.agentPath,
     ...(agentName ? { agentName } : {}),
+    ...(typeof item.model === "string" && item.model.trim() ? { model: item.model } : {}),
+    ...(typeof item.reasoningEffort === "string" && item.reasoningEffort.trim()
+      ? { reasoningEffort: item.reasoningEffort } : {}),
   };
 }
 
@@ -246,6 +252,8 @@ export function buildSubAgentActivityDetail(
         backend: "codex",
         origin: "codex-native",
         operation: subAgentActivityOperation(report.kind),
+        ...(report.model ? { model: report.model } : {}),
+        ...(report.reasoningEffort ? { reasoningEffort: report.reasoningEffort } : {}),
         agents: [agent],
       },
     },

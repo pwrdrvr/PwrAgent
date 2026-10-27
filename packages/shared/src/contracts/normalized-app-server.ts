@@ -697,6 +697,9 @@ export type AppServerThreadMessageOrigin = {
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
     messageId?: string;
+    /** Exact invoking turn and its known root. Attribution only; confers no authority. */
+    turnId?: string;
+    rootTurnId?: string;
     backend: AppServerBackendKind;
     /** Durable owner identity when the source thread belongs to another instance. */
     instanceId?: FederationInstanceId;
@@ -793,6 +796,8 @@ export type AppServerThreadTurnStatus =
 
 export type AppServerThreadTurnMetadata = {
   id: string;
+  /** Server-reported attribution. Null or absent means unknown. */
+  rootTurnId?: string | null;
   status?: AppServerThreadTurnStatus;
   startedAt?: number;
   completedAt?: number;
@@ -1940,6 +1945,8 @@ export type AppServerNotification =
         turnId?: string;
         turn: {
           id: string;
+          /** Attribution only; never a permission or consent source. */
+          rootTurnId?: string | null;
           status?: string;
           startedAt?: number | null;
           completedAt?: number | null;
@@ -1978,6 +1985,8 @@ export type AppServerNotification =
         turnId: string;
         turn: {
           id: string;
+          /** Attribution only; never a permission or consent source. */
+          rootTurnId?: string | null;
           status: "completed" | "interrupted" | "cancelled";
           startedAt?: number | null;
           completedAt?: number | null;
@@ -2009,6 +2018,8 @@ export type AppServerNotification =
         turnId: string;
         turn: {
           id: string;
+          /** Attribution only; never a permission or consent source. */
+          rootTurnId?: string | null;
           status: "failed";
           startedAt?: number | null;
           completedAt?: number | null;
@@ -2064,6 +2075,8 @@ export type AppServerNotification =
         turnId: string;
         turn: {
           id: string;
+          /** Attribution only; never a permission or consent source. */
+          rootTurnId?: string | null;
           status: "cancelled";
           startedAt?: number | null;
           completedAt?: number | null;
