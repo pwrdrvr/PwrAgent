@@ -109,6 +109,7 @@ describe("MCP connection IPC", () => {
     openApplication: vi.fn(),
     openDownload: vi.fn(),
     openSandboxerLink: vi.fn(async () => ({ opened: true })),
+    setSandboxerTransport: vi.fn(async () => managedConnection),
     testStdioConnection: vi.fn(async () => ({
       ok: true as const,
       command: "/opt/fixture/bin/server",
@@ -445,6 +446,17 @@ describe("MCP connection IPC", () => {
       ),
     ).rejects.toThrow(/machine that owns this window/i);
     expect(service.testStdioConnection).not.toHaveBeenCalled();
+  });
+
+  it("validates Sandboxer transport and restricts changes to a local window", async () => {
+    service.setSandboxerTransport.mockClear();
+    registerMcpConnectionIpcHandlers(service as never, pwrGit as never, installer as never);
+    const change = mocks.handlers.get("mcp-connection:set-sandboxer-transport")!;
+    await expect(change({ sender: remoteSender }, { transport: "hosted" })).rejects.toThrow("machine that owns");
+    await expect(change({ sender: { id: 18 } }, { transport: "arbitrary" })).rejects.toThrow("transport");
+    expect(service.setSandboxerTransport).not.toHaveBeenCalled();
+    await change({ sender: { id: 18 } }, { transport: "hosted" });
+    expect(service.setSandboxerTransport).toHaveBeenCalledWith("hosted");
   });
 
   it("opens Sandboxer pages only from a local window, and only known ones", async () => {

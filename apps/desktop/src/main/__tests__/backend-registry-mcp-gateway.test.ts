@@ -135,6 +135,7 @@ describe("backend MCP gateway dispatch", () => {
     async (cache) => {
       await registry.close();
       const connections = new McpConnectionRegistry({ configPath: path.join(directory, "config.toml") });
+      connections.setSandboxerTransport("local_cli");
       const remote = connections.create({ displayName: "Remote", serverUrl: "https://fixture.example/mcp" });
       for (const id of ["pwrsnap", "pwrgit", remote.id, "builtin:sandboxer"]) {
         connections.setSelectForNewThreads(id, true);

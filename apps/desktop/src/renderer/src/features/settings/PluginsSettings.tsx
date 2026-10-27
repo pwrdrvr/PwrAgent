@@ -12,6 +12,7 @@ import type {
   McpConnectionSetupState,
   McpConnectionStatus,
   McpConnectionToolApproval,
+  SandboxerTransport,
   ProbeMcpConnectionResponse,
   PwrSnapConnectionStatus,
   PwrGitConnectionStatus,
@@ -2242,6 +2243,8 @@ function ManagedMcpConnectionRow(props: {
   const [sandboxerSetupOpen, setSandboxerSetupOpen] = useState(false);
   const toolApproval = connection.toolApproval ?? "auto";
   const sandboxer = connection.kind === "sandboxer";
+  const localSandboxer = sandboxer && connection.authMode === "local_cli";
+  const [transportBusy, setTransportBusy] = useState(false);
   const stdio = connection.kind === "stdio";
   const app = connection.kind === "pwrgit"
     ? "PwrGit"
@@ -2294,11 +2297,11 @@ function ManagedMcpConnectionRow(props: {
       .length > 0;
   // A sign-in in flight holds this row only. Its switches wait for it, since
   // it replaces the credentials they describe; every other row stays live.
-  const disabled = props.disabled || props.authorizing;
+  const disabled = props.disabled || props.authorizing || transportBusy;
   // Setup happens in a terminal, so the operator comes back to this window
   // when it is done. Checking again then saves a trip to Refresh status. Only
   // while setup is unfinished: a refresh retires the connection's sessions.
-  const sandboxerSetupPending = sandboxer && sandboxerNeedsSetup(connection);
+  const sandboxerSetupPending = localSandboxer && sandboxerNeedsSetup(connection);
   const refreshSandboxerRef = useRef(props.onAuthorize);
   refreshSandboxerRef.current = props.onAuthorize;
   const authorizing = props.authorizing;
@@ -2309,7 +2312,7 @@ function ManagedMcpConnectionRow(props: {
     return () => window.removeEventListener("focus", refresh);
   }, [authorizing, sandboxerSetupPending]);
   if (
-    sandboxer
+    localSandboxer
     && connection.sandboxerCliState === "cli_missing"
     && !sandboxerSetupOpen
   ) {
@@ -2399,7 +2402,7 @@ function ManagedMcpConnectionRow(props: {
             * here and a Stop waiting at the top of the card, which on a long
             * list was a screen away from the row it stopped.
             */}
-          {props.authorizing && connection.kind !== "sandboxer" ? (
+          {props.authorizing && !localSandboxer ? (
             <SignInWait
               name={connection.displayName}
               title={`Stop waiting for ${connection.displayName}. The sign-in page already open in your browser stops working; start again for a fresh one.`}
@@ -2407,7 +2410,7 @@ function ManagedMcpConnectionRow(props: {
             />
           ) : (
             <>
-              {sandboxer ? (
+              {localSandboxer ? (
                 <>
                   <SandboxerSetupAction
                     connection={connection}
@@ -2453,7 +2456,7 @@ function ManagedMcpConnectionRow(props: {
                 >
                   {props.busy
                     ? "Working..."
-                    : connection.configured ? "Reauthorize" : "Authorize"}
+                    : connection.configured ? "Reauthorize" : sandboxer ? "Connect Sandboxer" : "Authorize"}
                 </button>
               )}
               {/*
@@ -2610,11 +2613,36 @@ function ManagedMcpConnectionRow(props: {
           )}
           {sandboxer ? (
             <SandboxerDrawerDetail
+              hosted={!localSandboxer}
               desktopApi={props.desktopApi}
               onNotice={props.onNotice}
             />
           ) : null}
         </div>
+      ) : null}
+      {sandboxer && props.desktopApi?.setSandboxerTransport ? (
+        <label className="settings-mcp-row__state">
+          Connection method
+          <Select
+            aria-label="Sandboxer connection method"
+            className="settings-select settings-select--chip"
+            disabled={disabled}
+            value={localSandboxer ? "local_cli" : "hosted"}
+            options={[
+              { value: "hosted", label: "Hosted · browser sign-in" },
+              { value: "local_cli", label: "Local CLI · existing login or API key" },
+            ]}
+            onChange={(value) => {
+              setTransportBusy(true);
+              void props.desktopApi!.setSandboxerTransport!({ transport: value as SandboxerTransport })
+                .then(() => props.onChanged())
+                .catch((cause: unknown) => props.onNotice({
+                  kind: "error", text: cause instanceof Error ? cause.message : String(cause),
+                }))
+                .finally(() => setTransportBusy(false));
+            }}
+          />
+        </label>
       ) : null}
       {/*
         * The two switches answer different questions, and side by side with

@@ -2,6 +2,7 @@ import { ipcMain } from "electron";
 import {
   isMcpConnectionToolApproval,
   isSandboxerLinkTarget,
+  isSandboxerTransport,
   type AuthorizeMcpConnectionRequest,
   type AuthorizeMcpConnectionResponse,
   type CancelMcpConnectionAuthorizationRequest,
@@ -28,6 +29,7 @@ import {
   type SetMcpConnectionSelectForNewThreadsRequest,
   type SetMcpConnectionToolApprovalRequest,
   type SetSandboxerCleanupOnPrCloseRequest,
+  type SetSandboxerTransportRequest,
   type ReadThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsResponse,
@@ -61,6 +63,7 @@ import {
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
+  MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
@@ -284,6 +287,16 @@ export function registerMcpConnectionIpcHandlers(
           request.toolApproval,
         );
       return { connectionId: request.connectionId, connection };
+    },
+  );
+  ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL);
+  ipcMain.handle(
+    MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL,
+    async (event, request: SetSandboxerTransportRequest): Promise<MutateMcpConnectionResponse> => {
+      requireLocalOwner(event);
+      if (!isSandboxerTransport(request?.transport)) throw new Error("Choose a Sandboxer transport.");
+      const connection = await service.setSandboxerTransport(request.transport);
+      return { connectionId: connection.id, connection };
     },
   );
   ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL);

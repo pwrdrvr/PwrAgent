@@ -18,6 +18,17 @@ export const SANDBOXER_MCP_LAUNCH_ARGS = [...SANDBOXER_MCP_ARGS, "--no-update"] 
 // a new account would reach "Signed in" and still fail its first create.
 export const SANDBOXER_SETUP_COMMAND = `${SANDBOXER_CLI_PATH} onboard`;
 
+/** Hosted OAuth or the optional existing local CLI login. */
+export type SandboxerTransport = "hosted" | "local_cli";
+
+export function isSandboxerTransport(value: unknown): value is SandboxerTransport {
+  return value === "hosted" || value === "local_cli";
+}
+
+export const SANDBOXER_MCP_URL = "https://sandboxer.com/mcp";
+
+export type SetSandboxerTransportRequest = { transport: SandboxerTransport };
+
 /** Remote compute today; a remote PwrAgent runtime is reserved for later work. */
 export type SandboxerRole = "compute" | "remote_agent";
 /**
@@ -77,7 +88,7 @@ export const SANDBOXER_ORIGIN = "https://sandboxer.com";
 
 /**
  * Every fixed Sandboxer page, for main's link handler and the launchpad
- * tile. The dashboard link comes from the CLI.
+ * tile. The local dashboard link comes from the CLI.
  */
 export const SANDBOXER_LINKS: Readonly<Record<Exclude<SandboxerLinkTarget, "dashboard">, string>> = {
   home: `${SANDBOXER_ORIGIN}/`,
@@ -716,7 +727,7 @@ export function resolveMcpConnectionSetup(
     );
   }
 
-  if (connection.kind === "sandboxer") {
+  if (connection.kind === "sandboxer" && connection.authMode === "local_cli") {
     const detail = connection.detail ?? "Check Sandboxer with /usr/local/bin/sbx status.";
     if (connection.sandboxerCliState === "cli_missing") {
       return build("app_not_installed", "CLI missing", detail, "idle");

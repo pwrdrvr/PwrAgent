@@ -31,8 +31,8 @@ function about(cleanupOnPrClose: boolean) {
     body:
       "Sandboxer runs Linux machines your agent can build, test, and host apps "
       + "on, while the thread stays on this computer. It is a separate paid "
-      + "service, billed per second while a machine runs. PwrAgent uses the "
-      + "Sandboxer CLI's own login.",
+      + "service, billed per second while a machine runs. Its sign-in is separate "
+      + "from PwrAgent and your coding agent.",
     note: cleanupOnPrClose
       ? "Each thread opts in with its own switch. Once all of a thread's PRs "
         + "merge or close, PwrAgent deletes the sandboxes that thread created, "
@@ -111,6 +111,8 @@ export function SandboxerConnectionPrompt(props: {
     [line, tone] = [readError, "error"];
   } else if (!connection) {
     // Checking; the pitch says what this is meanwhile.
+  } else if (connection.authMode === "oauth" && !connection.configured) {
+    [line, tone] = ["Sign in to Sandboxer in Settings", "state"];
   } else if (state === "cli_missing") {
     // An ad: the pitch, and Get Sandboxer.
   } else if (state === "not_signed_in") {
@@ -192,7 +194,7 @@ export function SandboxerConnectionPrompt(props: {
       icon={sandboxerMark}
       ariaLabel="Sandboxer connection"
       about={about(connection?.sandboxerCleanupOnPrClose !== false)}
-      connected={ready && state === "signed_in"}
+      connected={ready && (connection?.authMode === "oauth" || state === "signed_in")}
       line={line}
       lineTone={tone}
       action={action}
