@@ -1,5 +1,5 @@
 import { detachOwnedThreadDirectory } from "../app-server/thread-directory-detach";
-import type { ThreadTodosChangedEvent } from "@pwragent/shared";
+import type { ThreadTodoFeedDelta, ThreadTodosChangedEvent } from "@pwragent/shared";
 import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION_METHODS,
   registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
   type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
@@ -633,6 +633,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "turn_assistant_reply",
   "thread_mcp_connections",
   "thread_todos",
+  "thread_todo_feed",
   "operator_questions",
   "operator_requests",
   "thread_display_bulk_reads",
@@ -787,7 +788,8 @@ export function federationEventClassForMethod(
   ) {
     return "star_map";
   }
-  if (method === "navigation/invalidated" || method === "thread/todos/changed" || method === "thread/operatorRequests/changed") {
+  if (method === "navigation/invalidated" || method === "thread/todos/changed" || method === "thread/todos/delta"
+    || method === "thread/operatorRequests/changed") {
     return "navigation";
   }
   if (method === NAVIGATION_DIRECTORY_SET_CHANGED_METHOD) {
@@ -2413,6 +2415,17 @@ export class DesktopFederationRuntime {
       notification: { method: "thread/operatorRequests/changed", params } });
     this.forwardLocalBackendEvent({ backend: params.backend ?? "codex",
       notification: { method: "thread/operatorRequestDetails/changed", params } });
+  }
+
+  /** One card change from this owner's live To-do feed. */
+  publishThreadTodoDelta(delta: ThreadTodoFeedDelta): void {
+    this.forwardLocalBackendEvent({ backend: delta.backend ?? "codex",
+      notification: { method: "thread/todos/delta", params: delta } });
+  }
+
+  /** The owner is connected and serves `threadTodos.snapshot` and its deltas. */
+  remotePeerSupportsTodoFeed(target: FederationRemoteTarget): boolean {
+    return this.todoQueueUnavailableInstance(target, "thread_todo_feed") === undefined;
   }
 
   publishThreadTodosChanged(event: ThreadTodosChangedEvent): void {
@@ -6394,6 +6407,9 @@ export class DesktopFederationRuntime {
     for (const [subscriberInstanceId, subscription] of
       this.incomingEventSubscriptions) {
       if (!subscription.eventClasses.has(eventClass)) continue;
+      // A viewer that predates the feed reads To-dos through markers.
+      if (event.notification.method === "thread/todos/delta"
+        && !this.remotePeerAdvertisesCapability(subscriberInstanceId, "thread_todo_feed")) continue;
       if (
         eventClass !== "star_map"
         && !eventMatchesThreadSelection(

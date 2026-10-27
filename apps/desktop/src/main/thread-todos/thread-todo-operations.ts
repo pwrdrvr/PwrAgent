@@ -10,6 +10,7 @@ import type {
   SetThreadTodoItemCheckedRequest,
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
+  ThreadTodoFeedSnapshot,
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
 } from "@pwragent/shared";
@@ -21,6 +22,7 @@ import {
   threadReviewTodo,
 } from "@pwragent/shared";
 import {
+  getThreadTodoFeed,
   getThreadTodoService,
   listThreadTodoProjects,
   setThreadTodoProject,
@@ -35,13 +37,22 @@ import { listThreadTodosForAvailableOwners } from "../thread-todos/thread-todo-o
  * listing backs the sidebar, so this is usually a cache hit: no navigation
  * index, overlay projection, PR, Git or messaging work for a card filter.
  */
-async function listLocalTodoOwners() {
-  const threads = await getDesktopBackendRegistry().listThreads({
+export async function listLocalTodoOwnerThreads() {
+  return await getDesktopBackendRegistry().listThreads({
     callerReason: "thread-todo-owners",
     // The sidebar index lists with directories, so this shares its cache entry.
     enrichDirectories: true,
   });
-  const managed = getDesktopOverlayStore().readManagedSubAgentThreadKeys();
+}
+
+/** Private managed sub-agent threads; their cards never reach the queue. */
+export function readManagedTodoThreadKeys(): ReadonlySet<string> {
+  return getDesktopOverlayStore().readManagedSubAgentThreadKeys();
+}
+
+async function listLocalTodoOwners() {
+  const threads = await listLocalTodoOwnerThreads();
+  const managed = readManagedTodoThreadKeys();
   return managed.size === 0 ? threads
     : threads.filter((thread) => !managed.has(buildThreadIdentityKey(thread.source, thread.id)));
 }
@@ -97,6 +108,9 @@ export const localThreadTodoOperations = {
       mergeMethods: todos.mergeMethodPreferences(),
     };
   },
+  /** Open cards at the live feed's revision; `thread/todos/delta` follows it. */
+  snapshotFeed: async (_request: Record<string, never> = {}): Promise<ThreadTodoFeedSnapshot> =>
+    await getThreadTodoFeed().snapshot(),
   resolveTodo: (request: ResolveThreadTodoRequest): ThreadTodoMutationResponse => {
     // The status is written to the row as given, so it is checked here.
     if (!isThreadTodoStatus(request.status)) {

@@ -49,6 +49,7 @@ export * from "./contracts/thread-link";
 export * from "./contracts/thread-tools";
 export * from "./contracts/thread-todos";
 export * from "./contracts/thread-reviews";
+export * from "./thread-todo-feed";
 export * from "./contracts/operator-requests";
 export * from "./contracts/thread-dependencies";
 export * from "./contracts/thread-system-messages";

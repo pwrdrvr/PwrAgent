@@ -497,6 +497,45 @@ export type SetThreadTodoProjectRequest = {
   projectKey: string | null;
 };
 
+/**
+ * Open cards at one revision of a To-do feed. A viewer reads one snapshot,
+ * then applies each `ThreadTodoFeedDelta` in revision order.
+ */
+export type ThreadTodoFeedSnapshot = {
+  /** Changes when the feed restarts. A delta from another epoch is a gap. */
+  epoch: string;
+  revision: number;
+  /** Newest first. */
+  todos: ThreadTodo[];
+  mergeMethods?: ThreadTodoMergeMethodPreferences;
+  errors?: string[];
+  unavailableInstances?: TodoUnavailableInstance[];
+};
+
+/**
+ * One revision of change to a To-do feed: cards upserted or removed, or a
+ * new status. A field that is present replaces the viewer's value; an empty
+ * `errors` or `unavailableInstances` clears it. `resync` asks the viewer to
+ * read a new snapshot.
+ *
+ * An owner sends one card per delta, named by `backend` and `threadId`, so
+ * a viewer subscribed to a few threads receives only theirs. Federation
+ * carries it as the `thread/todos/delta` event to viewers that advertise
+ * `thread_todo_feed`.
+ */
+export type ThreadTodoFeedDelta = {
+  epoch: string;
+  revision: number;
+  backend?: AppServerBackendKind;
+  threadId?: ThreadIdentifier;
+  upserts?: ThreadTodo[];
+  removedIds?: string[];
+  mergeMethods?: ThreadTodoMergeMethodPreferences;
+  errors?: string[];
+  unavailableInstances?: TodoUnavailableInstance[];
+  resync?: true;
+};
+
 /** An identity-less notification refreshes the whole list after owner discovery. */
 export type ThreadTodosChangedEvent = { at: number; federationTarget?: FederationRemoteTarget } & ({
   backend: AppServerBackendKind;

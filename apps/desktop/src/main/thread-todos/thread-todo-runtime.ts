@@ -8,9 +8,12 @@ import type {
   ThreadTodo,
   ThreadTodoMergeMethod,
   ThreadTodoProject,
+  ThreadTodoFeedDelta,
   ThreadTodosChangedEvent,
 } from "@pwragent/shared";
-import { DEFAULT_THREAD_TODO_MERGE_METHOD, NAVIGATION_QUERY_MAX_PAGE_ROWS, resolveThreadTodoModelSettings } from "@pwragent/shared";
+import {
+  DEFAULT_THREAD_TODO_MERGE_METHOD, NAVIGATION_QUERY_MAX_PAGE_ROWS, resolveThreadTodoModelSettings, threadReviewTodo,
+} from "@pwragent/shared";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
@@ -32,6 +35,7 @@ import {
   type ThreadTodoActionRunners,
 } from "./thread-todo-service.js";
 import { ThreadTodoStore } from "./thread-todo-store.js";
+import { ThreadTodoFeed, type ThreadTodoFeedOwner } from "./thread-todo-feed.js";
 import {
   getThreadReviewService,
   setThreadReviewBroadcast,
@@ -43,6 +47,7 @@ import { ThreadReviewError } from "../thread-reviews/thread-review-service";
 const threadTodoLog = getMainLogger("pwragent:thread-todos");
 
 let service: ThreadTodoService | null = null;
+let feed: ThreadTodoFeed | null = null;
 let unsubscribeArchive: (() => void) | undefined;
 let readDefaultMergeMethod: (() => ThreadTodoMergeMethod) | undefined;
 let listProjectCandidates: (() => Promise<ThreadTodoProjectCandidate[]>) | undefined;
@@ -58,7 +63,14 @@ export function getThreadTodoService(): ThreadTodoService {
   return service;
 }
 
+/** This owner's live open cards. Installed with the runtime. */
+export function getThreadTodoFeed(): ThreadTodoFeed {
+  if (!feed) throw new Error("To-dos are not available yet.");
+  return feed;
+}
+
 export function resetThreadTodoServiceForTests(): void {
+  feed = null;
   unsubscribeArchive?.();
   unsubscribeArchive = undefined;
   readDefaultMergeMethod = undefined;
@@ -136,11 +148,34 @@ export function installThreadTodoRuntime(params: {
   readDefaultMergeMethod: () => ThreadTodoMergeMethod;
   /** The federation agent tools, which start threads on peers. */
   federation?: PwrAgentFederationHandler;
+  /** What the live card feed reads besides the services, and where it publishes. */
+  feed: {
+    loadOwners: () => Promise<readonly ThreadTodoFeedOwner[]>;
+    managedThreadKeys: () => ReadonlySet<string>;
+    onDelta: (delta: ThreadTodoFeedDelta) => void;
+  };
 }): void {
   const { registry, listProjects, federation } = params;
   const todos = getThreadTodoService();
   const reviews = getThreadReviewService();
-  setThreadReviewBroadcast(params.broadcast);
+  feed = new ThreadTodoFeed({
+    readOpenCards: (scope) => [
+      ...todos.list({ ...scope, status: "open" }),
+      ...reviews.list({ ...scope, status: "open" }).map(threadReviewTodo),
+    ],
+    loadOwners: params.feed.loadOwners,
+    managedThreadKeys: params.feed.managedThreadKeys,
+    withDispatchDefaults: (cards) => todos.withDispatchDefaults(cards),
+    mergeMethods: () => todos.mergeMethodPreferences(),
+  }, params.feed.onDelta);
+  const liveFeed = feed;
+  // Markers stay for viewers that predate the feed and for review details.
+  const changed = (event: ThreadTodosChangedEvent): void => {
+    params.broadcast(event);
+    liveFeed.cardsChanged(event.backend === undefined ? undefined
+      : { backend: event.backend, threadId: event.threadId });
+  };
+  setThreadReviewBroadcast(changed);
   // Tracking a review is a side effect of reading or finishing a new one. A review
   // that cannot be recorded must not fail the thread read or the event.
   const importReview = (
@@ -157,7 +192,7 @@ export function installThreadTodoRuntime(params: {
     }
   };
   readDefaultMergeMethod = params.readDefaultMergeMethod;
-  todos.setOnChanged(params.broadcast);
+  todos.setOnChanged(changed);
   todos.setRunners(createThreadTodoRunners({ registry, federation }));
   todos.setDispatchSettingsReader(async (thread) => {
     const settings = await registry.readThreadHandoffSettings(thread);
@@ -167,6 +202,8 @@ export function installThreadTodoRuntime(params: {
   unsubscribeArchive?.();
   unsubscribeArchive = registry.onEvent((event) => {
     if (event.federationTarget?.scope === "remote") return;
+    // Owner membership, titles, PR attachments and dispatch defaults.
+    liveFeed.handleBackendEvent(event);
     if (event.notification.method === "navigation/providerThreads/refreshed") {
       // Discovery and authentication recovery can make persisted owners
       // available without changing a card. The inventory spans backends.

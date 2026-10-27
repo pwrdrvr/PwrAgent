@@ -1907,6 +1907,7 @@ export type AppServerNotification =
   | { method: "thread/operatorQuestions/changed"; params: { backend: AppServerBackendKind; threadId: string } }
   | { method: "thread/operatorRequests/changed" | "thread/operatorRequestDetails/changed"; params: import("./operator-requests").OperatorRequestsChangedEvent }
   | { method: "thread/todos/changed" | "thread/todoDetails/changed"; params: import("./thread-todos").ThreadTodosChangedEvent }
+  | { method: "thread/todos/delta"; params: import("./thread-todos").ThreadTodoFeedDelta }
   | {
       method: "thread/dependencies/updated";
       params: { threadId: string; dependencyId: string };
