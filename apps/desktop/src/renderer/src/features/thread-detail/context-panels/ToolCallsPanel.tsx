@@ -11,6 +11,7 @@ import type {
 import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../../lib/thread-links";
+import { useToolInvocationDetails } from "../../../lib/useToolInvocationDetails";
 import { useTranscriptActivityDetails } from "../../../lib/useTranscriptActivityDetails";
 import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
 import { detailMatchesInvocationItem } from "../tool-call-details";
@@ -253,7 +254,7 @@ function ToolInvocationList(props: {
                   className="button button--ghost tool-call-row__details"
                   aria-expanded={expanded}
                   onClick={() => {
-                    if (!expanded && !transcriptDetail) {
+                    if (!expanded && !transcriptDetail && invocation.backend !== "codex") {
                       props.onRequestInvocationDetails?.(invocation);
                     }
                     props.onExpandedInvocationChange(
@@ -281,30 +282,58 @@ function ToolInvocationList(props: {
                 invocation={invocation}
                 onScrollToTurn={props.onScrollToTurn}
               />
-              {expanded ? (
-                <div className="tool-call-instance__detail">
-                  {transcriptDetail ? (
-                    <ToolInvocationOutput
-                      desktopApi={props.desktopApi}
-                      source={transcriptDetail}
-                      threadLinkSource={props.threadLinkSource}
-                    />
-                  ) : (
-                    <p
-                      className="tool-call-instance__detail-status"
-                      aria-live="polite"
-                    >
-                      {loadingDetail
-                        ? "Loading captured output…"
-                        : "Captured output is unavailable in transcript history."}
-                    </p>
-                  )}
-                </div>
-              ) : null}
+              <ToolInvocationDetails
+                desktopApi={props.desktopApi}
+                invocation={invocation}
+                expanded={expanded}
+                source={transcriptDetail}
+                loading={loadingDetail}
+                threadLinkSource={props.threadLinkSource}
+              />
             </li>
           );
         })}
       </ul>
+    </div>
+  );
+}
+
+function ToolInvocationDetails(props: {
+  desktopApi?: Pick<DesktopApi, "readThread">;
+  invocation: ThreadToolInvocationRecord;
+  expanded: boolean;
+  source?: CommandDetailSource;
+  loading: boolean;
+  threadLinkSource?: ThreadLinkSource;
+}) {
+  const direct = props.invocation.backend === "codex";
+  const details = useToolInvocationDetails({
+    invocation: props.invocation,
+    enabled: direct && props.expanded && !props.source,
+    desktopApi: props.desktopApi,
+    instanceId: props.threadLinkSource?.instanceId,
+  });
+  if (!props.expanded) return null;
+  return (
+    <div className="tool-call-instance__detail">
+      {props.source ? (
+        <ToolInvocationOutput desktopApi={props.desktopApi} source={props.source} threadLinkSource={props.threadLinkSource} />
+      ) : direct && details.details ? (
+        details.details.filter((detail) => detail.command).map((detail) => (
+          <TranscriptCommandOutput key={detail.id} detail={detail} threadLinkSource={props.threadLinkSource} />
+        ))
+      ) : details.error ? (
+        <div className="tool-call-instance__detail-status">
+          <p role="alert">{details.error}</p>
+          <button className="button button--ghost" type="button" onClick={() => void details.load()}>Retry</button>
+        </div>
+      ) : (
+        <p className="tool-call-instance__detail-status" aria-live="polite">
+          {props.loading || details.loading
+            ? "Loading captured output…"
+            : "Captured output is unavailable in transcript history."}
+        </p>
+      )}
     </div>
   );
 }

@@ -208,6 +208,7 @@ import {
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
+  type AppServerThreadActivityDetail,
   type AppServerThreadCommandDetail,
   type AppServerThreadEntry,
   type AppServerReviewContext,
@@ -1047,6 +1048,7 @@ type BackendClient = {
   readThreadSummary?(threadId: string): Promise<AppServerThreadSummary>;
   readThreadName?(threadId: string): Promise<string | undefined>;
   readThreadActivity?(params: { threadId: string; turnId: string; entryId: string; itemIds?: string[] }): Promise<AppServerThreadActivityEntry>;
+  readThreadToolInvocation?(params: { threadId: string; turnId: string; itemId: string }): Promise<AppServerThreadActivityDetail[]>;
   readThreadTurn?(params: { threadId: string; turnId: string }): Promise<AppServerThreadReplay>;
   prepareFreshNativeVoiceThread?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean>;
   resumeNativeVoiceThread?(params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]): Promise<void>;
@@ -17402,6 +17404,21 @@ export class DesktopBackendRegistry {
       this.assertNotBootstrap("readThread");
       const activity = request.display.activity;
       if (backend !== "codex" || !activity?.entryId || !activity.turnId) throw new Error("Invalid activity detail request.");
+      if (activity.invocationItemId !== undefined) {
+        const itemId = activity.invocationItemId;
+        if (!itemId || activity.entryId !== `activity-${itemId}` || activity.itemIds !== undefined) {
+          throw new Error("Invalid tool invocation detail request.");
+        }
+        const details = await this.withCodexThreadClient(request.threadId, async (client) => {
+          if (!client.readThreadToolInvocation) throw new Error("Tool invocation detail reads are unavailable.");
+          return await client.readThreadToolInvocation({ threadId: request.threadId, turnId: activity.turnId, itemId });
+        }, undefined, false);
+        return {
+          backend, threadId: request.threadId, fetchedAt: Date.now(),
+          toolInvocationDetails: { turnId: activity.turnId, itemId, details },
+          replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+        };
+      }
       const entry = await this.withCodexThreadClient(request.threadId, async (client) => {
         if (!client.readThreadActivity) throw new Error("Activity detail reads are unavailable.");
         return await client.readThreadActivity({ threadId: request.threadId, ...activity });

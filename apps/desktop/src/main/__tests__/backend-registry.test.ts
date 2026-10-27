@@ -4012,6 +4012,28 @@ describe("DesktopBackendRegistry", () => {
       await registry.close();
     }
   });
+  it("returns isolated invocation details without reading ledgers or claiming a transcript page", async () => {
+    const details = [{ id: "middle", kind: "command" as const, label: "Ran build", command: { displayCommand: "build", output: "done" } }];
+    const readThreadToolInvocation = vi.fn(async () => details);
+    const codexClient = Object.assign(new MockBackendClient({}), { readThreadToolInvocation });
+    const overlayStore = createOverlayStoreMock();
+    const pricingRead = vi.spyOn(overlayStore, "readThreadPricing");
+    const accountingRead = vi.spyOn(overlayStore, "readThreadToolAccounting");
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+    try {
+      const response = await registry.readThread({ backend: "codex", threadId: "thread", viewOnly: true, display: {
+        resource: "activity", activity: { turnId: "turn", entryId: "activity-middle", invocationItemId: "middle" },
+      } });
+      expect(response.toolInvocationDetails).toEqual({ turnId: "turn", itemId: "middle", details });
+      expect(response.replay.entries).toEqual([]);
+      expect(response.replay.messages).toEqual([]);
+      expect(readThreadToolInvocation).toHaveBeenCalledExactlyOnceWith({ threadId: "thread", turnId: "turn", itemId: "middle" });
+      expect(codexClient.readThreadCalls).toEqual([]);
+      expect(pricingRead).not.toHaveBeenCalled();
+      expect(accountingRead).not.toHaveBeenCalled();
+    } finally { await registry.close(); }
+  });
+
   it("overlays only the Codex spawn env with its Token Miser bridge", () => {
     const source = {
       CODEX_HOME: "/tmp/codex-profile",

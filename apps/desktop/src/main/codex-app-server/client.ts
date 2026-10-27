@@ -9822,6 +9822,43 @@ export class CodexAppServerClient {
     } }, { threadId: params.threadId });
   }
 
+  /** A single invocation's bodies, with no claim about its transcript group. */
+  async readThreadToolInvocation(params: {
+    threadId: string;
+    turnId: string;
+    itemId: string;
+  }): Promise<AppServerThreadActivityDetail[]> {
+    if (!params.threadId || !params.turnId || !params.itemId) throw new Error("Invalid tool invocation detail request.");
+    await this.ensureInitialized();
+    let items: CodexThreadItem[] | undefined;
+    try {
+      // initialize deliberately opts into experimentalApi. Exact invocation
+      // reads are isolated from replay: one item cannot establish a group.
+      const payload = { threadId: params.threadId, turnId: params.turnId, itemIds: [params.itemId] } satisfies CodexThreadItemsReadParams;
+      const response = await requestWithThreadMetadataReadRetry(async () =>
+        await this.connection.request("thread/items/read", payload,
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+      ) as CodexThreadItemsReadResponse;
+      const entry = Array.isArray(response?.data) && response.data.length === 1 ? response.data[0] : undefined;
+      if (entry?.turnId === params.turnId && entry.item?.id === params.itemId && entry.item.type === "commandExecution") {
+        items = [entry.item];
+      }
+    } catch (error) {
+      if (!isMethodUnavailableError(error, "thread/items/read")) throw error;
+    }
+    // Older servers enumerate only the requested turn. Select the raw item
+    // before normalization so adjacent commands cannot become its details.
+    items ??= (await listCodexThreadItems({
+      client: this.connection, threadId: params.threadId, turnId: params.turnId,
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    })).filter((item) => item.id === params.itemId && item.type === "commandExecution");
+    if (items.length !== 1) throw new Error("Tool invocation details are no longer available. Reload the thread.");
+    const replay = extractThreadReplayFromReadResult({ thread: { id: params.threadId,
+      turns: [{ id: params.turnId, items }],
+    } }, { threadId: params.threadId });
+    return replay.entries.flatMap((entry) => entry.type === "activity" ? entry.details : []);
+  }
+
   async readThreadActivity(params: {
     threadId: string;
     turnId: string;

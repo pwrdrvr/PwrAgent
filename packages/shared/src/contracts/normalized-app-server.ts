@@ -1353,7 +1353,13 @@ export type ThreadDisplayRead = {
   /** New viewers load folded Pricing gate cards only on expansion. */
   deferPricingGates?: boolean;
   pricingGateGroup?: { usageLineId: string; filter: "primary" | "small" };
-  activity?: { turnId: string; entryId: string; itemIds?: string[] };
+  activity?: {
+    turnId: string;
+    entryId: string;
+    itemIds?: string[];
+    /** Returns toolInvocationDetails only; the invocation's transcript group is unknown. */
+    invocationItemId?: string;
+  };
   firstWarningAt?: number;
   largeOutputThresholdChars?: number;
   monitorId?: string;
@@ -1411,6 +1417,8 @@ export type AppServerReadThreadRequest = {
 };
 
 export type AppServerReadThreadResponse = {
+  /** Isolated invocation bodies; never a transcript page or a complete activity group. */
+  toolInvocationDetails?: { turnId: string; itemId: string; details: AppServerThreadActivityDetail[] };
   display?: ThreadDisplayData;
   /** Opaque hash of the complete owner response, excluding observation timings. */
   replayRevision?: string;

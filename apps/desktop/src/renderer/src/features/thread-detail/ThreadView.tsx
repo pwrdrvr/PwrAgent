@@ -3294,6 +3294,9 @@ export function ThreadView(props: ThreadViewProps) {
 
   const handleRequestToolCallDetails = useCallback(
     (invocation: ThreadToolInvocationRecord) => {
+      // Tool Calls owns isolated Codex item bodies. Only other backends use
+      // transcript discovery; partial Codex reads must never enter history.
+      if (invocation.backend === "codex") return;
       if (!invocation.turnId || !selectedThreadKey) {
         return;
       }
