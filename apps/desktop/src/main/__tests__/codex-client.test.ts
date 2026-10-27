@@ -235,6 +235,8 @@ class MockTransport implements JsonRpcTransport {
 
   readonly sentMessages: string[] = [];
   readonly itemResponseBytes: number[] = [];
+  captureHistoryResponses = false;
+  readonly historyResponses: Array<{ method: string; bytes: number }> = [];
   mcpServerStatusResponse?: () => void;
   readonly options?: unknown;
   closeCount = 0;
@@ -1432,7 +1434,16 @@ class MockTransport implements JsonRpcTransport {
   }
 
   setMessageHandler(handler: (message: string) => void): void {
-    this.messageHandler = handler;
+    this.messageHandler = (message) => {
+      if (this.captureHistoryResponses) {
+        const response = JSON.parse(message);
+        const request = this.sentMessages.map((sent) => JSON.parse(sent)).findLast((sent) => sent.id === response.id);
+        if (["thread/read", "thread/turns/list", "thread/items/list", "thread/items/read", "thread/turns/items/list"].includes(request?.method)) {
+          this.historyResponses.push({ method: request.method, bytes: Buffer.byteLength(message) });
+        }
+      }
+      handler(message);
+    };
   }
 
   setCloseHandler(handler: (error?: Error) => void): void {
@@ -6722,6 +6733,110 @@ describe("CodexAppServerClient", () => {
     } finally {
       await client.close();
     }
+  });
+
+  it.each(["exact", "unavailable", "missing", "wrong-turn", "wrong-item", "non-command", "malformed", "duplicate", "legacy"])(
+    "isolates a middle invocation from its undiscovered command group (%s)", async (scenario) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const threadId = "unloaded-thread";
+      const turnId = "unloaded-turn";
+      const items = ["before", "target", "after"].map((id) => ({ id, type: "commandExecution", command: id,
+        aggregatedOutput: `${id} output`, status: "completed", exitCode: 0,
+      }));
+      const exact = { turnId, item: items[1], startedAtMs: 1000, completedAtMs: 2000 };
+      MockTransport.threadItemsReadResult = { data: [exact] };
+      if (scenario === "unavailable" || scenario === "legacy") MockTransport.threadItemsReadError = { code: -32601, message: "Method not found" };
+      if (scenario === "missing") MockTransport.threadItemsReadResult = { data: [] };
+      if (scenario === "wrong-turn") MockTransport.threadItemsReadResult = { data: [{ ...exact, turnId: "other" }] };
+      if (scenario === "wrong-item") MockTransport.threadItemsReadResult = { data: [{ ...exact, item: items[0] }] };
+      if (scenario === "non-command") MockTransport.threadItemsReadResult = { data: [{ ...exact, item: { id: "target", type: "agentMessage", text: "wrong" } }] };
+      if (scenario === "malformed") MockTransport.threadItemsReadResult = { data: null };
+      if (scenario === "duplicate") MockTransport.threadItemsReadResult = { data: [exact, exact] };
+      if (scenario === "legacy") {
+        for (const cursor of ["", "more"]) {
+          MockTransport.threadItemsListTransientErrorsByRequest.set(`${threadId}:${turnId}:${cursor}`, [{ code: -32601, message: "Method not found" }]);
+        }
+      }
+      MockTransport.threadItemsListResultByRequest.set(`${threadId}:${turnId}:`, {
+        data: items.slice(0, 2).map((item) => ({ turnId, item })), nextCursor: "more", backwardsCursor: null,
+      });
+      MockTransport.threadItemsListResultByRequest.set(`${threadId}:${turnId}:more`, {
+        data: [{ turnId, item: items[2] }], nextCursor: null, backwardsCursor: null,
+      });
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const details = await client.readThreadToolInvocation({ threadId, turnId, itemId: "target" });
+        expect(details).toHaveLength(1);
+        expect(details[0].command).toMatchObject({ displayCommand: "target", output: "target output" });
+        const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+        expect(requests.find((request) => request.method === "initialize").params.capabilities.experimentalApi).toBe(true);
+        expect(requests.filter((request) => request.method === "thread/items/read").map((request) => request.params))
+          .toEqual([{ threadId, turnId, itemIds: ["target"] }]);
+        expect(requests.some((request) => ["thread/read", "thread/turns/list"].includes(request.method))).toBe(false);
+        expect(requests.filter((request) => request.method === "thread/items/list")).toHaveLength(scenario === "exact" ? 0 : 2);
+        expect(requests.filter((request) => request.method === "thread/turns/items/list")).toHaveLength(scenario === "legacy" ? 2 : 0);
+      } finally { await client.close(); }
+    },
+  );
+
+  it("surfaces invocation read errors without hiding them behind history reads", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadItemsReadError = { code: -32000, message: "Owner read failed" };
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await expect(client.readThreadToolInvocation({ threadId: "thread", turnId: "turn", itemId: "target" })).rejects.toThrow("Owner read failed");
+      expect(MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message).method)).not.toContain("thread/items/list");
+    } finally { await client.close(); }
+  });
+
+  it.each([20, 200, 1000])("measures unloaded invocation reads against paging %i synthetic older turns", async (turns) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadId = "unloaded-synthetic";
+    const history = Array.from({ length: turns }, (_, index) => ({
+      id: `turn-${index}`, status: "completed", itemsView: "full",
+      items: ["before", "target", "after"].map((suffix) => ({
+        id: `item-${index}-${suffix}`, type: "commandExecution", command: `synthetic ${suffix}`,
+        status: "completed", exitCode: 0, aggregatedOutput: "x".repeat(1024),
+      })),
+    }));
+    MockTransport.readThreadResultByThreadId.set(threadId, { thread: { id: threadId, turns: [] } });
+    for (let offset = 0; offset < turns; offset += 20) {
+      MockTransport.threadTurnsListResultByRequest.set(`${threadId}:${offset || ""}`, {
+        data: history.slice(offset, offset + 20), nextCursor: offset + 20 < turns ? String(offset + 20) : null, backwardsCursor: null,
+      });
+    }
+    const target = history.at(-1)!;
+    MockTransport.threadItemsReadResult = { data: [{ turnId: target.id, item: target.items[1], startedAtMs: null, completedAtMs: null }] };
+    MockTransport.threadItemsListResultByRequest.set(`${threadId}:${target.id}:`, {
+      data: target.items.map((item) => ({ turnId: target.id, item })), nextCursor: null, backwardsCursor: null,
+    });
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const transport = MockTransport.instances.at(-1)!;
+      transport.captureHistoryResponses = true;
+      let before: string | undefined;
+      do {
+        const replay = await client.readThread({ threadId, limit: 20, before });
+        before = replay.pagination.previousCursor;
+      } while (before);
+      const totals = () => ({ requests: transport.historyResponses.length,
+        responseBytes: transport.historyResponses.reduce((sum, response) => sum + response.bytes, 0) });
+      const baseline = totals();
+      transport.historyResponses.length = 0;
+      const request = { threadId, turnId: target.id, itemId: target.items[1].id };
+      const details = await client.readThreadToolInvocation(request);
+      const direct = totals();
+      transport.historyResponses.length = 0;
+      MockTransport.threadItemsReadError = { code: -32601, message: "Method not found" };
+      expect(await client.readThreadToolInvocation(request)).toEqual(details);
+      const fallback = totals();
+      expect(baseline.requests).toBe(turns / 10);
+      expect(direct.requests).toBe(1);
+      expect(fallback.requests).toBe(2);
+      expect(direct.responseBytes).toBeLessThan(baseline.responseBytes / 20);
+      expect(fallback.responseBytes).toBeLessThan(baseline.responseBytes / 10);
+      console.info("Unloaded invocation synthetic bytes", JSON.stringify({ turns, commandsPerTurn: 3, outputBytesPerCommand: 1024, baseline, direct, fallback }));
+    } finally { await client.close(); }
   });
 
   it("falls back to the legacy Codex turn item list method", async () => {
