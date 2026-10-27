@@ -4,9 +4,13 @@ import type {
   ThreadTodoFeedSnapshot,
 } from "./contracts/thread-todos";
 
-/** Newest first; the id breaks ties so every viewer agrees on the order. */
+/**
+ * Newest first, ties by id descending: the owner store's
+ * `created_at DESC, todo_id DESC`, so a card raised in the same millisecond
+ * keeps the place a list gave it.
+ */
 export function compareThreadTodosNewestFirst(left: ThreadTodo, right: ThreadTodo): number {
-  return right.createdAt - left.createdAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+  return right.createdAt - left.createdAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0);
 }
 
 /** The cards after a delta, newest first. A delta with no card change returns `todos`. */

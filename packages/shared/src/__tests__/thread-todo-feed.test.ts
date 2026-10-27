@@ -83,4 +83,10 @@ describe("applyThreadTodoFeedDelta", () => {
       .toEqual([card("c", 3), { ...card("a", 1), title: "edited" }]);
     expect(applyThreadTodoFeedDelta(todos, { epoch: "e", revision: 2 })).toBe(todos);
   });
+
+  it("orders cards raised in the same millisecond as the owner store does", () => {
+    expect(applyThreadTodoFeedDelta([], { epoch: "e", revision: 1,
+      upserts: [card("card-1", 5), card("card-2", 5), card("card-0", 6)] }).map((todo) => todo.id))
+      .toEqual(["card-0", "card-2", "card-1"]);
+  });
 });
