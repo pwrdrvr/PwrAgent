@@ -648,10 +648,13 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
   }
 
   const sourceRoot = params.sourceRoot ?? params.repoRoot;
+  const followCurrentBranch = params.worktreeBase !== "default_branch";
   const [rawCurrentBranch, baseBranchesOutput, remoteHead] = await Promise.all([
-    runGit(sourceRoot, ["rev-parse", "--abbrev-ref", "HEAD"], params.gitEnv).catch(
-      () => "",
-    ),
+    followCurrentBranch
+      ? runGit(sourceRoot, ["rev-parse", "--abbrev-ref", "HEAD"], params.gitEnv).catch(
+        () => "",
+      )
+      : "",
     runGit(
       params.repoRoot,
       [
@@ -669,10 +672,7 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
       params.gitEnv,
     ).catch(() => ""),
   ]);
-  const currentBranch =
-    rawCurrentBranch.trim() === "HEAD" || params.worktreeBase === "default_branch"
-      ? ""
-      : rawCurrentBranch;
+  const currentBranch = rawCurrentBranch.trim() === "HEAD" ? "" : rawCurrentBranch;
   const baseBranches = parseGitBaseBranchDetails(baseBranchesOutput).map(
     (detail) => detail.name,
   );

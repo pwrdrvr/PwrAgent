@@ -448,7 +448,11 @@ export function createThreadTodoRunners(params: {
         // The cwd is the raising thread's checkout. Its branch carries that
         // thread's unpublished work, so a card's new worktree starts from
         // the default branch instead.
-        ...(action.workMode === "worktree" ? { worktreeBase: "default_branch" as const } : {}),
+        // A card that says New worktree must not fall back to sharing the
+        // raising thread's checkout.
+        ...(action.workMode === "worktree"
+          ? { worktreeBase: "default_branch" as const, requiredWorkMode: "worktree" as const }
+          : {}),
         // Work for another project is not grouped under this thread, as
         // handoff_task does not group it.
         ...(crossProject
