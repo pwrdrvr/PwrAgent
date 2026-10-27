@@ -228,30 +228,15 @@ const WCAG_AA_TAGS = [
 const COLOR_RULES = ["color-contrast", "link-in-text-block"];
 
 // Selectors waived from the axe scan, with a written reason. Every
-// earlier waiver was fixed in the renderer; the one entry below is
-// pre-existing debt that the composer popup scan found. If a new
-// pre-existing violation surfaces (e.g. on a new surface added to the
-// suite below) and is too invasive to fix in the same PR, add an entry
-// here so the gate stays green AND surfaces the debt, then file a
-// follow-up.
+// earlier waiver was fixed in the renderer. If a new pre-existing
+// violation surfaces (e.g. on a new surface added to the suite below) and
+// is too invasive to fix in the same PR, add an entry here so the gate
+// stays green AND surfaces the debt, then file a follow-up.
 const KNOWN_VIOLATIONS: ReadonlyArray<{
   selector: string;
   rule: string;
   reason: string;
-}> = [
-  {
-    // The `@` picker's path on the keyboard-active row is `--text-muted` on
-    // the 12% accent tint over the raised panel: 4.37:1 in Tangerine dark and
-    // 4.38:1 in light. The `+` reference picker, the project picker, and
-    // Move to Project draw their paths the same way. Every other color theme
-    // clears 4.55:1 there, which theme-contract.test.tsx measures. Remove
-    // this entry when the active row's path takes a stronger token.
-    selector:
-      ".composer__autocomplete--directories .composer__autocomplete-option.is-active .composer__autocomplete-meta",
-    rule: "color-contrast",
-    reason: "Tangerine --text-muted on --accent-soft over --bg-panel-elevated is 4.37:1",
-  },
-];
+}> = [];
 
 /**
  * Direct `listitem` children of a list. `Locator.getByRole` matches every
