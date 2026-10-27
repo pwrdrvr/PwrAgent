@@ -1,6 +1,6 @@
 {
   "name": "pwragent",
-  "version": "0.0.0",
+  "version": "0.1.0-alpha.1",
   "private": false,
   "type": "module",
   "description": "Experimental headless PwrAgent daemon and command-line client.",
@@ -34,17 +34,20 @@
     "dist"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "registry": "https://registry.npmjs.org",
+    "tag": "next"
   },
   "bin": {
     "pwragent": "bin/pwragent.js"
   },
   "scripts": {
-    "test": "node --test test/*.test.js",
-    "pack:check": "npm pack --dry-run",
+    "test": "node --test test/*.test.js scripts/*.test.mjs",
+    "pack:check": "node scripts/pack-check.mjs",
     "build": "node scripts/build.mjs",
     "pretest": "node scripts/build.mjs",
-    "prepack": "node scripts/build.mjs"
+    "prepack": "node scripts/build.mjs",
+    "release:check": "node scripts/release.mjs"
   },
   "devDependencies": {
     "@pwragent/federation": "workspace:*",

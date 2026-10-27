@@ -14,7 +14,7 @@ Group=pwragent
 WorkingDirectory=/srv/pwragent/workspace
 Environment=PWRAGENT_HOME=/var/lib/pwragent
 Environment=PWRAGENT_PROFILE=outpost
-ExecStart=/usr/bin/node /opt/pwragent/bin/pwragent.js serve --workspace /srv/pwragent/workspace --codex-home /var/lib/codex-outpost --codex-bin /usr/local/bin/codex
+ExecStart=/usr/bin/node /opt/pwragent/node_modules/pwragent/bin/pwragent.js serve --workspace /srv/pwragent/workspace --codex-home /var/lib/codex-outpost --codex-bin /usr/local/bin/codex
 UMask=0077
 KillMode=control-group
 TimeoutStopSec=10
