@@ -51,10 +51,10 @@ const bonsaiSource = { label: "bonsai", configPath: "/home/me/.codex/profiles/bo
 const importScan: CodexModelProviderImportScan = {
   candidates: [
     {
-      sourceId: "bonsai",
-      name: "PrismML Bonsai (local)",
-      baseUrl: "http://127.0.0.1:18080/v1",
-      models: ["/models/Ternary-Bonsai-2-27B.gguf"],
+      sourceId: "gpu",
+      name: "Local Responses",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      models: ["local-model"],
       local: true,
       needsApiKey: false,
       notes: [],
@@ -150,34 +150,68 @@ describe("CodexModelProvidersSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
     await waitFor(() => expect(testCodexModelProvider).toHaveBeenCalled());
     expect(await screen.findByText(/4 models · 120 ms/u)).toBeInTheDocument();
-    expect(screen.getByText(/Codex needs the Responses API/u)).toBeInTheDocument();
+    expect(screen.getByText(/Codex needs Responses API compatibility/u)).toBeInTheDocument();
+    expect(screen.getByText(/A passing check does not validate a full PwrAgent turn/u)).toBeInTheDocument();
   });
 
   it("offers the providers Codex config files define and imports one into the form", async () => {
     const { onSave, setCodexModelProviderApiKey } = renderSettings([], importScan);
     const imports = await screen.findByRole("group", { name: "Providers in Codex config files" });
-    expect(within(imports).getByText("PrismML Bonsai (local)")).toBeInTheDocument();
+    expect(within(imports).getByText("Local Responses")).toBeInTheDocument();
     expect(within(imports).getByText(/Legacy chat/u)).toBeInTheDocument();
     expect(within(imports).getByText(/wire_api = "chat"/u)).toBeInTheDocument();
-    fireEvent.click(within(imports).getByRole("button", { name: "Import PrismML Bonsai (local)" }));
+    fireEvent.click(within(imports).getByRole("button", { name: "Import Local Responses" }));
     expect(screen.queryByRole("group", { name: "Providers in Codex config files" })).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Provider name" })).toHaveValue("PrismML Bonsai (local)");
-    expect(screen.getByRole("textbox", { name: "Provider ID" })).toHaveValue("bonsai");
-    expect(screen.getByRole("textbox", { name: "Base URL" })).toHaveValue("http://127.0.0.1:18080/v1");
-    expect(screen.getByRole("textbox", { name: "Model ids" })).toHaveValue("/models/Ternary-Bonsai-2-27B.gguf");
+    expect(screen.getByRole("textbox", { name: "Provider name" })).toHaveValue("Local Responses");
+    expect(screen.getByRole("textbox", { name: "Provider ID" })).toHaveValue("gpu");
+    expect(screen.getByRole("textbox", { name: "Base URL" })).toHaveValue("http://127.0.0.1:8080/v1");
+    expect(screen.getByRole("textbox", { name: "Model ids" })).toHaveValue("local-model");
     expect(screen.getByRole("switch", { name: "Runs locally" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByLabelText("API key")).toHaveValue("");
     expect(screen.getByText(/Imported from \/home\/me\/\.codex\/profiles\/bonsai\/config\.toml/u)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add and reconnect" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(onSave).toHaveBeenCalledWith([{
-      id: "bonsai",
-      name: "PrismML Bonsai (local)",
-      baseUrl: "http://127.0.0.1:18080/v1",
-      models: ["/models/Ternary-Bonsai-2-27B.gguf"],
+      id: "gpu",
+      name: "Local Responses",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      models: ["local-model"],
       local: true,
     }]);
     expect(setCodexModelProviderApiKey).not.toHaveBeenCalled();
+  });
+
+  it("explains an unsupported Bonsai import without offering an import action, even if it was already added", async () => {
+    const baseUrl = "http://127.0.0.1:18080/v1";
+    const { onSave } = renderSettings([{ id: "bonsai", name: "Bonsai", baseUrl, hasApiKey: false }], {
+      candidates: [],
+      skipped: [{
+        sourceId: "bonsai",
+        name: "PrismML Bonsai (local)",
+        baseUrl,
+        reason: "Import cannot preserve its Responses compatibility bridge, model catalog, context limits, feature restrictions, or custom launcher. Keep using its working PwrAgent profile.",
+        sources: [bonsaiSource],
+      }],
+    });
+    const skipped = await screen.findByRole("list", { name: "Not importable" });
+    expect(within(skipped).getByText(/Responses compatibility bridge/u)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Import PrismML Bonsai (local)" })).not.toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("preserves Bonsai's isolated compatibility and catalog when importing and editing", async () => {
+    const candidate = {
+      ...importScan.candidates[0], sourceId: "bonsai", name: "Bonsai", models: ["Bonsai.gguf"],
+      compatibility: "bonsai" as const, catalogPath: "/profiles/bonsai/models.json",
+      notes: ["Uses an isolated Codex runtime and Responses bridge."],
+    };
+    const { onSave } = renderSettings([], { candidates: [candidate], skipped: [] });
+    fireEvent.click(await screen.findByRole("button", { name: "Import Bonsai" }));
+    expect(screen.getByText(/isolated Codex runtime and Responses bridge/u)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Add and reconnect" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith([expect.objectContaining({
+      compatibility: "bonsai", catalogPath: "/profiles/bonsai/models.json",
+    })]));
   });
 
   it("asks for the key an imported provider needs and stores it in the keychain", async () => {
@@ -194,16 +228,16 @@ describe("CodexModelProvidersSettings", () => {
 
   it("hides an endpoint that is already a provider and picks a free id", async () => {
     const taken: DesktopCodexModelProvider = {
-      id: "bonsai",
-      name: "Other Bonsai",
+      id: "gpu",
+      name: "Other GPU",
       baseUrl: "http://gpu.lan:8000/v1",
       hasApiKey: false,
     };
     renderSettings([refuseless, taken], importScan);
     const imports = await screen.findByRole("group", { name: "Providers in Codex config files" });
     expect(within(imports).queryByRole("button", { name: "Import Refuseless" })).not.toBeInTheDocument();
-    fireEvent.click(within(imports).getByRole("button", { name: "Import PrismML Bonsai (local)" }));
-    expect(screen.getByRole("textbox", { name: "Provider ID" })).toHaveValue("bonsai-2");
+    fireEvent.click(within(imports).getByRole("button", { name: "Import Local Responses" }));
+    expect(screen.getByRole("textbox", { name: "Provider ID" })).toHaveValue("gpu-2");
   });
 
   it("derives an id from a name", () => {

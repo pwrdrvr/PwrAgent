@@ -238,6 +238,34 @@ theme = "dark"
     expect(providerLastKnownGoodMatchesConfig(after)).toBe(true);
   });
 
+  it("refreshes an isolated provider's catalog settings without invalidating executable discovery", async () => {
+    const fixture = createFixture("");
+    const discoverProvider = vi.fn(async () => ({ candidates: [], selectedCommand: "/opt/pwragent/codex" }));
+    const store = fixture.createStore({ discoverProvider });
+    await store.refreshProvider("codex", issueProviderDiscoveryPermit("startup"));
+    const original = store.read("providers").codex;
+    const provider = {
+      id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: ["fixture.gguf"],
+      compatibility: "bonsai" as const,
+    };
+    const replacement = { ...provider, models: ["replacement.gguf"] };
+    const withCatalog = { ...replacement, catalogPath: "/tmp/models.json" };
+    let previous = original.runtimeFingerprint;
+    for (const entry of [provider, replacement, withCatalog]) {
+      await store.write({ models: { codex: { providers: [entry] } } }, ["providers"]);
+      const current = store.read("providers").codex;
+      expect(current.runtimeFingerprint).not.toBe(previous);
+      expect(current.dependencyFingerprint).toBe(original.dependencyFingerprint);
+      expect(current.validation.state).toBe("valid");
+      previous = current.runtimeFingerprint;
+    }
+    await store.write({ models: { codex: { providers: [{
+      ...withCatalog, rates: [{ model: "replacement.gguf", inputPerMillion: 0 }],
+    }] } } }, ["providers"]);
+    expect(store.read("providers").codex.runtimeFingerprint).toBe(previous);
+    expect(discoverProvider).toHaveBeenCalledOnce();
+  });
+
   it("hydrates a newer durable provider row over the config snapshot", async () => {
     const fixture = createFixture("");
     const discoverProvider = vi.fn(async () => ({

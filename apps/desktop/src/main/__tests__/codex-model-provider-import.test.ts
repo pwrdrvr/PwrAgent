@@ -9,6 +9,7 @@ import {
   scanCodexModelProviderImports,
 } from "../settings/codex-model-provider-import";
 import { parseCodexConfigToml } from "../settings/codex-config-toml";
+import { readBonsaiCatalog } from "../codex-app-server/bonsai-runtime";
 
 const source = { label: "bonsai", configPath: "/home/me/.codex/profiles/bonsai/config.toml" };
 
@@ -17,26 +18,125 @@ function importsFrom(toml: string) {
 }
 
 describe("codexModelProviderImportsFromConfig", () => {
-  it("prefills a local Bonsai profile from its model and provider", () => {
+  it("imports a supported Bonsai profile with isolated compatibility and its catalog", () => {
     expect(importsFrom([
       "model = \"/models/Ternary-Bonsai-2-27B.gguf\"",
       "model_provider = \"bonsai\"",
       "model_catalog_json = \"/home/me/.codex/profiles/bonsai/models.json\"",
+      "model_context_window = 65536",
+      "model_auto_compact_token_limit = 49152",
+      "web_search = \"disabled\"",
+      "[features]",
+      "multi_agent = false",
+      "goals = false",
+      "apps = false",
+      "plugins = false",
+      "image_generation = false",
       "[model_providers.bonsai]",
       "name = \"PrismML Bonsai (local)\"",
       "base_url = \"http://127.0.0.1:18080/v1/\"",
       "wire_api = \"responses\"",
       "requires_openai_auth = false",
-    ].join("\n"))).toEqual([{
+    ].join("\n"))).toEqual([expect.objectContaining({
       sourceId: "bonsai",
       name: "PrismML Bonsai (local)",
       baseUrl: "http://127.0.0.1:18080/v1",
       models: ["/models/Ternary-Bonsai-2-27B.gguf"],
-      local: true,
-      needsApiKey: false,
-      notes: [],
+      compatibility: "bonsai",
+      catalogPath: path.resolve("/home/me/.codex/profiles/bonsai/models.json"),
+      notes: [expect.stringContaining("isolated Codex runtime")],
       sources: [source],
-    }]);
+    })]);
+  });
+
+  it("blocks Bonsai settings the compatibility runtime cannot preserve", () => {
+    const [entry] = importsFrom([
+      "model_provider = \"bonsai\"",
+      "model = \"/models/Bonsai.gguf\"",
+      "model_catalog_json = \"/secret/catalog.json\"",
+      "model_context_window = 131072",
+      "model_auto_compact_token_limit = 49152",
+      "[features]",
+      "plugins = false",
+      "[model_providers.bonsai]",
+      "base_url = \"http://127.0.0.1:18080/v1\"",
+    ].join("\n"));
+    expect("reason" in entry && entry.reason).toMatch(/model_catalog_json, model_context_window, model_auto_compact_token_limit, features.plugins/u);
+    expect(JSON.stringify(entry)).not.toContain("/secret/catalog.json");
+  });
+
+  it("blocks an incomplete Bonsai definition without a model", () => {
+    const [entry] = importsFrom("[model_providers.bonsai]\nbase_url = \"http://localhost:18080/v1\"\n");
+    expect(entry).toMatchObject({ reason: expect.stringContaining("exactly one model") });
+  });
+
+  it("recognizes Bonsai's model when the provider is renamed", () => {
+    const [entry] = importsFrom([
+      "[model_providers.gpu]",
+      "base_url = \"http://127.0.0.1:8080/v1\"",
+      "[profiles.local]",
+      "model_provider = \"gpu\"",
+      "model = \"/models/Ternary-Bonsai-2-27B.gguf\"",
+    ].join("\n"));
+    expect(entry).toMatchObject({ sourceId: "gpu", compatibility: "bonsai", notes: [expect.stringContaining("compatibility bridge")] });
+  });
+
+  it("retains a named profile's catalog and blocks conflicting catalogs for one provider", () => {
+    const config = [
+      'model_provider = "bonsai"', 'model = "Bonsai.gguf"', '[model_providers.bonsai]',
+      'base_url = "http://localhost:8080/v1"', '[profiles.local]', 'model_catalog_json = "models.json"',
+    ];
+    expect(importsFrom(config.join("\n"))[0]).toMatchObject({
+      compatibility: "bonsai", catalogPath: path.resolve("/home/me/.codex/profiles/bonsai/models.json"),
+    });
+    expect(importsFrom([...config, '[profiles.other]', 'model_catalog_json = "other.json"'].join("\n"))[0]).toMatchObject({
+      reason: expect.stringContaining("different model catalogs"),
+    });
+  });
+
+  it("does not assume every local GGUF endpoint needs Bonsai's compatibility settings", () => {
+    const [entry] = importsFrom([
+      "model_provider = \"gpu\"",
+      "model = \"/models/other.gguf\"",
+      "[model_providers.gpu]",
+      "base_url = \"http://localhost:8080/v1\"",
+    ].join("\n"));
+    expect(entry).toMatchObject({ sourceId: "gpu", models: ["/models/other.gguf"] });
+    expect(entry).not.toHaveProperty("reason");
+  });
+
+  it("keeps regular OpenAI imports separate from another provider's compatibility settings", () => {
+    const entries = importsFrom([
+      "model_provider = \"hosted\"",
+      "model = \"gpt-5.5\"",
+      "[model_providers.hosted]",
+      "base_url = \"https://api.openai.com/v1\"",
+      "env_key = \"OPENAI_API_KEY\"",
+      "[model_providers.local]",
+      "base_url = \"http://localhost:18080/v1\"",
+      "[profiles.local]",
+      "model_provider = \"local\"",
+      "model_catalog_json = \"models.json\"",
+      "model_context_window = 65536",
+      "model_auto_compact_token_limit = 49152",
+      "[profiles.local.features]",
+      "plugins = false",
+    ].join("\n"));
+    expect(entries[0]).toMatchObject({ sourceId: "hosted", models: ["gpt-5.5"], needsApiKey: true, notes: [] });
+    expect(entries[0]).not.toHaveProperty("reason");
+    expect(entries[1]).toMatchObject({ sourceId: "local", reason: expect.stringContaining("model_catalog_json") });
+  });
+
+  it("checks compatibility settings inherited by a named profile", () => {
+    const [entry] = importsFrom([
+      "model_catalog_json = \"models.json\"",
+      "[model_providers.gpu]",
+      "base_url = \"http://gpu.lan:8000/v1\"",
+      "[profiles.local]",
+      "model_provider = \"gpu\"",
+      "model = \"local-model\"",
+    ].join("\n"));
+    expect(entry).toMatchObject({ reason: expect.stringContaining("model_catalog_json") });
   });
 
   it("asks for a key by its variable name and never copies key material", () => {
@@ -135,9 +235,9 @@ describe("scanCodexModelProviderImports", () => {
   }
 
   it("merges one endpoint found in two homes and reports unreadable files", async () => {
-    const bonsai = "[model_providers.bonsai]\nbase_url = \"http://127.0.0.1:18080/v1\"\n";
-    const main = await home("main", bonsai);
-    const profile = await home("profile", `model = "bonsai-27b"\nmodel_provider = "bonsai"\n${bonsai}`);
+    const provider = "[model_providers.local]\nbase_url = \"http://127.0.0.1:18080/v1\"\n";
+    const main = await home("main", provider);
+    const profile = await home("profile", `model = "local-model"\nmodel_provider = "local"\n${provider}`);
     const broken = await home("broken", "[model_providers.x\n");
     const empty = await home("empty");
     const scan = await scanCodexModelProviderImports([
@@ -148,8 +248,8 @@ describe("scanCodexModelProviderImports", () => {
     ]);
     expect(scan.candidates).toHaveLength(1);
     expect(scan.candidates[0]).toMatchObject({
-      sourceId: "bonsai",
-      models: ["bonsai-27b"],
+      sourceId: "local",
+      models: ["local-model"],
       local: true,
       sources: [
         { label: "Codex home", configPath: path.join(main, "config.toml") },
@@ -160,6 +260,109 @@ describe("scanCodexModelProviderImports", () => {
       reason: "Its config.toml could not be parsed: Expected the end of a table header on line 1.",
       sources: [{ label: "broken", configPath: path.join(broken, "config.toml") }],
     }]);
+  });
+
+  it.each([false, true])("blocks an endpoint alias when another home declares compatibility requirements (reverse=%s)", async (reverse) => {
+    const plain = await home("plain", "[model_providers.alias]\nbase_url = \"http://127.0.0.1:18080/v1/\"\n");
+    const restricted = await home("restricted", [
+      "model_provider = \"local\"",
+      "model_catalog_json = \"models.json\"",
+      "[model_providers.local]",
+      "base_url = \"http://127.0.0.1:18080/v1\"",
+    ].join("\n"));
+    const homes = [plain, restricted].map((codexHome) => ({ codexHome, label: codexHome }));
+    const scan = await scanCodexModelProviderImports(reverse ? homes.reverse() : homes);
+    expect(scan.candidates).toEqual([]);
+    expect(scan.skipped).toEqual([expect.objectContaining({
+      sourceId: "local",
+      baseUrl: "http://127.0.0.1:18080/v1",
+      reason: expect.stringContaining("model_catalog_json"),
+    })]);
+  });
+
+  it("checks the imported catalog before offering Bonsai and reports missing catalogs as blocked imports", async () => {
+    const dir = await home("bonsai", [
+      'model_provider = "bonsai"', 'model = "/models/Bonsai.gguf"', 'model_catalog_json = "models.json"',
+      '[model_providers.bonsai]', 'base_url = "http://127.0.0.1:18080/v1"',
+    ].join("\n"));
+    const homes = [{ codexHome: dir, label: "Bonsai" }];
+    expect((await scanCodexModelProviderImports(homes)).skipped).toEqual([expect.objectContaining({
+      reason: expect.stringContaining("Bonsai catalog cannot be imported"),
+    })]);
+    const template = await readBonsaiCatalog({
+      id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: ["/models/Bonsai.gguf"], compatibility: "bonsai",
+    });
+    await writeFile(path.join(dir, "models.json"), JSON.stringify(template));
+    expect((await scanCodexModelProviderImports(homes)).candidates).toEqual([expect.objectContaining({
+      compatibility: "bonsai", catalogPath: path.join(dir, "models.json"),
+    })]);
+  });
+
+  it.each(["model", "catalog", "compatibility"])("blocks conflicting Bonsai %s definitions across homes in either scan order", async (conflict) => {
+    const config = (model: string, catalog?: string, id = "bonsai") => [
+      `model_provider = "${id}"`, `model = "${model}"`,
+      ...(catalog ? [`model_catalog_json = ${JSON.stringify(catalog)}`] : []),
+      `[model_providers.${id}]`, 'base_url = "http://127.0.0.1:18080/v1"',
+    ].join("\n");
+    const first = await home("first", config("Bonsai.gguf", conflict === "catalog" ? "models.json" : undefined));
+    const second = await home("second", config(
+      conflict === "model" ? "Other-Bonsai.gguf" : conflict === "compatibility" ? "other-model" : "Bonsai.gguf",
+      conflict === "catalog" ? "models.json" : undefined,
+      conflict === "compatibility" ? "alias" : "bonsai",
+    ));
+    if (conflict === "catalog") {
+      const catalog = await readBonsaiCatalog({
+        id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: ["Bonsai.gguf"], compatibility: "bonsai",
+      });
+      await writeFile(path.join(first, "models.json"), JSON.stringify(catalog));
+      catalog.models[0].base_instructions = "Different instructions";
+      await writeFile(path.join(second, "models.json"), JSON.stringify(catalog));
+    }
+    const homes = [first, second].map((codexHome) => ({ codexHome, label: codexHome }));
+    for (const ordered of [homes, [...homes].reverse()]) {
+      const scan = await scanCodexModelProviderImports(ordered);
+      expect(scan.candidates).toEqual([]);
+      expect(scan.skipped).toEqual([expect.objectContaining({
+        baseUrl: "http://127.0.0.1:18080/v1",
+        reason: expect.stringContaining("conflicting Bonsai"),
+        sources: ordered.map((item) => ({ label: item.label, configPath: path.join(item.codexHome, "config.toml") })),
+      })]);
+    }
+  });
+
+  it("merges matching Bonsai definitions without losing catalog instructions", async () => {
+    const catalogPath = path.join(root, "models.json");
+    const catalog = await readBonsaiCatalog({
+      id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: ["Bonsai.gguf"], compatibility: "bonsai",
+    });
+    await writeFile(catalogPath, JSON.stringify(catalog));
+    const toml = [
+      'model_provider = "bonsai"', 'model = "Bonsai.gguf"',
+      `model_catalog_json = ${JSON.stringify(catalogPath)}`,
+      '[model_providers.bonsai]', 'base_url = "http://127.0.0.1:18080/v1"',
+    ].join("\n");
+    const homes = await Promise.all([home("first", toml), home("second", toml)]);
+    const scan = await scanCodexModelProviderImports(homes.map((codexHome) => ({ codexHome, label: codexHome })));
+    expect(scan.skipped).toEqual([]);
+    expect(scan.candidates).toEqual([expect.objectContaining({ models: ["Bonsai.gguf"], catalogPath, sources: expect.any(Array) })]);
+    expect(scan.candidates[0].sources).toHaveLength(2);
+  });
+
+  it("reports each conflicting endpoint separately when homes reuse the provider name", async () => {
+    const homes = [];
+    for (const port of [18080, 18081]) {
+      for (const model of ["Bonsai.gguf", "Other-Bonsai.gguf"]) {
+        const codexHome = await home(`${port}-${model}`, [
+          'model_provider = "bonsai"', `model = "${model}"`,
+          '[model_providers.bonsai]', `base_url = "http://127.0.0.1:${port}/v1"`,
+        ].join("\n"));
+        homes.push({ codexHome, label: codexHome });
+      }
+    }
+    const scan = await scanCodexModelProviderImports(homes);
+    expect(scan.candidates).toEqual([]);
+    expect(scan.skipped.map((entry) => entry.baseUrl)).toEqual(["http://127.0.0.1:18080/v1", "http://127.0.0.1:18081/v1"]);
+    expect(scan.skipped.map((entry) => entry.sources.length)).toEqual([2, 2]);
   });
 
   it("does not read a config.toml larger than 1 MiB", async () => {

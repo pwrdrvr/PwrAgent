@@ -48,6 +48,8 @@ import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activit
 import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
 import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attribution";
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
+import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
+import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -1141,7 +1143,7 @@ type BackendClient = {
   onAppServerRestartStatusChanged?(
     listener: (status: CodexAppServerRestartStatus) => void,
   ): () => void;
-  onAppServerUnexpectedExit?(listener: () => void): () => void;
+  onAppServerUnexpectedExit?(listener: (threadIds?: ReadonlySet<string>) => void): () => void;
   restartAppServer?(): Promise<void>;
   resetAppServerRestarts?(reason: string): void;
   readAccount?(): Promise<BackendAccountSummary>;
@@ -10426,21 +10428,45 @@ export class DesktopBackendRegistry {
     this.localFilePrivateStorageRoots = codexHome ? [codexHome] : [];
     const clientVersion =
       typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
-    this.codexClient =
-      options?.codexClient ??
-      replayClients?.codexClient ??
-      new CodexAppServerClient({
+    const createCodexClient = (provider?: CodexModelProviderSettings): CodexAppServerClient => {
+      let resources: Promise<Awaited<ReturnType<typeof prepareBonsaiRuntime>>> | undefined;
+      let cleanup = Promise.resolve();
+      const releaseResources = (): Promise<void> => {
+        const previous = resources;
+        resources = undefined;
+        cleanup = cleanup.then(async () => {
+          const runtime = await previous?.catch(() => undefined);
+          await runtime?.close();
+        });
+        return cleanup;
+      };
+      const client = new CodexAppServerClient({
         args: settingsService ? undefined : buildCodexClientArgs(codexEnv),
         command: codexCommand,
         connectionObserver: codexObserver,
         env: codexSpawnEnv,
-        resolveArgs: settingsService
-          ? async (env) => buildCodexClientArgs(
+        resolveArgs: async (env) => {
+          const args = buildCodexClientArgs(
               env,
-              settingsService.resolveCodexConfigOverrides?.() ?? [],
-              settingsService.resolveCodexModelProviders?.() ?? [],
-            )
-          : undefined,
+              settingsService?.resolveCodexConfigOverrides?.() ?? [],
+              settingsService?.resolveCodexModelProviders?.() ?? [],
+            );
+          if (!provider) return args;
+          await cleanup;
+          resources ??= prepareBonsaiRuntime(provider, env?.[codexModelProviderApiKeyEnv(provider.id)]);
+          try {
+            const prepared = await resources;
+            const nativeMcpNames = await this.codexClient.readConfiguredMcpServerNames?.() ?? [];
+            return [
+              ...args,
+              ...bonsaiNativeMcpOverrides(nativeMcpNames).flatMap((override) => ["-c", override]),
+              ...prepared.overrides.flatMap((override) => ["-c", override]),
+            ];
+          } catch (error) {
+            await releaseResources();
+            throw error;
+          }
+        },
         resolveCommand: settingsService
           ? async () => await settingsService.resolveCodexCommand()
           : undefined,
@@ -10470,6 +10496,24 @@ export class DesktopBackendRegistry {
         // may initialize this client; ordinary backend summaries are passive.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
+      if (provider) {
+        const close = client.close.bind(client);
+        client.close = async () => {
+          try { await close(); } finally { await releaseResources(); }
+        };
+        client.onAppServerUnexpectedExit(() => {
+          void releaseResources().catch((error) => backendRegistryLog.warn("Bonsai runtime cleanup failed", { error: String(error) }));
+        });
+      }
+      return client;
+    };
+    this.codexClient = options?.codexClient ?? replayClients?.codexClient ?? createProviderRuntimeClient(
+      createCodexClient(),
+      {
+        resolveProviders: () => settingsService?.resolveCodexModelProviders?.() ?? [],
+        create: createCodexClient,
+      },
+    );
     if (typeof settingsService?.onCodexModelProviderKeysChanged === "function") {
       this.unsubscribers.push(settingsService.onCodexModelProviderKeysChanged(() => {
         this.codexModelProviderKeysRead = undefined;
@@ -10483,8 +10527,8 @@ export class DesktopBackendRegistry {
     }
     if (this.codexClient.onAppServerUnexpectedExit) {
       this.unsubscribers.push(
-        this.codexClient.onAppServerUnexpectedExit(() => {
-          void this.handleCodexAppServerUnexpectedExit().catch((error) => {
+        this.codexClient.onAppServerUnexpectedExit((threadIds) => {
+          void this.handleCodexAppServerUnexpectedExit(threadIds).catch((error) => {
             backendRegistryLog.warn("Codex app server exit cleanup failed", {
               error: error instanceof Error ? error.message : String(error),
             });
@@ -35817,8 +35861,8 @@ export class DesktopBackendRegistry {
             start: client.startRealtime.bind(client),
             stop: client.stopRealtime.bind(client),
             text: client.appendRealtimeText.bind(client),
-            onEvent: client.onRealtimeEvent.bind(client),
-            onDisconnect: client.onRealtimeDisconnect.bind(client),
+            onEvent: (listener) => client.onRealtimeEvent!(listener, threadId),
+            onDisconnect: (listener) => client.onRealtimeDisconnect!(listener, threadId),
             onToolCall: (listener) => {
               this.nativeVoiceToolListeners.add(listener);
               return () => { this.nativeVoiceToolListeners.delete(listener); };
@@ -47644,12 +47688,13 @@ export class DesktopBackendRegistry {
     if (items?.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
   }
 
-  private async handleCodexAppServerUnexpectedExit(): Promise<void> {
+  private async handleCodexAppServerUnexpectedExit(affected?: ReadonlySet<string>): Promise<void> {
     this.backgroundTerminalGeneration += 1;
     // The client synthesizes terminal failures only for turns it saw start.
     // Settle accepted compactions it cannot know about at this same boundary.
     const pendingCompactions: CodexRetryableCompaction[] = [];
     for (const [threadId, candidate] of this.codexRetryableOperations) {
+      if (affected && !affected.has(threadId)) continue;
       if (candidate.kind !== "compact" || candidate.lifecycleStarted) continue;
       candidate.terminalObserved = true;
       this.codexRetryableOperations.delete(threadId);
@@ -47658,11 +47703,12 @@ export class DesktopBackendRegistry {
     const threadIds = [...new Set([
       ...this.liveCodexToolItemsByThread.keys(), ...this.codexBackgroundTerminals.keys(),
       ...pendingCompactions.map((candidate) => candidate.params.threadId),
-    ])];
-    this.liveCodexToolItemsByThread.clear();
+    ])].filter((threadId) => !affected || affected.has(threadId));
+    for (const threadId of threadIds) this.liveCodexToolItemsByThread.delete(threadId);
     // The terminals died with the app server. Publish the clear so rows that
     // carried their mark refresh.
     for (const threadId of [...this.codexBackgroundTerminals.keys()]) {
+      if (affected && !affected.has(threadId)) continue;
       this.publishCodexBackgroundTerminals(threadId, []);
     }
     try {

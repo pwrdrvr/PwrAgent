@@ -8146,7 +8146,7 @@ export class CodexAppServerClient {
     };
   }
 
-  onAppServerUnexpectedExit(listener: () => void): () => void {
+  onAppServerUnexpectedExit(listener: (threadIds?: ReadonlySet<string>) => void): () => void {
     this.unexpectedExitListeners.add(listener);
     return () => {
       this.unexpectedExitListeners.delete(listener);
@@ -8342,7 +8342,7 @@ export class CodexAppServerClient {
 
   /**
    * Repairs the protocol-identified rollout, which requires stopping this
-   * app-server process: it is the profile's only writer, and Codex unloads an
+   * app-server process: it owns this thread's live writer, and Codex unloads an
    * unsubscribed thread (closing its writer) only after an idle delay — a
    * fixed 30 minutes in 0.153. A stopped stdio app-server sends no terminal
    * for the turns it was running, so the stop waits until no turn runs here.
@@ -8508,12 +8508,12 @@ export class CodexAppServerClient {
     });
   }
 
-  onRealtimeEvent(listener: (event: NativeVoiceNotification) => void): () => void {
+  onRealtimeEvent(listener: (event: NativeVoiceNotification) => void, _threadId?: string): () => void {
     this.realtimeListeners.add(listener);
     return () => { this.realtimeListeners.delete(listener); };
   }
 
-  onRealtimeDisconnect(listener: () => void): () => void {
+  onRealtimeDisconnect(listener: () => void, _threadId?: string): () => void {
     this.realtimeDisconnectListeners.add(listener);
     return () => { this.realtimeDisconnectListeners.delete(listener); };
   }

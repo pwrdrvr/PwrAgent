@@ -218,9 +218,15 @@ export function normalizeConfigDomains(params: {
                 enabled,
                 provider,
                 configOverrides: config.models?.codex?.configOverrides,
-                // Model lists and rates are PwrAgent reads, not launch arguments.
+                // Ordinary model lists and rates do not change a launch. An
+                // isolated compatibility runtime also owns its model catalog.
                 codexModelProviders: config.models?.codex?.providers?.map(
-                  (entry) => `${entry.id}\u0000${entry.name}\u0000${entry.baseUrl}`,
+                  (entry) => `${entry.id}\u0000${entry.name}\u0000${entry.baseUrl}`
+                    + (entry.compatibility ? `\u0000${JSON.stringify({
+                        compatibility: entry.compatibility,
+                        models: entry.models,
+                        catalogPath: entry.catalogPath,
+                      })}` : ""),
                 ),
               }),
             }

@@ -11,6 +11,7 @@
 
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { readBonsaiCatalog } from "../codex-app-server/bonsai-runtime";
 import {
   CODEX_MODEL_PROVIDER_MODEL_LIMIT,
   isLoopbackCodexBaseUrl,
@@ -68,9 +69,11 @@ export async function scanCodexModelProviderImports(
 ): Promise<CodexModelProviderImportScan> {
   // One endpoint found in several files is one candidate.
   const candidates = new Map<string, CodexModelProviderImportCandidate>();
+  const incompatibleEndpoints = new Set<string>();
+  const conflictingEndpoints = new Set<string>();
   const skipped = new Map<string, CodexModelProviderImportSkip>();
   const addSkip = (skip: CodexModelProviderImportSkip) => {
-    const key = `${skip.sourceId ?? ""}\n${skip.reason}`;
+    const key = `${skip.baseUrl ?? ""}\n${skip.sourceId ?? ""}\n${skip.reason}`;
     const existing = skipped.get(key);
     if (existing) {
       existing.sources.push(...skip.sources);
@@ -91,8 +94,24 @@ export async function scanCodexModelProviderImports(
     }
     for (const entry of codexModelProviderImportsFromConfig(read.config, source)) {
       if ("reason" in entry) {
+        if (entry.baseUrl) incompatibleEndpoints.add(entry.baseUrl);
         addSkip(entry);
         continue;
+      }
+      if (entry.compatibility === "bonsai") {
+        try {
+          await readBonsaiCatalog({ ...entry, id: entry.sourceId });
+        } catch (error) {
+          incompatibleEndpoints.add(entry.baseUrl);
+          addSkip({
+            sourceId: entry.sourceId,
+            name: entry.name,
+            baseUrl: entry.baseUrl,
+            reason: `Its Bonsai catalog cannot be imported. ${error instanceof Error ? error.message : "The catalog is invalid."}`,
+            sources: entry.sources,
+          });
+          continue;
+        }
       }
       const existing = candidates.get(entry.baseUrl);
       if (!existing) {
@@ -100,14 +119,36 @@ export async function scanCodexModelProviderImports(
         continue;
       }
       existing.sources.push(...entry.sources);
+      if (conflictingEndpoints.has(entry.baseUrl)) continue;
+      if ((existing.compatibility === "bonsai" || entry.compatibility === "bonsai")
+        && (existing.compatibility !== entry.compatibility
+          || existing.models.length !== 1 || entry.models.length !== 1
+          || existing.models[0] !== entry.models[0]
+          || existing.catalogPath !== entry.catalogPath)) {
+        incompatibleEndpoints.add(entry.baseUrl);
+        conflictingEndpoints.add(entry.baseUrl);
+        addSkip({
+          sourceId: existing.sourceId,
+          name: existing.name,
+          baseUrl: entry.baseUrl,
+          reason: "The same endpoint has conflicting Bonsai models, compatibility settings, or model catalogs across Codex homes.",
+          sources: existing.sources,
+        });
+        continue;
+      }
       existing.models = [...new Set([...existing.models, ...entry.models])]
         .slice(0, CODEX_MODEL_PROVIDER_MODEL_LIMIT);
       existing.needsApiKey ||= entry.needsApiKey;
       existing.apiKeyEnv ??= entry.apiKeyEnv;
       existing.notes = [...new Set([...existing.notes, ...entry.notes])];
+      existing.compatibility ??= entry.compatibility;
+      existing.catalogPath ??= entry.catalogPath;
     }
   }
-  return { candidates: [...candidates.values()], skipped: [...skipped.values()] };
+  return {
+    candidates: [...candidates.values()].filter((candidate) => !incompatibleEndpoints.has(candidate.baseUrl)),
+    skipped: [...skipped.values()],
+  };
 }
 
 async function readConfig(configPath: string): Promise<
@@ -185,6 +226,39 @@ export function codexModelProviderImportsFromConfig(
     if (entry.gateway_oauth !== undefined) {
       return skip("It signs in with gateway OAuth, which a PwrAgent provider cannot do.", name);
     }
+    const models = modelsByProvider.get(sourceId) ?? [];
+    const compatibility = providerCompatibilitySettings(config, sourceId);
+    const localBonsai = isLoopbackCodexBaseUrl(baseUrl)
+      && (/bonsai/iu.test(`${sourceId} ${name}`) || models.some((model) => /bonsai/iu.test(model)));
+    const contexts = providerContexts(config, sourceId);
+    const catalogPaths = [...new Set(contexts.flatMap((context) => typeof context.model_catalog_json === "string"
+      ? [path.resolve(path.dirname(source.configPath), context.model_catalog_json)] : []))];
+    const supportedBonsai = localBonsai && models.length === 1 && catalogPaths.length <= 1 && contexts.every((context) =>
+      (context.model_context_window === undefined || context.model_context_window === 65536)
+      && (context.model_auto_compact_token_limit === undefined || context.model_auto_compact_token_limit === 49152)
+      && ["model_reasoning_effort", "model_reasoning_summary"].every((key) => context[key] === undefined || context[key] === "none")
+      && (context.web_search === undefined || context.web_search === "disabled")
+      && (!isCodexTomlTable(context.features) || ["multi_agent", "goals", "apps", "plugins", "image_generation"]
+        .every((key) => (context.features as CodexTomlTable)[key] !== true)));
+    if (!supportedBonsai && (localBonsai || compatibility.length > 0)) {
+      const requirements = (compatibility.length ? ` It sets ${compatibility.join(", ")}.` : "")
+        + (catalogPaths.length > 1 ? " Its profiles select different model catalogs for the same provider." : "");
+      return {
+        ...skip(
+          localBonsai
+            ? "This Bonsai configuration cannot use the isolated local compatibility runtime."
+              + " It needs exactly one model, a 65536-token context, a 49152-token compaction limit, no reasoning or web search, and disabled unsupported features."
+              + requirements
+              + " Keep using its working PwrAgent profile."
+            : "This provider's Codex configuration has compatibility settings that import cannot preserve."
+              + requirements
+              + " Import copies only the endpoint and model IDs, not model catalogs, context limits, feature settings, or custom launchers."
+              + " Keep using its working PwrAgent profile.",
+          name,
+        ),
+        baseUrl,
+      };
+    }
     const hasEnvKey = typeof entry.env_key === "string" && entry.env_key.trim() !== "";
     // Only a plain variable name is shown; anything else is still a key.
     const envKey = hasEnvKey && ENV_NAME.test(String(entry.env_key).trim())
@@ -194,6 +268,7 @@ export function codexModelProviderImportsFromConfig(
     const usesOpenAiAuth = entry.requires_openai_auth === true;
     const usesAuthCommand = entry.auth !== undefined;
     const notes: string[] = [];
+    if (supportedBonsai) notes.push("Runs in an isolated Codex runtime with a Responses compatibility bridge, its own model catalog, a 65536-token context, a 49152-token compaction limit, and unsupported features disabled. Custom launchers are not copied.");
     if (hasBearerToken) notes.push("The file's bearer token is not copied.");
     if (usesAuthCommand) notes.push("Its auth command is not run.");
     if (usesOpenAiAuth) notes.push("It signed in with the OpenAI account. Here it needs an API key.");
@@ -204,14 +279,55 @@ export function codexModelProviderImportsFromConfig(
       sourceId,
       name,
       baseUrl,
-      models: modelsByProvider.get(sourceId) ?? [],
+      models,
       local: isLoopbackCodexBaseUrl(baseUrl),
       needsApiKey: hasEnvKey || hasBearerToken || usesOpenAiAuth || usesAuthCommand,
       ...(envKey ? { apiKeyEnv: envKey } : {}),
       notes,
       sources: [source],
+      ...(supportedBonsai ? { compatibility: "bonsai" as const } : {}),
+      ...(supportedBonsai && catalogPaths.length ? { catalogPath: catalogPaths[0] } : {}),
     };
   });
+}
+
+/** Inspect only settings associated with this provider, including profile inheritance. */
+function providerContexts(config: CodexTomlTable, provider: string): CodexTomlTable[] {
+  const contexts: CodexTomlTable[] = [];
+  if (config.model_provider === provider) contexts.push(config);
+  if (isCodexTomlTable(config.profiles)) {
+    for (const profile of Object.values(config.profiles)) {
+      if (!isCodexTomlTable(profile) || (profile.model_provider ?? config.model_provider) !== provider) continue;
+      contexts.push({
+        ...config,
+        ...profile,
+        features: {
+          ...(isCodexTomlTable(config.features) ? config.features : {}),
+          ...(isCodexTomlTable(profile.features) ? profile.features : {}),
+        },
+      });
+    }
+  }
+  return contexts;
+}
+
+function providerCompatibilitySettings(config: CodexTomlTable, provider: string): string[] {
+  const settings = new Set<string>();
+  for (const context of providerContexts(config, provider)) {
+    for (const key of ["model_catalog_json", "model_context_window", "model_auto_compact_token_limit"]) {
+      if (context[key] !== undefined) settings.add(key);
+    }
+    for (const key of ["model_reasoning_effort", "model_reasoning_summary"]) {
+      if (context[key] === "none") settings.add(key);
+    }
+    if (context.web_search === "disabled") settings.add("web_search");
+    if (isCodexTomlTable(context.features)) {
+      for (const key of ["multi_agent", "goals", "apps", "plugins", "image_generation"]) {
+        if (context.features[key] === false) settings.add(`features.${key}`);
+      }
+    }
+  }
+  return [...settings];
 }
 
 function hasUrlCredentials(value: string): boolean {

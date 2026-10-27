@@ -466,7 +466,7 @@ describe("settings ipc", () => {
     fs.mkdirSync(elsewhere);
     fs.writeFileSync(
       path.join(codexHome, "config.toml"),
-      "[model_providers.bonsai]\nbase_url = \"http://127.0.0.1:18080/v1\"\nexperimental_bearer_token = \"sk-file-token\"\n",
+      "[model_providers.compatible]\nbase_url = \"http://127.0.0.1:18080/v1\"\nexperimental_bearer_token = \"sk-file-token\"\n",
     );
     fs.writeFileSync(
       path.join(elsewhere, "config.toml"),
@@ -496,7 +496,7 @@ describe("settings ipc", () => {
       { codexHome: elsewhere, configPath: path.join(elsewhere, "config.toml") },
     );
     expect(scan).toMatchObject({
-      candidates: [{ sourceId: "bonsai", baseUrl: "http://127.0.0.1:18080/v1", local: true, needsApiKey: true }],
+      candidates: [{ sourceId: "compatible", baseUrl: "http://127.0.0.1:18080/v1", local: true, needsApiKey: true }],
       skipped: [],
     });
     expect(JSON.stringify(scan)).not.toMatch(/other\.example|sk-file-token/u);

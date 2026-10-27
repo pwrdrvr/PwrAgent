@@ -42,6 +42,49 @@ test("discovers vision while preserving catalog instructions and tool settings",
   assert.deepEqual(catalogTemplate.models[0].input_modalities, ["text"]);
 });
 
+test("authenticates metadata and response forwarding with the configured credential", async () => {
+  const seen = [];
+  const server = createServer(async (req, res) => {
+    seen.push([req.url, req.headers.authorization]);
+    if (req.headers.authorization !== "Bearer fixture-key") {
+      res.writeHead(401, { "Content-Type": "application/json" }).end(JSON.stringify({ error: "Unauthorized" }));
+      return;
+    }
+    res.setHeader("Content-Type", "application/json");
+    if (req.url === "/v1/responses") {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const request = JSON.parse(Buffer.concat(chunks).toString());
+      assert.equal(request.input[0].role, "system");
+      res.end(JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }] }));
+    } else {
+      res.end(JSON.stringify(req.url === "/v1/models"
+        ? { data: [{ id: "bonsai" }] }
+        : { model_alias: "bonsai", modalities: { vision: false } }));
+    }
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  onTestFinished(() => { server.closeAllConnections(); server.close(); });
+  const upstream = `http://127.0.0.1:${server.address().port}/v1`;
+  await assert.rejects(discoverModelCatalog(upstream, catalogTemplate), /HTTP 401/);
+  const catalog = await discoverModelCatalog(upstream, catalogTemplate, "fixture-key");
+  assert.deepEqual(catalog.models[0].input_modalities, ["text"]);
+  const bridge = await startBridge(upstream, "fixture-key");
+  onTestFinished(() => { bridge.closeAllConnections(); bridge.close(); });
+  const response = await fetch(`http://127.0.0.1:${bridge.address().port}/v1/responses`, {
+    method: "POST",
+    headers: { Authorization: "Bearer unrelated-client-key" },
+    body: JSON.stringify({ instructions: "Reply OK", input: [{ role: "developer", content: "Use one system message" }] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).output[0].content[0].text, "OK");
+  for (const endpoint of ["/v1/models", "/props", "/v1/responses"]) {
+    assert.ok(seen.some(([url, authorization]) => url === endpoint && authorization === "Bearer fixture-key"));
+  }
+  assert.ok(!seen.some(([, authorization]) => authorization === "Bearer unrelated-client-key"));
+});
+
 test("removes stale image support when the loaded server is text-only", async () => {
   const { upstream } = await metadataServer({ props: { model_alias: "bonsai", modalities: { vision: false } } });
   const result = await discoverModelCatalog(upstream, { models: [{ ...catalogTemplate.models[0], input_modalities: ["text", "image"] }] });
