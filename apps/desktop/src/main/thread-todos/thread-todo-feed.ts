@@ -52,7 +52,7 @@ export class ThreadTodoFeed {
   private readonly scheduled = new Set<string>();
   /** Owner thread key → title, from the last listing. */
   private owners = new Map<string, string | undefined>();
-  /** Thread keys with cards when the last listing was read; it found no owner for them. */
+  /** Thread keys that had cards when the listing was last read. */
   private listed = new Set<string>();
   /** Open cards per thread key, before owner filtering. */
   private readonly cards = new Map<string, ThreadTodo[]>();
