@@ -43,6 +43,8 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   modelProviderForThread: "provider",
   readThreadPricingSnapshot: "threadId",
   readThreadTurn: "thread",
+  readThreadToolInvocation: "thread",
+  readTurnRoot: "thread",
   readThreadActivity: "thread",
   readThreadName: "threadId",
   readThreadSummary: "threadId",
@@ -85,6 +87,7 @@ const READ_ONLY = new Set<Method>([
   "readArchiveCleanupThreadSummary", "readThreadPricingSnapshot", "readThreadTurn", "readThreadActivity",
   "readThreadName", "readThreadSummary", "readThread", "readThreadModelSettings", "exportThreadForHandoff",
   "listBackgroundTerminals",
+  "readThreadToolInvocation", "readTurnRoot",
 ]);
 
 /** Independent clients own their processes, caches, turn state, recovery and RPC IDs. */

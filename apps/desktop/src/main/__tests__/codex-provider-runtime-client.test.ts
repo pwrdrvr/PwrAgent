@@ -25,6 +25,8 @@ function fixture() {
     startRealtime: vi.fn(async () => undefined),
     readThreadSummary: vi.fn(async () => ({ id: "persisted" })),
     readThread: vi.fn(async () => ({ entries: [] })),
+    readThreadToolInvocation: vi.fn(async () => []),
+    readTurnRoot: vi.fn(async () => "root-turn"),
     listThreads: vi.fn(async () => []),
     listMcpServers: vi.fn(async () => []),
     recoverInvalidPersistedResponseMessageIds: vi.fn(async () => ({})),
@@ -145,6 +147,29 @@ describe("provider-specific Codex runtimes", () => {
     await client.startTurn({ threadId: "persisted", input: [] });
     await client.readThread({ threadId: "persisted" });
     expect(local.raw.readThread).toHaveBeenCalledOnce();
+  });
+
+  it("routes tool details and turn ancestry through history fallback, then their live owner", async () => {
+    const { primary, local, create, client } = setup();
+    primary.providers.set("persisted", "bonsai");
+    const turn = { threadId: "persisted", turnId: "turn" };
+    const invocation = { ...turn, itemId: "command" };
+    await client.readThreadToolInvocation(invocation);
+    await client.readTurnRoot(turn);
+    expect(primary.raw.readThreadToolInvocation).toHaveBeenCalledWith(invocation);
+    expect(primary.raw.readTurnRoot).toHaveBeenCalledWith(turn);
+    expect(create).not.toHaveBeenCalled();
+    await client.startTurn({ threadId: "persisted", input: [] });
+    await client.readThreadToolInvocation(invocation);
+    await client.readTurnRoot(turn);
+    expect(local.raw.readThreadToolInvocation).toHaveBeenCalledExactlyOnceWith(invocation);
+    expect(local.raw.readTurnRoot).toHaveBeenCalledExactlyOnceWith(turn);
+    await client.readThreadToolInvocation({ ...invocation, threadId: "openai-thread" });
+    await client.readTurnRoot({ ...turn, threadId: "openai-thread" });
+    expect(primary.raw.readThreadToolInvocation).toHaveBeenLastCalledWith({ ...invocation, threadId: "openai-thread" });
+    expect(primary.raw.readTurnRoot).toHaveBeenLastCalledWith({ ...turn, threadId: "openai-thread" });
+    expect(local.raw.readThreadToolInvocation).toHaveBeenCalledOnce();
+    expect(local.raw.readTurnRoot).toHaveBeenCalledOnce();
   });
 
   it("keeps a stopped Bonsai process out of the global OpenAI restart status", async () => {
