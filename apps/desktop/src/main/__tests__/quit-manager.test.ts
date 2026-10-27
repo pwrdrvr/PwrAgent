@@ -61,6 +61,32 @@ beforeEach(() => {
 });
 
 describe("createQuitManager", () => {
+  it("captures provenance once per quit prompt, without polling it on refresh", async () => {
+    const diagnostics = { sourceCounts: { "background-terminals": 1 }, contributors: [] };
+    const getBlockerDiagnostics = vi.fn(() => diagnostics);
+    const info = vi.fn();
+    let resolve!: (result: "manual-cancel") => void;
+    let refresh!: () => Promise<unknown>;
+    const confirm = vi.fn((options: Parameters<NonNullable<QuitManagerDependencies["confirm"]>>[0]) => {
+      refresh = options.refresh!;
+      return new Promise<"manual-cancel">((done) => { resolve = done; });
+    });
+    const manager = createQuitManager({
+      getConfirmationEnabled: () => true,
+      getQuitBlockers: () => ({ count: 1, threadIds: ["codex:thread-1"], terminalSessionCount: 0,
+        terminalThreadKeys: [], actionRunCount: 0, items: [] }),
+      getBlockerDiagnostics, confirm, performQuit: vi.fn(), log: { info },
+    });
+    const quit = manager.requestQuit({ source: "menu" });
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalledOnce());
+    await refresh();
+    const repeated = manager.requestQuit({ source: "menu" });
+    expect(getBlockerDiagnostics).toHaveBeenCalledOnce();
+    expect(info).toHaveBeenCalledWith("quit blocker provenance", { diagnostics: JSON.stringify(diagnostics) });
+    resolve("manual-cancel");
+    await Promise.all([quit, repeated]);
+  });
+
   it("prompts for cleanup-only work and refreshes its pending count", async () => {
     const { buildQuitBlockerSnapshot } = await import("../quit-manager");
     let count = 130;

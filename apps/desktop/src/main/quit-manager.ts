@@ -89,6 +89,8 @@ export type QuitManagerDependencies = {
   commitShutdown?: () => void;
   getConfirmationEnabled: () => boolean;
   getQuitBlockers: () => QuitBlockerSnapshot;
+  /** Bounded registry provenance, captured only for a new quit request. */
+  getBlockerDiagnostics?: () => unknown;
   /** Hold new automation launches until quitting proceeds or the prompt closes. */
   quiesceAutomationDispatch?: () => () => Promise<void> | void;
   /**
@@ -155,6 +157,16 @@ export function createQuitManager(
       quitAllowed = true;
       (options.performQuit ?? dependencies.performQuit)();
       return true;
+    }
+
+    if (!promptPromise && dependencies.getBlockerDiagnostics) {
+      try {
+        dependencies.log.info?.("quit blocker provenance", {
+          diagnostics: JSON.stringify(dependencies.getBlockerDiagnostics()),
+        });
+      } catch {
+        dependencies.log.warn?.("quit blocker provenance unavailable");
+      }
     }
 
     if (!dependencies.getConfirmationEnabled() && federationPeerCount === 0) {
@@ -695,6 +707,7 @@ export const appQuitManager = createQuitManager({
   getConfirmationEnabled: () =>
     getDesktopSettingsService().resolveConfirmQuitWithInProgressThreads(),
   getQuitBlockers: getCurrentQuitBlockers,
+  getBlockerDiagnostics: () => getDesktopBackendRegistry().getQuitBlockerDiagnostics(),
   quiesceAutomationDispatch: () =>
     getDesktopAutomationService().quiesceDispatch(),
   // Map/store reads only, no peer round trip. Names remembered from peer
