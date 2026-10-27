@@ -154,7 +154,8 @@ export function registerThreadTodoIpcHandlers(options: {
     runAction: THREAD_TODOS_RUN_ACTION_CHANNEL, listProjects: THREAD_TODOS_LIST_PROJECTS_CHANNEL,
     setItemChecked: THREAD_TODOS_SET_ITEM_CHECKED_CHANNEL, setProject: THREAD_TODOS_SET_PROJECT_CHANNEL,
   } as const;
-  for (const operation of Object.keys(channels) as ThreadTodoOperation[]) {
+  // The feed snapshot has its own per-window channel above.
+  for (const operation of Object.keys(channels) as Array<keyof typeof channels & ThreadTodoOperation>) {
     ipcMain.removeHandler(channels[operation]);
     ipcMain.handle(channels[operation], (event, request = {}) => service.request(
       operation, request, federationTargetForChannelSubscriber(event.sender),

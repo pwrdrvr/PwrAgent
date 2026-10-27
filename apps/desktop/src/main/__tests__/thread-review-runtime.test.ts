@@ -40,7 +40,8 @@ describe("review tracking runtime eligibility", () => {
       onEvent: (listener: typeof onEvent) => { onEvent = listener; return () => {}; },
       setPwrAgentThreadTodoHandler: (value: PwrAgentThreadTodoHandler) => { handler = value; },
     } as unknown as DesktopBackendRegistry;
-    installThreadTodoRuntime({ registry, broadcast, listProjects: async () => [], readDefaultMergeMethod: () => "squash" });
+    installThreadTodoRuntime({ registry, broadcast, listProjects: async () => [], readDefaultMergeMethod: () => "squash",
+      feed: { loadOwners: async () => [], managedThreadKeys: () => new Set(), onDelta: () => {} } });
   }
 
   function complete(id: string, withPr = false) {

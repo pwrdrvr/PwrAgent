@@ -20,6 +20,7 @@ function operations() {
     listProjects: vi.fn(async (_request?: unknown) => ({ projects: [] })),
     setItemChecked: vi.fn((_request?: unknown) => ({ todo: card })),
     setProject: vi.fn(async (_request?: unknown) => ({ todo: card })),
+    snapshotFeed: vi.fn(async (_request?: unknown) => ({ epoch: "owner", revision: 0, todos: [card] })),
   };
 }
 
