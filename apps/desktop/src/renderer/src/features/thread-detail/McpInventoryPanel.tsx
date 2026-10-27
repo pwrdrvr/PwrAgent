@@ -163,40 +163,40 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
           {/* Claude reads its config as each turn starts; only Codex queues
               a reload. */}
           {isClaude ? null : (
-          <button
-            type="button"
-            className={
-              `mcp-inventory-panel__reload${
-                reloadConfirmed
-                  ? " mcp-inventory-panel__reload--success"
-                  : ""
-              }`
-            }
-            aria-describedby={
-              reloadTooltip.visible ? reloadTooltip.tooltipId : undefined
-            }
-            disabled={
-              reloading
-              || reloadConfirmed
-              || !props.desktopApi?.reloadCodexMcpConfig
-            }
-            onClick={() => void reloadConfig()}
-            onMouseEnter={(event) =>
-              reloadTooltip.show(event.currentTarget, RELOAD_TOOLTIP)
-            }
-            onMouseLeave={reloadTooltip.hide}
-            onFocus={(event) =>
-              reloadTooltip.show(event.currentTarget, RELOAD_TOOLTIP)
-            }
-            onBlur={reloadTooltip.hide}
-          >
-            {reloadConfirmed ? (
-              <>
-                <CheckIcon size={12} aria-hidden="true" />
-                Reload queued
-              </>
-            ) : reloading ? "Reloading…" : "Reload Config"}
-          </button>
+            <button
+              type="button"
+              className={
+                `mcp-inventory-panel__reload${
+                  reloadConfirmed
+                    ? " mcp-inventory-panel__reload--success"
+                    : ""
+                }`
+              }
+              aria-describedby={
+                reloadTooltip.visible ? reloadTooltip.tooltipId : undefined
+              }
+              disabled={
+                reloading
+                || reloadConfirmed
+                || !props.desktopApi?.reloadCodexMcpConfig
+              }
+              onClick={() => void reloadConfig()}
+              onMouseEnter={(event) =>
+                reloadTooltip.show(event.currentTarget, RELOAD_TOOLTIP)
+              }
+              onMouseLeave={reloadTooltip.hide}
+              onFocus={(event) =>
+                reloadTooltip.show(event.currentTarget, RELOAD_TOOLTIP)
+              }
+              onBlur={reloadTooltip.hide}
+            >
+              {reloadConfirmed ? (
+                <>
+                  <CheckIcon size={12} aria-hidden="true" />
+                  Reload queued
+                </>
+              ) : reloading ? "Reloading…" : "Reload Config"}
+            </button>
           )}
           {reloadTooltip.tooltipNode}
           <button

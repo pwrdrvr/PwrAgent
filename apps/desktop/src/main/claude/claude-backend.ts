@@ -414,6 +414,7 @@ export class ClaudeBackend {
   // commands and skills differ by folder, so the folder is the key.
   private readonly commandsByCwd = new Map<string, AppServerAvailableCommandSummary[]>();
   private readonly commandProbes = new Map<string, Promise<AppServerAvailableCommandSummary[]>>();
+  private readonly mcpServerProbes = new Map<string, Promise<McpServerStatus[]>>();
   private readonly commandProbeRetryAt = new Map<string, number>();
   private terminalCommands = new Set(CLAUDE_TERMINAL_COMMANDS_SEED);
 
@@ -1803,10 +1804,23 @@ export class ClaudeBackend {
     if (query) {
       servers = await query.mcpServerStatus();
     } else {
-      const { cwd } = await this.store.read(threadId);
-      const executable = await this.requireInstallation();
-      const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
-      servers = await (this.options.readMcpServers ?? readClaudeMcpServerStatus)({ executable, env, cwd });
+      // Share a probe already in flight, so reopening the panel does not
+      // start another Claude Code process and another set of MCP servers.
+      let probe = this.mcpServerProbes.get(threadId);
+      if (!probe) {
+        probe = (async () => {
+          try {
+            const { cwd } = await this.store.read(threadId);
+            const executable = await this.requireInstallation();
+            const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+            return await (this.options.readMcpServers ?? readClaudeMcpServerStatus)({ executable, env, cwd });
+          } finally {
+            this.mcpServerProbes.delete(threadId);
+          }
+        })();
+        this.mcpServerProbes.set(threadId, probe);
+      }
+      servers = await probe;
     }
     return servers.map((server) => ({
       name: server.name,
