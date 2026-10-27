@@ -9547,12 +9547,15 @@ export class DesktopBackendRegistry {
   async readCausalMessagingContext(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<
     Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">
   > {
-    if (!context.turnId || !this.overlayStore.readThreadMessageOrigins) return {};
-    const messageId = buildTurnUserMessageOriginId(context.turnId);
-    const origins = await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [messageId] });
-    const origin = origins[messageId];
+    const origin = await this.readExactTurnMessageOrigin(context);
     return { ...(origin?.causalMessagingSource ? { causalMessagingSource: origin.causalMessagingSource } : {}),
       ...(origin?.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}) };
+  }
+
+  private async readExactTurnMessageOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<AppServerThreadMessageOrigin | undefined> {
+    if (!context.turnId || !this.overlayStore.readThreadMessageOrigins) return undefined;
+    const messageId = buildTurnUserMessageOriginId(context.turnId);
+    return (await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [messageId] }))[messageId];
   }
 
   private forgeReadHandler?: ForgeReadHandler;
@@ -23730,12 +23733,12 @@ export class DesktopBackendRegistry {
     try {
       const result = await promise;
       if (result.disposition === "steered" && messageOrigin) {
-        const previous = await this.readCausalMessagingContext({ backend: params.backend, threadId: params.threadId, turnId: result.turnId });
-        if (previous.causalMessagingSource || previous.causalMessagingAmbiguous
+        const previous = await this.readExactTurnMessageOrigin({ backend: params.backend, threadId: params.threadId, turnId: result.turnId });
+        if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
           || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
           await this.persistThreadMessageOrigin({ backend: params.backend, threadId: params.threadId,
             messageId: buildTurnUserMessageOriginId(result.turnId),
-            origin: { ...messageOrigin, ...mergeCausalMessagingContext([{ kind: "agent", ...previous }, messageOrigin]) } });
+            origin: { ...(previous ?? messageOrigin), ...mergeCausalMessagingContext([previous, messageOrigin]) } });
         }
       }
       return result;

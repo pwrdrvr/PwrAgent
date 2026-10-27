@@ -250,8 +250,8 @@ jobs:
           UPDATE_SQLITE_WRITE_BUDGETS: "1"
         run: |
           provenance_test_status=0
-          pnpm test apps/desktop/src/main/__tests__/messaging-request-store.test.ts || provenance_test_status=$?
-          node -e 'const b = require("./apps/desktop/src/main/__tests__/fixtures/sqlite-write-budgets.json"); console.log("CAUSAL_MESSAGING_BUDGET=" + JSON.stringify(b["messaging-causal-request-and-attachment"]));'
+          pnpm test apps/desktop/src/main/__tests__/messaging-request-store.test.ts apps/desktop/src/main/__tests__/sqlite-write-metrics.test.ts -t "causal messaging" || provenance_test_status=$?
+          node -e 'const b = require("./apps/desktop/src/main/__tests__/fixtures/sqlite-write-budgets.json"); console.log("CAUSAL_MESSAGING_BUDGET=" + JSON.stringify(Object.fromEntries(Object.entries(b).filter(([key]) => key.startsWith("messaging-causal-")))));'
           exit "$provenance_test_status"
 
       - name: Test
