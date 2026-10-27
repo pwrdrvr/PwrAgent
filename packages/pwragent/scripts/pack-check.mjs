@@ -17,7 +17,7 @@ try {
   mkdirSync(output, { recursive: true });
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   releaseMetadata(pkg);
-  const [packed] = JSON.parse(run("npm", ["pack", "--json", "--pack-destination", temporary], { cwd: root }));
+  const [packed] = JSON.parse(run("npm", ["pack", "--json", "--foreground-scripts=false", "--pack-destination", temporary], { cwd: root }));
   const tarball = path.join(temporary, packed.filename);
   const files = new Set(packed.files.map((file) => file.path));
   for (const required of ["package.json", "bin/pwragent.js", "src/cli.js", "src/daemon.js",
