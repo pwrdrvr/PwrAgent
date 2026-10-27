@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { tolerateTransientRpcFailure } from "./fixtures/transient-rpc-poll";
 
 const run = promisify(execFile);
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -61,11 +62,20 @@ test.describe("native macOS window activation", () => {
       for (const mode of ["activate", "reopen"]) {
         for (const [target, nativeId] of [[ids.local, ids.nativeLocal], [ids.viewer, ids.nativeViewer]]) {
           await fixture.electronApp.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.focus(), target!);
-          await expect.poll(() => fixture.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.id)).toBe(target);
+          const selected = tolerateTransientRpcFailure(() =>
+            fixture.electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.id),
+          );
+          await expect.poll(selected.read).toBe(target).catch(selected.rethrowWithLastFailure);
           await native("activate", String(finderPid));
-          await expect.poll(() => fixture.electronApp.evaluate(({ app }) => app.isActive())).toBe(false);
+          const inactive = tolerateTransientRpcFailure(() =>
+            fixture.electronApp.evaluate(({ app }) => app.isActive()),
+          );
+          await expect.poll(inactive.read).toBe(false).catch(inactive.rethrowWithLastFailure);
           await native(mode, String(pid));
-          await expect.poll(() => fixture.electronApp.evaluate(({ app }) => app.isActive())).toBe(true);
+          const active = tolerateTransientRpcFailure(() =>
+            fixture.electronApp.evaluate(({ app }) => app.isActive()),
+          );
+          await expect.poll(active.read).toBe(true).catch(active.rethrowWithLastFailure);
           const state = await fixture.electronApp.evaluate(async ({ BrowserWindow, Menu }) => {
             // Drain posted menu installation tasks before inspecting key state.
             await new Promise<void>((resolve) => setImmediate(resolve));
