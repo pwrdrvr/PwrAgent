@@ -31,6 +31,8 @@ import {
 } from "./pty-resize";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { resolveBundledClaudeExecutable } from "../claude/claude-bundled-executable";
+import { resolveClaudeExecutable } from "../claude/claude-executable";
 import { resolvePwragentRoot } from "../profile";
 import { terminalHasForegroundCommand } from "./terminal-foreground-command";
 import { isWithinWorktree } from "./worktree-terminals";
@@ -985,8 +987,15 @@ export async function spawnTerminalPty(params: {
 }): Promise<SpawnedTerminalPty> {
   const platform = params.platform ?? process.platform;
   const settings = getDesktopSettingsService();
-  const runtimeCommands = settings.resolveIntegratedTerminalCommands();
   const baseEnv = await settings.resolveTerminalSpawnEnvAsync();
+  const bundledClaude = await resolveTerminalBundledClaudeCommand(
+    baseEnv,
+    platform,
+  );
+  const runtimeCommands = [
+    ...settings.resolveIntegratedTerminalCommands(),
+    ...(bundledClaude ? [bundledClaude] : []),
+  ];
   let env = prependIntegratedTerminalRuntimePaths(
     baseEnv,
     runtimeCommands,
@@ -1015,6 +1024,19 @@ export async function spawnTerminalPty(params: {
     }),
   });
   return { pty, cwd, shell };
+}
+
+/**
+ * PwrAgent's bundled Claude Code CLI, for a terminal that has no `claude` of
+ * its own. A Claude Code the operator installed always wins, so the bundled
+ * copy is offered only when the same search the Claude backend runs finds none.
+ */
+async function resolveTerminalBundledClaudeCommand(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): Promise<string | undefined> {
+  if (await resolveClaudeExecutable({ env, platform })) return undefined;
+  return await resolveBundledClaudeExecutable({ platform });
 }
 
 export function prependIntegratedTerminalRuntimePaths(
