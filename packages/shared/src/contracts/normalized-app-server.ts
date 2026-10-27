@@ -687,6 +687,10 @@ export type AppServerThreadMessageOriginKind =
 
 export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
+  /** Host-owned causal source. A continuation keeps its own kind; this is not a new human message. */
+  causalMessagingSource?: MessagingCausalSourceRef;
+  /** Grouped inputs with different sources must never acquire last-writer attachment authority. */
+  causalMessagingAmbiguous?: boolean;
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence";
@@ -737,6 +741,16 @@ export type AppServerThreadMessageOrigin = {
     eventKinds?: ThreadPrAutoDispatchEventKind[];
     outcome?: "success" | "failure" | "merged" | "closed";
   };
+};
+
+export type MessagingCausalSourceRef = {
+  /** Opaque profile-database identity, distinct even for profiles sharing a harness. */
+  ownerId: string;
+  requestId: string;
+  /** Stable actor/agent/surface scope, used only to detect conflicting grouped inputs. */
+  surfaceSelector?: string;
+  /** Messaging owner, which can differ from the thread owner. */
+  instanceId?: FederationInstanceId;
 };
 
 export type AppServerThreadTextPart = {

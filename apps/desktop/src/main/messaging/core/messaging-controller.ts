@@ -81,6 +81,7 @@ import type {
   PwrAgentMessagingOutboundAttachmentSummary,
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
+  ListMessagingSurfacesResult,
   NavigationDirectorySummary,
   NavigationLaunchpadDraft,
   NavigationLaunchpadConfiguration,
@@ -95,6 +96,7 @@ import type {
   UpdateDirectoryLaunchpadRequest,
 } from "@pwragent/shared";
 import type { MessagingRbacPolicyProvider } from "../rbac-policy-service";
+import type { MessagingRequestSource, MessagingRequestStore } from "../../state/messaging-request-store";
 import type {
   MessagingBindingRecord,
   MessagingCallbackHandleRecord,
@@ -524,6 +526,7 @@ type AutomationTurnMessagingContext = {
 };
 
 type ActiveAgentMessagingOrigin = {
+  source?: MessagingRequestSource;
   binding?: MessagingBindingRecord;
   deliveryBinding?: MessagingBindingRecord;
   event: MessagingInboundEvent;
@@ -948,6 +951,8 @@ type MessagingCancellationSignal = MessagingDeliveryGuard & {
 };
 
 export type MessagingControllerOptions = {
+  requestStore?: MessagingRequestStore;
+  sourceInstanceId?: string;
   adapter: MessagingAdapter;
   authorizedActorIds: string[];
   /**
@@ -1206,6 +1211,10 @@ export class MessagingController {
     request: PwrAgentMessagingRequest,
   ): Promise<PwrAgentMessagingResponse> {
     switch (request.operation) {
+      case "list_messaging_surfaces":
+        return await this.listRetainedMessagingSurfaces(request);
+      case "attach_thread_to_surface":
+        return await this.attachThreadToRetainedSurface(request);
       case "get_current_location":
       case "get_current_messaging_surface": {
         const origin = await this.resolveAgentMessagingOrigin(request.context);
@@ -2798,7 +2807,7 @@ export class MessagingController {
       displayText: parsed.text,
       turn: {
         input: [{ type: "text", text: parsed.text }],
-        messageOrigin: messageOriginForInboundEvent(event),
+        messageOrigin: messageOriginForInboundEvent(event, this.rememberHumanMessagingSource(binding, event)?.ref),
       },
     });
     const failureMessage = scheduledActionFailureMessage(response.action);
@@ -4301,6 +4310,7 @@ export class MessagingController {
       if (this.privateReplyClaims.has(requestId)) return false;
       rememberBoundedKey(this.privateReplyClaims, requestId);
     }
+    this.rememberHumanMessagingSource(params.binding, params.event);
     this.markAdmissionStage(params.event, "routed");
     const startedAt = this.now();
     try {
@@ -5176,7 +5186,7 @@ export class MessagingController {
         federationTarget: federationTargetForBinding(params.binding),
         threadId: params.binding.threadId,
         input: params.input,
-        messageOrigin: messageOriginForInboundEvent(params.event),
+        messageOrigin: messageOriginForInboundEvent(params.event, startingOrigin?.source?.ref),
         ...turnSettings,
       });
       const startTurnAcceptedAt = this.now();
@@ -5549,7 +5559,7 @@ export class MessagingController {
         expectedTurnId: activeTurn.turnId,
         input: entry.input,
         requestId: entry.id,
-        messageOrigin: messageOriginForInboundEvent(entry.event),
+        messageOrigin: messageOriginForInboundEvent(entry.event, entry.event ? this.rememberHumanMessagingSource(entry.binding, entry.event)?.ref : undefined),
       });
     } catch (error) {
       await this.deliver(
@@ -6902,7 +6912,7 @@ export class MessagingController {
             expectedTurnId: activeTurn.turnId,
             input,
             requestId: this.newIntentId("async-question-reply"),
-            messageOrigin: messageOriginForInboundEvent(event),
+            messageOrigin: messageOriginForInboundEvent(event, this.rememberHumanMessagingSource(binding, event)?.ref),
           });
           return true;
         } catch (error) {
@@ -12591,6 +12601,7 @@ export class MessagingController {
       );
       return;
     }
+    this.rememberHumanMessagingSource(binding, event);
 
     if (actionId === "status:refresh" || actionId === "handoff:back-to-status") {
       if (
@@ -16462,6 +16473,7 @@ export class MessagingController {
       params.event
       && isLiveMessagingToolOriginBinding(params.binding, params.navigation)
         ? {
+            source: this.rememberHumanMessagingSource(params.binding, params.event),
             binding: isDefaultAgentRouteBinding(params.binding)
               ? undefined
               : params.binding,
@@ -16520,6 +16532,7 @@ export class MessagingController {
       };
     }
     return {
+      source: this.rememberHumanMessagingSource(params.binding, params.event),
       binding: isDefaultAgentRouteBinding(params.binding)
         ? undefined
         : params.binding,
@@ -16529,6 +16542,15 @@ export class MessagingController {
       event: params.event,
       privateResponseRequested: params.privateResponseRequested,
     };
+  }
+
+  private rememberHumanMessagingSource(binding: MessagingBindingRecord, event: MessagingInboundEvent): MessagingRequestSource | undefined {
+    if (!this.options.adapter.authorizeRetainedSource) return undefined;
+    return this.options.requestStore?.remember({
+      agent: { backend: binding.backend, threadId: binding.threadId },
+      bindingId: isDefaultAgentRouteBinding(binding) ? undefined : binding.id,
+      event, instanceId: this.options.sourceInstanceId,
+    });
   }
 
   private async resolvePrivateReplySourceBinding(
@@ -16750,6 +16772,7 @@ export class MessagingController {
       params.event
       && isLiveMessagingToolOriginBinding(params.binding, params.navigation)
         ? {
+            source: this.rememberHumanMessagingSource(params.binding, params.event),
             binding: isDefaultAgentRouteBinding(params.binding)
               ? undefined
               : params.binding,
@@ -18222,8 +18245,170 @@ export class MessagingController {
     );
   }
 
+  private retainedRequestSource(context: PwrAgentMessagingRequest["context"]): MessagingRequestSource | undefined {
+    if (context.causalMessagingAmbiguous) return undefined;
+    if (context.causalMessagingSource) return this.options.requestStore?.get(context.causalMessagingSource);
+    if (!context.turnId) return undefined;
+    return this.activeAgentMessagingOriginsByTurnKey.get(
+      agentMessagingTurnKey(context.backend, context.threadId, context.turnId),
+    )?.source;
+  }
+
+  private retainedRequestCanCrossInstance(context: PwrAgentMessagingRequest["context"], source: MessagingRequestSource): boolean {
+    return !context.requestingInstanceId || this.actorHasPermission(source.event, "federation.remote_control");
+  }
+
+  private async retainedSourceIsAuthorized(source: MessagingRequestSource, verifyAccess = true): Promise<boolean | undefined> {
+    if (!this.isChannelInScope(source.event.channel)
+      || !this.options.adapter.authorizeRetainedSource) return false;
+    const providerAdmission = await this.options.adapter.authorizeRetainedSource(source.event, verifyAccess);
+    if (providerAdmission !== true) return providerAdmission;
+    if (source.bindingId) {
+      const binding = await this.options.store.findActiveBindingForChannel(source.event.channel);
+      if (!binding || binding.revokedAt || binding.backend !== source.agent.backend
+        || binding.id !== source.bindingId || binding.threadId !== source.agent.threadId) return false;
+    } else {
+      // The effective default route, not any older broader matching assignment,
+      // must still name the Agent that admitted this human request.
+      const assignment = await this.options.store.findActiveDefaultAgentAssignmentForChannel(source.event.channel);
+      if (!assignment || assignment.target.backend !== source.agent.backend
+        || assignment.target.threadId !== source.agent.threadId) return false;
+    }
+    return true;
+  }
+
+  private retainedSourceHasPermissions(source: MessagingRequestSource): boolean {
+    const permissions = this.resolveActorPermissions(source.event);
+    return permissions === null || (["thread.resume", "tools.thread_inspection"] as const)
+      .every((permission) => permissions.permissions.has(permission));
+  }
+
+  private retainedSourceUnavailable(context: PwrAgentMessagingRequest["context"]): PwrAgentMessagingResponse {
+    return { ok: false, error: {
+      code: context.causalMessagingAmbiguous ? "ambiguous_location" : "forbidden",
+      message: context.causalMessagingAmbiguous
+        ? "This turn combines different causal messaging requests; choose a separately attributable request before attaching."
+        : "No currently authorized human messaging request is available for this operation. Saved bindings do not establish the requesting actor.",
+    } };
+  }
+
+  private async listRetainedMessagingSurfaces(
+    request: Extract<PwrAgentMessagingRequest, { operation: "list_messaging_surfaces" }>,
+  ): Promise<PwrAgentMessagingResponse> {
+    const source = this.retainedRequestSource(request.context);
+    if (!source || !this.retainedRequestCanCrossInstance(request.context, source) || !this.options.requestStore || !this.retainedSourceHasPermissions(source)
+      || !await this.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(request.context);
+    if (!isAppServerBackendKind(request.args.backend) || !request.args.threadId?.trim()
+      || (request.args.limit !== undefined && (!Number.isInteger(request.args.limit) || request.args.limit < 1 || request.args.limit > 25))) {
+      return { ok: false, error: { code: "invalid_arguments", message: "Provide a target backend/threadId and a limit between 1 and 25." } };
+    }
+    const target = await this.resolveAttachTarget({ ...request.args, includeRemote: request.args.includeRemote !== false });
+    if (!target.ok) return target;
+    let before: { at: number; selector: string } | undefined;
+    if (request.args.cursor) {
+      try {
+        if (request.args.cursor.length > 512) throw new Error("oversized cursor");
+        const cursor = JSON.parse(Buffer.from(request.args.cursor, "base64url").toString("utf8")) as { scope: string; at: number; selector: string };
+        if (cursor.scope !== source.principalScope || !Number.isSafeInteger(cursor.at) || !/^[a-f0-9]{64}$/.test(cursor.selector)) throw new Error("invalid cursor");
+        before = cursor;
+      } catch {
+        return { ok: false, error: { code: "invalid_arguments", message: "Use an unmodified nextCursor from this request's destination listing." } };
+      }
+    }
+    const limit = request.args.limit ?? 25;
+    const candidates = this.options.requestStore.list(source, limit + 1, before);
+    const page = candidates.slice(0, limit);
+    const result: ListMessagingSurfacesResult = {
+      surfaces: [], eligibleCount: null, countIsComplete: !before && candidates.length <= limit,
+      selectionReason: "unavailable",
+    };
+    for (const candidate of page) {
+      if (!this.retainedSourceHasPermissions(candidate)) continue;
+      const authorized = await this.retainedSourceIsAuthorized(candidate);
+      if (authorized === undefined) result.countIsComplete = false;
+      if (!authorized) continue;
+      // Use the immutable request's reply anchor for its causal destination,
+      // even if a later human interaction updated this surface's summary.
+      const selected = candidate.selector === source.selector ? source : candidate;
+      const origin = await this.originForRetainedSource(selected);
+      const location = await this.summarizeAgentMessagingLocation(origin, { navigation: { kind: "thread", thread: target.thread } });
+      if (location.managedConversation.outcome === "failed") result.countIsComplete = false;
+      if (!this.resolveAttachPlacement({ location, origin, placement: request.args.placement ?? "auto" }).ok) continue;
+      result.surfaces.push({ surfaceSelector: candidate.selector, location,
+        revision: selected.ref.requestId,
+        lastUserInteractionAt: candidate.event.receivedAt, route: candidate.route,
+        provenance: candidate.selector === source.selector ? "causal_request" : "last_human_interaction" });
+    }
+    if (result.countIsComplete) result.eligibleCount = result.surfaces.length;
+    if (candidates.length > limit && page.length) {
+      const last = page[page.length - 1]!;
+      result.nextCursor = Buffer.from(JSON.stringify({ scope: source.principalScope,
+        at: last.event.receivedAt, selector: last.selector })).toString("base64url");
+    }
+    // Recommendation does not reorder the human-recency list and does not
+    // require enumerating every surface on the normal causal attach path.
+    const origin = await this.originForRetainedSource(source);
+    const location = await this.summarizeAgentMessagingLocation(origin, { navigation: { kind: "thread", thread: target.thread } });
+    if (this.resolveAttachPlacement({ location, origin, placement: request.args.placement ?? "auto" }).ok) {
+      result.recommendedSurfaceSelector = source.selector;
+      result.selectionReason = "causal_request";
+    } else if (result.surfaces.length) {
+      result.selectionReason = "ambiguous";
+    } else if (result.countIsComplete) result.selectionReason = "none";
+    return { ok: true, data: result };
+  }
+
+  private async originForRetainedSource(source: MessagingRequestSource): Promise<ActiveAgentMessagingOrigin> {
+    return { source, event: source.event,
+      binding: source.bindingId ? await this.options.store.getBinding(source.bindingId) : undefined };
+  }
+
+  private async attachThreadToRetainedSurface(
+    request: Extract<PwrAgentMessagingRequest, { operation: "attach_thread_to_surface" }>,
+  ): Promise<PwrAgentMessagingResponse> {
+    const source = this.retainedRequestSource(request.context);
+    if (!source || !this.retainedRequestCanCrossInstance(request.context, source) || !this.retainedSourceHasPermissions(source)
+      || !await this.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(request.context);
+    const selector = request.args.surfaceSelector;
+    const selected = !selector || selector === source.selector ? source
+      : this.options.requestStore?.destination(source, selector);
+    if (!selected || !this.retainedSourceHasPermissions(selected)
+      || !await this.retainedSourceIsAuthorized(selected)) return this.retainedSourceUnavailable(request.context);
+    if (request.args.expectedRevision && request.args.expectedRevision !== selected.ref.requestId) {
+      return { ok: false, error: { code: "forbidden", message: "The selected destination's human reply anchor changed. Inspect its current revision before attaching." } };
+    }
+    if (request.args.idempotencyKey !== undefined && (typeof request.args.idempotencyKey !== "string"
+      || !request.args.idempotencyKey || request.args.idempotencyKey.length > 128)) {
+      return { ok: false, error: { code: "invalid_arguments", message: "idempotencyKey must contain 1 to 128 characters." } };
+    }
+    const claim = this.options.requestStore?.claimAttachment([source.ref.requestId, selected.selector,
+      request.args.backend, request.args.threadId, request.args.instanceId ?? null,
+      request.args.placement ?? "auto", request.args.targetKind ?? "thread", request.args.title ?? null,
+      request.args.idempotencyKey ?? null]);
+    if (!claim) return this.retainedSourceUnavailable(request.context);
+    if (!claim.claimed) return claim.result ?? { ok: false, error: { code: "internal_error",
+      message: "This attachment was already claimed and its provider outcome is unresolved. Reconcile it before retrying; no second conversation was created." } };
+    const result = await this.attachThreadHereFromAgentMessagingOrigin({
+      operation: "attach_thread_here", context: request.context, args: request.args,
+    }, await this.originForRetainedSource(selected));
+    this.options.requestStore!.finishAttachment(claim.id, result);
+    return result;
+  }
+
+  async authorizeRetainedTool(
+    context: PwrAgentMessagingRequest["context"],
+    check: Parameters<MessagingController["checkDynamicToolPermission"]>[0],
+  ): Promise<{ owns: boolean; allowed: boolean; permission?: string }> {
+    const source = this.retainedRequestSource(context);
+    if (!source || !this.isChannelInScope(source.event.channel)) return { owns: false, allowed: false };
+    if (!this.retainedRequestCanCrossInstance(context, source)) return { owns: true, allowed: false, permission: "federation.remote_control" };
+    if (!await this.retainedSourceIsAuthorized(source, false)) return { owns: true, allowed: false, permission: "message.reply" };
+    return this.checkDynamicToolPermission(check, source);
+  }
+
   private async attachThreadHereFromAgentMessagingOrigin(
     request: Extract<PwrAgentMessagingRequest, { operation: "attach_thread_here" }>,
+    retainedOrigin?: ActiveAgentMessagingOrigin,
   ): Promise<PwrAgentMessagingResponse> {
     const { args } = request;
     if (
@@ -18285,7 +18470,8 @@ export class MessagingController {
       };
     }
 
-    const origin = await this.resolveAgentMessagingOrigin(request.context);
+    const origin = retainedOrigin ? { ok: true as const, origin: retainedOrigin }
+      : await this.resolveAgentMessagingOrigin(request.context);
     if (!origin.ok) {
       return origin;
     }
@@ -18297,6 +18483,10 @@ export class MessagingController {
     });
     if (!target.ok) {
       return target;
+    }
+
+    if (!await this.requireRemoteScope(origin.origin.event, target.federatedThread?.target, "agent-attach:remote-instance", { notify: false })) {
+      return { ok: false, error: { code: "forbidden", message: "The requesting actor cannot attach a thread from this instance." } };
     }
 
     const location = await this.summarizeAgentMessagingLocation(origin.origin, {
@@ -19466,7 +19656,7 @@ export class MessagingController {
           error: {
             code: "not_found",
             message:
-              "No active messaging origin is recorded for this Agent turn.",
+              "No active messaging origin is recorded for this Agent turn. For a delegated/completion request, use list_messaging_surfaces and attach_thread_to_surface to inspect and select its retained destination.",
           },
         };
       }
@@ -20060,12 +20250,12 @@ export class MessagingController {
     category: MessagingDynamicToolCategory;
     tool: string;
     arguments?: Record<string, unknown> | null;
-  }): { owns: boolean; allowed: boolean; permission?: string } {
-    if (!params.turnId) {
+  }, source?: MessagingRequestSource): { owns: boolean; allowed: boolean; permission?: string } {
+    if (!params.turnId && !source) {
       return { owns: false, allowed: true };
     }
-    const origin = this.activeAgentMessagingOriginsByTurnKey.get(
-      agentMessagingTurnKey(params.backend, params.threadId, params.turnId),
+    const origin = source ? { event: source.event } : this.activeAgentMessagingOriginsByTurnKey.get(
+      agentMessagingTurnKey(params.backend, params.threadId, params.turnId!),
     );
     if (!origin) {
       return { owns: false, allowed: true };
@@ -23931,6 +24121,7 @@ function bindingWithInboundRoutingState(
 
 function messageOriginForInboundEvent(
   event: MessagingInboundEvent | undefined,
+  causalMessagingSource?: AppServerThreadMessageOrigin["causalMessagingSource"],
 ): AppServerThreadMessageOrigin {
   if (!event) {
     return { kind: "messaging" };
@@ -23939,6 +24130,7 @@ function messageOriginForInboundEvent(
   const conversation = event.channel.conversation;
   return {
     kind: "messaging",
+    ...(causalMessagingSource ? { causalMessagingSource } : {}),
     messaging: {
       platform: event.channel.channel,
       ...(event.sourceUrl ? { sourceUrl: event.sourceUrl } : {}),

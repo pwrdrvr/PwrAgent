@@ -244,6 +244,16 @@ jobs:
         uses: ./.github/actions/install-ripgrep
         timeout-minutes: 5
 
+      - name: Record causal messaging fixture budget
+        if: matrix.lane == 1
+        env:
+          UPDATE_SQLITE_WRITE_BUDGETS: "1"
+        run: |
+          provenance_test_status=0
+          pnpm test apps/desktop/src/main/__tests__/messaging-request-store.test.ts || provenance_test_status=$?
+          node -e 'const b = require("./apps/desktop/src/main/__tests__/fixtures/sqlite-write-budgets.json"); console.log("CAUSAL_MESSAGING_BUDGET=" + JSON.stringify(b["messaging-causal-request-and-attachment"]));'
+          exit "$provenance_test_status"
+
       - name: Test
         timeout-minutes: 10
         run: pnpm test --shard=${{ matrix.lane }}/2

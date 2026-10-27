@@ -3,6 +3,7 @@ import type {
   MessagingDynamicToolCategory,
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
+  PwrAgentMessagingContext,
   ThreadIdentifier,
 } from "@pwragent/shared";
 
@@ -29,6 +30,10 @@ export type DynamicToolPermissionResult = {
 };
 
 export type MessagingAgentToolService = {
+  authorizeRetainedTool?(
+    context: PwrAgentMessagingContext,
+    check: DynamicToolPermissionCheck,
+  ): Promise<DynamicToolPermissionResult>;
   handlePwrAgentMessagingRequest(
     request: PwrAgentMessagingRequest,
   ): Promise<PwrAgentMessagingResponse>;

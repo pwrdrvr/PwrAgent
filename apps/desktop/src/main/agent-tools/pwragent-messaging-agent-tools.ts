@@ -83,7 +83,7 @@ export function buildPwrAgentMessagingToolDefinitions(
     namespace: options.namespace ?? PWRAGENT_TOOL_NAMESPACE,
     name: operation,
     // Rendering writes page images. Only inspection and text search are read-only.
-    annotations: { readOnlyHint: ["get_current_location", "get_current_messaging_surface", "inspect_messaging_pdfs", "search_messaging_pdf_text"].includes(operation) },
+    annotations: { readOnlyHint: ["get_current_location", "get_current_messaging_surface", "list_messaging_surfaces", "inspect_messaging_pdfs", "search_messaging_pdf_text"].includes(operation) },
     description: descriptionForOperation(operation),
     inputSchema: inputSchemaForOperation(operation),
     advertise: PWRAGENT_MESSAGING_OPERATION_NAMES.includes(
@@ -128,6 +128,10 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
       return "Send a local file that is not already in the response. Use this for a rendered PDF, zip, or installer. Do not use it for an image you will embed in the final reply. Those images already go to this messaging surface. Do not use this tool to inspect a file. Requires an absolute filesystem path. Optional caption, filename, mediaKind, and private. private=true DMs the requesting user without suppressing the source reply. Call get_current_messaging_surface for this surface's outboundAttachments limits before sending a large file. Works only on the active messaging origin.";
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface. Use new_child for a native child topic when supported. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename the PwrAgent thread.";
+    case "list_messaging_surfaces":
+      return "Inspect authorized attachment destinations for the human request behind this turn, including completion and delegated turns with no active inbound origin. Pass the target backend/threadId and intended placement. Rows are newest human interaction first; the causal recommendation takes precedence over unrelated newer traffic. Counts are complete only when countIsComplete is true. Use a returned surfaceSelector with attach_thread_to_surface. This does not browse chat history.";
+    case "attach_thread_to_surface":
+      return "Attach an existing thread to an authorized messaging destination retained for this request, including after a child or monitor completes. Pass a surfaceSelector from list_messaging_surfaces, or omit it to use a verified causal or sole eligible destination. Use new_child for a native child topic; current_conversation replaces/reuses the selected binding. Permissions and routing are checked again. This does not fabricate an inbound user message or rename the target thread.";
     case "inspect_messaging_pdfs":
       return "List PDF attachments for the current messaging turn. Use this only when the initial attachment metadata is unavailable. The result contains local metadata and render limits, not PDF content. In Codex Code Mode, parse the JSON string. Native MCP clients receive the response directly.";
     case "search_messaging_pdf_text":
@@ -141,6 +145,34 @@ function inputSchemaForOperation(
   operation: PwrAgentMessagingOperationName,
 ): Record<string, unknown> {
   switch (operation) {
+    case "list_messaging_surfaces": {
+      const base = inputSchemaForOperation("attach_thread_here");
+      const properties = base.properties as Record<string, unknown>;
+      return {
+        ...base,
+        properties: {
+          backend: properties.backend,
+          threadId: properties.threadId,
+          instanceId: properties.instanceId,
+          includeRemote: properties.includeRemote,
+          placement: properties.placement,
+          limit: { type: "integer", minimum: 1, maximum: 25 },
+          cursor: { type: "string", description: "Opaque nextCursor from the previous page." },
+        },
+      };
+    }
+    case "attach_thread_to_surface": {
+      const base = inputSchemaForOperation("attach_thread_here");
+      return {
+        ...base,
+        properties: {
+          ...(base.properties as Record<string, unknown>),
+          surfaceSelector: { type: "string", description: "Authorized selector returned by list_messaging_surfaces. Omit to use the causal or sole eligible destination." },
+          expectedRevision: { type: "string", description: "Revision returned for the selected destination. A changed human reply anchor fails safely." },
+          idempotencyKey: { type: "string", maxLength: 128, description: "Optional operation key. Retries with the same key replay the outcome; omit for one attachment per causal request/target/placement." },
+        },
+      };
+    }
     case "get_current_location":
     case "get_current_messaging_surface":
       return {

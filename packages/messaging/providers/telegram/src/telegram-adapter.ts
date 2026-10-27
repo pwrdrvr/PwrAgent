@@ -1596,6 +1596,22 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
   }
 
+  async authorizeRetainedSource(event: MessagingInboundEvent, verifyAccess = true): Promise<boolean | undefined> {
+    if (event.channel.channel !== this.channel || event.actor.isBot
+      || !this.isAuthorizedActor(event.actor.platformUserId)) return false;
+    const conversation = event.channel.conversation;
+    if (conversation.kind === "dm") return conversation.id === event.actor.platformUserId;
+    const target = this.telegramStateFromChannel(conversation);
+    if (!target || !this.options.config.authorizedSupergroupIds?.some((item) => item.id === String(target.chatId))) return false;
+    if (!verifyAccess) return true;
+    try {
+      const member = await this.bot.api.getChatMember(target.chatId, event.actor.platformUserId);
+      return member.status !== "left" && member.status !== "kicked";
+    } catch {
+      return undefined;
+    }
+  }
+
   async createManagedConversation(
     request: MessagingManagedConversationCreateRequest,
   ): Promise<MessagingManagedConversationCreateResult> {

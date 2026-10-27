@@ -116,6 +116,8 @@ export type MessagingActiveBackendTurn = {
 export type MessagingThreadAdmissionState = ThreadAdmissionState;
 
 export type MessagingAdapter = {
+  /** Reapply provider admission to a retained source without dispatching a new inbound event. */
+  authorizeRetainedSource?(event: MessagingInboundEvent, verifyAccess?: boolean): boolean | undefined | Promise<boolean | undefined>;
   capabilityProfile: MessagingCapabilityProfile;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
   resolveDirectConversation?(userId: string): Promise<MessagingPrivateConversationResolveResult>;

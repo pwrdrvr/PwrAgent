@@ -793,8 +793,11 @@ export function permissionForDynamicTool(
       if (tool === "rename_current_messaging_conversation") {
         return "thread.settings.name";
       }
-      if (tool === "attach_thread_here") {
+      if (tool === "attach_thread_here" || tool === "attach_thread_to_surface") {
         return "thread.resume";
+      }
+      if (tool === "list_messaging_surfaces") {
+        return "tools.thread_inspection";
       }
       if (tool === "send_messaging_file") {
         return "message.reply";

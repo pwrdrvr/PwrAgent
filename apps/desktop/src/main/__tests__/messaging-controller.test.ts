@@ -89,6 +89,7 @@ import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core
 import { MessagingDeliveryBudget } from "../messaging/core/messaging-delivery-budget";
 import { MessagingStore } from "../messaging/core/messaging-store";
 import { StateDb } from "../state/state-db";
+import { SqliteMessagingRequestStore } from "../state/messaging-request-store";
 import { createTempStateDb } from "./sqlite-test-utils";
 import {
   inspectPdfDocument,
@@ -6151,6 +6152,93 @@ describe("MessagingController", () => {
       title: "Turn failed",
       body: "remote start failed",
     });
+  });
+
+  it("attaches from retained human provenance after completion without claiming an active inbound origin", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const createManagedConversation = vi.fn(async () => ({ channel: "telegram" as const, outcome: "created" as const,
+        conversation: buildTopicChannel("200").conversation, updatedAt: 2000 }));
+      const harness = await createHarness({ requestStore: requests, authorizeRetainedSource: () => true, createManagedConversation });
+      const event = buildTextEvent("attach the builder", { channel: buildTopicChannel("100") });
+      await harness.store.upsertBinding({ id: "manager-binding", backend: "codex", threadId: "thread-1", targetKind: "agent_thread",
+        channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+      await harness.controller.handleInboundEvent(event);
+      const source = requests.remember({ agent: { backend: "codex", threadId: "thread-1" }, bindingId: "manager-binding", event })!;
+      expect(harness.startTurn).toHaveBeenCalledWith(expect.objectContaining({ messageOrigin: expect.objectContaining({ causalMessagingSource: source.ref }) }));
+      await harness.controller.handleBackendEvent({ backend: "codex", notification: { method: "turn/completed",
+        params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } } } });
+      const context = { backend: "codex" as const, threadId: "thread-1", turnId: "completion-turn", causalMessagingSource: source.ref };
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "get_current_messaging_surface", context, args: {} }))
+        .toMatchObject({ ok: false, error: { code: "not_found" } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "list_messaging_surfaces", context,
+        args: { backend: "codex", threadId: "thread-1", placement: "new_child" } }))
+        .toMatchObject({ ok: true, data: { eligibleCount: 1, countIsComplete: true,
+          selectionReason: "causal_request", recommendedSurfaceSelector: source.selector } });
+      const request = { operation: "attach_thread_to_surface" as const, context,
+        args: { backend: "codex" as const, threadId: "thread-1", placement: "new_child" as const } };
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({ ok: true, data: { outcome: "created_and_attached" } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({ ok: true });
+      expect(createManagedConversation).toHaveBeenCalledTimes(1);
+      expect((await harness.store.getBinding("manager-binding"))?.revokedAt).toBeUndefined();
+      await harness.store.revokeBinding({ bindingId: "manager-binding", revokedAt: 3000 });
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(createManagedConversation).toHaveBeenCalledTimes(1);
+    } finally { db.close(); }
+  });
+
+  it("keeps Slack channel4 causal through a completion despite newer human traffic in four other channels", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const createManagedConversation = vi.fn(async (request: Parameters<NonNullable<MessagingAdapter["createManagedConversation"]>>[0]) => ({ channel: "slack" as const, outcome: "created" as const,
+        conversation: { ...request.parent.conversation, kind: "thread" as const, parentId: "1000.000004", parentConversationId: request.parent.conversation.id }, updatedAt: 9000 }));
+      const harness = await createHarness({ requestStore: requests, authorizeRetainedSource: () => true, createManagedConversation, channel: "slack" });
+      let root: ReturnType<SqliteMessagingRequestStore["remember"]>;
+      for (const [i, id] of ["C4", "C5", "C3", "C2", "C1"].entries()) {
+        const event = { ...buildTextEvent(`request in ${id}`), id: `human-${id}`, receivedAt: 1000 + i * 1000,
+          channel: { channel: "slack" as const, conversation: { id, kind: "channel" as const, workspaceId: "T1" } },
+          routingState: { opaque: { channelId: id, ts: `1000.00000${i}` } } };
+        await harness.store.upsertBinding({ id: `binding-${id}`, backend: "codex", threadId: "thread-1", targetKind: "agent_thread",
+          channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+        await harness.controller.handleInboundEvent(event);
+        if (id === "C4") root = requests.remember({ agent: { backend: "codex", threadId: "thread-1" }, bindingId: "binding-C4", event });
+      }
+      const context = { backend: "codex" as const, threadId: "thread-1", turnId: "child-completion", causalMessagingSource: root!.ref };
+      const listed = await harness.controller.handlePwrAgentMessagingRequest({ operation: "list_messaging_surfaces", context,
+        args: { backend: "codex", threadId: "thread-1", placement: "new_child" } });
+      expect(listed).toMatchObject({ ok: true, data: { eligibleCount: 5, recommendedSurfaceSelector: root!.selector } });
+      if (!listed.ok || !("surfaces" in listed.data)) throw new Error("Missing destination list");
+      expect(listed.data.surfaces.map((s) => s.location.conversation.id)).toEqual(["C1", "C2", "C3", "C5", "C4"]);
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", context,
+        args: { backend: "codex", threadId: "thread-1", placement: "new_child" } })).toMatchObject({ ok: true });
+      expect(createManagedConversation).toHaveBeenCalledWith(expect.objectContaining({ parent: expect.objectContaining({ conversation: expect.objectContaining({ id: "C4" }) }) }));
+    } finally { db.close(); }
+  });
+
+  it("retains an unbound default route and denies missing or conflicting provenance", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const navigation = buildNavigationSnapshot();
+      navigation.threads[0]!.agent = { name: "Default Agent", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1000 };
+      const harness = await createHarness({ requestStore: requests, authorizeRetainedSource: () => true, navigation });
+      const event = buildTextEvent("attach", { botMention: true, channel: buildTopicChannel("400") });
+      await seedConversationDefaultAgent(harness.store, event.channel);
+      await harness.controller.handleInboundEvent(event);
+      const source = requests.remember({ agent: { backend: "codex", threadId: "thread-1" }, event })!;
+      expect(await harness.store.findActiveBindingsForThread({ backend: "codex", threadId: "thread-1" })).toHaveLength(0);
+      const context = { backend: "codex" as const, threadId: "thread-1", turnId: "completion", causalMessagingSource: source.ref };
+      const args = { backend: "codex" as const, threadId: "thread-1", placement: "current_conversation" as const };
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "list_messaging_surfaces", context, args }))
+        .toMatchObject({ ok: true, data: { eligibleCount: 1, surfaces: [expect.objectContaining({ route: "default" })] } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", args,
+        context: { ...context, causalMessagingSource: undefined } })).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", args,
+        context: { ...context, causalMessagingAmbiguous: true } })).toMatchObject({ ok: false, error: { code: "ambiguous_location" } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", context, args })).toMatchObject({ ok: true });
+    } finally { db.close(); }
   });
 
   it("preserves the messaging location for queued Agent-thread turns", async () => {
@@ -26390,7 +26478,7 @@ describe("send_messaging_file agent tool", () => {
       ok: false,
       error: {
         code: "not_found",
-        message: "No active messaging origin is recorded for this Agent turn.",
+        message: expect.stringContaining("No active messaging origin is recorded for this Agent turn."),
       },
     });
     expect(harness.delivered).toEqual([]);
@@ -26808,6 +26896,8 @@ function setHandoffDetailFixture(
 async function createHarness<
   Store extends MessagingControllerOptions["store"] = MessagingStore,
 >(options?: {
+  requestStore?: MessagingControllerOptions["requestStore"];
+  authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
   deliveryBudget?: MessagingDeliveryBudget;
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
@@ -26946,6 +27036,7 @@ async function createHarness<
   const store = (options?.store ?? await createStore()) as Store;
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter: MessagingAdapter = {
+    authorizeRetainedSource: options?.authorizeRetainedSource,
     capabilityProfile: options?.capabilityProfile ?? PERMISSIVE_CAPABILITY_PROFILE,
     ...(options?.downloadAttachment
       ? { downloadAttachment: options.downloadAttachment }
@@ -27466,6 +27557,7 @@ async function createHarness<
 
   const onBindingChanged = vi.fn();
   const controller = new MessagingController({
+    requestStore: options?.requestStore,
     adapter,
     authorizedActorIds: ["user-1"],
     rbacPolicy: options?.rbacPolicy,

@@ -1,5 +1,8 @@
 import { matchesAutomationConversation } from "@pwragent/shared";
 import { randomBytes, randomUUID } from "node:crypto";
+import { getAppStateDb } from "../state/app-state";
+import { SqliteMessagingRequestStore } from "../state/messaging-request-store";
+import { setFederationMessagingDestinationHandler } from "../federation/federation-messaging-tools";
 import {
   isMessagingInteractivePendingRequest,
   MessagingController,
@@ -34,6 +37,7 @@ import type {
   MessagingToolUpdateMode,
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
+  PwrAgentMessagingContext,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
 import type {
@@ -114,6 +118,7 @@ import type {
 } from "./messaging-agent-tool-service";
 
 export type DesktopMessagingAdapter = {
+  authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;
   channel: MessagingChannelKind;
@@ -519,7 +524,29 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       automationInboundMatches?: MessagingAutomationInboundMatcher;
       adapterStartTimeoutMs?: number;
     },
-  ) {}
+  ) {
+    setFederationMessagingDestinationHandler(async (operation, callerInstanceId) => {
+      if (operation?.kind === "authorize") {
+        const context = { ...operation.context, requestingInstanceId: callerInstanceId };
+        if (!context.causalMessagingSource || context.causalMessagingSource.instanceId !== getDesktopFederationRuntime().messagingSourceInstanceId()
+          || operation.check.threadId !== context.threadId || operation.check.backend !== context.backend) {
+          return { allowed: false, permission: "federation.remote_control" };
+        }
+        return await this.authorizeRetainedTool(context, operation.check);
+      }
+      if (operation?.kind !== "request" || !operation.request?.context?.causalMessagingSource
+        || !["list_messaging_surfaces", "attach_thread_to_surface"].includes(operation.request.operation)
+        || operation.request.context.causalMessagingSource.instanceId !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
+        return { ok: false, error: { code: "forbidden", message: "The destination must be resolved by its original messaging owner." } };
+      }
+      const request = { ...operation.request, context: { ...operation.request.context, requestingInstanceId: callerInstanceId } };
+      const permission = await this.authorizeRetainedTool(request.context, {
+        ...request.context, category: "messaging_context", tool: request.operation, arguments: request.args,
+      });
+      if (!permission.allowed) return { ok: false, error: { code: "forbidden", message: "The original actor no longer authorizes this federated messaging operation." } };
+      return await this.handlePwrAgentMessagingRequest(request);
+    });
+  }
 
   async start(): Promise<void> {
     this.pendingAdapterStopReason = undefined;
@@ -546,6 +573,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
   async handlePwrAgentMessagingRequest(
     request: PwrAgentMessagingRequest,
   ): Promise<PwrAgentMessagingResponse> {
+    const sourceOwner = request.context.causalMessagingSource?.instanceId;
+    if (["list_messaging_surfaces", "attach_thread_to_surface"].includes(request.operation)
+      && sourceOwner && sourceOwner !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
+      try {
+        const result = await getDesktopFederationRuntime().requestMessagingDestination(sourceOwner, { kind: "request", request });
+        return "ok" in result ? result : { ok: false, error: { code: "internal_error", message: "Unexpected messaging owner response." } };
+      } catch {
+        return { ok: false, error: { code: "peer_unavailable", message: "The original messaging owner is unavailable or requires a retained-destination upgrade." } };
+      }
+    }
     let firstNotFound: PwrAgentMessagingResponse | undefined;
     for (const controller of this.controllers) {
       const response = await controller.handlePwrAgentMessagingRequest(request);
@@ -565,6 +602,29 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
         message: "No running messaging adapter has this Agent turn location.",
       },
     };
+  }
+
+  async authorizeRetainedTool(
+    context: PwrAgentMessagingContext,
+    check: DynamicToolPermissionCheck,
+  ): Promise<DynamicToolPermissionResult> {
+    if (context.causalMessagingAmbiguous) return { allowed: false, permission: "message.reply" };
+    const sourceOwner = context.causalMessagingSource?.instanceId;
+    if (sourceOwner && sourceOwner !== getDesktopFederationRuntime().messagingSourceInstanceId()) {
+      try {
+        const result = await getDesktopFederationRuntime().requestMessagingDestination(sourceOwner, { kind: "authorize", context, check });
+        return "allowed" in result ? result : { allowed: false, permission: "federation.remote_control" };
+      } catch {
+        return { allowed: false, permission: "federation.remote_control" };
+      }
+    }
+    for (const controller of this.controllers) {
+      const result = await controller.authorizeRetainedTool(context, check);
+      if (result.owns) return result;
+    }
+    // Messaging attribution survives controller shutdown/restart. Missing
+    // owners and unsupported providers never become desktop authority.
+    return { allowed: false, permission: "message.reply" };
   }
 
   checkDynamicToolPermission(
@@ -1472,6 +1532,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     }
     const controller = new MessagingController({
       adapter,
+      requestStore: new SqliteMessagingRequestStore(getAppStateDb().raw),
+      sourceInstanceId: getDesktopFederationRuntime().messagingSourceInstanceId(),
       attachmentPolicy: config.attachmentPolicy,
       authorizedActorIds,
       rbacPolicy: getRbacPolicyService().providerFor(adapter.channel),
