@@ -1881,6 +1881,7 @@ describe("local terminal owner read lifecycle", () => {
       vi.mocked(pty.onData).mock.calls[0]![0]("retained screen");
       const reader = readerFor(service);
       const page = await reader.read(context, { ...address, format: "plain", maxChars: 3 });
+      if (!("snapshotId" in page)) throw new Error("Expected a plain screen snapshot");
       expect(page.hasMore).toBe(true);
       const replay = service.outputForThread("codex:one", "one")!;
       const snapshot = replay.snapshot.bind(replay);
