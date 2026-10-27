@@ -24552,7 +24552,7 @@ a.button {
 /* A start-thread card leads with the 22px Model chip: give the taller row
    room and center its label on the chip. Other labels stay on their value's
    first line when it wraps. */
-.thread-todo-card__facts--model {
+.thread-todo-card__facts:has(.thread-todo-card__fact--model) {
   row-gap: 3px;
 }
 
@@ -50117,12 +50117,17 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 }
 
 .todo-model-picker__footnote,
+.todo-model-picker__error,
 .todo-model-picker__provenance {
   margin: 6px 0 0;
   color: var(--text-muted);
   font-family: var(--font-sans);
   font-size: 11px;
   line-height: 16px;
+}
+
+.todo-model-picker__error {
+  padding: 0 8px 4px 26px;
 }
 
 .todo-model-picker__footnote {

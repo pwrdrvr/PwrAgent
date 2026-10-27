@@ -122,7 +122,7 @@ export function TodoModelPicker(props: PickerProps) {
           {hasSuggestion ? row(suggested, "Suggested") : null}
           {recentRows.length ? <div className="composer-dropdown__group-label"><span>Recent</span><span className="composer-dropdown__group-detail">all threads</span></div> : null}
           {recentRows.map((recent, index) => row(recent, undefined, `recent-${index}`))}
-          {error ? <p className="todo-model-picker__footnote" role="status">{error}</p> : null}
+          {error ? <p className="todo-model-picker__error" role="status">{error}</p> : null}
           <div className="todo-split__separator" role="separator" />
           <div className="composer-dropdown__group-label">Custom</div>
           <div className="todo-model-picker__custom" role="presentation">

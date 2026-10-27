@@ -938,7 +938,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             </>
           ) : null}
           {facts.length > 0 ? (
-            <dl className={`thread-todo-card__facts${action?.type === "start_thread" ? " thread-todo-card__facts--model" : ""}`}>
+            <dl className="thread-todo-card__facts">
               {action?.type === "start_thread" ? (
                 <div className="thread-todo-card__fact thread-todo-card__fact--model">
                   <dt>Model</dt>

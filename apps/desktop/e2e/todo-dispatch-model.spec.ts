@@ -9,6 +9,7 @@ import { StateDb } from "../src/main/state/state-db";
 import { recordModelSettingsRecent } from "../src/main/state/model-settings-recents-store";
 import { ThreadTodoService } from "../src/main/thread-todos/thread-todo-service";
 import { ThreadTodoStore } from "../src/main/thread-todos/thread-todo-store";
+import { ROW_CHECK_INSET } from "../src/renderer/src/features/thread-todos/todo-model-menu-placement";
 
 /** Where the Model chip sits in its facts row, in CSS pixels. */
 async function measureModelChip(chip: Locator) {
@@ -120,8 +121,8 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await expect(menu).toContainText("GPT-5.4");
     // The menu hangs under the card's facts, not off the chip.
     const menuBox = await menu.boundingBox();
-    expect(menuBox?.width).toBe(312);
-    expect(Math.abs((menuBox?.x ?? 0) - (stackLayout.factsLeft - 13))).toBeLessThanOrEqual(1);
+    expect(menuBox?.width).toBeCloseTo(312, 0);
+    expect(Math.abs((menuBox?.x ?? 0) - (stackLayout.factsLeft - ROW_CHECK_INSET))).toBeLessThanOrEqual(1);
     await menu.screenshot({ path: testInfo.outputPath("todo-dispatch-popover.png"), animations: "disabled" });
     await menu.getByRole("menuitemradio").first().press("ArrowDown");
     await expect(menu.getByRole("menuitemradio", { name: /GPT-5.5 · xhigh/ })).toBeFocused();

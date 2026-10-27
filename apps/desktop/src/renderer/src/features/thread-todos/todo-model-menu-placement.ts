@@ -1,5 +1,5 @@
 /** Menu border, padding and row padding before a row's check column. */
-const ROW_CHECK_INSET = 13;
+export const ROW_CHECK_INSET = 13;
 
 /**
  * Prefer below the chip, then the roomier side; keep offscreen triggers from
