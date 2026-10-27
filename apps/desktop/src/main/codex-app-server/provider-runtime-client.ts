@@ -1,18 +1,18 @@
 import { parseCodexProviderModelId, type CodexModelProviderSettings } from "@pwragent/shared";
 import type { CodexAppServerClient } from "./client";
 
-type Route = "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider" | "status";
+type Route = "primary" | "thread" | "threadId" | "model" | "subscribe" | "all" | "provider";
 // Exhaustive: adding a public client operation requires choosing its runtime ownership.
 const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   close: "all",
-  getAppServerRestartStatus: "status",
-  onAppServerRestartStatusChanged: "subscribe",
+  getAppServerRestartStatus: "primary",
+  onAppServerRestartStatusChanged: "primary",
   onAppServerUnexpectedExit: "subscribe",
   restartAppServer: "all",
   resetAppServerRestarts: "all",
   recoverInvalidPersistedResponseMessageIds: "thread",
-  onRealtimeEvent: "subscribe",
-  onRealtimeDisconnect: "subscribe",
+  onRealtimeEvent: "primary",
+  onRealtimeDisconnect: "primary",
   startRealtime: "thread",
   stopRealtime: "threadId",
   appendRealtimeText: "threadId",
@@ -176,9 +176,6 @@ export function createProviderRuntimeClient(
         || typeof Reflect.get(target, property, target) !== "function") return Reflect.get(target, property, target);
       const method = property as Method;
       const route = ROUTES[method];
-      if (route === "status") return () => [primary, ...runtimes.values()]
-        .map((client) => client.getAppServerRestartStatus()).find((status) => status.stopped)
-        ?? primary.getAppServerRestartStatus();
       if (route === "provider") return providerForThread;
       if (route === "subscribe") return (...args: unknown[]) => {
         const subscription: Subscription = { method, args, stops: new Map() };

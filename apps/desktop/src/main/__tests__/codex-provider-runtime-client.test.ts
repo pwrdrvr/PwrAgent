@@ -83,6 +83,15 @@ describe("provider-specific Codex runtimes", () => {
     expect(local.raw.readThread).toHaveBeenCalledOnce();
   });
 
+  it("keeps a stopped Bonsai process out of the global OpenAI restart status", async () => {
+    const { primary, local, client } = setup();
+    await client.startThread({ model: "@bonsai/Bonsai.gguf" });
+    local.raw.getAppServerRestartStatus.mockReturnValue({ stopped: true });
+    expect(client.getAppServerRestartStatus()).toEqual({ stopped: false });
+    expect(primary.raw.getAppServerRestartStatus).toHaveBeenCalled();
+    expect(local.raw.getAppServerRestartStatus).not.toHaveBeenCalled();
+  });
+
   it("propagates events and keeps request IDs and unexpected exits scoped to their runtime", async () => {
     const { primary, local, client } = setup();
     primary.raw.startThread.mockResolvedValueOnce({ threadId: "openai-thread" });
