@@ -77,6 +77,7 @@ export const localThreadTodoOperations = {
         }).map(threadReviewTodo),
       ].sort((a, b) => b.createdAt - a.createdAt), async () => (await loadLocalNavigationQueryIndex({
         callerReason: "thread-todo-owners",
+        membershipOnly: true,
       })).threads)),
       mergeMethods: todos.mergeMethodPreferences(),
     };

@@ -5,6 +5,7 @@ import type {
 import {
   buildThreadIdentityKey,
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
+  navigationInvalidationMayChangeMembership,
   navigationQueryEventRequiresRefresh,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
@@ -38,6 +39,13 @@ function sourceId(value: object): number {
 export async function loadLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
   callerReason: string;
+  /**
+   * The caller reads only which threads exist, whether they are archived,
+   * and their titles. Row-only changes (turn status, Git state, seen marks)
+   * then do not restart its scan. A busy owner's live turns emit those
+   * continuously, and restarting for them exhausted the read's retries.
+   */
+  membershipOnly?: boolean;
   /** List provider threads afresh rather than from the thread-list cache. */
   refreshProviders?: boolean;
   registry?: DesktopBackendRegistry;
@@ -49,8 +57,11 @@ export async function loadLocalNavigationQueryIndex(params: {
   const backend = params.backend ?? "all";
   // A refresh reads under its own key: it must not be served a retained or
   // in-flight index that predates it, nor cost other readers a retry.
+  // A membership read has its own key, so a row read's restarts cannot
+  // cost it a retry either.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
-    ...(params.refreshProviders ? ["refresh-providers"] : [])]);
+    ...(params.refreshProviders ? ["refresh-providers"] : []),
+    ...(params.membershipOnly ? ["membership"] : [])]);
   const version = overlayStore.readNavigationSourceVersion?.();
   let subscribed = false;
   return indexReads.read(key, async (signal, assertCurrent) => {
@@ -60,7 +71,12 @@ export async function loadLocalNavigationQueryIndex(params: {
     if (!subscribed) {
       subscribed = true;
       const unsubscribe = registry.onEvent?.((event) => {
-        if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) indexReads.invalidate(key);
+        const { method, params: eventParams } = event.notification;
+        if (!navigationQueryEventRequiresRefresh(method, eventParams)) return;
+        if (params.membershipOnly && !navigationInvalidationMayChangeMembership(method === "navigation/invalidated"
+          ? (eventParams as { sourceMethod?: unknown } | undefined)?.sourceMethod
+          : method)) return;
+        indexReads.invalidate(key);
       });
       // The pool owns this listener through its bounded completed reuse window.
       // Eviction/expiry/cancellation aborts the lifetime and releases it.
