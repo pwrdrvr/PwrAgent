@@ -91,10 +91,19 @@ const FORGE_TOOL_ACCESS_LABELS: Record<ForgeAgentToolAccess, string> = {
 
 const FORGE_TOOL_ACCESS_DESCRIPTIONS: Record<ForgeAgentToolAccess, string> = {
   allow: "Runs without asking.",
-  auto: "Asks unless the thread has Full Access.",
+  auto: "Runs in Codex Auto and Full Access threads. Asks otherwise.",
   ask: "Always asks.",
   off: "Removes these tools from threads.",
 };
+
+// Approving and merging cannot be taken back, so Auto waits for Full Access.
+const FORGE_TOOL_APPROVE_MERGE_AUTO_DESCRIPTION = "Asks unless the thread has Full Access.";
+
+function forgeToolAccessDescription(group: ForgeAgentToolGroup, level: ForgeAgentToolAccess): string {
+  return group === "approve_merge" && level === "auto"
+    ? FORGE_TOOL_APPROVE_MERGE_AUTO_DESCRIPTION
+    : FORGE_TOOL_ACCESS_DESCRIPTIONS[level];
+}
 
 const FORGE_TOOL_GROUP_SUBS: Record<ForgeAgentToolGroup, string> = {
   read: "Pull requests, diffs, files, reviews, review threads, issues, CI runs and logs.",
@@ -560,7 +569,7 @@ export function GitSettings(props: {
                     options={forgeAgentToolAccessLevels(group).map((level) => ({
                       value: level,
                       label: FORGE_TOOL_ACCESS_LABELS[level],
-                      description: FORGE_TOOL_ACCESS_DESCRIPTIONS[level],
+                      description: forgeToolAccessDescription(group, level),
                     }))}
                     onChange={(value) => {
                       void props.onAgentToolAccessChange(group, value);
