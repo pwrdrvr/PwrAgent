@@ -58,10 +58,12 @@ export function TodoModelPicker(props: PickerProps) {
     const trigger = triggerRef.current?.getBoundingClientRect();
     const menu = menuRef.current;
     if (!trigger || !menu) return;
+    const facts = triggerRef.current?.closest(".thread-todo-card__facts")?.getBoundingClientRect();
     const next = placeTodoModelMenu({
       trigger,
+      alignLeft: facts?.left,
       menuHeight: menu.scrollHeight + menu.offsetHeight - menu.clientHeight,
-      menuWidth: menu.offsetWidth || 340,
+      menuWidth: menu.offsetWidth || 312,
       viewportHeight: window.innerHeight,
       viewportWidth: window.innerWidth,
     });
@@ -111,16 +113,16 @@ export function TodoModelPicker(props: PickerProps) {
         aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
         data-tooltip={open ? undefined : "Settings for starts here. Start thread on another PwrAgent uses that peer’s defaults."}
         onClick={() => setOpen(!open)}>
-        <span className="composer-dropdown__label">{label}</span><ChevronDownIcon size={12} />
+        <span className="composer-dropdown__label">{label}</span><span className="composer-dropdown__icon" aria-hidden="true"><ChevronDownIcon size={12} /></span>
       </button>
       {open ? createPortal(
         <div ref={menuRef} id={id} className="todo-split__menu todo-model-picker__menu"
           style={position} role="menu" aria-label="Model for the new thread" tabIndex={-1}>
           {row(thread, "This thread")}
           {hasSuggestion ? row(suggested, "Suggested") : null}
-          {recentRows.length ? <div className="composer-dropdown__group-label"><span>Recent</span><span>all threads</span></div> : null}
+          {recentRows.length ? <div className="composer-dropdown__group-label"><span>Recent</span><span className="composer-dropdown__group-detail">all threads</span></div> : null}
           {recentRows.map((recent, index) => row(recent, undefined, `recent-${index}`))}
-          {error ? <p className="todo-model-picker__footnote" role="status">{error}</p> : null}
+          {error ? <p className="todo-model-picker__error" role="status">{error}</p> : null}
           <div className="todo-split__separator" role="separator" />
           <div className="composer-dropdown__group-label">Custom</div>
           <div className="todo-model-picker__custom" role="presentation">

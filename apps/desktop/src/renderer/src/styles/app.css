@@ -24549,6 +24549,17 @@ a.button {
   overflow-wrap: anywhere;
 }
 
+/* A start-thread card leads with the 22px Model chip: give the taller row
+   room and center its label on the chip. Other labels stay on their value's
+   first line when it wraps. */
+.thread-todo-card__facts:has(.thread-todo-card__fact--model) {
+  row-gap: 3px;
+}
+
+.thread-todo-card__fact--model dt {
+  align-self: center;
+}
+
 /* The Markdown prompt rests at three lines; its own control opens it. */
 .thread-todo-card__prompt {
   display: block;
@@ -50052,16 +50063,24 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   font-size: 12px;
 }
 
+/* Sized to its label. `.composer-dropdown__button` fills its slot, which
+   stretched the chip across the facts column. */
 .todo-model-picker__chip {
   display: inline-flex;
+  width: auto;
   max-width: 100%;
   min-height: 22px;
   height: auto;
-  gap: 6px;
-  padding: 1px 8px;
+  gap: 5px;
+  padding: 0 7px 0 9px;
   font-family: var(--font-sans);
   font-size: 12px;
   line-height: 18px;
+  vertical-align: middle;
+}
+
+.todo-model-picker__chip .composer-dropdown__icon {
+  color: var(--text-muted);
 }
 
 .todo-model-picker__chip.is-changed {
@@ -50072,7 +50091,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   position: fixed;
   right: auto;
   z-index: 150;
-  width: 340px;
+  width: 312px;
   min-width: 0;
   max-width: calc(100vw - 16px);
   overflow-y: auto;
@@ -50085,14 +50104,20 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   font-size: 11px;
 }
 
+/* Section heads, Custom and the footnote share the rows' text column. */
+.todo-model-picker__menu .composer-dropdown__group-label {
+  padding: 6px 8px 3px 26px;
+}
+
 .todo-model-picker__custom {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 4px 8px 8px;
+  padding: 4px 8px 6px 26px;
 }
 
 .todo-model-picker__footnote,
+.todo-model-picker__error,
 .todo-model-picker__provenance {
   margin: 6px 0 0;
   color: var(--text-muted);
@@ -50101,8 +50126,13 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   line-height: 16px;
 }
 
+.todo-model-picker__error {
+  padding: 0 8px 4px 26px;
+}
+
 .todo-model-picker__footnote {
-  padding: 6px 8px;
+  margin-top: 4px;
+  padding: 7px 8px 2px 26px;
   border-top: 1px solid var(--border-subtle);
 }
 

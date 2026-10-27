@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
@@ -9,6 +9,43 @@ import { StateDb } from "../src/main/state/state-db";
 import { recordModelSettingsRecent } from "../src/main/state/model-settings-recents-store";
 import { ThreadTodoService } from "../src/main/thread-todos/thread-todo-service";
 import { ThreadTodoStore } from "../src/main/thread-todos/thread-todo-store";
+import { ROW_CHECK_INSET } from "../src/renderer/src/features/thread-todos/todo-model-menu-placement";
+
+/** Where the Model chip sits in its facts row, in CSS pixels. */
+async function measureModelChip(chip: Locator) {
+  return chip.evaluate((element) => {
+    const value = element.closest("dd");
+    const label = element.querySelector(".composer-dropdown__label");
+    const term = value?.previousElementSibling;
+    const facts = element.closest(".thread-todo-card__facts");
+    if (!value || !label || !term || !facts) throw new Error("Missing Model fact parts");
+    const chip = element.getBoundingClientRect();
+    const valueBox = value.getBoundingClientRect();
+    const termBox = term.getBoundingClientRect();
+    return {
+      chipWidth: chip.width,
+      chipRight: chip.right,
+      labelWidth: label.scrollWidth,
+      labelTruncated: label.scrollWidth > label.clientWidth,
+      valueWidth: valueBox.width,
+      valueRight: valueBox.right,
+      termCenterOffset: Math.abs((chip.top + chip.bottom) / 2 - (termBox.top + termBox.bottom) / 2),
+      factsLeft: facts.getBoundingClientRect().left,
+    };
+  });
+}
+
+/**
+ * The chip hugs its label: padding, gap, chevron and border add about 35px.
+ * `.composer-dropdown__button` sets `width: 100%`, which stretched the chip
+ * across the whole value column once.
+ */
+function expectChipHugsLabel(layout: Awaited<ReturnType<typeof measureModelChip>>) {
+  expect(layout.labelTruncated).toBe(false);
+  expect(layout.chipWidth).toBeLessThanOrEqual(layout.labelWidth + 40);
+  expect(layout.chipWidth).toBeLessThan(layout.valueWidth - 40);
+  expect(layout.termCenterOffset).toBeLessThanOrEqual(1.5);
+}
 
 /** Contrived Atlas data only; also captures the before/after PR illustrations. */
 test("picks dispatch settings with the keyboard and remembers them on the raising thread", async ({ browserName: _browserName }, testInfo) => {
@@ -76,10 +113,16 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     }
     const chip = stack.getByRole("button", { name: /Model for the new thread:/ });
     await expect(chip).toHaveAccessibleName(/GPT-5.5, high/);
+    const stackLayout = await measureModelChip(chip);
+    expectChipHugsLabel(stackLayout);
     await chip.click();
     const menu = app.window.getByRole("menu", { name: "Model for the new thread", exact: true });
     await expect(menu.getByRole("menuitemradio").first()).toBeFocused();
     await expect(menu).toContainText("GPT-5.4");
+    // The menu hangs under the card's facts, not off the chip.
+    const menuBox = await menu.boundingBox();
+    expect(menuBox?.width).toBeCloseTo(312, 0);
+    expect(Math.abs((menuBox?.x ?? 0) - (stackLayout.factsLeft - ROW_CHECK_INSET))).toBeLessThanOrEqual(1);
     await menu.screenshot({ path: testInfo.outputPath("todo-dispatch-popover.png"), animations: "disabled" });
     await menu.getByRole("menuitemradio").first().press("ArrowDown");
     await expect(menu.getByRole("menuitemradio", { name: /GPT-5.5 · xhigh/ })).toBeFocused();
@@ -96,6 +139,41 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     await todosTab.click();
     const panel = app.window.getByRole("tabpanel", { name: /^To-dos/ });
     await expect(panel.locator(".thread-todo-card")).toHaveCount(2);
+    const firstPanelChip = panel.getByRole("button", { name: /^Model for the new thread:/ }).first();
+    // The rail's width follows the window: about 220px in CI's 1024px
+    // window, which truncates the label. Either way the chip stays in its
+    // column, and it hugs the label whenever the label fits.
+    const panelLayout = await measureModelChip(firstPanelChip);
+    expect(panelLayout.chipRight).toBeLessThanOrEqual(panelLayout.valueRight + 0.5);
+    if (!panelLayout.labelTruncated) expectChipHugsLabel(panelLayout);
+    await panel.locator(".thread-todo-card").first().screenshot({
+      path: testInfo.outputPath("todo-dispatch-panel.png"), animations: "disabled",
+    });
+    // A narrow panel truncates the label inside the chip instead of
+    // overflowing the card.
+    await panel.locator(".thread-todos-panel").evaluate((element) => { element.style.width = "220px"; });
+    await expect.poll(async () => (await measureModelChip(firstPanelChip)).labelTruncated).toBe(true);
+    const narrowLayout = await measureModelChip(firstPanelChip);
+    expect(narrowLayout.chipRight).toBeLessThanOrEqual(narrowLayout.valueRight + 0.5);
+    expect(narrowLayout.termCenterOffset).toBeLessThanOrEqual(1.5);
+    // A wrapped value keeps its label on the first line.
+    const whereFact = panel.locator(".thread-todo-card").first().locator(".thread-todo-card__fact", { hasText: "Where" });
+    const where = await whereFact.evaluate((element) => {
+      const text = (node: Element) => {
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        return range.getBoundingClientRect();
+      };
+      const term = text(element.querySelector("dt")!);
+      const value = text(element.querySelector("dd")!);
+      return { termTop: term.top, termHeight: term.height, valueTop: value.top, valueHeight: value.height };
+    });
+    expect(where.valueHeight).toBeGreaterThan(where.termHeight);
+    expect(Math.abs(where.termTop - where.valueTop)).toBeLessThanOrEqual(1);
+    await panel.locator(".thread-todo-card").first().screenshot({
+      path: testInfo.outputPath("todo-dispatch-panel-narrow.png"), animations: "disabled",
+    });
+    await panel.locator(".thread-todos-panel").evaluate((element) => { element.style.width = ""; });
     await panel.locator(".thread-todos-panel").evaluate((element) => { element.style.paddingTop = "900px"; });
     const panelChip = panel.getByRole("button", { name: /^Model for the new thread:/ }).first();
     await panelChip.evaluate((element) => {

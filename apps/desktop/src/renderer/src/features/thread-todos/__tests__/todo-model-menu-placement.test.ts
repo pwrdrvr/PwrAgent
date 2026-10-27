@@ -8,6 +8,14 @@ describe("to-do model menu placement", () => {
     expect(placeTodoModelMenu(base)).toEqual({ left: 200, top: 128, maxHeight: 664 });
   });
 
+  it("lines the rows' check column up with the card's facts edge", () => {
+    // The chip sits after the "Model" label; anchoring at the chip pushed the
+    // menu past the card's right side.
+    expect(placeTodoModelMenu({ ...base, menuWidth: 312, alignLeft: 150 }).left).toBe(137);
+    expect(placeTodoModelMenu({ ...base, menuWidth: 312, alignLeft: 1100 }).left).toBe(880);
+    expect(placeTodoModelMenu({ ...base, menuWidth: 312, alignLeft: 4 }).left).toBe(8);
+  });
+
   it("flips above a chip at the bottom of the viewport", () => {
     const result = placeTodoModelMenu({ ...base, trigger: { left: 200, top: 768, bottom: 790 } });
     expect(result).toEqual({ left: 200, top: 462, maxHeight: 754 });

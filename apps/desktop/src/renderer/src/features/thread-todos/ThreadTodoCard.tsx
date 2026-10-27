@@ -940,7 +940,7 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           {facts.length > 0 ? (
             <dl className="thread-todo-card__facts">
               {action?.type === "start_thread" ? (
-                <div className="thread-todo-card__fact">
+                <div className="thread-todo-card__fact thread-todo-card__fact--model">
                   <dt>Model</dt>
                   <dd><TodoModelPicker todo={todo} selection={selection} onPick={pickModel} disabled={props.running} /></dd>
                 </div>
