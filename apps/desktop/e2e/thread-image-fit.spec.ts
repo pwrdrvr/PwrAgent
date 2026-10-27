@@ -359,7 +359,10 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
   const read = replay.steps.find((step: { method?: string }) => step.method === "thread/read");
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160" viewBox="0 0 320 160" onload="init(evt)">
     <script><![CDATA[
-      function init() { document.getElementById("state").textContent = "Ready"; }
+      function init() {
+        document.getElementById("state").textContent = "Ready";
+        document.getElementById("frame").setAttribute("fill", "lime");
+      }
       window.addEventListener("mouseover", function(event) {
         if (event.target.id === "frame") document.getElementById("details").textContent = "Function: frame";
       });
@@ -413,12 +416,22 @@ test("runs SVG flamegraph controls in an isolated lightbox frame", async () => {
     await expect(notice).toBeHidden();
     const frame = app.window.frameLocator('iframe[title="Interactive SVG: Interactive flamegraph"]');
     await expect(frame.locator("#state")).toHaveText("Ready");
-    // Ready marks SVG onload, not presentation of the opaque frame. Linux
-    // can route an earlier hover to the parent iframe without reaching the
-    // SVG. Wait for presentation before the first native pointer action.
-    await expect.poll(() => frame.locator("html").evaluate(() =>
-      performance.getEntriesByType("paint").some((entry) => entry.name === "first-contentful-paint"),
-    ), { message: "Interactive SVG has presented its first contentful paint" }).toBe(true);
+    // A child document's paint entry can precede embedding its surface in
+    // the window compositor. Only the running SVG turns the frame green, so
+    // read back its hover point to distinguish it from the orange preview
+    // before sending the single pointer move into the isolated frame.
+    const frameBox = await frame.locator("#frame").boundingBox();
+    if (!frameBox) throw new Error("Interactive SVG frame has no bounds");
+    const nativeWindow = await app.electronApp.browserWindow(app.window);
+    const hoverPoint = {
+      x: Math.floor(frameBox.x + frameBox.width / 2),
+      y: Math.floor(frameBox.y + frameBox.height / 2),
+    };
+    await expect.poll(() => nativeWindow.evaluate(async (window, point) => {
+      const image = await window.webContents.capturePage({ ...point, width: 1, height: 1 });
+      return [...image.toBitmap().subarray(0, 4)];
+    }, hoverPoint), { message: "Window compositor has presented the SVG hover target" })
+      .toEqual([0, 255, 0, 255]); // Opaque lime, in either RGBA or BGRA byte order.
     await frame.locator("#frame").hover();
     await expect(frame.locator("#details")).toHaveText("Function: frame");
     await frame.locator("#frame").click();
