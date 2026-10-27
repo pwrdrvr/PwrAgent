@@ -52,7 +52,7 @@ export class ThreadTodoFeed {
   private readonly scheduled = new Set<string>();
   /** Owner thread key → title, from the last listing. */
   private owners = new Map<string, string | undefined>();
-  /** Thread keys the last listing was asked about. */
+  /** Thread keys with cards when the last listing was read; it found no owner for them. */
   private listed = new Set<string>();
   /** Open cards per thread key, before owner filtering. */
   private readonly cards = new Map<string, ThreadTodo[]>();
@@ -211,7 +211,7 @@ export class ThreadTodoFeed {
 
   /** Re-projects the named threads' cards and publishes what changed. */
   private async publish(keys: string[]): Promise<void> {
-    if (keys.some((key) => this.cards.has(key) && !this.listed.has(key))) {
+    if (keys.some((key) => this.cards.has(key) && !this.owners.has(key) && !this.listed.has(key))) {
       this.setOwners(await this.source.loadOwners());
     }
     const scope = new Set(keys);
