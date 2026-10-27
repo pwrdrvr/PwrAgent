@@ -1026,17 +1026,34 @@ export async function spawnTerminalPty(params: {
   return { pty, cwd, shell };
 }
 
+// The bundled binary's location is fixed for the life of the app.
+const bundledClaudeLookups = new Map<NodeJS.Platform, Promise<string | undefined>>();
+
 /**
  * PwrAgent's bundled Claude Code CLI, for a terminal that has no `claude` of
- * its own. A Claude Code the operator installed always wins, so the bundled
- * copy is offered only when the same search the Claude backend runs finds none.
+ * its own. A `claude` on the terminal's PATH always wins. Install directories
+ * that are not on PATH do not count: the shell could not run them.
  */
 async function resolveTerminalBundledClaudeCommand(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
 ): Promise<string | undefined> {
-  if (await resolveClaudeExecutable({ env, platform })) return undefined;
-  return await resolveBundledClaudeExecutable({ platform });
+  if (await resolveClaudeExecutable({
+    env,
+    platform,
+    includeInstallDirectories: false,
+  })) return undefined;
+  let lookup = bundledClaudeLookups.get(platform);
+  if (!lookup) {
+    lookup = resolveBundledClaudeExecutable({ platform });
+    bundledClaudeLookups.set(platform, lookup);
+  }
+  return await lookup;
+}
+
+/** Test seam: forget the cached bundled Claude lookup. */
+export function resetBundledClaudeLookupForTests(): void {
+  bundledClaudeLookups.clear();
 }
 
 export function prependIntegratedTerminalRuntimePaths(

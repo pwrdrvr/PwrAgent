@@ -19,6 +19,7 @@ import {
   IntegratedTerminalService,
   prependIntegratedTerminalRuntimePaths,
   prepareIntegratedTerminalShellEnvironment,
+  resetBundledClaudeLookupForTests,
   resolveTerminalShell,
   writeZshIntegrationDirectory,
 } from "../terminal/integrated-terminal-service";
@@ -38,7 +39,10 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 
 const claudeLookupMock = vi.hoisted(() => ({
   resolveClaudeExecutable: vi.fn(
-    async (_options?: { env?: NodeJS.ProcessEnv }): Promise<string | undefined> => undefined,
+    async (_options?: {
+      env?: NodeJS.ProcessEnv;
+      includeInstallDirectories?: boolean;
+    }): Promise<string | undefined> => undefined,
   ),
   resolveBundledClaudeExecutable: vi.fn(
     async (): Promise<string | undefined> => undefined,
@@ -77,6 +81,7 @@ beforeEach(() => {
   });
   claudeLookupMock.resolveClaudeExecutable.mockResolvedValue(undefined);
   claudeLookupMock.resolveBundledClaudeExecutable.mockResolvedValue(undefined);
+  resetBundledClaudeLookupForTests();
 });
 
 describe("integrated terminal runtime PATH", () => {
@@ -790,10 +795,12 @@ describe("resolveTerminalShell", () => {
       fakeWebContents(),
     );
 
-    // The search runs on the terminal's own environment, before any prefix.
+    // The search covers only the terminal's own PATH, before any prefix: an
+    // install directory missing from PATH is not a claude the shell can run.
     expect(claudeLookupMock.resolveClaudeExecutable).toHaveBeenCalledWith(
       expect.objectContaining({
         env: expect.objectContaining({ PATH: "/usr/bin" }),
+        includeInstallDirectories: false,
       }),
     );
     expect(spawnOptions?.env?.PATH).toBe(

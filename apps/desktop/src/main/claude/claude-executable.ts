@@ -53,6 +53,8 @@ export async function resolveClaudeExecutable(options: {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   homeDir?: string;
+  /** Also search the usual install directories that may be missing from PATH. */
+  includeInstallDirectories?: boolean;
   resolveCandidate?: (candidate: string) => Promise<string | undefined>;
 } = {}): Promise<string | undefined> {
   const env = options.env ?? process.env;
@@ -62,8 +64,10 @@ export async function resolveClaudeExecutable(options: {
   const pathValue = Object.entries(env).find(([key]) => key.toUpperCase() === "PATH")?.[1] ?? "";
   const directories = [
     ...pathValue.split(platform === "win32" ? ";" : ":").filter(Boolean),
-    paths.join(home, ".local", "bin"),
-    ...(platform === "win32" ? [] : ["/opt/homebrew/bin", "/usr/local/bin"]),
+    ...(options.includeInstallDirectories === false ? [] : [
+      paths.join(home, ".local", "bin"),
+      ...(platform === "win32" ? [] : ["/opt/homebrew/bin", "/usr/local/bin"]),
+    ]),
   ];
   const resolveCandidate = options.resolveCandidate ?? (async (candidate: string) => {
     try {
