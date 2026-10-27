@@ -5,7 +5,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
-import type { ThreadPrAutoDispatchPending } from "@pwragent/shared";
+import type { AppServerNotification, ThreadPrAutoDispatchPending, ThreadSubAgentSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { generateFederationIdentityKeyPair } from "../src/main/federation/federation-identity";
 import { generateFederationNoiseStaticKeyPair } from "../src/main/federation/federation-noise";
@@ -49,6 +49,8 @@ const VIEWER_ONLY_CODEX_MODEL = "gpt-viewer-only";
 async function createLocalControlFixture(options?: {
   threadId?: string;
   threadTitle?: string;
+  threadMessage?: string;
+  notifications?: Array<{ id: string; notification: AppServerNotification }>;
 }): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
@@ -59,6 +61,7 @@ async function createLocalControlFixture(options?: {
   const fixturePath = path.join(rootDir, "federation-local.fixture.json");
   const threadId = options?.threadId ?? "local-thread-1";
   const threadTitle = options?.threadTitle ?? "Local control thread";
+  const threadMessage = options?.threadMessage ?? "Local thread is ready.";
   await writeFile(
     fixturePath,
     JSON.stringify({
@@ -109,23 +112,24 @@ async function createLocalControlFixture(options?: {
                 type: "message",
                 id: "local-message-1",
                 role: "assistant",
-                text: "Local thread is ready.",
+                text: threadMessage,
               },
             ],
             messages: [
               {
                 id: "local-message-1",
                 role: "assistant",
-                text: "Local thread is ready.",
+                text: threadMessage,
               },
             ],
-            lastAssistantMessage: "Local thread is ready.",
+            lastAssistantMessage: threadMessage,
             pagination: {
               supportsPagination: false,
               hasPreviousPage: false,
             },
           },
         },
+        ...(options?.notifications ?? []).map((step) => ({ ...step, kind: "notification" })),
         {
           id: "thread-start-1",
           kind: "response",
@@ -300,6 +304,144 @@ async function seedFixtureGitRepo(params: {
 }
 
 test.describe("federation remote window", () => {
+  test("renders and refreshes owner sub-agents in the local main window through the real federation runtime", async ({ browserName: _browserName }, testInfo) => {
+    test.setTimeout(180_000);
+    const threadId = "colliding-subagent-parent";
+    const workerId = "fixture-live-worker";
+    const task = "Inspect the contrived federation delivery path";
+    const ownerIdentity = generateFederationIdentityKeyPair();
+    const ownerNoiseIdentity = generateFederationNoiseStaticKeyPair();
+    const viewerIdentity = generateFederationIdentityKeyPair();
+    const viewerNoiseIdentity = generateFederationNoiseStaticKeyPair();
+    const port = await reserveLoopbackPort();
+    const lifecycle = (completed: boolean): AppServerNotification => ({
+      method: "item/completed",
+      params: {
+        threadId, turnId: "fixture-parent-turn",
+        item: {
+          id: completed ? "fixture-wait" : "fixture-spawn", type: "collabAgentToolCall",
+          tool: completed ? "wait" : "spawnAgent", status: "completed", receiverThreadIds: [workerId],
+          prompt: task, model: "gpt-5.4-mini", reasoningEffort: "medium",
+          agentsStates: { [workerId]: { status: completed ? "completed" : "running",
+            agentNickname: "Delivery inspector", message: completed ? "Delivery verified on the owner." : "Inspecting delivery on the owner." } },
+        },
+      },
+    });
+    const ownerMessage = "This transcript was read from the fixture owner.";
+    const ownerFixture = await createLocalControlFixture({ threadId, threadTitle: "Peer sub-agent parent", threadMessage: ownerMessage,
+      notifications: [{ id: "spawn-worker", notification: lifecycle(false) }, { id: "complete-worker", notification: lifecycle(true) }],
+    });
+    const localFixture = await createLocalControlFixture({ threadId, threadTitle: "Local colliding parent" });
+    let owner: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    let viewer: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+    try {
+      owner = await launchElectronApp({ fixturePath: ownerFixture.fixturePath, secretStorage: "memory",
+        preLaunchHook: async (homeRoot) => {
+          const profile = path.join(homeRoot, ".pwragent", "profiles", "default");
+          await mkdir(path.join(profile, "state"), { recursive: true });
+          await writeFile(path.join(profile, "config.toml"), ["[federation]", 'mode = "gateway"',
+            'instance_label = "Fixture sub-agent owner"', 'listen_host = "127.0.0.1"', `listen_port = ${port}`,
+            `public_url = "ws://127.0.0.1:${port}"`, ""].join("\n"));
+          const db = StateDb.open(path.join(profile, "state", "state.db"));
+          try {
+            const store = new SqliteOverlayStore(db);
+            const now = Date.now();
+            const histories: ThreadSubAgentSummary[] = Array.from({ length: 21 }, (_, index) => ({
+              monitorId: `codex-native:fixture-history-${index}`, agentName: `Historical worker ${index}`,
+              task: `Completed contrived task ${index}`, status: "success", createdAt: now - 40_000 - index,
+              updatedAt: now - 30_000, completedAt: now - 30_000,
+            }));
+            histories.push({ monitorId: "system:token-miser:fixture-gate", task: "Contrived Token Miser gate", status: "success", createdAt: now - 40_000, updatedAt: now - 30_000 },
+              { monitorId: "review:fixture-review", task: "Contrived PwrAgent review", status: "success", createdAt: now - 40_000, updatedAt: now - 30_000 });
+            for (const subAgent of histories) await store.upsertThreadSubAgent({ backend: "codex", threadId, subAgent });
+          } finally { db.close(); }
+        },
+      });
+      await restoreE2eFederationIdentity({ page: owner.window, identityPrivateKeyPem: ownerIdentity.privateKeyPem,
+        noiseStaticPrivateKeyBase64: ownerNoiseIdentity.privateKeyBase64, restartMode: "gateway" });
+      const ownerInstanceId = await owner.window.evaluate(async () =>
+        (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.instanceId);
+      expect(ownerInstanceId).toBeTruthy();
+      const invite = await owner.window.evaluate(async () => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        return (await api.generateFederationInvite!()).invite;
+      });
+      viewer = await launchElectronApp({ fixturePath: localFixture.fixturePath, secretStorage: "memory" });
+      await restoreE2eFederationIdentity({ page: viewer.window, identityPrivateKeyPem: viewerIdentity.privateKeyPem,
+        noiseStaticPrivateKeyBase64: viewerNoiseIdentity.privateKeyBase64 });
+      await viewer.window.evaluate(async (encodedInvite) => {
+        await (window as unknown as { pwragent: DesktopApi }).pwragent.importFederationInvite!({ invite: encodedInvite });
+      }, invite);
+      await expect.poll(async () => viewer!.window.evaluate(async () =>
+        (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.status), { timeout: 30_000 }).toBe("connected");
+      await viewer.window.evaluate(async ({ instanceId, id }) => {
+        const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        const ref = { backend: "codex" as const, threadId: id, target: { scope: "remote" as const, instanceId } };
+        await api.addRemoteThreadPin!({ ref, instanceLabel: "Fixture sub-agent owner", summary: {
+          id, source: "codex", title: "Peer sub-agent parent", titleSource: "explicit", linkedDirectories: [],
+          inbox: { inInbox: true }, updatedAt: 2_000, federation: { ref, instanceLabel: "Fixture sub-agent owner", peerStatus: "connected" },
+        } });
+      }, { instanceId: ownerInstanceId!, id: threadId });
+
+      const page = viewer.window;
+      const selectPeer = async () => {
+        await page.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: "Peer sub-agent parent", exact: true }).click();
+        await page.getByRole("tab", { name: "Sub-agents", exact: true }).click();
+      };
+      await selectPeer();
+      await expect(page.getByText("Historical worker 0", { exact: true })).toBeVisible();
+      await expect(page.getByText("Historical worker 20", { exact: true })).toHaveCount(0);
+      await page.getByRole("button", { name: "Load more sub-agents" }).click();
+      await expect(page.getByText("Historical worker 20", { exact: true })).toBeVisible();
+      await page.getByRole("tab", { name: "Token Miser 1", exact: true }).click();
+      await expect(page.getByText("Contrived Token Miser gate", { exact: true })).toBeVisible();
+      await page.getByRole("tab", { name: "PwrAgent 1", exact: true }).click();
+      await expect(page.getByText("Contrived PwrAgent review", { exact: true })).toBeVisible();
+      await page.getByRole("tab", { name: "Harness 21", exact: true }).click();
+
+      // Only the provider notification is replayed. Persistence, owner display
+      // reads, subscriptions, wire transport, preload, hooks and DOM are real.
+      await owner.advance({ stepId: "spawn-worker" });
+      const card = page.locator(".rail-card").filter({ hasText: task });
+      await expect(card.getByText("Delivery inspector", { exact: true })).toBeVisible();
+      await expect(card.getByText("Running", { exact: true })).toBeVisible();
+      await expect(page.locator(".live-strip").getByText("Delivery inspector", { exact: true })).toBeVisible();
+      const browser = page.getByRole("region", { name: "Thread browser" });
+      await browser.getByRole("button", { name: "Expand 1 native Codex sub-agents for Peer sub-agent parent", exact: true }).click();
+      await expect(browser.getByRole("button", { name: "Open transcript for Delivery inspector", exact: true })).toBeVisible();
+      await card.getByRole("button", { name: "Details", exact: true }).click();
+      const details = page.getByRole("dialog", { name: "Sub-agent details: Delivery inspector" });
+      await expect(details.getByText(task, { exact: true })).toBeVisible();
+      await owner.advance({ stepId: "complete-worker" });
+      await expect(details.getByText("Delivery verified on the owner.", { exact: true })).toBeVisible();
+      await expect(details.getByText("Completed", { exact: true })).toBeVisible();
+      await expect(page.locator(".live-strip").getByText("Delivery inspector", { exact: true })).toHaveCount(0);
+      await details.getByRole("button", { name: "Close", exact: true }).click();
+      await page.screenshot({ path: testInfo.outputPath("peer-subagents-visible.png") });
+
+      await page.getByRole("region", { name: "Thread browser" }).getByRole("button", { name: "Local colliding parent", exact: true }).click();
+      await expect(page.getByText(/No sub-agents yet/)).toBeVisible();
+      await expect(page.getByText(task, { exact: true })).toHaveCount(0);
+      await page.reload();
+      await selectPeer();
+      await expect(card.getByText("Completed", { exact: true })).toBeVisible();
+      await expect(card.getByText("Delivery inspector", { exact: true })).toBeVisible();
+      await card.getByRole("button", { name: "Details", exact: true }).click();
+      const transcriptOpened = viewer.electronApp.waitForEvent("window");
+      await page.getByRole("dialog").getByRole("button", { name: "Open transcript", exact: true }).click();
+      const transcript = await transcriptOpened;
+      await expect(transcript.getByRole("heading", { name: "Delivery inspector", exact: true })).toBeVisible();
+      await expect(transcript.getByText(workerId, { exact: true })).toBeVisible();
+      await expect(transcript.getByText(ownerMessage, { exact: true })).toBeVisible();
+      await transcript.getByRole("button", { name: "Close window", exact: true }).click();
+    } finally {
+      await viewer?.close();
+      await owner?.close();
+      await localFixture.cleanup();
+      await ownerFixture.cleanup();
+    }
+  });
+
   test("cancels a colliding remote auto-fix without changing the local thread", async () => {
     test.setTimeout(180_000);
 
