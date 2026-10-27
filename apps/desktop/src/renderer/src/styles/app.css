@@ -32371,6 +32371,7 @@ div.composer-error-row__toggle {
   overflow-wrap: anywhere;
   color: var(--text-primary);
   line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 /* The full address, shown before the operator consents to open it. The

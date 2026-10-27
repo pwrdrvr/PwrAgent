@@ -344,6 +344,24 @@ describe("MCP elicitation helpers", () => {
     );
   });
 
+  it("shows long names and structured arguments while redacting nested credentials", () => {
+    const name = "pwragent-hosted-sandboxer-smoke-fixture";
+    expect(redactDisplayValue(name, { key: "name" })).toBe(name);
+    expect(redactDisplayValue("Bearer private-value", { key: "name" })).toBe("[redacted]");
+    expect(redactDisplayValue("short-secret", { key: "api_key" })).toBe("[redacted]");
+    expect(redactDisplayValue("short-secret", { key: "value", label: "API key" })).toBe("[redacted]");
+    const labels = {
+      purpose: "smoke", name, access_token: "short-secret",
+      nested: [{ password: "hidden", url: "https://example.test/path?token=hidden#fragment", enabled: true }],
+    };
+    for (const value of [labels, JSON.stringify(labels)]) {
+      expect(JSON.parse(redactDisplayValue(value, { key: "labels" }))).toEqual({
+        purpose: "smoke", name, access_token: "[redacted]",
+        nested: [{ password: "[redacted]", url: "https://example.test/path", enabled: true }],
+      });
+    }
+  });
+
   it("accepts a 2026-07-28 URL request, which carries no elicitationId", () => {
     const state = createMcpElicitationState(buildRequest({
       mode: "url", requestedSchema: undefined, url: "https://example.test/connect",

@@ -78,7 +78,7 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
                 <dt className={param.named ? undefined : "transcript-mcp__param-key"}>
                   {param.label}
                 </dt>
-                <dd>{redactDisplayValue(param.value)}</dd>
+                <dd>{redactDisplayValue(param.value, { key: param.key, label: param.label })}</dd>
               </div>
             ))}
           </dl>
@@ -417,7 +417,7 @@ function readStringMeta(
 
 function readToolParamsDisplay(
   meta: Record<string, unknown> | null
-): Array<{ label: string; named: boolean; value: unknown }> {
+): Array<{ key: string; label: string; named: boolean; value: unknown }> {
   const raw = meta?.tool_params_display;
   if (!Array.isArray(raw)) {
     return [];
@@ -436,6 +436,6 @@ function readToolParamsDisplay(
     if (!label) {
       return [];
     }
-    return [{ label, named: named !== undefined, value: record.value }];
+    return [{ key: readStringMeta(record, "name") ?? readStringMeta(record, "key") ?? label, label, named: named !== undefined, value: record.value }];
   });
 }

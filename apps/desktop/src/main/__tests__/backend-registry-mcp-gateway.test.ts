@@ -4,7 +4,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppServerMcpElicitationRequestNotification, AppServerPendingRequestNotification, AgentEvent, ThreadExecutionMode } from "@pwragent/shared";
-import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { DesktopBackendRegistry, buildCodexConnectionMcpServerName } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { createTempStateDb } from "./sqlite-test-utils";
@@ -768,6 +768,92 @@ select_for_new_threads = true
     }
     expect(unexpected).toEqual([]);
     expect(operation.mock.calls.filter(([entry]) => entry.operation === "gateway/tools/call")).toHaveLength(names.length);
+  });
+
+  it.each(["approve", "auto", "prompt"] as const)(
+    "applies %s to native Codex tool approval for an exact selected bridge",
+    async (toolApproval) => {
+      await registry.close();
+      const server = { name: "one", command: "fixture", args: [], env: { FIXTURE_BRIDGE: "one" } };
+      const service = {
+        registerBridge,
+        peekThreadBridge: (id: string, threadId: string) => id === "one" && threadId === "thread-1" ? server : undefined,
+        listConnections: async () => [{ id: "one", enabled: true, configured: true, toolApproval }],
+      };
+      createRegistry(service as never);
+      const emitted = declineUnexpectedApproval();
+      const result = await internals.handleServerRequest("codex", {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1", turnId: "turn-1", requestId: "native-approval",
+          serverName: buildCodexConnectionMcpServerName(server), mode: "form", message: "Allow create_sandbox?",
+          requestedSchema: { type: "object", properties: {} },
+          _meta: { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"], tool_title: "Create sandbox" },
+        },
+      });
+      expect(result).toEqual({ action: toolApproval === "approve" ? "accept" : "decline", content: toolApproval === "approve" ? {} : null, _meta: null });
+      expect(emitted).toHaveLength(toolApproval === "approve" ? 0 : 1);
+    },
+  );
+
+  it.each(["lookalike", "deselected", "disabled", "signed-out", "ended", "input", "url", "upstream", "policy-error"] as const)(
+    "keeps native approval interactive for %s requests",
+    async (scenario) => {
+      await registry.close();
+      const server = { name: "one", command: "fixture", args: [], env: { FIXTURE_BRIDGE: "one" } };
+      const service = {
+        registerBridge,
+        peekThreadBridge: (id: string, threadId: string) => id === "one" && threadId === "thread-1" ? server : undefined,
+        listConnections: async () => {
+          if (scenario === "policy-error") throw new Error("Fixture unavailable");
+          if (scenario === "deselected") await store.setThreadMcpConnectionIds({ backend: "codex", threadId: "thread-1", connectionIds: [] });
+          if (scenario === "ended") internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+          return [{ id: "one", enabled: scenario !== "disabled", configured: scenario !== "signed-out", toolApproval: "approve" }];
+        },
+      };
+      createRegistry(service as never);
+      const emitted = declineUnexpectedApproval();
+      const notification: AppServerPendingRequestNotification = {
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1", turnId: "turn-1", requestId: "native-boundary",
+          serverName: buildCodexConnectionMcpServerName(server) + (scenario === "lookalike" ? "_other" : ""),
+          mode: scenario === "url" ? "url" : "form", message: "Allow an operation?",
+          requestedSchema: { type: "object", properties: scenario === "input" ? { answer: { type: "string" } } : {} },
+          _meta: scenario === "upstream" ? {} : { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"] },
+          ...(scenario === "url" ? { url: "https://example.test/authorize" } : {}),
+        },
+      };
+      expect(await internals.handleServerRequest("codex", notification)).toMatchObject({ action: "decline" });
+      expect(emitted).toHaveLength(1);
+    },
+  );
+
+  it("rechecks the configured policy for every native approval without a remembered grant", async () => {
+    await registry.close();
+    const server = { name: "one", command: "fixture", args: [], env: {} };
+    let toolApproval = "approve";
+    createRegistry({
+      registerBridge,
+      peekThreadBridge: () => server,
+      listConnections: async () => [{ id: "one", enabled: true, configured: true, toolApproval }],
+    } as never);
+    const emitted = declineUnexpectedApproval();
+    const notification: AppServerPendingRequestNotification = {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "native-first", mode: "form",
+        serverName: buildCodexConnectionMcpServerName(server), message: "Allow create?",
+        requestedSchema: { type: "object", properties: {} },
+        _meta: { codex_approval_kind: "mcp_tool_call", persist: ["session", "always"] },
+      },
+    };
+    expect(await internals.handleServerRequest("codex", notification)).toEqual({ action: "accept", content: {}, _meta: null });
+    toolApproval = "prompt";
+    expect(await internals.handleServerRequest("codex", {
+      ...notification, params: { ...notification.params, requestId: "native-second" },
+    })).toMatchObject({ action: "decline" });
+    expect(emitted).toHaveLength(1);
   });
 
   it("requires source-specific approval and deduplicates the same dynamic call", async () => {

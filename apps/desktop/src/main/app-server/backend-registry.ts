@@ -203,6 +203,7 @@ import {
   type AppServerListSkillsResponse,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
+  type AppServerMcpElicitationResponse,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
@@ -591,7 +592,7 @@ import {
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { automationMcpToolAllowed, buildAutomationMcpPolicy, type AutomationMcpServer } from "../automations/automation-mcp-policy";
-import { buildAutomationMcpConsent, isMcpToolApproval } from "../mcp-connections/mcp-approval-consent";
+import { buildAutomationMcpConsent, buildMcpToolApprovalConsent, isMcpToolApproval } from "../mcp-connections/mcp-approval-consent";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import {
   buildStarMapIntakeAgentTools,
@@ -39546,6 +39547,11 @@ export class DesktopBackendRegistry {
       return buildHeadlessAutomationRequestCancelResponse(request);
     }
 
+    if (backend === "codex" && isMcpToolApproval(request)) {
+      const consent = await this.selectedConnectionMcpConsent(request, signal);
+      if (consent) return consent;
+    }
+
     const managedReview = this.findManagedReviewForChildRequest({
       backend,
       reviewThreadId: request.params.threadId,
@@ -39761,6 +39767,46 @@ export class DesktopBackendRegistry {
       if (signal.aborted) { aborted(); return; }
       void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
     });
+  }
+
+  private async selectedConnectionMcpConsent(
+    request: AppServerPendingRequestNotification,
+    signal?: AbortSignal,
+  ): Promise<AppServerMcpElicitationResponse | undefined> {
+    const consent = buildMcpToolApprovalConsent(request);
+    const threadId = request.params.threadId;
+    const turnId = request.params.turnId ?? undefined;
+    const service = this.mcpConnectionService;
+    if (!consent || !service?.peekThreadBridge || !service.listConnections
+      || !this.isLiveDynamicToolCall("codex", { threadId, turnId })) return undefined;
+    try {
+      signal?.throwIfAborted();
+      const selected = await this.readThreadMcpConnections({ backend: "codex", threadId });
+      const connectionId = selected.connectionIds.find((id) => {
+        const bridge = service.peekThreadBridge!(id, threadId);
+        return bridge && buildCodexConnectionMcpServerName(bridge) === request.params.serverName;
+      });
+      if (!connectionId) return undefined;
+      const connection = (await service.listConnections({ cachedLocalStatus: true }))
+        .find((entry) => entry.id === connectionId);
+      if (!connection?.enabled || !connection.configured || connection.toolApproval !== "approve"
+        || connection.state === "disconnected" || connection.state === "reauthorization_required") return undefined;
+      // A server prefix is not proof of ownership. Recheck selection, the
+      // exact live bridge and turn after asynchronous policy reads.
+      const current = await this.readThreadMcpConnections({ backend: "codex", threadId });
+      signal?.throwIfAborted();
+      const currentBridge = service.peekThreadBridge(connectionId, threadId);
+      if (!current.connectionIds.includes(connectionId)
+        || !this.isLiveDynamicToolCall("codex", { threadId, turnId })
+        || !currentBridge || buildCodexConnectionMcpServerName(currentBridge) !== request.params.serverName) return undefined;
+      // One invocation only: future requests must reread the connection's
+      // policy rather than inherit a Codex conversation or permanent grant.
+      return consent;
+    } catch {
+      signal?.throwIfAborted();
+      // An unavailable policy or registration keeps the normal prompt.
+    }
+    return undefined;
   }
 
   // A lookup that fails reads as the default, which still asks for anything
