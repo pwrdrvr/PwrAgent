@@ -59,6 +59,25 @@ test.describe("native macOS window activation", () => {
         };
       });
       const pid = fixture.electronApp.process().pid!;
+      const active = tolerateTransientRpcFailure(() =>
+        fixture.electronApp.evaluate(({ app }) => app.isActive()),
+      );
+      // On macOS, BrowserWindow.focus() activates the app with
+      // activateIgnoringOtherApps:NO, which does nothing while another app is
+      // active. Launch leaves the app inactive whenever macOS has already
+      // given activation to another app, such as Finder after the previous
+      // spec's app quit. A window can't be key in an inactive app, so focus()
+      // would never select one. Activate the app as the operator would.
+      traces.push({
+        mode: "launch",
+        ...await fixture.electronApp.evaluate(({ app, BrowserWindow }) => ({
+          active: app.isActive(),
+          key: BrowserWindow.getFocusedWindow()?.id ?? null,
+        })),
+        frontmost: JSON.parse((await native("frontmost")).stdout) as unknown,
+      });
+      await native("activate", String(pid));
+      await expect.poll(active.read).toBe(true).catch(active.rethrowWithLastFailure);
       for (const mode of ["activate", "reopen"]) {
         for (const [target, nativeId] of [[ids.local, ids.nativeLocal], [ids.viewer, ids.nativeViewer]]) {
           await fixture.electronApp.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)!.focus(), target!);
@@ -72,9 +91,6 @@ test.describe("native macOS window activation", () => {
           );
           await expect.poll(inactive.read).toBe(false).catch(inactive.rethrowWithLastFailure);
           await native(mode, String(pid));
-          const active = tolerateTransientRpcFailure(() =>
-            fixture.electronApp.evaluate(({ app }) => app.isActive()),
-          );
           await expect.poll(active.read).toBe(true).catch(active.rethrowWithLastFailure);
           const state = await fixture.electronApp.evaluate(async ({ BrowserWindow, Menu }) => {
             // Drain posted menu installation tasks before inspecting key state.
