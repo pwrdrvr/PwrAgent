@@ -22588,6 +22588,42 @@ command = "pnpm grok"
     await registry.close();
   });
 
+  it("asks the launchpad for a default-branch worktree base without leaking it to the backend", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list", "thread/start"] },
+      threads: [],
+    });
+    const prepareLaunchpadWorkspace = vi.fn(async () => ({
+      cwd: "/Users/test/.codex/worktrees/abc/repo",
+      repositoryPath: "/Users/test/repo",
+      workMode: "worktree" as const,
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        prepareLaunchpadWorkspace,
+        recordCodexWorktreeOwnerThread: vi.fn(async () => {}),
+      } as never,
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      cwd: "/Users/test/.codex/worktrees/parent/repo",
+      workMode: "worktree",
+      worktreeBase: "default_branch",
+    });
+
+    expect(prepareLaunchpadWorkspace).toHaveBeenCalledWith(expect.objectContaining({
+      directoryPath: "/Users/test/.codex/worktrees/parent/repo",
+      workMode: "worktree",
+      worktreeBase: "default_branch",
+    }));
+    expect(codexClient.lastStartThreadParams).not.toHaveProperty("worktreeBase");
+
+    await registry.close();
+  });
+
   it("materializes workspace launchpads into a scratch directory instead of the workspace root", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start"] },

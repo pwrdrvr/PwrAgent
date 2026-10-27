@@ -69,6 +69,9 @@ describe("thread to-do Start thread", () => {
       reasoningEffort: "high",
       fastMode: false,
       parentThreadId: "source-thread",
+      // The card's cwd is the raising thread's worktree. Its branch holds
+      // that thread's own work, not a base for a standalone follow-up.
+      worktreeBase: "default_branch",
     }));
     expect(registry.startTurn).toHaveBeenCalledWith(expect.objectContaining({
       threadId: "child-thread",
