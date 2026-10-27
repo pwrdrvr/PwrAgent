@@ -223,7 +223,7 @@ describe("CodexModelProviderCatalog", () => {
       resolveProviders: () => [],
       resolveKeys: async () => ({}),
       fetch: async (url, init) => {
-        expect((init?.headers as Record<string, string>).authorization).toBe("Bearer test-key");
+        expect((init?.headers as Record<string, string> | undefined)?.authorization).toBe("Bearer test-key");
         if (!url.endsWith("/responses")) return jsonResponse({ data: [{ id: "gpt-5.5" }] });
         expect(JSON.parse(String(init?.body)).model).toBe("gpt-5.5");
         return jsonResponse({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }] });

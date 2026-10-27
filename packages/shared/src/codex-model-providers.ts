@@ -318,7 +318,7 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
     }
     // Repair earlier endpoint-only Bonsai imports without changing unrelated providers.
     const compatibility = entry.compatibility ?? (
-      isLoopbackCodexBaseUrl(baseUrl) && models?.length === 1 && /bonsai/iu.test(models[0])
+      isLoopbackCodexBaseUrl(baseUrl) && models?.length === 1 && /bonsai.*\.gguf$/iu.test(models[0])
         ? "bonsai" : undefined
     );
     if (compatibility && (!isLoopbackCodexBaseUrl(baseUrl) || models?.length !== 1)) {
