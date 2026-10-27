@@ -774,7 +774,7 @@ jobs:
 
       - name: TEMPORARY crash dialog probe
         shell: bash
-        timeout-minutes: 5
+        timeout-minutes: 8
         continue-on-error: true
         run: node scripts/ci/probe-macos-crash-dialog.mjs
 
