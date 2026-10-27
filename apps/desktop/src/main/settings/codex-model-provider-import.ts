@@ -70,9 +70,10 @@ export async function scanCodexModelProviderImports(
   // One endpoint found in several files is one candidate.
   const candidates = new Map<string, CodexModelProviderImportCandidate>();
   const incompatibleEndpoints = new Set<string>();
+  const conflictingEndpoints = new Set<string>();
   const skipped = new Map<string, CodexModelProviderImportSkip>();
   const addSkip = (skip: CodexModelProviderImportSkip) => {
-    const key = `${skip.sourceId ?? ""}\n${skip.reason}`;
+    const key = `${skip.baseUrl ?? ""}\n${skip.sourceId ?? ""}\n${skip.reason}`;
     const existing = skipped.get(key);
     if (existing) {
       existing.sources.push(...skip.sources);
@@ -118,6 +119,23 @@ export async function scanCodexModelProviderImports(
         continue;
       }
       existing.sources.push(...entry.sources);
+      if (conflictingEndpoints.has(entry.baseUrl)) continue;
+      if ((existing.compatibility === "bonsai" || entry.compatibility === "bonsai")
+        && (existing.compatibility !== entry.compatibility
+          || existing.models.length !== 1 || entry.models.length !== 1
+          || existing.models[0] !== entry.models[0]
+          || existing.catalogPath !== entry.catalogPath)) {
+        incompatibleEndpoints.add(entry.baseUrl);
+        conflictingEndpoints.add(entry.baseUrl);
+        addSkip({
+          sourceId: existing.sourceId,
+          name: existing.name,
+          baseUrl: entry.baseUrl,
+          reason: "The same endpoint has conflicting Bonsai models, compatibility settings, or model catalogs across Codex homes.",
+          sources: existing.sources,
+        });
+        continue;
+      }
       existing.models = [...new Set([...existing.models, ...entry.models])]
         .slice(0, CODEX_MODEL_PROVIDER_MODEL_LIMIT);
       existing.needsApiKey ||= entry.needsApiKey;

@@ -244,8 +244,8 @@ describe("CodexModelProviderCatalog", () => {
       },
     });
     const provider = { ...refuseless, id: "bonsai", compatibility: "bonsai" as const };
-    expect((await catalog.test(provider, undefined)).responses.ok).toBe(false);
-    expect(prepareCompatibility).toHaveBeenCalledWith(provider);
+    expect((await catalog.test(provider, "fixture-key")).responses.ok).toBe(false);
+    expect(prepareCompatibility).toHaveBeenCalledWith(provider, "fixture-key");
     expect(close).toHaveBeenCalledOnce();
   });
 

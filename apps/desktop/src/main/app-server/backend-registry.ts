@@ -10453,7 +10453,7 @@ export class DesktopBackendRegistry {
             );
           if (!provider) return args;
           await cleanup;
-          resources ??= prepareBonsaiRuntime(provider);
+          resources ??= prepareBonsaiRuntime(provider, env?.[codexModelProviderApiKeyEnv(provider.id)]);
           try {
             const prepared = await resources;
             const nativeMcpNames = await this.codexClient.readConfiguredMcpServerNames?.() ?? [];
@@ -35861,8 +35861,8 @@ export class DesktopBackendRegistry {
             start: client.startRealtime.bind(client),
             stop: client.stopRealtime.bind(client),
             text: client.appendRealtimeText.bind(client),
-            onEvent: client.onRealtimeEvent.bind(client),
-            onDisconnect: client.onRealtimeDisconnect.bind(client),
+            onEvent: (listener) => client.onRealtimeEvent!(listener, threadId),
+            onDisconnect: (listener) => client.onRealtimeDisconnect!(listener, threadId),
             onToolCall: (listener) => {
               this.nativeVoiceToolListeners.add(listener);
               return () => { this.nativeVoiceToolListeners.delete(listener); };

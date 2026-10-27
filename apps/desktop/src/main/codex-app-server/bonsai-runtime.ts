@@ -62,12 +62,12 @@ export async function readBonsaiCatalog(provider: CodexModelProviderSettings): P
 }
 
 /** Resources live exactly as long as this provider's App Server process. */
-export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings): Promise<{
+export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings, apiKey?: string): Promise<{
   overrides: string[];
   baseUrl: string;
   close: () => Promise<void>;
 }> {
-  const catalog = await discoverModelCatalog(provider.baseUrl, await readBonsaiCatalog(provider));
+  const catalog = await discoverModelCatalog(provider.baseUrl, await readBonsaiCatalog(provider), apiKey);
   const root = resolveActiveProfilePath("runtime");
   await mkdir(root, { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(path.join(root, "bonsai-"));
@@ -84,7 +84,7 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings)
   try {
     const catalogPath = path.join(directory, "models.json");
     await writeFile(catalogPath, JSON.stringify(catalog), { mode: 0o600 });
-    bridge = await startBridge(provider.baseUrl);
+    bridge = await startBridge(provider.baseUrl, apiKey);
     const address = bridge.address();
     if (!address || typeof address === "string") throw new Error("The Bonsai bridge has no loopback address.");
     return {

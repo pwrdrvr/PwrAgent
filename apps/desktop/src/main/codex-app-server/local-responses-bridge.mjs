@@ -11,8 +11,11 @@ function loopbackUpstream(upstream) {
   return target;
 }
 
-async function readMetadata(url) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(5_000), redirect: "error" });
+async function readMetadata(url, apiKey) {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(5_000), redirect: "error",
+    headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+  });
   if (!response.ok) throw new Error(`Local model metadata ${url.pathname}: HTTP ${response.status}`);
   let text = "";
   let size = 0;
@@ -25,7 +28,7 @@ async function readMetadata(url) {
   return JSON.parse(text + decoder.decode());
 }
 
-export async function discoverModelCatalog(upstream, template) {
+export async function discoverModelCatalog(upstream, template, apiKey) {
   const target = loopbackUpstream(upstream);
   const base = target.href.replace(/\/$/, "");
   if (!target.pathname.replace(/\/$/, "").endsWith("/v1")) {
@@ -36,8 +39,8 @@ export async function discoverModelCatalog(upstream, template) {
     throw new Error("Local model discovery requires a single-model catalog template");
   }
   const [models, props] = await Promise.all([
-    readMetadata(new URL(`${base}/models`)),
-    readMetadata(new URL(`${base.slice(0, -3)}/props`)),
+    readMetadata(new URL(`${base}/models`), apiKey),
+    readMetadata(new URL(`${base.slice(0, -3)}/props`), apiKey),
   ]);
   const model = template.models[0];
   const advertised = Array.isArray(models?.data)
@@ -127,7 +130,7 @@ export function translateResponse(value, names) {
   return result;
 }
 
-export async function startBridge(upstream) {
+export async function startBridge(upstream, apiKey) {
   const target = loopbackUpstream(upstream);
   const server = createServer(async (req, res) => {
     const abort = new AbortController();
@@ -148,7 +151,7 @@ export async function startBridge(upstream) {
       const response = await fetch(`${target.href.replace(/\/$/, "")}/responses`, {
         method: "POST",
         redirect: "error",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
         body: JSON.stringify(body),
         signal: abort.signal,
       });

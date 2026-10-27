@@ -149,7 +149,7 @@ export class CodexModelProviderCatalog {
     let runtime: Awaited<ReturnType<typeof prepareBonsaiRuntime>> | undefined;
     try {
       if (provider.compatibility === "bonsai") {
-        runtime = await (this.options.prepareCompatibility ?? prepareBonsaiRuntime)(provider);
+        runtime = await (this.options.prepareCompatibility ?? prepareBonsaiRuntime)(provider, apiKey);
       }
       const response = await this.requestJson(`${runtime?.baseUrl ?? provider.baseUrl}/responses`, {
         method: "POST",

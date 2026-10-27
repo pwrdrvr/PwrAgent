@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexModelProviderSettings } from "@pwragent/shared";
 import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime, readBonsaiCatalog } from "../codex-app-server/bonsai-runtime";
+import { startBridge } from "../codex-app-server/local-responses-bridge.mjs";
 
 const bridge = vi.hoisted(() => ({
   discover: vi.fn(async (_upstream: string, template: unknown) => template),
@@ -31,7 +32,7 @@ describe("isolated Bonsai launch resources", () => {
     expect(bonsaiNativeMcpOverrides([])).toEqual([]);
   });
   it("generates a private catalog with model capabilities and process-local compatibility overrides", async () => {
-    const runtime = await prepareBonsaiRuntime(provider);
+    const runtime = await prepareBonsaiRuntime(provider, "fixture-key");
     try {
       const catalogArg = runtime.overrides.find((value) => value.startsWith("model_catalog_json="))!;
       const catalogPath = JSON.parse(catalogArg.slice("model_catalog_json=".length)) as string;
@@ -48,7 +49,8 @@ describe("isolated Bonsai launch resources", () => {
         "model_context_window=65536", "model_auto_compact_token_limit=49152", "features.apps=false", "features.plugins=false",
         "features.goals=false", "features.multi_agent=false", "features.image_generation=false", 'web_search="disabled"',
       ]));
-      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, expect.any(Object));
+      expect(bridge.discover).toHaveBeenCalledWith(provider.baseUrl, expect.any(Object), "fixture-key");
+      expect(startBridge).toHaveBeenCalledWith(provider.baseUrl, "fixture-key");
       await runtime.close();
       await expect(stat(catalogPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(bridge.close).toHaveBeenCalledOnce();

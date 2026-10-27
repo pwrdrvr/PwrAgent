@@ -298,6 +298,73 @@ describe("scanCodexModelProviderImports", () => {
     })]);
   });
 
+  it.each(["model", "catalog", "compatibility"])("blocks conflicting Bonsai %s definitions across homes in either scan order", async (conflict) => {
+    const config = (model: string, catalog?: string, id = "bonsai") => [
+      `model_provider = "${id}"`, `model = "${model}"`,
+      ...(catalog ? [`model_catalog_json = ${JSON.stringify(catalog)}`] : []),
+      `[model_providers.${id}]`, 'base_url = "http://127.0.0.1:18080/v1"',
+    ].join("\n");
+    const first = await home("first", config("Bonsai.gguf", conflict === "catalog" ? "models.json" : undefined));
+    const second = await home("second", config(
+      conflict === "model" ? "Other-Bonsai.gguf" : conflict === "compatibility" ? "other-model" : "Bonsai.gguf",
+      conflict === "catalog" ? "models.json" : undefined,
+      conflict === "compatibility" ? "alias" : "bonsai",
+    ));
+    if (conflict === "catalog") {
+      const catalog = await readBonsaiCatalog({
+        id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: ["Bonsai.gguf"], compatibility: "bonsai",
+      });
+      await writeFile(path.join(first, "models.json"), JSON.stringify(catalog));
+      catalog.models[0].base_instructions = "Different instructions";
+      await writeFile(path.join(second, "models.json"), JSON.stringify(catalog));
+    }
+    const homes = [first, second].map((codexHome) => ({ codexHome, label: codexHome }));
+    for (const ordered of [homes, [...homes].reverse()]) {
+      const scan = await scanCodexModelProviderImports(ordered);
+      expect(scan.candidates).toEqual([]);
+      expect(scan.skipped).toEqual([expect.objectContaining({
+        baseUrl: "http://127.0.0.1:18080/v1",
+        reason: expect.stringContaining("conflicting Bonsai"),
+        sources: ordered.map((item) => ({ label: item.label, configPath: path.join(item.codexHome, "config.toml") })),
+      })]);
+    }
+  });
+
+  it("merges matching Bonsai definitions without losing catalog instructions", async () => {
+    const catalogPath = path.join(root, "models.json");
+    const catalog = await readBonsaiCatalog({
+      id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: ["Bonsai.gguf"], compatibility: "bonsai",
+    });
+    await writeFile(catalogPath, JSON.stringify(catalog));
+    const toml = [
+      'model_provider = "bonsai"', 'model = "Bonsai.gguf"',
+      `model_catalog_json = ${JSON.stringify(catalogPath)}`,
+      '[model_providers.bonsai]', 'base_url = "http://127.0.0.1:18080/v1"',
+    ].join("\n");
+    const homes = await Promise.all([home("first", toml), home("second", toml)]);
+    const scan = await scanCodexModelProviderImports(homes.map((codexHome) => ({ codexHome, label: codexHome })));
+    expect(scan.skipped).toEqual([]);
+    expect(scan.candidates).toEqual([expect.objectContaining({ models: ["Bonsai.gguf"], catalogPath, sources: expect.any(Array) })]);
+    expect(scan.candidates[0].sources).toHaveLength(2);
+  });
+
+  it("reports each conflicting endpoint separately when homes reuse the provider name", async () => {
+    const homes = [];
+    for (const port of [18080, 18081]) {
+      for (const model of ["Bonsai.gguf", "Other-Bonsai.gguf"]) {
+        const codexHome = await home(`${port}-${model}`, [
+          'model_provider = "bonsai"', `model = "${model}"`,
+          '[model_providers.bonsai]', `base_url = "http://127.0.0.1:${port}/v1"`,
+        ].join("\n"));
+        homes.push({ codexHome, label: codexHome });
+      }
+    }
+    const scan = await scanCodexModelProviderImports(homes);
+    expect(scan.candidates).toEqual([]);
+    expect(scan.skipped.map((entry) => entry.baseUrl)).toEqual(["http://127.0.0.1:18080/v1", "http://127.0.0.1:18081/v1"]);
+    expect(scan.skipped.map((entry) => entry.sources.length)).toEqual([2, 2]);
+  });
+
   it("does not read a config.toml larger than 1 MiB", async () => {
     const big = await home("big", `# ${"x".repeat(1024 * 1024)}\n`);
     const scan = await scanCodexModelProviderImports([{ codexHome: big, label: "big" }]);

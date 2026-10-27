@@ -8508,12 +8508,12 @@ export class CodexAppServerClient {
     });
   }
 
-  onRealtimeEvent(listener: (event: NativeVoiceNotification) => void): () => void {
+  onRealtimeEvent(listener: (event: NativeVoiceNotification) => void, _threadId?: string): () => void {
     this.realtimeListeners.add(listener);
     return () => { this.realtimeListeners.delete(listener); };
   }
 
-  onRealtimeDisconnect(listener: () => void): () => void {
+  onRealtimeDisconnect(listener: () => void, _threadId?: string): () => void {
     this.realtimeDisconnectListeners.add(listener);
     return () => { this.realtimeDisconnectListeners.delete(listener); };
   }

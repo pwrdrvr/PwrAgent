@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppServerNotification, AppServerPendingRequestNotification, CodexModelProviderSettings } from "@pwragent/shared";
 import type { CodexAppServerClient } from "../codex-app-server/client";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
+import type { NativeVoiceNotification } from "../codex-app-server/native-voice-protocol";
 
 const bonsai: CodexModelProviderSettings = {
   id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: ["Bonsai.gguf"], compatibility: "bonsai",
@@ -11,12 +12,17 @@ function fixture() {
   const notifications = new Set<(event: AppServerNotification) => void>();
   const requests = new Set<(event: AppServerPendingRequestNotification) => Promise<unknown>>();
   const exits = new Set<() => void>();
+  const realtimeEvents = new Set<(event: NativeVoiceNotification) => void>();
+  const realtimeDisconnects = new Set<() => void>();
   const providers = new Map<string, string>();
   const raw = {
     startThread: vi.fn(async () => ({ threadId: "new-thread" })),
     forkThread: vi.fn(async () => ({ threadId: "forked-thread" })),
     startTurn: vi.fn(async () => ({ turnId: "turn" })),
     interruptTurn: vi.fn(async () => undefined),
+    steerTurn: vi.fn(async () => ({ threadId: "new-thread", turnId: "turn" })),
+    terminateBackgroundTerminal: vi.fn(async () => true),
+    startRealtime: vi.fn(async () => undefined),
     readThreadSummary: vi.fn(async () => ({ id: "persisted" })),
     readThread: vi.fn(async () => ({ entries: [] })),
     listThreads: vi.fn(async () => []),
@@ -35,17 +41,24 @@ function fixture() {
     onAppServerUnexpectedExit: (listener: () => void) => {
       exits.add(listener); return () => exits.delete(listener);
     },
+    onRealtimeEvent: (listener: (event: NativeVoiceNotification) => void) => {
+      realtimeEvents.add(listener); return () => realtimeEvents.delete(listener);
+    },
+    onRealtimeDisconnect: (listener: () => void) => {
+      realtimeDisconnects.add(listener); return () => realtimeDisconnects.delete(listener);
+    },
   };
-  return { raw, client: raw as unknown as CodexAppServerClient, providers, notifications, requests, exits };
+  return { raw, client: raw as unknown as CodexAppServerClient, providers, notifications, requests, exits, realtimeEvents, realtimeDisconnects };
 }
 
 describe("provider-specific Codex runtimes", () => {
   function setup() {
     const primary = fixture();
     const local = fixture();
+    const providers = [bonsai];
     const create = vi.fn(() => local.client);
-    const client = createProviderRuntimeClient(primary.client, { resolveProviders: () => [bonsai], create });
-    return { primary, local, create, client };
+    const client = createProviderRuntimeClient(primary.client, { resolveProviders: () => providers, create });
+    return { primary, local, create, client, providers };
   }
 
   it("routes Bonsai starts and subsequent operations to one lazy client while OpenAI stays on the primary", async () => {
@@ -70,6 +83,57 @@ describe("provider-specific Codex runtimes", () => {
     expect(primary.raw.readThreadSummary).toHaveBeenCalledWith("persisted");
     expect(local.raw.startTurn).toHaveBeenCalledOnce();
     await expect(client.startTurn({ threadId: "persisted", model: "@another/model", input: [] })).rejects.toThrow("Hand it off");
+  });
+
+  it("keeps live operations on their owner after provider removal until the pool closes", async () => {
+    const { primary, local, client, providers } = setup();
+    await client.startThread({ model: "@bonsai/Bonsai.gguf" });
+    providers.splice(0);
+    await client.interruptTurn({ threadId: "new-thread", turnId: "turn" });
+    await client.steerTurn({ threadId: "new-thread", expectedTurnId: "turn", input: [] });
+    await client.terminateBackgroundTerminal("new-thread", "process");
+    expect(local.raw.interruptTurn).toHaveBeenCalledOnce();
+    expect(local.raw.steerTurn).toHaveBeenCalledOnce();
+    expect(local.raw.terminateBackgroundTerminal).toHaveBeenCalledWith("new-thread", "process");
+    expect(primary.raw.interruptTurn).not.toHaveBeenCalled();
+    expect(primary.raw.steerTurn).not.toHaveBeenCalled();
+    expect(primary.raw.terminateBackgroundTerminal).not.toHaveBeenCalled();
+    await client.close();
+    expect(local.raw.close).toHaveBeenCalledOnce();
+    await client.startThread({ model: "gpt-5.5" });
+    expect(primary.raw.startThread).toHaveBeenCalledOnce();
+  });
+
+  it("routes scoped realtime events and disconnects to the voice session's runtime", async () => {
+    const { primary, local, client } = setup();
+    primary.providers.set("persisted", "bonsai");
+    const localEvent = vi.fn();
+    const localDisconnect = vi.fn();
+    const primaryDisconnect = vi.fn();
+    const stopEvent = client.onRealtimeEvent(localEvent, "persisted");
+    const stopDisconnect = client.onRealtimeDisconnect(localDisconnect, "persisted");
+    const stopPrimary = client.onRealtimeDisconnect(primaryDisconnect, "openai-thread");
+    await client.startRealtime({ threadId: "persisted", outputModality: "audio", transport: { type: "webrtc", sdp: "offer" } });
+    expect(local.raw.startRealtime).toHaveBeenCalledOnce();
+    const event: NativeVoiceNotification = { method: "thread/realtime/sdp", params: { threadId: "persisted", sdp: "answer" } };
+    for (const listener of local.realtimeEvents) listener(event);
+    expect(localEvent).toHaveBeenCalledWith(event);
+    for (const listener of local.realtimeDisconnects) listener();
+    expect(localDisconnect).toHaveBeenCalledOnce();
+    expect(primaryDisconnect).not.toHaveBeenCalled();
+    for (const listener of primary.realtimeEvents) listener(event);
+    expect(localEvent).toHaveBeenCalledOnce();
+    for (const listener of primary.realtimeDisconnects) listener();
+    expect(primaryDisconnect).toHaveBeenCalledOnce();
+    expect(localDisconnect).toHaveBeenCalledOnce();
+    stopEvent(); stopDisconnect(); stopPrimary();
+    expect(local.realtimeEvents.size + primary.realtimeEvents.size).toBe(0);
+    expect(local.realtimeDisconnects.size + primary.realtimeDisconnects.size).toBe(0);
+    const lateListener = vi.fn();
+    const stopLate = client.onRealtimeEvent(lateListener, "persisted");
+    for (const listener of local.realtimeEvents) listener(event);
+    expect(lateListener).toHaveBeenCalledWith(event);
+    stopLate();
   });
 
   it("reads persisted history without needing a local inference server and uses the live owner once started", async () => {

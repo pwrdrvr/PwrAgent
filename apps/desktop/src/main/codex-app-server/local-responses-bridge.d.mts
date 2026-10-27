@@ -4,8 +4,8 @@ export type LocalModelCatalog = {
   models: Array<{ slug: string; input_modalities: string[]; [key: string]: unknown }>;
   [key: string]: unknown;
 };
-export function discoverModelCatalog(upstream: string, template: LocalModelCatalog): Promise<LocalModelCatalog>;
-export function startBridge(upstream: string): Promise<Server>;
+export function discoverModelCatalog(upstream: string, template: LocalModelCatalog, apiKey?: string): Promise<LocalModelCatalog>;
+export function startBridge(upstream: string, apiKey?: string): Promise<Server>;
 export function translateRequest(request: Record<string, unknown>): {
   body: Record<string, unknown>;
   names: Map<string, { name: string; namespace?: string }>;

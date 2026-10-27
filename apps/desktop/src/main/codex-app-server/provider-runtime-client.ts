@@ -11,8 +11,8 @@ const ROUTES: Record<keyof CodexAppServerClient, Route> = {
   restartAppServer: "all",
   resetAppServerRestarts: "all",
   recoverInvalidPersistedResponseMessageIds: "thread",
-  onRealtimeEvent: "primary",
-  onRealtimeDisconnect: "primary",
+  onRealtimeEvent: "subscribe",
+  onRealtimeDisconnect: "subscribe",
   startRealtime: "thread",
   stopRealtime: "threadId",
   appendRealtimeText: "threadId",
@@ -119,7 +119,15 @@ export function createProviderRuntimeClient(
   };
   const subscribe = (subscription: Subscription, client: CodexAppServerClient, provider?: string): void => {
     const callback = subscription.args[0] as Callback;
-    const args = subscription.method === "onAppServerUnexpectedExit" ? [() => {
+    const realtime = subscription.method === "onRealtimeEvent" || subscription.method === "onRealtimeDisconnect";
+    const args = realtime ? [(...values: unknown[]) => {
+      const threadId = subscription.args[1];
+      if (typeof threadId === "string") {
+        const owner = providerForThread(threadId);
+        if ((owner ? runtimes.get(owner) : undefined) !== (client === primary ? undefined : client)) return;
+      }
+      return callback(...values);
+    }] : subscription.method === "onAppServerUnexpectedExit" ? [() => {
       const affected = new Set([...owners].filter(([, owner]) =>
         provider ? owner === provider : !owner || !runtimes.has(owner)).map(([id]) => id));
       return callback(affected);
@@ -134,15 +142,15 @@ export function createProviderRuntimeClient(
     subscription.stops.set(client, invoke(client, subscription.method, args) as () => void);
   };
   const runtime = (providerId: string | undefined): CodexAppServerClient => {
+    // Settings changes defer shutdown while turns are active; their owner stays live.
+    const existing = providerId ? runtimes.get(providerId) : undefined;
+    if (existing) return existing;
     const provider = options.resolveProviders().find((entry) => entry.id === providerId);
     if (provider?.compatibility !== "bonsai") return primary;
-    let client = runtimes.get(provider.id);
-    if (!client) {
-      client = options.create(provider);
-      runtimes.set(provider.id, client);
-      attach(client, provider.id);
-      for (const subscription of subscriptions) subscribe(subscription, client, provider.id);
-    }
+    const client = options.create(provider);
+    runtimes.set(provider.id, client);
+    attach(client, provider.id);
+    for (const subscription of subscriptions) subscribe(subscription, client, provider.id);
     return client;
   };
   const dispatch = async (method: Method, route: Route, args: unknown[]): Promise<unknown> => {

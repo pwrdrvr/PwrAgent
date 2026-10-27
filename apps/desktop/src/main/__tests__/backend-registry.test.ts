@@ -3818,6 +3818,8 @@ describe("DesktopBackendRegistry", () => {
 
   it("admits a newly created stock 0.160 director with its generic discovery catalog", async () => {
     const codexClient = voiceClient({ initializeResult: { userAgent: "codex/0.160.0" }, serverCapabilities: {} });
+    const onEvent = vi.spyOn(codexClient, "onRealtimeEvent");
+    const onDisconnect = vi.spyOn(codexClient, "onRealtimeDisconnect");
     const prepare = vi.fn(async (params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]) => {
       // The real client's current-process proof is covered by codex-client tests.
       return params.threadId === "thread-1"
@@ -3834,6 +3836,11 @@ describe("DesktopBackendRegistry", () => {
       }));
       expect(JSON.stringify(prepare.mock.calls[0][0].dynamicTools)).toContain("tool_search");
       expect(codexClient.refreshThreadTools).not.toHaveBeenCalled();
+      const stopEvent = voice.onEvent(() => {});
+      const stopDisconnect = voice.onDisconnect(() => {});
+      expect(onEvent).toHaveBeenCalledWith(expect.any(Function), started.threadId);
+      expect(onDisconnect).toHaveBeenCalledWith(expect.any(Function), started.threadId);
+      stopEvent(); stopDisconnect();
       voice.release();
     } finally { await registry.close(); }
   });
