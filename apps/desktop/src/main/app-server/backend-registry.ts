@@ -20069,11 +20069,11 @@ export class DesktopBackendRegistry {
     if (!request.input.some((item) => item.type === "text" && item.text.trim())) {
       throw new Error("Replacement input requires a non-empty prompt.");
     }
-    if (entry.agentMessages) {
-      const updated = this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender, request.messageOrigin);
-      if (!updated) throw new Error("The sender's queued message is no longer waiting.");
-      this.emitQueuedTurnInputUpdated(updated);
-    } else this.updateQueuedTurnInput(entry.id, input);
+    const updated = entry.agentMessages
+      ? this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender, request.messageOrigin)
+      : this.threadTurnQueue.updateQueuedEntryInput(entry.id, input, sender);
+    if (!updated) throw new Error("The sender's queued message is no longer waiting.");
+    this.emitQueuedTurnInputUpdated(updated);
     return {
       backend: entry.backend,
       threadId: entry.threadId,

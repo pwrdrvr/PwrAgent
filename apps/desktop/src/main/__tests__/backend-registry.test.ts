@@ -44994,6 +44994,55 @@ script = "printf setup"
     expect(registry.getQueuedTurnsSnapshot()[buildThreadIdentityKey("codex", "recipient")]).toHaveLength(1);
   });
 
+  it.each([
+    { queueMode: "new_turn", turnId: "later-turn", rootTurnId: "later-root" },
+    { queueMode: "new_turn", turnId: "later-turn", rootTurnId: undefined },
+    { queueMode: "settings", turnId: "later-turn", rootTurnId: "later-root" },
+    { queueMode: "settings", turnId: undefined, rootTurnId: undefined },
+  ])("refreshes ungrouped replacement ancestry: $queueMode, $turnId, $rootTurnId", async ({ queueMode, turnId, rootTurnId }) => {
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["turn/start"] } });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null });
+    onTestFinished(() => registry.close());
+    const target = { backend: "codex" as const, threadId: "recipient" };
+    await registry.publishLocalEvent({ ...target, notification: {
+      method: "turn/started", params: { threadId: target.threadId, turn: { id: "busy" } },
+    } });
+    const originalOrigin = { kind: "agent" as const, sourceThread: {
+      backend: "codex" as const, threadId: "sender", messageId: "original-correspondence",
+      turnId: "original-turn", rootTurnId: "original-root",
+    } };
+    await registry.submitTurn({ ...target, queueEntryId: "replacement",
+      ...(queueMode === "new_turn" ? { delivery: "new_turn" as const } : { reasoningEffort: "high" }),
+      input: [{ type: "text", text: "Original task" }], messageOrigin: originalOrigin,
+    });
+    const replacement = { ...target, queueEntryId: "replacement",
+      input: [{ type: "text" as const, text: "Replacement task" }],
+      messageOrigin: { ...originalOrigin, sourceThread: {
+        ...originalOrigin.sourceThread, turnId, rootTurnId, messageId: "replacement-correspondence",
+      } },
+    };
+    await expect(registry.replaceQueuedAgentMessage({ ...replacement, messageOrigin: {
+      ...replacement.messageOrigin, sourceThread: { ...replacement.messageOrigin.sourceThread, instanceId: "other-instance" },
+    } })).rejects.toThrow("Only the sending thread");
+    expect((await registry.readQueuedTurn(replacement)).messageOrigin).toEqual(originalOrigin);
+    await registry.replaceQueuedAgentMessage(replacement);
+    const queued = await registry.readQueuedTurn(replacement);
+    expect(queued.input).toEqual(replacement.input);
+    expect(queued.messageOrigin).toEqual({ ...originalOrigin, sourceThread: {
+      ...originalOrigin.sourceThread, turnId, rootTurnId,
+    } });
+    expect(codexClient.startTurnCalls).toHaveLength(0);
+    await registry.publishLocalEvent({ ...target, notification: {
+      method: "turn/completed", params: { threadId: target.threadId, turnId: "busy", turn: { id: "busy", status: "completed", output: [] } },
+    } });
+    await waitForCondition(() => codexClient.startTurnCalls.length === 1);
+    expect(codexClient.lastStartTurnParams?.input).toEqual(replacement.input);
+    expect(codexClient.lastStartTurnParams?.parentTurnId).toBe(turnId);
+    expect(codexClient.lastStartTurnParams?.rootTurnId).toBe(rootTurnId);
+    expect(codexClient.lastStartTurnParams?.approvalPolicy).toBe("on-request");
+    if (queueMode === "settings") expect(codexClient.lastStartTurnParams?.reasoningEffort).toBe("high");
+  });
+
   it("keeps cross-thread queue content lossless and persists sender correspondence through cancellation and reload", async () => {
     const directory = mkdtempSync(path.join(os.tmpdir(), "correspondence-test-"));
     onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
