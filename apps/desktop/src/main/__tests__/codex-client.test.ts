@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerNotification,
+  AppServerPendingRequestNotification,
   AppServerThreadSummary,
   AppServerTurnInputItem,
   DesktopHelperModelSettings,
@@ -14,10 +15,13 @@ import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../shared/__tests__/fixtures/pull-request-review";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
 import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
+import { nativeCodexMcpApprovalFixture } from "./fixtures/native-codex-mcp-approval";
+import { buildAutomationMcpConsent } from "../mcp-connections/mcp-approval-consent";
 import type { InitializeResponse } from "@pwrdrvr/codex-app-server-protocol";
 import type {
   ConfigWriteResponse,
   DynamicToolSpec,
+  ItemStartedNotification,
   Model,
   ModelListResponse,
   ThreadArchiveResponse,
@@ -15865,6 +15869,37 @@ describe("CodexAppServerClient", () => {
       }
     });
 
+    await client.close();
+  });
+
+  it.each([1, 2])("does not infer native approval identity from %i preceding MCP tool items", async (itemCount) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    await client.getInitializeResult();
+    const wire = nativeCodexMcpApprovalFixture();
+    const requests: AppServerPendingRequestNotification[] = [];
+    client.onRequest((request) => {
+      requests.push(request);
+      return buildAutomationMcpConsent({ request, serverNames: ["fixture-server"], toolAllowlist: ["lookup"] })
+        ?? { action: "cancel", content: null, _meta: null };
+    });
+    const transport = MockTransport.instances.at(-1)!;
+    for (let index = 0; index < itemCount; index += 1) {
+      const params: ItemStartedNotification = {
+        threadId: "fixture-thread", turnId: "fixture-turn", startedAtMs: 1_700_000_000_000,
+        item: {
+          type: "mcpToolCall", id: `fixture-call-${index}`, server: "fixture-server", tool: index === 0 ? "lookup" : "write",
+          status: "inProgress", arguments: { id: "fixture" }, appContext: null, mcpAppUi: null,
+          pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: null,
+        },
+      };
+      transport.emitInbound({ jsonrpc: "2.0", method: "item/started", params });
+    }
+    transport.emitInbound({ jsonrpc: "2.0", ...wire });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(requests).toEqual([{ method: wire.method, params: { ...wire.params, requestId: "41" } }]);
+    expect(transport.sentMessages.map((message) => JSON.parse(message)).find((message) => message.id === 41))
+      .toEqual({ jsonrpc: "2.0", id: 41, result: { action: "cancel", content: null, _meta: null } });
     await client.close();
   });
 
