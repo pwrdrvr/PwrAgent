@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,13 +101,36 @@ test.describe("native macOS window activation", () => {
         ], { timeout: 50_000, maxBuffer: 64 * 1024 * 1024 }).then((result) => result.stdout, (failure: unknown) => String(failure));
         const around = await run("/usr/bin/log", [
           "show", "--info", "--style", "compact",
-          "--start", local(started - 3), "--end", local(started + 3),
+          "--start", local(started - 2), "--end", local(started + 1),
+          "--predicate",
+          'NOT process IN {"bird", "mDNSResponder", "configd", "heard", "bluetoothd", "thermalmonitord"}'
+          + ' AND NOT eventMessage CONTAINS "cloud docs root"'
+          + ' AND NOT eventMessage CONTAINS "activating connection"',
         ], { timeout: 50_000, maxBuffer: 64 * 1024 * 1024 }).then((result) => result.stdout, (failure: unknown) => String(failure));
+        // Crash reports written shortly before the holder started.
+        const reports: unknown[] = [];
+        for (const dir of [path.join(os.homedir(), "Library/Logs/DiagnosticReports"), "/Library/Logs/DiagnosticReports"]) {
+          const names = await readdir(dir).catch(() => [] as string[]);
+          for (const name of names) {
+            const file = path.join(dir, name);
+            const info = await stat(file).catch(() => null);
+            if (!info?.isFile() || Math.abs(info.mtimeMs / 1000 - started) > 600) continue;
+            const text = (await readFile(file, "utf8").catch(() => "")).slice(0, 200_000);
+            const field = (key: string) => new RegExp(`"${key}"\\s*:\\s*("[^"]*"|\\{[^}]*\\})`).exec(text)?.[1] ?? null;
+            reports.push({
+              file, modified: info.mtime.toISOString(),
+              header: text.split("\n")[0]?.slice(0, 400),
+              procName: field("procName"), procPath: field("procPath"), parentProc: field("parentProc"),
+              exception: field("exception"), termination: field("termination"),
+            });
+          }
+        }
+        traces.push({ mode: "crash-reports-near-holder-start", reports: reports.slice(0, 30) });
         const logPath = testInfo.outputPath("activation-holder-log.txt");
         await writeFile(logPath, [
           ...log.split("\n").slice(0, 400),
-          "==== every process, 3 s either side of the holder's start ====",
-          ...around.split("\n").slice(0, 1500),
+          "==== every process, 2 s before to 1 s after the holder's start ====",
+          ...around.split("\n").slice(0, 4000),
         ].map((line) => line.slice(0, 600)).join("\n"));
         await testInfo.attach("activation-holder-log", { path: logPath, contentType: "text/plain" });
         return active.rethrowWithLastFailure(error);
