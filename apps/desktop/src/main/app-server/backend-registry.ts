@@ -91,6 +91,7 @@ import {
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { buildIncomingWorkSummary } from "./thread-work-notification";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
+import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
 import { app } from "electron";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -3155,6 +3156,7 @@ type TaskMonitorCancellationState = {
 };
 
 type TaskMonitorDelegationRecord = {
+  causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
   activeCommandCount: number;
   backend: AppServerBackendKind;
   createdAt: number;
@@ -9479,7 +9481,7 @@ export class DesktopBackendRegistry {
       if (pdfResponse) {
         return pdfResponse;
       }
-      if (request.context.backend === "codex" && request.operation === "attach_thread_here") {
+      if (request.context.backend === "codex" && ["attach_thread_here", "attach_thread_to_surface", "list_messaging_surfaces"].includes(request.operation)) {
         const threadId = request.context.threadId;
         if (this.changingCodexAgentThreadIds.has(threadId)) {
           return {
@@ -9535,7 +9537,25 @@ export class DesktopBackendRegistry {
         },
       };
     }
-    return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(request);
+    return await this.messagingAgentToolService.handlePwrAgentMessagingRequest({
+      ...request,
+      context: { ...request.context, ...await this.readCausalMessagingContext(request.context) },
+    });
+  }
+
+  /** Exact, indexed origin lookup. Never hydrate a transcript or traverse ancestry. */
+  async readCausalMessagingContext(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<
+    Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">
+  > {
+    const origin = await this.readExactTurnMessageOrigin(context);
+    return { ...(origin?.causalMessagingSource ? { causalMessagingSource: origin.causalMessagingSource } : {}),
+      ...(origin?.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}) };
+  }
+
+  private async readExactTurnMessageOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<AppServerThreadMessageOrigin | undefined> {
+    if (!context.turnId || !this.overlayStore.readThreadMessageOrigins) return undefined;
+    const messageId = buildTurnUserMessageOriginId(context.turnId);
+    return (await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [messageId] }))[messageId];
   }
 
   private forgeReadHandler?: ForgeReadHandler;
@@ -9751,7 +9771,7 @@ export class DesktopBackendRegistry {
     | ThreadPullRequestWatchToolHandler
     | undefined;
   private threadDependencyToolHandler:
-    | ((args: import("@pwragent/shared").ManageThreadDependenciesRequest) => Promise<PwrAgentThreadInspectionResponse>)
+    | ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">) => Promise<PwrAgentThreadInspectionResponse>)
     | undefined;
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
@@ -10625,7 +10645,7 @@ export class DesktopBackendRegistry {
         connections: { requestGatewayToolOperation: (params) => gatewayConnections.requestGatewayToolOperation!(params) },
         selectedConnections: async (context) => {
           if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("MCP gateway tools require an active turn on the owning thread.");
-          const denied = this.dynamicToolPermissionDenied(context.backend, "mcp_connections", {
+          const denied = await this.dynamicToolPermissionDenied(context.backend, "mcp_connections", {
             ...context, tool: "call_mcp_tool",
           });
           if (denied) throw new Error(`The messaging actor lacks permission for MCP gateway tools (${denied}).`);
@@ -11822,7 +11842,7 @@ export class DesktopBackendRegistry {
   }
 
   setThreadDependencyToolHandler(
-    handler: ((args: import("@pwragent/shared").ManageThreadDependenciesRequest) => Promise<PwrAgentThreadInspectionResponse>) | undefined,
+    handler: ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">) => Promise<PwrAgentThreadInspectionResponse>) | undefined,
   ): void {
     this.threadDependencyToolHandler = handler;
   }
@@ -20035,7 +20055,7 @@ export class DesktopBackendRegistry {
       throw new Error("Replacement input requires a non-empty prompt.");
     }
     if (entry.agentMessages) {
-      const updated = this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender);
+      const updated = this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender, request.messageOrigin);
       if (!updated) throw new Error("The sender's queued message is no longer waiting.");
       this.emitQueuedTurnInputUpdated(updated);
     } else this.updateQueuedTurnInput(entry.id, input);
@@ -23711,7 +23731,17 @@ export class DesktopBackendRegistry {
     const promise = this.submitSteerTurn(params, messageOrigin);
     this.acceptedSteerRequests.set(requestKey, { promise, signature });
     try {
-      return await promise;
+      const result = await promise;
+      if (result.disposition === "steered" && messageOrigin) {
+        const previous = await this.readExactTurnMessageOrigin({ backend: params.backend, threadId: params.threadId, turnId: result.turnId });
+        if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
+          || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
+          await this.persistThreadMessageOrigin({ backend: params.backend, threadId: params.threadId,
+            messageId: buildTurnUserMessageOriginId(result.turnId),
+            origin: { ...(previous ?? messageOrigin), ...mergeCausalMessagingContext([previous, messageOrigin]) } });
+        }
+      }
+      return result;
     } catch (error) {
       if (this.acceptedSteerRequests.get(requestKey)?.promise === promise) {
         this.acceptedSteerRequests.delete(requestKey);
@@ -34310,6 +34340,7 @@ export class DesktopBackendRegistry {
       monitorId: record.monitorId,
     });
     const subAgent: ThreadSubAgentSummary = {
+      ...record.causalContext,
       monitorId: record.monitorId,
       task: record.task,
       status:
@@ -39455,7 +39486,7 @@ export class DesktopBackendRegistry {
         const isStaticToolGuide = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
           && hostToolCall.tool === "read_tool_guide";
         const category = isStaticToolGuide ? undefined : messagingDynamicToolCategoryForCatalog(route.id);
-        const denied = category && this.dynamicToolPermissionDenied(backend, category, hostToolCall);
+        const denied = category && await this.dynamicToolPermissionDenied(backend, category, hostToolCall);
         if (denied) {
           return toDynamicToolResponse({
             ok: false,
@@ -40004,25 +40035,30 @@ export class DesktopBackendRegistry {
    * (non-messaging / legacy turns, and ungated tools, always allow). Denials
    * are audited by the messaging layer.
    */
-  private dynamicToolPermissionDenied(
+  private async dynamicToolPermissionDenied(
     backend: AppServerBackendKind,
     category: MessagingDynamicToolCategory,
     call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
-  ): string | null {
+  ): Promise<string | null> {
     const service = this.messagingAgentToolService;
-    if (!service) return null;
+    const causalContext = await this.readCausalMessagingContext({ backend, ...call });
+    if (!service) return causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous ? "message.reply" : null;
     const args =
       call.arguments && typeof call.arguments === "object"
         ? (call.arguments as Record<string, unknown>)
         : null;
-    const result = service.checkDynamicToolPermission({
+    const permissionCheck = {
       backend,
       threadId: call.threadId,
       turnId: call.turnId,
       category,
       tool: call.tool,
       arguments: args,
-    });
+    };
+    const result = causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous
+      ? await service.authorizeRetainedTool?.({ backend, ...call, ...causalContext }, permissionCheck)
+        ?? { allowed: false, permission: "message.reply" }
+      : service.checkDynamicToolPermission(permissionCheck);
     if (result.allowed) return null;
     backendRegistryLog.warn("denying dynamic tool call: messaging RBAC", {
       backend,
@@ -40035,14 +40071,14 @@ export class DesktopBackendRegistry {
     return result.permission ?? "required capability";
   }
 
-  private authorizeAgentToolMcpCall(params: {
+  private async authorizeAgentToolMcpCall(params: {
     backend: AppServerBackendKind;
     catalogId?: AgentToolCatalogId;
     threadId: string;
     tool: string;
     turnId: string;
     arguments?: unknown;
-  }): string | null {
+  }): Promise<string | null> {
     const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
     if (!category) {
       return null;
@@ -41248,11 +41284,14 @@ export class DesktopBackendRegistry {
   private async buildAgentMessageOrigin(params: {
     backend: AppServerBackendKind;
     threadId: string;
+    turnId?: string;
   }): Promise<AppServerThreadMessageOrigin> {
+    const causalContext = await this.readCausalMessagingContext(params);
     const sourceThread = await this.resolveThread(params).catch(() => undefined);
     const sourceTitle = sourceThread?.title.trim();
     return {
       kind: "agent",
+      ...causalContext,
       sourceThread: {
         backend: params.backend,
         threadId: params.threadId,
@@ -41344,6 +41383,7 @@ export class DesktopBackendRegistry {
       const messageOrigin = await this.buildAgentMessageOrigin({
         backend: request.context.backend,
         threadId: request.context.threadId,
+        turnId: request.context.turnId,
       });
       source.title = messageOrigin.sourceThread?.title;
       if (messageOrigin.sourceThread) {
@@ -41730,6 +41770,7 @@ export class DesktopBackendRegistry {
     const messageOrigin = await this.buildAgentMessageOrigin({
       backend: request.context.backend,
       threadId: request.context.threadId,
+      turnId: request.context.turnId,
     });
     const remoteRequest = {
       operation: request.operation === "stop_thread" ? "stop" as const : "steer" as const,
@@ -41955,6 +41996,7 @@ export class DesktopBackendRegistry {
     const sourceBackend = request.context.backend;
     const sourceThreadId = request.context.threadId;
     const sourceTurnId = request.context.turnId?.trim();
+    const causalContext = await this.readCausalMessagingContext(request.context);
     if (
       !sourceTurnId ||
       !this.isLiveDynamicToolCall(sourceBackend, {
@@ -42539,6 +42581,7 @@ export class DesktopBackendRegistry {
     });
     const messageOrigin: AppServerThreadMessageOrigin = {
       kind: "agent",
+      ...causalContext,
       sourceThread: {
         backend: sourceBackend,
         threadId: sourceThreadId,
@@ -43119,6 +43162,7 @@ export class DesktopBackendRegistry {
     args: CreateMonitorDelegationToolArgs,
   ): Promise<TaskMonitorResponse<"create_monitor_delegation">> {
     const parentThreadId = context.threadId;
+    const causalContext = await this.readCausalMessagingContext(context);
     const task = args.task?.trim();
     if (!task) {
       return taskMonitorFailure("create_monitor_delegation", "invalid_arguments", "task is required.");
@@ -43206,6 +43250,7 @@ export class DesktopBackendRegistry {
       });
     }
     const record: TaskMonitorDelegationRecord = {
+      causalContext,
       activeCommandCount: 0,
       backend: context.backend,
       createdAt: Date.now(),
@@ -43242,6 +43287,7 @@ export class DesktopBackendRegistry {
     try {
       startedMonitor = await this.startManagedTaskMonitor({
         context,
+        causalContext,
         cwd: args.cwd,
         monitorId,
         preferredModel,
@@ -43632,6 +43678,7 @@ export class DesktopBackendRegistry {
   }
 
   private async startManagedTaskMonitor(params: {
+    causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
     context: TaskMonitorRequest<"create_monitor_delegation">["context"];
     cwd?: string;
     monitorId: string;
@@ -43748,6 +43795,11 @@ export class DesktopBackendRegistry {
         model: params.runtimeModel,
         reasoningEffort,
       });
+      const causalContext = params.causalContext ?? {};
+      if (causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous) {
+        await this.persistThreadMessageOrigin({ backend: params.context.backend, threadId: turn.threadId,
+          messageId: buildTurnUserMessageOriginId(turn.turnId), origin: { kind: "sub-agent", ...causalContext } });
+      }
       return {
         cwd,
         executionMode,
@@ -43814,6 +43866,12 @@ export class DesktopBackendRegistry {
       monitorTurnId: turn.turnId,
       parentThreadId: params.context.threadId,
     });
+
+    const causalContext = params.causalContext ?? {};
+    if (causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous) {
+      await this.persistThreadMessageOrigin({ backend: "codex", threadId: turn.threadId,
+        messageId: buildTurnUserMessageOriginId(turn.turnId), origin: { kind: "sub-agent", ...causalContext } });
+    }
 
     return {
       cwd,
@@ -44019,6 +44077,7 @@ export class DesktopBackendRegistry {
         summary: params.summary,
         task: params.record.task,
       });
+      Object.assign(messageOrigin, params.record.causalContext);
       const parentWake = {
         backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,
@@ -44873,7 +44932,7 @@ export class DesktopBackendRegistry {
           : {}),
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
-      });
+      }, await this.readCausalMessagingContext(request.context));
     }
 
     if (request.operation === "mark_project_read") {

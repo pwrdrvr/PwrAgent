@@ -45,6 +45,9 @@ export type ThreadDependencyEvidence = {
 };
 
 export type ThreadDependency = {
+  /** Trusted host provenance captured at registration, independent of later traffic. */
+  causalMessagingSource?: import("./normalized-app-server").MessagingCausalSourceRef;
+  causalMessagingAmbiguous?: boolean;
   id: string;
   backend: AppServerBackendKind;
   threadId: string;

@@ -49689,7 +49689,7 @@ script = "printf setup"
     expect(handler).toHaveBeenCalledExactlyOnceWith({ action: "create", backend: "codex", threadId: "waiting-thread",
       continuation: "Rebase onto the helper.",
       conditions: [{ backend: "codex", threadId: "foundation", when: "ci_passed" }],
-    });
+    }, {});
     expect(response).toMatchObject({ success: true });
     await registry.close();
   });
@@ -49737,7 +49737,7 @@ script = "printf setup"
       { backend: "codex", threadId: "foundation", when: "ci_passed", title: "Extract retry helper" },
       { backend: "codex", threadId: "unknown", when: "pr_merged" },
       { backend: "codex", threadId: "foundation", when: "turn_completed", title: "Agent's name" },
-    ] }));
+    ] }), {});
     await registry.close();
   });
 

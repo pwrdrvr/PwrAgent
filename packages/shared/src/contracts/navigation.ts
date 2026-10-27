@@ -386,6 +386,9 @@ export type ThreadActiveSubAgent = Pick<ThreadSubAgentSummary,
 >;
 
 export type ThreadSubAgentSummary = {
+  /** Fixed-size request provenance captured when the monitor was delegated. */
+  causalMessagingSource?: import("./normalized-app-server").MessagingCausalSourceRef;
+  causalMessagingAmbiguous?: boolean;
   monitorId: string;
   task: string;
   status: ThreadSubAgentStatus;

@@ -3,6 +3,7 @@ import type {
   AppServerThreadTitleSource,
   ThreadExecutionMode,
   ThreadIdentifier,
+  MessagingCausalSourceRef,
 } from "./normalized-app-server";
 import type { FederationInstanceId } from "./federation";
 import type {
@@ -20,6 +21,8 @@ export const PWRAGENT_MESSAGING_OPERATION_NAMES = [
   "send_private_response",
   "send_messaging_file",
   "attach_thread_here",
+  "list_messaging_surfaces",
+  "attach_thread_to_surface",
   "inspect_messaging_pdfs",
   "search_messaging_pdf_text",
   "render_messaging_pdf_pages",
@@ -68,12 +71,19 @@ export type PwrAgentMessagingContext = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   turnId?: string;
+  /** Internal host metadata; never a tool argument or a fabricated inbound message. */
+  causalMessagingSource?: MessagingCausalSourceRef;
+  causalMessagingAmbiguous?: boolean;
+  /** Set from an authenticated federation envelope, never from tool arguments. */
+  requestingInstanceId?: FederationInstanceId;
 };
 
 export type PwrAgentMessagingConversationSummary = {
   id: string;
   kind: MessagingConversationKind;
   parentId?: string;
+  parentConversationId?: string;
+  workspaceId?: string;
   title?: string;
   parentTitle?: string;
   ancestorTitle?: string;
@@ -211,6 +221,42 @@ export type AttachThreadHereToolArgs = {
 
 export type InspectMessagingPdfsToolArgs = Record<string, never>;
 
+export type ListMessagingSurfacesToolArgs = Pick<AttachThreadHereToolArgs,
+  "backend" | "threadId" | "instanceId" | "includeRemote" | "placement"> & {
+  limit?: number;
+  /** Opaque bounded-page cursor returned by this tool. */
+  cursor?: string;
+};
+
+export type AttachThreadToSurfaceToolArgs = AttachThreadHereToolArgs & {
+  /** Omit only when discovery identifies the causal source or a sole eligible surface. */
+  surfaceSelector?: string;
+  /** Explicit opt-in to bounded discovery; the default causal path is an indexed point lookup. */
+  selection?: "causal" | "sole_eligible";
+  expectedRevision?: string;
+  /** Same key/request/target replays the recorded outcome, never a second topic creation. */
+  idempotencyKey?: string;
+};
+
+export type MessagingSurfaceCandidate = {
+  surfaceSelector: string;
+  revision: string;
+  location: PwrAgentMessagingLocationSummary;
+  lastUserInteractionAt: number;
+  provenance: "causal_request" | "last_human_interaction";
+  route: "binding" | "default";
+};
+
+export type ListMessagingSurfacesResult = {
+  surfaces: MessagingSurfaceCandidate[];
+  /** Null when examination was bounded before all candidates could be authorized. */
+  eligibleCount: number | null;
+  countIsComplete: boolean;
+  nextCursor?: string;
+  recommendedSurfaceSelector?: string;
+  selectionReason: "causal_request" | "sole_eligible" | "ambiguous" | "none" | "unavailable";
+};
+
 export type SearchMessagingPdfTextToolArgs = {
   attachmentId: string;
   pageEnd?: number;
@@ -319,6 +365,8 @@ export type PwrAgentMessagingToolArgsByOperation = {
   send_private_response: SendPrivateResponseToolArgs;
   send_messaging_file: SendMessagingFileToolArgs;
   attach_thread_here: AttachThreadHereToolArgs;
+  list_messaging_surfaces: ListMessagingSurfacesToolArgs;
+  attach_thread_to_surface: AttachThreadToSurfaceToolArgs;
   inspect_messaging_pdfs: InspectMessagingPdfsToolArgs;
   search_messaging_pdf_text: SearchMessagingPdfTextToolArgs;
   render_messaging_pdf_pages: RenderMessagingPdfPagesToolArgs;
@@ -351,6 +399,7 @@ export type PwrAgentMessagingResponse =
         | SendPrivateResponseResult
         | SendMessagingFileResult
         | AttachThreadHereResult
+        | ListMessagingSurfacesResult
         | {
             attachments: PwrAgentMessagingPdfAttachmentSummary[];
           }

@@ -76,6 +76,8 @@ describe("PwrAgent messaging agent tools", () => {
       "send_private_response",
       "send_messaging_file",
       "attach_thread_here",
+      "list_messaging_surfaces",
+      "attach_thread_to_surface",
       "inspect_messaging_pdfs",
       "search_messaging_pdf_text",
       "render_messaging_pdf_pages",
@@ -86,6 +88,8 @@ describe("PwrAgent messaging agent tools", () => {
       "send_private_response",
       "send_messaging_file",
       "attach_thread_here",
+      "list_messaging_surfaces",
+      "attach_thread_to_surface",
     ]);
     const privateResponseTool = specs[0]?.type === "namespace"
       ? specs[0].tools.find((tool) => tool.name === "send_private_response")

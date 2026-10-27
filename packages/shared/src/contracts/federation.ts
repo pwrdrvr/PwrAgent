@@ -26,6 +26,7 @@ export const FEDERATION_CAPABILITIES = [
   "launchpad_metadata",
   "federated_search",
   "messaging_route",
+  "messaging_destinations",
   "pwrsnap_connection",
   "gateway_relay",
   "remote_pty",

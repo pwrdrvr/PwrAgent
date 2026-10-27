@@ -579,6 +579,9 @@
     "rowsChanged": 9,
     "statements": 11
   },
+  "messaging-causal-monitor-lifecycle": {"commits":5,"note":"One attributed ACP monitor origin plus lifecycle and final usage; 120 heartbeats add no commits. Provenance is one fixed reference captured at delegation.","observedWalBytes":160680,"rowsChanged":7,"statements":7},
+  "messaging-causal-request-and-attachment": {"commits":3,"note":"One accepted human request (immutable source plus latest-human pointer in one transaction), one attachment claim/outcome, 100 duplicate/bot/read retries. No stream, poll or idle writes.","observedWalBytes":32960,"rowsChanged":4,"statements":4},
+  "messaging-causal-steer": {"commits":2,"note":"One attributed Claude steer updates its current turn's causal reference once; one idempotent retry adds no writes. No history traversal or timer writes.","observedWalBytes":20600,"rowsChanged":2,"statements":2},
   "messaging-outbound-file-activity": {
     "commits": 1,
     "note": "one send_messaging_file audit row; this runs per agent tool call, so the row count must not grow with attachment parts",

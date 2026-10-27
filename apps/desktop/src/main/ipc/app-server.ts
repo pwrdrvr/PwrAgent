@@ -8533,7 +8533,8 @@ class DesktopAppServerService {
     return { dependencies: this.getThreadDependencyCoordinator().active() };
   }
 
-  async manageThreadDependencies(request: ManageThreadDependenciesRequest): Promise<ManageThreadDependenciesResponse> {
+  async manageThreadDependencies(request: ManageThreadDependenciesRequest,
+    provenance?: Pick<import("@pwragent/shared").AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">): Promise<ManageThreadDependenciesResponse> {
     if (!request || typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) {
       throw new Error("A local backend and waiting threadId are required.");
     }
@@ -8555,7 +8556,7 @@ class DesktopAppServerService {
         throw new Error("Enable background PR polling before waiting for a PR prerequisite.");
       }
     }
-    return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() });
+    return await this.getThreadDependencyCoordinator().manage({ ...request, backend: request.backend, threadId: request.threadId.trim() }, provenance);
   }
 
   async reconcileThreadDependencies(): Promise<void> {
@@ -8947,9 +8948,9 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setLocalPullRequestAuthorityResolver((prKey) =>
     appServerService.isPullRequestLocallyMonitored(prKey)
   );
-  getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request) => {
+  getDesktopBackendRegistry().setThreadDependencyToolHandler(async (request, provenance) => {
     try {
-      return { ok: true, data: { threadDependencies: await appServerService.manageThreadDependencies(request) } };
+      return { ok: true, data: { threadDependencies: await appServerService.manageThreadDependencies(request, provenance) } };
     } catch (error) {
       return { ok: false, error: { code: "invalid_arguments", message: error instanceof Error ? error.message : String(error) } };
     }

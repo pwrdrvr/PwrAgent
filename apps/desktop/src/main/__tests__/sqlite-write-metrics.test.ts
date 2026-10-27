@@ -7,6 +7,7 @@ import type {
   AgentEvent,
   AppServerThreadReplay,
   AppServerThreadSummary,
+  AppServerThreadMessageOrigin,
   StarMapWorkspaceSnapshot,
   TaskMonitorUsageSnapshot,
   ThreadSubAgentSummary,
@@ -193,7 +194,7 @@ describe("sqlite write metrics", () => {
     } finally { await registry.close(); }
   });
 
-  it("steers Claude once per request and dispatches queued input only after completion", async () => {
+  it.each([false, true])("steers Claude once per request and dispatches queued input only after completion (causal messaging=%s)", async (causal) => {
     const finish = Promise.withResolvers<void>();
     const prompts: SDKUserMessage[] = [];
     const queries: Array<{ resume?: string }> = [];
@@ -230,7 +231,9 @@ describe("sqlite write metrics", () => {
     try {
       const { threadId } = await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" });
       const identity = { backend: "claude" as const, threadId };
-      const started = await registry.startTurn({ ...identity, input: [{ type: "text", text: "Start" }] });
+      const causalMessagingSource = { ownerId: "1".repeat(64), requestId: "2".repeat(64), surfaceSelector: "3".repeat(64) };
+      const started = await registry.startTurn({ ...identity, input: [{ type: "text", text: "Start" }],
+        ...(causal ? { messageOrigin: { kind: "messaging" as const, causalMessagingSource } } : {}) });
       await vi.waitFor(() => expect(prompts).toHaveLength(1));
       // Keep terminal accounting and setup outside the per-steer write budget.
       await vi.waitFor(() => expect(events.some((event) => event.notification.method === "backend/providerStatus/updated")).toBe(true));
@@ -238,12 +241,19 @@ describe("sqlite write metrics", () => {
         .toMatchObject({ status: "queued" });
       const request = { ...identity, expectedTurnId: started.turnId, requestId: "steer-fixture",
         input: [{ type: "text" as const, text: "Focus on the PR" }] };
-      const origin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", title: "Sender" } };
+      const origin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", title: "Sender" },
+        ...(causal ? { causalMessagingSource } : {}) };
       const { writes } = await measureSqliteWrites(async () => {
         expect(await registry.steerTurn(request, origin)).toMatchObject({ disposition: "steered", turnId: started.turnId });
         expect(await registry.steerTurn(request, origin)).toMatchObject({ disposition: "steered", turnId: started.turnId });
       });
-      expectSqliteWriteBudget({ scenario: "claude-steer", note: "one steer with agent origin plus one idempotent retry; no timer writes", writes });
+      expectSqliteWriteBudget({ scenario: causal ? "messaging-causal-steer" : "claude-steer",
+        note: causal ? "One attributed Claude steer updates its current turn's causal reference once; one idempotent retry adds no writes. No history traversal or timer writes."
+          : "one steer with agent origin plus one idempotent retry; no timer writes", writes });
+      if (causal) {
+        expect(await registry.readCausalMessagingContext({ ...identity, turnId: started.turnId })).toEqual({ causalMessagingSource });
+        expect((await store.readThreadMessageOrigins({ ...identity, messageIds: [`user:${started.turnId}`] }))[`user:${started.turnId}`]?.kind).toBe("messaging");
+      }
       expect(queries).toHaveLength(1);
       expect(prompts).toHaveLength(1);
       finish.resolve();
@@ -2370,12 +2380,13 @@ describe("sqlite write metrics", () => {
     }
   });
 
-  it("bounds one ACP monitor lifecycle independently of heartbeat count", async () => {
+  it.each([false, true])("bounds one ACP monitor lifecycle independently of heartbeat count (causal messaging=%s)", async (causal) => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
     const monitorRecord: {
+      causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
       activeCommandCount: number;
       backend: "acp:kimi";
       createdAt: number;
@@ -2394,6 +2405,7 @@ describe("sqlite write metrics", () => {
       startupTimeoutSeconds: number;
       task: string;
     } = {
+      ...(causal ? { causalContext: { causalMessagingSource: { ownerId: "1".repeat(64), requestId: "2".repeat(64), surfaceSelector: "3".repeat(64) } } } : {}),
       activeCommandCount: 0,
       backend: "acp:kimi",
       createdAt: 1_800_000_000_000,
@@ -2411,6 +2423,7 @@ describe("sqlite write metrics", () => {
       task: "Wait for one bounded external operation.",
     };
     const internal = registry as unknown as {
+      persistThreadMessageOrigin(params: { backend: "acp:kimi"; threadId: string; messageId: string; origin: AppServerThreadMessageOrigin }): Promise<void>;
       completedTaskMonitorsByThread: Map<string, typeof monitorRecord>;
       injectTaskMonitorProgress(
         caller: {
@@ -2434,6 +2447,8 @@ describe("sqlite write metrics", () => {
 
     try {
       const { writes } = await measureSqliteWrites(async () => {
+        if (causal) await internal.persistThreadMessageOrigin({ backend: "acp:kimi", threadId: monitorRecord.monitorThreadId,
+          messageId: `user:${monitorRecord.monitorTurnId}`, origin: { kind: "sub-agent", ...monitorRecord.causalContext } });
         await internal.persistTaskMonitorSubAgent(monitorRecord, {
           status: "running",
         });
@@ -2505,9 +2520,9 @@ describe("sqlite write metrics", () => {
         // Measured at four commits per completed monitor, independent of the
         // 120 heartbeats. At 100 monitors/day that is 400 commits/day; this
         // calibration observed about 115 KB per lifecycle, or about 11 MB/day.
-        note:
-          "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
-        scenario: "acp-task-monitor-lifecycle",
+        note: causal ? "One attributed ACP monitor origin plus lifecycle and final usage; 120 heartbeats add no commits. Provenance is one fixed reference captured at delegation."
+          : "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
+        scenario: causal ? "messaging-causal-monitor-lifecycle" : "acp-task-monitor-lifecycle",
         writes,
       });
       expect(internal.completedTaskMonitorsByThread.size).toBe(0);

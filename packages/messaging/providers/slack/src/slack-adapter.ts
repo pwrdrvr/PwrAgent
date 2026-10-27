@@ -158,6 +158,8 @@ export type SlackApi = {
   }): Promise<SlackAgentSessionInfo>;
   authTest(): Promise<SlackAuthTestResult>;
   conversationsInfo?(params: { channel: string }): Promise<SlackConversationInfo | undefined>;
+  /** Bounded membership check for an explicitly selected retained destination. */
+  conversationHasMember?(params: { channel: string; userId: string }): Promise<boolean | undefined>;
   conversationsHistory?(params: {
     channel: string;
     limit?: number;
@@ -275,6 +277,8 @@ export type SlackAgentSessionInfo = {
 };
 
 export type SlackConversationInfo = {
+  is_archived?: boolean;
+  is_member?: boolean;
   id?: string;
   name?: string;
   is_im?: boolean;
@@ -1240,6 +1244,40 @@ export class SlackAdapter implements SlackProviderAdapter {
       outcome: supported ? "ok" : "unsupported",
       updatedAt: this.now(),
     };
+  }
+
+  async authorizeRetainedSource(event: MessagingInboundEvent, verifyAccess = true): Promise<boolean | undefined> {
+    if (event.channel.channel !== this.channel || event.actor.isBot) return false;
+    const state = readSlackAdapterState(event.routingState);
+    // A fresh channel lookup establishes current bot access and the actual DM
+    // shape; do not reuse a months-old metadata cache as authorization.
+    try {
+      const isGroupDm = await this.resolveIsGroupDm({ channelId: event.channel.conversation.id });
+      if (this.authorizeInbound({
+        actor: event.actor,
+        channel: event.channel,
+        kind: "command",
+        teamId: event.channel.conversation.workspaceId ?? state?.teamId,
+        isGroupDm,
+        reportRejection: false,
+        routingState: event.routingState,
+      }) !== true) return false;
+      if (!verifyAccess) return true;
+      if (!this.api.conversationsInfo) return undefined;
+      const info = await this.api.conversationsInfo({ channel: event.channel.conversation.id });
+      if (!info) return undefined;
+      if (info.is_archived) return false;
+      if (info.is_im) return true;
+      if (info.is_member === false) return false;
+      return await this.api.conversationHasMember?.({ channel: event.channel.conversation.id, userId: event.actor.platformUserId });
+    } catch {
+      return undefined;
+    }
+  }
+
+  retainedSourceConnectionId(): string | undefined {
+    return this.workspaceId && (this.botId || this.botUserId)
+      ? `${this.workspaceId}:${this.botId ?? this.botUserId}` : undefined;
   }
 
   async createManagedConversation(
@@ -4247,6 +4285,19 @@ export function createSlackApi(botToken: string): SlackApi {
     async conversationsInfo(params) {
       const response = await client.conversations.info(params);
       return response.channel as SlackConversationInfo | undefined;
+    },
+    async conversationHasMember(params) {
+      let cursor: string | undefined;
+      // Authorization checks one selected channel, never unrelated chats.
+      // A large membership list or missing scope is unknown, not permission.
+      for (let page = 0; page < 5; page++) {
+        const response = await client.conversations.members({ channel: params.channel, cursor, limit: 200 });
+        if (response.members?.includes(params.userId)) return true;
+        cursor = response.response_metadata?.next_cursor?.trim();
+        if (!cursor) return false;
+        if (cursor.length > 2048) return undefined;
+      }
+      return undefined;
     },
     async conversationsHistory(params) {
       const response = await client.conversations.history(params);
