@@ -423,7 +423,7 @@ after changing the loaded model's vision projector so Codex reloads the catalog.
 
 Settings → Codex → Model providers (`models.codex.providers` and
 `models.codex.provider_rates`) lists OpenAI Responses-compatible endpoints that
-the one Codex App Server can run threads on beside its default provider: a
+Codex can run threads on beside its default provider: a
 second API account, a hosted open-weight model, or a local server. Each becomes
 a process-local `-c model_providers.<id>.*` override with
 `wire_api = "responses"`. Its API key is a keychain secret
@@ -434,16 +434,45 @@ the commands a model runs by default (`ignore_default_excludes = true`), so a
 `shell_environment_policy.set.<VAR>=""` override blanks each key for them. Changing a provider's endpoint or
 key reconnects Codex when it is idle; its models and rates do not.
 
+Ordinary providers share the primary App Server. `compatibility = "bonsai"`
+selects a separate `CodexAppServerClient` and process through
+`provider-runtime-client.ts`. That client owns its own initialization, running
+turns, request IDs, restart policy and recovery barriers. Routing resolves
+persisted provider identity with App Server reads; history remains readable
+through the primary client while the local server is offline. Process-exit
+notifications carry only that runtime's affected thread IDs. All clients use
+the selected Codex home; PwrAgent does not inspect Codex session storage.
+
+The Bonsai runtime starts the bundled `local-responses-bridge.mjs`, flattens
+namespaced function tools, combines instructions and system/developer input
+into one leading system message, and restores tool identities in JSON and
+streamed responses. It gets a private model catalog, a 65536-token context,
+a 49152-token compaction threshold, and disabled unsupported features and
+inherited native MCP servers. Other runtimes receive none of those overrides.
+An optional `catalog_path` preserves an imported single-model catalog's
+instructions and supported capabilities. Without it, the built-in Bonsai
+catalog supplies those settings. Earlier loopback imports naming a Bonsai
+GGUF model acquire the preset on read; the normal settings writer saves it
+when the provider is next edited.
+
 When the section opens, it offers the providers that Codex config files
 already define. The main process
-(`apps/desktop/src/main/settings/codex-model-provider-import.ts`) reads only
+(`apps/desktop/src/main/settings/codex-model-provider-import.ts`) reads
 `config.toml` in the active Codex home and in each auth profile home that
 Settings lists. It picks those paths itself, so the renderer cannot name a
 file. Import prefills the add form with the name, the Codex key as the id,
 `base_url`, the model each profile sets for it, and Runs locally for a
 loopback URL. It never copies a key, bearer token or header from the file. It
 skips a provider that PwrAgent cannot run, such as a `wire_api` other than
-`responses`, and says why.
+`responses`, and says why. A supported Bonsai import carries its compatibility
+preset and catalog path; the scan validates that catalog before offering the
+import. Conflicting catalogs or settings outside the supported preset block
+the import with an explanation. A blocked endpoint cannot reappear under an
+alias from another config home.
+
+Connection tests exercise instructions, a developer message and a namespaced
+function tool, and require completed text output. Bonsai tests use its bridge.
+These checks do not replace a completed turn through PwrAgent.
 
 Every PwrAgent surface names a provider model with a qualified id,
 `@<provider>/<model>` (`packages/shared/src/codex-model-providers.ts`). Codex

@@ -191,4 +191,3 @@ export async function startBridge(upstream) {
   await once(server, "listening");
   return server;
 }
-
