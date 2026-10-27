@@ -4589,16 +4589,11 @@ class DesktopAppServerService {
       request.directoryPaths,
     );
     const existingLookupMatches = existing?.prsRefreshKey === requestKey;
-    if (existingLookupMatches) {
-      this.rememberPrLookup({
-        lookupKey,
-        provider,
-        branch,
-        directoryPaths: lookupDirectoryPaths,
-        prs: existingPrs.filter((pr) => !pr.explicitlyAttached),
-        fetchedAt: existing?.prsFetchedAt ?? 0,
-      });
-    }
+    // The lookup registry is shared by every thread on this branch and
+    // checkout, so it holds only what a branch lookup returned. Never seed it
+    // from this thread's overlay: that list carries the thread's own history
+    // (PRs from earlier branches, detached PRs), and a seeded entry attached
+    // that history to every other thread in the same checkout.
     const lookupEntry = this.prLookupRegistry.get(lookupKey);
     const lookupPrs = lookupEntry
       ? this.canonicalizePrs(lookupEntry.prs)
