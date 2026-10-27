@@ -226,6 +226,41 @@ describe("backend forge tool dispatch", () => {
     expect((await merge).success).toBe(true);
   });
 
+  it("runs Auto writes without asking in a Codex Auto turn, except approve and merge", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    const prompts = vi.fn();
+    registry.onEvent((event) => { if (event.notification.method === "mcpServer/elicitation/request") prompts(); });
+    const created = await internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", draft: true }, "call-auto-pr"));
+    expect(created.success).toBe(true);
+    const comment = await internals.handleServerRequest("codex", request("add_issue_comment", { number: 3, body: "Fixed." }, "call-auto-comment"));
+    expect(comment.success).toBe(true);
+    expect(prompts).not.toHaveBeenCalled();
+    expect(github).toHaveBeenCalledTimes(2);
+
+    policy.access.approve_merge = "auto";
+    const mergePrompt = nextApproval();
+    const merge = internals.handleServerRequest("codex", request("merge_pull_request", { number: 9, expectedHeadSha: "a".repeat(40) }, "call-auto-merge"));
+    await answer(await mergePrompt, "decline");
+    expect(text(await merge)).toContain("declined");
+
+    policy.access.pull_requests = "ask";
+    const askPrompt = nextApproval();
+    const asked = internals.handleServerRequest("codex", request("update_pull_request", { number: 9, title: "New title" }, "call-auto-ask"));
+    await answer(await askPrompt, "accept");
+    expect((await asked).success).toBe(true);
+    expect(github).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses Auto writes from an Auto-mode automation, which no one can review", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    (registry as unknown as { headlessAutomationTurns: Map<string, unknown> }).headlessAutomationTurns.set("codex:thread-1:turn-1", {
+      agentThreadId: "thread-1", automationRunId: "run-1", executionMode: "auto", queueEntryId: "queue-1",
+    });
+    const result = await internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", draft: true }, "call-automation-pr"));
+    expect(text(result)).toContain("approval_required");
+    expect(github).not.toHaveBeenCalled();
+  });
+
   it("treats an approving review as an approve-and-merge decision", async () => {
     policy.access.comments = "allow";
     policy.access.approve_merge = "off";

@@ -9643,9 +9643,10 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * The operator's consent for one GitHub write. `allow` runs; `auto` runs in
-   * a Full Access turn; otherwise the shipped MCP approval card asks.
-   * Automations cannot answer, so they are refused with the setting to change.
+   * The operator's consent for one GitHub write. `allow` runs; `auto` follows
+   * the turn's approval mode (see `forgeAutoRunsWithoutApproval`); otherwise
+   * the shipped MCP approval card asks. Automations cannot answer, so they are
+   * refused with the setting to change.
    */
   private async approveForgeToolWrite(
     operation: ForgePrToolOperation,
@@ -9685,8 +9686,14 @@ export class DesktopBackendRegistry {
       },
     };
     const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
-    if (access === "auto" && await this.isMcpGatewayFullAccess(context, automation?.executionMode)) {
+    if (access === "auto" && await this.forgeAutoRunsWithoutApproval(group, context, automation)) {
       signal.throwIfAborted();
+      backendRegistryLog.info("running Auto forge write without an approval card", {
+        backend: context.backend,
+        threadId: context.threadId,
+        turnId: context.turnId,
+        operation,
+      });
       return;
     }
     if (automation) {
@@ -39856,17 +39863,48 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Whether a forge group set to Auto runs without a card in this turn.
+   *
+   * Auto follows the turn's approval mode. Full Access runs every group. A
+   * Codex Auto turn runs every group but Approve and merge: in that mode Codex
+   * lets its own reviewer clear the same work done through `gh` or its GitHub
+   * connector, without a card. Codex never reviews PwrAgent's dynamic tools,
+   * so asking here made the PwrAgent tool the one path that always stopped,
+   * and the agent is told not to fall back to `gh`. These tools reach only
+   * the thread's linked repositories. Merging and approving stay Full Access
+   * only, because they cannot be taken back. A headless automation also
+   * needs Full Access: nobody is watching it, and in an Auto automation no
+   * reviewer would see these calls at all.
+   */
+  private async forgeAutoRunsWithoutApproval(
+    group: ForgeAgentToolGroup,
+    context: AgentToolCallContext,
+    automation?: { executionMode?: ThreadExecutionMode },
+  ): Promise<boolean> {
+    if (context.backend !== "codex") return await this.isMcpGatewayFullAccess(context, automation?.executionMode);
+    const executionMode = await this.resolveCodexToolCallExecutionMode(context, automation?.executionMode);
+    if (executionMode === "full-access") return true;
+    return executionMode === "auto" && group !== "approve_merge" && !automation;
+  }
+
+  private async resolveCodexToolCallExecutionMode(
+    context: AgentToolCallContext,
+    automationMode?: ThreadExecutionMode,
+  ): Promise<ThreadExecutionMode | undefined> {
+    const activeMode = context.turnId
+      ? this.activeCodexTurnModes.get(buildActiveTurnModeKey(context.threadId, context.turnId))
+      : undefined;
+    return activeMode ?? automationMode
+      ?? await this.resolveCodexThreadExecutionModeForActiveTurn(context.threadId);
+  }
+
   private async isMcpGatewayFullAccess(
     context: AgentToolCallContext,
     automationMode?: ThreadExecutionMode,
   ): Promise<boolean> {
     if (context.backend === "codex") {
-      const activeMode = context.turnId
-        ? this.activeCodexTurnModes.get(buildActiveTurnModeKey(context.threadId, context.turnId))
-        : undefined;
-      const executionMode = activeMode ?? automationMode
-        ?? await this.resolveCodexThreadExecutionModeForActiveTurn(context.threadId);
-      return executionMode === "full-access";
+      return await this.resolveCodexToolCallExecutionMode(context, automationMode) === "full-access";
     }
     if (isAcpBackendId(context.backend)) {
       const session = this.acpBackend.getSession(context.backend, context.threadId);

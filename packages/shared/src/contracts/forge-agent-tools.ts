@@ -15,9 +15,9 @@ export const FORGE_AGENT_TOOL_GROUPS = [
 export type ForgeAgentToolGroup = (typeof FORGE_AGENT_TOOL_GROUPS)[number];
 
 /**
- * `allow` runs without asking. `auto` asks unless the thread has Full Access,
- * the same rule as an MCP connection's Auto tool approval. `ask` always asks.
- * `off` removes the group's tools from threads.
+ * `allow` runs without asking. `auto` runs in a Full Access turn and, except
+ * for `approve_merge`, in a Codex Auto turn; otherwise it asks. `ask` always
+ * asks. `off` removes the group's tools from threads.
  */
 export const FORGE_AGENT_TOOL_ACCESS_LEVELS = ["allow", "auto", "ask", "off"] as const;
 
