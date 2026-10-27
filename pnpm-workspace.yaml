@@ -5,6 +5,8 @@ packages:
   - packages/messaging/providers/*
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
+  # Explicit Codex protocol upgrade; the published type changes were inspected.
+  - '@pwrdrvr/codex-app-server-protocol@0.164.0'
   # Explicit native-check migration pins, benchmarked before adoption.
   - 'oxlint@1.87.0'
   - 'oxlint-tsgolint@7.0.2003'

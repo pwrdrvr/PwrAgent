@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -211,6 +211,61 @@ describe.skipIf(process.platform === "win32")("macos-e2e-pre-run-cleanup.sh", ()
 
     expect(existsSync(stateDir)).toBe(true);
     expect(output).toContain("REAP_STATE_HOME unset, saved application state left alone");
+  });
+
+  // A crash dialog is dismissed only when UserNotificationCenter started right
+  // after an Electron crash report was written. REAP_NOW pins the clock that
+  // turns `ps` etime into a start time.
+  const CRASH_AT = 1_793_061_325;
+  const NOW = CRASH_AT + 20 * 3600;
+  const UNC = "/System/Library/CoreServices/UserNotificationCenter.app/Contents/MacOS/UserNotificationCenter";
+
+  function crashReport(home, name, bundleId, modifiedAt) {
+    const dir = path.join(home, "Library", "Logs", "DiagnosticReports");
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, name);
+    writeFileSync(file, `{"app_name":"Electron","bundleID":"${bundleId}","bug_type":"309"}\n{"procName":"Electron"}\n`, "utf8");
+    utimesSync(file, modifiedAt, modifiedAt);
+  }
+
+  it("selects the UserNotificationCenter that started right after an Electron crash", () => {
+    const stateHome = mkdtempSync(path.join(workDir, "home-"));
+    crashReport(stateHome, "Electron-2026-10-27-003525.ips", "com.github.Electron", CRASH_AT);
+    const output = run([...BASELINE, row(52137, 1, "S", UNC, "20:00:00")], {
+      env: { REAP_STATE_HOME: stateHome, REAP_NOW: String(NOW) },
+    });
+    expect(output).toContain("pid 52137 (up 20:00:00) is the crash dialog for Electron-2026-10-27-003525.ips");
+    expect(output).toContain("report-only; would dismiss UserNotificationCenter pid 52137");
+  });
+
+  it("leaves alone a UserNotificationCenter that no Electron crash explains", () => {
+    const stateHome = mkdtempSync(path.join(workDir, "home-"));
+    crashReport(stateHome, "Electron-2026-10-27-003525.ips", "com.github.Electron", CRASH_AT);
+    // Started ten minutes after the crash: some other alert.
+    const output = run([...BASELINE, row(52137, 1, "S", UNC, "19:50:00")], {
+      env: { REAP_STATE_HOME: stateHome, REAP_NOW: String(NOW) },
+    });
+    expect(output).toContain("pid 52137 (up 19:50:00) is not tied to an Electron crash report; left alone");
+    expect(output).not.toContain("would dismiss");
+  });
+
+  it("ignores another app's crash report even when the name says Electron", () => {
+    const stateHome = mkdtempSync(path.join(workDir, "home-"));
+    crashReport(stateHome, "Electron-2026-10-27-003525.ips", "com.example.other", CRASH_AT);
+    const output = run([...BASELINE, row(52137, 1, "S", UNC, "20:00:00")], {
+      env: { REAP_STATE_HOME: stateHome, REAP_NOW: String(NOW) },
+    });
+    expect(output).toContain("not tied to an Electron crash report; left alone");
+    expect(output).not.toContain("would dismiss");
+  });
+
+  it("reads an etime that runs past a day", () => {
+    const stateHome = mkdtempSync(path.join(workDir, "home-"));
+    crashReport(stateHome, "Electron-2026-10-26-003525.ips", "com.github.Electron", CRASH_AT - 86_400 + 7200);
+    const output = run([...BASELINE, row(52137, 1, "S", UNC, "1-18:00:00")], {
+      env: { REAP_STATE_HOME: stateHome, REAP_NOW: String(NOW) },
+    });
+    expect(output).toContain("would dismiss UserNotificationCenter pid 52137");
   });
 
   it("refuses to run when no workspace is set rather than guessing a scope", () => {

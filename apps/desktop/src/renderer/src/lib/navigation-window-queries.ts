@@ -7,7 +7,7 @@ import { federationTargetsEqual } from "./federated-thread-events";
 import {
   applyNavigationPage, beginNavigationPageRead, createNavigationPageState,
   failNavigationPageRead, isNavigationAnchorMissing, isNavigationCursorExpired, navigationAnchorsEqual,
-  navigationFallbackAnchor, navigationIdentityKey, navigationRetainedRange, type NavigationPageState,
+  navigationFallbackAnchor, navigationIdentitiesEqual, navigationIdentityKey, navigationRetainedRange, type NavigationPageState,
 } from "./navigation-query-state";
 
 const MAX_CONCURRENT_READS = 4;
@@ -66,6 +66,20 @@ export function navigationDemandKey(request: NavigationQueryRequest): string {
   });
 }
 
+/** Prepared at the window's immutable demand boundary, never cached by caller object identity. */
+export function prepareNavigationDemand(demand: ReadonlyMap<string, NavigationQueryRequest>) {
+  const entries = new Map<string, { request: NavigationQueryRequest; requestKey: string }>();
+  let bytes = 0;
+  const encoder = new TextEncoder();
+  for (const [id, request] of demand) {
+    bytes += encoder.encode(JSON.stringify([id, request])).byteLength;
+    if (bytes > MAX_DEMAND_BYTES) break;
+    entries.set(id, { request, requestKey: navigationDemandKey(request) });
+  }
+  return { entries, admissionError: entries.size !== demand.size
+    ? "Navigation request metadata exceeds its memory budget." : undefined };
+}
+
 /** Window demand and loaded ranges only. All I/O shares the main-process query pool. */
 export class NavigationWindowQueries {
   private readonly prefix = `navigation-window:${++nextWindow}`;
@@ -88,6 +102,14 @@ export class NavigationWindowQueries {
   }
 
   getSnapshot = (): NavigationWindowQueriesState => this.snapshot;
+  /** Base demand keys survive refreshes and continuations without reserialization. */
+  matchesDemand(demand: ReturnType<typeof prepareNavigationDemand>, snapshot: NavigationWindowQueriesState): boolean {
+    if (snapshot !== this.snapshot || demand.admissionError || this.resources.size !== demand.entries.size) return false;
+    for (const [id, { requestKey }] of demand.entries) {
+      if (this.resources.get(id)?.requestKey !== requestKey) return false;
+    }
+    return true;
+  }
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
@@ -122,19 +144,16 @@ export class NavigationWindowQueries {
 
   setDemand(demand: ReadonlyMap<string, NavigationQueryRequest>): void {
     if (this.disposed) return;
-    const admitted = new Map<string, NavigationQueryRequest>();
-    let demandBytes = 0;
-    for (const [id, request] of demand) {
-      demandBytes += new TextEncoder().encode(JSON.stringify([id, request])).byteLength;
-      if (demandBytes > MAX_DEMAND_BYTES) break;
-      admitted.set(id, request);
-    }
+    this.setPreparedDemand(prepareNavigationDemand(demand));
+  }
+
+  setPreparedDemand(demand: ReturnType<typeof prepareNavigationDemand>): void {
+    if (this.disposed) return;
+    const { entries: admitted, admissionError } = demand;
     let changed = false;
-    const admissionError = admitted.size !== demand.size
-      ? "Navigation request metadata exceeds its memory budget." : undefined;
     for (const [id, resource] of this.resources) {
-      const request = admitted.get(id);
-      if (!request || navigationDemandKey(request) !== resource.requestKey) {
+      const entry = admitted.get(id);
+      if (!entry || entry.requestKey !== resource.requestKey) {
         if (resource.value.state.page) {
           const key = this.retainedKey(id, resource.requestKey);
           this.retained.delete(key);
@@ -147,9 +166,8 @@ export class NavigationWindowQueries {
       }
     }
     const added: Resource[] = [];
-    for (const [id, request] of admitted) {
+    for (const [id, { request, requestKey }] of admitted) {
       if (this.resources.has(id)) continue;
-      const requestKey = navigationDemandKey(request);
       const retainedKey = this.retainedKey(id, requestKey);
       const retained = this.retained.get(retainedKey);
       this.retained.delete(retainedKey);
@@ -283,9 +301,9 @@ export class NavigationWindowQueries {
       // Unknown membership events still discover newly created/reparented children.
       const ownerInstanceId = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId
         : method === "navigation/remoteThreadPins/changed" ? params.instanceId : undefined;
-      const key = navigationIdentityKey({ backend: event.backend, threadId: params.threadId, ownerInstanceId });
-      return navigationIdentityKey(request.query.parent) === key
-        || page.entries.some(({ row }) => navigationIdentityKey(row.ref) === key);
+      const ref = { backend: event.backend, threadId: params.threadId, ownerInstanceId };
+      return navigationIdentitiesEqual(request.query.parent, ref)
+        || page.entries.some(({ row }) => navigationIdentitiesEqual(row.ref, ref));
     }
     // A remote row event cannot change membership of an exact identity query.
     // Other collections retain conservative invalidation for counts/order.

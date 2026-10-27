@@ -136,8 +136,19 @@ mode selections add no commits. At 100 new threads and 100 permission changes
 per day, the measured projection is `(400 / 86400) commits/s × 16480 bytes ×
 86400 seconds`, or approximately 6.6 MB/day. This adds no timer-based writes.
 Archive changes metadata and
-retains the workspace. Native fork, workspace handoff, and transcript
-pagination are not advertised.
+retains the workspace. Workspace handoff and transcript pagination are not
+advertised.
+
+**Fork** goes through the registry's shared fork path, which prepares the
+workspace (same directory, new worktree, or scratch), sets the parent, and
+records the fork origin. The new thread copies the source's history and
+records the source's SDK session. Its first message resumes that session with
+`forkSession: true` from the fork's own working directory. The CLI resumes a
+session started in another directory and gives the fork a new session, which
+the thread adopts at `init`. Before that prompt, the fork reads its starting
+usage totals, as an older session without a baseline does, so the copied
+history is not billed as new work. A source with no conversation yet cannot
+be forked.
 
 Queue uses PwrAgent's shared FIFO and resumes the SDK session after the active
 turn finishes. Steer sends an additional native user message through the same
@@ -193,9 +204,33 @@ contract and the confirmation.
   the prompt is confirmed rewindable, never for a rewind that is refused.
   A message sent during the rewind waits in the queue, which drains after it.
 - The session metadata records each rewind: the turn it removed, the SDK
-  session, and the removed branch's last entry, which is where an undo would
-  resume. The append-only history gains a truncation line that drops the
+  session, and the removed branch's last entry, which is where an undo
+  resumes. The append-only history gains a truncation line that drops the
   removed entries on every read, so the rewind survives a restart.
+
+### Undo
+
+Claude keeps the removed turns as a branch of its session, so the latest
+rewind can be undone until the next turn starts (`ClaudeBackend.undoRewind`).
+
+- The record keeps what the rewind left the session at (`after`) and what it
+  cleared (`before`: the earlier resume point, usage totals, and context
+  occupancy). Undo is refused once the session no longer matches `after`,
+  which the next turn's `init` changes, or once an entry follows the
+  truncation line in the history.
+- Undo points the next query back at the removed branch's last entry
+  (`resumeSessionAt`), restores what the rewind cleared, and appends a
+  `pwragent_truncation_undo` line, so reads keep the removed entries again.
+- `rewindFiles` restores checkpoints but cannot go forward again. Before a
+  file rewind, the adapter asks Claude for a dry run and copies the files it
+  names into `state/claude/rewind-backups/<thread>/<rewind>/`, PwrAgent's own
+  storage, up to 50 MB. After the restore it records a hash of each file.
+  Undo writes the copies back, and deletes the files the rewind brought back
+  that did not exist before. It refuses, changing nothing, when a file
+  changed after the rewind. A file rewind whose copies could not be kept
+  cannot be undone.
+- A turn's first `init` removes the thread's backups: no rewind before it can
+  be undone any more.
 
 ## Background tasks and sub-agents
 

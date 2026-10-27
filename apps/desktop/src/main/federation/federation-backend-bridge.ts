@@ -60,6 +60,8 @@ import type {
   PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
+  UndoThreadRewindRequest,
+  UndoThreadRewindResponse,
   ControlActiveTurnRequest,
   ControlActiveTurnResponse,
   CreateScheduledThreadActionRequest,
@@ -507,6 +509,8 @@ export function authenticateMessageOrigin(params: {
         : {}),
       threadId: sourceThread.threadId,
       ...(sourceThread.messageId ? { messageId: sourceThread.messageId } : {}),
+      ...(typeof sourceThread.turnId === "string" ? { turnId: sourceThread.turnId } : {}),
+      ...(typeof sourceThread.rootTurnId === "string" ? { rootTurnId: sourceThread.rootTurnId } : {}),
       ...(sourceThread.title ? { title: sourceThread.title } : {}),
     },
   };
@@ -621,6 +625,7 @@ export const FEDERATION_BACKEND_METHODS = {
   compactThread: "backend.compactThread",
   rewindThread: "backend.rewindThread",
   previewThreadRewind: "backend.previewThreadRewind",
+  undoThreadRewind: "backend.undoThreadRewind",
   listMcpConnections: "backend.listMcpConnections",
   readThreadMcpConnections: "backend.readThreadMcpConnections",
   setThreadMcpConnections: "backend.setThreadMcpConnections",
@@ -774,6 +779,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.compactThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.rewindThread]: "turn_control",
   [FEDERATION_BACKEND_METHODS.previewThreadRewind]: "turn_control",
+  [FEDERATION_BACKEND_METHODS.undoThreadRewind]: "turn_control",
   [FEDERATION_BACKEND_METHODS.listMcpConnections]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readThreadMcpConnections]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.setThreadMcpConnections]: "turn_control",
@@ -1041,6 +1047,7 @@ export type FederationBackendOperations = {
   compactThread(request: CompactThreadRequest): Promise<CompactThreadResponse>;
   rewindThread(request: RewindThreadRequest): Promise<RewindThreadResponse>;
   previewThreadRewind(request: PreviewThreadRewindRequest): Promise<PreviewThreadRewindResponse>;
+  undoThreadRewind(request: UndoThreadRewindRequest): Promise<UndoThreadRewindResponse>;
   listMcpConnections(): Promise<ListMcpConnectionsResponse>;
   readThreadMcpConnections(
     request: ReadThreadMcpConnectionsRequest,
@@ -1835,6 +1842,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.previewThreadRewind(
         envelope.params as PreviewThreadRewindRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.undoThreadRewind,
+    async (envelope) =>
+      await params.backend.undoThreadRewind(
+        envelope.params as UndoThreadRewindRequest,
       ),
   );
   params.router.registerHandler(
@@ -2966,6 +2980,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<PreviewThreadRewindResponse> {
     return await this.rpc.request<PreviewThreadRewindResponse>({
       method: FEDERATION_BACKEND_METHODS.previewThreadRewind,
+      params: request,
+    });
+  }
+
+  async undoThreadRewind(
+    request: UndoThreadRewindRequest,
+  ): Promise<UndoThreadRewindResponse> {
+    return await this.rpc.request<UndoThreadRewindResponse>({
+      method: FEDERATION_BACKEND_METHODS.undoThreadRewind,
       params: request,
     });
   }

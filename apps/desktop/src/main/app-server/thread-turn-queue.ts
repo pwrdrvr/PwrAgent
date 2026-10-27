@@ -8,6 +8,7 @@ import type {
   ThreadIdentifier,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
+import { mergeCausalMessagingContext } from "./causal-messaging-context";
 
 export type ThreadTurnQueueOrigin =
   | "manual"
@@ -319,6 +320,8 @@ export class ThreadTurnQueue {
           ...(message.origin ? [message.origin] : []),
         ],
         input: groupedAgentInput(messages),
+        messageOrigin: { ...input.messageOrigin, kind: "agent",
+          ...mergeCausalMessagingContext(current ? [current.messageOrigin, message.origin] : [message.origin]) },
         ...(holdReason ? { manualReleaseRequired: true, holdReason } : {}),
       };
       if (
@@ -674,6 +677,7 @@ export class ThreadTurnQueue {
   updateQueuedEntryInput(
     entryId: string,
     input: AppServerTurnInputItem[],
+    sourceTurn?: Pick<NonNullable<AppServerThreadMessageOrigin["sourceThread"]>, "turnId" | "rootTurnId">,
   ): ThreadTurnQueueEntry | undefined {
     for (const queue of this.queuedEntries.values()) {
       const index = queue.findIndex((entry) => entry.id === entryId);
@@ -685,6 +689,16 @@ export class ThreadTurnQueue {
       const updated = {
         ...rest,
         input,
+        ...(sourceTurn && current.messageOrigin?.sourceThread ? {
+          messageOrigin: {
+            ...current.messageOrigin,
+            sourceThread: {
+              ...current.messageOrigin.sourceThread,
+              turnId: sourceTurn.turnId,
+              rootTurnId: sourceTurn.rootTurnId,
+            },
+          },
+        } : {}),
         // An operator edit replaces the complete batch. Do not subsequently
         // rebuild it from stale per-sender input when another message arrives.
         ...(current.agentMessages ? { agentMessages: undefined } : {}),
@@ -699,6 +713,7 @@ export class ThreadTurnQueue {
     entryId: string,
     input: AppServerTurnInputItem[],
     sender: NonNullable<AppServerThreadMessageOrigin["sourceThread"]>,
+    origin?: AppServerThreadMessageOrigin,
   ): ThreadTurnQueueEntry | undefined {
     const found = this.findQueuedEntry(entryId);
     if (!found?.entry.agentMessages) return undefined;
@@ -709,12 +724,15 @@ export class ThreadTurnQueue {
         || source.instanceId !== sender.instanceId) return [message];
       if (replaced) return [];
       replaced = true;
-      return [{ ...message, input }];
+      return [{ ...message, input, ...(origin ? { origin } : {}) }];
     });
     if (!replaced) return undefined;
     // The title named the input being replaced.
     const { title: _staleTitle, ...rest } = found.entry;
-    const entry = { ...rest, agentMessages: messages, input: groupedAgentInput(messages) };
+    const entry = { ...rest, agentMessages: messages, input: groupedAgentInput(messages),
+      messageOrigin: { ...rest.messageOrigin, kind: "agent" as const,
+        causalMessagingSource: undefined, causalMessagingAmbiguous: undefined,
+        ...mergeCausalMessagingContext(messages.map((message) => message.origin)) } };
     this.queueFor(found.key)[found.position - 1] = entry;
     return entry;
   }

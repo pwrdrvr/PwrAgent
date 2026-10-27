@@ -4,7 +4,10 @@ import type {
   AppServerReviewOutput,
   AppServerThreadReviewEntry,
 } from "@pwragent/shared";
-import { formatPathRelativeToDirectories } from "@pwragent/shared";
+import {
+  formatPathRelativeToDirectories,
+  reviewContextPullRequests,
+} from "@pwragent/shared";
 import { shortReviewSha } from "../../../../shared/review-command";
 import { reviewFindingTag } from "../../../../shared/review-output";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -195,18 +198,20 @@ function formatReviewMetadata(model: ReviewClipboardModel): string[] {
   push("PR base tip", context?.pullRequestSnapshot?.baseCommit);
   push("PR merge base", context?.pullRequestSnapshot?.mergeBaseCommit);
   const pullRequest = context?.pullRequest;
-  if (pullRequest) {
-    const title = pullRequest.title?.trim();
-    push(
-      "Pull request",
-      [
-        `${pullRequest.org}/${pullRequest.repo}#${pullRequest.number}`,
-        title,
-        pullRequest.url,
-      ]
-        .filter(Boolean)
-        .join(" — "),
-    );
+  const pullRequests = reviewContextPullRequests(context);
+  if (pullRequests.length > 0) {
+    for (const reviewed of pullRequests) {
+      push(
+        "Pull request",
+        [
+          `${reviewed.org}/${reviewed.repo}#${reviewed.number}`,
+          reviewed.title?.trim(),
+          reviewed.url,
+        ]
+          .filter(Boolean)
+          .join(" — "),
+      );
+    }
   } else if (pullRequest === null) {
     // The branch was checked and carried none. Saying so is not the same as
     // leaving the row out, which is what an unchecked branch does.
@@ -257,9 +262,9 @@ export function formatFindingProvenance(model: ReviewClipboardModel): string {
     collapseToOneLine(model.summary) || "Code review",
     context?.projectLabel?.trim(),
     formatReviewedState(context),
-    context?.pullRequest
-      ? `${context.pullRequest.org}/${context.pullRequest.repo}#${context.pullRequest.number}`
-      : undefined,
+    reviewContextPullRequests(context)
+      .map((reviewed) => `${reviewed.org}/${reviewed.repo}#${reviewed.number}`)
+      .join(", "),
   ].filter(Boolean);
   return parts.length > 0 ? `_${parts.join(" · ")}_` : "";
 }

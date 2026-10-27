@@ -4,6 +4,7 @@ export const AGENT_TOOL_CATALOG_IDS = [
   "automation_inspection",
   "app_management",
   "thread_inspection",
+  "forge",
   "messaging_context",
   "thread_orchestration",
   "federation",

@@ -117,6 +117,28 @@ describe("SandboxerConnectionPrompt", () => {
     }
   });
 
+  it("routes missing or rejected hosted credentials to service sign-in in Settings", async () => {
+    for (const state of ["disconnected", "reauthorization_required"] as const) {
+      const onOpenSettings = vi.fn();
+      const view = renderTile(api([sandboxer({
+        authMode: "oauth", serverUrl: "https://sandboxer.com/mcp", sandboxerCliState: undefined,
+        configured: state === "reauthorization_required", state,
+      })]), { onOpenSettings });
+      expect(await screen.findByText("Sign in to Sandboxer in Settings")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Use Sandboxer in this thread")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Get Sandboxer" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Set up Sandboxer in Settings" }));
+      expect(onOpenSettings).toHaveBeenCalledOnce();
+      view.unmount();
+    }
+  });
+
+  it("shows a signed-in hosted service as connected without a CLI status", async () => {
+    renderTile(api([sandboxer({ authMode: "oauth", serverUrl: "https://sandboxer.com/mcp", sandboxerCliState: undefined })]));
+    expect(await screen.findByLabelText("Use Sandboxer in this thread")).toBeEnabled();
+    expect(screen.getByRole("complementary", { name: "Sandboxer connection" })).toHaveClass("pwrsuite-tile--connected");
+  });
+
   it("offers the thread switch once set up, and keeps it through a billing problem", async () => {
     const onEnabledChange = vi.fn(async () => undefined);
     const view = renderTile(api([sandboxer()]), { onEnabledChange });

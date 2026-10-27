@@ -1,3 +1,4 @@
+import { probe } from "../test/phase-probes";
 import "@testing-library/jest-dom/vitest";
 import { navigationOwnerApiFixture } from "../test/navigation-owner-api-fixture";
 import type { DesktopApi } from "../lib/desktop-api";
@@ -12,7 +13,7 @@ import {
   screen,
   waitFor,
   within
-} from "@testing-library/react";
+} from "../test/phase-probes";
 import { resolveNewThreadBackend } from "@pwragent/shared";
 import type {
   AgentEvent,
@@ -121,13 +122,28 @@ function getComposerValueHost(textbox: HTMLElement): HTMLElement {
   );
 }
 
+// Settle immediate fixture IPC promises before starting DOM polling. Role
+// queries over a half-mounted shell otherwise compete with the work that
+// makes the heading/composer ready, especially under CPU pressure.
+async function renderApp(): Promise<ReturnType<typeof render>> {
+  let view!: ReturnType<typeof render>;
+  await probe("setup-render", () => act(async () => {
+    view = render(<App />);
+  }));
+  return view;
+}
+
 async function clickButton(name: string | RegExp): Promise<void> {
-  await waitFor(() => expect(screen.getByRole("button", { name })).toBeEnabled());
+  const button = await waitFor(() => {
+    const button = screen.getByRole("button", { name });
+    expect(button).toBeEnabled();
+    return button;
+  });
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name }));
+    fireEvent.click(button.isConnected ? button : screen.getByRole("button", { name }));
     await Promise.resolve();
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await probe("timer", () => new Promise((resolve) => setTimeout(resolve, 0)));
   });
 }
 
@@ -135,8 +151,71 @@ async function flushReactUpdates(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await probe("timer", () => new Promise((resolve) => setTimeout(resolve, 0)));
   });
+}
+
+async function renderThreadApp(signal?: AbortSignal): Promise<void> {
+  const api = (window as Window & { pwragent?: DesktopApi }).pwragent!;
+  const record = api.recordStartupProfileEvent;
+  let ready!: () => void;
+  let failed!: (error: Error) => void;
+  let completed!: () => void;
+  const imported = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject; });
+  const completion = new Promise<void>((resolve) => { completed = resolve; });
+  void imported.catch(() => undefined);
+  let importStarted = false;
+  let cancelled = false;
+  let finished = false;
+  let cancelPhase: (() => void) | undefined;
+  let view: ReturnType<typeof render> | undefined;
+  const cancelledError = new Error("Renderer startup was cancelled.");
+  const cancel = () => {
+    cancelled = true;
+    cancelPhase?.();
+    failed(cancelledError);
+  };
+  api.recordStartupProfileEvent = (type, detail) => {
+    if (type === "thread-view-import:start") importStarted = true;
+    if (type === "thread-view-import:end") ready();
+    if (type === "thread-view-import:error") failed(new Error(String(detail?.error)));
+    record?.(type, detail);
+  };
+  signal?.addEventListener("abort", cancel, { once: true });
+  if (signal?.aborted) cancel();
+  onTestFinished(async () => {
+    if (!finished) cancel();
+    await completion;
+    api.recordStartupProfileEvent = record;
+  });
+  try {
+    if (cancelled) throw cancelledError;
+    view = await renderApp();
+    // Commit each deferred paint/task separately. Wait for the import's
+    // admission event before awaiting its completion inside act.
+    while (!importStarted && !cancelled) {
+      await act(async () => {
+        await new Promise<void>((resolve) => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const done = () => { cancelPhase = undefined; resolve(); };
+          const frame = requestAnimationFrame(() => { timer = setTimeout(done, 0); });
+          cancelPhase = () => {
+            cancelAnimationFrame(frame);
+            if (timer !== undefined) clearTimeout(timer);
+            done();
+          };
+        });
+      });
+    }
+    if (cancelled) throw cancelledError;
+    await act(async () => { await imported; });
+  } finally {
+    cancelPhase?.();
+    signal?.removeEventListener("abort", cancel);
+    if (cancelled) view?.unmount();
+    finished = true;
+    completed();
+  }
 }
 
 function createDeferred<T>(): {
@@ -290,7 +369,7 @@ describe("inferReplayCodexProfileModel", () => {
 
 describe("App", () => {
   beforeEach(() => {
-    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    probe("setup", () => vi.spyOn(document, "hasFocus").mockReturnValue(true));
   });
 
   afterEach(async () => {
@@ -302,6 +381,21 @@ describe("App", () => {
     delete (window as typeof window & {
       __pwragentFederationLabel?: unknown;
     }).__pwragentFederationLabel;
+  });
+
+  it("cancels pending startup work without leaving an act scope open", async () => {
+    const controller = new AbortController();
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({ readSettings: () => new Promise<never>(() => {
+        requestAnimationFrame(() => controller.abort());
+      }) }),
+    });
+
+    await expect(renderThreadApp(controller.signal)).rejects.toThrow("Renderer startup was cancelled.");
+
+    render(<button>Independent render</button>);
+    expect(screen.getByRole("button", { name: "Independent render" })).toBeInTheDocument();
   });
 
   it("keeps a selected document intact while another thread queues and refunds a CI repair", async () => {
@@ -354,7 +448,7 @@ describe("App", () => {
         }),
       }),
     });
-    render(<App />);
+    await renderThreadApp();
     fireEvent.click(await screen.findByRole("link", { name: "report" }));
     await screen.findByRole("heading", { name: "Stable report" });
     const dialog = screen.getByRole("dialog", { name: "Markdown document: report" });
@@ -430,7 +524,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(screen.queryByText("Exit Settings")).not.toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
@@ -470,7 +564,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     fireEvent.keyDown(window, {
       metaKey: true,
@@ -551,7 +645,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     const jumpTo = async (label: string): Promise<void> => {
       fireEvent.keyDown(window, {
@@ -651,7 +745,7 @@ describe("App", () => {
       }),
     });
 
-    const { container } = render(<App />);
+    const { container } = await renderApp();
     const opener = await screen.findByRole("button", { name: "Open automations" });
     act(() => opener.focus());
     fireEvent.click(opener);
@@ -707,7 +801,7 @@ describe("App", () => {
     });
 
     try {
-      render(<App />);
+      await renderApp();
 
       fireEvent.click(
         await screen.findByRole("button", { name: "Open Star Map" }),
@@ -834,7 +928,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
 
     const button = screen.getByRole("button", { name: "New thread" });
@@ -1013,7 +1107,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(windowFocusListeners.size).toBeGreaterThan(0));
     act(() => {
       for (const listener of windowFocusListeners) {
@@ -1138,7 +1232,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
     await clickButton("New thread");
     const chip = await screen.findByRole("button", { name: /^Machine(?::|$)/ });
@@ -1248,7 +1342,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(samlListener).toBeDefined());
     act(() => {
       samlListener?.({
@@ -1336,7 +1430,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     expect(await screen.findByText("New threads start on Auto")).toBeInTheDocument();
     expect(dismissLaunchpadAccessNotice).not.toHaveBeenCalled();
 
@@ -1440,7 +1534,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(getNavigationSnapshot).toHaveBeenCalled());
 
     if (!expected) {
@@ -1561,7 +1655,7 @@ describe("App", () => {
       (window as typeof window & { pwragent: DesktopApi }).pwragent,
       "getNavigationSelectedDetail",
     );
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
     await flushReactUpdates();
 
@@ -1758,7 +1852,7 @@ describe("App", () => {
         readSettings: async () => await new Promise<never>(() => {}),
       }),
     });
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(listeners.size).toBeGreaterThan(0));
     const emit = (notification: AgentEvent["notification"]) => act(() => {
       for (const listener of listeners) listener({ backend: "codex", notification });
@@ -1815,7 +1909,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
 
     act(() => {
@@ -1925,7 +2019,7 @@ describe("App", () => {
           }),
       }),
     });
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
 
     act(() => {
@@ -2021,7 +2115,7 @@ describe("App", () => {
       }),
     });
 
-    const { container } = render(<App />);
+    const { container } = await renderApp();
     await act(async () => {
       backendSummaries.resolve({ fetchedAt: Date.now(), backends: [] });
     });
@@ -2134,7 +2228,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => {
       expect(agentEventListeners.size).toBeGreaterThan(0);
@@ -2191,7 +2285,7 @@ describe("App", () => {
       value: ownerApi({ readSettings, getLatestCodexConfigWarning }),
     });
 
-    render(<App />);
+    await renderApp();
     await waitFor(() => expect(readSettings).toHaveBeenCalledOnce());
     await flushReactUpdates();
     expect(getLatestCodexConfigWarning).not.toHaveBeenCalled();
@@ -2246,7 +2340,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Codex config warning"
@@ -2621,6 +2715,16 @@ describe("App", () => {
           source: "default",
         },
         defaultMergeMethod: { value: "squash", source: "default" },
+        agentTools: {
+          enabled: { value: true, source: "default" },
+          access: {
+            read: { value: "allow", source: "default" },
+            pull_requests: { value: "auto", source: "default" },
+            comments: { value: "auto", source: "default" },
+            issues: { value: "auto", source: "default" },
+            approve_merge: { value: "ask", source: "default" },
+          },
+        },
       },
       applications: {
         editors: [],
@@ -2652,7 +2756,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(await screen.findByText("Settings config did not load")).toBeInTheDocument();
     expect(screen.getByText(/line 3: expected a key/)).toBeInTheDocument();
@@ -2709,7 +2813,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
@@ -2818,7 +2922,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", { level: 2, name: "Rail tab thread" });
     const context = screen.getByRole("complementary", { name: "Thread context" });
@@ -2860,7 +2964,7 @@ describe("App", () => {
         } as DesktopSettingsSnapshot,
       });
       // Let the read land in state; React has not rendered it yet.
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await probe("timer", () => new Promise((resolve) => setTimeout(resolve, 0)));
       fireEvent.click(within(context).getByRole("tab", { name: "Linked projects" }));
       fireEvent.click(screen.getAllByRole("button", { name: "Hide sidebar" })[0]!);
     });
@@ -3144,7 +3248,7 @@ describe("App", () => {
       })
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { level: 1, name: "Threads" })).not.toBeInTheDocument();
@@ -3401,7 +3505,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole(
       "heading",
@@ -3734,7 +3838,7 @@ describe("App", () => {
       })
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -3915,7 +4019,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("textbox", { name: "New thread" }),
@@ -4054,7 +4158,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await waitFor(() => {
       expect(
@@ -4193,7 +4297,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("button", { name: "Restored remote thread" }),
@@ -4314,7 +4418,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("button", { name: "Existing replay thread" }),
@@ -4407,7 +4511,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     // `[onboarding] completed = true` says this operator already answered every
     // question the wizard asks. A missing provider is a health problem to point
@@ -4536,7 +4640,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("button", { name: "Existing thread" }),
@@ -4642,7 +4746,7 @@ describe("App", () => {
         }),
       });
 
-      const { container } = render(<App />);
+      const { container } = await renderApp();
       await waitFor(() => expect(screen.getByRole("button", { name: /^Access mode(?::|$)/ })).toHaveTextContent("Full Access"));
       if (entryPoint === "Cmd+N") {
         expect(openNewThreadListener).toBeDefined();
@@ -4753,7 +4857,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(await screen.findByRole("heading", { level: 2, name: "Select a thread" }))
       .toBeInTheDocument();
@@ -4856,7 +4960,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("heading", {
@@ -5075,7 +5179,7 @@ describe("App", () => {
       })
     });
 
-    const { unmount } = render(<App />);
+    const { unmount } = await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -5294,7 +5398,7 @@ describe("App", () => {
       })
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("heading", {
@@ -5446,7 +5550,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     expect(
       await screen.findByRole("heading", {
@@ -5698,7 +5802,7 @@ describe("App", () => {
       })
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -5993,7 +6097,7 @@ describe("App", () => {
       })
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -6074,6 +6178,21 @@ describe("App", () => {
       level: 2,
       name: "Name this thread something funny and spunky. Something about potatoes."
     });
+
+    // The owner stores a rename before it announces one. The event patches
+    // the header in place, and 250 ms later the selected-thread detail read
+    // that it triggers replaces it with whatever the owner returns. An owner
+    // that still returned the derived title put that title back, so the
+    // assertion below passed only when it ran before that read.
+    navigationSnapshot = {
+      ...navigationSnapshot,
+      fetchedAt: Date.now(),
+      threads: navigationSnapshot.threads.map((thread) =>
+        thread.id === "thread-new"
+          ? { ...thread, title: "Spud up the thread", titleSource: "explicit" as const }
+          : thread
+      ),
+    };
 
     await act(async () => {
       for (const listener of agentEventListeners) {
@@ -6266,7 +6385,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
     await screen.findByRole("heading", { level: 2, name: localThread.title });
 
     fireEvent.click(screen.getByRole("button", {
@@ -6465,7 +6584,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -6589,7 +6708,7 @@ describe("App", () => {
       }
       return response;
     };
-    render(<App />);
+    await renderThreadApp();
     await screen.findByRole("heading", { level: 2, name: "First thread" });
     const row = screen.getByRole("button", { name: rapid ? "First thread" : "Double-click thread" });
     const card = row.closest(".thread-row")!;
@@ -6646,8 +6765,9 @@ describe("App", () => {
     // destinations before the next action consumes or replaces their entries.
     const waitForHistory = async (back?: string, forward?: string): Promise<void> => {
       await waitFor(() => {
+        const history = within(screen.getByRole("group", { name: "History navigation" }));
         for (const [name, destination] of [["Back", back], ["Forward", forward]] as const) {
-          const button = screen.getByRole("button", { name });
+          const button = history.getByRole("button", { name });
           if (destination === undefined) {
             expect(button).toBeDisabled();
           } else {
@@ -6817,7 +6937,7 @@ describe("App", () => {
       }
       return response;
     };
-    render(<App />);
+    await renderThreadApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -7158,7 +7278,7 @@ describe("App", () => {
       }),
     });
 
-    render(<App />);
+    await renderThreadApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -7254,6 +7374,62 @@ describe("App", () => {
     expect(screen.queryByRole("button", { name: /sub-thread draft/ })).not.toBeInTheDocument();
   });
 
+  // The desktop API a mounted thread shell needs: Codex threads in the
+  // Inbox, seen marks echoed back, and no live events. `api` adds what a
+  // test drives; `threads` is read on every snapshot, so a rename shows.
+  function installCodexThreadShell(params: {
+    threads: () => Array<{ id: string; title: string; summary?: string; updatedAt: number }>;
+    api: object;
+  }): void {
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: ownerApi({
+        copyText: async () => undefined,
+        ping: () => "pong",
+        getNavigationSnapshot: async () => {
+          const threads = params.threads();
+          return {
+            backend: "all" as const,
+            fetchedAt: Date.now(),
+            unchanged: false,
+            inboxThreadKeys: threads.map((thread) => `codex:${thread.id}`),
+            threads: threads.map((thread) => ({
+              ...thread,
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              executionMode: "default" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+            })),
+            directories: [],
+            launchpadDefaults: {
+              backend: "codex" as const,
+              executionMode: "default" as const,
+            },
+          };
+        },
+        markThreadSeen: async ({
+          backend,
+          threadId,
+        }: {
+          backend: AppServerBackendKind;
+          threadId: string;
+        }) => ({
+          backend,
+          threadId,
+          seenAt: Date.now(),
+        }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+        platform: "darwin",
+        ...params.api,
+      }),
+    });
+  }
+
   // One Codex thread whose backend renames, reflected by the next snapshot.
   function installRenamableThreadFixture() {
     let threadTitle = "Build Codex client";
@@ -7281,11 +7457,14 @@ describe("App", () => {
       },
     }));
 
-    Object.defineProperty(window, "pwragent", {
-      configurable: true,
-      value: ownerApi({
-        copyText: async () => undefined,
-        ping: () => "pong",
+    installCodexThreadShell({
+      threads: () => [{
+        id: "thread-1",
+        title: threadTitle,
+        summary: "Wire the app-server transport and list threads",
+        updatedAt: 2_000,
+      }],
+      api: {
         listSkills: async () => ({
           backend: "codex" as const,
           fetchedAt: Date.now(),
@@ -7324,50 +7503,9 @@ describe("App", () => {
             },
           ],
         }),
-        getNavigationSnapshot: async () => ({
-          backend: "all" as const,
-          fetchedAt: Date.now(),
-          unchanged: false,
-          inboxThreadKeys: ["codex:thread-1"],
-          threads: [
-            {
-              id: "thread-1",
-              title: threadTitle,
-              titleSource: "explicit" as const,
-              summary: "Wire the app-server transport and list threads",
-              source: "codex" as const,
-              executionMode: "default" as const,
-              linkedDirectories: [],
-              inbox: {
-                inInbox: true,
-                reason: "new-thread" as const,
-              },
-              updatedAt: 2_000,
-            },
-          ],
-          directories: [],
-          launchpadDefaults: {
-            backend: "codex" as const,
-            executionMode: "default" as const,
-          },
-        }),
-        markThreadSeen: async ({
-          backend,
-          threadId,
-        }: {
-          backend: AppServerBackendKind;
-          threadId: string;
-        }) => ({
-          backend,
-          threadId,
-          seenAt: Date.now(),
-        }),
-        onAgentEvent: () => () => undefined,
-        onWindowFocus: () => () => undefined,
-        platform: "darwin",
         readThread,
         renameThread,
-      }),
+      },
     });
     return { renameThread };
   }
@@ -7375,7 +7513,7 @@ describe("App", () => {
   it("renames the selected thread from the sidebar actions menu", async () => {
     const { renameThread } = installRenamableThreadFixture();
 
-    render(<App />);
+    await renderThreadApp();
 
     await screen.findByRole("heading", {
       level: 2,
@@ -7403,10 +7541,121 @@ describe("App", () => {
     });
   });
 
+  function installQuestionThreadFixture(questionThreadId: "thread-1" | "thread-2") {
+    const question = {
+      type: "message" as const,
+      id: "call-question",
+      role: "assistant" as const,
+      text: "Which region should we deploy to?",
+      delivery: "async" as const,
+      questions: [{ title: "Which region should we deploy to?", options: null }],
+    };
+    const readThread = vi.fn(async ({ threadId }: { threadId: string }) => ({
+      backend: "codex" as const,
+      fetchedAt: Date.now(),
+      threadId,
+      replay: {
+        entries: [
+          { type: "message" as const, id: `${threadId}-ask`, role: "user" as const, text: "Ship it." },
+          ...(threadId === questionThreadId ? [question] : []),
+          { type: "message" as const, id: `${threadId}-done`, role: "assistant" as const, text: "Waiting on you." },
+        ],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    }));
+
+    installCodexThreadShell({
+      threads: () => [
+        { id: "thread-1", title: "Build Codex client", updatedAt: 2_000 },
+        { id: "thread-2", title: "Deploy the gateway", updatedAt: 1_000 },
+      ],
+      api: {
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        listOperatorRequests: async () => ({
+          serverRequests: [],
+          questions: [{
+            backend: "codex" as const,
+            threadId: questionThreadId,
+            messageId: question.id,
+            questions: [{ title: "Which region should we deploy to?", options: [] }],
+            createdAt: 1_500,
+          }],
+          seenKeys: [],
+        }),
+        readThread,
+      },
+    });
+
+    // jsdom has no scrollIntoView. Record what the jump scrolls.
+    const scrollIntoView = vi.fn<(this: HTMLElement) => void>();
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    onTestFinished(() => {
+      if (descriptor) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", descriptor);
+      else delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    });
+    return { scrollIntoView };
+  }
+
+  async function expectQuestionRevealed(scrollIntoView: { mock: { contexts: unknown[] } }): Promise<void> {
+    await waitFor(() => {
+      expect(document.querySelector("[data-entry-id=\"call-question\"]"))
+        .toHaveAttribute("data-linked-message", "true");
+    });
+    const item = document.querySelector("[data-entry-id=\"call-question\"]");
+    expect(scrollIntoView.mock.contexts).toContain(item?.firstElementChild);
+  }
+
+  it("opens another thread on its question from the sidebar Question chip", async () => {
+    const { scrollIntoView } = installQuestionThreadFixture("thread-2");
+
+    await renderApp();
+
+    await screen.findByRole("heading", { level: 2, name: "Build Codex client" });
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    fireEvent.click(await within(browseSection).findByRole("button", {
+      name: "Question: Which region should we deploy to?",
+    }));
+
+    await screen.findByRole("heading", { level: 2, name: "Deploy the gateway" });
+    await expectQuestionRevealed(scrollIntoView);
+  });
+
+  it("brings the selected thread back from Search on its question", async () => {
+    const { scrollIntoView } = installQuestionThreadFixture("thread-1");
+
+    await renderApp();
+
+    await screen.findByRole("heading", { level: 2, name: "Build Codex client" });
+    fireEvent.keyDown(window, {
+      metaKey: true,
+      shiftKey: true,
+      code: "KeyF",
+      key: "F",
+    });
+    await screen.findByRole("heading", { level: 2, name: "Search" });
+
+    const browseSection = screen.getByRole("region", { name: "Thread browser" });
+    fireEvent.click(await within(browseSection).findByRole("button", {
+      name: "Question: Which region should we deploy to?",
+    }));
+
+    await screen.findByRole("heading", { level: 2, name: "Build Codex client" });
+    expect(screen.queryByRole("heading", { level: 2, name: "Search" })).not.toBeInTheDocument();
+    await expectQuestionRevealed(scrollIntoView);
+  });
+
   it("renames the open thread from its title strip on double-click", async () => {
     const { renameThread } = installRenamableThreadFixture();
 
-    render(<App />);
+    await renderThreadApp();
 
     const title = await screen.findByRole("heading", {
       level: 2,

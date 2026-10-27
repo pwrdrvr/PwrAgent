@@ -1,18 +1,27 @@
-import type {
-  AppServerBackendKind,
-  ThreadOverlayState,
-  ThreadSubAgentSummary,
+import {
+  CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
+  isThreadSubAgentVisibleInPanel,
+  MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES,
+  subAgentLens,
+  totalTokenMiserGateAccountings,
+  type AppServerBackendKind,
+  type AppServerThreadActivityEntry,
+  type SubAgentLens,
+  type ThreadOverlayState,
+  type ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import type { OverlayStoreLike } from "../../state/overlay-store-sqlite";
 import { TOKEN_MISER_MONITOR_ID_PREFIX } from "../../state/thread-sub-agents";
 
 /**
  * The overlay record a mock store keeps. The real store holds sub-agent cards
- * in `thread_sub_agents`; mocks keep them on the record so a test can seed
- * and assert them in one place. Production code never sees this field.
+ * in `thread_sub_agents` and usage activities in `thread_usage_activities`;
+ * mocks keep both on the record so a test can seed and assert them in one
+ * place. Production code never sees these fields.
  */
 export type MockOverlayState = ThreadOverlayState & {
   subAgents?: ThreadSubAgentSummary[];
+  immutableUsageActivities?: AppServerThreadActivityEntry[];
 };
 
 /** A mock store whose overlay reads expose the cards kept on the record. */
@@ -37,8 +46,19 @@ export function mockSubAgentReads(read: ReadOverlay) {
     [...(read(backend, threadId)?.subAgents ?? [])].sort(
       (left, right) =>
         right.createdAt - left.createdAt
-        || left.monitorId.localeCompare(right.monitorId),
+        // SQLite's BINARY collation, as `ORDER BY monitor_id` uses.
+        || (left.monitorId < right.monitorId ? -1 : left.monitorId > right.monitorId ? 1 : 0),
     );
+  // The panel's retention window, from its `visibleSince` cutoff.
+  const visibleCards = (params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    visibleSince: number;
+    excludeMonitorIds?: readonly string[];
+  }) =>
+    cards(params.backend, params.threadId).filter((card) =>
+      !params.excludeMonitorIds?.includes(card.monitorId)
+      && isThreadSubAgentVisibleInPanel(card, params.visibleSince + CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS));
   return {
     getThreadSubAgent: async (params: {
       backend: AppServerBackendKind;
@@ -81,6 +101,54 @@ export function mockSubAgentReads(read: ReadOverlay) {
           || card.status === "failed"
           || card.status === "failure",
       ),
+    getThreadSubAgents: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      monitorIds: readonly string[];
+    }) =>
+      cards(params.backend, params.threadId).filter((card) =>
+        params.monitorIds.includes(card.monitorId)),
+    readThreadSubAgentLensCounts: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      visibleSince: number;
+      excludeMonitorIds?: readonly string[];
+    }) => {
+      const counts: Record<SubAgentLens, number> = { harness: 0, "token-miser": 0, pwragent: 0 };
+      for (const card of visibleCards(params)) counts[subAgentLens(card)] += 1;
+      return counts;
+    },
+    listThreadSubAgentLensPage: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      lens: SubAgentLens;
+      visibleSince: number;
+      excludeMonitorIds?: readonly string[];
+      offset: number;
+      limit: number;
+    }) =>
+      visibleCards(params)
+        .filter((card) => subAgentLens(card) === params.lens)
+        .slice(params.offset, params.offset + params.limit),
+    listThreadSubAgentPage: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      excludeMonitorIds?: readonly string[];
+      offset: number;
+      limit: number;
+    }) =>
+      cards(params.backend, params.threadId)
+        .filter((card) => !params.excludeMonitorIds?.includes(card.monitorId))
+        .slice(params.offset, params.offset + params.limit),
+    readThreadTokenMiserGateTotals: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+    }) =>
+      totalTokenMiserGateAccountings(
+        cards(params.backend, params.threadId)
+          .filter((card) => card.monitorId.startsWith(TOKEN_MISER_MONITOR_ID_PREFIX))
+          .map((card) => card.tokenMiserAccounting),
+      ),
     readThreadSubAgentRevision: async (params: {
       backend: AppServerBackendKind;
       threadId: string;
@@ -93,5 +161,32 @@ export function mockSubAgentReads(read: ReadOverlay) {
       }
       return { count: current.length, revision };
     },
+  };
+}
+
+/**
+ * The store's usage-activity reads over a mock's overlay records, with the
+ * same window as `ThreadUsageActivityTable`: the newest 100, oldest first.
+ */
+export function mockUsageActivityReads(read: ReadOverlay) {
+  const retained = (backend: AppServerBackendKind, threadId: string) =>
+    (read(backend, threadId)?.immutableUsageActivities ?? []).slice(-MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES);
+  return {
+    readThreadUsageActivities: async (params: {
+      backend: AppServerBackendKind;
+      threadIds: string[];
+    }) => {
+      const result: Record<string, AppServerThreadActivityEntry[]> = {};
+      for (const threadId of new Set(params.threadIds)) {
+        const activities = retained(params.backend, threadId);
+        if (activities.length > 0) result[threadId] = activities;
+      }
+      return result;
+    },
+    readThreadUsageActivityForTurn: async (params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+      turnId: string;
+    }) => retained(params.backend, params.threadId).find((activity) => activity.turn?.id === params.turnId),
   };
 }

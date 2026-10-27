@@ -1,7 +1,7 @@
 import type { DesktopApi } from "../desktop-api";
 import { expect, it, vi } from "vitest";
 import type { AgentEvent, NavigationQueryEntry, NavigationQueryPage, NavigationQueryRequest } from "@pwragent/shared";
-import { NavigationWindowQueries } from "../navigation-window-queries";
+import { navigationDemandKey, NavigationWindowQueries } from "../navigation-window-queries";
 
 function request(filter = ""): NavigationQueryRequest {
   return { protocol: 2, consumer: "main-sidebar", pageSize: 10, query: { kind: "lens", lens: "inbox", filter } };
@@ -34,6 +34,52 @@ function deferred<T>() {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve };
 }
+
+it("canonicalizes each admitted demand once, including replacements", () => {
+  const queries = new NavigationWindowQueries({});
+  queries.setVisible(false);
+  try {
+    queries.setDemand(new Map([["lens", request()]]));
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      queries.setDemand(new Map([["lens", request("replacement")]]));
+      const calls = stringify.mock.calls.filter(([, replacer]) => typeof replacer === "function").length;
+      if (process.env.NAVIGATION_OPERATION_REPORT) console.info("replacement canonicalizations", calls);
+      expect(calls).toBe(1);
+    } finally { stringify.mockRestore(); }
+  } finally { queries.dispose(); }
+});
+
+it("rekeys mutable caller requests and nested identity arrays on each explicit setDemand", () => {
+  const queries = new NavigationWindowQueries({});
+  queries.setVisible(false);
+  const ref = { backend: "codex" as const, threadId: "same", ownerInstanceId: "peer-a" };
+  const identities = [ref];
+  const demand: NavigationQueryRequest = { ...request(), query: { kind: "exact", identities } };
+  const install = () => queries.setDemand(new Map([["exact", demand]]));
+  try {
+    install();
+    const first = queries.getSnapshot().resources.get("exact");
+    ref.ownerInstanceId = "peer-b";
+    install();
+    const second = queries.getSnapshot().resources.get("exact");
+    expect(second).not.toBe(first);
+    identities.push({ ...ref, threadId: "other" });
+    install();
+    expect(queries.getSnapshot().resources.get("exact")).not.toBe(second);
+  } finally { queries.dispose(); }
+});
+
+it("preserves semantic equality for request metadata, sets and transport fields", () => {
+  const a: NavigationQueryRequest = { ...request(), federationTarget: { scope: "remote", instanceId: "a" },
+    query: { kind: "directory-index", keys: ["b", "a"] } };
+  expect(navigationDemandKey(a)).toBe(navigationDemandKey({ ...a,
+    query: { keys: ["a", "b"], kind: "directory-index" }, deadlineAt: 123, readReason: "refresh" }));
+  for (const patch of [{ pageSize: 20 }, { cursor: "fresh" }, { anchor: { kind: "directory" as const, key: "a" } },
+    { federationTarget: { scope: "remote" as const, instanceId: "b" } }]) {
+    expect(navigationDemandKey({ ...a, ...patch })).not.toBe(navigationDemandKey(a));
+  }
+});
 
 it("restores a lens range synchronously while a fresh lease refreshes it in place", async () => {
   const refreshed = deferred<NavigationQueryPage>();
@@ -163,7 +209,13 @@ it("enforces the aggregate retained range budget while keeping the accepted base
   const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
   queries.setDemand(new Map([["directory-index", request()]]));
   await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory-index")?.loading).toBe(false));
-  for (let index = 0; index < 34; index += 1) await queries.loadMore("directory-index");
+  // One click continues for up to eight pages. Stop on the first rejected
+  // range rather than serializing the same 8 MiB baseline on 30 more retries.
+  for (let index = 0; index < 34; index += 1) {
+    await queries.loadMore("directory-index");
+    if (queries.getSnapshot().resources.get("directory-index")!.state.error) break;
+  }
+  expect(read).toHaveBeenCalledTimes(35);
   const state = queries.getSnapshot().resources.get("directory-index")!.state;
   expect(state.page?.directories).toHaveLength(34);
   expect(state.stale).toBe(true);

@@ -9,7 +9,7 @@ import {
   operatorTodoItemKey,
   parseCodexAsyncQuestionReply,
 } from "@pwragent/shared";
-import { copyText } from "../../../lib/copy-text";
+import { copyTextWithHtml } from "../../../lib/copy-text";
 import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
@@ -20,13 +20,14 @@ import { OperatorWaitsContext } from "../../operator-requests/useOperatorRequest
 
 vi.mock("../../../lib/copy-text", () => ({
   copyText: vi.fn(async () => undefined),
+  copyTextWithHtml: vi.fn(async () => undefined),
 }));
 
 afterEach(() => {
   cleanup();
   delete (window as unknown as { pwragent?: unknown }).pwragent;
   vi.useRealTimers();
-  vi.mocked(copyText).mockClear();
+  vi.mocked(copyTextWithHtml).mockClear();
 });
 
 const AGENT: ThreadTodoProject = { key: "directory:/src/pwragent", label: "PwrAgent", path: "/src/pwragent" };
@@ -430,7 +431,7 @@ describe("ThreadTodoStack", () => {
       <ThreadTodoStack threadKey="codex:thread-a" todos={[handoff]} view={createView([handoff])} onStartReview={vi.fn()} />,
     );
 
-    expect(screen.getByText("gpt-6.1-sol · xhigh")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Model for the new thread: OpenAI, gpt-6.1-sol, xhigh" })).toBeTruthy();
     expect(screen.getByText("Access").nextElementSibling?.textContent).toBe("Auto");
   });
 
@@ -472,7 +473,7 @@ describe("ThreadTodoStack", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Copy prompt" }));
     });
-    expect(copyText).toHaveBeenCalledWith("Port the parser");
+    expect(copyTextWithHtml).toHaveBeenCalledWith("Port the parser", "<p>Port the parser</p>");
     expect(screen.getByRole("button", { name: "Prompt copied" })).toBeTruthy();
   });
 
@@ -656,7 +657,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
-    expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true });
+    expect(handoffView.run).toHaveBeenCalledWith(handoff, { allowOpenItems: true, modelSettings: { backend: "codex" } });
   });
 
   it("starts a thread at once when only the new thread's steps are open", async () => {
@@ -680,7 +681,7 @@ describe("thread to-do checklists", () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
     expect(screen.queryByText(/still open/)).toBeNull();
-    expect(view.run).toHaveBeenCalledWith(handoff, {});
+    expect(view.run).toHaveBeenCalledWith(handoff, { modelSettings: { backend: "codex" } });
     cleanup();
 
     // A peer's card may live on an older owner, which blocks on every open
@@ -697,7 +698,7 @@ describe("thread to-do checklists", () => {
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     });
-    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true });
+    expect(remoteView.run).toHaveBeenCalledWith(remote, { allowOpenItems: true, modelSettings: { backend: "codex" } });
   });
 
   it("drops the question once the last open step is checked", () => {

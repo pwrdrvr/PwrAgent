@@ -6,6 +6,7 @@ import { relative, resolve } from "node:path";
 const repoRoot = resolve(import.meta.dirname, "..");
 const scanRoots = [
   "apps/desktop/src/main",
+  "packages/pwragent/src",
   "scripts",
 ];
 

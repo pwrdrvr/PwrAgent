@@ -736,6 +736,8 @@ export type RewindThreadRequest = {
   threadId: ThreadIdentifier;
   target: ThreadRewindTarget;
   mode: ThreadRewindMode;
+  /** Turns the rewind removes, as the caller counted them; the marker shows it. */
+  removedTurnCount?: number;
 };
 
 export type RewindThreadResponse = {
@@ -748,6 +750,22 @@ export type RewindThreadResponse = {
   promptText?: string;
   /** Files the rewind restored, for a conversation-and-files rewind. */
   restoredFileCount?: number;
+  /** The rewind's entry in the thread's rewind log. */
+  rewindId?: string;
+};
+
+export type UndoThreadRewindRequest = {
+  backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  rewindId: string;
+};
+
+export type UndoThreadRewindResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  rewindId: string;
+  updatedAt: number;
 };
 
 export type GrokWorkflowBudgetPolicy = {
@@ -1336,7 +1354,7 @@ export type RecordRecentFileReferencesRequest = {
  * intended second, which is why the history is scoped rather than named for
  * reviews.
  */
-export type ModelSettingsRecentsScope = "review" | "composer";
+export type ModelSettingsRecentsScope = "review" | "composer" | "todo-dispatch";
 
 /**
  * One remembered provider/model/reasoning combination. Recorded only when the

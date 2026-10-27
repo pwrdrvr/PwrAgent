@@ -297,8 +297,19 @@ export type AppServerReviewContext = {
    * Never a list. A pull request that is not on the reviewed branch is not
    * evidence about the reviewed diff, and printing the thread's other PRs here
    * would imply a connection that does not exist.
+   *
+   * A review whose command named its pull requests (`/code-review 12,13`)
+   * names those instead of the checked-out branch's. When it named several,
+   * this is the first and `pullRequests` holds them all.
    */
   pullRequest?: AppServerReviewPullRequest | null;
+  /**
+   * Every pull request a review of several named, in the order named. Absent
+   * for a review of one. A reviewer that reports one set of findings for all
+   * of them does not say which pull request each finding belongs to, so the
+   * card names them together rather than splitting the findings by guess.
+   */
+  pullRequests?: AppServerReviewPullRequest[];
 };
 
 export type LinkedDirectorySummary = {
@@ -676,12 +687,19 @@ export type AppServerThreadMessageOriginKind =
 
 export type AppServerThreadMessageOrigin = {
   kind: AppServerThreadMessageOriginKind;
+  /** Host-owned causal source. A continuation keeps its own kind; this is not a new human message. */
+  causalMessagingSource?: MessagingCausalSourceRef;
+  /** Grouped inputs with different sources must never acquire last-writer attachment authority. */
+  causalMessagingAmbiguous?: boolean;
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
   systemReason?: "monitor-job-suggestion" | "thread-correspondence";
   sourceThread?: {
     /** Sender correspondence message, when PwrAgent has a durable breadcrumb. */
     messageId?: string;
+    /** Exact invoking turn and its known root. Attribution only; confers no authority. */
+    turnId?: string;
+    rootTurnId?: string;
     backend: AppServerBackendKind;
     /** Durable owner identity when the source thread belongs to another instance. */
     instanceId?: FederationInstanceId;
@@ -728,6 +746,16 @@ export type AppServerThreadMessageOrigin = {
   };
 };
 
+export type MessagingCausalSourceRef = {
+  /** Opaque profile-database identity, distinct even for profiles sharing a harness. */
+  ownerId: string;
+  requestId: string;
+  /** Stable actor/agent/surface scope, used only to detect conflicting grouped inputs. */
+  surfaceSelector?: string;
+  /** Messaging owner, which can differ from the thread owner. */
+  instanceId?: FederationInstanceId;
+};
+
 export type AppServerThreadTextPart = {
   type: "text";
   text: string;
@@ -768,6 +796,8 @@ export type AppServerThreadTurnStatus =
 
 export type AppServerThreadTurnMetadata = {
   id: string;
+  /** Server-reported attribution. Null or absent means unknown. */
+  rootTurnId?: string | null;
   status?: AppServerThreadTurnStatus;
   startedAt?: number;
   completedAt?: number;
@@ -894,6 +924,8 @@ export type AppServerThreadActivityEntry = {
   tone?: "warning";
   status?: AppServerThreadActivityStatus;
   details: AppServerThreadActivityDetail[];
+  /** Exact provider item IDs for a group that can be reloaded independently. */
+  itemIds?: string[];
   /** Owner-prepared collapsed history; resolve before expanding its details. */
   detailsRef?: {
     backend: AppServerBackendKind;
@@ -901,6 +933,7 @@ export type AppServerThreadActivityEntry = {
     turnId: string;
     entryId: string;
     revision: string;
+    itemIds?: string[];
   };
   turn?: AppServerThreadTurnMetadata;
   usageLine?: ThreadUsageLineRecord;
@@ -1325,7 +1358,13 @@ export type ThreadDisplayRead = {
   /** New viewers load folded Pricing gate cards only on expansion. */
   deferPricingGates?: boolean;
   pricingGateGroup?: { usageLineId: string; filter: "primary" | "small" };
-  activity?: { turnId: string; entryId: string };
+  activity?: {
+    turnId: string;
+    entryId: string;
+    itemIds?: string[];
+    /** Returns toolInvocationDetails only; the invocation's transcript group is unknown. */
+    invocationItemId?: string;
+  };
   firstWarningAt?: number;
   largeOutputThresholdChars?: number;
   monitorId?: string;
@@ -1383,6 +1422,8 @@ export type AppServerReadThreadRequest = {
 };
 
 export type AppServerReadThreadResponse = {
+  /** Isolated invocation bodies; never a transcript page or a complete activity group. */
+  toolInvocationDetails?: { turnId: string; itemId: string; details: AppServerThreadActivityDetail[] };
   display?: ThreadDisplayData;
   /** Opaque hash of the complete owner response, excluding observation timings. */
   replayRevision?: string;
@@ -1912,6 +1953,8 @@ export type AppServerNotification =
         turnId?: string;
         turn: {
           id: string;
+          /** Attribution only; never a permission or consent source. */
+          rootTurnId?: string | null;
           status?: string;
           startedAt?: number | null;
           completedAt?: number | null;
@@ -1950,6 +1993,8 @@ export type AppServerNotification =
         turnId: string;
         turn: {
           id: string;
+          /** Attribution only; never a permission or consent source. */
+          rootTurnId?: string | null;
           status: "completed" | "interrupted" | "cancelled";
           startedAt?: number | null;
           completedAt?: number | null;
@@ -1981,6 +2026,8 @@ export type AppServerNotification =
         turnId: string;
         turn: {
           id: string;
+          /** Attribution only; never a permission or consent source. */
+          rootTurnId?: string | null;
           status: "failed";
           startedAt?: number | null;
           completedAt?: number | null;
@@ -2036,6 +2083,8 @@ export type AppServerNotification =
         turnId: string;
         turn: {
           id: string;
+          /** Attribution only; never a permission or consent source. */
+          rootTurnId?: string | null;
           status: "cancelled";
           startedAt?: number | null;
           completedAt?: number | null;

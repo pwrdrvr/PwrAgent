@@ -382,6 +382,7 @@ import type {
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
+  SetSandboxerTransportRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
@@ -459,6 +460,8 @@ import type {
   PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
+  UndoThreadRewindRequest,
+  UndoThreadRewindResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -675,6 +678,7 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   setMcpConnectionToolApproval?: (
     request: SetMcpConnectionToolApprovalRequest,
   ) => Promise<MutateMcpConnectionResponse>;
+  setSandboxerTransport?: (request: SetSandboxerTransportRequest) => Promise<MutateMcpConnectionResponse>;
   setSandboxerCleanupOnPrClose?: (
     request: SetSandboxerCleanupOnPrCloseRequest,
   ) => Promise<MutateMcpConnectionResponse>;
@@ -1156,6 +1160,9 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   rewindThread?: (
     request: RewindThreadRequest,
   ) => Promise<RewindThreadResponse>;
+  undoThreadRewind?: (
+    request: UndoThreadRewindRequest,
+  ) => Promise<UndoThreadRewindResponse>;
   configureGrokWorkflowBudget?: (
     request: ConfigureGrokWorkflowBudgetRequest,
   ) => Promise<ConfigureGrokWorkflowBudgetResponse>;

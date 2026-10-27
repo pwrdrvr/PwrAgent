@@ -155,8 +155,9 @@ describe("StateDb — handoff navigation migration", () => {
     await seedMisclassifiedHandoff(store);
     downgradeToV56();
     // Handoff, relationships, v65 retention, v66 backend metadata, v76
-    // generation, and the v79 card table.
-    expect(reopenAndCountImmediateTransactions()).toBe(6);
+    // generation, the v79 card table, its lens index and gate totals, and
+    // the v80 usage-activity table.
+    expect(reopenAndCountImmediateTransactions()).toBe(8);
 
     expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
       CURRENT_STATE_DB_USER_VERSION,
@@ -215,8 +216,9 @@ describe("StateDb — handoff navigation migration", () => {
     await seedMisclassifiedHandoff(store);
     downgradeToV56();
     // Handoff, relationships, v65 retention, v66 backend metadata, v76
-    // generation, and the v79 card table.
-    expect(reopenAndCountImmediateTransactions()).toBe(6);
+    // generation, the v79 card table, its lens index and gate totals, and
+    // the v80 usage-activity table.
+    expect(reopenAndCountImmediateTransactions()).toBe(8);
 
     // Simulate a supported pre-v56 instance sharing the profile after the
     // migration has committed.

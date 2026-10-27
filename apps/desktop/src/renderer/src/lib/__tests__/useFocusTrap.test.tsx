@@ -1,9 +1,9 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useFocusTrap } from "../useFocusTrap";
-import { pressTab } from "../../test/tab-walk";
+import { pressTab, tabEscapes, walkTab } from "../../test/tab-walk";
 
 let opener: HTMLButtonElement;
 
@@ -63,6 +63,27 @@ describe("useFocusTrap", () => {
     expect(focusedLabel()).toBe("First");
   });
 
+  it("reads shared ancestor styles once per Tab scan", () => {
+    render(<Dialog open />);
+    const dialog = screen.getByRole("dialog");
+    const last = button("Last");
+    last.focus();
+    const styles = vi.spyOn(window, "getComputedStyle");
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect(focusedLabel()).toBe("First");
+    expect(styles.mock.calls.filter(([element]) => element === dialog)).toHaveLength(1);
+  });
+
+  it("checks every stop and both wrap boundaries without repeating focus cycles", () => {
+    render(<Dialog open />);
+    const dialog = screen.getByRole("dialog");
+    const visited: string[] = [];
+    const recordFocus = () => visited.push(focusedLabel() ?? "");
+    dialog.addEventListener("focusin", recordFocus);
+    expect(tabEscapes(dialog, 60, { stopAtCycle: true })).toEqual({ forward: [], backward: [] });
+    expect(visited).toEqual(["Middle", "Last", "First", "Last", "Middle", "First"]);
+  });
+
   it("wraps Shift+Tab from the first control to the last", () => {
     render(<Dialog open />);
     pressTab({ shift: true });
@@ -103,6 +124,36 @@ describe("useFocusTrap", () => {
     button("Last").focus();
     pressTab({ shift: true });
     expect(focusedLabel()).toBe("First");
+  });
+
+  it("reads shared ancestor styles only for the Tab cycle's edges", () => {
+    render(<Dialog open />);
+    const middle = button("Middle");
+    button("Last").focus();
+    const readStyle = vi.spyOn(window, "getComputedStyle");
+
+    expect(pressTab().defaultPrevented).toBe(true);
+
+    expect(focusedLabel()).toBe("First");
+    expect(readStyle.mock.calls.filter(([el]) => el === document.body)).toHaveLength(1);
+    expect(readStyle.mock.calls.filter(([el]) => el === middle)).toHaveLength(0);
+    readStyle.mockClear();
+
+    expect(pressTab({ shift: true }).defaultPrevented).toBe(true);
+
+    expect(focusedLabel()).toBe("Last");
+    expect(readStyle.mock.calls.filter(([el]) => el === document.body)).toHaveLength(1);
+    expect(readStyle.mock.calls.filter(([el]) => el === middle)).toHaveLength(0);
+  });
+
+  it("shares fallback visibility reads across a synchronous keyboard walk", () => {
+    render(<Dialog open />);
+    const dialog = screen.getByRole("dialog");
+    const readStyle = vi.spyOn(window, "getComputedStyle");
+
+    expect(walkTab(60).every((element) => dialog.contains(element))).toBe(true);
+
+    expect(readStyle.mock.calls.filter(([el]) => el === document.body)).toHaveLength(1);
   });
 
   it("uses current visibility when a control appears between Tab presses", () => {

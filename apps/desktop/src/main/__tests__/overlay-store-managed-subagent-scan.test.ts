@@ -537,7 +537,7 @@ describe("managed subagent navigation reads", () => {
     const before = stateDb.raw.prepare("SELECT total_changes() AS n").get() as { n: number };
     const { writes } = await measureSqliteWrites(async () => {
       for (let i = 0; i < 20; i++) {
-        write("parent", { immutableUsageActivities: [{ text: "history".repeat(100) }], subAgents: [
+        write("parent", { managedReviewEntries: [{ text: "history".repeat(100) }], subAgents: [
           card("child", { status: String(i), title: String(i) }),
           card("grouped", { task: String(i) }, "grouped-worker"),
         ] });
@@ -768,14 +768,14 @@ describe("managed subagent navigation reads", () => {
     useFileStateDb();
     const largeHistory = Array.from({ length: 2_000 }, (_, id) => ({ id, text: "fixture".repeat(40) }));
     seed("parent", {
-      immutableUsageActivities: largeHistory,
+      managedReviewEntries: largeHistory,
       subAgents: [
         card("child", { title: "x".repeat(2 * 1024 * 1024) }),
         card("grouped", {}, "grouped-worker"),
       ],
     });
-    seed("child", { immutableUsageActivities: largeHistory });
-    seed("grouped", { immutableUsageActivities: largeHistory, handoffOrigin: { groupingMode: "subthread" } });
+    seed("child", { managedReviewEntries: largeHistory });
+    seed("grouped", { managedReviewEntries: largeHistory, handoffOrigin: { groupingMode: "subthread" } });
     stateDb.raw.prepare("INSERT INTO backends(scope, payload) VALUES (?, ?)").run("all", JSON.stringify({
       knownThreadKeys: ["acp%3Agrok:child"], lastSnapshotHash: "hash",
     }));

@@ -1,171 +1,123 @@
 # Sandboxer remote compute
 
-## Mode A — shipped integration
+## Mode A — built-in compute connection
 
-The agent and thread stay on the laptop. Sandboxer supplies extra Linux CPU and
-memory for builds, tests, and other compute. It is a synthesized built-in MCP
-connection alongside PwrSnap and PwrGit, not a stored URL or a federation peer.
-Its ID is `builtin:sandboxer`: the colon is outside the custom ID grammar, so
-existing custom `sandboxer` connections retain their configuration, credentials,
-and thread selections without migration.
-Its domain role is `compute`; the shared `SandboxerRole` also reserves
-`remote_agent` for later work. Nothing accepts that role as an executable mode.
+The agent and thread stay on this computer. Sandboxer supplies cloud Linux
+compute. The built-in connection keeps ID `builtin:sandboxer`, role `compute`,
+thread selection, tool approval, sandbox ownership and PR cleanup across both
+connection methods. Existing custom connections named `sandboxer` remain
+separate. `remote_agent` is a reserved role and is not executable.
 
-The operator enables Sandboxer in Settings → Plugins → MCPs, then selects it
-in a thread's MCP access. Both enabled and select-for-new-threads default to
-false. Profile TOML scalars `sandboxer_enabled`,
-`sandboxer_select_for_new_threads`, `sandboxer_tool_approval`, and
-`sandboxer_cleanup_on_pr_close` (default true) live under
-`[mcp_connections]`. No SQLite persistence is added.
+### Hosted sign-in
 
-The built-in connection defaults `sandboxer_tool_approval` to `approve`.
-Enabling and selecting sandbox compute authorizes its tools, including shell
-commands and file writes, in Default and Auto access. An explicitly configured
-`auto` or `prompt` policy overrides that default. The default is stored as an
-absent scalar; `prompt` is stored explicitly. The upstream annotations remain
-unchanged: approval policy recognizes the authorized sandbox environment
-instead of rewriting tool metadata to describe commands as read-only.
+A profile with no saved Sandboxer preferences defaults to Streamable HTTP at
+`https://sandboxer.com/mcp`. Settings → Plugins offers **Connect Sandboxer**.
+This signs into the third-party Sandboxer service in a browser, separately
+from PwrAgent and coding-agent authentication. No CLI, npm package or API key
+is required for this path, and it never probes `sbx`.
 
-The gateway launches only `/usr/local/bin/sbx mcp --type small --ttl 1800
---no-update`, through the MCP SDK's stdio transport. This absolute path avoids
-Docker's unrelated `sbx`. The initial integration expects the official CLI at
-that path; it does not search PATH or accept arbitrary commands. Status comes
-from `/usr/local/bin/sbx status --json --no-update`, with an eight-second limit
-and a short in-memory cache. Missing CLI, missing login, and unavailable status
-have distinct remedies in Settings; Refresh status bypasses the cache. While
-setup is unfinished, Settings also refreshes when its window regains focus,
-because the remedy runs in a terminal.
+Hosted mode reuses the generic OAuth coordinator: protected-resource discovery,
+dynamic public-client registration, PKCE S256, a state-checked loopback callback,
+refresh and rejected-credential handling. Credentials are endpoint-bound to
+`builtin:sandboxer` in the existing encrypted profile vault, never TOML. Cancel
+abandons the pending callback, retry starts a new attempt, and Reauthorize can
+replace credentials. Disconnect removes PwrAgent's local credentials; it does
+not claim to revoke access in the Sandboxer account.
 
-Signed in is not the same as ready. The status's `plan.canStart: false` gets
-a chip that names the reason: `No plan` (no plan, or a zero-dollar one),
-`Billing issue` (a `billingStatus` other than `active` or `trialing`), `Out of
-credit` (`creditBalanceHours` at zero), or `Can't start` for a reason the
-status does not name. No plan keeps Sandboxer out of threads, since no sandbox
-can exist yet. The other three stop new machines, not running ones, so threads
-keep reaching Sandboxer to list and stop what is still running and billing.
-Refresh status retires live `sbx mcp` sessions only when the signed-in account
-changed or the login is no longer usable. Only `active` has been
-observed; the other values are inferred. A status without `plan` comes from an
-older CLI and counts as able to start. Settings shows the account the login
-bills (`user.email`, the plan's monthly price, credit hours left). Federation
-strips that account from the connection list it serves to peers, and the
-`manage_mcp_connections` agent tool never returns it.
-New-thread defaults read the last cached status without waiting for the CLI,
-including through the profile owner broker. If enabled, Sandboxer refreshes in
-the background. A cold cache skips only Sandboxer's default until its login is
-known; unrelated defaults are never held up by the CLI's eight-second probe.
+Signing in establishes authentication only. It does not establish machine
+allowance, plan eligibility, storage availability or permission to purchase a
+plan. PwrAgent does not purchase plans or modify account settings.
 
-Sandboxer owns its local login. Settings copies `/usr/local/bin/sbx onboard`
-for the operator to run in a terminal: it signs in an existing account or
-creates one, then asks only for what the account still lacks, such as the plan
-checkout. `sbx login` only signs in, so a new account would reach "Signed in"
-and still fail its first create. PwrAgent runs neither command. PwrAgent neither
-reads its credential file nor stores OAuth tokens for it. `SANDBOXER_API_KEY`
-is an inherited fallback for headless/CI use. Status and MCP inherit the same
-limited environment, including Sandboxer's endpoint/org overrides. The URL
-connection form still rejects command lines, and offers to add them as a local
-command instead; see [mcp-stdio-connections.md](mcp-stdio-connections.md).
+### Transport configuration and compatibility
 
-Each thread gateway session owns a separate `sbx mcp` process. This matters:
-Sandboxer's omitted `sandboxId` means the last sandbox that process used.
-Settings discovery gets a separate, temporary session. Revocation, disabling,
-gateway shutdown, and failed initialization close the transport and process.
-Closing a local process does **not** stop a remote sandbox. Agents must use
-`stop_sandbox` when finished; the finite creation TTL is a fallback. After a
-local session restarts, use an explicit sandbox ID from `list_sandboxes`.
+`[mcp_connections].sandboxer_transport` accepts `hosted` or `local_cli`.
+Settings exposes **Connection method**. A missing or malformed mode falls back
+to local CLI when any recognized legacy Sandboxer preference exists; otherwise
+it uses hosted. Reads do not migrate files. The first Sandboxer preference save
+pins the resolved mode, so enabling a fresh hosted connection cannot change it
+to local on the next read. Unrelated saves do not pin it.
 
-### Cleanup when a thread's PRs close
+This is an additive scalar, not a renamed or incompatible config shape. Existing
+`sandboxer_enabled`, `sandboxer_select_for_new_threads`,
+`sandboxer_tool_approval` and `sandboxer_cleanup_on_pr_close` scalars remain in
+place for older clients, which continue to use their CLI integration. There is
+no replaced key requiring a legacy marker or lossy dual-write projection.
+Comments and unrelated config keys survive path-based writes.
 
-PwrAgent releases the sandboxes a thread created once every PR attached to
-that thread has merged or closed. The owner gateway records each successful
-`create_sandbox` result against the calling thread in the profile's
-`thread_sandboxes` table (one commit per sandbox). That is the only source of
-ids it will touch: a sandbox created outside PwrAgent, or by another thread,
-is never released.
+An explicit method change abandons pending authorization, closes upstream
+sessions and invalidates the tool catalog. It retains endpoint-bound hosted
+credentials for a later switch back. Enabled and new-thread defaults remain
+opt-in and are not changed by sign-in or a method change.
 
-- **When.** On the first observation of a terminal PR, for each local thread
-  it is attached to, and again at startup for threads still holding a
-  sandbox. A thread with several PRs waits until all are merged or closed;
-  a thread with no attached PR is never cleaned up. Detached PRs do not count.
-- **How.** Only through the connection's MCP tools, over the same
-  owner-broker path as an agent's call, so a hosted endpoint works the same as
-  the local `sbx mcp` process. The capability comes from the tool list: it
-  calls `delete_sandbox` when the connection lists it, otherwise
-  `stop_sandbox`, which ends compute billing but keeps the snapshot, and marks
-  deletion pending. A later cleanup deletes a stopped sandbox once
-  `delete_sandbox` appears. "Not found" counts as already deleted.
-- **Failures.** A missing CLI, a signed-out account, a disabled connection, or
-  a network error leaves the sandbox in place and reports it. Cleanup never
-  blocks a merge/close wake; the wake waits up to 30 seconds for the result.
-- **Where it shows.** Each outcome is a `cleanup` row in PR activity and a
-  `sandboxer cleanup` line in the main log, and a merge/close wake lists it
-  for the thread.
-- **Switch.** Settings → Plugins → MCPs → Sandboxer → **Clean up when PRs
-  close**, `sandboxer_cleanup_on_pr_close`, on by default: it only acts on the
-  thread's own sandboxes after its PRs are done, and stopped machines and
-  their snapshots otherwise keep billing compute and storage. A reopened PR
-  can resume a stopped sandbox; a deleted one cannot come back.
+### Optional local CLI
 
-Settings links to Sandboxer's own pages (home, pricing, quickstart, and the MCP,
-machines, and billing docs) through main, which maps each to a fixed
-`https://sandboxer.com` URL. Open dashboard and Open billing run
-`sbx dashboard --no-open --json --no-update` and open the one-time signed-in
-link it prints only when its origin is exactly `https://sandboxer.com`.
-Federation windows cannot open them. Until the CLI is found, the row is one
-line with Learn more and Set up, so operators who never use Sandboxer are not
-shown a setup ladder.
+Profiles with existing Sandboxer preferences retain local mode. An unconfigured
+local profile also offers **Connect Sandboxer**, which explicitly switches to
+hosted mode and opens browser sign-in without requiring CLI setup. Local mode launches
+`/usr/local/bin/sbx mcp --type small --ttl 1800 --no-update` and reads
+`/usr/local/bin/sbx status --json --no-update`, with the existing bounded cache.
+PwrAgent does not read CLI credential files or own the CLI's login. Local mode
+preserves the limited inherited environment, including `SANDBOXER_API_KEY` for
+headless users and endpoint/org overrides. The hosted path does not import
+those overrides or keys. Sandboxer also documents API-key authorization for
+headless HTTP clients; the interactive built-in flow uses browser OAuth.
 
-The New thread launchpad advertises Sandboxer with a tile beside PwrGit and
-PwrSnap, using Sandboxer's own site icon (see
-`apps/desktop/src/renderer/src/assets/sandboxer/README.md`). While the CLI is
-missing, the tile shows what Sandboxer is, with Get Sandboxer opening the
-quickstart and the Info and site buttons explaining and linking the service.
-Sign-in, a plan, and offering it to threads are finished in Settings, so those
-states show Set up, which opens Settings → Plugins. Once Sandboxer is signed in
-and offered, the tile is the thread's Use in thread switch; a billing problem
-keeps the switch so a thread can still stop running sandboxes. Its About
-note follows Clean up when PRs close. The tile reads status from the
-connection list, so it never retires live sessions. It asks for a Sandboxer
-answer no older than two seconds (main refuses anything fresher than one), so
-a window coming back from `sbx onboard` in a terminal shows the new login. It
-reads on mount, on window focus, after a failed read, and when main announces
-a Sandboxer change. A remote thread shows no tile: its tools run on the owner,
-whose CLI this window cannot see.
+Local status continues to distinguish missing CLI, missing login, account limits
+and unavailable service. A billing problem does not hide running machines that
+still need to be stopped. Refresh status retires sessions only when the account
+or usable login changes. Local dashboard links use the CLI's signed dashboard
+URL; hosted mode opens the fixed Sandboxer dashboard in the browser without
+probing the CLI. Account summaries are stripped from peer and agent listings.
 
-Main announces MCP connection changes on `mcp-connections:changed` to this
-instance's local windows: every successful mutation (whether this instance
-owns the connections or forwards to the owner broker), and each `sbx status`
-answer that differs from the last. The event carries connection ids only.
-The launchpad tile and Settings → Plugins re-read the list when they hear it,
-so a setting changed in Settings or a connection an agent added shows without
-a refresh. A change made from another PwrAgent instance on the profile is not
-announced; focus reads cover it. Nothing is persisted.
+Each local thread session has its own process and last-used sandbox. After any
+session reconnect, use explicit sandbox IDs. Closing a transport or thread does
+not stop cloud compute. Agents should stop their sandboxes when finished and
+set a finite TTL; a TTL is not a spending cap. Hosted defaults and capabilities
+come from the authenticated server schema, not from local CLI launch flags.
 
-The existing `search_mcp_tools` / `call_mcp_tool` path carries the official
-server's eight tools: create, list, exec, read/write files, host a port, stop,
-and resume. Search results that include a Sandboxer tool also carry
-Sandboxer's `initialize` instructions once, capped at 2,000 characters; they
-tell the agent to stop each sandbox when it is done. Other servers'
-instructions are not forwarded: they would be untrusted text. No Sandboxer REST client or agent harness is
-implemented here.
-The default size is small (2 vCPU / 4 GB), never xlarge. Agents may explicitly
-pass `type` and `ttlSeconds`, including overriding auto-stop; the TTL is a
-default, not a spending cap. Other sizes are default (4 / 8 GB), large
-(8 / 16 GB), and xlarge (16 / 32 GB, requiring the $100 plan).
+### Selection, approval and cleanup
 
-Inspection of installed build `1d1ae54` on 2026-10-23 used initialize and
-tools/list only. All tools advertise `openWorldHint: true`. Only list and read
-advertise `readOnlyHint: true`; exec and write also advertise
-`destructiveHint: true`. Create is non-read-only and non-destructive.
-These annotations already cause side effects to ask under Auto. Sandboxer
-nevertheless defaults to **Prompt** for every tool because creating/resuming
-compute starts per-second billing. Other connections keep their defaults.
-Default and Auto threads honor this setting; Full Access never asks.
-Automations retain their existing approval policy.
+Both enabled and select-for-new-threads default to false. Approval defaults to
+`approve`: selecting Sandboxer authorizes sandbox tools in Default and Auto,
+including shell commands, file writes and lifecycle operations. Explicit
+`prompt` or `auto` settings retain their meaning. Full Access never asks.
+The upstream annotations and per-tool schema checks remain unchanged.
 
-MCP exec waits at most 600 seconds; longer work should use background commands
-or systemd within the sandbox. Stop/resume preserves memory. A resize resume
-cold-boots, so enabled systemd services are needed for that case.
+The gateway discovers the server's current tool catalog dynamically; it does
+not assume a tool count or translate schemas between local and hosted servers.
+Only the built-in Sandboxer connection forwards its capped server instructions.
+A custom remote connection cannot gain this trust by choosing the same name.
+
+The owner records successful `create_sandbox` results against the calling
+thread in `thread_sandboxes`, one SQLite commit per created sandbox. An exact
+recorded ID is the only cleanup target. No cleanup discovers or adopts existing
+account resources. Once all attached PRs merge or close, cleanup uses
+`delete_sandbox` when listed, otherwise `stop_sandbox` and a pending-deletion
+record. It never uses labels or the upstream session's implicit last sandbox
+as the cleanup target. Existing ownership records survive connection changes.
+
+The **Clean up when PRs close** switch remains on by default. A disabled or
+unauthenticated connection or a service failure leaves cleanup pending and
+reports the result. A thread with no attached PR is not cleaned up. Closing a
+thread alone does not trigger cleanup. Cleanup uses the same owner-broker and
+connection routing as agent calls.
+
+### Contributor verification
+
+Use deterministic fixtures for callback/token exchange, refresh, cancellation,
+rejected credentials, routing and local compatibility. Never use an operator
+profile or real CLI login in a unit test. The hosted integration fixture mocks
+remote HTTP and uses the actual coordinator, vault and HTTP MCP transport.
+Live sign-in requires the operator to complete consent. Public metadata or an
+open consent page does not prove callback success, credential storage,
+authenticated tools, refresh or account-side revocation.
+
+For cloud verification, follow the Sandboxer verification skill and inspect the
+selected `create_sandbox` schema first. Require `noEnv: true`; do not create via
+an older schema that cannot suppress account environment inheritance. Report
+that blocker and wait for an authorized alternative. Inspect quota before
+creating an owned fixture and clean up only its exact ID. Do not clear existing
+resources to make room.
 
 ## Mode B — not shipped
 

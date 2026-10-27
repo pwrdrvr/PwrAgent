@@ -248,6 +248,11 @@ jobs:
         timeout-minutes: 10
         run: pnpm test --shard=${{ matrix.lane }}/2
 
+      - name: Test standalone headless CLI
+        if: matrix.lane == 1
+        timeout-minutes: 2
+        run: pnpm --filter pwragent test
+
   test-result:
     # Preserve the required `Test` status-check context while the work runs
     # as matrix lanes. `always()` is required so a failed lane reaches this
@@ -766,6 +771,9 @@ jobs:
         # included) so the log carries evidence next time. Process matching is
         # scoped to this runner's own workspace: the guest is shared with
         # PwrSnap and with operator work, and neither may become collateral.
+        # It also dismisses an Electron "quit unexpectedly" dialog that a
+        # previous job's crash left up: that dialog holds macOS activation and
+        # fails every spec that activates the app.
         # Windows lanes are GitHub-hosted (fresh VM per job), so they need no
         # equivalent.
         shell: bash

@@ -1,7 +1,8 @@
-import type {
-  AppServerReviewContext,
-  AppServerReviewPullRequest,
-  PrSummary,
+import {
+  reviewContextPullRequests,
+  type AppServerReviewContext,
+  type AppServerReviewPullRequest,
+  type PrSummary,
 } from "@pwragent/shared";
 import { useMemo } from "react";
 import {
@@ -38,6 +39,7 @@ export function ReviewProvenance(props: ReviewProvenanceProps) {
   const branchLabel = formatBranchLabel(context);
   const headCommit = context.headCommit?.trim();
   const pullRequest = context.pullRequest;
+  const pullRequests = reviewContextPullRequests(context);
 
   return (
     <div
@@ -91,8 +93,13 @@ export function ReviewProvenance(props: ReviewProvenanceProps) {
         </CopyableThreadChip>
       ) : null}
 
-      {pullRequest ? (
-        <ReviewPullRequestChip pullRequest={pullRequest} />
+      {pullRequests.length > 0 ? (
+        pullRequests.map((reviewed) => (
+          <ReviewPullRequestChip
+            key={`${reviewed.provider}/${reviewed.org}/${reviewed.repo}#${reviewed.number}`}
+            pullRequest={reviewed}
+          />
+        ))
       ) : pullRequest === null ? (
         // Distinct from an absent field: the branch was checked and carried no
         // pull request. Saying so is the difference between an answer and a

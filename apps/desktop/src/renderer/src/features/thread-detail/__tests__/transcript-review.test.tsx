@@ -429,6 +429,31 @@ describe("TranscriptReview provenance", () => {
     );
   });
 
+  it("names every pull request a review of several covered", () => {
+    const second = {
+      ...context.pullRequest,
+      number: 1920,
+      headRefName: "feat/rollup-chip",
+      title: "Lead the rollup chip",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1920",
+    };
+    const { gitBranch: _gitBranch, ...withoutBranch } = context;
+    renderReview({
+      context: {
+        ...withoutBranch,
+        pullRequest: context.pullRequest,
+        pullRequests: [context.pullRequest, second],
+      },
+    });
+
+    expect(
+      screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#1918 .* in browser/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Open pwrdrvr\/PwrAgent#1920 .* in browser/ })
+    ).toBeInTheDocument();
+  });
+
   it("says the branch carried no pull request rather than listing others", () => {
     renderReview({
       context: { ...context, pullRequest: null, gitBranch: "main" },

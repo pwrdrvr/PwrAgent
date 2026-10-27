@@ -9,6 +9,7 @@ import type {
   DesktopCodexModelProvider,
 } from "../codex-model-providers";
 import type { ThreadTodoMergeMethod } from "./thread-todos";
+import type { ForgeAgentToolAccess, ForgeAgentToolGroup } from "./forge-agent-tools";
 import {
   TOOL_OUTPUT_WARNING_INVOCATIONS,
   TOOL_OUTPUT_WARNING_PERCENT,
@@ -1590,6 +1591,14 @@ export type DesktopSettingsSnapshot = {
      * overrides it for that project.
      */
     defaultMergeMethod: DesktopSettingsValue<ThreadTodoMergeMethod>;
+    /**
+     * PwrAgent's own forge tools for agents. `enabled` offers or hides the
+     * whole family; each group sets how much of it runs without asking.
+     */
+    agentTools: {
+      enabled: DesktopSettingsValue<boolean>;
+      access: Record<ForgeAgentToolGroup, DesktopSettingsValue<ForgeAgentToolAccess>>;
+    };
   };
   applications: DesktopApplicationsSnapshot;
   worktrees: {
@@ -1853,6 +1862,10 @@ export type DesktopSettingsConfigPatch = {
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;
     defaultMergeMethod?: ThreadTodoMergeMethod;
+    agentTools?: {
+      enabled?: boolean;
+      access?: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>>;
+    };
   };
   applications?: {
     editor?: {

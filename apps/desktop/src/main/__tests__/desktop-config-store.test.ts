@@ -178,6 +178,94 @@ theme = "dark"
     expect(persisted.payload).not.toContain("secret-value");
   });
 
+  it("preserves Codex discovery across provider imports, edits, removal and restart", async () => {
+    const fixture = createFixture("");
+    const discoverProvider = vi.fn(async () => ({
+      candidates: [],
+      selectedCommand: "/opt/pwragent/codex",
+      selectedVersion: "1.2.3",
+    }));
+    const store = fixture.createStore({ discoverProvider });
+    await store.refreshProvider("codex", issueProviderDiscoveryPermit("startup"));
+    const original = store.read("providers").codex;
+    const bonsai = {
+      id: "bonsai",
+      name: "Bonsai (local)",
+      baseUrl: "http://127.0.0.1:18080/v1",
+      local: true,
+      models: ["fixture.gguf"],
+    };
+
+    for (const providers of [[bonsai], [{ ...bonsai, baseUrl: "http://127.0.0.1:18081/v1" }], []]) {
+      const before = store.read("providers").codex;
+      await store.write({ models: { codex: { providers } } }, ["providers"]);
+      const after = store.read("providers").codex;
+      expect(after.runtimeFingerprint).not.toBe(before.runtimeFingerprint);
+      expect(after.dependencyFingerprint).toBe(original.dependencyFingerprint);
+      expect(after.lastKnownGood).toEqual(original.lastKnownGood);
+      expect(after.validation.state).toBe("valid");
+      expect(providerLastKnownGoodMatchesConfig(after)).toBe(true);
+    }
+    await store.write({ models: { codex: { providers: [bonsai] } } }, ["providers"]);
+    store.dispose();
+    const restarted = fixture.createStore({ discoverProvider });
+    expect(providerLastKnownGoodMatchesConfig(restarted.read("providers").codex)).toBe(true);
+    expect(discoverProvider).toHaveBeenCalledOnce();
+
+    await restarted.write({ models: { codex: { path: "/opt/other/codex" } } }, ["providers"]);
+    expect(restarted.read("providers").codex.validation.state).toBe("stale");
+    expect(providerLastKnownGoodMatchesConfig(restarted.read("providers").codex)).toBe(false);
+  });
+
+  it("accepts an in-flight executable discovery after a Codex launch config change", async () => {
+    const fixture = createFixture("");
+    let complete!: (result: { candidates: []; selectedCommand: string }) => void;
+    const store = fixture.createStore({
+      discoverProvider: async () => await new Promise<{
+        candidates: [];
+        selectedCommand: string;
+      }>((resolve) => { complete = resolve; }),
+    });
+    const discovery = store.refreshProvider("codex", issueProviderDiscoveryPermit("startup"));
+    await store.write({ models: { codex: { configOverrides: ['model="fixture"'] } } }, ["providers"]);
+    const runtimeFingerprint = store.read("providers").codex.runtimeFingerprint;
+    complete({ candidates: [], selectedCommand: "/opt/pwragent/codex" });
+    await discovery;
+
+    const after = store.read("providers").codex;
+    expect(after.validation.state).toBe("valid");
+    expect(after.runtimeFingerprint).toBe(runtimeFingerprint);
+    expect(providerLastKnownGoodMatchesConfig(after)).toBe(true);
+  });
+
+  it("refreshes an isolated provider's catalog settings without invalidating executable discovery", async () => {
+    const fixture = createFixture("");
+    const discoverProvider = vi.fn(async () => ({ candidates: [], selectedCommand: "/opt/pwragent/codex" }));
+    const store = fixture.createStore({ discoverProvider });
+    await store.refreshProvider("codex", issueProviderDiscoveryPermit("startup"));
+    const original = store.read("providers").codex;
+    const provider = {
+      id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: ["fixture.gguf"],
+      compatibility: "bonsai" as const,
+    };
+    const replacement = { ...provider, models: ["replacement.gguf"] };
+    const withCatalog = { ...replacement, catalogPath: "/tmp/models.json" };
+    let previous = original.runtimeFingerprint;
+    for (const entry of [provider, replacement, withCatalog]) {
+      await store.write({ models: { codex: { providers: [entry] } } }, ["providers"]);
+      const current = store.read("providers").codex;
+      expect(current.runtimeFingerprint).not.toBe(previous);
+      expect(current.dependencyFingerprint).toBe(original.dependencyFingerprint);
+      expect(current.validation.state).toBe("valid");
+      previous = current.runtimeFingerprint;
+    }
+    await store.write({ models: { codex: { providers: [{
+      ...withCatalog, rates: [{ model: "replacement.gguf", inputPerMillion: 0 }],
+    }] } } }, ["providers"]);
+    expect(store.read("providers").codex.runtimeFingerprint).toBe(previous);
+    expect(discoverProvider).toHaveBeenCalledOnce();
+  });
+
   it("hydrates a newer durable provider row over the config snapshot", async () => {
     const fixture = createFixture("");
     const discoverProvider = vi.fn(async () => ({

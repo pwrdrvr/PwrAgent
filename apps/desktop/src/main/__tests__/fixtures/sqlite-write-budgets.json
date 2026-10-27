@@ -59,10 +59,10 @@
   },
   "archive-retention-delete-batch": {
     "commits": 1,
-    "note": "One transaction releases 100 overlays after permanent provider deletion, plus one statement each clearing their sub-agent cards and card counters.",
+    "note": "One transaction releases 100 overlays after permanent provider deletion, plus one statement each clearing their sub-agent cards, card counters and usage activities.",
     "observedWalBytes": 41200,
     "rowsChanged": 100,
-    "statements": 102
+    "statements": 103
   },
   "archive-retention-idle-day": {
     "commits": 0,
@@ -365,6 +365,7 @@
     "rowsChanged": 0,
     "statements": 0
   },
+  "forge-create-pull-request-attach": {"commits":1,"note":"One allowed create_pull_request through registry dispatch and real SQLite attachment: 1 commit/16,480 bytes WAL; 20 PR creations/day = 0.3296 MB/day. Provider creation is stubbed; setup and overlay verification are excluded.","observedWalBytes":16480,"rowsChanged":1,"statements":1},
   "global-search-active-and-archived": {"commits": 1, "note": "Two global searches with active and archived fixtures: one initial index transaction, unchanged repeat search writes nothing; no background writes.", "observedWalBytes": 37080, "rowsChanged": 4, "statements": 6},
   "held-scheduled-action-retry": {
     "commits": 3,
@@ -481,9 +482,9 @@
   "managed-relationships-lifecycle": {
     "commits": 7,
     "note": "add a parent's card, redirect it, group/ungroup the child, forget the parent: each overlay or card write is one commit, and the projection, revision and generation rows share it",
-    "observedWalBytes": 197760,
+    "observedWalBytes": 210120,
     "rowsChanged": 9,
-    "statements": 9
+    "statements": 10
   },
   "managed-subagent-metadata-writes": {
     "commits": 80,
@@ -578,6 +579,9 @@
     "rowsChanged": 9,
     "statements": 11
   },
+  "messaging-causal-monitor-lifecycle": {"commits":5,"note":"One attributed ACP monitor origin plus lifecycle and final usage; 120 heartbeats add no commits. Provenance is one fixed reference captured at delegation.","observedWalBytes":160680,"rowsChanged":7,"statements":7},
+  "messaging-causal-request-and-attachment": {"commits":3,"note":"One accepted human request (immutable source plus latest-human pointer in one transaction), one attachment claim/outcome, 100 duplicate/bot/read retries. No stream, poll or idle writes.","observedWalBytes":32960,"rowsChanged":4,"statements":4},
+  "messaging-causal-steer": {"commits":2,"note":"One attributed Claude steer updates its current turn's causal reference once; one idempotent retry adds no writes. No history traversal or timer writes.","observedWalBytes":20600,"rowsChanged":2,"statements":2},
   "messaging-outbound-file-activity": {
     "commits": 1,
     "note": "one send_messaging_file audit row; this runs per agent tool call, so the row count must not grow with attachment parts",
@@ -626,6 +630,13 @@
     "observedWalBytes": 82400,
     "rowsChanged": 4,
     "statements": 4
+  },
+  "native-subagent-late-metadata": {
+    "commits": 3,
+    "note": "One worker start, a late resolved-metadata update, and completion; repeated reports write nothing. At 100 workers/day, three commits/worker project to approximately 8.7 MB/day with no idle writes.",
+    "observedWalBytes": 86520,
+    "rowsChanged": 3,
+    "statements": 3
   },
   "native-subagent-model-repair": {
     "commits": 2,
@@ -796,9 +807,20 @@
     "rowsChanged": 5,
     "statements": 5
   },
+  "overlay-row-update-11000": {"commits": 1, "note": "one seen-watermark write on an existing 11000-byte overlay; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 12392, "rowsChanged": 1, "statements": 1},
+  "overlay-row-update-11000-pending": {"commits": 1, "note": "one seen-watermark write on an existing 11000-byte overlay with a pending spend alert; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1},
+  "overlay-row-update-25000": {"commits": 1, "note": "one seen-watermark write on an existing 25000-byte overlay; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 12392, "rowsChanged": 1, "statements": 1},
+  "overlay-row-update-25000-pending": {"commits": 1, "note": "one seen-watermark write on an existing 25000-byte overlay with a pending spend alert; rowid and overflow chain retained, at most four WAL frames including unchanged index entries", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1},
   "overlay-scalar-write-flat": {
     "commits": 1,
     "note": "one overlay scalar write (a reaction) on a thread holding 2,000 gate cards: the small overlay row only, ~16 KB WAL. It rewrote the ~3.5 MB row while the cards lived there",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "overlay-scalar-write-with-usage-history": {
+    "commits": 1,
+    "note": "one seen-watermark write on a thread holding 100 usage activities: the small overlay row only. It rewrote the 65-115 KB row while the activities lived there",
     "observedWalBytes": 16480,
     "rowsChanged": 1,
     "statements": 1
@@ -1069,6 +1091,13 @@
   "thread-dependencies-unchanged-events": {"commits": 0, "note": "100 unchanged PR polls plus 100 thread events with a busy consumer: zero commits and 0 MB/day idle.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "thread-dependency-lifecycle": {"commits": 5, "note": "One dependency registration and one successful continuation; no per-poll or per-turn writes when evidence is unchanged.", "observedWalBytes": 49440, "rowsChanged": 5, "statements": 5},
   "thread-dependency-operator-reminder": {"commits": 4, "note": "One operator dependency registration and its reminder card; the card and the delivered claim share one commit, and later PR events write nothing. ~62 KB per reminder: ~6.2 MB/day at 100 reminders, 0 MB/day idle.", "observedWalBytes": 61800, "rowsChanged": 5, "statements": 5},
+  "thread-execution-mode-unchanged": {
+    "commits": 0,
+    "note": "a turn start re-asserting a Codex thread's execution mode: no writes. Only ACP threads read the mode's timestamp",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "thread-lock-toggle": {
     "commits": 2,
     "note": "An operator or agent lock and unlock: one commit each, never on a timer or per turn; a redundant unlock writes nothing. 50 toggles/day at ~4 KiB/commit is ~0.4 MB/day",
@@ -1076,12 +1105,26 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "thread-model-settings-unchanged": {
+    "commits": 0,
+    "note": "a turn start re-asserting the thread's model, effort and fast mode: no writes. It rewrote the whole overlay row every turn",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
   "thread-pricing-lazy-repair": {
     "commits": 1,
     "note": "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",
     "observedWalBytes": 49440,
     "rowsChanged": 27,
     "statements": 27
+  },
+  "thread-pull-requests-unchanged": {
+    "commits": 0,
+    "note": "a PR lookup that found the stored list a minute later: no writes. prsFetchedAt refreshes at most every five minutes",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
   },
   "thread-review-legacy-enrollment": {"commits": 1, "note": "One explicit opt-in of a legacy review and 99 repeats; preserves findings and outcomes, no idle writes.", "observedWalBytes": 4120, "rowsChanged": 1, "statements": 1},
   "thread-review-lifecycle": {
@@ -1093,6 +1136,7 @@
   },
   "thread-review-reported-outcomes": {"commits": 1, "note": "One re-report settling three findings (fixed, no_change_needed, skipped), then 99 identical re-reports. One commit for the whole report; repeats write nothing. ~8 KB per report: ~0.8 MB/day at 100 reports/day, 0 MB/day idle.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "thread-review-tracking-start": {"commits": 1, "note": "One profile tracking boundary; 100 service starts and reads. No repeated initialization or idle commits.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
+  "thread-rewind-and-undo": {"commits": 2, "note": "One operator rewind recorded, then marked undone: one commit each, no per-turn or idle writes. ~16 KB per action: ~1.6 MB/day at 100 rewinds and undos/day, 0 MB/day idle.", "observedWalBytes": 32960, "rowsChanged": 2, "statements": 2},
   "thread-sandbox-cleanup-two": {
     "commits": 2,
     "note": "stop two sandboxes after a thread's PRs closed: 1 commit/~8 KB WAL per sandbox; ~0.4 MB/day at 50 sandboxes/day, zero idle writes",
@@ -1106,6 +1150,13 @@
     "observedWalBytes": 12360,
     "rowsChanged": 1,
     "statements": 1
+  },
+  "thread-seen-unchanged": {
+    "commits": 0,
+    "note": "re-marking an unchanged seen watermark a minute later: no writes. lastSeenAt refreshes at most every five minutes",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
   },
   "thread-self-rename": {
     "commits": 0,
@@ -1130,15 +1181,15 @@
   },
   "thread-sub-agent-upsert-flat": {
     "commits": 1,
-    "note": "one changed gate card on a thread holding 2,000 cards: its own row and the revision counter, never the parent overlay row, and equal to the same write on a thread with no cards. ~12 KB WAL: ~25 MB/day at 2,000 card writes/day, where each one rewrote the ~3.5 MB overlay row before",
-    "observedWalBytes": 12360,
+    "note": "one changed gate card on a thread holding 2,000 cards: its own row, the revision counter with its gate totals, and its lens index entry; never the parent overlay row, and equal to the same write on a thread with no cards. ~16 KB WAL: ~33 MB/day at 2,000 card writes/day (the lens index added ~8 MB/day), where each one rewrote the ~3.5 MB overlay row before",
+    "observedWalBytes": 16480,
     "rowsChanged": 1,
     "statements": 1
   },
   "thread-sub-agents-move": {
     "commits": 5,
     "note": "one-time move of 12 legacy payloads holding 40 cards each, in 36 KB slices: one commit per slice, the last one setting the marker. Runs once per profile; the 2,043-card production copy moved in 25 slices (p50 89 ms, ~195 MB WAL once)",
-    "observedWalBytes": 45320,
+    "observedWalBytes": 70040,
     "rowsChanged": 13,
     "statements": 13
   },
@@ -1174,6 +1225,27 @@
     "commits": 1,
     "note": "a merge method picked on a card, then picked again: one upsert, and the unchanged repeat writes nothing; only on an explicit menu pick",
     "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "thread-usage-activities-move": {
+    "commits": 5,
+    "note": "one-time move of 12 legacy payloads holding 40 usage activities each, in 72 KB slices: one commit per slice, the last one setting the marker. Runs once per profile; a production copy holds 10.6 MB of activities across 2,482 rows",
+    "observedWalBytes": 41200,
+    "rowsChanged": 13,
+    "statements": 13
+  },
+  "thread-usage-activities-move-repeat": {
+    "commits": 0,
+    "note": "the usage-activity move and reads after it on a profile already marked moved: no writes",
+    "observedWalBytes": 0,
+    "rowsChanged": 0,
+    "statements": 0
+  },
+  "thread-usage-activity-append-flat": {
+    "commits": 1,
+    "note": "one turn-usage activity appended to a thread already holding 100: one ~0.6 KB row and its two index entries, never the overlay row, and equal to the same append on a thread with none. Each one rewrote the thread's 65-115 KB overlay row before",
+    "observedWalBytes": 12360,
     "rowsChanged": 1,
     "statements": 1
   },
@@ -1275,6 +1347,7 @@
     "rowsChanged": 28,
     "statements": 28
   },
+  "todo-dispatch-model-preference": {"commits": 1, "note": "One changed dispatch: preference and recent in one commit; default start and 100 identical preference writes cost zero. About 0.0165 MB/changed dispatch, 1.65 MB/day at 100 dispatches/day, zero idle writes.", "observedWalBytes": 16480, "rowsChanged": 2, "statements": 2},
   "tool-output-history-analysis": {
     "commits": 1,
     "note": "replace 25 deterministic history findings plus coverage metadata in one explicit analysis transaction",

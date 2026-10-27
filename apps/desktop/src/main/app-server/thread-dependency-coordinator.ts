@@ -76,7 +76,8 @@ export class ThreadDependencyCoordinator {
     return result;
   }
 
-  manage(request: ManageThreadDependenciesRequest & { backend: AppServerBackendKind; threadId: string }): Promise<ManageThreadDependenciesResponse> {
+  manage(request: ManageThreadDependenciesRequest & { backend: AppServerBackendKind; threadId: string },
+    provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">): Promise<ManageThreadDependenciesResponse> {
     return this.serialize(async () => {
       if (request.action === "list") return this.response(request);
       if (request.action === "cancel" || request.action === "dismiss") {
@@ -107,6 +108,7 @@ export class ThreadDependencyCoordinator {
       }
       const now = this.now();
       const item = this.options.store.register({
+        ...provenance,
         id: randomUUID(), backend: request.backend, threadId: request.threadId,
         conditions, mode: request.mode ?? "all", onFailure: request.onFailure ?? "notify",
         ...(request.continuation?.trim() ? { continuation: request.continuation.trim() } : {}),
@@ -259,7 +261,8 @@ export class ThreadDependencyCoordinator {
       const result = await this.options.submit({
         backend: claim.backend, threadId: claim.threadId,
         input: [{ type: "text", text: buildDependencyPrompt(claim) }],
-        origin: "automation", messageOrigin: { kind: "pwragent", dependencyId: claim.id },
+        origin: "automation", messageOrigin: { kind: "pwragent", dependencyId: claim.id,
+          causalMessagingSource: claim.causalMessagingSource, causalMessagingAmbiguous: claim.causalMessagingAmbiguous },
       });
       if (result.status === "busy") this.busyConsumers.add(identity(claim));
       await this.save(claim, result.status === "busy"

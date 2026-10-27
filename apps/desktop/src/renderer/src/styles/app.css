@@ -1414,17 +1414,18 @@
    `.chip` directly and aren't affected by this rule.
 
    Every density rule has two halves. The `:root` half applies the operator's
-   density to the live list, except while X-ray is held (`data-xray`, see
-   lib/xray-mode.ts) and except inside a `.density-preview`, which shows its
-   own density whatever the app's is. The `.density-preview--*` half is that
+   density to the live list, except inside the row X-ray has lifted
+   (`[data-xray-target]`, see features/navigation/xray-spy-card.ts) and
+   inside a `.density-preview`, which shows its own density whatever the
+   app's is. The `.density-preview--*` half is that
    preview: the Settings and onboarding density pickers render real thread
    rows, so their previews cannot drift from the list. */
-:root[data-density="compact"]:not([data-xray]) .thread-row__chips:not(.density-preview *) .thread-row__chip:not(.thread-row__chip--persistent),
+:root[data-density="compact"] .thread-row__chips:not(:is(.density-preview, [data-xray-target]) *) .thread-row__chip:not(.thread-row__chip--persistent),
 .density-preview--compact .thread-row__chips .thread-row__chip:not(.thread-row__chip--persistent) {
   display: none;
 }
 
-:root[data-density="compact"]:not([data-xray]) .thread-row__chips:not(.density-preview *),
+:root[data-density="compact"] .thread-row__chips:not(:is(.density-preview, [data-xray-target]) *),
 .density-preview--compact .thread-row__chips {
   /* Tighter inter-chip gap when only reactions + PRs remain visible. */
   gap: 4px;
@@ -1441,15 +1442,31 @@
    the suppression rule above) plus `.pr-chip` are the only things that
    survive, so two :has() checks decide it without JS. The `.pr-chip`
    check reads the flow only: the Minimal rollup on the title line is a
-   `.pr-chip` too, and must not hold a chip row open. */
-:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *),
-.density-preview--compact .thread-row {
+   `.pr-chip` too, and must not hold a chip row open.
+
+   The title line tightens too. The pin is a 24px target around a 12px
+   glyph, so it carries 6px of air on each side already; Mission
+   Control's 12px header gap and 4px action margins stacked on top of
+   that cost a long title two characters to blank space. The two custom
+   properties narrow both (read by `.thread-row__header` and the action
+   margins); every control keeps its 24px box, and 2px rather than 0
+   keeps the pin's hover box off the bordered PR chip beside it.
+
+   `:not(.directory-row__summary)`: the Directories header and the
+   Pinned group header are `.thread-row` buttons too (for the title
+   type), with their own 4px left inset and 8px gap. Without the
+   exclusion these rules moved their caret 8px right in Compact and
+   Minimal. */
+:root[data-density="compact"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary),
+.density-preview--compact .thread-row:not(.directory-row__summary) {
+  --thread-row-header-gap: 4px;
+  --thread-row-action-gap: 2px;
   gap: 4px;
   padding-left: 12px;
 }
 
-:root[data-density="compact"]:not([data-xray]) .thread-row:not(.density-preview *):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)),
-.density-preview--compact .thread-row:not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)) {
+:root[data-density="compact"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)),
+.density-preview--compact .thread-row:not(.directory-row__summary):not(:has(.thread-row__chip--persistent)):not(:has(.thread-row__chips .pr-chip)) {
   gap: 0;
 }
 
@@ -1462,8 +1479,8 @@
    least ready PR's state. Reactions move to the title line too
    (`.thread-row__title-reactions`); there are rarely more than two, and the
    title ellipsizes to make room. An unsent draft becomes the Draft chip's
-   pencil before the title (`.thread-row__title-draft`). Holding the X-ray
-   key brings the full Mission Control rows back; the title-line copies hide
+   pencil before the title (`.thread-row__title-draft`). The row X-ray lifts
+   gets its full Mission Control chips back; its title-line copies hide
    again because the chips they stand for are back in the flow. */
 .thread-row__pr-rollup,
 .thread-row__title-reactions,
@@ -1471,7 +1488,7 @@
   display: none;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row__title-draft:not(.density-preview *),
+:root[data-density="minimal"] .thread-row__title-draft:not(:is(.density-preview, [data-xray-target]) *),
 .density-preview--minimal .thread-row__title-draft {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1481,7 +1498,7 @@
   pointer-events: auto;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row__pr-rollup:not(.density-preview *),
+:root[data-density="minimal"] .thread-row__pr-rollup:not(:is(.density-preview, [data-xray-target]) *),
 .density-preview--minimal .thread-row__pr-rollup {
   display: inline-flex;
   align-items: center;
@@ -1489,13 +1506,13 @@
   pointer-events: auto;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row__title-reactions:not(.density-preview *),
+:root[data-density="minimal"] .thread-row__title-reactions:not(:is(.density-preview, [data-xray-target]) *),
 .density-preview--minimal .thread-row__title-reactions {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 2px;
-  margin-right: 4px;
+  margin-right: var(--thread-row-action-gap, 4px);
   pointer-events: auto;
 }
 
@@ -1507,19 +1524,22 @@
   height: 20px;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row__chips:not(.density-preview *) > :not(.thread-row__chip--essential),
+:root[data-density="minimal"] .thread-row__chips:not(:is(.density-preview, [data-xray-target]) *) > :not(.thread-row__chip--essential),
 .density-preview--minimal .thread-row__chips > :not(.thread-row__chip--essential) {
   display: none;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *),
-.density-preview--minimal .thread-row {
+/* Same title-line spacing and header exclusion as Compact; see there. */
+:root[data-density="minimal"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary),
+.density-preview--minimal .thread-row:not(.directory-row__summary) {
+  --thread-row-header-gap: 4px;
+  --thread-row-action-gap: 2px;
   gap: 4px;
   padding-left: 12px;
 }
 
-:root[data-density="minimal"]:not([data-xray]) .thread-row:not(.density-preview *):not(:has(.thread-row__chip--essential)),
-.density-preview--minimal .thread-row:not(:has(.thread-row__chip--essential)) {
+:root[data-density="minimal"] .thread-row:not(:is(.density-preview, [data-xray-target]) *):not(.directory-row__summary):not(:has(.thread-row__chip--essential)),
+.density-preview--minimal .thread-row:not(.directory-row__summary):not(:has(.thread-row__chip--essential)) {
   gap: 0;
 }
 
@@ -1593,6 +1613,40 @@
 .xray-badge__pin.is-pinned {
   background: var(--accent-soft);
   color: var(--accent-bright);
+}
+
+/* The X-ray spy card (features/navigation/xray-spy-card.ts): the one row
+   X-ray lifts. Its shell holds the row's own height, so no other row moves,
+   and the row comes out of flow at the same left edge to grow over its
+   neighbours with every chip showing. `--xray-lift` slides it up just far
+   enough to clear the foot of the lane and the badge. Above the sticky
+   directory headers (5). */
+.thread-row-shell[data-xray-target] {
+  height: var(--xray-shell-height, auto);
+}
+
+.thread-row-shell[data-xray-target] > .thread-row {
+  position: absolute;
+  top: calc(-1 * var(--xray-lift, 0px));
+  right: 0;
+  left: 0;
+  z-index: 6;
+  /* The density rules' inset and title-line gaps, which the card escapes
+     with them: the title must not move when the card lifts. X-ray runs
+     only in those densities. */
+  --thread-row-header-gap: 4px;
+  --thread-row-action-gap: 2px;
+  padding-left: 12px;
+  border-color: var(--accent-border);
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 8px 20px var(--shadow-tint-soft);
+}
+
+.thread-row-shell[data-xray-target] > .thread-row.is-selected {
+  background: var(--bg-row-active);
+  box-shadow:
+    inset 2px 0 0 0 var(--accent),
+    0 8px 20px var(--shadow-tint-soft);
 }
 
 /* The rollup's list of PRs: a portal on <body>, at the PR status card's
@@ -3162,7 +3216,6 @@ textarea,
   pointer-events: none;
 }
 
-.thread-header__terminal-toggle,
 .thread-header__rewind-toggle {
   display: inline-flex;
   width: 24px;
@@ -3183,37 +3236,27 @@ textarea,
     border-color 80ms ease;
 }
 
-.thread-header__terminal-toggle,
-.thread-header__terminal-toggle *,
 .thread-header__rewind-toggle,
 .thread-header__rewind-toggle * {
   -webkit-app-region: no-drag;
 }
 
-.thread-header__terminal-toggle:hover,
 .thread-header__rewind-toggle:hover {
   background: var(--bg-row-active);
   color: var(--text-primary);
 }
 
-.thread-header__terminal-toggle:focus-visible,
 .thread-header__rewind-toggle:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
-/* Remote thread whose peer lacks remote_pty or is disconnected: the toggle
-   stays visible (the terminal exists as a concept) but reads inert, with the
-   tooltip carrying the reason. aria-disabled, not disabled, so hover still
-   reaches it and the tooltip can explain why. */
-.thread-header__terminal-toggle.is-disabled,
 .thread-header__rewind-toggle.is-disabled {
   color: var(--text-muted);
   opacity: 0.45;
   cursor: default;
 }
 
-.thread-header__terminal-toggle.is-disabled:hover,
 .thread-header__rewind-toggle.is-disabled:hover {
   background: transparent;
   color: var(--text-muted);
@@ -3226,33 +3269,6 @@ textarea,
   .thread-header__rewind-toggle--thread {
     display: none;
   }
-}
-
-.thread-header__terminal-toggle.is-open {
-  color: var(--accent-bright);
-}
-
-.thread-header__terminal-toggle.is-open:hover {
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent-bright);
-}
-
-/* A shell is running behind a collapsed panel. Without this the terminal is
-   invisible from the thread — the toggle looks identical to "no terminal". */
-.thread-header__terminal-toggle.is-running {
-  position: relative;
-  color: var(--accent);
-}
-
-.thread-header__terminal-toggle.is-running::after {
-  content: "";
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--accent);
 }
 
 /* Browser-style Back/Forward pair at the leading edge of the thread/search
@@ -6725,7 +6741,7 @@ a.button {
 .thread-row__chip--add-reaction:focus-visible,
 .thread-row__chip--add-reaction.is-open {
   width: 30px;
-  margin-right: 4px;
+  margin-right: var(--thread-row-action-gap, 4px);
   opacity: 1;
   pointer-events: auto;
 }
@@ -6870,7 +6886,7 @@ a.button {
   z-index: 1;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--thread-row-header-gap, 12px);
   pointer-events: none;
 }
 
@@ -6974,7 +6990,7 @@ a.button {
   height: 24px;
   flex: 0 0 auto;
   place-items: center;
-  margin-right: 4px;
+  margin-right: var(--thread-row-action-gap, 4px);
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -7393,7 +7409,7 @@ a.button {
 .thread-row-shell:hover .thread-row__pin-button,
 .thread-row__pin-button:focus-visible {
   width: 24px;
-  margin-right: 4px;
+  margin-right: var(--thread-row-action-gap, 4px);
   border-width: 1px;
 }
 
@@ -7676,6 +7692,25 @@ a.button {
      sitting high in their line box so the centered dot read as resting on
      the text baseline. A natural line box re-centers the glyphs against the
      dot. */
+  line-height: normal;
+}
+
+/* The rollup chip's one open PR (`#12 +3`). The lead holds the dot, number
+   and draft bar, so the bar centers under the PR it marks. It is centered in
+   the pill, so the bar's centerline anchor below is unchanged. */
+.pr-chip__lead {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The finished PRs behind the lead: muted, so the number stays the
+   strongest text, and pulled toward it so the two read as one label. */
+.pr-chip__more {
+  margin-left: -2px;
+  color: var(--text-muted);
+  white-space: nowrap;
   line-height: normal;
 }
 
@@ -24514,8 +24549,18 @@ a.button {
   overflow-wrap: anywhere;
 }
 
-/* The proposed prompt, quoted. Three lines until it is opened; the clamp is
-   on the inner span so the padding never shows a partial fourth line. */
+/* A start-thread card leads with the 22px Model chip: give the taller row
+   room and center its label on the chip. Other labels stay on their value's
+   first line when it wraps. */
+.thread-todo-card__facts:has(.thread-todo-card__fact--model) {
+  row-gap: 3px;
+}
+
+.thread-todo-card__fact--model dt {
+  align-self: center;
+}
+
+/* The Markdown prompt rests at three lines; its own control opens it. */
 .thread-todo-card__prompt {
   display: block;
   width: 100%;
@@ -24530,28 +24575,36 @@ a.button {
   font-size: 12px;
   line-height: 17px;
   text-align: left;
-  cursor: pointer;
 }
 
-.thread-todo-card__prompt:focus-visible {
+.thread-todo-card__prompt-text:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
 .thread-todo-card__prompt-text {
-  display: -webkit-box;
+  max-height: 51px;
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .thread-todo-card__prompt.is-expanded .thread-todo-card__prompt-text {
-  display: block;
   max-height: 240px;
   overflow-y: auto;
-  -webkit-line-clamp: unset;
+}
+
+.thread-todo-card__prompt .thread-markdown {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.thread-todo-card__prompt .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
+  font-size: 12px;
+  line-height: 17px;
+}
+
+.thread-todo-card__prompt .thread-markdown > * + * {
+  margin-top: 6px;
 }
 
 /* Opens and closes a resting card: the review card's "Show N more" type,
@@ -24580,6 +24633,10 @@ a.button {
   border-radius: 4px;
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+.thread-todo-card__prompt .thread-todo-card__more {
+  margin-left: 0;
 }
 
 .thread-todo-card__error {
@@ -32325,6 +32382,7 @@ div.composer-error-row__toggle {
   overflow-wrap: anywhere;
   color: var(--text-primary);
   line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 /* The full address, shown before the operator consents to open it. The
@@ -41599,19 +41657,38 @@ button.composer__subthread-source-parent:hover {
   line-height: 1.4;
 }
 
-/* A command under the list (Edit environments…), outside the listbox. */
-.composer-dropdown__footer {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.composer-dropdown__footer .composer-dropdown__footer-action {
+/* A command outside the listbox (Edit environments…), at the end of the menu
+   farthest from the trigger. Its divider is a `__separator`. */
+.composer-dropdown__menu-action .composer-dropdown__menu-action-button {
   color: var(--text-secondary);
 }
 
-.composer-dropdown__footer-action .composer-dropdown__check {
+.composer-dropdown__menu-action-button .composer-dropdown__check {
   color: var(--text-muted);
+}
+
+/* A short list of plain names (the Environment chip) takes the thread
+   options menu's density: the same 4px frame, and the rows and separator
+   below `.composer-thread-options__menu`. */
+.composer-dropdown--dense .composer-dropdown__menu {
+  padding: 4px;
+}
+
+.composer-dropdown--dense
+  .composer-dropdown__menu:not(.composer-dropdown__menu--below, .composer-dropdown__menu--other) {
+  min-width: max(100%, 204px);
+}
+
+.composer-dropdown--dense .composer-dropdown__option {
+  gap: 8px;
+}
+
+.composer-dropdown--dense .composer-dropdown__check {
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 16px;
 }
 
 /* Opens downward from a trigger near the top of the window; the component
@@ -41732,8 +41809,10 @@ button.composer__subthread-source-parent:hover {
 
 /* An action menu, so it takes the thread context menu's native density
    rather than the composer pickers' 40px option rows. Scoped to the menu so
-   every row in it, including "Use default for monitor suggestions", matches. */
-.composer-thread-options__menu .composer-dropdown__option {
+   every row in it, including "Use default for monitor suggestions", matches.
+   A `dense` dropdown (the Environment chip) shares these rows. */
+.composer-thread-options__menu .composer-dropdown__option,
+.composer-dropdown--dense .composer-dropdown__option {
   min-height: 24px;
   padding: 4px 8px;
   border-radius: 4px;
@@ -41741,7 +41820,8 @@ button.composer__subthread-source-parent:hover {
   line-height: 16px;
 }
 
-.composer-thread-options__menu .composer-dropdown__separator {
+.composer-thread-options__menu .composer-dropdown__separator,
+.composer-dropdown--dense .composer-dropdown__separator {
   margin: 4px 8px;
 }
 
@@ -42894,6 +42974,64 @@ button.composer__subthread-source-parent:hover {
   cursor: not-allowed;
 }
 
+/* One row stands where a rewind removed turns. */
+.transcript-rewind-marker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.transcript-rewind-marker::before,
+.transcript-rewind-marker::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.transcript-rewind-marker__undo {
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.transcript-rewind-marker__undo:hover:not([aria-disabled="true"]) {
+  text-decoration: underline;
+}
+
+.transcript-rewind-marker__undo:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-rewind-marker__undo[aria-disabled="true"] {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.composer__rewound-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .workflow-budget-dialog__fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -43453,6 +43591,36 @@ button.composer__subthread-source-parent:hover {
 .composer__toggle:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+/* A shell remains alive behind a collapsed integrated terminal panel. */
+.composer__terminal-toggle.is-running {
+  color: var(--accent);
+}
+
+.composer__terminal-toggle.is-running::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.composer__terminal-toggle.is-disabled,
+.composer__terminal-toggle.is-disabled:hover {
+  opacity: 0.45;
+  cursor: default;
+  border-color: var(--border-subtle);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+}
+
+.composer__terminal-toggle.is-disabled:focus-visible {
+  opacity: 1;
+  color: var(--text-subtle);
 }
 
 .composer__autocomplete {
@@ -49893,4 +50061,91 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   margin: 0;
   color: var(--danger-text);
   font-size: 12px;
+}
+
+/* Sized to its label. `.composer-dropdown__button` fills its slot, which
+   stretched the chip across the facts column. */
+.todo-model-picker__chip {
+  display: inline-flex;
+  width: auto;
+  max-width: 100%;
+  min-height: 22px;
+  height: auto;
+  gap: 5px;
+  padding: 0 7px 0 9px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 18px;
+  vertical-align: middle;
+}
+
+.todo-model-picker__chip .composer-dropdown__icon {
+  color: var(--text-muted);
+}
+
+.todo-model-picker__chip.is-changed {
+  border-color: var(--accent-border);
+}
+
+.todo-model-picker__menu {
+  position: fixed;
+  right: auto;
+  z-index: 150;
+  width: 312px;
+  min-width: 0;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
+  font-family: var(--font-sans);
+}
+
+.todo-model-picker__detail {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* Section heads, Custom and the footnote share the rows' text column. */
+.todo-model-picker__menu .composer-dropdown__group-label {
+  padding: 6px 8px 3px 26px;
+}
+
+.todo-model-picker__custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px 6px 26px;
+}
+
+.todo-model-picker__footnote,
+.todo-model-picker__error,
+.todo-model-picker__provenance {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.todo-model-picker__error {
+  padding: 0 8px 4px 26px;
+}
+
+.todo-model-picker__footnote {
+  margin-top: 4px;
+  padding: 7px 8px 2px 26px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.todo-model-picker__reset {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  cursor: pointer;
+  font: inherit;
+}
+
+.todo-model-picker__reset:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 2px;
 }

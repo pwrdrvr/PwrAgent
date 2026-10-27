@@ -222,6 +222,7 @@ export const AGENT_STOP_SUB_AGENT_CHANNEL = "agent:stop-sub-agent";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
 export const AGENT_REWIND_THREAD_CHANNEL = "agent:rewind-thread";
 export const AGENT_PREVIEW_THREAD_REWIND_CHANNEL = "agent:preview-thread-rewind";
+export const AGENT_UNDO_THREAD_REWIND_CHANNEL = "agent:undo-thread-rewind";
 export const AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL =
   "agent:configure-grok-workflow-budget";
 export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL = "agent:set-thread-execution-mode";
@@ -313,6 +314,8 @@ export const MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL =
   "mcp-connection:set-select-for-new-threads";
 export const MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL =
   "mcp-connection:set-tool-approval";
+export const MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL =
+  "mcp-connection:set-sandboxer-transport";
 export const MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL =
   "mcp-connection:set-sandboxer-cleanup-on-pr-close";
 export const MCP_CONNECTION_LIST_TOOLS_CHANNEL = "mcp-connection:list-tools";

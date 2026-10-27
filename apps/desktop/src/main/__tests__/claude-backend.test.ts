@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -506,6 +506,22 @@ describe("Claude SDK backend", () => {
         reviewer: { backend: "claude", model: "claude-opus-5-5", reasoningEffort: "high" },
         turn: expect.objectContaining({ status: "completed" }),
       })]);
+      await backend.close();
+    });
+
+    it("resolves the card's context from the pull requests the /code-review named", async () => {
+      const f = await fixture(turns(report("review-1", { level: "medium", findings })));
+      const resolveReviewContext = vi.fn().mockResolvedValue({ workspacePath: f.root });
+      const backend = new ClaudeBackend({ ...f.backendOptions, resolveReviewContext });
+      const { threadId } = await backend.startThread({ cwd: f.root, executionMode: "default" });
+      await backend.startTurn({ threadId, input: [{ type: "text", text: "/code-review medium --fix 2947,2948" }] });
+      await f.waitForTurn();
+
+      // One report covers both pull requests, and it names neither.
+      expect(resolveReviewContext).toHaveBeenCalledWith({
+        threadId, cwd: f.root, pullRequests: [{ number: 2947 }, { number: 2948 }],
+      });
+      expect(reviewItems(f.events).map((item) => item.id)).toEqual(["review-1"]);
       await backend.close();
     });
 
@@ -1109,7 +1125,7 @@ describe("Claude SDK backend", () => {
     let count = 0;
     const context = vi.fn().mockResolvedValue({ totalTokens: 1200, maxTokens: 200_000 });
     const usage = vi.fn().mockResolvedValue({ rate_limits_available: true, rate_limits: {
-      seven_day: { utilization: 35, resets_at: "2026-10-27T00:00:00Z" },
+      seven_day: { utilization: 35, resets_at: new Date(Date.now() + 7 * 86_400_000).toISOString() },
     }, session: { model_usage: {} } });
     const f = await fixture(async function* () {
       count += 1;
@@ -2031,6 +2047,71 @@ describe("Claude SDK backend", () => {
     expect(f.queries[1]).toMatchObject({ resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", additionalDirectories: [attached] });
   });
 
+  it("refuses to fork a thread while its turn is running", async () => {
+    let finish!: () => void;
+    const gate = new Promise<void>((resolve) => { finish = resolve; });
+    const f = await fixture(async function* () {
+      yield { type: "system", subtype: "init", session_id: "5a85c1ad-85c1-4930-ae19-50f721ad13dd" } as SDKMessage;
+      await gate;
+      yield { type: "result", subtype: "success", is_error: false } as SDKMessage;
+    });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Hi" }] });
+    await expect(f.backend.forkThread({ sourceThreadId: threadId, cwd: f.root, executionMode: "default" }))
+      .rejects.toThrow("finish before forking");
+    finish();
+    await f.waitForTurn();
+    await expect(f.backend.forkThread({ sourceThreadId: threadId, cwd: f.root, executionMode: "default" })).resolves.toBeDefined();
+  });
+
+  it("forks a thread: copies its history and continues its session in a new one", async () => {
+    let call = 0;
+    const usage = vi.fn().mockResolvedValue({ session: { model_usage: { opus: {
+      inputTokens: 40, outputTokens: 10, cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+      costUSD: 0.4, contextWindow: 200_000, maxOutputTokens: 32_000, webSearchRequests: 0,
+    } } } });
+    const f = await fixture(async function* () {
+      call += 1;
+      const sessionId = call === 1 ? "5a85c1ad-85c1-4930-ae19-50f721ad13dd" : "f0f0f0f0-0000-4000-8000-000000000002";
+      yield { type: "system", subtype: "init", session_id: sessionId } as SDKMessage;
+      yield { type: "assistant", parent_tool_use_id: null, message: { id: `reply-${call}`, content: [{ type: "text", text: `Reply ${call}` }] } } as SDKMessage;
+      yield { type: "result", subtype: "success", is_error: false, result: `Reply ${call}` } as SDKMessage;
+    }, { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: usage } as Partial<Query>);
+    const { threadId: sourceId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+    await f.backend.startTurn({ threadId: sourceId, input: [{ type: "text", text: "Remember PINEAPPLE" }] });
+    await f.waitForTurn();
+    await expect(f.backend.forkThread({ sourceThreadId: (await f.backend.startThread({ cwd: f.root, executionMode: "default" })).threadId,
+      cwd: f.root, executionMode: "default" })).rejects.toThrow("no conversation to fork");
+
+    const forkCwd = path.join(f.root, "fork-worktree");
+    const { threadId } = await f.backend.forkThread({ sourceThreadId: sourceId, cwd: forkCwd, executionMode: "auto" });
+    const fork = await f.backend.readThread(threadId);
+    expect(fork.lastUserMessage).toBe("Remember PINEAPPLE");
+    expect(fork.lastAssistantMessage).toBe("Reply 1");
+    expect((await f.store.read(threadId)).thread).toMatchObject({ title: expect.stringContaining("(fork)"), executionMode: "auto" });
+    // A fork of a fork that has not sent anything continues the same source.
+    const { threadId: nestedId } = await f.backend.forkThread({ sourceThreadId: threadId, cwd: forkCwd, executionMode: "default" });
+    expect((await f.store.read(nestedId)).forkFromSdkSessionId).toBe("5a85c1ad-85c1-4930-ae19-50f721ad13dd");
+    expect((await f.backend.readThread(nestedId)).lastAssistantMessage).toBe("Reply 1");
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "What did I ask?" }] });
+    await f.waitForTurn();
+    expect(f.queries[1]).toMatchObject({ cwd: forkCwd, resume: "5a85c1ad-85c1-4930-ae19-50f721ad13dd", forkSession: true });
+    expect(f.queries[1].sessionId).toBeUndefined();
+    // The fork reads its starting totals, so the copied history is not billed again.
+    expect(usage).toHaveBeenCalled();
+    const saved = await f.store.read(threadId);
+    expect(saved.sdkSessionId).toBe("f0f0f0f0-0000-4000-8000-000000000002");
+    expect(saved.forkFromSdkSessionId).toBeUndefined();
+    // The source keeps its own session.
+    expect((await f.store.read(sourceId)).sdkSessionId).toBe("5a85c1ad-85c1-4930-ae19-50f721ad13dd");
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Again" }] });
+    await f.waitForTurn();
+    expect(f.queries[2]).toMatchObject({ resume: "f0f0f0f0-0000-4000-8000-000000000002" });
+    expect(f.queries[2].forkSession).toBeUndefined();
+  });
+
   describe("stopping a turn while a background task runs", () => {
     const capabilities = ["interrupt_receipt_v1", "interrupt_cancel_queued_v1"];
     async function stoppable(params: { capabilities?: string[]; answer?: boolean; interruptGraceMs?: number } = {}) {
@@ -2883,6 +2964,117 @@ describe("Claude thread rewind", () => {
       .resolves.toEqual({ filesUnavailableReason: "Claude did not answer which files it can restore." });
     // The control query's process does not outlive the check.
     expect(f.close).toHaveBeenCalledTimes(2);
+  });
+
+  it("undoes a rewind until the next turn starts, resuming on the kept branch", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const f = await fixture(promptRecorder(prompts));
+    Object.assign(f.backendOptions, { getSessionMessages: sessionMessages(prompts) });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt", "Second prompt"]);
+    const rewindId = "0b7f1c52-6a52-4c5e-9f0e-3b0f2f0c9e11";
+
+    const result = await f.backend.rewindThread({
+      threadId, target: { messageId: `user:${turnIds[1]}`, turnId: turnIds[1] }, mode: "conversation", rewindId,
+    });
+    expect(result.undoable).toBe(true);
+    expect((await f.backend.readThread(threadId)).entries).toHaveLength(2);
+
+    await f.backend.undoRewind({ threadId, rewindId });
+    const stored = await f.store.read(threadId);
+    expect(stored.sdkSessionId).toBe(SDK_SESSION);
+    // The next turn continues where the removed branch ended.
+    expect(stored.resumeSessionAt).toBe("assistant-2");
+    expect(stored.rewinds?.[0]?.undoneAt).toEqual(expect.any(Number));
+    const reopened = new ClaudeSessionStore(f.root);
+    expect((await reopened.entries(threadId)).map((entry) => entry.id))
+      .toEqual([`user:${turnIds[0]}`, "answer-1", `user:${turnIds[1]}`, "answer-2"]);
+    await expect(f.backend.undoRewind({ threadId, rewindId })).rejects.toThrow("can no longer be undone");
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Third prompt" }] });
+    await f.waitForTurn();
+    expect(f.queries.at(-1)).toMatchObject({ resume: SDK_SESSION, resumeSessionAt: "assistant-2" });
+  });
+
+  it("refuses to undo a rewind once a turn has continued the rewound conversation", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const f = await fixture(promptRecorder(prompts));
+    Object.assign(f.backendOptions, { getSessionMessages: sessionMessages(prompts) });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt", "Second prompt"]);
+    const rewindId = "0b7f1c52-6a52-4c5e-9f0e-3b0f2f0c9e12";
+    await f.backend.rewindThread({
+      threadId, target: { messageId: `user:${turnIds[1]}`, turnId: turnIds[1] }, mode: "conversation", rewindId,
+    });
+
+    await f.backend.startTurn({ threadId, input: [{ type: "text", text: "Another way" }] });
+    await f.waitForTurn();
+    await expect(f.backend.undoRewind({ threadId, rewindId }))
+      .rejects.toThrow("Claude has continued the conversation since");
+    expect((await f.backend.readThread(threadId)).entries.map((entry) => entry.type === "message" ? entry.text : entry.id))
+      .toEqual(["First prompt", "Answer 1", "Another way", "Answer 3"]);
+  });
+
+  it("keeps what a file rewind overwrote and puts it back on undo", async () => {
+    const prompts: SDKUserMessage[] = [];
+    const f = await fixture(promptRecorder(prompts), {
+      rewindFiles: vi.fn(async (_id: string, options?: { dryRun?: boolean }) => {
+        if (!options?.dryRun) {
+          // Claude restores the files to before the prompt.
+          await writeFile(path.join(f.root, "lock.ts"), "before");
+          await rm(path.join(f.root, "lock.test.ts"));
+        }
+        return { canRewind: true, filesChanged: ["lock.ts", "lock.test.ts"] };
+      }),
+    });
+    Object.assign(f.backendOptions, { getSessionMessages: sessionMessages(prompts) });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt", "Second prompt"]);
+    await writeFile(path.join(f.root, "lock.ts"), "edited");
+    await writeFile(path.join(f.root, "lock.test.ts"), "created");
+    const target = { messageId: `user:${turnIds[1]}`, turnId: turnIds[1] };
+
+    const first = await f.backend.rewindThread({
+      threadId, target, mode: "conversation-and-files", rewindId: "0b7f1c52-6a52-4c5e-9f0e-3b0f2f0c9e13",
+    });
+    expect(first).toMatchObject({ restoredFileCount: 2, undoable: true });
+    await f.backend.undoRewind({ threadId, rewindId: "0b7f1c52-6a52-4c5e-9f0e-3b0f2f0c9e13" });
+    expect(await readFile(path.join(f.root, "lock.ts"), "utf8")).toBe("edited");
+    expect(await readFile(path.join(f.root, "lock.test.ts"), "utf8")).toBe("created");
+
+    // A file changed after the rewind is the operator's; undo leaves it be.
+    await f.backend.rewindThread({
+      threadId, target, mode: "conversation-and-files", rewindId: "0b7f1c52-6a52-4c5e-9f0e-3b0f2f0c9e14",
+    });
+    await writeFile(path.join(f.root, "lock.ts"), "operator's own edit");
+    await expect(f.backend.undoRewind({ threadId, rewindId: "0b7f1c52-6a52-4c5e-9f0e-3b0f2f0c9e14" }))
+      .rejects.toThrow("lock.ts changed after the rewind");
+    expect(await readFile(path.join(f.root, "lock.ts"), "utf8")).toBe("operator's own edit");
+    expect((await f.backend.readThread(threadId)).entries).toHaveLength(2);
+  });
+
+  it("drops a file rewind's copies when Claude fails it, and explains copies that are gone", async () => {
+    const prompts: SDKUserMessage[] = [];
+    let fail = true;
+    const f = await fixture(promptRecorder(prompts), {
+      rewindFiles: vi.fn(async (_id: string, options?: { dryRun?: boolean }) => {
+        if (!options?.dryRun && fail) throw new Error("Claude exited");
+        return { canRewind: true, filesChanged: ["lock.ts"] };
+      }),
+    });
+    Object.assign(f.backendOptions, { getSessionMessages: sessionMessages(prompts) });
+    const { threadId, turnIds } = await runTurns(f, ["First prompt", "Second prompt"]);
+    await writeFile(path.join(f.root, "lock.ts"), "edited");
+    const target = { messageId: `user:${turnIds[1]}`, turnId: turnIds[1] };
+    const rewindId = "0b7f1c52-6a52-4c5e-9f0e-3b0f2f0c9e15";
+
+    await expect(f.backend.rewindThread({ threadId, target, mode: "conversation-and-files", rewindId }))
+      .rejects.toThrow("Claude exited");
+    await expect(readFile(path.join(f.store.rewindBackupDirectory(threadId, rewindId), "manifest.json")))
+      .rejects.toMatchObject({ code: "ENOENT" });
+
+    fail = false;
+    await f.backend.rewindThread({ threadId, target, mode: "conversation-and-files", rewindId });
+    await rm(f.store.rewindBackupDirectory(threadId, rewindId), { recursive: true, force: true });
+    await expect(f.backend.undoRewind({ threadId, rewindId }))
+      .rejects.toThrow("no longer has the files this rewind replaced");
   });
 
   it("holds a message sent during a rewind for the queue", async () => {

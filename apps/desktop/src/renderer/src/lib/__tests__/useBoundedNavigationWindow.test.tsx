@@ -595,3 +595,51 @@ it("keeps remote reads owned by semantic demand across bridge-wrapper rerenders"
     expect(fixture.read).toHaveBeenCalledTimes(initialReads);
   } finally { unmount(); vi.useRealTimers(); }
 });
+
+it.each(["directory-index", "selected-context"] as const)(
+  "keeps a removed directory pin removed while only %s has re-read",
+  async (first) => {
+    const fixture = api();
+    const home: NavigationDirectoryRow = { ...directory, key: "directory:/home", pinnedRank: "1024" };
+    const ref = { backend: "codex" as const, threadId: "selected" };
+    const row: NavigationRow = { id: ref.threadId, source: "codex", ref, title: "Selected", titleSource: "explicit",
+      rowRevision: "r", linkedDirectories: [], inbox: { inInbox: false }, ordinaryChildCount: 0,
+      nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" };
+    let current = home;
+    let hold: Promise<void> | undefined;
+    let finish!: () => void;
+    fixture.read.mockImplementation(async (request) => {
+      const owner = current;
+      const second = first === "directory-index" ? "exact" : "directory-index";
+      if (hold && request.query.kind === second) await hold;
+      if (request.query.kind === "directory-index") return page({ directories: [owner] });
+      if (request.query.kind === "exact") return page({ selectionDirectory: owner,
+        entries: [{ row, placement: { kind: "root" }, orderKey: "selected" }] });
+      return page();
+    });
+    const { result, unmount } = renderHook(() => useBoundedNavigationWindow({ ...base,
+      desktopApi: fixture.desktopApi, selectedRef: ref, selectedDirectoryKeys: [home.key],
+    }));
+    try {
+      await waitFor(() => expect(result.current.resources.get("selected-context")?.state.page).toBeDefined());
+      await waitFor(() => expect(result.current.directories).toEqual([home]));
+
+      // The owner removes the pin; one page re-reads before the other.
+      current = { ...home, pinnedRank: undefined };
+      hold = new Promise<void>((resolve) => { finish = resolve; });
+      fixture.emit({ backend: "codex", notification: { method: "directory/pin/removed",
+        params: { directoryKey: home.key } } } as AgentEvent);
+      await waitFor(() => expect(result.current.resources.get(first)?.state.stale).toBe(false));
+      expect(result.current.resources.get(first === "directory-index" ? "selected-context" : "directory-index")
+        ?.state.stale).toBe(true);
+      expect(result.current.directories.map((descriptor) => descriptor.pinnedRank)).toEqual([undefined]);
+
+      await act(async () => finish());
+      await waitFor(() => expect([...result.current.resources.values()].some((resource) => resource.state.stale)).toBe(false));
+      expect(result.current.directories.map((descriptor) => descriptor.pinnedRank)).toEqual([undefined]);
+    } finally {
+      finish?.();
+      unmount();
+    }
+  },
+);

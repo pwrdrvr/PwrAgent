@@ -14,6 +14,10 @@ import { threadTodoMarkdown, threadTodosMarkdown } from "../thread-todo-copy";
 
 const copied = vi.hoisted(() => [] as string[]);
 vi.mock("../../../lib/copy-text", () => ({
+  copyTextWithHtml: vi.fn((text: string) => {
+    copied.push(text);
+    return Promise.resolve();
+  }),
   copyText: vi.fn((text: string) => {
     copied.push(text);
     return Promise.resolve();
@@ -102,7 +106,7 @@ describe("to-do card Markdown", () => {
       detail: undefined,
       action: { type: "start_thread", prompt: "Build the gateway." },
     });
-    expect(threadTodoMarkdown(handoff)).toBe("## Add stdio server support\n\n### Prompt\n\nBuild the gateway.");
+    expect(threadTodoMarkdown(handoff)).toBe("## Add stdio server support\n\n### Prompt\n\n> Build the gateway.");
 
     const finding = (id: string, status: ThreadReviewItem["status"], priority?: number): ThreadReviewItem => ({
       id, title: `Finding ${id}`, status, priority, createdAt: 0, updatedAt: 0,
@@ -139,7 +143,7 @@ describe("to-do card Markdown", () => {
       "",
       "### Prompt",
       "",
-      "Build the gateway.",
+      "> Build the gateway.",
     ].join("\n"));
   });
 

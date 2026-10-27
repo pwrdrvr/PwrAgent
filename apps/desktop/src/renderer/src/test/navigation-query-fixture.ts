@@ -57,6 +57,11 @@ export function navigationQueryFixture(
     directory.threadKeys?.includes(key(thread))
       || (target?.scope === "remote" && !hasMountedRows && directory.threadKeys?.includes(buildThreadIdentityKey(thread.source, thread.id)))
       || thread.linkedDirectories.some((linked) => classifyDirectory(linked).key === directory.key));
+  const childCounts = new Map<string, number>();
+  for (const thread of all) {
+    const parent = resolveParentKey(thread);
+    if (parent) childCounts.set(parent, (childCounts.get(parent) ?? 0) + 1);
+  }
   let threads = all;
   if (query.kind === "star-map" && query.projectKey !== undefined) {
     threads = all.filter((thread) => (thread.linkedDirectories[0]
@@ -124,7 +129,7 @@ export function navigationQueryFixture(
     }
     threads = [...selected.values()];
   }
-  const descriptors = (population.directories ?? [])
+  const descriptors = (query.kind === "directory-index" || query.kind === "star-map-geometry" ? population.directories ?? [] : [])
     .filter((directory) => query.kind !== "directory-index" || ((!query.keys || query.keys.includes(directory.key))
       && (!query.filter || `${directory.label}\n${directory.path ?? ""}`.toLowerCase().includes(query.filter.toLowerCase()))))
     .map((directory) => {
@@ -170,7 +175,7 @@ export function navigationQueryFixture(
         subthreadsCollapsed: thread.subthreadsCollapsed, reactions: thread.reactions, model: thread.model,
         executionMode: thread.executionMode, serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort,
         primaryGitRepository: thread.primaryGitRepository, prAutoDispatchEnabled: thread.prAutoDispatchEnabled,
-        fastMode: thread.fastMode, ordinaryChildCount: all.filter((child) => resolveParentKey(child) === key(thread)).length,
+        fastMode: thread.fastMode, ordinaryChildCount: childCounts.get(key(thread)) ?? 0,
         nativeSubAgentGroupPresent: Boolean(thread.codexNativeSubAgents?.length), nativeSubAgentCount: thread.codexNativeSubAgents?.length,
         queueCount: 0, queueState: "unknown",
       };

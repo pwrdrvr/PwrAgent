@@ -3,6 +3,7 @@ import { ThreadServices } from "../federation/ThreadServices";
 import type { BackgroundTerminalsViewProps } from "./BackgroundTerminalsView";
 import type { AgentCommandsStatus } from "../../lib/useThreadSessionState";
 import { useEventCallback } from "../../lib/useEventCallback";
+import { useIncrementalMarkdownRenderer } from "../../lib/markdown-rendering-options";
 import { useDismissedOperatorQuestions } from "../operator-requests/useDismissedOperatorQuestions";
 import type { NavigationDirectoryView as NavigationDirectorySummary } from "../../lib/navigation-loaded-rows";
 import { applyLaunchpadEnvironmentSetupProgress, type LaunchpadEnvironmentSetupProgress } from "../../lib/launchpad-setup-progress";
@@ -113,6 +114,7 @@ import { useTranscriptWindow } from "./useTranscriptWindow";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { resolvePreferredEditor } from "../../lib/preferred-application";
 import { Composer, type ComposerProps } from "../composer/Composer";
+import { ComposerTerminalToggle } from "../composer/ComposerTerminalToggle";
 import type { EnvironmentSetupRowModel } from "../composer/EnvironmentSetupRow";
 import {
   describeLaunchpadMachineOffline,
@@ -1231,6 +1233,7 @@ function findTranscriptTurnEntryIndex(
 const NO_THREAD_TODOS: ThreadTodo[] = [];
 
 export function ThreadView(props: ThreadViewProps) {
+  const incrementalMarkdownRenderer = useIncrementalMarkdownRenderer();
   const [pendingActivityEntry, setPendingActivityEntry] =
     useState<AppServerThreadActivityEntry>();
   const [pendingProtocolActivityEntry, setPendingProtocolActivityEntry] =
@@ -1368,7 +1371,9 @@ export function ThreadView(props: ThreadViewProps) {
     federationTarget?: FederationTarget;
     text: string;
     imageAttachments: RewoundPrompt["imageAttachments"];
+    kind: "rewound-prompt" | "rewound-prompt-undone";
   }>();
+  const [rewindUndoBusyId, setRewindUndoBusyId] = useState<string>();
   const [workflowBudgetDialog, setWorkflowBudgetDialog] =
     useState<WorkflowBudgetDialogState>();
   // Transcript element the in-thread find bar (⌘F) searches + highlights.
@@ -1725,6 +1730,7 @@ export function ThreadView(props: ThreadViewProps) {
           ...(confirm.turnId ? { turnId: confirm.turnId } : {}),
         },
         mode,
+        removedTurnCount: confirm.summary.laterTurnCount + 1,
       });
       setRewindConfirm(undefined);
       const promptText = response.promptText ?? confirm.prompt.text;
@@ -1738,6 +1744,7 @@ export function ThreadView(props: ThreadViewProps) {
           federationTarget,
           text: promptText,
           imageAttachments,
+          kind: "rewound-prompt",
         });
       }
       if (droppedAttachmentCount > 0) {
@@ -1762,6 +1769,59 @@ export function ThreadView(props: ThreadViewProps) {
         : current);
     }
   };
+  // What an undo needs, read when the operator clicks it.
+  const rewindUndoContextRef = useRef({ desktopApi: rewindDesktopApi, thread: selectedThread });
+  rewindUndoContextRef.current = { desktopApi: rewindDesktopApi, thread: selectedThread };
+  const undoRewind = useCallback((rewindId: string): void => {
+    const { desktopApi, thread } = rewindUndoContextRef.current;
+    const undoThreadRewind = desktopApi?.undoThreadRewind;
+    if (!thread || !undoThreadRewind) return;
+    const federationTarget = thread.federation?.ref.target ?? readRendererFederationTarget();
+    setRewindUndoBusyId(rewindId);
+    void (async () => {
+      try {
+        await undoThreadRewind({ backend: thread.source, federationTarget, threadId: thread.id, rewindId });
+      } catch (error) {
+        onShowRewindNotice?.({
+          id: `rewind-undo:${thread.id}`,
+          title: "Rewind not undone",
+          message: error instanceof Error ? error.message : String(error),
+          tone: "warning",
+        });
+        return;
+      } finally {
+        setRewindUndoBusyId((current) => current === rewindId ? undefined : current);
+      }
+      // The prompt is back in the transcript, so the composer's copy goes.
+      rewoundPromptRestoreId.current += 1;
+      setRewoundPromptRestore({
+        id: rewoundPromptRestoreId.current,
+        threadId: thread.id,
+        backend: thread.source,
+        federationTarget,
+        text: "",
+        imageAttachments: [],
+        kind: "rewound-prompt-undone",
+      });
+      try {
+        await onRefreshNavigationAfterRewind?.();
+        await onReloadThreadAfterRewind?.();
+      } catch {
+        // The thread/rewound event refreshes the thread as well.
+      }
+    })();
+  }, [onRefreshNavigationAfterRewind, onReloadThreadAfterRewind, onShowRewindNotice]);
+  const canUndoRewind = Boolean(threadRewindSupport?.undo && rewindDesktopApi?.undoThreadRewind);
+  const rewindUndo = useMemo(
+    () => canUndoRewind
+      ? {
+          busyId: rewindUndoBusyId,
+          disabledReason: rewindDisabledReason,
+          onUndo: undoRewind,
+        }
+      : undefined,
+    [canUndoRewind, rewindDisabledReason, rewindUndoBusyId, undoRewind],
+  );
   const openWorkflowBudgetDialog = useCallback(async (): Promise<void> => {
     if (!selectedThread || selectedThread.source !== "acp:grok") {
       return;
@@ -2088,7 +2148,7 @@ export function ThreadView(props: ThreadViewProps) {
       celestialIcon: federation.celestialIcon,
     };
   }, [selectedThread?.federation]);
-  const toggleSelectedThreadTerminal = useCallback(() => {
+  const toggleSelectedThreadTerminal = useEventCallback(() => {
     if (!selectedThreadKey) return;
     if (selectedThreadTerminalDisabledReason) return;
     terminals.togglePanel(
@@ -2096,13 +2156,7 @@ export function ThreadView(props: ThreadViewProps) {
       selectedThreadTerminalCwd,
       selectedThreadTerminalRemote,
     );
-  }, [
-    selectedThreadKey,
-    selectedThreadTerminalCwd,
-    selectedThreadTerminalDisabledReason,
-    selectedThreadTerminalRemote,
-    terminals,
-  ]);
+  });
   const acceptedBranchDriftRef = useRef<string | undefined>(undefined);
   const suppressBranchDriftDialogRef = useRef(
     props.suppressBranchDriftDialog ?? false
@@ -3240,6 +3294,9 @@ export function ThreadView(props: ThreadViewProps) {
 
   const handleRequestToolCallDetails = useCallback(
     (invocation: ThreadToolInvocationRecord) => {
+      // Tool Calls owns isolated Codex item bodies. Only other backends use
+      // transcript discovery; partial Codex reads must never enter history.
+      if (invocation.backend === "codex") return;
       if (!invocation.turnId || !selectedThreadKey) {
         return;
       }
@@ -3895,6 +3952,19 @@ export function ThreadView(props: ThreadViewProps) {
   const launchpadRunningCodexEnvironmentSetup = Boolean(
     selectedLaunchpadCodexEnvironment?.setupScript,
   );
+  const showIntegratedTerminal = Boolean(selectedThread && !composerLaunchpad);
+  const integratedTerminal = useMemo(() => showIntegratedTerminal ? {
+    open: selectedThreadTerminalOpen,
+    running: selectedThreadTerminalRunning,
+    disabledReason: selectedThreadTerminalDisabledReason,
+    onToggle: toggleSelectedThreadTerminal,
+  } : undefined, [
+    showIntegratedTerminal,
+    selectedThreadTerminalOpen,
+    selectedThreadTerminalRunning,
+    selectedThreadTerminalDisabledReason,
+    toggleSelectedThreadTerminal,
+  ]);
   // What only one mode's composer receives. Everything both modes receive is
   // written once on the `<Composer>` below, so the two cannot drift apart.
   const composerModeProps: Partial<ComponentProps<typeof Composer>> =
@@ -4089,9 +4159,16 @@ export function ThreadView(props: ThreadViewProps) {
       ) : workspaceRecoverySlot}
       {/* Second child in both modes, so React matches it by position when
           the slot itself survives. */}
-      {composerReplacedByRecovery ? null : <Composer
+      {composerReplacedByRecovery ? (
+        <div className="composer__footer">
+          <div className="composer__application-actions" aria-label="Composer tools">
+            {integratedTerminal ? <ComposerTerminalToggle {...integratedTerminal} /> : null}
+          </div>
+        </div>
+      ) : <Composer
         backends={props.backends}
         applications={props.applications}
+        integratedTerminal={integratedTerminal}
         codexFastAllowed={props.codexFastAllowed}
         desktopApi={props.desktopApi}
         onShowNotice={props.onShowNotice}
@@ -4243,13 +4320,6 @@ export function ThreadView(props: ThreadViewProps) {
       backends={props.backends}
       onRevealSelectedThreadInList={props.onRevealSelectedThreadInList}
       titleRename={props.titleRename}
-      layout={{
-        ...headerChrome.layout,
-        terminalOpen: selectedThreadTerminalOpen,
-        terminalRunning: selectedThreadTerminalRunning,
-        terminalDisabledReason: selectedThreadTerminalDisabledReason,
-        onToggleTerminal: toggleSelectedThreadTerminal,
-      }}
       rewind={
         threadRewindSupport
           ? {
@@ -4489,6 +4559,8 @@ export function ThreadView(props: ThreadViewProps) {
             selectedThread!.questionnaireActivityLog
           }
           turnFailures={selectedThread!.turnFailureLog}
+          rewinds={selectedThread!.rewindLog}
+          rewindUndo={rewindUndo}
           activeTurnId={props.activeTurnId}
           activeTurnStartedAt={props.activeTurnStartedAt}
           applications={props.applications}
@@ -4671,6 +4743,7 @@ export function ThreadView(props: ThreadViewProps) {
   const serviceInstanceId = serviceTarget?.scope === "remote" ? serviceTarget.instanceId : undefined;
   return (
     <section
+      data-markdown-renderer-available={incrementalMarkdownRenderer ? "incremental" : "standard"}
       className={`thread-view${
         emptyView
           ? " thread-view--empty"

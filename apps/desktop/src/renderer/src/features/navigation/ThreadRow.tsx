@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -28,6 +29,7 @@ import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { PrChip } from "../pr-status/PrChip";
+import { findBranchDriftPr, type PrBranchDrift } from "../pr-status/pr-branch-drift";
 import { PrRollupChip } from "../pr-status/PrRollupChip";
 import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
@@ -99,11 +101,11 @@ type ThreadRowProps = {
   revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
   /**
-   * The rows currently selected for a sidebar batch action. This is separate
-   * from `selectedThreadKey`, which still identifies the thread open in the
-   * detail pane while the user builds a multi-selection.
+   * This row's batch selection, projected before the memo boundary so another
+   * row's selection does not render every visible row. Undefined follows the
+   * thread open in the detail pane.
    */
-  selectedThreadKeys?: ReadonlySet<string>;
+  selected?: boolean;
   subthreadCount?: number;
   subthreadsCollapsed?: boolean;
   thinkingThreadKeys?: Record<string, boolean>;
@@ -193,9 +195,7 @@ type ThreadRowProps = {
 
 export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   const threadKey = threadSummaryIdentityKey(props.thread);
-  const selected = props.selectedThreadKeys
-    ? props.selectedThreadKeys.has(threadKey)
-    : threadKey === props.selectedThreadKey;
+  const selected = props.selected ?? threadKey === props.selectedThreadKey;
   const active = threadKey === props.selectedThreadKey;
   const isComposerSource = threadKey === props.composerSourceThreadKey;
   // A thread link elsewhere in the window (a provenance chip in the
@@ -309,6 +309,32 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       .map((pr) => pr.url)
       .join("\n")
     : "";
+  // The branch chip's base drift, for the hover card of the PR on that branch:
+  // Compact and Minimal hide the branch chip, and with it the only other
+  // place the counts appear. Built from scalars so the memoized chips see one
+  // object until a count moves.
+  const gitWorking = props.thread.gitWorkingState;
+  const driftBaseBranch = gitWorking?.baseBranch;
+  const threadRepositoryKey = primaryRepositoryKey(props.thread);
+  const branchDriftPrUrl = findBranchDriftPr({
+    prs,
+    branch: props.thread.observedGitBranch?.trim() || props.thread.gitBranch,
+    baseBranch: driftBaseBranch,
+    isThreadRepository: (pr) => isThreadRepositoryPr(threadRepositoryKey, pr),
+  })?.url;
+  const driftBehind = gitWorking?.baseBehindCommitCount;
+  const driftAhead = gitWorking?.baseAheadCommitCount;
+  const branchDrift = useMemo<PrBranchDrift | undefined>(
+    () => branchDriftPrUrl && driftBaseBranch
+      ? {
+        url: branchDriftPrUrl,
+        baseBranch: driftBaseBranch,
+        behind: driftBehind,
+        ahead: driftAhead,
+      }
+      : undefined,
+    [branchDriftPrUrl, driftBaseBranch, driftBehind, driftAhead],
+  );
   const detachPr = useEventCallback((targetPr: PrSummary) =>
     props.onDetachPullRequest?.(props.thread, targetPr));
   const toggleReactionPicker = useCallback(
@@ -379,6 +405,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       hoverTimerRef.current = undefined;
     }
   };
+  // Stable for the memoized rollup chip, which arms the same prefetch.
+  const armRollupHoverPrefetch = useEventCallback(armHoverPrefetch);
+  const cancelRollupHoverPrefetch = useEventCallback(cancelHoverPrefetch);
 
   const toggleReaction = (emoji: string): void => {
     if (!props.onSetReaction) {
@@ -692,6 +721,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 prs={prs}
                 threadTitle={props.thread.title}
                 repoPrefixedUrls={repoPrefixedPrUrls}
+                branchDrift={branchDrift}
+                onHoverStart={armRollupHoverPrefetch}
+                onHoverEnd={cancelRollupHoverPrefetch}
                 onOpen={openPrStable}
                 onOpenContextMenu={
                   props.onOpenPullRequestContextMenu
@@ -776,6 +808,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
                 key={pr.url}
                 pr={pr}
                 showRepoPrefix={needsRepoPrefix(props.thread, pr, prs)}
+                branchDrift={branchDrift?.url === pr.url ? branchDrift : undefined}
                 onOpen={openPrStable}
                 onOpenContextMenu={
                   props.onOpenPullRequestContextMenu
@@ -1239,6 +1272,28 @@ function needsRepoPrefix(
   }
   const firstKey = `${prs[0]!.org}/${prs[0]!.repo}`;
   return prs.some((pr) => `${pr.org}/${pr.repo}` !== firstKey);
+}
+
+function primaryRepositoryKey(thread: NavigationThreadSummary): string | undefined {
+  const primaryRepository = parseRepositoryIdentity(thread.gitOriginUrl);
+  return primaryRepository ? repositoryIdentityKey(primaryRepository) : undefined;
+}
+
+/**
+ * Whether a PR belongs to the thread's checkout: its repository, or the fork
+ * it pushes to. Without a parseable origin, the head-branch match alone
+ * decides.
+ */
+function isThreadRepositoryPr(
+  primaryKey: string | undefined,
+  pr: PrSummary,
+): boolean {
+  if (primaryKey === undefined) {
+    return true;
+  }
+  return repositoryIdentityKey(pr) === primaryKey
+    || (pr.sourceRepository !== undefined
+      && repositoryIdentityKey(pr.sourceRepository) === primaryKey);
 }
 
 function parseRepositoryIdentity(

@@ -14,7 +14,7 @@ import { ThreadPlaceholderHeader } from "../../thread-detail/ThreadPlaceholderHe
  * The rule these tests pin — window chrome lives in ONE place per platform:
  *
  *   win32   strip:  wordmark, menu, app actions, panel toggles, Star Map, MSG
- *   linux   header: history, breadcrumb, chips, terminal
+ *   linux   header: history, breadcrumb, chips
  *   darwin  strip:  not rendered at all
  *           header: all of it
  *
@@ -24,15 +24,12 @@ import { ThreadPlaceholderHeader } from "../../thread-detail/ThreadPlaceholderHe
  * buttons, which Linux alone has to paint. macOS keeps its system menu bar and
  * its stoplights, so it keeps the header.
  *
- * The terminal toggle is the one control in the cluster that stays in the
- * header everywhere, because its state is per-thread (running dot, per-thread
- * disabled reason); putting it in a global strip would drag thread state up
- * into it.
+ * The per-thread terminal toggle lives in the composer footer on every platform.
  *
  * Checked against the pre-fix components, three of these fail: both Star Map
  * counting cases and the win32 ownership case, all because the header drew an
  * unguarded Star Map beside the strip's. The others pass there — the panel
- * toggles were already strip-owned on win32, and the terminal and the macOS
+ * toggles were already strip-owned on win32, and the macOS
  * behavior are unchanged by that fix. They are here to hold those halves of
  * the rule in place, not because they caught anything.
  *
@@ -54,10 +51,8 @@ const thread = {
 const threadLayout = {
   sidebarOpen: true,
   railOpen: false,
-  terminalOpen: false,
   onToggleSidebar: noop,
   onToggleRail: noop,
-  onToggleTerminal: noop,
 };
 
 const placeholderLayout = {
@@ -173,9 +168,9 @@ describe("painted chrome placement", () => {
     expect(header.querySelector('[aria-label="Open Star Map"]')).toBeNull();
     expect(header.querySelector(".panel-toggle")).toBeNull();
 
-    // Thread-scoped: header only, including the terminal.
-    expect(header.querySelector(".thread-header__terminal-toggle")).not.toBeNull();
-    expect(strip.querySelector(".thread-header__terminal-toggle")).toBeNull();
+    // Thread-scoped: the breadcrumb stays in the header.
+    expect(header.querySelector(".composer__terminal-toggle")).toBeNull();
+    expect(strip.querySelector(".composer__terminal-toggle")).toBeNull();
     expect(header.querySelector(".thread-header__breadcrumb")).not.toBeNull();
     },
   );
@@ -188,8 +183,8 @@ describe("painted chrome placement", () => {
     expect(screen.getAllByRole("group", { name: "Window layout" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Open Star Map" })).toHaveLength(1);
     expect(
-      screen.getByRole("button", { name: "Open integrated terminal" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: "Open integrated terminal" }),
+    ).not.toBeInTheDocument();
   });
 
   // The sidebar masthead is hidden on these platforms (app.css), so the strip
@@ -257,7 +252,7 @@ describe("painted chrome placement", () => {
     expect(document.querySelector(".app-titlebar__right")).toBeNull();
   });
 
-  it("keeps the terminal toggle in the header on every platform", () => {
+  it("leaves the terminal toggle out of the header on every platform", () => {
     for (const platform of ["win32", "darwin", "linux"]) {
       setPlatform(platform);
       render(
@@ -268,8 +263,8 @@ describe("painted chrome placement", () => {
         />,
       );
       expect(
-        screen.getByRole("button", { name: "Open integrated terminal" }),
-      ).toBeInTheDocument();
+        screen.queryByRole("button", { name: "Open integrated terminal" }),
+      ).not.toBeInTheDocument();
       cleanup();
     }
   });

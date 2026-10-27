@@ -80,6 +80,8 @@ export function useDismissableMenu<T extends HTMLElement>(
 
 export function ComposerDropdown(props: {
   ariaLabel: string;
+  /** Lets a containing menu include this trigger in its arrow-key walk. */
+  triggerRole?: "menuitem";
   /**
    * A change of this choice is in flight. The trigger disables, sets
    * `aria-busy`, and swaps its icon for the shared pending ring, so the chip
@@ -87,13 +89,19 @@ export function ComposerDropdown(props: {
    */
   busy?: boolean;
   compact?: boolean;
+  /**
+   * Give the open list the thread options menu's row density (24px rows)
+   * instead of the pickers' 40px rows. For a short list of plain names.
+   */
+  dense?: boolean;
   disabled?: boolean;
   /**
-   * A command drawn under the list, outside the listbox, such as the
-   * Environment chip's "Edit environments…". It is a button, not an option,
-   * so choosing it never changes the value.
+   * A command outside the listbox, such as the Environment chip's "Edit
+   * environments…". It is a button, not an option, so choosing it never
+   * changes the value. It sits at the end of the menu farthest from the
+   * trigger, so the pointer reaches the choices first.
    */
-  footerAction?: { label: string; icon?: ComposerDropdownIcon; onSelect: () => void };
+  menuAction?: { label: string; icon?: ComposerDropdownIcon; onSelect: () => void };
   icon?: ComposerDropdownIcon;
   /**
    * Draw the trigger as the icon alone, in a toggle-sized circle. The label
@@ -160,7 +168,8 @@ export function ComposerDropdown(props: {
     setOpen(false);
     setShowOther(false);
     onOpenChange?.(false);
-  }, [onOpenChange]);
+    if (props.triggerRole) buttonRef.current?.focus();
+  }, [onOpenChange, props.triggerRole]);
   const ref = useDismissableMenu<HTMLDivElement>(open, closeMenu);
   // Right-aligned to the trigger: it sits toward the window's right.
   const placeBelowMenu = useCallback((): void => {
@@ -204,6 +213,13 @@ export function ComposerDropdown(props: {
       firstOtherOptionRef.current?.focus();
     }
   }, [open, showingOther]);
+
+  useEffect(() => {
+    if (!open || !props.triggerRole) return;
+    const selected = ref.current?.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]');
+    const first = ref.current?.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled)');
+    (selected ?? first)?.focus();
+  }, [open, props.triggerRole, ref]);
 
   const renderOptions = (options: ComposerDropdownOption[], menuId: string, focusFirst: boolean) =>
     options.map((option, index) => {
@@ -346,11 +362,41 @@ export function ComposerDropdown(props: {
     </>
   );
 
+  // A menu opening up from the composer footer puts its last row beside the
+  // trigger, under the pointer. The command goes to the far end instead:
+  // above the list when it opens up, below it when it opens down.
+  const actionAfterList = props.menuPlacement === "below";
+  const menuActionRow = props.menuAction ? (
+    <div className="composer-dropdown__menu-action">
+      {actionAfterList ? (
+        <div aria-hidden="true" className="composer-dropdown__separator" />
+      ) : null}
+      <button
+        className="composer-dropdown__option composer-dropdown__menu-action-button"
+        type="button"
+        onClick={() => {
+          hide();
+          closeMenu();
+          props.menuAction?.onSelect();
+        }}
+      >
+        <span aria-hidden="true" className="composer-dropdown__check">
+          {props.menuAction.icon ? <props.menuAction.icon size={12} /> : null}
+        </span>
+        <span className="composer-dropdown__option-label">{props.menuAction.label}</span>
+      </button>
+      {actionAfterList ? null : (
+        <div aria-hidden="true" className="composer-dropdown__separator" />
+      )}
+    </div>
+  ) : null;
+
   return (
     <div
       className={[
         "composer-dropdown",
         props.compact ? "composer-dropdown--compact" : "",
+        props.dense ? "composer-dropdown--dense" : "",
         props.kind === "branch" ? "composer-dropdown--branch" : "",
         props.iconOnly && Icon ? "composer-dropdown--icon-only" : "",
         props.tone === "active" ? "composer-dropdown--active" : "",
@@ -361,6 +407,20 @@ export function ComposerDropdown(props: {
       ]
         .filter(Boolean)
         .join(" ")}
+      onKeyDown={props.triggerRole ? (event) => {
+        if (!open) return;
+        const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]:not(:disabled)')];
+        const at = options.indexOf(document.activeElement as HTMLButtonElement);
+        const next = event.key === "ArrowDown" ? options[(at + 1) % options.length]
+          : event.key === "ArrowUp" ? options[(at - 1 + options.length) % options.length]
+          : event.key === "Home" ? options[0]
+          : event.key === "End" ? options[options.length - 1] : undefined;
+        if (next) {
+          event.preventDefault();
+          event.stopPropagation();
+          next.focus();
+        }
+      } : undefined}
       onPointerEnter={props.onPointerEnter}
       onMouseEnter={(event) => {
         if (!open && props.tooltip) {
@@ -371,6 +431,7 @@ export function ComposerDropdown(props: {
       ref={ref}
     >
       <button
+        role={props.triggerRole}
         aria-description={props.tooltip}
         aria-describedby={visible && !open ? tooltipId : undefined}
         aria-controls={open ? listboxId : undefined}
@@ -424,37 +485,21 @@ export function ComposerDropdown(props: {
       {/* The listbox carries its own name: the trigger's label does not reach
           it through `aria-controls`, and an unnamed one is an axe
           `aria-input-field-name` failure on every dropdown in the app. */}
-      {open && (props.footerAction || props.footnote) ? (
+      {open && (props.menuAction || props.footnote) ? (
         <div
-          className={`composer-dropdown__menu composer-dropdown__menu--with-footer${
+          className={`composer-dropdown__menu${
             props.menuPlacement === "below" ? " composer-dropdown__menu--below" : ""
           }`}
           style={props.menuPlacement === "below" ? belowMenuPosition : undefined}
         >
+          {menuActionRow && !actionAfterList ? menuActionRow : null}
           <div aria-label={props.ariaLabel} id={listboxId} role="listbox">
             {listContent}
           </div>
           {props.footnote ? (
             <p className="composer-dropdown__footnote">{props.footnote}</p>
           ) : null}
-          {props.footerAction ? (
-            <div className="composer-dropdown__footer">
-              <button
-                className="composer-dropdown__option composer-dropdown__footer-action"
-                type="button"
-                onClick={() => {
-                  hide();
-                  closeMenu();
-                  props.footerAction?.onSelect();
-                }}
-              >
-                <span aria-hidden="true" className="composer-dropdown__check">
-                  {props.footerAction.icon ? <props.footerAction.icon size={12} /> : null}
-                </span>
-                <span className="composer-dropdown__option-label">{props.footerAction.label}</span>
-              </button>
-            </div>
-          ) : null}
+          {menuActionRow && actionAfterList ? menuActionRow : null}
         </div>
       ) : open ? (
         <div

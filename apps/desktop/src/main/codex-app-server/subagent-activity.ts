@@ -32,8 +32,8 @@ export function subAgentActivityToolCall(
     senderThreadId: "",
     receiverThreadIds: [report.agentThreadId],
     prompt: null,
-    model: null,
-    reasoningEffort: null,
+    model: report.model ?? null,
+    reasoningEffort: (report.reasoningEffort as CollabAgentToolCall["reasoningEffort"]) ?? null,
     agentsStates: {
       [report.agentThreadId]: {
         status: subAgentActivityAgentStatus(report.kind) as CollabAgentStatus,

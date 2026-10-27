@@ -18,7 +18,7 @@ describe("archive cleanup storage budgets", () => {
       db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run(`codex:${threadId}`, JSON.stringify({
         backend: "codex", threadId, extraLinkedDirectories: [directory], parentThreadId: "parent",
         parentThreadBackend: "acp:kimi", parentThreadInstanceId: "remote-owner",
-        immutableUsageActivities: [{ text: "contrived history".repeat(1000) }],
+        managedReviewEntries: [{ text: "contrived history".repeat(1000) }],
       }));
       sessions.upsertSession({ backendId: "acp:kimi", sessionId: threadId, title: "fixture", cwd: "/fixture/worktree",
         executionMode: "default", status: "idle", createdAt: 1, updatedAt: 2, ...(id % 2 ? { archivedAt: 3 } : {}) });
@@ -40,7 +40,7 @@ describe("archive cleanup storage budgets", () => {
       const { writes } = await measureSqliteWrites(async () => {
         const projected = await store.getArchiveCleanupOverlayStates({ backend: "codex", threadIds: ["000", "missing"] });
         expect(projected["000"]).toMatchObject({ extraLinkedDirectories: [directory], parentThreadId: "parent", parentThreadInstanceId: "remote-owner" });
-        expect(projected["000"]?.immutableUsageActivities).toBeUndefined();
+        expect(projected["000"]?.managedReviewEntries).toBeUndefined();
         expect(projected.missing).toBeUndefined();
         let after: string | undefined;
         const ids: string[] = [];

@@ -14,6 +14,7 @@ export type CodexProtocolCompatibility = {
   supportsOnFailureApprovalPolicy: boolean;
   supportsThreadScopedMcpServerStatus: boolean;
   supportsThreadRevert: boolean;
+  supportsTurnAncestry: boolean;
 };
 
 type ModernDynamicToolFunction = Extract<
@@ -72,6 +73,7 @@ export function resolveCodexProtocolCompatibility(
     supportsThreadScopedMcpServerStatus:
       isAtLeast(THREAD_SCOPED_MCP_STATUS_MIN_VERSION),
     supportsThreadRevert: isAtLeast(THREAD_REVERT_MIN_VERSION),
+    supportsTurnAncestry: isAtLeast([0, 164, 0]),
   };
 }
 

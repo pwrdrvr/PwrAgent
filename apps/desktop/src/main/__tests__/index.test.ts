@@ -3,6 +3,7 @@ import type { AgentEvent } from "@pwragent/shared";
 import { resolve } from "node:path";
 import { EventEmitter } from "node:events";
 import { performance } from "node:perf_hooks";
+import type { BrowserWindow } from "electron";
 import type {
   applyRememberedLinuxPasswordStore,
   relaunchForLinuxSecretStore,
@@ -192,9 +193,11 @@ const startMcpConnectionGatewayServiceMock = vi.fn<() => Promise<void>>();
 const closeMcpConnectionGatewayServiceMock = vi.fn<() => Promise<void>>();
 const registerMessagingRbacIpcHandlersMock = vi.fn();
 const setApplicationMenuMock = vi.fn();
+const activeProfileMenuItem = { checked: true };
 const buildFromTemplateMock = vi.fn((template: unknown) => ({
   kind: "menu",
   template,
+  getMenuItemById: () => activeProfileMenuItem,
 }));
 const shellOpenExternalMock = vi.fn(async () => undefined);
 const shellOpenPathMock = vi.fn(async () => "");
@@ -299,6 +302,9 @@ vi.mock("electron", () => ({
   BrowserWindow: {
     getAllWindows: getAllWindowsMock,
     getFocusedWindow: vi.fn(() => null),
+    fromWebContents: (contents: unknown) => getAllWindowsMock().find(
+      (window) => (window as { webContents: unknown }).webContents === contents,
+    ),
   },
   safeStorage: {
     isEncryptionAvailable: isEncryptionAvailableMock,
@@ -1662,6 +1668,85 @@ describe("bootstrapApp", () => {
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(appFocusMock).toHaveBeenCalledWith({ steal: true });
+  });
+
+  it("updates macOS profile checks without replacing the native Window menu on focus", async () => {
+    vi.stubGlobal("process", Object.create(process, { platform: { value: "darwin" } }));
+    try {
+      startupProfilerInstance.start.mockResolvedValue();
+      await import("../index");
+      await flushMicrotasks();
+      const { isFederationWindowWebContents } = await import("../window");
+      const local = Object.assign(new EventEmitter(), { webContents: { id: 101 } });
+      const remote = Object.assign(new EventEmitter(), { webContents: { id: 102 } });
+      vi.mocked(isFederationWindowWebContents).mockImplementation(
+        (contents) => contents === remote.webContents,
+      );
+      appEventHandlers.get("browser-window-created")?.({}, local);
+      appEventHandlers.get("browser-window-created")?.({}, remote);
+      setApplicationMenuMock.mockClear();
+      buildFromTemplateMock.mockClear();
+      for (const window of [local, remote, local, remote]) {
+        window.emit("focus");
+        expect(activeProfileMenuItem.checked).toBe(window === local);
+        window.emit("page-title-updated");
+      }
+      remote.emit("closed");
+      expect(setApplicationMenuMock).not.toHaveBeenCalled();
+      expect(buildFromTemplateMock).not.toHaveBeenCalled();
+      // Ordinary activation must not override an explicitly selected window.
+      getAllWindowsMock.mockReturnValue([local]);
+      createMainWindowMock.mockClear();
+      appEventHandlers.get("activate")?.();
+      expect(createMainWindowMock).not.toHaveBeenCalled();
+      expect(appFocusMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([0, 1])("raises only the last selected profile window (index %s)", async (selected) => {
+    startupProfilerInstance.start.mockResolvedValue();
+    await import("../index");
+    await flushMicrotasks();
+    const { registerWindowChannels, WINDOW_KIND_MAIN } = await import("../window-channels");
+    const { WINDOW_OPEN_SETTINGS_CHANNEL } = await import("../../shared/ipc");
+    const windows = [0, 1].map(() => Object.assign(new EventEmitter(), {
+      webContents: { isDestroyed: () => false },
+      getChildWindows: () => [],
+      isDestroyed: () => false,
+      isVisible: () => true,
+      isMinimized: () => false,
+      show: vi.fn(),
+      focus: vi.fn(),
+    }));
+    for (const window of windows) {
+      registerWindowChannels(window as unknown as BrowserWindow, WINDOW_KIND_MAIN, [WINDOW_OPEN_SETTINGS_CHANNEL]);
+      appEventHandlers.get("browser-window-created")?.({}, window);
+    }
+    // The unit suite runs on Linux too; this exercises profile selection
+    // without asking its non-macOS menu builder to inspect the fake windows.
+    windows[selected]!.emit("focus");
+    getAllWindowsMock.mockReturnValue(windows);
+    const onFocus = (startProfileFocusRequestWatcherMock.mock.calls[0] as unknown as
+      [string, { onFocus: () => void }])[1].onFocus;
+    onFocus();
+    expect(windows[selected]!.focus).toHaveBeenCalledOnce();
+    expect(windows[selected]!.show).toHaveBeenCalledOnce();
+    expect(windows[1 - selected]!.focus).not.toHaveBeenCalled();
+    expect(windows[1 - selected]!.show).not.toHaveBeenCalled();
+    if (selected === 1) {
+      windows[1]!.emit("hide");
+      for (const window of windows) {
+        window.focus.mockClear();
+        window.show.mockClear();
+      }
+      onFocus();
+      expect(windows[0]!.focus).toHaveBeenCalledOnce();
+      expect(windows[1]!.focus).not.toHaveBeenCalled();
+    }
+    getAllWindowsMock.mockReturnValue([]);
+    for (const window of windows) window.emit("closed");
   });
 
   it("prewarms the initial thread list after starting the first window", async () => {

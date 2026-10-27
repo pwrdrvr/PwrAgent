@@ -274,6 +274,9 @@ importers:
       '@peculiar/x509':
         specifier: ^2.0.0
         version: 2.2.0
+      '@pwragent/federation':
+        specifier: workspace:*
+        version: link:../../packages/federation
       '@pwragent/messaging-interface':
         specifier: workspace:*
         version: link:../../packages/messaging/interface
@@ -311,8 +314,8 @@ importers:
         specifier: ^0.1.7
         version: 0.1.7
       '@pwrdrvr/codex-app-server-protocol':
-        specifier: 0.159.2
-        version: 0.159.2
+        specifier: 0.164.0
+        version: 0.164.0
       '@pwrdrvr/codex-discovery':
         specifier: ^0.4.0
         version: 0.4.0
@@ -545,6 +548,19 @@ importers:
         specifier: ^5.0.1
         version: 5.0.2(@opentelemetry/api@1.9.1)(@types/node@24.19.0)(jsdom@30.1.1(@noble/hashes@1.8.0))(vite@7.3.7(@types/node@24.19.0)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
 
+  packages/federation:
+    dependencies:
+      '@pwragent/shared':
+        specifier: workspace:*
+        version: link:../shared
+      ws:
+        specifier: 8.22.0
+        version: 8.22.0
+    devDependencies:
+      '@types/ws':
+        specifier: 8.18.2
+        version: 8.18.2
+
   packages/messaging/interface:
     dependencies:
       '@pwragent/shared':
@@ -641,7 +657,17 @@ importers:
         specifier: ^5.0.1
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@24.19.2)(jsdom@30.1.3(@noble/hashes@1.8.0))(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.15))
 
-  packages/pwragent: {}
+  packages/pwragent:
+    devDependencies:
+      '@pwragent/federation':
+        specifier: workspace:*
+        version: link:../federation
+      '@pwragent/shared':
+        specifier: workspace:*
+        version: link:../shared
+      esbuild:
+        specifier: 0.28.1
+        version: 0.28.1
 
   packages/shared: {}
 
@@ -3063,6 +3089,10 @@ packages:
 
   '@pwrdrvr/codex-app-server-protocol@0.159.2':
     resolution: {integrity: sha512-Zj2YiLuF+pMabkXYWBxft6KXEaKtKXqiVJTrvUhRjSGI73RuzFCoEiC/nP0XBIt2QtMVHb8Yt3zlkHb4u0H9VA==}
+    engines: {node: '>=20'}
+
+  '@pwrdrvr/codex-app-server-protocol@0.164.0':
+    resolution: {integrity: sha512-5N21R7AtmB5xsJjqDuKN9vt5uYCc3nWXV/Mn4k7DqJ/xpQ5dj0LB6PKKKExaXB+wRb3faXiBCZfsFAWth4hg6g==}
     engines: {node: '>=20'}
 
   '@pwrdrvr/codex-discovery@0.4.0':
@@ -11572,6 +11602,8 @@ snapshots:
   '@pwrdrvr/codex-app-server-protocol@0.144.0': {}
 
   '@pwrdrvr/codex-app-server-protocol@0.159.2': {}
+
+  '@pwrdrvr/codex-app-server-protocol@0.164.0': {}
 
   '@pwrdrvr/codex-discovery@0.4.0':
     dependencies:

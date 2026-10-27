@@ -1,5 +1,6 @@
 import type { MessagingChannelKind } from "./messaging";
 import type { MutateThreadToolArgs } from "./thread-tools";
+import { isForgeWriteToolName } from "./forge-agent-tools";
 
 /**
  * Additive RBAC for messaging-platform actors (issue #260).
@@ -76,6 +77,9 @@ export type MessagingPermissionId =
   | "tools.thread_inspection"
   | "tools.thread_orchestration"
   | "tools.instance_management"
+  // Publishes as the operator's GitHub or GitLab account: pull and merge requests, comments,
+  // reviews, issues and merges through PwrAgent's own forge tools.
+  | "tools.forge_write"
   // Escalation-equivalent — near-complete control of the host. Danger.
   | "thread.execution.full_access"
   // Federation SCOPE. Orthogonal to every permission above: those say WHAT an
@@ -290,6 +294,14 @@ export const MESSAGING_PERMISSION_CATALOG: readonly MessagingPermissionDescripto
     danger: "med",
   },
   {
+    id: "tools.forge_write",
+    label: "Agent: change GitHub and GitLab",
+    description:
+      "Let the agent open and edit pull requests, merge requests and issues, comment, review and merge as the operator's GitHub or GitLab account.",
+    group: "tools",
+    danger: "med",
+  },
+  {
     id: "thread.execution.full_access",
     label: "Codex Full Access",
     description:
@@ -407,6 +419,7 @@ const POWER_USER_TOOLS_PERMISSIONS: MessagingPermissionId[] = [
   "tools.thread_inspection",
   "tools.thread_orchestration",
   "tools.instance_management",
+  "tools.forge_write",
 ];
 
 const CHAT_USER_PERMISSIONS: MessagingPermissionId[] = [
@@ -715,6 +728,7 @@ export function permissionForActionId(
 export type MessagingDynamicToolCategory =
   | "automation_inspection"
   | "thread_inspection"
+  | "forge"
   | "app_management"
   | "thread_orchestration"
   | "messaging_context"
@@ -735,6 +749,8 @@ export type MessagingDynamicToolCategory =
  *         status-card buttons (including the Full Access danger gate).
  *       · `attach_thread_pull_request` is a write → `tools.thread_orchestration`.
  *       · `mark_project_read` changes seen state → `thread.control.organize`.
+ *   - forge: reads → `tools.thread_inspection`; writes (pull requests,
+ *     comments, reviews, issues, merge) → `tools.forge_write`.
  *   - thread_orchestration → `tools.thread_orchestration` (inject messages, handoff, attach dirs)
  *   - app_management / automation_inspection → `tools.instance_management`
  *   - messaging_context: `get_current_messaging_surface` is benign (ungated);
@@ -765,6 +781,8 @@ export function permissionForDynamicTool(
         return "tools.thread_orchestration";
       }
       return "tools.thread_inspection";
+    case "forge":
+      return isForgeWriteToolName(tool) ? "tools.forge_write" : "tools.thread_inspection";
     case "thread_orchestration":
       return "tools.thread_orchestration";
     case "automation_inspection":
@@ -775,8 +793,11 @@ export function permissionForDynamicTool(
       if (tool === "rename_current_messaging_conversation") {
         return "thread.settings.name";
       }
-      if (tool === "attach_thread_here") {
+      if (tool === "attach_thread_here" || tool === "attach_thread_to_surface") {
         return "thread.resume";
+      }
+      if (tool === "list_messaging_surfaces") {
+        return "tools.thread_inspection";
       }
       if (tool === "send_messaging_file") {
         return "message.reply";

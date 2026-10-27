@@ -74,6 +74,64 @@ graph TB
 
 The dependency direction is one-way: `interface → shared`, `providers → interface`, `desktop → interface (+ providers via the loader)`. Enforced by `pnpm lint:boundaries` (`.dependency-cruiser.cjs`).
 
+## Retained request destinations
+
+`get_current_messaging_surface` and `attach_thread_here` describe a live inbound
+turn. A completion can retain a destination without becoming another inbound
+human message. Telegram and Slack expose read-only retained-source authorization
+and a stable bot account/workspace identity for this purpose. Providers without
+those capabilities keep their existing live-origin behavior.
+
+On an admitted human request, `SqliteMessagingRequestStore` records a bounded
+routing snapshot and advances one actor/Agent/provider/workspace/connection
+destination pointer in one transaction. It stores no message text or attachment
+bytes. Bot messages, observed-only traffic, completion events and polling never
+advance this projection. A duplicate event makes no writes. Profile-file
+identity is part of the owner namespace, so copying a database into another
+profile does not transfer attachment authority.
+
+The host carries `causalMessagingSource` through handoffs, correspondence,
+queues, monitors and dependency continuations. The immediate origin retains its
+`agent`, `sub-agent` or `pwragent` kind. Delegation captures the source before
+asynchronous setup; it does not reread a mutable parent destination on completion.
+Grouped inputs with incompatible sources are marked ambiguous instead of granting
+the last sender's authority. A restart resolves the source from the exact
+persisted turn origin and request key.
+
+`list_messaging_surfaces` returns authorized candidates ordered by descending
+human interaction time, with a separate causal recommendation, stable selectors,
+revision, route, conversation hierarchy and operation capabilities. Newer traffic
+in another channel does not change a request's causal destination.
+`attach_thread_to_surface` uses that causal source by default or an explicit
+selector. `selection: "sole_eligible"` requests bounded discovery and succeeds
+only for a complete set containing exactly one eligible destination. Unknown
+provider permissions make the count incomplete. Revoked routes never fall back
+to an unrelated surface. Attachment claims retain their result; an uncertain
+provider outcome requires reconciliation rather than another native creation.
+
+The default attachment path performs indexed point reads, never transcript
+replay, ancestry traversal, historical attachment rewrites or startup backfill.
+Source snapshots are capped at 16 KiB and descendants carry a fixed-size
+reference. Inspection uses keyset pages of at most 25 candidates plus one
+sentinel. Slack membership checks are bounded to five pages in the selected
+channel; missing scopes or an exhausted bound yield unknown authorization.
+Request and attachment boundaries have checked-in SQLite commit budgets;
+streamed output, passive delivery, polls and idle time add no provenance writes.
+CI measured three commits and 32,960 WAL bytes for one request plus attachment
+claim/outcome, two commits and 20,600 bytes for one attributed steer, and five
+commits and 160,680 bytes for an attributed monitor's entire lifecycle. At 100
+of each per day these are 3.30, 2.06 and 16.07 MB/day respectively. The monitor
+baseline is four commits and 115,360 bytes, so attribution adds one commit and
+4.53 MB/day at that rate. These are boundary costs, independent of history age
+and streamed-event count. The added empty schema increases a full database
+vacuum by eight pages (32,960 WAL bytes), with no additional vacuum commits.
+
+Federated tools route to the messaging owner, which can differ from the target
+thread owner. The `messaging_destinations` capability advertises protocol support;
+the RPC requires `messaging_route` and `thread_navigation`. The source profile
+rechecks provider admission, actor RBAC, route and remote-control authority.
+An unavailable or older owner cannot be replaced by a matching local thread ID.
+
 ## Data flow
 
 ### Inbound (user message arrives at the bot)

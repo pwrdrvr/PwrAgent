@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import type { DesktopGlabDiscoverySnapshot, GlabStatus, PrSummary } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
@@ -12,8 +15,24 @@ const execFileAsync = promisify(execFile);
 /** Concurrent `glab` subprocesses admitted at once. */
 const API_CONCURRENCY = 3;
 export class GitLabReadError extends Error {
-  constructor(readonly status: number, readonly retryAt?: number) {
-    super(status === 413 ? "GitLab response exceeds the download limit (16 MiB logs, 2 MiB metadata). Open the source URL for the full content." : `GitLab returned HTTP ${status}. Check host login, read_api permission and project/job access.`);
+  /** `reason` is GitLab's own explanation from a JSON error body, never raw CLI output. */
+  constructor(readonly status: number, readonly retryAt?: number, readonly reason?: string) {
+    super(status === 413 ? "GitLab response exceeds the download limit (16 MiB logs, 2 MiB metadata). Open the source URL for the full content." : reason ? `GitLab returned HTTP ${status}: ${reason}` : `GitLab returned HTTP ${status}. Check host login, read_api permission and project/job access.`);
+  }
+}
+
+/** GitLab's `message`/`error` field, flattened. Its shape varies by endpoint. */
+function readGitLabErrorReason(body: string): string | undefined {
+  try {
+    const payload = JSON.parse(body.slice(0, 64 * 1024)) as { message?: unknown; error?: unknown; error_description?: unknown };
+    const flatten = (value: unknown): string[] => typeof value === "string" ? [value]
+      : Array.isArray(value) ? value.flatMap(flatten)
+      : value && typeof value === "object" ? Object.entries(value).flatMap(([key, item]) => flatten(item).map((text) => `${key} ${text}`))
+      : [];
+    const reason = [...flatten(payload.message), ...flatten(payload.error), ...flatten(payload.error_description)].join("; ");
+    return reason ? reason.slice(0, 600) : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -117,9 +136,18 @@ export type GitLabPrFetcherOptions = {
   run?: (command: string, args: string[]) => Promise<string>;
   resolveRepos?: typeof resolveGitLabReposForDirectory;
   tryTakeRequestToken?: () => boolean;
+  /** Attachment uploads only; every other request goes through glab. */
+  fetch?: typeof fetch;
 };
 
-/** Credentials remain owned by glab. Never include raw subprocess output in errors. */
+export type GitLabWriteMethod = "POST" | "PUT" | "DELETE";
+
+/**
+ * Credentials remain owned by glab, with one exception: GitLab uploads are
+ * multipart, which `glab api` cannot send, so `uploadProjectFile` reads the
+ * host's token for that one request. Never include raw subprocess output in
+ * errors.
+ */
 export class GitLabPrFetcher {
   private readonly failures = new Map<string, string>();
 
@@ -131,6 +159,8 @@ export class GitLabPrFetcher {
   private readonly statuses = new Map<string, { at: number; pending: Promise<GlabStatus> }>();
   private readonly requests = new Map<string, Promise<unknown>>();
   private requestSequence = 0;
+  private activeWrites = 0;
+  private readonly tokens = new Map<string, { at: number; token: string }>();
   private readonly options: GitLabPrFetcherOptions;
 
   constructor(options: GitLabPrFetcherOptions = {}) {
@@ -145,6 +175,8 @@ export class GitLabPrFetcher {
   invalidate(): void {
     this.discovery = undefined;
     this.statuses.clear();
+    // A re-check follows a sign-in change; never upload with the previous account's token.
+    this.tokens.clear();
   }
 
   private discover(): Promise<DesktopGlabDiscoverySnapshot> {
@@ -159,6 +191,104 @@ export class GitLabPrFetcher {
 
   async isAvailable(): Promise<boolean> {
     return Boolean((await this.discover()).selectedCommand);
+  }
+
+  /**
+   * First-party merge request, note and issue changes. Endpoints are built by
+   * the forge tool client, never taken from agent arguments. The JSON body
+   * travels in a private temp file, so it never appears in process arguments.
+   * Writes are not coalesced: two identical requests are two changes.
+   */
+  async writeApi<T>(host: string, endpoint: string, method: GitLabWriteMethod, body: unknown, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
+    if (!/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i.test(host) || host === "github.com") throw new Error("Invalid GitLab hostname.");
+    const command = (await this.discover()).selectedCommand;
+    if (!command) throw new Error("GitLab CLI is unavailable. Install glab or select its path in Settings → Git.");
+    if (this.activeWrites >= API_CONCURRENCY) throw new Error("GitLab request concurrency limit reached.");
+    if (this.options.tryTakeRequestToken && !this.options.tryTakeRequestToken()) throw new Error("PR status refresh budget is temporarily exhausted.");
+    this.activeWrites++;
+    let dir: string | undefined;
+    try {
+      dir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-glab-"));
+      const file = path.join(dir, "body.json");
+      await fs.writeFile(file, JSON.stringify(body ?? {}), { encoding: "utf8", mode: 0o600 });
+      const args = ["api", "--hostname", host, "--method", method, "--include", "--header", "Content-Type: application/json", "--input", file, endpoint];
+      let stdout = "";
+      let answered = true;
+      try {
+        stdout = this.options.run
+          ? await this.options.run(command, args)
+          : (await execFileAsync(command, args, {
+            env: { ...buildPwrAgentChildProcessEnv(process.env), GLAB_CHECK_UPDATE: "0", GLAB_SEND_SURVEY: "0", GIT_TERMINAL_PROMPT: "0" },
+            signal, timeout: 30_000, maxBuffer: FORGE_JSON_MAX_BYTES + 64 * 1024, encoding: "utf8",
+          })).stdout;
+      } catch (error) {
+        // glab exits nonzero on an HTTP error but still prints the response.
+        stdout = error && typeof error === "object" && "stdout" in error && typeof error.stdout === "string" ? error.stdout : "";
+        answered = /^HTTP\//i.test(stdout);
+      }
+      // Raw CLI output can carry credentials, so a failure without a response is reported without it.
+      if (!answered) throw new Error(`GitLab request failed on ${host}. Check glab login, api permission, project access, and connectivity.`);
+      const status = stdout.match(/^HTTP\/[\d.]+ (\d{3})[^\r\n]*\r?\n/i);
+      const boundary = stdout.match(/\r?\n\r?\n/);
+      const responseBody = boundary ? stdout.slice(boundary.index! + boundary[0].length) : stdout;
+      const code = status ? Number(status[1]) : 200;
+      if (code >= 400) {
+        const header = boundary ? stdout.slice(0, boundary.index) : stdout;
+        const reset = Number(header.match(/^(?:ratelimit-reset|x-ratelimit-reset):\s*(\d+)/im)?.[1]) * 1000;
+        throw new GitLabReadError(code, code === 429 ? Math.max(Date.now() + 60_000, reset || 0) : undefined, readGitLabErrorReason(responseBody));
+      }
+      return (responseBody.trim() ? JSON.parse(responseBody) : null) as T;
+    } finally {
+      this.activeWrites--;
+      if (dir) await fs.rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  /** The host's token, for the multipart upload glab cannot send. Cached briefly, never logged. */
+  private async readToken(host: string): Promise<string | undefined> {
+    const cached = this.tokens.get(host);
+    if (cached && Date.now() - cached.at < 5 * 60_000) return cached.token;
+    const command = (await this.discover()).selectedCommand;
+    if (!command) return undefined;
+    const run = async (args: string[]): Promise<string> => {
+      if (this.options.run) {
+        try { return await this.options.run(command, args); } catch { return ""; }
+      }
+      try {
+        const output = await execFileAsync(command, args, { env: { ...buildPwrAgentChildProcessEnv(process.env), GLAB_CHECK_UPDATE: "0", GLAB_SEND_SURVEY: "0" }, timeout: 10_000, encoding: "utf8" });
+        return `${output.stdout}\n${output.stderr}`;
+      } catch (error) {
+        return error && typeof error === "object" && "stderr" in error && typeof error.stderr === "string" ? error.stderr : "";
+      }
+    };
+    let token: string | undefined = (await run(["config", "get", "token", "--host", host])).trim().split(/\s+/)[0];
+    if (!token) token = (await run(["auth", "status", "--hostname", host, "--show-token"])).match(/Token:\s*(\S+)/i)?.[1];
+    if (!token || /[^\w.-]/.test(token)) return undefined;
+    this.tokens.set(host, { at: Date.now(), token });
+    return token;
+  }
+
+  /** Upload one file to a project's uploads, returning the Markdown link target GitLab assigns. */
+  async uploadProjectFile(host: string, projectPath: string, file: { data: Uint8Array; name: string }, signal?: AbortSignal): Promise<{ url: string }> {
+    signal?.throwIfAborted();
+    if (!/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i.test(host) || host === "github.com") throw new Error("Invalid GitLab hostname.");
+    if (this.options.tryTakeRequestToken && !this.options.tryTakeRequestToken()) throw new Error("PR status refresh budget is temporarily exhausted.");
+    const token = await this.readToken(host);
+    if (!token) throw new GitLabReadError(401, undefined, `glab has no token for ${host} to upload attachments. Sign in with glab auth login.`);
+    const form = new FormData();
+    form.append("file", new Blob([new Uint8Array(file.data)]), file.name);
+    const timeout = AbortSignal.timeout(120_000);
+    const response = await (this.options.fetch ?? fetch)(`https://${host}/api/v4/projects/${encodeURIComponent(projectPath)}/uploads`, {
+      method: "POST", body: form, redirect: "error",
+      headers: { Authorization: `Bearer ${token}` },
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    });
+    const text = (await response.text()).slice(0, 64 * 1024);
+    if (!response.ok) throw new GitLabReadError(response.status, undefined, readGitLabErrorReason(text));
+    const url = (JSON.parse(text) as { url?: unknown }).url;
+    if (typeof url !== "string" || !url.startsWith("/")) throw new Error("GitLab did not return the uploaded file's link.");
+    return { url };
   }
 
   /** Fixed, read-only endpoints constructed by first-party adapters, never agent-supplied URLs. */

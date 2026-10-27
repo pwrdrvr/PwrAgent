@@ -74,7 +74,10 @@ export type ProviderCandidateSummary = Readonly<{
 
 export type ProviderProjection = Readonly<{
   provider: ProviderId;
+  /** Executable discovery dependencies; launch arguments do not change these. */
   dependencyFingerprint: string;
+  /** Includes Codex launch arguments so runtime changes still reconnect at idle. */
+  runtimeFingerprint?: string;
   configured: Readonly<{
     enabled: boolean;
     commandOverride?: string;
@@ -182,14 +185,6 @@ export function normalizeConfigDomains(params: {
         ? true
         : config.acpAgents?.[provider]?.enabled !== false;
       const dependencyFingerprint = providerDependencyFingerprint({
-        configOverrides: provider === "codex"
-          ? config.models?.codex?.configOverrides
-          : undefined,
-        // Only what Codex launches with. Models and rates are PwrAgent's own
-        // reads and must not reconnect Codex.
-        codexModelProviders: provider === "codex"
-          ? config.models?.codex?.providers?.map((entry) => `${entry.id}\u0000${entry.name}\u0000${entry.baseUrl}`)
-          : undefined,
         commandOverride,
         enabled,
         managedBuilds:
@@ -216,6 +211,26 @@ export function normalizeConfigDomains(params: {
       const projection: ProviderProjection = {
         provider,
         dependencyFingerprint,
+        ...(provider === "codex"
+          ? {
+              runtimeFingerprint: providerDependencyFingerprint({
+                commandOverride,
+                enabled,
+                provider,
+                configOverrides: config.models?.codex?.configOverrides,
+                // Ordinary model lists and rates do not change a launch. An
+                // isolated compatibility runtime also owns its model catalog.
+                codexModelProviders: config.models?.codex?.providers?.map(
+                  (entry) => `${entry.id}\u0000${entry.name}\u0000${entry.baseUrl}`
+                    + (entry.compatibility ? `\u0000${JSON.stringify({
+                        compatibility: entry.compatibility,
+                        models: entry.models,
+                        catalogPath: entry.catalogPath,
+                      })}` : ""),
+                ),
+              }),
+            }
+          : {}),
         configured: {
           enabled,
           ...(commandOverride ? { commandOverride } : {}),

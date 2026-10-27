@@ -26,6 +26,14 @@ describe("Sandboxer contract", () => {
     expect(mcpConnectionIdsForNewThread([{ ...connection, selectForNewThreads: true, enabled: false }])).toEqual([]);
   });
 
+  it("uses OAuth readiness for hosted Sandboxer without inferring account allowance", () => {
+    const hosted = { ...connection, authMode: "oauth" as const, serverUrl: "https://sandboxer.com/mcp", sandboxerCliState: undefined };
+    expect(describeMcpConnectionAuth(hosted)).toMatchObject({ label: "Signed in", canSignIn: true });
+    expect(resolveMcpConnectionSetup({ connection: hosted, gatewayEnabled: true })).toMatchObject({ state: "ready", threadSelectable: true });
+    expect(resolveMcpConnectionSetup({ connection: { ...hosted, configured: false, state: "disconnected" }, gatewayEnabled: true })).toMatchObject({ state: "not_authorized", threadSelectable: false });
+    expect(resolveMcpConnectionSetup({ connection: { ...hosted, state: "reauthorization_required" }, gatewayEnabled: true })).toMatchObject({ state: "login_required", threadSelectable: false });
+  });
+
   it("shows actionable CLI states without OAuth claims", () => {
     for (const [sandboxerCliState, headline, configured] of [
       ["cli_missing", "CLI missing", false], ["not_signed_in", "Not signed in", false],

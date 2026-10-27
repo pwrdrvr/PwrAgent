@@ -721,6 +721,40 @@ describe("grouped queued steering", () => {
     queue.close();
   });
 
+  it.each(["source", "ambiguous"] as const)("clears stale %s provenance when replacement removes the last attributed contribution", async (kind) => {
+    const queue = new ThreadTurnQueue({ isThreadActive: () => true, startTurn: async (entry) => result(entry) });
+    const sender = senderEntry("alice");
+    const attributed = { ...sender, messageOrigin: { ...sender.messageOrigin,
+      ...(kind === "source"
+        ? { causalMessagingSource: { ownerId: "profile", requestId: "old-request", surfaceSelector: "old-topic" } }
+        : { causalMessagingAmbiguous: true }),
+    } };
+    const first = await queue.submitGroupedSteer(attributed);
+    const updated = queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "unrelated replacement" }],
+      sender.messageOrigin.sourceThread, sender.messageOrigin);
+    expect(updated?.agentMessages?.[0]?.origin).toEqual(sender.messageOrigin);
+    expect(updated?.messageOrigin?.causalMessagingSource).toBeUndefined();
+    expect(updated?.messageOrigin?.causalMessagingAmbiguous).toBeUndefined();
+    expect(queue.getQueuedEntries(target)[0]?.messageOrigin).toEqual(updated?.messageOrigin);
+    queue.close();
+  });
+
+  it("recomputes a replaced batch from the remaining sender's provenance", async () => {
+    const queue = new ThreadTurnQueue({ isThreadActive: () => true, startTurn: async (entry) => result(entry) });
+    const alice = senderEntry("alice");
+    const bob = senderEntry("bob");
+    const source = { ownerId: "profile", requestId: "bob-request", surfaceSelector: "bob-topic" };
+    const first = await queue.submitGroupedSteer({ ...alice, messageOrigin: { ...alice.messageOrigin,
+      causalMessagingSource: { ...source, requestId: "alice-request", surfaceSelector: "alice-topic" } } });
+    await queue.submitGroupedSteer({ ...bob, messageOrigin: { ...bob.messageOrigin, causalMessagingSource: source } });
+    expect(queue.getQueuedEntries(target)[0]?.messageOrigin?.causalMessagingAmbiguous).toBe(true);
+    const updated = queue.replaceQueuedAgentInput(first.entry.id, [{ type: "text", text: "same request as Bob" }],
+      alice.messageOrigin.sourceThread, { ...alice.messageOrigin, causalMessagingSource: source });
+    expect(updated?.messageOrigin?.causalMessagingSource).toEqual(source);
+    expect(updated?.messageOrigin?.causalMessagingAmbiguous).toBeUndefined();
+    queue.close();
+  });
+
   it("preserves an operator-edited steer when a new sender arrives", async () => {
     const queue = new ThreadTurnQueue({ isThreadActive: () => true, startTurn: async (entry) => result(entry) });
     const first = await queue.submitGroupedSteer(senderEntry("alice"));

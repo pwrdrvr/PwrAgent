@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { mastheadAction } from "./fixtures/window-chrome";
 import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 
 const threadMarkdownSpecDir = path.dirname(fileURLToPath(import.meta.url));
@@ -29,6 +30,20 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
     // Resource Timing omits file:// modules. Debugger.enable also reports
     // scripts parsed before attachment, including an already-loaded renderer.
     await cdp.send("Debugger.enable");
+
+    // Startup may already have opened the replay thread. Leave it explicitly
+    // so the assertions below exercise a fresh transcript mount in either case.
+    await mastheadAction(app.window, "New thread").click();
+    await expect(app.window.getByRole("heading", { level: 2, name: "New thread" }))
+      .toBeVisible();
+    await expect(app.window.getByRole("heading", { name: "Transcript heading 1", exact: true }))
+      .toHaveCount(0);
+
+    // Wait for the provider's committed context before mounting the transcript.
+    // A parsed chunk alone does not prove the provider has adopted it, and
+    // settled documents keep the renderer they mounted with until text changes.
+    await expect(app.window.locator(".thread-view[data-markdown-renderer-available]"))
+      .toHaveAttribute("data-markdown-renderer-available", incrementalEnabled ? "incremental" : "standard");
 
     await app.window
       .getByRole("button", { name: /Markdown replay thread/i })
@@ -66,24 +81,25 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
     for (const heading of headingLocators) {
       await expect(heading).toBeVisible();
     }
-    const headingStyles = await Promise.all(
-      headingLocators.map((heading) =>
-        heading.evaluate((element) => {
-          const styles = getComputedStyle(element);
-          return {
-            fontSize: Number.parseFloat(styles.fontSize),
-            fontStyle: styles.fontStyle,
-          };
-        })
-      )
-    );
-    for (let index = 1; index < headingStyles.length; index += 1) {
-      expect(headingStyles[index - 1].fontSize).toBeGreaterThan(
-        headingStyles[index].fontSize
-      );
-    }
-    expect(headingStyles[4].fontStyle).toBe("italic");
-    expect(headingStyles[5].fontStyle).toBe("italic");
+    // Read all six heading styles from one snapshot of the current DOM.
+    await expect.poll(async () => {
+      const styles = await transcript.evaluate(readTranscriptHeadingStyles);
+      return {
+        found: styles.filter(Boolean).length,
+        sizesDecrease: styles.every((style, index) =>
+          style !== null
+          && (index === 0 || styles[index - 1]!.fontSize > style.fontSize)
+        ),
+        h5FontStyle: styles[4]?.fontStyle,
+        h6FontStyle: styles[5]?.fontStyle,
+        styles,
+      };
+    }).toMatchObject({
+      found: 6,
+      sizesDecrease: true,
+      h5FontStyle: "italic",
+      h6FontStyle: "italic",
+    });
     await expect(transcript.getByText("Preserves file links")).toBeVisible();
     await expect(transcript).toContainText("Keeps");
     await expect(transcript).toContainText("inert");
@@ -93,4 +109,22 @@ async function assertMarkdownRendering(incrementalEnabled: boolean) {
   } finally {
     await app.close();
   }
+}
+
+function readTranscriptHeadingStyles(transcript: Element) {
+  return [1, 2, 3, 4, 5, 6].map((level) => {
+    const heading = Array.from(
+      transcript.querySelectorAll(`h${level}.transcript-message__heading`)
+    ).find((element) =>
+      element.textContent?.includes(`Transcript heading ${level}`)
+    );
+    if (!heading) {
+      return null;
+    }
+    const styles = getComputedStyle(heading);
+    return {
+      fontSize: Number.parseFloat(styles.fontSize),
+      fontStyle: styles.fontStyle,
+    };
+  });
 }

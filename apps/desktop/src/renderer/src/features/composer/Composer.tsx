@@ -123,6 +123,7 @@ import {
   CloseIcon,
   FileCodeIcon,
   FolderIcon,
+  HistoryIcon,
   LightningIcon,
   MoreVerticalIcon,
   PauseIcon,
@@ -245,6 +246,10 @@ import {
 } from "./composer-image-files";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
+import {
+  ComposerTerminalToggle,
+  type ComposerTerminalToggleProps,
+} from "./ComposerTerminalToggle";
 import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./EnvironmentSetupRow";
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
@@ -392,6 +397,12 @@ export type ComposerProps = {
     federationTarget?: FederationTarget;
     text: string;
     imageAttachments?: NavigationLaunchpadImageAttachment[];
+    /**
+     * `rewound-prompt` marks the composer with a Rewound prompt chip until it
+     * is cleared. `rewound-prompt-undone` takes that prompt back out, parked
+     * in the recovery journal, once its rewind is undone; `text` is ignored.
+     */
+    kind?: "rewound-prompt" | "rewound-prompt-undone";
   };
   /**
    * Focus the input once this composer shows the named thread and can take
@@ -565,6 +576,7 @@ export type ComposerProps = {
   providerCommands?: AppServerAvailableCommandSummary[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
+  integratedTerminal?: ComposerTerminalToggleProps;
   workspaceActionsBlocked?: boolean;
   /** Opens Settings → Environments on this workspace. Omitted, or for a
    *  thread whose environment runs on another machine, the Environment menu
@@ -4289,6 +4301,21 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.reviewRequest, props.disabled, props.thread?.id, props.thread?.source, composerRequestOwner]);
   const appliedDraftRestoreId = useRef<number | undefined>(undefined);
+  // The scope a rewound prompt was put back in. The chip goes once the
+  // composer is cleared, after the prompt showed, or moves to another thread.
+  const [rewoundPromptScope, setRewoundPromptScope] = useState<string>();
+  const rewoundPromptShownRef = useRef(false);
+  const composerHasContent = draft.trim().length > 0 || imageAttachments.length > 0;
+  useEffect(() => {
+    if (rewoundPromptScope === undefined) return;
+    if (rewoundPromptScope !== composerScopeKey) {
+      setRewoundPromptScope(undefined);
+    } else if (composerHasContent) {
+      rewoundPromptShownRef.current = true;
+    } else if (rewoundPromptShownRef.current) {
+      setRewoundPromptScope(undefined);
+    }
+  }, [composerHasContent, composerScopeKey, rewoundPromptScope]);
   useEffect(() => {
     const restore = props.draftRestore;
     if (!restore || appliedDraftRestoreId.current === restore.id) {
@@ -4304,6 +4331,22 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     }
     if (props.disabled) return;
     appliedDraftRestoreId.current = restore.id;
+    if (restore.kind === "rewound-prompt-undone") {
+      // The prompt is back in the transcript; sending this copy would send
+      // it twice. Only a composer still marked with the chip holds it.
+      if (rewoundPromptScope !== composerScopeKey) return;
+      abandonComposerDraftSnapshot(composerScopeKey);
+      pendingProgrammaticComposerChangeRef.current = {
+        expectedDraft: "",
+        expectedSkillTokensSignature: getComposerSkillTokensSignature([]),
+        staleDraft: draft,
+        staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+      };
+      setComposerDraftFromCanonical("");
+      setImageAttachments([]);
+      setRewoundPromptScope(undefined);
+      return;
+    }
     // A draft in progress is parked in the recovery journal, where ArrowUp
     // brings it back, rather than overwritten by the restored prompt.
     abandonComposerDraftSnapshot(composerScopeKey);
@@ -4321,6 +4364,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     };
     setComposerDraftFromCanonical(restore.text);
     setImageAttachments(restore.imageAttachments ?? []);
+    rewoundPromptShownRef.current = false;
+    setRewoundPromptScope(restore.kind === "rewound-prompt" ? composerScopeKey : undefined);
     requestAnimationFrame(() => inputRef.current?.focus());
     // The helpers are recreated each render; the id guard applies once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -11187,7 +11232,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         ? props.launchpad.directoryPath
         : props.thread?.codexEnvironmentRuntime?.cwd ?? threadWorkspace?.sourcePath;
   const onEditEnvironments = props.onEditEnvironments;
-  const environmentFooterAction = environmentEditPath && onEditEnvironments
+  const environmentMenuAction = environmentEditPath && onEditEnvironments
     ? {
         label: "Edit environments…",
         icon: PencilIcon,
@@ -14561,15 +14606,16 @@ export const Composer = memo(function Composer(props: ComposerProps) {
 
       </fieldset>
       <div className="composer__footer">
-        <fieldset
-          className="composer__pending-controls composer__pending-controls--dim"
-          disabled={preparingSend}
-        >
         {launchpadCodexEnvironmentOptions.length > 0 ||
         threadCodexEnvironmentOptions.length > 0 ||
         props.thread?.codexEnvironmentRuntime ||
-        (workspaceOpenPath && (editorApplication || terminalApplication)) ? (
+        (workspaceOpenPath && (editorApplication || terminalApplication)) ||
+        (props.thread && !props.launchpad && props.integratedTerminal) ? (
           <div className="composer__application-actions" aria-label="Composer tools">
+            <fieldset
+              className="composer__pending-controls composer__pending-controls--dim"
+              disabled={preparingSend}
+            >
             {props.launchpad && launchpadCodexEnvironmentOptions.length > 0 ? (
               <ComposerDropdown
                 ariaLabel="Environment"
@@ -14578,8 +14624,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                   && props.environmentSetup.status === "running"
                 }
                 compact
+                dense
                 disabled={launchpadSubmitting}
-                footerAction={environmentFooterAction}
+                menuAction={environmentMenuAction}
                 icon={FileCodeIcon}
                 value={props.launchpad.codexEnvironmentId ?? ""}
                 options={[
@@ -14609,8 +14656,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 ariaLabel="Environment"
                 busy={threadEnvironmentBusy}
                 compact
+                dense
                 disabled={!props.desktopApi?.setCodexThreadEnvironment}
-                footerAction={environmentFooterAction}
+                menuAction={environmentMenuAction}
                 icon={FileCodeIcon}
                 value={threadEnvironmentValue}
                 options={[
@@ -14704,6 +14752,15 @@ export const Composer = memo(function Composer(props: ComposerProps) {
               </div>
             ) : null}
 
+            </fieldset>
+            {/* Panel visibility stays interactive through send preparation. */}
+            {props.thread && !props.launchpad && props.integratedTerminal ? (
+              <ComposerTerminalToggle {...props.integratedTerminal} />
+            ) : null}
+            <fieldset
+              className="composer__pending-controls composer__pending-controls--dim"
+              disabled={preparingSend}
+            >
             {workspaceOpenPath && editorApplication ? (
               <ComposerApplicationButton
                 application={editorApplication}
@@ -14718,13 +14775,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                 onOpen={openWorkspaceApplication}
               />
             ) : null}
+            </fieldset>
           </div>
         ) : (
           <span aria-hidden="true" className="composer__footer-spacer" />
         )}
-
-        </fieldset>
         <div className="composer__actions">
+          {rewoundPromptScope === composerScopeKey ? (
+            <span className="composer__rewound-chip">
+              <HistoryIcon size={12} />
+              Rewound prompt
+            </span>
+          ) : null}
           <ContextWindowMoon
             contextWindow={props.contextWindow}
             onOpenUsage={props.desktopApi?.openUsageActivity

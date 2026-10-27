@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AppServerNotification,
+  AppServerPendingRequestNotification,
   AppServerThreadSummary,
   AppServerTurnInputItem,
   DesktopHelperModelSettings,
@@ -14,10 +15,13 @@ import type { JsonRpcTransport } from "@pwrdrvr/agent-transport";
 import { pullRequestReviewPrompt, pullRequestReviewUrl } from "../../shared/__tests__/fixtures/pull-request-review";
 import gitBudgets from "./fixtures/git-subprocess-budgets.json";
 import navigationListingBudgets from "./fixtures/navigation-listing-budgets.json";
+import { nativeCodexMcpApprovalFixture } from "./fixtures/native-codex-mcp-approval";
+import { buildAutomationMcpConsent } from "../mcp-connections/mcp-approval-consent";
 import type { InitializeResponse } from "@pwrdrvr/codex-app-server-protocol";
 import type {
   ConfigWriteResponse,
   DynamicToolSpec,
+  ItemStartedNotification,
   Model,
   ModelListResponse,
   ThreadArchiveResponse,
@@ -116,6 +120,8 @@ class MockTransport implements JsonRpcTransport {
     Array<{ code: number; message: string }>
   >();
   static threadItemsListResultByRequest = new Map<string, unknown>();
+  static threadItemsReadResult: unknown = { data: [] };
+  static threadItemsReadError: { code: number; message: string } | undefined;
   static threadItemsListTransientErrorsByRequest = new Map<
     string,
     Array<{ code: number; message: string }>
@@ -228,6 +234,9 @@ class MockTransport implements JsonRpcTransport {
   static threadSettingsUpdateError: string | undefined;
 
   readonly sentMessages: string[] = [];
+  readonly itemResponseBytes: number[] = [];
+  captureHistoryResponses = false;
+  readonly historyResponses: Array<{ method: string; bytes: number }> = [];
   mcpServerStatusResponse?: () => void;
   readonly options?: unknown;
   closeCount = 0;
@@ -938,6 +947,16 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/items/read") {
+      const response = JSON.stringify({ jsonrpc: "2.0", id: payload.id,
+        ...(MockTransport.threadItemsReadError ? { error: MockTransport.threadItemsReadError }
+          : { result: MockTransport.threadItemsReadResult }),
+      });
+      this.itemResponseBytes.push(Buffer.byteLength(response));
+      this.messageHandler(response);
+      return;
+    }
+
     if (
       payload.method === "thread/items/list"
       || payload.method === "thread/turns/items/list"
@@ -959,16 +978,16 @@ class MockTransport implements JsonRpcTransport {
         );
         return;
       }
-      this.messageHandler(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          id: payload.id,
-          result:
-            MockTransport.threadItemsListResultByRequest.get(
-              `${threadId}:${turnId}:${cursor}`,
-            ) ?? { data: [], nextCursor: null, backwardsCursor: null },
-        }),
-      );
+      const response = JSON.stringify({
+        jsonrpc: "2.0",
+        id: payload.id,
+        result:
+          MockTransport.threadItemsListResultByRequest.get(
+            `${threadId}:${turnId}:${cursor}`,
+          ) ?? { data: [], nextCursor: null, backwardsCursor: null },
+      });
+      this.itemResponseBytes.push(Buffer.byteLength(response));
+      this.messageHandler(response);
       return;
     }
 
@@ -1415,7 +1434,16 @@ class MockTransport implements JsonRpcTransport {
   }
 
   setMessageHandler(handler: (message: string) => void): void {
-    this.messageHandler = handler;
+    this.messageHandler = (message) => {
+      if (this.captureHistoryResponses) {
+        const response = JSON.parse(message);
+        const request = this.sentMessages.map((sent) => JSON.parse(sent)).findLast((sent) => sent.id === response.id);
+        if (["thread/read", "thread/turns/list", "thread/items/list", "thread/items/read", "thread/turns/items/list"].includes(request?.method)) {
+          this.historyResponses.push({ method: request.method, bytes: Buffer.byteLength(message) });
+        }
+      }
+      handler(message);
+    };
   }
 
   setCloseHandler(handler: (error?: Error) => void): void {
@@ -1465,6 +1493,77 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it.each([
+    { version: "0.164.0", parentTurnId: "parent", rootTurnId: "root", expected: { parentTurnId: "parent", rootTurnId: "root" } },
+    { version: "0.164.0", parentTurnId: "parent", expected: { parentTurnId: "parent" } },
+    { version: "0.164.0", expected: {} },
+    { version: "0.163.0", parentTurnId: "parent", rootTurnId: "root", expected: {} },
+    { version: "unknown", parentTurnId: "parent", rootTurnId: "root", expected: {} },
+  ])("serializes delegation attribution for $version: $expected", async ({ version, parentTurnId, rootTurnId, expected }) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverVersion = version;
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      await client.startTurn({ threadId: "child", input: [{ type: "text", text: "Work" }], parentTurnId, rootTurnId });
+      const request = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)))
+        .findLast((message) => message.method === "turn/start");
+      expect(Object.fromEntries(Object.entries(request.params).filter(([key]) => ["parentTurnId", "rootTurnId"].includes(key))))
+        .toEqual(expected);
+    } finally { await client.close(); }
+  });
+
+  it.each(["root", null, undefined])("reads the exact parent root from metadata pages: %s", async (rootTurnId) => {
+    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    MockTransport.threadTurnsListResultByRequest.set("source:", {
+      data: [{ id: "unrelated", rootTurnId: "wrong-root" }], nextCursor: "older",
+    });
+    MockTransport.threadTurnsListResultByRequest.set("source:older", {
+      data: [{ id: "parent", rootTurnId }], nextCursor: null,
+    });
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      expect(await client.readTurnRoot({ threadId: "source", turnId: "parent" })).toBe(rootTurnId ?? undefined);
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.filter((request) => request.method === "thread/turns/list").map((request) => request.params.itemsView))
+        .toEqual(["notLoaded", "notLoaded"]);
+      expect(requests.some((request) => request.method === "thread/items/list")).toBe(false);
+      const replay = extractThreadReplayFromReadResult({ thread: { turns: [{
+        id: "parent", rootTurnId, items: [{ type: "userMessage", id: "user", content: [{ type: "text", text: "Work" }] }],
+      }] } });
+      expect(replay.entries[0]?.turn?.rootTurnId).toBe(rootTurnId);
+    } finally { await client.close(); }
+  });
+
+  it("keeps exact ancestry from live turns without a history lookup", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      await client.getInitializeResult();
+      const transport = MockTransport.instances.at(-1)!;
+      const observed = new Promise<void>((resolve) => client.onNotification((event) => {
+        if (event.method === "turn/started") resolve();
+      }));
+      transport.emitInbound({ method: "turn/started", params: {
+        threadId: "source", turn: { id: "parent", rootTurnId: "original-root" },
+      } });
+      await observed;
+      expect(await client.readTurnRoot({ threadId: "source", turnId: "parent" })).toBe("original-root");
+      const methods = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message).method));
+      expect(methods).not.toContain("thread/turns/list");
+    } finally { await client.close(); }
+  });
+
+  it("does not read ancestry from older servers", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverVersion = "0.163.0";
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      expect(await client.readTurnRoot({ threadId: "source", turnId: "parent" })).toBeUndefined();
+      const methods = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message).method));
+      expect(methods).not.toContain("thread/turns/list");
+    } finally { await client.close(); }
+  });
+
   it.each([false, true])("applies the compaction model before compacting (already loaded: %s)", async (alreadyLoaded) => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient();
@@ -1979,6 +2078,8 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadTurnsListResultByRequest.clear();
     MockTransport.threadTurnsListTransientErrorsByRequest.clear();
     MockTransport.threadItemsListResultByRequest.clear();
+    MockTransport.threadItemsReadResult = { data: [] };
+    MockTransport.threadItemsReadError = undefined;
     MockTransport.threadItemsListTransientErrorsByRequest.clear();
     MockTransport.threadStartErrors = [];
     MockTransport.threadStartResult = {
@@ -3015,7 +3116,7 @@ describe("CodexAppServerClient", () => {
     db.raw.transaction(() => {
       for (const id of ids) db.raw.prepare("INSERT INTO threads(thread_id, payload) VALUES (?, ?)").run(`codex:${id}`, JSON.stringify({
         backend: "codex", threadId: id, model: "fixture-model", extraLinkedDirectories: [],
-        immutableUsageActivities: [{ text: "contrived history ".repeat(1_000) }],
+        managedReviewEntries: [{ text: "contrived history ".repeat(1_000) }],
       }));
     })();
     const transport = MockTransport.instances.at(-1)!;
@@ -6586,6 +6687,229 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it.each([3, 100])("reads an exact %i-command group in canonical order with experimental opt-in", async (count) => {
+    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    const threadId = "bounded-thread";
+    const turnId = "bounded-turn";
+    const ids = Array.from({ length: count }, (_, index) => `command-${index}`);
+    const requestedIds = [ids[0], ...ids.slice(1).reverse()];
+    const items = ids.map((id) => ({ id, type: "commandExecution", command: id,
+      aggregatedOutput: `${id} output`, status: "completed", exitCode: 0,
+    }));
+    const expected = extractThreadReplayFromReadResult({ thread: { id: threadId, turns: [{ id: turnId, items }] } }, { threadId });
+    const first = expected.entries.find((entry) => entry.type === "activity")!;
+    MockTransport.threadItemsReadResult = { data: items.map((item, index) => ({
+      turnId, item, startedAtMs: 1000 + index, completedAtMs: 2000 + index,
+    })) };
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const entry = await client.readThreadActivity({ threadId, turnId, entryId: first.id, itemIds: requestedIds });
+      expect(entry).toEqual(first);
+      expect(entry.itemIds).toEqual(ids);
+      const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+      expect(requests.find((request) => request.method === "initialize").params.capabilities.experimentalApi).toBe(true);
+      expect(requests.filter((request) => request.method === "thread/items/read").map((request) => request.params))
+        .toEqual([{ threadId, turnId, itemIds: requestedIds }]);
+      expect(requests.some((request) => ["thread/items/list", "thread/read", "thread/turns/list"].includes(request.method))).toBe(false);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each(["unavailable", "missing", "wrong-turn", "duplicate", "unexpected-item", "non-command", "malformed"])(
+    "falls back to complete turn items for %s bounded responses", async (scenario) => {
+      const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+      const threadId = "fallback-thread";
+      const turnId = "fallback-turn";
+      const items = ["one", "two"].map((id) => ({ id, type: "commandExecution", command: id,
+        aggregatedOutput: `${id} output`, status: "completed", exitCode: 0,
+      }));
+      const expected = extractThreadReplayFromReadResult({ thread: { id: threadId, turns: [{ id: turnId, items }] } }, { threadId }).entries[0];
+      const data = items.map((item) => ({ turnId, item: { ...item }, startedAtMs: null, completedAtMs: null }));
+      if (scenario === "unavailable") MockTransport.threadItemsReadError = { code: -32601, message: "Method not found" };
+      if (scenario === "missing") data.pop();
+      if (scenario === "wrong-turn") data[0].turnId = "other-turn";
+      if (scenario === "duplicate") data[1] = data[0];
+      if (scenario === "unexpected-item") data[1].item.id = "unrequested";
+      if (scenario === "non-command") data[1].item.type = "agentMessage";
+      MockTransport.threadItemsReadResult = scenario === "malformed" ? { data: null } : { data };
+      MockTransport.threadItemsListResultByRequest.set(`${threadId}:${turnId}:`, {
+        data: items.map((item) => ({ turnId, item })), nextCursor: null, backwardsCursor: null,
+      });
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        expect(await client.readThreadActivity({ threadId, turnId, entryId: expected.id, itemIds: ["one", "two"] })).toEqual(expected);
+        const methods = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message).method);
+        expect(methods.filter((method) => method === "thread/items/read")).toHaveLength(1);
+        expect(methods.filter((method) => method === "thread/items/list")).toHaveLength(1);
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it.each([
+    { name: "empty", ids: [] },
+    { name: "duplicate", ids: ["one", "one"] },
+    { name: "over 100", ids: Array.from({ length: 101 }, (_, index) => `item-${index}`) },
+  ])(
+    "uses turn pagination for $name item IDs", async ({ ids }) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      MockTransport.threadItemsListResultByRequest.set("limit-thread:limit-turn:", {
+        data: [{ turnId: "limit-turn", item: { id: "one", type: "commandExecution", command: "one", status: "completed" } }],
+        nextCursor: null, backwardsCursor: null,
+      });
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        await client.readThreadActivity({ threadId: "limit-thread", turnId: "limit-turn", entryId: "activity-one", itemIds: ids });
+        expect(MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message).method)).not.toContain("thread/items/read");
+      } finally {
+        await client.close();
+      }
+    },
+  );
+
+  it.each([10, 100, 1000])("measures command expansion response bytes in a synthetic %i-item turn", async (count) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadId = "synthetic-thread";
+    const turnId = "synthetic-turn";
+    const data = Array.from({ length: count }, (_, index) => ({ turnId,
+      item: index % 2 === 0 ? {
+        type: "commandExecution", id: `item-${index}`, pluginId: null, scriptPath: null,
+        command: "synthetic command", cwd: "/fixture", processId: null, source: "agent", status: "completed",
+        commandActions: [], aggregatedOutput: "x".repeat(16_384), exitCode: 0, durationMs: 100,
+      } : { type: "agentMessage", id: `item-${index}`, text: "Group boundary", phase: "commentary",
+        memoryCitation: null, delivery: null, questions: null },
+      startedAtMs: 1000 + index, completedAtMs: 1100 + index,
+    }));
+    for (let offset = 0; offset < count; offset += 100) {
+      MockTransport.threadItemsListResultByRequest.set(`${threadId}:${turnId}:${offset || ""}`, {
+        data: data.slice(offset, offset + 100), nextCursor: offset + 100 < count ? String(offset + 100) : null, backwardsCursor: null,
+      });
+    }
+    MockTransport.threadItemsReadResult = { data: [data[0]] };
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const request = { threadId, turnId, entryId: "activity-item-0" };
+      const before = await client.readThreadActivity(request);
+      const transport = MockTransport.instances.at(-1)!;
+      const baseline = { requests: transport.itemResponseBytes.length, responseBytes: transport.itemResponseBytes.reduce((sum, bytes) => sum + bytes, 0) };
+      transport.itemResponseBytes.length = 0;
+      expect(await client.readThreadActivity({ ...request, itemIds: ["item-0"] })).toEqual(before);
+      const bounded = { requests: transport.itemResponseBytes.length, responseBytes: transport.itemResponseBytes.reduce((sum, bytes) => sum + bytes, 0) };
+      expect(baseline.requests).toBe(Math.ceil(count / 100));
+      expect(bounded.requests).toBe(1);
+      expect(bounded.responseBytes).toBeLessThan(baseline.responseBytes / 5);
+      console.info("Codex item-detail synthetic bytes", JSON.stringify({ items: count, baseline, bounded }));
+    } finally {
+      await client.close();
+    }
+  });
+
+  it.each(["exact", "unavailable", "missing", "wrong-turn", "wrong-item", "non-command", "malformed", "duplicate", "legacy"])(
+    "isolates a middle invocation from its undiscovered command group (%s)", async (scenario) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const threadId = "unloaded-thread";
+      const turnId = "unloaded-turn";
+      const items = ["before", "target", "after"].map((id) => ({ id, type: "commandExecution", command: id,
+        aggregatedOutput: `${id} output`, status: "completed", exitCode: 0,
+      }));
+      const exact = { turnId, item: items[1], startedAtMs: 1000, completedAtMs: 2000 };
+      MockTransport.threadItemsReadResult = { data: [exact] };
+      if (scenario === "unavailable" || scenario === "legacy") MockTransport.threadItemsReadError = { code: -32601, message: "Method not found" };
+      if (scenario === "missing") MockTransport.threadItemsReadResult = { data: [] };
+      if (scenario === "wrong-turn") MockTransport.threadItemsReadResult = { data: [{ ...exact, turnId: "other" }] };
+      if (scenario === "wrong-item") MockTransport.threadItemsReadResult = { data: [{ ...exact, item: items[0] }] };
+      if (scenario === "non-command") MockTransport.threadItemsReadResult = { data: [{ ...exact, item: { id: "target", type: "agentMessage", text: "wrong" } }] };
+      if (scenario === "malformed") MockTransport.threadItemsReadResult = { data: null };
+      if (scenario === "duplicate") MockTransport.threadItemsReadResult = { data: [exact, exact] };
+      if (scenario === "legacy") {
+        for (const cursor of ["", "more"]) {
+          MockTransport.threadItemsListTransientErrorsByRequest.set(`${threadId}:${turnId}:${cursor}`, [{ code: -32601, message: "Method not found" }]);
+        }
+      }
+      MockTransport.threadItemsListResultByRequest.set(`${threadId}:${turnId}:`, {
+        data: items.slice(0, 2).map((item) => ({ turnId, item })), nextCursor: "more", backwardsCursor: null,
+      });
+      MockTransport.threadItemsListResultByRequest.set(`${threadId}:${turnId}:more`, {
+        data: [{ turnId, item: items[2] }], nextCursor: null, backwardsCursor: null,
+      });
+      const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+      try {
+        const details = await client.readThreadToolInvocation({ threadId, turnId, itemId: "target" });
+        expect(details).toHaveLength(1);
+        expect(details[0].command).toMatchObject({ displayCommand: "target", output: "target output" });
+        const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
+        expect(requests.find((request) => request.method === "initialize").params.capabilities.experimentalApi).toBe(true);
+        expect(requests.filter((request) => request.method === "thread/items/read").map((request) => request.params))
+          .toEqual([{ threadId, turnId, itemIds: ["target"] }]);
+        expect(requests.some((request) => ["thread/read", "thread/turns/list"].includes(request.method))).toBe(false);
+        expect(requests.filter((request) => request.method === "thread/items/list")).toHaveLength(scenario === "exact" ? 0 : 2);
+        expect(requests.filter((request) => request.method === "thread/turns/items/list")).toHaveLength(scenario === "legacy" ? 2 : 0);
+      } finally { await client.close(); }
+    },
+  );
+
+  it("surfaces invocation read errors without hiding them behind history reads", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadItemsReadError = { code: -32000, message: "Owner read failed" };
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      await expect(client.readThreadToolInvocation({ threadId: "thread", turnId: "turn", itemId: "target" })).rejects.toThrow("Owner read failed");
+      expect(MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message).method)).not.toContain("thread/items/list");
+    } finally { await client.close(); }
+  });
+
+  it.each([20, 200, 1000])("measures unloaded invocation reads against paging %i synthetic older turns", async (turns) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadId = "unloaded-synthetic";
+    const history = Array.from({ length: turns }, (_, index) => ({
+      id: `turn-${index}`, status: "completed", itemsView: "full",
+      items: ["before", "target", "after"].map((suffix) => ({
+        id: `item-${index}-${suffix}`, type: "commandExecution", command: `synthetic ${suffix}`,
+        status: "completed", exitCode: 0, aggregatedOutput: "x".repeat(1024),
+      })),
+    }));
+    MockTransport.readThreadResultByThreadId.set(threadId, { thread: { id: threadId, turns: [] } });
+    for (let offset = 0; offset < turns; offset += 20) {
+      MockTransport.threadTurnsListResultByRequest.set(`${threadId}:${offset || ""}`, {
+        data: history.slice(offset, offset + 20), nextCursor: offset + 20 < turns ? String(offset + 20) : null, backwardsCursor: null,
+      });
+    }
+    const target = history.at(-1)!;
+    MockTransport.threadItemsReadResult = { data: [{ turnId: target.id, item: target.items[1], startedAtMs: null, completedAtMs: null }] };
+    MockTransport.threadItemsListResultByRequest.set(`${threadId}:${target.id}:`, {
+      data: target.items.map((item) => ({ turnId: target.id, item })), nextCursor: null, backwardsCursor: null,
+    });
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    try {
+      const transport = MockTransport.instances.at(-1)!;
+      transport.captureHistoryResponses = true;
+      let before: string | undefined;
+      do {
+        const replay = await client.readThread({ threadId, limit: 20, before });
+        before = replay.pagination.previousCursor;
+      } while (before);
+      const totals = () => ({ requests: transport.historyResponses.length,
+        responseBytes: transport.historyResponses.reduce((sum, response) => sum + response.bytes, 0) });
+      const baseline = totals();
+      transport.historyResponses.length = 0;
+      const request = { threadId, turnId: target.id, itemId: target.items[1].id };
+      const details = await client.readThreadToolInvocation(request);
+      const direct = totals();
+      transport.historyResponses.length = 0;
+      MockTransport.threadItemsReadError = { code: -32601, message: "Method not found" };
+      expect(await client.readThreadToolInvocation(request)).toEqual(details);
+      const fallback = totals();
+      expect(baseline.requests).toBe(turns / 10);
+      expect(direct.requests).toBe(1);
+      expect(fallback.requests).toBe(2);
+      expect(direct.responseBytes).toBeLessThan(baseline.responseBytes / 20);
+      expect(fallback.responseBytes).toBeLessThan(baseline.responseBytes / 10);
+      console.info("Unloaded invocation synthetic bytes", JSON.stringify({ turns, commandsPerTurn: 3, outputBytesPerCommand: 1024, baseline, direct, fallback }));
+    } finally { await client.close(); }
+  });
+
   it("falls back to the legacy Codex turn item list method", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const threadId = "thread-legacy-item-list";
@@ -9135,7 +9459,8 @@ describe("CodexAppServerClient", () => {
           status: "completed",
           items: [
             { type: "subAgentActivity", id: "started-review", kind: "started",
-              agentThreadId: "worker-review", agentPath: "/root/review_savers" },
+              agentThreadId: "worker-review", agentPath: "/root/review_savers",
+              model: "resolved-model", reasoningEffort: "high" },
             { type: "subAgentActivity", id: "completed-review", kind: "completed",
               agentThreadId: "worker-review", agentPath: "/root/review_savers" },
           ],
@@ -9153,7 +9478,7 @@ describe("CodexAppServerClient", () => {
           id: "started-review",
           label: "Started review_savers",
           command: expect.objectContaining({ subAgent: expect.objectContaining({
-            origin: "codex-native", operation: "spawn",
+            origin: "codex-native", operation: "spawn", model: "resolved-model", reasoningEffort: "high",
             agents: [{ threadId: "worker-review", name: "review_savers", status: "running" }],
           }) }),
         }),
@@ -15865,6 +16190,37 @@ describe("CodexAppServerClient", () => {
       }
     });
 
+    await client.close();
+  });
+
+  it.each([1, 2])("does not infer native approval identity from %i preceding MCP tool items", async (itemCount) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
+    await client.getInitializeResult();
+    const wire = nativeCodexMcpApprovalFixture();
+    const requests: AppServerPendingRequestNotification[] = [];
+    client.onRequest((request) => {
+      requests.push(request);
+      return buildAutomationMcpConsent({ request, serverNames: ["fixture-server"], toolAllowlist: ["lookup"] })
+        ?? { action: "cancel", content: null, _meta: null };
+    });
+    const transport = MockTransport.instances.at(-1)!;
+    for (let index = 0; index < itemCount; index += 1) {
+      const params: ItemStartedNotification = {
+        threadId: "fixture-thread", turnId: "fixture-turn", startedAtMs: 1_700_000_000_000,
+        item: {
+          type: "mcpToolCall", id: `fixture-call-${index}`, server: "fixture-server", tool: index === 0 ? "lookup" : "write",
+          status: "inProgress", arguments: { id: "fixture" }, appContext: null, mcpAppUi: null,
+          pluginId: null, readOnlyHint: null, result: null, error: null, durationMs: null,
+        },
+      };
+      transport.emitInbound({ jsonrpc: "2.0", method: "item/started", params });
+    }
+    transport.emitInbound({ jsonrpc: "2.0", ...wire });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(requests).toEqual([{ method: wire.method, params: { ...wire.params, requestId: "41" } }]);
+    expect(transport.sentMessages.map((message) => JSON.parse(message)).find((message) => message.id === 41))
+      .toEqual({ jsonrpc: "2.0", id: 41, result: { action: "cancel", content: null, _meta: null } });
     await client.close();
   });
 

@@ -2,10 +2,12 @@
  * Model providers that Codex runs threads on besides its default provider.
  *
  * A provider is an OpenAI Responses-compatible endpoint (Refuseless, a second
- * OpenAI API key, a local llama.cpp server). PwrAgent gives it to the single
+ * OpenAI API key, a local llama.cpp server). PwrAgent gives it to a
  * Codex App Server as a `model_providers.<id>` table and pins a thread to it
  * with `thread/start.modelProvider`. Codex then reports `Thread.modelProvider`
  * on every read.
+ * Ordinary providers share the primary runtime. Bonsai compatibility runs in
+ * a separate client and process so its catalog and feature limits stay local.
  *
  * Every PwrAgent surface names one of these models with a qualified id,
  * `@<provider>/<model>`. Codex model ids never start with `@`, so the prefix
@@ -53,6 +55,10 @@ export type CodexModelProviderSettings = {
   /** Declared to cost nothing, as for a local server. Overrides rates. */
   local?: boolean;
   rates?: CodexModelProviderRate[];
+  /** A dedicated Codex process with the local Bonsai Responses bridge and limits. */
+  compatibility?: "bonsai";
+  /** Optional user-authored catalog template; never a Codex session or database. */
+  catalogPath?: string;
 };
 
 /** Settings snapshot form: whether a key is stored, never the key. */
@@ -64,7 +70,7 @@ export type DesktopCodexModelProvider = CodexModelProviderSettings & {
 export type CodexModelProviderTestResult = {
   /** `GET /models`. */
   models: { ok: boolean; count: number; error?: string };
-  /** One short `POST /responses`, the only wire format Codex speaks. */
+  /** A completed text response to a short request with instructions and namespaced tools. */
   responses: { ok: boolean; model?: string; skipped?: boolean; error?: string };
   latencyMs?: number;
 };
@@ -97,6 +103,8 @@ export type CodexModelProviderImportCandidate = {
   /** Settings the import leaves behind, such as custom HTTP headers. */
   notes: string[];
   sources: CodexModelProviderImportSource[];
+  compatibility?: "bonsai";
+  catalogPath?: string;
 };
 
 /** A provider, or a whole file, that cannot be imported, and why. */
@@ -104,6 +112,8 @@ export type CodexModelProviderImportSkip = {
   /** Absent when the whole file could not be read. */
   sourceId?: string;
   name?: string;
+  /** Normalized endpoint when omitted compatibility settings block import. */
+  baseUrl?: string;
   reason: string;
   sources: CodexModelProviderImportSource[];
 };
@@ -305,6 +315,21 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
         : (() => {
             throw new Error(`${label}.rates must be a list of at most ${CODEX_MODEL_PROVIDER_MODEL_LIMIT} rates.`);
           })();
+    if (entry.compatibility !== undefined && entry.compatibility !== "bonsai") {
+      throw new Error(`${label}.compatibility must be bonsai.`);
+    }
+    // Repair earlier endpoint-only Bonsai imports without changing unrelated providers.
+    const compatibility = entry.compatibility ?? (
+      isLoopbackCodexBaseUrl(baseUrl) && models?.length === 1 && /bonsai.*\.gguf$/iu.test(models[0])
+        ? "bonsai" : undefined
+    );
+    if (compatibility && (!isLoopbackCodexBaseUrl(baseUrl) || models?.length !== 1)) {
+      throw new Error(`${label}: Bonsai compatibility needs a loopback endpoint and exactly one model.`);
+    }
+    if (entry.catalogPath !== undefined && (!compatibility || typeof entry.catalogPath !== "string"
+      || !entry.catalogPath.trim().endsWith(".json") || entry.catalogPath.length > 4096 || /[\0\r\n]/u.test(entry.catalogPath))) {
+      throw new Error(`${label}.catalogPath needs Bonsai compatibility and a valid catalog path.`);
+    }
     return {
       id,
       name,
@@ -313,6 +338,8 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
       ...(typeof entry.discoverModels === "boolean" ? { discoverModels: entry.discoverModels } : {}),
       ...(entry.local === true ? { local: true } : {}),
       ...(rates?.length ? { rates } : {}),
+      ...(compatibility ? { compatibility: "bonsai" as const } : {}),
+      ...(typeof entry.catalogPath === "string" ? { catalogPath: entry.catalogPath.trim() } : {}),
     };
   });
 }

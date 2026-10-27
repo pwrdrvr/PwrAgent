@@ -317,7 +317,8 @@ describe("turn end read budget", () => {
   }, 60_000);
 
   // Each display read rebuilds the thread's whole display: Token Miser
-  // accounting, every sub-agent card, the overlay, and tool accounting. A
+  // accounting, the sub-agent cards its pricing lines name, the overlay, and
+  // tool accounting. No read lists every card. A
   // renderer refresh after a turn end therefore asks for every loaded turn
   // and every loaded Pricing row in one read each, not in 256-turn chunks and
   // 20-row pages.
@@ -328,6 +329,7 @@ describe("turn end read budget", () => {
     await endTurn(internals);
     const builds = {
       cardLists: vi.spyOn(store, "listThreadSubAgents"),
+      cardReads: vi.spyOn(store, "getThreadSubAgents"),
       overlays: vi.spyOn(store, "getThreadOverlayState"),
       tokenMiser: vi.spyOn(
         registry as unknown as { withTokenMiserAccounting(...args: unknown[]): unknown },
@@ -366,7 +368,7 @@ describe("turn end read budget", () => {
   it("serves a renderer refresh with one display build per resource for a small and a large thread", async () => {
     const small = await measureRendererRefresh(20);
     const large = await measureRendererRefresh(2_000);
-    expect(small).toEqual({ cardLists: 2, overlays: 2, tokenMiser: 2, toolAccounting: 2 });
+    expect(small).toEqual({ cardLists: 0, cardReads: 2, overlays: 2, tokenMiser: 2, toolAccounting: 2 });
     expect(large).toEqual(small);
   }, 60_000);
 

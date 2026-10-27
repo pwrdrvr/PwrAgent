@@ -1,3 +1,4 @@
+import { TodoDispatchProvider } from "./features/thread-todos/TodoDispatchProvider";
 import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared";
 import { FederationShutdownNotices } from "./features/notifications/FederationShutdownNotices";
 import { AgentThreadRenameNotice } from "./features/notifications/AgentThreadRenameNotice";
@@ -4037,6 +4038,7 @@ function DesktopAppShell(props: {
   return (
     <FederationDisplayLabelsProvider health={liveFederationHealth}>
     <ThreadTodoCountsContext.Provider value={threadTodoController.openByThreadKey}>
+    <TodoDispatchProvider api={desktopApi} backends={backendSummaries.backends} todos={threadTodoController.openTodos}>
     <OperatorWaitsContext.Provider value={operatorWaitsContext}>
     <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
     <ThreadProvidersContext.Provider value={threadProviders}>
@@ -4121,6 +4123,7 @@ function DesktopAppShell(props: {
           threadLensesEmpty={navigation.threadLensesEmpty}
           creatingThread={navigation.creatingThread}
           pagedNavigation={navigation.pagedNavigation}
+          pagesAwaitingRows={navigation.pagesAwaitingRows}
           selectedThreadDirectoryKeys={navigation.pagedNavigation.selectedDirectoryKeys}
           directories={navigation.directories}
           error={navigation.error}
@@ -4308,9 +4311,8 @@ function DesktopAppShell(props: {
           onSetDirectoryThreadsCollapsed={
             navigation.setDirectoryThreadsCollapsed
           }
-          onRemoveDirectory={(directory) => {
-            void navigation.removeDirectory(directory.key);
-          }}
+          onRemoveDirectory={(directory) =>
+            navigation.removeDirectory(directory.key)}
           onPrefetchPullRequests={pullRequests.prefetch}
           onPrefetchGitWorkingState={gitWorkingState.prefetch}
           onDetachPullRequest={detachThreadPullRequest}
@@ -4667,6 +4669,7 @@ function DesktopAppShell(props: {
     </ThreadProvidersContext.Provider>
     </ThreadDependencyIndicatorsContext.Provider>
     </OperatorWaitsContext.Provider>
+    </TodoDispatchProvider>
     </ThreadTodoCountsContext.Provider>
     </FederationDisplayLabelsProvider>
   );

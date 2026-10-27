@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared";
 import { turnUsageEntryTurnId } from "@pwragent/shared";
 import { formatElapsedMs } from "../../lib/format-duration";
+import { isRewindMarkerEntry } from "./rewind-marker-entries";
 
 export type TranscriptRenderItem =
   | {
@@ -492,6 +493,7 @@ function isWorkPhaseEntry(
   if (entry.type === "activity") {
     return (
       !isTerminalTurnFailureActivity(entry) &&
+      !isRewindMarkerEntry(entry) &&
       !isFileDiffActivity(entry) &&
       !isTokenUsageActivity(entry)
     );
@@ -515,6 +517,7 @@ export function isConcreteWorkEntry(
     entry.type === "plan" ||
     (entry.type === "activity" &&
       !isTerminalTurnFailureActivity(entry) &&
+      !isRewindMarkerEntry(entry) &&
       !isFileDiffActivity(entry) &&
       !isTokenUsageActivity(entry))
   );

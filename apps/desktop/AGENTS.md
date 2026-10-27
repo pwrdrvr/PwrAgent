@@ -786,11 +786,16 @@ Density is `<html data-density>`: absent for Mission Control, `compact`, or
   of every PR. Add `--essential` only to a chip that is waiting on the
   operator.
 - **X-ray** (`lib/xray-mode.ts`): holding ⌘ (Ctrl off macOS) sets
-  `<html data-xray>`, which every density rule excludes, so the rows show all
-  chips. A double press, or the badge's pin, keeps it on.
+  `<html data-xray>` and lifts one row into a card with every chip
+  (`features/navigation/xray-spy-card.ts`): the row under the pointer, or
+  else the selected row if it is on screen. The lifted shell gets
+  `data-xray-target`, which every density rule excludes, and keeps its own
+  height, so no other row moves and the list never scrolls. Lifting every
+  row pushed the selected thread out of sight. A double press, or the
+  badge's pin, keeps X-ray on.
 - **Previews.** The Settings and onboarding density pickers render real
   `ThreadRow`s, inert, inside `.density-preview--<density>`. Write each density
-  rule twice: the `:root[data-density="…"]:not([data-xray]) … :not(.density-preview *)`
+  rule twice: the `:root[data-density="…"] … :not(:is(.density-preview, [data-xray-target]) *)`
   half and the `.density-preview--… ` half.
   `styles/__tests__/density-contract.test.ts` fails when a rule lacks either.
 

@@ -93,6 +93,13 @@ when available; otherwise it accepts that request once. An unattended run never
 creates an `always` grant. Upstream MCP questions and URL/login flows still need
 interaction and are cancelled in headless runs.
 
+For interactive Codex threads, **Allow all tools** also accepts native MCP tool
+approval requests for the exact managed bridge currently registered to the
+active thread. The connection must still be enabled, configured and selected.
+PwrAgent rechecks selection and bridge identity after reading policy and accepts
+only that invocation, without creating a Codex conversation or permanent grant.
+Input forms, upstream confirmations and OAuth URL requests remain interactive.
+
 Arguments are validated before requesting approval. After approval, the owner
 broker lists the tools again, compares the revision, validates the arguments and
 calls the original upstream name. Revisions bind the tool definition to the

@@ -1,4 +1,13 @@
-import { FORGE_KINDS, type ForgeKind } from "@pwragent/shared";
+import {
+  DEFAULT_FORGE_AGENT_TOOL_POLICY,
+  FORGE_AGENT_TOOL_GROUPS,
+  FORGE_AGENT_TOOL_GROUP_LABELS,
+  FORGE_KINDS,
+  forgeAgentToolAccessLevels,
+  type ForgeAgentToolAccess,
+  type ForgeAgentToolGroup,
+  type ForgeKind,
+} from "@pwragent/shared";
 import type { ComponentProps } from "react";
 import { useState, type ReactNode } from "react";
 import {
@@ -17,6 +26,7 @@ import {
   type GhStatus,
   type ThreadTodoMergeMethod,
 } from "@pwragent/shared";
+import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useNavigationSettingsPreview, isNavigationPreviewCancelled } from "../../lib/navigation-settings-preview";
 import {
@@ -60,9 +70,47 @@ const DEFAULT_PAUSE_PR_AUTO_DISPATCH_WHEN_BUDGET_EMPTY_VALUE = {
   source: "default" as const,
 };
 
+const DEFAULT_AGENT_TOOLS_VALUE = {
+  enabled: { value: DEFAULT_FORGE_AGENT_TOOL_POLICY.enabled, source: "default" as const },
+  access: Object.fromEntries(
+    FORGE_AGENT_TOOL_GROUPS.map((group) => [group, { value: DEFAULT_FORGE_AGENT_TOOL_POLICY.access[group], source: "default" as const }]),
+  ) as Record<ForgeAgentToolGroup, { value: ForgeAgentToolAccess; source: "default" }>,
+};
+
 const DEFAULT_MERGE_METHOD_VALUE = {
   value: DEFAULT_THREAD_TODO_MERGE_METHOD,
   source: "default" as const,
+};
+
+const FORGE_TOOL_ACCESS_LABELS: Record<ForgeAgentToolAccess, string> = {
+  allow: "Allow",
+  auto: "Auto",
+  ask: "Ask",
+  off: "Off",
+};
+
+const FORGE_TOOL_ACCESS_DESCRIPTIONS: Record<ForgeAgentToolAccess, string> = {
+  allow: "Runs without asking.",
+  auto: "Runs in Codex Auto and Full Access threads. Asks otherwise.",
+  ask: "Always asks.",
+  off: "Removes these tools from threads.",
+};
+
+// Approving and merging cannot be taken back, so Auto waits for Full Access.
+const FORGE_TOOL_APPROVE_MERGE_AUTO_DESCRIPTION = "Asks unless the thread has Full Access.";
+
+function forgeToolAccessDescription(group: ForgeAgentToolGroup, level: ForgeAgentToolAccess): string {
+  return group === "approve_merge" && level === "auto"
+    ? FORGE_TOOL_APPROVE_MERGE_AUTO_DESCRIPTION
+    : FORGE_TOOL_ACCESS_DESCRIPTIONS[level];
+}
+
+const FORGE_TOOL_GROUP_SUBS: Record<ForgeAgentToolGroup, string> = {
+  read: "Pull requests, diffs, files, reviews, review threads, issues, CI runs and logs.",
+  pull_requests: "Open, edit, close and reopen pull and merge requests, mark ready or draft, labels, attachments.",
+  comments: "Comment, reply to review comments, comment-only reviews, resolve threads.",
+  issues: "Open, edit, close and label issues.",
+  approve_merge: "Approving or requesting changes in a review, and merging a pull or merge request.",
 };
 
 const MERGE_METHOD_OPTIONS: Array<{ label: string; value: ThreadTodoMergeMethod }> = [
@@ -86,6 +134,8 @@ export function GitSettings(props: {
     enabled: boolean,
   ) => Promise<void>;
   onDefaultMergeMethodChange: (method: ThreadTodoMergeMethod) => Promise<void>;
+  onAgentToolsEnabledChange: (enabled: boolean) => Promise<void>;
+  onAgentToolAccessChange: (group: ForgeAgentToolGroup, access: ForgeAgentToolAccess) => Promise<void>;
   onRefresh: () => Promise<void>;
   /** Nav sub-route: the section slug to scroll to on arrival. */
   focusSectionId?: string;
@@ -122,6 +172,7 @@ export function GitSettings(props: {
   const defaultPrAutoDispatchEnabled =
     props.snapshot.git?.defaultPrAutoDispatchEnabled ??
     DEFAULT_PR_AUTO_DISPATCH_ENABLED_VALUE;
+  const agentTools = props.snapshot.git?.agentTools ?? DEFAULT_AGENT_TOOLS_VALUE;
   const defaultMergeMethod =
     props.snapshot.git?.defaultMergeMethod ??
     DEFAULT_MERGE_METHOD_VALUE;
@@ -483,6 +534,51 @@ export function GitSettings(props: {
             value={defaultMergeMethod.value}
             onChange={(method) => props.onDefaultMergeMethodChange(method)}
           />
+        </div>
+      </SettingsSection>
+      <SettingsSection
+        eyebrow="Git"
+        title="Agent forge tools"
+        description="PwrAgent's own tools let agents read and change GitHub pull requests, GitLab merge requests and issues in their thread's repository. They use your gh or glab sign-in, and no GitHub App or connector is involved."
+        chip={agentTools.enabled.value ? "On" : "Off"}
+        chipKind={agentTools.enabled.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <ToggleField
+            checked={agentTools.enabled.value}
+            disabled={props.saving}
+            label="Offer forge tools to threads"
+            sub="Off hides every tool, including CI reads. A turn that already holds one gets a refusal naming this setting."
+            source={sourceBadge(agentTools.enabled)}
+            onChange={(enabled) => props.onAgentToolsEnabledChange(enabled)}
+          />
+          {FORGE_AGENT_TOOL_GROUPS.map((group) => {
+            const access = agentTools.access[group];
+            return (
+              <SettingsField
+                key={group}
+                label={FORGE_AGENT_TOOL_GROUP_LABELS[group]}
+                sub={FORGE_TOOL_GROUP_SUBS[group]}
+                source={sourceBadge(access)}
+                control={
+                  <Select
+                    aria-label={`${FORGE_AGENT_TOOL_GROUP_LABELS[group]} access`}
+                    className="settings-select settings-select--chip"
+                    disabled={props.saving || !agentTools.enabled.value}
+                    value={access.value}
+                    options={forgeAgentToolAccessLevels(group).map((level) => ({
+                      value: level,
+                      label: FORGE_TOOL_ACCESS_LABELS[level],
+                      description: forgeToolAccessDescription(group, level),
+                    }))}
+                    onChange={(value) => {
+                      void props.onAgentToolAccessChange(group, value);
+                    }}
+                  />
+                }
+              />
+            );
+          })}
         </div>
       </SettingsSection>
     </SettingsSectionStack>

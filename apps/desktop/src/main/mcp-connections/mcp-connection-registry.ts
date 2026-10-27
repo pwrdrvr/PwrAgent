@@ -6,6 +6,9 @@ import {
   PWRSNAP_MCP_CONNECTION_ID,
   PWRGIT_MCP_CONNECTION_ID,
   SANDBOXER_MCP_CONNECTION_ID,
+  SANDBOXER_MCP_URL,
+  isSandboxerTransport,
+  type SandboxerTransport,
   isBuiltInMcpConnectionId,
   isMcpConnectionToolApproval,
   MCP_STDIO_ENV_NAME_PATTERN,
@@ -191,6 +194,7 @@ export class McpConnectionRegistry {
         applyTomlEdits(source, [toolApproval === (connectionId === SANDBOXER_MCP_CONNECTION_ID ? "approve" : "auto")
           ? { op: "delete", path }
           : { op: "set", path, value: toolApproval }]),
+        connectionId === SANDBOXER_MCP_CONNECTION_ID,
       );
       return this.get(connectionId)!;
     }
@@ -251,12 +255,13 @@ export class McpConnectionRegistry {
   }
 
   private sandboxerConnection(table = this.readConnectionsTable()): McpConnectionRecord {
+    const transport = readSandboxerTransport(table);
     return {
       id: SANDBOXER_MCP_CONNECTION_ID,
       displayName: "Sandboxer",
-      // A built-in identity, never fetched or accepted by the URL form.
-      serverUrl: "sandboxer:compute",
-      authMode: "local_cli",
+      // Keep the built-in identity across both transports.
+      serverUrl: transport === "hosted" ? SANDBOXER_MCP_URL : "sandboxer:compute",
+      authMode: transport === "hosted" ? "oauth" : "local_cli",
       kind: "sandboxer",
       sandboxerRole: "compute",
       enabled: table?.sandboxer_enabled === true,
@@ -269,9 +274,18 @@ export class McpConnectionRegistry {
     };
   }
 
+  setSandboxerTransport(transport: SandboxerTransport): McpConnectionRecord {
+    if (!isSandboxerTransport(transport)) throw new Error("Choose a Sandboxer transport.");
+    this.writeConfig((source) => applyTomlEdits(source, [{
+      op: "set", path: ["mcp_connections", "sandboxer_transport"], value: transport,
+    }]));
+    return this.sandboxerConnection();
+  }
+
   private writeScalar(path: readonly string[], value: boolean): void {
     this.writeConfig((source) =>
       applyTomlEdits(source, [{ op: "set", path, value }]),
+      path[1]?.startsWith("sandboxer_") === true,
     );
   }
 
@@ -523,12 +537,19 @@ export class McpConnectionRegistry {
     );
   }
 
-  private writeConfig(edit: (source: string) => string): void {
+  private writeConfig(edit: (source: string) => string, pinSandboxerTransport = false): void {
     fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
     const source = fs.existsSync(this.configPath)
       ? fs.readFileSync(this.configPath, "utf8")
       : "";
-    const next = edit(source);
+    const edited = edit(source);
+    const table = parseTomlTables(source, this.configPath).mcp_connections as Record<string, unknown> | undefined;
+    const next = pinSandboxerTransport && edited !== source
+      ? applyTomlEdits(edited, [{
+          op: "set", path: ["mcp_connections", "sandboxer_transport"],
+          value: readSandboxerTransport(table),
+        }])
+      : edited;
     if (next === source) return;
     const temporaryPath = `${this.configPath}.${process.pid}.mcp.tmp`;
     fs.writeFileSync(temporaryPath, next, "utf8");
@@ -795,4 +816,15 @@ function connectionFromRow(
   } catch {
     return undefined;
   }
+}
+
+/** Additive mode key: absence preserves profiles with saved local preferences.
+ * Reads never migrate the file. Existing preference scalars remain readable by
+ * older clients; a fresh profile is pinned before its first preference save.
+ */
+function readSandboxerTransport(table: Record<string, unknown> | undefined): SandboxerTransport {
+  if (isSandboxerTransport(table?.sandboxer_transport)) return table.sandboxer_transport;
+  return table && ["sandboxer_enabled", "sandboxer_select_for_new_threads", "sandboxer_tool_approval", "sandboxer_cleanup_on_pr_close"]
+    .some((key) => Object.hasOwn(table, key))
+    ? "local_cli" : "hosted";
 }

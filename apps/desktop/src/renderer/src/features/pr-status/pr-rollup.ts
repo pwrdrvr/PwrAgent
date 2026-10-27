@@ -30,6 +30,12 @@ export type PrRollup = {
   /** Every PR, least ready first; finished PRs at the end. */
   ordered: PrSummary[];
   openCount: number;
+  /**
+   * The only open PR, when exactly one is open. The chip names it and counts
+   * the rest (`#12 +3`), since it is the one PR the operator is after however
+   * many have finished.
+   */
+  lead: PrSummary | undefined;
   /** The rollup's state in words, for the chip's accessible name. */
   summary: string;
 };
@@ -84,6 +90,7 @@ export function resolvePrRollup(prs: readonly PrSummary[]): PrRollup | undefined
     representative,
     ordered,
     openCount: open.length,
+    lead: open.length === 1 ? open[0] : undefined,
     summary: rollupSummary(representative, open.length, prs.length, mergedCount),
   };
 }
@@ -107,4 +114,9 @@ function rollupSummary(
 /** The rollup chip's visible label: the PR number alone, or the count. */
 export function prRollupLabel(prs: readonly PrSummary[]): string {
   return prs.length === 1 ? `#${prs[0]!.number}` : `${prs.length} PRs`;
+}
+
+/** A PR's chip label: `#12`, or `org/repo#12` when it needs its repository. */
+export function prNumberLabel(pr: PrSummary, showRepoPrefix: boolean): string {
+  return showRepoPrefix ? `${pr.org}/${pr.repo}#${pr.number}` : `#${pr.number}`;
 }

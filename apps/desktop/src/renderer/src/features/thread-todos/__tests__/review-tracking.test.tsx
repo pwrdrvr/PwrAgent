@@ -380,6 +380,14 @@ describe("review naming", () => {
       title: "Code review",
       context: { ...context, pullRequest: { provider: "github.com", org: "example", repo: "atlas", number: 412, url: "https://github.com/example/atlas/pull/412" } },
     })).toBe("Review of PR #412");
+    const pr = (number: number) => ({
+      provider: "github.com", org: "example", repo: "atlas", number,
+      url: `https://github.com/example/atlas/pull/${number}`,
+    });
+    expect(threadReviewDisplayTitle({
+      title: "Code review",
+      context: { workspacePath: "/example/atlas", pullRequest: pr(412), pullRequests: [pr(412), pr(413)] },
+    })).toBe("Review of PRs #412, #413");
     expect(threadReviewDisplayTitle({ title: "Security pass", context })).toBe("Security pass");
     expect(threadReviewDisplayTitle({ title: "Code review" })).toBe("Code review");
   });

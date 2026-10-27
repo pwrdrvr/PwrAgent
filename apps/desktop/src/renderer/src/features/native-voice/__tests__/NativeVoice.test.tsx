@@ -10,6 +10,7 @@ import { DirectorVoiceButton, DirectorVoiceComposerToggle, DirectorVoicePanel, o
 import type { AgentEvent } from "@pwragent/shared";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, MUTED_STALL_END_MS, type NativeVoiceController } from "../native-voice-controller";
+import { cssWithOnlyProperties } from "../../../styles/__tests__/css-property-cascade";
 import type { NativeVoiceEvent } from "../../../../../shared/native-voice";
 
 const owners = new Set<NativeVoiceController>();
@@ -536,11 +537,13 @@ it("resizes the director panel from its grip and remembers the size", async () =
 
 // The panel floats at its own layer and its tooltips portal to the body, so
 // a tooltip left on the default viewport-tooltip layer paints under the
-// panel it describes. Resolved through the real stylesheets, not a copy.
+// panel it describes. Resolved through the real stylesheets, not a copy, cut
+// to their z-index cascade: jsdom took 2 s to parse all of app.css, and every
+// role query after it walked 6,000 rules.
 it("draws the director panel's tooltips above the panel", async () => {
   const styles = document.createElement("style");
   styles.textContent = ["../../../styles/app.css", "../native-voice.css"]
-    .map((file) => readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8"))
+    .map((file) => cssWithOnlyProperties(readFileSync(fileURLToPath(new URL(file, import.meta.url)), "utf8"), ["z-index"]))
     .join("\n");
   document.head.append(styles);
   try {
@@ -549,13 +552,17 @@ it("draws the director panel's tooltips above the panel", async () => {
     render(<><DirectorVoiceButton api={f.api} /><DirectorVoicePanel api={f.api} /></>);
     await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
     await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+    expect(directorPanel()).toHaveClass("director-voice-panel");
     const panelLayer = Number(getComputedStyle(directorPanel()!).zIndex);
     expect(panelLayer).toBeGreaterThan(0);
     for (const name of ["Director voice", "Mute microphone", "Copy transcript", "End director voice", "Resize director voice"]) {
-      fireEvent.mouseEnter(screen.getByRole("button", { name }));
+      const control = screen.getByRole("button", { name });
+      fireEvent.mouseEnter(control);
       const tooltip = await screen.findByRole("tooltip");
+      expect(tooltip).toHaveClass(name === "Director voice" ? "director-voice-card" : "director-voice-panel__tooltip");
+      expect(tooltip.parentElement).toBe(document.body);
       expect(Number(getComputedStyle(tooltip).zIndex), name).toBeGreaterThan(panelLayer);
-      fireEvent.mouseLeave(screen.getByRole("button", { name }));
+      fireEvent.mouseLeave(control);
       await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
     }
   } finally {

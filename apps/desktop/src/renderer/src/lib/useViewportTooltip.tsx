@@ -19,7 +19,7 @@ import {
 } from "./native-drag-interaction";
 
 const VIEWPORT_PADDING = 12;
-/** Gap between the tooltip and the target element (above or below). */
+/** Gap between the tooltip and its placement anchor. */
 const TOOLTIP_GAP = 10;
 /** Where a pointer-anchored tooltip sits relative to the cursor's hotspot:
  *  right of the arrow and below its tail, as a native cursor tooltip does. */
@@ -357,6 +357,13 @@ export function tooltipHandlers(
 export function useViewportTooltip(options: {
   /** CSS class applied to the rendered tooltip element. */
   className: string;
+  /** Beside the anchor, level with the target: right, left, below, above. */
+  placement?: "above-below" | "beside";
+  /**
+   * Rectangle to keep clear in beside placement (for example, a row's list).
+   * Defaults to the target. Re-read after content updates and anchor settling.
+   */
+  getAnchorRect?: (target: HTMLElement) => TooltipTargetRect;
   /**
    * Optional horizontal boundaries for a tooltip that must remain within a
    * local surface as well as escaping that surface's clipping ancestor.
@@ -408,7 +415,7 @@ export function useViewportTooltip(options: {
   visible: boolean;
   tooltipNode: ReactNode;
 } {
-  const { className, getHorizontalBounds } = options;
+  const { className, getHorizontalBounds, placement, getAnchorRect } = options;
   const tooltipRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLElement | null>(null);
   const targetRectRef = useRef<TooltipTargetRect | null>(null);
@@ -420,6 +427,7 @@ export function useViewportTooltip(options: {
   // arrow, and threading that identity through `rememberTarget` would rebuild
   // `show` every render and defeat the memoized panels it is passed to.
   const getHorizontalBoundsRef = useRef(getHorizontalBounds);
+  const getAnchorRectRef = useRef(getAnchorRect);
   const tooltipId = useId();
   const [state, setState] = useState<TooltipState | undefined>(undefined);
   const pointerRef = useRef<TooltipPoint | null>(null);
@@ -431,6 +439,10 @@ export function useViewportTooltip(options: {
   useEffect(() => {
     getHorizontalBoundsRef.current = getHorizontalBounds;
   }, [getHorizontalBounds]);
+
+  useLayoutEffect(() => {
+    getAnchorRectRef.current = getAnchorRect;
+  }, [getAnchorRect]);
 
   const clearHoverDelay = useCallback((): void => {
     if (hoverDelayTimerRef.current === null) {
@@ -559,6 +571,23 @@ export function useViewportTooltip(options: {
         state.horizontalBounds?.right ?? window.innerWidth - VIEWPORT_PADDING,
       ),
     );
+    if (placement === "beside" && targetRef.current) {
+      const anchor = getAnchorRectRef.current?.(targetRef.current)
+        ?? targetRef.current.getBoundingClientRect();
+      const { left, top } = besideTooltipPosition({
+        anchor,
+        targetTop: state.targetTop,
+        width: rect.width,
+        height: rect.height,
+        minLeft: horizontalLeft,
+        maxRight: horizontalRight,
+      });
+      if (state.left !== left || state.top !== top) {
+        recordRendererUpdate(RendererUpdateEvent.tooltipReposition, tooltipId);
+        setState({ ...state, left, top });
+      }
+      return;
+    }
     const left = Math.min(
       Math.max(horizontalLeft, horizontalRight - rect.width),
       Math.max(horizontalLeft, state.targetCenter - rect.width / 2),
@@ -592,7 +621,7 @@ export function useViewportTooltip(options: {
       recordRendererUpdate(RendererUpdateEvent.tooltipReposition, tooltipId);
       setState({ ...state, left, top });
     }
-  }, [state, tooltipId]);
+  }, [state, tooltipId, placement]);
 
   const show = useCallback((target: HTMLElement, content: ReactNode): void => {
     recordRendererUpdate(RendererUpdateEvent.tooltipShow, tooltipId);
@@ -843,6 +872,40 @@ export function useViewportTooltip(options: {
     visible,
     tooltipNode,
   };
+}
+
+/** Keep the whole anchor clear before falling back to viewport clamping. */
+function besideTooltipPosition(params: {
+  anchor: TooltipTargetRect;
+  targetTop: number;
+  width: number;
+  height: number;
+  minLeft: number;
+  maxRight: number;
+}): { top: number; left: number } {
+  const { anchor, width, height, minLeft } = params;
+  const viewportTop = portalViewportTop();
+  const maxLeft = Math.max(minLeft, params.maxRight - width);
+  const maxTop = Math.max(viewportTop, window.innerHeight - VIEWPORT_PADDING - height);
+  const besideTop = Math.max(viewportTop, Math.min(params.targetTop, maxTop));
+  const right = anchor.right + TOOLTIP_GAP;
+  if (right <= maxLeft) {
+    return { top: besideTop, left: right };
+  }
+  const leftSide = anchor.left - TOOLTIP_GAP - width;
+  if (leftSide >= minLeft) {
+    return { top: besideTop, left: leftSide };
+  }
+  const alignedLeft = Math.max(minLeft, Math.min(anchor.left, maxLeft));
+  const below = anchor.bottom + TOOLTIP_GAP;
+  if (below <= maxTop) {
+    return { top: below, left: alignedLeft };
+  }
+  const above = anchor.top - TOOLTIP_GAP - height;
+  if (above >= viewportTop) {
+    return { top: above, left: alignedLeft };
+  }
+  return { top: besideTop, left: Math.min(maxLeft, Math.max(minLeft, leftSide)) };
 }
 
 /** Beside the cursor, flipped to its left near the right edge and above it

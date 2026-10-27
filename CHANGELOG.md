@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.3.4 - 2026-10-26
+
+- Sandboxer Sign-In - Connect Sandboxer through browser OAuth without installing its CLI. Existing CLI configurations remain supported, with connection method, thread selections, and cleanup ownership preserved.
+- GitHub and GitLab Tools - Give agents built-in tools for PRs, merge requests, issues, reviews, comments, and merges. Operator policies control reads and writes, with separate authorization for messaging-triggered changes.
+- Claude Fork and Rewind - Fork Claude conversations into separate threads and workspaces. Rewind conversations with optional file restoration, see rewind markers, and undo an eligible Claude rewind before sending the next message.
+- Codex Provider Import - Import compatible model-provider definitions from existing Codex configurations into Settings. Review the imported settings and supply credentials separately.
+- To-do Dispatch - Choose the provider, model, and reasoning effort before starting a To-do thread. Reuse recent choices, browse remote projects, and copy or preview proposed prompts as formatted Markdown.
+- Review Tracking - Clearly distinguish addressed, declined, and deferred findings, with deferred work linked to To-do cards. Claude review cards identify the PRs targeted by the review.
+- MCP Controls - Reduce repeated Sandboxer approvals and allow conversation-scoped consent for an MCP connection's tools. Remote MCP selection and verification consistently use the owning machine.
+- Sidebar and PR Visibility - Show branch drift in PR cards and name a lone open PR in the rollup chip. X-ray reveals one thread's details without shifting the list.
+- Performance and Storage - Reduce redundant database writes and read only the sub-agent cards needed for pricing and display. Improve large-thread paging and preserve settled Markdown while the incremental renderer loads.
+- Navigation and Terminals - Put the integrated-terminal toggle beside the composer's other tools, jump directly to pending questions, preserve restored scroll positions, and clear stale Codex quit blockers without hiding genuine background work.
+
+Compatibility: Claude rewind requires eligible recorded prompts and file checkpoints. Selecting Sandboxer now allows its sandbox tools by default unless overridden; input forms and browser authorization still prompt.
+
 ## v1.3.3 - 2026-10-26
 
 - Codex Model Providers - Run Codex threads against additional OpenAI Responses-compatible endpoints, including other API accounts, hosted models, and local servers. Configure providers, model lists, connection tests, and pricing in Settings.

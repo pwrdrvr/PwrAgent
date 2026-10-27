@@ -52,6 +52,18 @@ describe("review tracking runtime eligibility", () => {
     } });
   }
 
+  it("refreshes a card's projected defaults when its raising thread changes model settings", () => {
+    install();
+    onEvent({ backend: THREAD.backend, notification: {
+      method: "thread/modelSettings/updated", params: { threadId: THREAD.threadId, model: "gpt-6.1-sol", reasoningEffort: "high" },
+    } });
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith({ ...THREAD, at: expect.any(Number) });
+    onEvent({ backend: THREAD.backend, federationTarget: { scope: "remote", instanceId: "peer" }, notification: {
+      method: "thread/modelSettings/updated", params: { threadId: THREAD.threadId, model: "gpt-6.1-sol" },
+    } });
+    expect(broadcast).toHaveBeenCalledTimes(1);
+  });
+
   it("does not import startup overlays or historical thread reads, but records new completions", () => {
     const old = { type: "review" as const, id: "managed-review:old:result", review: "Old review.", createdAt: Date.now() - 35 * 86_400_000 };
     db.raw.prepare("INSERT INTO threads (thread_id, payload) VALUES (?, ?)")

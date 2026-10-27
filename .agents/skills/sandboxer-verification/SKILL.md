@@ -37,6 +37,14 @@ samples over the step, as a share of all 8 vCPUs.
 
 `all` uses two unit shards and four E2E lanes.
 
+These are observations, not a time budget. On 2026-10-26, a fresh `large`
+VM took 336 s for two shards at `ee6923d1d` (12 failed tests), and 380 s
+at the October 25 documentation commit `0b487a206` (24 failed tests), on
+that same VM with no overlapping checks. CPU steal averaged 4.7% and 4.0%.
+The older revision also missing 127 s means suite growth alone does not
+explain that gap. Preserve the revision, exit statuses, `/proc/stat` deltas,
+and CPU pressure when comparing runs; `avg300` includes earlier activity.
+
 - Vitest already runs one worker per core. A single run leaves the CPU idle
   while it starts and finishes. Two shards fill those gaps and use about the
   same CPU time, so more shards cannot help on 8 vCPUs.
@@ -53,7 +61,13 @@ replaced by `-`, so `list_sandboxes` shows which thread owns it.
 Call `list_sandboxes` first. If this thread's sandbox exists, use its ID.
 `resume_sandbox` brings back a stopped one in about 2 s.
 
-Otherwise call `create_sandbox` with `from: "pwragent-base"`,
+Before creating, inspect the selected tool schema and require `noEnv: true` to
+suppress inherited account environment secrets. If that field is unavailable,
+do not create a sandbox through an older schema; report the blocker and ask
+for a compatible connection or an explicitly authorized verification alternative.
+Check available allowance without deleting existing account resources.
+
+Otherwise call `create_sandbox` with `noEnv: true`, `from: "pwragent-base"`,
 `type: "large"`, the name, and `ttlSeconds: 3600`. The `pwragent-base`
 snapshot already holds Node, pnpm, the E2E packages, the Electron download, a
 warm pnpm store, and a clone at `~/pwragent/repo`. A sandbox from it was ready
@@ -188,7 +202,7 @@ Report the sandbox ID, the commit, and each status line. Name every failure.
 
 ## 5. Known differences from CI
 
-- The VM sets `GH_TOKEN` for the Sandboxer account. `verify.sh` unsets
+- Create verification fixtures with `noEnv: true`. `verify.sh` also unsets
   `GH_TOKEN` and `GITHUB_TOKEN` before every check, as CI runs without them.
 - `verify.sh e2e` sets `CI=1`, as the CI lane does: Playwright retries a
   failed test once, reports a test that passes on retry as flaky, and keeps
@@ -258,5 +272,5 @@ existing name replaces the snapshot; new sandboxes use the new one, and a
 save took 3 s.
 
 Every new sandbox gets a copy of the base, so never leave a worktree, a log,
-or a credential in it. Sandboxer passes the account's `GH_TOKEN` to each
-sandbox when it starts. The snapshot does not store it.
+or a credential in it. Always pass `noEnv: true` when creating the builder as well. Do not rely on
+snapshot behavior to suppress account environment injection.

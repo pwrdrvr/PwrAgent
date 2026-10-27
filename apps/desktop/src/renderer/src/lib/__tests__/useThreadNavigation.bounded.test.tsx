@@ -1,9 +1,10 @@
-import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "../../test/phase-probes";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { NavigationQueryPage, NavigationRow, NavigationSelectedDetailResponse, PrSummary } from "@pwragent/shared";
+import type { AgentEvent, NavigationQueryPage, NavigationRow, NavigationSelectedDetailResponse, PrSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadNavigation } from "../useThreadNavigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
+import { useHoverStableSnapshot } from "../../features/navigation/useHoverStableSnapshot";
 
 const counts = { total: 1000, active: 40, unread: 90, review: 50 };
 const row = (id: string): NavigationRow => ({ id, source: "codex", title: id, titleSource: "fallback", ref: { backend: "codex", threadId: id },
@@ -39,6 +40,112 @@ beforeEach(() => {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 });
 afterEach(() => vi.restoreAllMocks());
+
+it("retains unchanged row projections while still publishing changed titles", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  let title: string | undefined;
+  f.read.mockImplementation(async (request, consumer) => {
+    const page = await originalRead(request, consumer);
+    const updatedTitle = title;
+    return updatedTitle ? { ...page, entries: page.entries.map((entry) => entry.row.id === "thread-1"
+      ? { ...entry, row: { ...entry.row, title: updatedTitle } } : entry) } : page;
+  });
+  const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
+  await waitFor(() => expect(result.current.selectedThreadConfigurationReady).toBe(true));
+  const threads = result.current.threads;
+  const directories = result.current.directories;
+
+  await act(async () => { await result.current.pagedNavigation.refresh(); });
+
+  expect(result.current.threads).toBe(threads);
+  expect(result.current.directories).toBe(directories);
+  expect(result.current.pagesAwaitingRows).toEqual([]);
+
+  title = "Updated title";
+  await act(async () => { await result.current.pagedNavigation.refresh(); });
+
+  expect(result.current.threads).not.toBe(threads);
+  expect(result.current.threads.find((thread) => thread.id === "thread-1")?.title).toBe(title);
+  unmount();
+});
+
+it("publishes identical accepted pages and freezes hover again after a revealed pin", async () => {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  let pinnedRank: string | undefined;
+  let removeLast = false;
+  f.read.mockImplementation(async (request, consumer) => {
+    const page = await originalRead(request, consumer);
+    return { ...page, entries: page.entries
+      .filter((entry) => !removeLast || entry.row.id !== "thread-9")
+      .map((entry) => entry.row.id === "thread-1"
+        ? { ...entry, row: { ...entry.row, pinnedRank } } : entry) };
+  });
+  const setThreadPin = vi.fn<NonNullable<DesktopApi["setThreadPin"]>>(async (request) => {
+    pinnedRank = "1024";
+    return { backend: "codex", threadId: request.threadId, pinnedRank };
+  });
+  const api = { ...f.api, setThreadPin };
+  const loadingFlags: Array<{ loading: boolean; refreshing: boolean }> = [];
+  let navigation!: ReturnType<typeof useThreadNavigation>;
+  let hover!: ReturnType<typeof useHoverStableSnapshot<(typeof navigation)["threads"]>>;
+  // Sidebar owns hover state in a child: a reveal render must not rerender
+  // the navigation owner and accidentally clear its stale page IDs.
+  function HoverRows({ current }: { current: typeof navigation }) {
+    hover = useHoverStableSnapshot({
+      scope: current.browseMode,
+      outstandingReads: [
+        ...[...current.pagedNavigation.resources.values()]
+          .filter((resource) => resource.state.stale && !resource.state.error)
+          .map((resource) => resource.id),
+        ...current.pagesAwaitingRows,
+      ],
+      value: current.threads,
+    });
+    return <div onPointerOver={hover.onPointerOver}><div data-hover-stable-row>Hovered row</div></div>;
+  }
+  function NavigationWindow() {
+    navigation = useThreadNavigation(api);
+    loadingFlags.push({ loading: navigation.loading, refreshing: navigation.refreshing });
+    return <HoverRows current={navigation} />;
+  }
+  const { unmount } = render(<NavigationWindow />);
+  await waitFor(() => expect(navigation.selectedThreadConfigurationReady).toBe(true));
+  fireEvent.pointerOver(screen.getByText("Hovered row"), { pointerType: "mouse" });
+
+  await act(async () => {
+    await hover.reveal(() => navigation.setThreadPin(
+      navigation.threads.find((thread) => thread.id === "thread-1")!, true,
+    ));
+    await navigation.pagedNavigation.refresh();
+  });
+  expect(setThreadPin).toHaveBeenCalledOnce();
+  expect(hover.value.find((thread) => thread.id === "thread-1")?.pinnedRank).toBe("1024");
+
+  const threads = navigation.threads;
+  const directories = navigation.directories;
+  const pages = [...navigation.pagedNavigation.resources.values()].map((resource) => resource.state.page);
+  loadingFlags.length = 0;
+  // Immediate read start/completion batch together: row identities and both
+  // loading flags stay unchanged, but the newly accepted pages must publish.
+  await act(async () => { await navigation.pagedNavigation.refresh(); });
+  expect(navigation.loading).toBe(false);
+  expect(navigation.refreshing).toBe(false);
+  expect(loadingFlags.every(({ loading, refreshing }) => !loading && !refreshing)).toBe(true);
+  expect([...navigation.pagedNavigation.resources.values()].some((resource, index) => resource.state.page !== pages[index])).toBe(true);
+  expect(navigation.threads).toBe(threads);
+  expect(navigation.directories).toBe(directories);
+  const awaitingRows = navigation.pagesAwaitingRows;
+
+  removeLast = true;
+  await act(async () => { await navigation.pagedNavigation.refresh(); });
+  expect(navigation.threads.some((thread) => thread.id === "thread-9")).toBe(false);
+  expect(hover.value).toBe(threads);
+  expect(hover.value.some((thread) => thread.id === "thread-9")).toBe(true);
+  expect(awaitingRows).toEqual([]);
+  unmount();
+});
 
 it("returns to the loaded lens range without a loading or missing-row frame", async () => {
   const f = fixture();
@@ -181,6 +288,100 @@ it("uses viewer directory disclosure for page demand across owner refresh and pr
   expect(f.legacy).not.toHaveBeenCalled();
 });
 
+/**
+ * An owner with one pinned directory. Each index read serves the pin as it
+ * was when the read began, and waits on `hold` while one is set.
+ */
+function pinnedDirectoryOwner() {
+  const f = fixture();
+  const originalRead = f.read.getMockImplementation()!;
+  const key = "directory:/project";
+  const owner: { rank?: string; hold?: Promise<void> } = { rank: "1024" };
+  f.read.mockImplementation(async (request) => {
+    const pinnedRank = owner.rank;
+    if (owner.hold && request.query.kind === "directory-index") await owner.hold;
+    const page = await originalRead(request);
+    return request.query.kind === "directory-index" ? { ...page, directories: [{ key, kind: "directory", label: "Project",
+      path: "/project", counts, pinnedRootCount: 1, unpinnedRootCount: 999, launchpadPresent: false, pinnedRank }] } : page;
+  });
+  const setDirectoryPin = vi.fn<NonNullable<DesktopApi["setDirectoryPin"]>>(async () => {
+    owner.rank = undefined;
+    return { directoryKey: key, pinnedRank: undefined };
+  });
+  /** Hold every directory index read until the returned release runs. */
+  const holdIndexReads = (): (() => void) => {
+    let release!: () => void;
+    owner.hold = new Promise<void>((resolve) => { release = resolve; });
+    return release;
+  };
+  return { f, key, setDirectoryPin, holdIndexReads };
+}
+
+it("keeps an unpinned directory unpinned while another page lands before the index re-read", async () => {
+  const { f, key, setDirectoryPin, holdIndexReads } = pinnedDirectoryOwner();
+  let finish: (() => void) | undefined;
+  let listener: ((event: AgentEvent) => void) | undefined;
+  const api = { ...f.api, setDirectoryPin,
+    onAgentEvent: (callback: (event: AgentEvent) => void) => { listener = callback; return () => { listener = undefined; }; } };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const rank = () => result.current.directories.find((directory) => directory.key === key)?.pinnedRank;
+  try {
+    await waitFor(() => expect(rank()).toBe("1024"));
+    act(() => {
+      result.current.setBrowseMode("directories");
+      result.current.directoryDisclosure.setExpandedByKey({ [key]: true });
+    });
+    await waitFor(() => expect(result.current.pagedNavigation.resources.get(`directory-pins:${key}`)?.state.page).toBeDefined());
+
+    finish = holdIndexReads();
+    await act(() => result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false));
+    expect(rank()).toBeUndefined();
+    // The owner's event invalidates every page. The directory index reads
+    // are held, so the other pages land first.
+    act(() => listener?.({ backend: "codex", notification: { method: "directory/pin/removed",
+      params: { directoryKey: key } } } as AgentEvent));
+    const resources = () => [...result.current.pagedNavigation.resources.values()];
+    const indexes = () => resources().filter((resource) => resource.state.request.query.kind === "directory-index");
+    await waitFor(() => expect(resources().filter((resource) => !indexes().includes(resource))
+      .every((resource) => !resource.state.stale && !resource.loading)).toBe(true));
+    expect(indexes().every((resource) => resource.state.stale)).toBe(true);
+    expect(rank()).toBeUndefined();
+
+    await act(async () => finish?.());
+    await waitFor(() => expect(indexes().some((resource) => resource.state.stale)).toBe(false));
+    expect(rank()).toBeUndefined();
+  } finally {
+    finish?.();
+    unmount();
+  }
+});
+
+it("keeps an unpinned directory unpinned when an index read from before the unpin lands", async () => {
+  const { f, key, setDirectoryPin, holdIndexReads } = pinnedDirectoryOwner();
+  let finish: (() => void) | undefined;
+  const api = { ...f.api, setDirectoryPin };
+  const { result, unmount } = renderHook(() => useThreadNavigation(api));
+  const rank = () => result.current.directories.find((directory) => directory.key === key)?.pinnedRank;
+  try {
+    await waitFor(() => expect(rank()).toBe("1024"));
+    act(() => result.current.setBrowseMode("directories"));
+    // A background refresh reads the index before the operator unpins.
+    finish = holdIndexReads();
+    act(() => { void result.current.pagedNavigation.refresh(); });
+    await waitFor(() => expect(result.current.pagedNavigation.resources.get("directory-index")?.loading).toBe(true));
+    await act(() => result.current.setDirectoryPin(result.current.directories.find((directory) => directory.key === key)!, false));
+    expect(rank()).toBeUndefined();
+
+    // The owner's event has not arrived, so nothing fences the earlier read.
+    act(() => finish?.());
+    await waitFor(() => expect(result.current.pagedNavigation.resources.get("directory-index")?.loading).toBe(false));
+    expect(rank()).toBeUndefined();
+  } finally {
+    finish?.();
+    unmount();
+  }
+});
+
 it("loads one owner lens page and exact selection, preserving complete counts independently", async () => {
   const f = fixture();
   const { result, unmount } = renderHook(() => useThreadNavigation(f.api));
@@ -255,7 +456,8 @@ it("keeps loaded sub-threads in place without inserting loading text on refresh"
       onBrowseModeChange={navigation.setBrowseMode} onSelectThread={navigation.selectThread}
       onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
   }
-  const mounted = render(<Window />);
+  let mounted!: ReturnType<typeof render>;
+  await act(async () => { mounted = render(<Window />); });
   await screen.findByRole("button", { name: "child" });
   holdChildren = true;
   let refresh!: Promise<void>;

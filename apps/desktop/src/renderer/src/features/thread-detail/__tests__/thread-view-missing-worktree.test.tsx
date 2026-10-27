@@ -53,6 +53,9 @@ describe("ThreadView with a missing worktree", () => {
 
     expect(screen.getByRole("region", { name: /worktree is gone/ })).toBeInTheDocument();
     expect(container.querySelector(".composer")).toBeNull();
+    const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
+    expect(toggle.closest(".composer__footer .composer__application-actions")).not.toBeNull();
+    expect(toggle).toBeEnabled();
   });
 
   it("keeps the composer during a live turn so the turn can still be stopped", () => {

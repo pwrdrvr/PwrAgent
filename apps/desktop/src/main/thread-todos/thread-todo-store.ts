@@ -5,10 +5,12 @@ import type {
   ThreadTodoItem,
   ThreadTodoKind,
   ThreadTodoMergeMethod,
+  ThreadTodoModelSettings,
   ThreadTodoProject,
   ThreadTodoStatus,
 } from "@pwragent/shared";
-import { isThreadTodoMergeMethod, isThreadTodoStatus } from "@pwragent/shared";
+import { isThreadTodoMergeMethod, isThreadTodoStatus, sameThreadTodoModelSettings } from "@pwragent/shared";
+import { recordModelSettingsRecent } from "../state/model-settings-recents-store";
 import type { StateDb } from "../state/state-db.js";
 
 type ThreadTodoRow = {
@@ -293,6 +295,35 @@ export class ThreadTodoStore {
           WHERE status = 'open' AND backend = ? AND thread_id = ?`,
       )
       .run(params.now, params.now, params.backend, params.threadId).changes;
+  }
+
+  getThreadModelSettings(backend: AppServerBackendKind, threadId: string): ThreadTodoModelSettings | undefined {
+    const row = this.stateDb.raw.prepare(
+      "SELECT model_settings_json FROM thread_todo_thread_prefs WHERE backend = ? AND thread_id = ?",
+    ).get(backend, threadId) as { model_settings_json: string } | undefined;
+    return parseJson<ThreadTodoModelSettings>(row?.model_settings_json ?? null);
+  }
+
+  /** At most one commit per changed dispatch, none for an identical value. */
+  setThreadModelSettings(backend: AppServerBackendKind, threadId: string, settings: ThreadTodoModelSettings): void {
+    const previous = this.getThreadModelSettings(backend, threadId);
+    if (previous && sameThreadTodoModelSettings(previous, settings)) return;
+    this.stateDb.raw.prepare(`
+      INSERT INTO thread_todo_thread_prefs (backend, thread_id, model_settings_json)
+      VALUES (?, ?, ?)
+      ON CONFLICT(backend, thread_id) DO UPDATE SET model_settings_json = excluded.model_settings_json
+    `).run(backend, threadId, JSON.stringify(settings));
+  }
+
+  rememberDispatch(backend: AppServerBackendKind, threadId: string, settings: ThreadTodoModelSettings, source: ThreadTodoModelSettings): void {
+    const differs = !sameThreadTodoModelSettings(settings, source);
+    const previous = this.getThreadModelSettings(backend, threadId);
+    // An untouched thread-default dispatch does not create a preference.
+    if (!differs && !previous) return;
+    this.transaction(() => {
+      this.setThreadModelSettings(backend, threadId, settings);
+      if (differs) recordModelSettingsRecent(this.stateDb, "todo-dispatch", settings);
+    });
   }
 
   /** Per-project merge-method picks, for the cards' button labels. */

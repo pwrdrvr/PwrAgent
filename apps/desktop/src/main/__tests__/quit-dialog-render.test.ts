@@ -72,10 +72,10 @@ describe("quit dialog HTML", () => {
 
     // Every running item is reachable, and the counts read as one sentence.
     expect(html).toContain(
-      "1 thread has an agent turn in progress, 10 integrated terminals are running, and 1 environment action is running.",
+      "1 thread has work in progress, 10 integrated terminals are running, and 1 environment action is running.",
     );
     expect(html).toContain("Select an item below to go to it instead.");
-    expect(html).toContain("Agent turns in progress");
+    expect(html).toContain("Thread work in progress");
     expect(html).toContain("Integrated terminals");
     expect(html).toContain("Environment actions");
     expect(html).not.toContain(">Sub-agent</span>");

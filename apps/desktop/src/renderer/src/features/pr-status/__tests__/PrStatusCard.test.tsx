@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
+import type { PrBranchDrift } from "../pr-branch-drift";
 import { PrStatusCard } from "../PrStatusCard";
 
 afterEach(cleanup);
@@ -302,5 +303,55 @@ describe("PrStatusCard counts", () => {
     const singular = renderCard(basePr({ changedFiles: 1, commitCount: 1 }));
     expect(text(singular, ".pr-status-card__files")).toBe("1 file");
     expect(text(singular, ".pr-status-card__caption")).toBe("1 commit");
+  });
+});
+
+describe("PrStatusCard local branch", () => {
+  function renderWithDrift(drift: PrBranchDrift | undefined) {
+    const { container } = render(
+      <div className="pr-status-card">
+        <PrStatusCard pr={basePr({ createdAt: NOW - DAY })} now={NOW} branchDrift={drift} />
+      </div>,
+    );
+    return container;
+  }
+
+  function sectionRows(container: HTMLElement): string[][] {
+    const section = [...container.querySelectorAll(".pr-status-card__section")]
+      .find((element) => element.textContent?.startsWith("Local branch"));
+    if (!section) {
+      return [];
+    }
+    return [...section.querySelectorAll(".pr-status-card__row")].map((row) => [
+      row.querySelector(".pr-status-card__row-label")!.textContent!,
+      row.querySelector(".pr-status-card__row-value")!.textContent!,
+    ]);
+  }
+
+  const url = "https://github.com/pwrdrvr/PwrAgent/pull/1372";
+
+  it("names the base and counts commits behind and ahead, before the timeline", () => {
+    const container = renderWithDrift({ url, baseBranch: "main", behind: 4, ahead: 1 });
+    expect(sectionRows(container)).toEqual([
+      ["Behind main", "4 commits"],
+      ["Ahead of main", "1 commit"],
+    ]);
+    const titles = [...container.querySelectorAll(".pr-status-card__section-title")]
+      .map((element) => element.textContent);
+    expect(titles.indexOf("Local branch")).toBe(titles.indexOf("Timeline") - 1);
+  });
+
+  it("shows a zero, because up to date is a known count", () => {
+    const container = renderWithDrift({ url, baseBranch: "main", behind: 0, ahead: 2 });
+    expect(sectionRows(container)[0]).toEqual(["Behind main", "0 commits"]);
+  });
+
+  it("draws no section without drift, a base, or a usable count", () => {
+    expect(sectionRows(renderWithDrift(undefined))).toEqual([]);
+    cleanup();
+    expect(sectionRows(renderWithDrift({ url, baseBranch: " ", behind: 4 }))).toEqual([]);
+    cleanup();
+    expect(sectionRows(renderWithDrift({ url, baseBranch: "main", behind: -1, ahead: Number.NaN })))
+      .toEqual([]);
   });
 });

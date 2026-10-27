@@ -4,7 +4,7 @@ import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
 import { hydrateComposerDraft } from "../composer-draft-hydration";
 import { buildDirectoryReferenceMarkdown } from "../../../lib/directory-references";
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, createEvent, fireEvent, render, renderHook, screen, waitFor, within } from "../../../test/phase-probes";
 import userEvent from "@testing-library/user-event";
 import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "react";
 import {
@@ -2357,6 +2357,128 @@ describe("Composer", () => {
     expect(elsewhere).toHaveFocus();
   });
 
+  describe("integrated terminal tools", () => {
+    const thread: NavigationThreadSummary = {
+      id: "terminal-thread", title: "Terminal tools", titleSource: "explicit", source: "codex",
+      executionMode: "default", linkedDirectories: [], inbox: { inInbox: false },
+    };
+    const applications: ComponentProps<typeof Composer>["applications"] = {
+      editors: [{ id: "code", kind: "editor", name: "VS Code", source: "application",
+        appPath: "/Applications/Code.app", canOpenWorkspace: true }],
+      terminals: [{ id: "terminal", kind: "terminal", name: "Terminal", source: "application",
+        appPath: "/Applications/Terminal.app", canOpenWorkspace: true }],
+      preferredEditorId: { value: "code", source: "config" },
+      preferredTerminalId: { value: "terminal", source: "config" },
+      gh: { enabled: { value: false, source: "default" }, path: { value: "", source: "default" },
+        discovery: { candidates: [] } },
+      git: { path: { value: "", source: "default" }, discovery: { candidates: [] } },
+    };
+
+    it("places the toggle after Environment and Run, immediately before the application launchers", () => {
+      render(<Composer skills={[]} applications={applications}
+        integratedTerminal={{ open: false, onToggle: vi.fn() }}
+        thread={{ ...thread,
+          linkedDirectories: [{ id: "project", kind: "local", label: "Demo", path: "/repo/demo" }],
+          codexEnvironmentRuntime: { environmentId: "demo", environmentName: "Demo", executionTarget: "local" },
+          codexEnvironmentOptions: [{ id: "demo", name: "Demo", sourcePath: "/repo/demo/environment.toml",
+            actions: [{ id: "work", name: "Work", command: "pnpm dev" }] }],
+        }} />);
+      const tools = screen.getByLabelText("Composer tools");
+      const buttons = within(tools).getAllByRole("button");
+      expect(buttons.map((button) => button.getAttribute("aria-label")?.split(":")[0])).toEqual([
+        "Environment", "Run", "Environment command", "Open integrated terminal", "VS Code", "Terminal",
+      ]);
+      const toggle = within(tools).getByRole("button", { name: "Open integrated terminal" });
+      expect(toggle).toHaveClass("composer__toggle", "composer__terminal-toggle");
+      expect(toggle).toHaveTextContent("");
+      expect(toggle.querySelector("svg")).toHaveAttribute("width", "14");
+    });
+
+    it.each([
+      { open: false, running: false, label: "Open integrated terminal" },
+      { open: true, running: false, label: "Hide integrated terminal" },
+      { open: false, running: true, label: "Show running integrated terminal" },
+      { open: true, running: true, label: "Hide integrated terminal" },
+    ])("shows $label without a workspace or application launchers", ({ open, running, label }) => {
+      const onToggle = vi.fn();
+      render(<Composer skills={[]} thread={thread} integratedTerminal={{ open, running, onToggle }} />);
+      const tools = screen.getByLabelText("Composer tools");
+      const toggle = within(tools).getByRole("button", { name: label });
+      expect(within(tools).getAllByRole("button")).toEqual([toggle]);
+      expect(toggle).toHaveAttribute("aria-pressed", String(open));
+      expect(toggle).not.toHaveAttribute("aria-disabled");
+      expect(toggle.classList.contains("is-active")).toBe(open);
+      expect(toggle.classList.contains("is-running")).toBe(running && !open);
+      fireEvent.mouseEnter(toggle);
+      expect(screen.getByRole("tooltip")).toHaveTextContent(label);
+      expect(document.body.querySelector(":scope > .viewport-tooltip")).toBe(screen.getByRole("tooltip"));
+      fireEvent.click(toggle);
+      expect(onToggle).toHaveBeenCalledOnce();
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("keeps unavailable remote terminals focusable and explains why on hover and focus", () => {
+      const onToggle = vi.fn();
+      const disabledReason = "Remote terminal not granted by Demo peer.";
+      render(<Composer skills={[]} thread={{ ...thread, federation: {
+        ref: { backend: "codex", threadId: thread.id, target: { scope: "remote", instanceId: "demo-peer" } },
+        instanceLabel: "Demo peer", peerStatus: "connected",
+      } }} integratedTerminal={{ open: false, disabledReason, onToggle }} />);
+      const toggle = screen.getByRole("button", { name: disabledReason });
+      expect(toggle).toHaveClass("is-disabled");
+      expect(toggle).toHaveAttribute("aria-disabled", "true");
+      expect(toggle).toHaveAttribute("aria-pressed", "false");
+      expect(toggle).toBeEnabled();
+      expect(toggle).not.toHaveAttribute("disabled");
+      fireEvent.mouseEnter(toggle);
+      expect(screen.getByRole("tooltip")).toHaveTextContent(disabledReason);
+      fireEvent.mouseLeave(toggle);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      act(() => toggle.focus());
+      expect(toggle).toHaveFocus();
+      expect(screen.getByRole("tooltip")).toHaveTextContent(disabledReason);
+      fireEvent.click(toggle);
+      expect(onToggle).not.toHaveBeenCalled();
+    });
+
+    it("hides the toggle in a launchpad even if terminal controls were supplied", () => {
+      render(<Composer skills={[]} integratedTerminal={{ open: false, onToggle: vi.fn() }}
+        launchpad={{ directoryKey: "demo", directoryKind: "directory", directoryLabel: "Demo",
+          directoryPath: "/repo/demo", backend: "codex", executionMode: "default", prompt: "",
+          workMode: "local", branchName: "main", createdAt: 1, updatedAt: 1 }} />);
+      expect(screen.queryByRole("button", { name: /integrated terminal/ })).toBeNull();
+      expect(screen.queryByLabelText("Composer tools")).toBeNull();
+    });
+
+    it("opens and hides the terminal while a send is being prepared", async () => {
+      const check = createDeferred<boolean>();
+      const startTurn = vi.fn();
+      function PreparingComposer() {
+        const [open, setOpen] = useState(false);
+        return <Composer skills={[]} applications={applications} desktopApi={{ startTurn }}
+          onBeforeStartTurn={() => check.promise}
+          thread={{ ...thread, linkedDirectories: [{ id: "project", kind: "local", label: "Demo", path: "/repo/demo" }] }}
+          integratedTerminal={{ open, onToggle: () => setOpen((value) => !value) }} />;
+      }
+      render(<PreparingComposer />);
+      fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), { target: { value: "Check the demo" } });
+      await clickButton("Send");
+      expect(screen.getByRole("button", { name: "Preparing…" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "VS Code" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Terminal" })).toBeDisabled();
+      const toggle = screen.getByRole("button", { name: "Open integrated terminal" });
+      expect(toggle).toBeEnabled();
+      expect(toggle.closest("fieldset")).toBeNull();
+      await clickButton("Open integrated terminal");
+      expect(screen.getByRole("button", { name: "Hide integrated terminal" })).toHaveAttribute("aria-pressed", "true");
+      await clickButton("Hide integrated terminal");
+      expect(screen.getByRole("button", { name: "Open integrated terminal" })).toHaveAttribute("aria-pressed", "false");
+      await clickButton("Cancel");
+      await act(async () => { check.resolve(false); });
+      expect(startTurn).not.toHaveBeenCalled();
+    });
+  });
+
   it("renders unavailable reason when provided", async () => {
     const unavailableReason = "Codex profile not logged in. Please check your settings.";
     render(
@@ -3690,7 +3812,7 @@ describe("Composer", () => {
     expect(runCodexEnvironmentAction).not.toHaveBeenCalled();
   });
 
-  it("offers Edit environments… below the Environment list for the thread's workspace", () => {
+  it("offers Edit environments… above the Environment list for the thread's workspace", () => {
     const onEditEnvironments = vi.fn();
     const thread = {
       id: "thread-1",
@@ -3728,10 +3850,17 @@ describe("Composer", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Environment(?::|$)/ }));
     const listbox = screen.getByRole("listbox", { name: "Environment" });
-    // A button after the list, not an option, so choosing it never changes
+    // A button outside the list, not an option, so choosing it never changes
     // the selection.
     expect(within(listbox).queryByText("Edit environments…")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Edit environments…" }));
+    const editEnvironments = screen.getByRole("button", { name: "Edit environments…" });
+    // The menu opens up from the composer footer, so the command sits above
+    // the list, away from the trigger and the pointer.
+    expect(
+      editEnvironments.compareDocumentPosition(listbox) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(listbox.closest(".composer-dropdown")).toHaveClass("composer-dropdown--dense");
+    fireEvent.click(editEnvironments);
 
     expect(onEditEnvironments).toHaveBeenCalledWith("/repo/.worktrees/abc/repo");
     expect(screen.queryByRole("listbox", { name: "Environment" })).not.toBeInTheDocument();
@@ -4040,6 +4169,105 @@ describe("Composer", () => {
     expect(
       within(listbox).getByRole("option", { name: /#Bob's Best Thread 3000/ }),
     ).toBeInTheDocument();
+  });
+
+  it("marks a rewound prompt with a chip until the composer is cleared", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-rewound",
+      title: "Rewound thread",
+      titleSource: "explicit",
+      source: "claude",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const otherThread: NavigationThreadSummary = { ...thread, id: "thread-other", title: "Other thread" };
+    const props = {
+      desktopApi: { onAgentEvent: () => () => undefined },
+      disabled: false,
+      skills: [],
+      threads: [thread, otherThread],
+    };
+    const { rerender } = render(
+      <Composer
+        {...props}
+        draftRestore={{
+          id: 1,
+          threadId: thread.id,
+          backend: "claude",
+          text: "Try holding the lock until the child exits instead.",
+          kind: "rewound-prompt",
+        }}
+        thread={thread}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    await waitFor(() => {
+      expect(textbox).toHaveTextContent("Try holding the lock until the child exits instead.");
+    });
+    expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
+    // Editing the prompt keeps the chip; it is still the rewound prompt.
+    fireEvent.change(textbox, { target: { value: "Try holding the lock until exit." } });
+    expect(screen.getByText("Rewound prompt")).toBeInTheDocument();
+    fireEvent.change(textbox, { target: { value: "" } });
+    await waitFor(() => {
+      expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+    });
+
+    rerender(
+      <Composer
+        {...props}
+        draftRestore={{
+          id: 2,
+          threadId: thread.id,
+          backend: "claude",
+          text: "Now add a regression test for it.",
+          kind: "rewound-prompt",
+        }}
+        thread={thread}
+      />,
+    );
+    expect(await screen.findByText("Rewound prompt")).toBeInTheDocument();
+    // Another thread's composer is not the rewound one.
+    rerender(<Composer {...props} thread={otherThread} />);
+    await waitFor(() => {
+      expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+    });
+  });
+
+  it("takes a rewound prompt back out once its rewind is undone, and nothing else", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "thread-undone",
+      title: "Undone thread",
+      titleSource: "explicit",
+      source: "claude",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const props = {
+      desktopApi: { onAgentEvent: () => () => undefined },
+      disabled: false,
+      skills: [],
+      thread,
+      threads: [thread],
+    };
+    const restore = (id: number, kind: "rewound-prompt" | "rewound-prompt-undone", text = "") => ({
+      id, threadId: thread.id, backend: "claude" as const, text, kind,
+    });
+    const { rerender } = render(
+      <Composer {...props} draftRestore={restore(1, "rewound-prompt", "Try holding the lock instead.")} />,
+    );
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    await waitFor(() => expect(textbox).toHaveTextContent("Try holding the lock instead."));
+
+    rerender(<Composer {...props} draftRestore={restore(2, "rewound-prompt-undone")} />);
+    await waitFor(() => expect(textbox).toHaveTextContent(""));
+    expect(screen.queryByText("Rewound prompt")).not.toBeInTheDocument();
+
+    // A draft the operator wrote after clearing the chip is theirs.
+    fireEvent.change(textbox, { target: { value: "Something else" } });
+    rerender(<Composer {...props} draftRestore={restore(3, "rewound-prompt-undone")} />);
+    expect(textbox).toHaveTextContent("Something else");
   });
 
   it("forgets cold `#` anchors when the draft is cleared", async () => {
@@ -6555,12 +6783,11 @@ describe("Composer", () => {
     // looked editable and silently swallowed keystrokes.
     expect(container.querySelector(".composer-tiptap-input")).toHaveClass("is-readonly");
     expect(screen.getByText(/Message held while checks run/)).toBeInTheDocument();
-    // The pill is the only thing reporting the wait, so it keeps its contrast
-    // and carries the spinner while the footer group dims behind it.
+    // The pill reports the wait with a spinner at full contrast.
     const pill = container.querySelector(".composer__send-split-pill");
     expect(pill).toHaveClass("is-preparing");
     expect(pill?.querySelector(".pending-spinner")).toBeTruthy();
-    expect(container.querySelector(".composer__pending-controls--dim")).toBeTruthy();
+    expect(container.querySelector(".composer__pending-controls:disabled")).toBeTruthy();
 
     await act(async () => { check.resolve(false); });
     expect(container.querySelector(".composer-tiptap-input")).not.toHaveClass("is-readonly");

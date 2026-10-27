@@ -17,19 +17,25 @@ import {
 } from "./thread-navigation-relationships.js";
 import { STORAGE_RETENTION_SCHEMA } from "./storage-maintenance.js";
 import { THREAD_DEPENDENCY_SCHEMA } from "./thread-dependency-store.js";
+import { MESSAGING_REQUEST_SCHEMA } from "./messaging-request-store.js";
 import { THREAD_SANDBOX_SCHEMA } from "./thread-sandbox-store.js";
 import { migratePrReferenceIdentities } from "./migrate-pr-reference-identities.js";
 import { DURABLE_TURN_REQUEST_SCHEMA } from "./durable-turn-request-schema";
 import {
+  ensureThreadSubAgentPanelSchema,
   ensureThreadSubAgentSchema,
   THREAD_SUB_AGENTS_MOVED_META_KEY,
 } from "./thread-sub-agents";
+import {
+  ensureThreadUsageActivitySchema,
+  THREAD_USAGE_ACTIVITIES_MOVED_META_KEY,
+} from "./thread-usage-activities";
 import {
   attachSqliteWriteMetrics,
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 79;
+export const CURRENT_STATE_DB_USER_VERSION = 80;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -608,6 +614,16 @@ CREATE TABLE IF NOT EXISTS thread_todo_project_prefs (
   directory_key TEXT PRIMARY KEY,
   merge_method  TEXT NOT NULL,
   updated_at    INTEGER NOT NULL
+);
+`;
+
+/** Additive learned dispatch settings, keyed by the raising thread. */
+const THREAD_TODO_THREAD_PREFS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_todo_thread_prefs (
+  backend TEXT NOT NULL,
+  thread_id TEXT NOT NULL,
+  model_settings_json TEXT NOT NULL,
+  PRIMARY KEY (backend, thread_id)
 );
 `;
 
@@ -2133,9 +2149,30 @@ export class StateDb {
           db.pragma("user_version = 79");
         }).immediate();
       }
-      // Converge a profile whose v79 came from another branch. On a current
-      // profile every statement is IF NOT EXISTS and writes nothing.
+      if ((db.pragma("user_version", { simple: true }) as number) < 80) {
+        db.transaction(() => {
+          if ((db.pragma("user_version", { simple: true }) as number) >= 80) return;
+          // Schema and capture triggers only, as v79 did for cards. Existing
+          // usage activities move out of `threads.payload` lazily and in a
+          // sliced background pass, never here.
+          ensureThreadUsageActivitySchema(db);
+          if (tableExists(db, "threads")) {
+            db.prepare(
+              "INSERT OR IGNORE INTO meta(key, value) SELECT ?, '1' WHERE NOT EXISTS (SELECT 1 FROM threads)",
+            ).run(THREAD_USAGE_ACTIVITIES_MOVED_META_KEY);
+          }
+          db.pragma("user_version = 80");
+        }).immediate();
+      }
+      // Converge a profile whose v79 or v80 came from another branch. On a
+      // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
+      ensureThreadUsageActivitySchema(db);
+      db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
+      // Additive columns on the card tables, with no version of their own so
+      // no branch can claim it: one immediate transaction the first time,
+      // then two table-info reads per open.
+      ensureThreadSubAgentPanelSchema(db);
       // Keep current-version databases converged without asking pre-v36 profiles
       // to install the unique index before the migration above removes duplicates.
       db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
@@ -2833,6 +2870,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(PR_STATUS_WATCH_SCHEMA);
     ensurePrStatusWatchTerminalColumns(db);
     db.exec(THREAD_DEPENDENCY_SCHEMA);
+    db.exec(MESSAGING_REQUEST_SCHEMA);
     db.exec(THREAD_SANDBOX_SCHEMA);
     ensureThreadSearchFtsThreadIdColumn(db);
     ensurePullRequestProviderColumns(db);

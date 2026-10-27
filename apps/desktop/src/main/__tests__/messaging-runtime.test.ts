@@ -1648,6 +1648,61 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
+  it.each(["list_messaging_surfaces", "attach_thread_to_surface"] as const)("routes %s past Telegram to the owning Slack controller and preserves its denials", async (operation) => {
+    await prepareRuntimeStore();
+    let authorized = true;
+    const telegramAuthorization = vi.fn(() => true);
+    const telegramAdapter = createAdapter("telegram", {
+      retainedSourceConnectionId: () => "telegram-fixture",
+      authorizeRetainedSource: telegramAuthorization,
+    });
+    const createManagedConversation = vi.fn(async () => ({
+      channel: "slack" as const, outcome: "created" as const, updatedAt: 2000,
+      conversation: { id: "C4", kind: "thread" as const, parentId: "1000.000004", parentConversationId: "C4", workspaceId: "T1" },
+    }));
+    const slackAdapter = createAdapter("slack", {
+      retainedSourceConnectionId: () => "slack-fixture",
+      authorizeRetainedSource: () => authorized,
+      createManagedConversation,
+    });
+    const bridge = createBackendBridge();
+    const navigation = buildNavigationSnapshot();
+    navigation.threads.push({ ...navigation.threads[0]!, id: "thread-2", title: "Builder" });
+    navigation.threads[0]!.agent = { name: "Manager", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1000 };
+    bridge.readNavigationFixturePopulation = vi.fn(async () => navigation);
+    const event = { ...buildTextEvent("Attach the builder."), botMention: true,
+      channel: { channel: "slack" as const, conversation: { id: "C4", kind: "channel" as const, workspaceId: "T1" } } };
+    const { getDesktopMessagingStore } = await import("../messaging/desktop-messaging-store");
+    await getDesktopMessagingStore().upsertBinding({ id: "slack-manager", backend: "codex", threadId: "thread-1",
+      targetKind: "agent_thread", channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+    const { DesktopMessagingRuntime: Runtime } = await import("../messaging/messaging-runtime");
+    const runtime = trackRuntime(new Runtime({
+      adapterFactory: () => [telegramAdapter, slackAdapter], backendBridge: bridge,
+      config: {
+        inputDebounceMs: 0,
+        telegram: { channel: "telegram", botToken: "telegram-token", authorizedActorIds: [{ id: "user-1", displayName: "" }] },
+        slack: { channel: "slack", appToken: "slack-app-token", botToken: "slack-bot-token", signingSecret: "slack-signing-secret",
+          authorizedActorIds: [{ id: "user-1", displayName: "" }] },
+      },
+    }));
+    await runtime.start();
+    await slackAdapter.listener!(event);
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
+    const source = vi.mocked(bridge.startTurn).mock.calls[0]?.[0].messageOrigin?.causalMessagingSource;
+    expect(source).toBeDefined();
+    const args = { backend: "codex" as const, threadId: "thread-2", placement: "new_child" as const };
+    const context = { backend: "codex" as const, threadId: "thread-1", turnId: "completion", causalMessagingSource: source };
+    expect(await runtime.handlePwrAgentMessagingRequest({ operation, context, args })).toMatchObject({ ok: true });
+    // A live-origin fallback has no source in Telegram's controller either.
+    expect(await runtime.handlePwrAgentMessagingRequest({ operation, args,
+      context: { ...context, turnId: "turn-1", causalMessagingSource: undefined } })).toMatchObject({ ok: true });
+    authorized = false;
+    expect(await runtime.handlePwrAgentMessagingRequest({ operation, context, args }))
+      .toMatchObject({ ok: false, error: { code: "forbidden" } });
+    expect(telegramAuthorization).not.toHaveBeenCalled();
+    expect(createManagedConversation).toHaveBeenCalledTimes(operation === "attach_thread_to_surface" ? 1 : 0);
+  });
+
   it("clears resolved approval buttons through the owning channel adapter only", async () => {
     await prepareRuntimeStore();
     const telegramAdapter = createAdapter("telegram");

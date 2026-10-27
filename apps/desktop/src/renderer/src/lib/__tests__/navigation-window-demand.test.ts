@@ -1,7 +1,8 @@
 import { expect, it } from "vitest";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared";
 import type { NavigationDirectoryRow, NavigationIdentity, NavigationQueryPage } from "@pwragent/shared";
-import { addVisibleMountedOwnerDemand, buildNavigationWindowDemand, visibleDisclosedNavigationParents } from "../navigation-window-demand";
+import { addVisibleMountedOwnerDemand, buildNavigationWindowDemand, projectDisclosedNavigationParents, visibleDisclosedNavigationParents } from "../navigation-window-demand";
+import type { NavigationPresentedThread } from "../navigation-loaded-rows";
 
 const directories: NavigationDirectoryRow[] = Array.from({ length: 100 }, (_, index) => ({
   key: `directory:${index}`, kind: "directory", label: `Project ${index}`,
@@ -10,6 +11,25 @@ const directories: NavigationDirectoryRow[] = Array.from({ length: 100 }, (_, in
 }));
 const base = { browseMode: "directories" as const, attentionView: { id: "window", promoteOnTurnEnd: true }, directories,
   expandedByKey: {}, unpinnedExpandedByKey: {} };
+
+it("retains disclosure identities across metadata changes and replaces them for membership and owner changes", () => {
+  const thread: NavigationPresentedThread = { id: "parent", source: "codex", title: "Parent", titleSource: "explicit",
+    linkedDirectories: [], inbox: { inInbox: true }, ordinaryChildCount: 1 };
+  const project = (row: NavigationPresentedThread, previous: readonly NavigationIdentity[]) =>
+    projectDisclosedNavigationParents(new Map([[row.id, row]]), previous);
+  const first = project(thread, []);
+  expect(first).toEqual([{ backend: "codex", threadId: "parent" }]);
+  expect(project({ ...thread, title: "Renamed", threadStatus: "active", ordinaryChildCount: 2 }, first)).toBe(first);
+  expect(project({ ...thread, subthreadsCollapsed: true }, first)).toEqual([]);
+  expect(project({ ...thread, ordinaryChildCount: 0 }, first)).toEqual([]);
+  expect(project({ ...thread, source: "acp:grok" }, first)).toEqual([{ backend: "acp:grok", threadId: "parent" }]);
+  const remote: NavigationPresentedThread = { ...thread, federation: { instanceLabel: "Peer", peerStatus: "connected",
+    ref: { backend: "codex", threadId: thread.id, target: { scope: "remote", instanceId: "peer" } } } };
+  const remoteRefs = project(remote, first);
+  expect(remoteRefs).toEqual([{ backend: "codex", threadId: "parent", ownerInstanceId: "peer" }]);
+  expect(project({ ...remote, federation: { ...remote.federation!, peerStatus: "disconnected" } }, remoteRefs)).toBe(remoteRefs);
+  expect(project(thread, remoteRefs)).toEqual(first);
+});
 
 it("cold navigation fetches only visible membership and collapsed directories use counts only", () => {
   expect([...buildNavigationWindowDemand(base).keys()]).toEqual(["directory-index"]);

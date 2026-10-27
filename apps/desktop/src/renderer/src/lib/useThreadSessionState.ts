@@ -4081,6 +4081,12 @@ function normalizeReviewContext(
   const gitBranch = readTrimmedString(record.gitBranch);
   const baseBranch = readTrimmedString(record.baseBranch);
   const pullRequest = normalizeReviewPullRequest(record.pullRequest);
+  const pullRequests = Array.isArray(record.pullRequests)
+    ? record.pullRequests.flatMap((value) => {
+        const reviewed = normalizeReviewPullRequest(value);
+        return reviewed ? [reviewed] : [];
+      })
+    : [];
   const headCommit = readTrimmedString(record.headCommit);
   const baseCommit = readTrimmedString(record.baseCommit);
   const snapshot = record.pullRequestSnapshot as Record<string, unknown> | undefined;
@@ -4110,6 +4116,7 @@ function normalizeReviewContext(
     ...(record.pullRequest === null || pullRequest
       ? { pullRequest: pullRequest ?? null }
       : {}),
+    ...(pullRequests.length > 0 ? { pullRequests } : {}),
   };
 }
 

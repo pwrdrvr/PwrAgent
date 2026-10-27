@@ -11,12 +11,14 @@ import { CloseIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { observeElementVisibility } from "../../lib/observe-element-visibility";
 import { PrChipContextMenu } from "./PrChipContextMenu";
+import type { PrBranchDrift } from "./pr-branch-drift";
 import {
   prChipModifierClasses,
   prStatusLabel,
   resolvePrChipPresentation,
 } from "./pr-chip-state";
 import { PrStatusCard } from "./PrStatusCard";
+import { prNumberLabel } from "./pr-rollup";
 
 type PrChipProps = {
   pr: PrSummary;
@@ -31,6 +33,11 @@ type PrChipProps = {
    * draft / conflict on the chip itself, since there are no pills there.
    */
   withStatusPills?: boolean;
+  /**
+   * The thread branch's base drift, when this is the PR on that branch. The
+   * card shows it as its Local branch section.
+   */
+  branchDrift?: PrBranchDrift;
   onOpen: (url: string) => void;
   onOpenContextMenu?: (
     pr: PrSummary,
@@ -59,9 +66,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     className: "pr-status-card",
   });
   const updateTooltip = tooltipController.update;
-  const label = props.showRepoPrefix
-    ? `${pr.org}/${pr.repo}#${pr.number}`
-    : `#${pr.number}`;
+  const label = prNumberLabel(pr, props.showRepoPrefix);
   const presentation = resolvePrChipPresentation(pr, {
     withStatusPills: props.withStatusPills,
   });
@@ -70,7 +75,13 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   // Creating this element is not rendering it: it stays an inert object until
   // `show` hands it to the portal on hover/focus, so a sidebar full of chips
   // mounts exactly zero cards.
-  const card = <PrStatusCard pr={pr} withStatusPills={props.withStatusPills} />;
+  const card = (
+    <PrStatusCard
+      pr={pr}
+      withStatusPills={props.withStatusPills}
+      branchDrift={props.branchDrift}
+    />
+  );
   const latestCardRef = useRef(card);
   latestCardRef.current = card;
   const tooltipVisible = tooltipController.visible;
@@ -102,6 +113,9 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     pr.createdAt,
     pr.mergedAt,
     pr.closedAt,
+    props.branchDrift?.baseBranch,
+    props.branchDrift?.behind,
+    props.branchDrift?.ahead,
   ].join("|");
   const pushedCardKeyRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -111,9 +125,13 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
       return;
     }
     updateTooltip(
-      <PrStatusCard pr={pr} withStatusPills={props.withStatusPills} />,
+      <PrStatusCard
+        pr={pr}
+        withStatusPills={props.withStatusPills}
+        branchDrift={props.branchDrift}
+      />,
     );
-  }, [cardKey, pr, props.withStatusPills, tooltipVisible, updateTooltip]);
+  }, [cardKey, pr, props.withStatusPills, props.branchDrift, tooltipVisible, updateTooltip]);
 
   // `resolvePrChipPresentation` owns the draft / conflict / checks-running
   // rules, including the "defer to the sibling status pills" case, so the

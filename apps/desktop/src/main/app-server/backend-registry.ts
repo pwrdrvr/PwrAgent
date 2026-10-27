@@ -1,7 +1,10 @@
+import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
-import { ForgeReadError, validateForgeReadArgs, type ForgeReadRequest } from "../pr-status/forge-tool-contract";
+import type { ForgePrRepositoryResolver, ForgePrToolHandler } from "../agent-tools/pwragent-forge-pr-agent-tools";
+import { ForgeReadError, repositoryKey, validateForgeReadArgs, type ForgeReadRequest, type ForgeRepository } from "../pr-status/forge-tool-contract";
+import { forgePrToolGroup, type ForgePrToolArgs, type ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { sweepThreadArchiveRetention, archivedThreadFamily, archiveRetentionFamilyEligible } from "./thread-archive-retention";
 import { runGitCommand } from "./git-executable";
 import {
@@ -11,13 +14,22 @@ import {
   type TokenMiserPricingIndex,
 } from "./token-miser-ledger-index";
 import {
+  addTokenMiserGateAccountingTotals,
   findAcpPermissionModeConfigOption,
+  DEFAULT_FORGE_AGENT_TOOL_POLICY,
+  PWRAGENT_TOOL_NAMESPACE,
   DEFAULT_THREAD_ARCHIVE_POLICY,
+  FORGE_AGENT_TOOL_GROUP_LABELS,
+  isTokenMiserSubAgent,
+  totalTokenMiserGateAccountings,
   RENAME_THREAD_EXPECTED_NAME_MISMATCH,
   classifyDirectory,
   readUuidV7Timestamp,
   type DesktopThreadArchivePolicy,
   type DesktopThreadArchiveSweepStatus,
+  type ForgeAgentToolAccess,
+  type ForgeAgentToolGroup,
+  type ForgeAgentToolPolicy,
   type McpConnectionToolApproval,
 } from "@pwragent/shared";
 import type {
@@ -36,6 +48,8 @@ import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activit
 import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
 import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attribution";
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
+import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
+import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -71,10 +85,16 @@ import {
   type PullRequestRepositoryRef,
   type PullRequestReferenceIdentity,
 } from "../pr-status/forge-reference";
-import { projectThreadDisplay } from "./thread-display";
+import {
+  projectThreadDisplay,
+  readThreadSubAgentPanel,
+  type ThreadDisplayCards,
+  type ThreadSubAgentPanel,
+} from "./thread-display";
 import type { ReadQueuedTurnRequest, ReadQueuedTurnResponse } from "@pwragent/shared";
 import { buildIncomingWorkSummary } from "./thread-work-notification";
 import { ThreadCorrespondenceStore } from "./thread-correspondence-store";
+import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
 import { app } from "electron";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -98,7 +118,10 @@ import type {
   CodexProtocolCaptureResult,
   CodexProtocolCaptureStatus,
 } from "../../shared/codex-protocol-capture";
-import { formatReviewCommand } from "../../shared/review-command";
+import {
+  formatReviewCommand,
+  type NamedReviewPullRequest,
+} from "../../shared/review-command";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
   findLiveProfileRuntimeMarkers,
@@ -148,6 +171,8 @@ import {
   type PreviewThreadRewindResponse,
   type RewindThreadRequest,
   type RewindThreadResponse,
+  type UndoThreadRewindRequest,
+  type UndoThreadRewindResponse,
   anchorTurnUsageEntries,
   buildPrependPinRank,
   buildThreadMarkdownLink,
@@ -182,9 +207,11 @@ import {
   type AppServerListSkillsResponse,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
+  type AppServerMcpElicitationResponse,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
+  type AppServerThreadActivityDetail,
   type AppServerThreadCommandDetail,
   type AppServerThreadEntry,
   type AppServerReviewContext,
@@ -518,10 +545,8 @@ import { OwnerContentSearch } from "../thread-search/owner-content-search";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
 import { ThreadSearchStore } from "../thread-search/thread-search-store";
 import {
-  buildAutomationInspectionDynamicToolErrorResponse,
   handleAutomationInspectionDynamicToolCall,
   isAutomationInspectionDynamicToolCall,
-  readAutomationInspectionDynamicToolCall,
   type AutomationInspectionHandler,
 } from "../automations/automation-inspection-codex-tools";
 import {
@@ -535,17 +560,13 @@ import {
   readTaskMonitorDynamicToolCall,
 } from "./task-monitor-codex-tools";
 import {
-  buildPwrAgentAppDynamicToolErrorResponse,
   handlePwrAgentAppDynamicToolCall,
   isPwrAgentAppDynamicToolCall,
-  readPwrAgentAppDynamicToolCall,
 } from "../agent-tools/pwragent-app-codex-tools";
 import type { PwrAgentAppManagementHandler } from "../agent-tools/pwragent-app-agent-tools";
 import {
-  buildPwrAgentThreadDynamicToolErrorResponse,
   handlePwrAgentThreadDynamicToolCall,
   isPwrAgentThreadDynamicToolCall,
-  readPwrAgentThreadDynamicToolCall,
 } from "../agent-tools/pwragent-thread-codex-tools";
 import {
   PwrAgentFederatedThreadInspectionError,
@@ -555,49 +576,28 @@ import {
   type PwrAgentThreadInspectionHandler,
 } from "../agent-tools/pwragent-thread-agent-tools";
 import {
-  buildPwrAgentMessagingDynamicToolErrorResponse,
   handlePwrAgentMessagingDynamicToolCall,
   isPwrAgentMessagingDynamicToolCall,
-  readPwrAgentMessagingDynamicToolCall,
 } from "../agent-tools/pwragent-messaging-codex-tools";
 import {
   buildPwrAgentMessagingPdfToolRouter,
   type PwrAgentMessagingHandler,
 } from "../agent-tools/pwragent-messaging-agent-tools";
 import {
-  buildPwrAgentThreadOrchestrationDynamicToolErrorResponse,
-  handlePwrAgentThreadOrchestrationDynamicToolCall,
-  isPwrAgentThreadOrchestrationDynamicToolCall,
-  readPwrAgentThreadOrchestrationDynamicToolCall,
-} from "../agent-tools/pwragent-thread-orchestration-codex-tools";
-import {
   PwrAgentFederatedThreadMessageError,
   type PwrAgentFederatedThreadControlHandler,
   type PwrAgentFederatedThreadMessageHandler,
   type PwrAgentThreadOrchestrationHandler,
 } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
-import {
-  buildPwrAgentFederationDynamicToolErrorResponse,
-  handlePwrAgentFederationDynamicToolCall,
-  isPwrAgentFederationDynamicToolCall,
-  readPwrAgentFederationDynamicToolCall,
-} from "../agent-tools/pwragent-federation-codex-tools";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools";
-import {
-  buildPwrAgentStarMapDynamicToolErrorResponse,
-  handlePwrAgentStarMapDynamicToolCall,
-  isPwrAgentStarMapDynamicToolCall,
-  readPwrAgentStarMapDynamicToolCall,
-} from "../agent-tools/pwragent-star-map-codex-tools";
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
 import {
-  buildPwrAgentThreadTodoToolRouter,
   type PwrAgentThreadTodoHandler,
 } from "../agent-tools/pwragent-thread-todo-agent-tools";
 import type { MessagingAgentToolService } from "../messaging/messaging-agent-tool-service";
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { automationMcpToolAllowed, buildAutomationMcpPolicy, type AutomationMcpServer } from "../automations/automation-mcp-policy";
-import { buildAutomationMcpConsent, isMcpToolApproval } from "../mcp-connections/mcp-approval-consent";
+import { buildAutomationMcpConsent, buildMcpToolApprovalConsent, isMcpToolApproval } from "../mcp-connections/mcp-approval-consent";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import {
   buildStarMapIntakeAgentTools,
@@ -608,8 +608,6 @@ import {
   readAgentDynamicToolCall,
   toDynamicToolResponse,
 } from "../agent-tools/agent-tool-router";
-import { buildPwrAgentMcpConnectionToolRouter } from "../agent-tools/pwragent-mcp-connection-agent-tools";
-import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
 import {
   buildPwrAgentToolSearchDefinition,
@@ -1052,7 +1050,8 @@ type BackendClient = {
   }): Promise<AppServerReadThreadResponse["replay"]>;
   readThreadSummary?(threadId: string): Promise<AppServerThreadSummary>;
   readThreadName?(threadId: string): Promise<string | undefined>;
-  readThreadActivity?(params: { threadId: string; turnId: string; entryId: string }): Promise<AppServerThreadActivityEntry>;
+  readThreadActivity?(params: { threadId: string; turnId: string; entryId: string; itemIds?: string[] }): Promise<AppServerThreadActivityEntry>;
+  readThreadToolInvocation?(params: { threadId: string; turnId: string; itemId: string }): Promise<AppServerThreadActivityDetail[]>;
   readThreadTurn?(params: { threadId: string; turnId: string }): Promise<AppServerThreadReplay>;
   prepareFreshNativeVoiceThread?(params: Parameters<CodexAppServerClient["refreshThreadTools"]>[0]): Promise<boolean>;
   resumeNativeVoiceThread?(params: Parameters<CodexAppServerClient["resumeNativeVoiceThread"]>[0]): Promise<void>;
@@ -1088,8 +1087,11 @@ type BackendClient = {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadForkParams["config"];
   }): Promise<{ threadId: string }>;
+  readTurnRoot?(params: { threadId: string; turnId: string }): Promise<string | undefined>;
   startTurn(params: {
     threadId: string;
+    parentTurnId?: string;
+    rootTurnId?: string;
     input: AppServerTurnInputItem[];
     onInputTextPrepared?: (text: string | undefined) => void;
     cwd?: string;
@@ -1141,7 +1143,7 @@ type BackendClient = {
   onAppServerRestartStatusChanged?(
     listener: (status: CodexAppServerRestartStatus) => void,
   ): () => void;
-  onAppServerUnexpectedExit?(listener: () => void): () => void;
+  onAppServerUnexpectedExit?(listener: (threadIds?: ReadonlySet<string>) => void): () => void;
   restartAppServer?(): Promise<void>;
   resetAppServerRestarts?(reason: string): void;
   readAccount?(): Promise<BackendAccountSummary>;
@@ -2011,8 +2013,16 @@ function normalizePositivePullRequestNumber(value: unknown): number | undefined 
   return value;
 }
 
+type QuitThreadSource = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  threadKey: string;
+  source: string;
+  turnId?: string;
+};
+
 /** A started Codex tool item; `itemType` is lowercased with separators removed. */
-type LiveCodexToolItem = { turnId: string; itemType: string };
+type LiveCodexToolItem = { turnId: string; itemType: string; turnEnded?: boolean };
 
 type PendingServerRequest = {
   backend: AppServerBackendKind;
@@ -3154,6 +3164,7 @@ type TaskMonitorCancellationState = {
 };
 
 type TaskMonitorDelegationRecord = {
+  causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
   activeCommandCount: number;
   backend: AppServerBackendKind;
   createdAt: number;
@@ -3168,6 +3179,7 @@ type TaskMonitorDelegationRecord = {
   parentBackend: AppServerBackendKind;
   parentThreadId: string;
   parentTurnId: string;
+  rootTurnId?: string;
   heartbeatIntervalSeconds: number;
   pollIntervalSeconds: number;
   preferredModel: string;
@@ -3218,6 +3230,7 @@ type ReviewTerminal = {
 };
 
 type PendingReviewStartRecord = {
+  turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
   pendingReviewId: string;
   backend: AppServerBackendKind;
   threadId: string;
@@ -4359,12 +4372,12 @@ function readFormattedTokenCount(
  * lets thread-list discovery repair both the card and its parent pricing row.
  */
 function buildPersistedCodexNativeUsageBackfill(params: {
+  activities?: readonly AppServerThreadActivityEntry[];
   fastMode?: boolean;
   model?: string;
-  overlay?: ThreadOverlayState;
   serviceTier?: string;
 }): PersistedCodexNativeUsageBackfill | undefined {
-  const activities = (params.overlay?.immutableUsageActivities ?? []).filter(
+  const activities = (params.activities ?? []).filter(
     (activity) =>
       activity.status === "completed"
       && (
@@ -5575,7 +5588,8 @@ function claudeTurnTimes(replay: AppServerThreadReplay): Map<string, ClaudeTurnT
 }
 
 function resolveLiveThreadUsageTiming(params: {
-  overlay?: ThreadOverlayState;
+  /** The thread's persisted usage activity for `turnId`, if any. */
+  activity?: AppServerThreadActivityEntry;
   reportedStartedAt?: number;
   turnId?: string;
 }): {
@@ -5587,9 +5601,9 @@ function resolveLiveThreadUsageTiming(params: {
     return {};
   }
 
-  const activity = params.overlay?.immutableUsageActivities?.find(
-    (entry) => entry.turn?.id === params.turnId,
-  );
+  const activity = params.activity?.turn?.id === params.turnId
+    ? params.activity
+    : undefined;
   const turn = activity?.turn;
   // Only a UUIDv7 id carries its own start time. Other backends (Claude's ids
   // are UUIDv4) report the start on turn/started instead.
@@ -8605,7 +8619,7 @@ function buildSteerRequestSignature(
   return createHash("sha256")
     .update(JSON.stringify({
       input: params.input,
-      messageOrigin: messageOrigin ?? null,
+      messageOrigin: withoutTurnAttribution(messageOrigin) ?? null,
       // An interrupt and a steer of the same text are different requests.
       ...(params.delivery === "now" ? { delivery: "now" } : {}),
     }))
@@ -8649,6 +8663,10 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "readTokenMiserGatePricingLines"
     | "reconcileOrphanedThreadSubAgents"
     | "moveLegacyThreadSubAgents"
+    | "moveLegacyThreadUsageActivities"
+    | "readThreadUsageActivities"
+    | "readThreadUsageActivityForTurn"
+    | "readThreadUsageSettings"
     | "markThreadToolInvocationsNoisy"
     | "setThreadSpendAlertPending"
     | "persistThreadToolInvocationBoundary"
@@ -8869,7 +8887,9 @@ function readProviderRuntimeFingerprints(
   return Object.fromEntries(
     PROVIDER_IDS.map((provider) => [
       provider,
-      providers[provider]?.dependencyFingerprint ?? "",
+      providers[provider]?.runtimeFingerprint
+        ?? providers[provider]?.dependencyFingerprint
+        ?? "",
     ]),
   ) as Record<ProviderId, string>;
 }
@@ -9144,7 +9164,11 @@ export class DesktopBackendRegistry {
    * revert (its thread/reverted, normalized to thread/rewound). The registry
    * announces only a revert Codex did not, so windows reload once.
    */
-  private readonly codexRevertsInFlight = new Map<string, { announced: boolean }>();
+  /**
+   * Codex threads this registry is reverting, and whether Codex has reported
+   * the revert. The registry announces each revert itself.
+   */
+  private readonly codexRevertsInFlight = new Map<string, { reported: boolean }>();
   private readonly reservedAcpStartThreadKeys = new Set<string>();
   private readonly activeTurnKeys = new ActiveTurnKeySet();
   private readonly threadHandoffReservations = new Set<string>();
@@ -9160,7 +9184,7 @@ export class DesktopBackendRegistry {
    * original `turn/started` notification.
    */
   private readonly backendActiveCodexThreadIds = new Set<string>();
-  /** Started Codex tool items can keep running after their parent turn ends. */
+  /** Commands may outlive their turn; other tools belong to that turn only. */
   private readonly liveCodexToolItemsByThread = new Map<string, Map<string, LiveCodexToolItem>>();
   private readonly codexBackgroundTerminals = new Map<string, CodexBackgroundTerminal[]>();
   /**
@@ -9469,7 +9493,7 @@ export class DesktopBackendRegistry {
       if (pdfResponse) {
         return pdfResponse;
       }
-      if (request.context.backend === "codex" && request.operation === "attach_thread_here") {
+      if (request.context.backend === "codex" && ["attach_thread_here", "attach_thread_to_surface", "list_messaging_surfaces"].includes(request.operation)) {
         const threadId = request.context.threadId;
         if (this.changingCodexAgentThreadIds.has(threadId)) {
           return {
@@ -9525,7 +9549,25 @@ export class DesktopBackendRegistry {
         },
       };
     }
-    return await this.messagingAgentToolService.handlePwrAgentMessagingRequest(request);
+    return await this.messagingAgentToolService.handlePwrAgentMessagingRequest({
+      ...request,
+      context: { ...request.context, ...await this.readCausalMessagingContext(request.context) },
+    });
+  }
+
+  /** Exact, indexed origin lookup. Never hydrate a transcript or traverse ancestry. */
+  async readCausalMessagingContext(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<
+    Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">
+  > {
+    const origin = await this.readExactTurnMessageOrigin(context);
+    return { ...(origin?.causalMessagingSource ? { causalMessagingSource: origin.causalMessagingSource } : {}),
+      ...(origin?.causalMessagingAmbiguous ? { causalMessagingAmbiguous: true } : {}) };
+  }
+
+  private async readExactTurnMessageOrigin(context: { backend: AppServerBackendKind; threadId: string; turnId?: string }): Promise<AppServerThreadMessageOrigin | undefined> {
+    if (!context.turnId || !this.overlayStore.readThreadMessageOrigins) return undefined;
+    const messageId = buildTurnUserMessageOriginId(context.turnId);
+    return (await this.overlayStore.readThreadMessageOrigins({ ...context, messageIds: [messageId] }))[messageId];
   }
 
   private forgeReadHandler?: ForgeReadHandler;
@@ -9536,8 +9578,186 @@ export class DesktopBackendRegistry {
     this.forgeReadHandler = routed;
   }
 
+  private forgePrToolHandler?: ForgePrToolHandler;
+  private forgePrRepositoryResolver?: ForgePrRepositoryResolver;
+  private forgeToolPolicyResolver?: () => ForgeAgentToolPolicy;
+  /** Conversation grants for forge writes, keyed by thread, then tool and repository. Memory only. */
+  private readonly forgeToolSessionApprovals = new Map<string, Map<string, string>>();
+
+  /** `resolveRepository` names the repository on an approval card and fails a bad target before asking. */
+  setForgePrToolHandler(handler: ForgePrToolHandler, resolveRepository?: ForgePrRepositoryResolver): void {
+    this.forgePrToolHandler = handler;
+    this.forgePrRepositoryResolver = resolveRepository;
+  }
+
+  setForgeToolPolicyResolver(resolve: () => ForgeAgentToolPolicy): void {
+    this.forgeToolPolicyResolver = resolve;
+  }
+
+  private resolveForgeToolPolicy(): ForgeAgentToolPolicy {
+    try {
+      return this.forgeToolPolicyResolver?.() ?? DEFAULT_FORGE_AGENT_TOOL_POLICY;
+    } catch (error) {
+      // An unreadable policy must not widen access: treat the family as off.
+      backendRegistryLog.warn("could not read forge tool policy", { error: String(error) });
+      return { ...DEFAULT_FORGE_AGENT_TOOL_POLICY, enabled: false };
+    }
+  }
+
+  /** Refuses a call the operator's policy removed, even from a turn holding an older schema. */
+  private assertForgeToolAllowed(group: ForgeAgentToolGroup, tool: string): ForgeAgentToolAccess {
+    const policy = this.resolveForgeToolPolicy();
+    if (!policy.enabled) {
+      throw new ForgeReadError("tools_disabled", `Forge tools are off in Settings → Git → Agent forge tools, so ${tool} is unavailable. Ask the operator to turn them on; do not work around the setting with the gh or glab CLI.`);
+    }
+    const access = policy.access[group];
+    if (access === "off") {
+      throw new ForgeReadError("tools_disabled", `${FORGE_AGENT_TOOL_GROUP_LABELS[group]} is Off in Settings → Git → Agent forge tools, so ${tool} is unavailable. Ask the operator to change the setting; do not work around it with the gh or glab CLI.`);
+    }
+    return access;
+  }
+
+  private readonly gatedForgeReadHandler: ForgeReadHandler = async (operation, args, context) => {
+    this.assertForgeToolAllowed("read", operation);
+    if (!this.forgeReadHandler) throw new ForgeReadError("unavailable", "Forge read tools are unavailable on this instance.");
+    return await this.forgeReadHandler(operation, args, context);
+  };
+
+  private readonly gatedForgePrToolHandler: ForgePrToolHandler = async (operation, args, context) => {
+    const group = forgePrToolGroup(operation, args);
+    const access = this.assertForgeToolAllowed(group, operation);
+    let target = args;
+    if (group !== "read") {
+      const repository = this.forgePrRepositoryResolver ? await this.forgePrRepositoryResolver(args, context) : args.repository;
+      await this.approveForgeToolWrite(operation, args, context, group, access, repository);
+      // Act exactly where the card said, even if the thread's remotes change while it waits.
+      if (repository) target = { ...args, repository };
+    }
+    if (!this.forgePrToolHandler) throw new ForgeReadError("unavailable", "Forge tools are unavailable on this instance.");
+    const result = await this.forgePrToolHandler(operation, target, context);
+    if (operation === "create_pull_request") return await this.attachCreatedPullRequest(result, context);
+    return result;
+  };
+
+  /** Link a PR the agent just opened, so its chip and status appear without a branch lookup. */
+  private async attachCreatedPullRequest(result: unknown, context: AgentToolCallContext): Promise<unknown> {
+    const url = readRecord(result)?.url;
+    if (typeof url !== "string") return result;
+    try {
+      const attached = await this.handleAttachThreadPullRequestInspectionRequest({ backend: context.backend, threadId: context.threadId, url });
+      return { ...readRecord(result), attachedToThread: attached.ok };
+    } catch (error) {
+      backendRegistryLog.warn("could not attach created pull request", { threadId: context.threadId, error: String(error) });
+      return { ...readRecord(result), attachedToThread: false };
+    }
+  }
+
+  /**
+   * The operator's consent for one GitHub write. `allow` runs; `auto` follows
+   * the turn's approval mode (see `forgeAutoRunsWithoutApproval`); otherwise
+   * the shipped MCP approval card asks. Automations cannot answer, so they are
+   * refused with the setting to change.
+   */
+  private async approveForgeToolWrite(
+    operation: ForgePrToolOperation,
+    args: ForgePrToolArgs,
+    context: AgentToolCallContext,
+    group: ForgeAgentToolGroup,
+    access: ForgeAgentToolAccess,
+    repository?: ForgeRepository,
+  ): Promise<void> {
+    if (access === "allow") return;
+    const signal = context.signal ?? new AbortController().signal;
+    signal.throwIfAborted();
+    const label = FORGE_AGENT_TOOL_GROUP_LABELS[group];
+    const requestId = `forge-tool:${randomUUID()}`;
+    const forge = repository?.provider === "gitlab" ? "GitLab" : "GitHub";
+    // Comment-sized changes may be granted for the conversation; opening,
+    // editing, approving and merging are always one call at a time.
+    const sessionGrant = group === "comments" || group === "issues";
+    const notification: AppServerPendingRequestNotification = {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: context.threadId,
+        turnId: context.turnId ?? "",
+        requestId,
+        serverName: forge,
+        mode: "form",
+        message: forgeToolApprovalMessage(operation, args, repository?.provider ?? "github"),
+        requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          pwragent_approval_kind: "mcp_tool_call",
+          ...(sessionGrant ? { persist: ["session"] } : {}),
+          ...(repository ? { connector_name: `${repository.owner}/${repository.repo}` } : {}),
+          ...(group === "approve_merge" ? { riskLevel: "high" } : {}),
+          subtitle: `${label} is set to ${access === "auto" ? "Auto" : "Ask"} in Settings → Git → Agent forge tools.${sessionGrant ? " A conversation grant lasts until PwrAgent restarts or the setting changes." : " This allows this call only."}`,
+          tool_params_display: forgeToolParamsDisplay(args),
+        },
+      },
+    };
+    const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
+    if (access === "auto" && await this.forgeAutoRunsWithoutApproval(group, context, automation)) {
+      signal.throwIfAborted();
+      backendRegistryLog.info("running Auto forge write without an approval card", {
+        backend: context.backend,
+        threadId: context.threadId,
+        turnId: context.turnId,
+        operation,
+      });
+      return;
+    }
+    if (automation) {
+      throw new ForgeReadError("approval_required", `${label} is set to ${access === "auto" ? "Auto" : "Ask"} in Settings → Git → Agent forge tools, and an automation cannot answer an approval. The operator can set it to Allow.`);
+    }
+    if (!context.turnId) {
+      throw new ForgeReadError("approval_required", `${label} needs the operator's approval, which requires an active turn.`);
+    }
+    const sessionKey = JSON.stringify([context.backend, context.threadId]);
+    // A grant covers one tool in one repository, never every repository the
+    // thread links, and ends when that group's access level changes.
+    const grantTarget = `${operation}\u0000${repository ? repositoryKey(repository) : ""}`;
+    const grantKey = `${group}:${access}`;
+    if (sessionGrant && this.forgeToolSessionApprovals.get(sessionKey)?.get(grantTarget) === grantKey) return;
+    const key = buildPendingRequestKey({ backend: context.backend, threadId: context.threadId, requestId });
+    const approved = await new Promise<"once" | "session" | false>((resolve, reject) => {
+      const finish = (value: "once" | "session" | false, error?: unknown): void => {
+        signal.removeEventListener("abort", aborted);
+        this.pendingServerRequests.delete(key);
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const aborted = (): void => {
+        finish(false, signal.reason);
+        void this.emit({ backend: context.backend, notification: {
+          method: "serverRequest/resolved", params: { threadId: context.threadId, turnId: context.turnId, requestId },
+        } }).catch(() => undefined);
+      };
+      this.pendingServerRequests.set(key, {
+        backend: context.backend, notification,
+        resolve: (response) => {
+          if (signal.aborted) { aborted(); return; }
+          const accepted = Boolean(response && "action" in response && response.action === "accept");
+          const persist = response && "_meta" in response ? readRecord(response._meta)?.persist : undefined;
+          finish(accepted ? (sessionGrant && persist === "session" ? "session" : "once") : false);
+        },
+        reject: (error) => finish(false, error),
+      });
+      signal.addEventListener("abort", aborted, { once: true });
+      if (signal.aborted) { aborted(); return; }
+      void this.emit({ backend: context.backend, notification }).catch((error) => finish(false, error));
+    });
+    if (!approved) throw new ForgeReadError("declined", `The operator declined ${operation}. Do not retry it or use the gh or glab CLI instead; ask what they want changed.`);
+    if (approved === "session") {
+      const grants = this.forgeToolSessionApprovals.get(sessionKey) ?? new Map<string, string>();
+      grants.set(grantTarget, grantKey);
+      this.forgeToolSessionApprovals.set(sessionKey, grants);
+    }
+  }
+
   async readForgeForPeer(request: ForgeReadRequest, signal?: AbortSignal): Promise<unknown> {
     validateForgeReadArgs(request.operation, request.args);
+    // This instance's operator decides whether its threads' forge data is read, from here or a peer.
+    this.assertForgeToolAllowed("read", request.operation);
     if (!isAppServerBackendKind(request.backend) || !request.threadId || request.args.instanceId) throw new ForgeReadError("invalid_arguments", "Federated forge reads require a local thread target.");
     if (!this.localForgeReadHandler) throw new ForgeReadError("unavailable", "Forge read tools are unavailable on this owner.");
     return this.localForgeReadHandler(request.operation, { ...request.args, backend: request.backend, threadId: request.threadId }, { backend: request.backend, threadId: request.threadId, transport: "mcp", signal });
@@ -9570,7 +9790,7 @@ export class DesktopBackendRegistry {
     | ThreadPullRequestWatchToolHandler
     | undefined;
   private threadDependencyToolHandler:
-    | ((args: import("@pwragent/shared").ManageThreadDependenciesRequest) => Promise<PwrAgentThreadInspectionResponse>)
+    | ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">) => Promise<PwrAgentThreadInspectionResponse>)
     | undefined;
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
@@ -10208,21 +10428,45 @@ export class DesktopBackendRegistry {
     this.localFilePrivateStorageRoots = codexHome ? [codexHome] : [];
     const clientVersion =
       typeof app?.getVersion === "function" ? app.getVersion() : "0.0.0";
-    this.codexClient =
-      options?.codexClient ??
-      replayClients?.codexClient ??
-      new CodexAppServerClient({
+    const createCodexClient = (provider?: CodexModelProviderSettings): CodexAppServerClient => {
+      let resources: Promise<Awaited<ReturnType<typeof prepareBonsaiRuntime>>> | undefined;
+      let cleanup = Promise.resolve();
+      const releaseResources = (): Promise<void> => {
+        const previous = resources;
+        resources = undefined;
+        cleanup = cleanup.then(async () => {
+          const runtime = await previous?.catch(() => undefined);
+          await runtime?.close();
+        });
+        return cleanup;
+      };
+      const client = new CodexAppServerClient({
         args: settingsService ? undefined : buildCodexClientArgs(codexEnv),
         command: codexCommand,
         connectionObserver: codexObserver,
         env: codexSpawnEnv,
-        resolveArgs: settingsService
-          ? async (env) => buildCodexClientArgs(
+        resolveArgs: async (env) => {
+          const args = buildCodexClientArgs(
               env,
-              settingsService.resolveCodexConfigOverrides?.() ?? [],
-              settingsService.resolveCodexModelProviders?.() ?? [],
-            )
-          : undefined,
+              settingsService?.resolveCodexConfigOverrides?.() ?? [],
+              settingsService?.resolveCodexModelProviders?.() ?? [],
+            );
+          if (!provider) return args;
+          await cleanup;
+          resources ??= prepareBonsaiRuntime(provider, env?.[codexModelProviderApiKeyEnv(provider.id)]);
+          try {
+            const prepared = await resources;
+            const nativeMcpNames = await this.codexClient.readConfiguredMcpServerNames?.() ?? [];
+            return [
+              ...args,
+              ...bonsaiNativeMcpOverrides(nativeMcpNames).flatMap((override) => ["-c", override]),
+              ...prepared.overrides.flatMap((override) => ["-c", override]),
+            ];
+          } catch (error) {
+            await releaseResources();
+            throw error;
+          }
+        },
         resolveCommand: settingsService
           ? async () => await settingsService.resolveCodexCommand()
           : undefined,
@@ -10252,6 +10496,24 @@ export class DesktopBackendRegistry {
         // may initialize this client; ordinary backend summaries are passive.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
+      if (provider) {
+        const close = client.close.bind(client);
+        client.close = async () => {
+          try { await close(); } finally { await releaseResources(); }
+        };
+        client.onAppServerUnexpectedExit(() => {
+          void releaseResources().catch((error) => backendRegistryLog.warn("Bonsai runtime cleanup failed", { error: String(error) }));
+        });
+      }
+      return client;
+    };
+    this.codexClient = options?.codexClient ?? replayClients?.codexClient ?? createProviderRuntimeClient(
+      createCodexClient(),
+      {
+        resolveProviders: () => settingsService?.resolveCodexModelProviders?.() ?? [],
+        create: createCodexClient,
+      },
+    );
     if (typeof settingsService?.onCodexModelProviderKeysChanged === "function") {
       this.unsubscribers.push(settingsService.onCodexModelProviderKeysChanged(() => {
         this.codexModelProviderKeysRead = undefined;
@@ -10265,8 +10527,8 @@ export class DesktopBackendRegistry {
     }
     if (this.codexClient.onAppServerUnexpectedExit) {
       this.unsubscribers.push(
-        this.codexClient.onAppServerUnexpectedExit(() => {
-          void this.handleCodexAppServerUnexpectedExit().catch((error) => {
+        this.codexClient.onAppServerUnexpectedExit((threadIds) => {
+          void this.handleCodexAppServerUnexpectedExit(threadIds).catch((error) => {
             backendRegistryLog.warn("Codex app server exit cleanup failed", {
               error: error instanceof Error ? error.message : String(error),
             });
@@ -10444,7 +10706,7 @@ export class DesktopBackendRegistry {
         connections: { requestGatewayToolOperation: (params) => gatewayConnections.requestGatewayToolOperation!(params) },
         selectedConnections: async (context) => {
           if (!this.isLiveDynamicToolCall(context.backend, context)) throw new Error("MCP gateway tools require an active turn on the owning thread.");
-          const denied = this.dynamicToolPermissionDenied(context.backend, "mcp_connections", {
+          const denied = await this.dynamicToolPermissionDenied(context.backend, "mcp_connections", {
             ...context, tool: "call_mcp_tool",
           });
           if (denied) throw new Error(`The messaging actor lacks permission for MCP gateway tools (${denied}).`);
@@ -10498,7 +10760,9 @@ export class DesktopBackendRegistry {
                 taskMonitorHandler: async (request) =>
                   await this.handleAgentTaskMonitorRequest(request),
                 threadInspectionHandler: this.threadInspectionHandler,
-                forgeReadHandler: this.forgeReadHandler,
+                forgeReadHandler: this.gatedForgeReadHandler,
+                forgePrToolHandler: this.gatedForgePrToolHandler,
+                forgeToolPolicy: this.resolveForgeToolPolicy(),
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
                 tokenMiserStore: this.tokenMiserStore,
                 tokenMiserFocused: this.tokenMiserService?.focused,
@@ -10546,12 +10810,14 @@ export class DesktopBackendRegistry {
           method: "serverRequest/resolved", params: { threadId, turnId, requestId },
         } });
       },
-      resolveReviewContext: async ({ threadId, cwd }) => await this.resolveReviewContext({
+      resolveReviewContext: async ({ threadId, cwd, pullRequests }) => await this.resolveReviewContext({
         backend: "claude", cwd, threadId,
         overlay: await this.overlayStore.getThreadOverlayState({ backend: "claude", threadId }),
-        // `/code-review` reviews the checked-out work, so the branch and its
-        // attached pull request name the card.
+        // `/code-review` with no target reviews the checked-out work, so the
+        // branch and its attached pull request name the card. One that named
+        // pull requests is named by those.
         target: { type: "custom", instructions: "/code-review" },
+        ...(pullRequests ? { namedPullRequests: pullRequests } : {}),
       }),
       ...options?.claudeBackendOptions,
     });
@@ -10851,6 +11117,16 @@ export class DesktopBackendRegistry {
     this.subAgentStartupReconciliation =
       this.reconcileOrphanedThreadSubAgentsAtStartup().catch((error) => {
         backendRegistryLog.warn("sub-agent-startup-reconciliation-failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    // The one-time move of usage activities out of overlay rows, after the
+    // card repair. Sliced, and a no-op once the profile's marker is set.
+    // Nothing waits for it: a row it has not reached moves on first touch.
+    void this.subAgentStartupReconciliation
+      .then(() => this.overlayStore.moveLegacyThreadUsageActivities?.())
+      .catch((error: unknown) => {
+        backendRegistryLog.warn("usage-activity-move-failed", {
           message: error instanceof Error ? error.message : String(error),
         });
       });
@@ -11627,7 +11903,7 @@ export class DesktopBackendRegistry {
   }
 
   setThreadDependencyToolHandler(
-    handler: ((args: import("@pwragent/shared").ManageThreadDependenciesRequest) => Promise<PwrAgentThreadInspectionResponse>) | undefined,
+    handler: ((args: import("@pwragent/shared").ManageThreadDependenciesRequest, provenance?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">) => Promise<PwrAgentThreadInspectionResponse>) | undefined,
   ): void {
     this.threadDependencyToolHandler = handler;
   }
@@ -14081,7 +14357,7 @@ export class DesktopBackendRegistry {
                 replay,
                 entries: overlay?.managedReviewEntries,
               }),
-          activities: overlay?.immutableUsageActivities?.filter(
+          activities: (await this.readThreadUsageActivities(backend, [request.threadId]))[request.threadId]?.filter(
             (activity) => usageActivityScope(activity) === "monitor",
           ),
         })
@@ -17178,6 +17454,21 @@ export class DesktopBackendRegistry {
       this.assertNotBootstrap("readThread");
       const activity = request.display.activity;
       if (backend !== "codex" || !activity?.entryId || !activity.turnId) throw new Error("Invalid activity detail request.");
+      if (activity.invocationItemId !== undefined) {
+        const itemId = activity.invocationItemId;
+        if (!itemId || activity.entryId !== `activity-${itemId}` || activity.itemIds !== undefined) {
+          throw new Error("Invalid tool invocation detail request.");
+        }
+        const details = await this.withCodexThreadClient(request.threadId, async (client) => {
+          if (!client.readThreadToolInvocation) throw new Error("Tool invocation detail reads are unavailable.");
+          return await client.readThreadToolInvocation({ threadId: request.threadId, turnId: activity.turnId, itemId });
+        }, undefined, false);
+        return {
+          backend, threadId: request.threadId, fetchedAt: Date.now(),
+          toolInvocationDetails: { turnId: activity.turnId, itemId, details },
+          replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+        };
+      }
       const entry = await this.withCodexThreadClient(request.threadId, async (client) => {
         if (!client.readThreadActivity) throw new Error("Activity detail reads are unavailable.");
         return await client.readThreadActivity({ threadId: request.threadId, ...activity });
@@ -17188,16 +17479,11 @@ export class DesktopBackendRegistry {
       };
     }
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
-    // Pricing groups gates by their cards, so the display still reads every
-    // card; it no longer parses them as part of the overlay.
-    const persistedSubAgents = await this.overlayStore.listThreadSubAgents({ backend, threadId: request.threadId });
-    const subAgents = backend === "codex"
-      ? this.mergeLiveTokenMiserSubAgents(request.threadId, persistedSubAgents)
-      : persistedSubAgents;
     if (request.display.resource === "transcript") {
-      return projectThreadDisplay(await this.readThreadData(request), request, {
+      const data = await this.readThreadData(request);
+      return projectThreadDisplay(data, request, {
         ...overlay,
-        subAgents,
+        ...await this.readPricingSubAgents({ backend, threadId: request.threadId, pricing: data.pricing }),
         activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
       });
     }
@@ -17218,15 +17504,107 @@ export class DesktopBackendRegistry {
       ...(request.display.resource === "tools" || request.display.resource === "incident" ? { includeAllInvocations: true } : {}),
     });
     const toolAccounting = stored ? await this.withTokenMiserAccounting({ accounting: stored, backend, threadId: request.threadId }) : undefined;
+    const monitorId = request.display.monitorId;
+    // Pricing includes in-memory gates; their parent links and accounting
+    // must come from the same live view before grouping and pagination.
+    const pricingCards = await this.readPricingSubAgents({ backend, threadId: request.threadId, pricing });
     return projectThreadDisplay({
       backend, threadId: request.threadId, fetchedAt: Date.now(), pricing, toolAccounting,
       replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
     }, request, {
       ...overlay,
-      // Pricing includes in-memory gates; their parent links and accounting
-      // must come from the same live view before grouping and pagination.
-      subAgents,
+      ...pricingCards,
+      ...(request.display.resource === "subagents"
+        ? { subAgentPanel: await this.readSubAgentPanel({ backend, request, pricingSubAgents: pricingCards.pricingSubAgents }) }
+        : {}),
+      ...(request.display.resource === "subagent" && monitorId
+        ? { subAgent: (await this.readSubAgentsWithLiveState({ backend, threadId: request.threadId, monitorIds: [monitorId] }))
+          .find((card) => card.monitorId === monitorId) }
+        : {}),
       activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
+    });
+  }
+
+  /** Cards whose stored row live state replaces: unpersisted gates and held native-worker usage. */
+  private liveSubAgentMonitorIds(backend: AppServerBackendKind, threadId: string): string[] {
+    if (backend !== "codex") return [];
+    return [
+      ...this.liveTokenMiserSubAgents.get(threadId)?.keys() ?? [],
+      ...this.liveCodexNativeSubAgentUsage.get(threadId)?.keys() ?? [],
+    ];
+  }
+
+  /** The named stored cards, with every live card and live usage merged in. */
+  private async readSubAgentsWithLiveState(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    monitorIds: readonly string[];
+  }): Promise<ThreadSubAgentSummary[]> {
+    const stored = await this.overlayStore.getThreadSubAgents(params);
+    return params.backend === "codex" ? this.mergeLiveTokenMiserSubAgents(params.threadId, stored) : stored;
+  }
+
+  /**
+   * Pricing's cards: only those its usage lines name, so a thread's thousands
+   * of policy gates with no line are never read. The savings fallback sums
+   * every gate, so it gets the stored totals, with each live gate swapped in
+   * for its stored version.
+   */
+  private async readPricingSubAgents(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    pricing: ThreadPricingLedger | undefined;
+  }): Promise<Pick<ThreadDisplayCards, "pricingSubAgents" | "tokenMiserGateTotals">> {
+    const { backend, threadId } = params;
+    const liveIds = this.liveSubAgentMonitorIds(backend, threadId);
+    const named = new Set(liveIds);
+    for (const line of params.pricing?.lines ?? []) {
+      if (line.sourceItemId) named.add(line.sourceItemId);
+    }
+    const stored = await this.overlayStore.getThreadSubAgents({ backend, threadId, monitorIds: [...named] });
+    const storedTotals = await this.overlayStore.readThreadTokenMiserGateTotals({ backend, threadId });
+    if (backend !== "codex") return { pricingSubAgents: stored, tokenMiserGateTotals: storedTotals };
+    const liveGates = this.listLiveTokenMiserSubAgents(threadId).filter(isTokenMiserSubAgent);
+    const liveGateIds = new Set(liveGates.map((card) => card.monitorId));
+    const replaced = stored.filter((card) => liveGateIds.has(card.monitorId) && isTokenMiserSubAgent(card));
+    return {
+      pricingSubAgents: this.mergeLiveTokenMiserSubAgents(threadId, stored),
+      tokenMiserGateTotals: addTokenMiserGateAccountingTotals(
+        addTokenMiserGateAccountingTotals(
+          storedTotals,
+          totalTokenMiserGateAccountings(liveGates.map((card) => card.tokenMiserAccounting)),
+        ),
+        totalTokenMiserGateAccountings(replaced.map((card) => card.tokenMiserAccounting)),
+        -1,
+      ),
+    };
+  }
+
+  /**
+   * The sub-agents panel's page from the card table, with live cards merged
+   * into it. Pricing's cards already hold every live card with its live state.
+   */
+  private async readSubAgentPanel(params: {
+    backend: AppServerBackendKind;
+    request: AppServerReadThreadRequest;
+    pricingSubAgents: readonly ThreadSubAgentSummary[] | undefined;
+  }): Promise<ThreadSubAgentPanel> {
+    const { backend, request } = params;
+    const threadId = request.threadId;
+    const liveIds = this.liveSubAgentMonitorIds(backend, threadId);
+    const live = new Set(liveIds);
+    return await readThreadSubAgentPanel({
+      demand: request.display!,
+      now: Date.now(),
+      storedRevision: await this.overlayStore.readThreadSubAgentRevision({ backend, threadId }),
+      live: {
+        monitorIds: liveIds,
+        cards: (params.pricingSubAgents ?? []).filter((card) => live.has(card.monitorId)),
+      },
+      reader: {
+        counts: (read) => this.overlayStore.readThreadSubAgentLensCounts({ backend, threadId, ...read }),
+        page: (read) => this.overlayStore.listThreadSubAgentLensPage({ backend, threadId, ...read }),
+      },
     });
   }
 
@@ -17343,7 +17721,7 @@ export class DesktopBackendRegistry {
     const replayWithImmutableUsage = shouldAppendTranscriptOverlays
       ? mergeTurnAnchoredUsageActivities({
           replay: replayWithManagedReviews,
-          activities: overlay?.immutableUsageActivities,
+          activities: (await this.readThreadUsageActivities(backend, [request.threadId]))[request.threadId],
         })
       : replayWithManagedReviews;
     const messageIds = [
@@ -18620,7 +18998,9 @@ export class DesktopBackendRegistry {
       taskMonitorHandler: async (request) =>
         await this.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
-      forgeReadHandler: this.forgeReadHandler,
+      forgeReadHandler: this.gatedForgeReadHandler,
+      forgePrToolHandler: this.gatedForgePrToolHandler,
+      forgeToolPolicy: this.resolveForgeToolPolicy(),
       threadOrchestrationHandler: this.threadOrchestrationHandler,
       // Gated on the setting, not merely on the store existing: the store is
       // constructed for any live Codex client, so passing it unconditionally
@@ -19084,8 +19464,8 @@ export class DesktopBackendRegistry {
   ): Promise<ForkThreadResponse> {
     this.assertNotBootstrap("forkThread");
     const backend = request.backend ?? "codex";
-    if (backend !== "codex") {
-      throw new Error("Thread forking is currently supported only by the Codex backend.");
+    if (backend !== "codex" && backend !== "claude") {
+      throw new Error("Thread forking is supported by the Codex and Claude backends.");
     }
 
     const executionMode = request.executionMode ?? "default";
@@ -19139,92 +19519,112 @@ export class DesktopBackendRegistry {
             worktreePath: request.importedWorktree?.worktreePath ?? cwd,
           })
         : buildLocalLinkedDirectory(cwd);
-    const client = this.getClient(backend, executionMode);
-    if (!client.forkThread) {
-      await preparedWorkspace.rollback?.();
-      request.onPreparedWorkspaceRollback?.(undefined);
-      throw new Error("Selected backend does not support thread/fork.");
-    }
-    const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
-    const pdfMcpRegistration =
-      sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
-        ? await this.registerPdfMcpClient({})
-        : undefined;
-    const pdfMcpConfig = sourceHasPdfMcpToolCatalog
-      ? pdfMcpRegistration
-        ? buildCodexPdfMcpConfig(pdfMcpRegistration)
-        : buildCodexPdfMcpDisabledConfig()
-      : undefined;
-    const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
-      sourceOverlay?.tokenMiserEnabled,
-    );
-    if (tokenMiserEnabled) {
-      await this.prepareTokenMiserRuntime();
-    }
-    const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
-      client,
-      enabled: tokenMiserEnabled,
-    });
-    const codexThreadConfig = mergeCodexThreadConfigs(
-      pdfMcpConfig,
-      tokenMiserConfig,
-    );
-
     let result: { threadId: string };
+    let pdfMcpRegistration: AgentToolMcpRegistration | undefined;
     let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     let codexEnvironmentStartupFailure: CodexEnvironmentStartupFailure | undefined;
-    try {
+    if (backend === "claude") {
+      // Claude copies the history and forks its session at the first message.
       try {
-        const sourceRuntime = directoryKind === "workspace"
-          ? undefined
-          : Object.hasOwn(request, "codexEnvironmentRuntime")
-            ? request.codexEnvironmentRuntime
-            : sourceOverlay?.codexEnvironmentRuntime;
-        forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
-          cwd,
-          forceSetup: request.rerunCodexEnvironmentSetup,
-          onSetupProgress: request.onCodexEnvironmentSetupProgress
-            ? (event) => {
-                request.onCodexEnvironmentSetupProgress?.({
-                  directoryKey:
-                    request.codexEnvironmentSetupProgressKey ??
-                    `fork:${backend}:${request.sourceThreadId}`,
-                  ...event,
-                });
-              }
-            : undefined,
-          sourceRuntime,
-          workMode: preparedWorkspace.workMode,
+        result = await this.claudeBackend.forkThread({
+          sourceThreadId: request.sourceThreadId,
+          cwd: cwd!,
+          model: modelSettings.model,
+          executionMode,
+          linkedDirectories: dedupeLinkedDirectoriesByNormalizedIdentity(
+            linkedDirectories.map(normalizeLinkedDirectoryKind),
+          ),
         });
       } catch (error) {
-        if (!(error instanceof CodexEnvironmentStartupError)) {
-          throw error;
-        }
-        forkedCodexEnvironmentRuntime = error.runtime;
-        codexEnvironmentStartupFailure = {
-          message: error.message,
-          phase: error.phase,
-          worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
-        };
+        await preparedWorkspace.rollback?.();
+        request.onPreparedWorkspaceRollback?.(undefined);
+        throw error;
       }
-      result = await client.forkThread({
-        threadId: request.sourceThreadId,
-        ...(request.sourceThreadPath?.trim()
-          ? { path: request.sourceThreadPath.trim() }
-          : {}),
-        cwd,
-        ...modelSettings,
-        approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
-        approvalsReviewer: modeSettings.approvalsReviewer,
-        sandbox: request.sandbox ?? modeSettings.sandbox,
-        codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
-        ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
+    } else {
+      const client = this.getClient(backend, executionMode);
+      if (!client.forkThread) {
+        await preparedWorkspace.rollback?.();
+        request.onPreparedWorkspaceRollback?.(undefined);
+        throw new Error("Selected backend does not support thread/fork.");
+      }
+      const sourceHasPdfMcpToolCatalog = this.hasPdfMcpToolCatalog(sourceOverlay);
+      pdfMcpRegistration =
+        sourceHasPdfMcpToolCatalog && this.resolvePdfAnalysisEnabledFn()
+          ? await this.registerPdfMcpClient({})
+          : undefined;
+      const pdfMcpConfig = sourceHasPdfMcpToolCatalog
+        ? pdfMcpRegistration
+          ? buildCodexPdfMcpConfig(pdfMcpRegistration)
+          : buildCodexPdfMcpDisabledConfig()
+        : undefined;
+      const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+        sourceOverlay?.tokenMiserEnabled,
+      );
+      if (tokenMiserEnabled) {
+        await this.prepareTokenMiserRuntime();
+      }
+      const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
+        client,
+        enabled: tokenMiserEnabled,
       });
-      pdfMcpRegistration?.bindThread(result.threadId);
-    } catch (error) {
-      await preparedWorkspace.rollback?.();
-      request.onPreparedWorkspaceRollback?.(undefined);
-      throw error;
+      const codexThreadConfig = mergeCodexThreadConfigs(
+        pdfMcpConfig,
+        tokenMiserConfig,
+      );
+
+      try {
+        try {
+          const sourceRuntime = directoryKind === "workspace"
+            ? undefined
+            : Object.hasOwn(request, "codexEnvironmentRuntime")
+              ? request.codexEnvironmentRuntime
+              : sourceOverlay?.codexEnvironmentRuntime;
+          forkedCodexEnvironmentRuntime = await this.buildForkedCodexEnvironmentRuntime({
+            cwd,
+            forceSetup: request.rerunCodexEnvironmentSetup,
+            onSetupProgress: request.onCodexEnvironmentSetupProgress
+              ? (event) => {
+                  request.onCodexEnvironmentSetupProgress?.({
+                    directoryKey:
+                      request.codexEnvironmentSetupProgressKey ??
+                      `fork:${backend}:${request.sourceThreadId}`,
+                    ...event,
+                  });
+                }
+              : undefined,
+            sourceRuntime,
+            workMode: preparedWorkspace.workMode,
+          });
+        } catch (error) {
+          if (!(error instanceof CodexEnvironmentStartupError)) {
+            throw error;
+          }
+          forkedCodexEnvironmentRuntime = error.runtime;
+          codexEnvironmentStartupFailure = {
+            message: error.message,
+            phase: error.phase,
+            worktreeCleanupAvailable: preparedWorkspace.workMode === "worktree",
+          };
+        }
+        result = await client.forkThread({
+          threadId: request.sourceThreadId,
+          ...(request.sourceThreadPath?.trim()
+            ? { path: request.sourceThreadPath.trim() }
+            : {}),
+          cwd,
+          ...modelSettings,
+          approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
+          approvalsReviewer: modeSettings.approvalsReviewer,
+          sandbox: request.sandbox ?? modeSettings.sandbox,
+          codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
+          ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
+        });
+        pdfMcpRegistration?.bindThread(result.threadId);
+      } catch (error) {
+        await preparedWorkspace.rollback?.();
+        request.onPreparedWorkspaceRollback?.(undefined);
+        throw error;
+      }
     }
     let gitBranch: string | undefined;
     try {
@@ -19276,7 +19676,7 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode,
       });
-      if (sourceOverlay?.tokenMiserEnabled !== undefined) {
+      if (backend === "codex" && sourceOverlay?.tokenMiserEnabled !== undefined) {
         await this.overlayStore.setThreadTokenMiser({
           backend,
           threadId: result.threadId,
@@ -19730,11 +20130,11 @@ export class DesktopBackendRegistry {
     if (!request.input.some((item) => item.type === "text" && item.text.trim())) {
       throw new Error("Replacement input requires a non-empty prompt.");
     }
-    if (entry.agentMessages) {
-      const updated = this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender);
-      if (!updated) throw new Error("The sender's queued message is no longer waiting.");
-      this.emitQueuedTurnInputUpdated(updated);
-    } else this.updateQueuedTurnInput(entry.id, input);
+    const updated = entry.agentMessages
+      ? this.threadTurnQueue.replaceQueuedAgentInput(entry.id, input, sender, request.messageOrigin)
+      : this.threadTurnQueue.updateQueuedEntryInput(entry.id, input, sender);
+    if (!updated) throw new Error("The sender's queued message is no longer waiting.");
+    this.emitQueuedTurnInputUpdated(updated);
     return {
       backend: entry.backend,
       threadId: entry.threadId,
@@ -20070,7 +20470,69 @@ export class DesktopBackendRegistry {
     return this.getInProgressThreadSnapshot();
   }
 
-  private getInProgressThreadSnapshot(): {
+  /** On-demand only: no timers, persistence, tool arguments, or transcript text. */
+  getQuitBlockerDiagnostics() {
+    const contributors: Record<string, unknown>[] = [];
+    const sourceCounts: Record<string, number> = {};
+    let omittedContributors = 0;
+    let bytes = 0;
+    const bounded = (value: string) => value.slice(0, 100);
+    this.getInProgressThreadSnapshot((entry) => {
+      sourceCounts[entry.source] = (sourceCounts[entry.source] ?? 0) + 1;
+      if (contributors.length >= 20) {
+        omittedContributors += 1;
+        return;
+      }
+      const tools = entry.source === "live-tool-items"
+        ? this.liveCodexToolItemsByThread.get(entry.threadId)
+        : undefined;
+      const terminals = entry.source === "background-terminals"
+        ? this.codexBackgroundTerminals.get(entry.threadId)
+        : undefined;
+      const detail = {
+        threadKey: bounded(entry.threadKey),
+        sourceThreadId: bounded(entry.threadId),
+        source: entry.source,
+        sourceBackend: entry.backend,
+        ...(entry.turnId ? { turnId: bounded(entry.turnId) } : {}),
+        ...(entry.backend === "codex" ? {
+          observedStatus: this.observedCodexThreadStatuses.get(entry.threadId)?.status,
+        } : {}),
+        ...(tools ? {
+          itemCount: tools.size,
+          items: (() => {
+            const sample = [];
+            for (const [itemId, item] of tools) {
+              sample.push({
+                itemId: bounded(itemId), turnId: bounded(item.turnId),
+                type: bounded(item.itemType), turnEnded: Boolean(item.turnEnded),
+              });
+              if (sample.length === 4) break;
+            }
+            return sample;
+          })(),
+        } : {}),
+        ...(terminals ? {
+          terminalCount: terminals.length,
+          terminals: terminals.slice(0, 4).map((terminal) => ({
+            itemId: bounded(terminal.itemId), processId: bounded(terminal.processId),
+          })),
+        } : {}),
+      };
+      const size = Buffer.byteLength(JSON.stringify(detail), "utf8");
+      // Leave room for the fixed source counts and omission counters within
+      // an 8 KiB log field, even with non-ASCII protocol identifiers.
+      if (bytes + size > 6_500) {
+        omittedContributors += 1;
+        return;
+      }
+      contributors.push(detail);
+      bytes += size;
+    });
+    return { sourceCounts, contributors, omittedContributors };
+  }
+
+  private getInProgressThreadSnapshot(onSource?: (entry: QuitThreadSource) => void): {
     count: number;
     threadIds: string[];
     subAgentThreadKeys?: string[];
@@ -20113,10 +20575,11 @@ export class DesktopBackendRegistry {
         });
       }
     }
-    const addThread = (backend: AppServerBackendKind, threadId: string): void => {
+    const addThread = (backend: AppServerBackendKind, threadId: string, source: string, turnId?: string): void => {
       const owner = this.resolveSubAgentThreadOwner({ backend, threadId });
       const threadKey = formatQuitThreadKey(owner.backend, owner.threadId);
       if (!automationExecutionThreadKeys.has(threadKey)) {
+        onSource?.({ backend, threadId, threadKey, source, turnId });
         threadKeys.add(threadKey);
         if (owner.isSubAgent) {
           subAgentThreadKeys.add(threadKey);
@@ -20128,45 +20591,45 @@ export class DesktopBackendRegistry {
       }
     };
     for (const threadId of this.backendActiveCodexThreadIds) {
-      addThread("codex", threadId);
+      addThread("codex", threadId, "backend-active");
     }
     for (const threadId of this.codexBackgroundTerminals.keys()) {
-      addThread("codex", threadId);
+      addThread("codex", threadId, "background-terminals");
     }
     // A Claude session outlives its turn while background tasks run.
     for (const threadId of this.claudeBackend.liveSessionThreadIds()) {
-      addThread("claude", threadId);
+      addThread("claude", threadId, "live-session");
     }
     for (const threadId of this.liveCodexToolItemsByThread.keys()) {
-      addThread("codex", threadId);
+      addThread("codex", threadId, "live-tool-items");
     }
     for (const key of this.activeTurnKeys) {
       const parsed = parseActiveTurnKey(key);
       if (parsed) {
-        addThread(parsed.backend, parsed.threadId);
+        addThread(parsed.backend, parsed.threadId, "active-turn", parsed.turnId);
       }
     }
     for (const key of this.activeCodexTurnModes.keys()) {
       const threadId = parseThreadIdFromThreadTurnKeyBody(key);
       if (threadId) {
-        addThread("codex", threadId);
+        addThread("codex", threadId, "turn-mode", parseThreadTurnKeyBody(key)?.turnId);
       }
     }
     for (const threadId of this.reservedCodexStartThreadIds) {
-      addThread("codex", threadId);
+      addThread("codex", threadId, "start-reservation");
     }
     for (const key of this.reservedAcpStartThreadKeys) {
       const parsed = parseReservedAcpStartThreadKey(key);
       if (parsed) {
-        addThread(parsed.backend, parsed.threadId);
+        addThread(parsed.backend, parsed.threadId, "start-reservation");
       }
     }
     for (const entry of this.threadTurnQueue.getAllQueuedEntries()) {
-      addThread(entry.backend, entry.threadId);
+      addThread(entry.backend, entry.threadId, "queued-turn");
     }
     for (const move of this.pendingThreadWorkspaceMoves.values()) {
       if (move.status === "queued" || move.status === "running") {
-        addThread(move.backend, move.threadId);
+        addThread(move.backend, move.threadId, "workspace-move");
       }
     }
     const threadIds = [...threadKeys].sort();
@@ -20572,6 +21035,8 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
+    agentMessageOrigins?: AppServerThreadMessageOrigin[];
+    agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
@@ -20607,6 +21072,8 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
+    agentMessageOrigins?: AppServerThreadMessageOrigin[];
+    agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     if (!this.tokenMiserServerCapabilitiesForTurn.getStore()) {
@@ -21053,6 +21520,8 @@ export class DesktopBackendRegistry {
           );
           const started = await client.startTurn({
             threadId: params.threadId,
+            ...delegatedTurnAttribution(params.messageOrigin,
+              params.agentMessages?.map((message) => message.origin) ?? params.agentMessageOrigins),
             input,
             ...(pendingMessageContextId ? {
               onInputTextPrepared: (text: string | undefined) => {
@@ -21586,12 +22055,16 @@ export class DesktopBackendRegistry {
     return { ...params, cwd, target };
   }
 
-  async startReview(params: StartReviewRequest, trustedSnapshot = false): Promise<StartReviewResponse> {
+  async startReview(
+    params: StartReviewRequest,
+    trustedSnapshot = false,
+    turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
+  ): Promise<StartReviewResponse> {
     // Retain terminal evidence only for the lifetime of this start request.
     const terminals = new Map<string, ReviewTerminal>();
     this.pendingReviewTerminals.add(terminals);
     try {
-      return await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot);
+      return await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution);
     } finally {
       this.pendingReviewTerminals.delete(terminals);
     }
@@ -21601,6 +22074,7 @@ export class DesktopBackendRegistry {
     params: StartReviewRequest,
     terminals: Map<string, ReviewTerminal>,
     trustedSnapshot: boolean,
+    turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
   ): Promise<StartReviewResponse> {
     this.assertNotBootstrap("startReview");
     await this.assertThreadNotLocked(params.backend, params.threadId);
@@ -21819,6 +22293,7 @@ export class DesktopBackendRegistry {
 
       result = managedMode
         ? await this.startManagedReviewChild({
+            turnAttribution,
             backend: reviewBackend,
             cwd,
             // The parent thread's persisted Codex environment only describes
@@ -21954,6 +22429,7 @@ export class DesktopBackendRegistry {
   }
 
   private async startManagedReviewChild(params: {
+    turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
     /** Backend that runs the review — the reviewer override when set. */
     backend: AppServerBackendKind;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
@@ -22054,6 +22530,7 @@ export class DesktopBackendRegistry {
     this.reservedCodexStartThreadIds.add(thread.threadId);
     try {
       const turn = await client.startTurn({
+        ...params.turnAttribution,
         threadId: thread.threadId,
         input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
         ...(params.cwd ? { cwd: params.cwd } : {}),
@@ -22115,6 +22592,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     cwd?: string;
     executionTarget?: "local" | "remote";
+    namedPullRequests?: NamedReviewPullRequest[];
     overlay?: ThreadOverlayState;
     target: AppServerReviewTarget;
     threadId: string;
@@ -22146,6 +22624,9 @@ export class DesktopBackendRegistry {
           ...(thread?.linkedDirectories ?? []),
           ...(params.overlay?.extraLinkedDirectories ?? []),
         ],
+        ...(params.namedPullRequests
+          ? { namedPullRequests: params.namedPullRequests }
+          : {}),
         ...(params.overlay?.prs ? { prs: params.overlay.prs } : {}),
         target: params.target,
       });
@@ -22297,6 +22778,7 @@ export class DesktopBackendRegistry {
   }
 
   private scheduleReviewStart(params: {
+    turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
     invokingTurnId: string;
     request: StartReviewRequest;
     idempotencyKey?: string;
@@ -22327,6 +22809,7 @@ export class DesktopBackendRegistry {
 
     const now = Date.now();
     const pending: PendingReviewStartRecord = {
+      ...(params.turnAttribution ? { turnAttribution: params.turnAttribution } : {}),
       pendingReviewId: `pending-review:${randomUUID()}`,
       backend: params.request.backend,
       threadId: params.request.threadId,
@@ -22413,7 +22896,7 @@ export class DesktopBackendRegistry {
       };
       this.pendingReviewStarts.set(candidate.pendingReviewId, starting);
       try {
-        const response = await this.startReview(starting.request, true);
+        const response = await this.startReview(starting.request, true, starting.turnAttribution);
         this.pendingReviewStarts.set(candidate.pendingReviewId, {
           ...starting,
           status: "started",
@@ -22493,7 +22976,7 @@ export class DesktopBackendRegistry {
       .update(JSON.stringify({
         expectedTurnId: request.expectedTurnId ?? null,
         input: request.input ?? [],
-        messageOrigin: request.messageOrigin ?? null,
+        messageOrigin: withoutTurnAttribution(request.messageOrigin) ?? null,
         operation: request.operation,
       }))
       .digest("hex");
@@ -23340,7 +23823,17 @@ export class DesktopBackendRegistry {
     const promise = this.submitSteerTurn(params, messageOrigin);
     this.acceptedSteerRequests.set(requestKey, { promise, signature });
     try {
-      return await promise;
+      const result = await promise;
+      if (result.disposition === "steered" && messageOrigin) {
+        const previous = await this.readExactTurnMessageOrigin({ backend: params.backend, threadId: params.threadId, turnId: result.turnId });
+        if (previous?.causalMessagingSource || previous?.causalMessagingAmbiguous
+          || messageOrigin.causalMessagingSource || messageOrigin.causalMessagingAmbiguous) {
+          await this.persistThreadMessageOrigin({ backend: params.backend, threadId: params.threadId,
+            messageId: buildTurnUserMessageOriginId(result.turnId),
+            origin: { ...(previous ?? messageOrigin), ...mergeCausalMessagingContext([previous, messageOrigin]) } });
+        }
+      }
+      return result;
     } catch (error) {
       if (this.acceptedSteerRequests.get(requestKey)?.promise === promise) {
         this.acceptedSteerRequests.delete(requestKey);
@@ -23373,11 +23866,12 @@ export class DesktopBackendRegistry {
     if (request.mode !== "conversation" && request.backend !== "claude") {
       throw new Error("This provider cannot restore files when it rewinds a thread");
     }
+    const rewindId = randomUUID();
     let result: {
-      announced?: boolean;
       promptText?: string;
       restoredFileCount?: number;
       targetPromptIndex?: number;
+      undoable?: boolean;
       updatedAt: number;
     };
     if (request.backend === "claude") {
@@ -23387,6 +23881,7 @@ export class DesktopBackendRegistry {
           threadId: request.threadId,
           target: request.target,
           mode: request.mode,
+          rewindId,
         });
       } finally {
         // A reply sent during the rewind waited in the queue.
@@ -23417,7 +23912,31 @@ export class DesktopBackendRegistry {
     } else {
       throw new Error("Rewind is not available for this provider");
     }
-    if (!result.announced) await this.emit({
+    try {
+      await this.overlayStore.appendThreadRewind({
+        backend: request.backend,
+        threadId: request.threadId,
+        rewind: {
+          id: rewindId,
+          occurredAt: result.updatedAt,
+          ...(request.removedTurnCount !== undefined
+            ? { removedTurnCount: request.removedTurnCount }
+            : {}),
+          ...(result.restoredFileCount !== undefined
+            ? { restoredFileCount: result.restoredFileCount }
+            : {}),
+          ...(result.undoable ? { undoable: true } : {}),
+        },
+      });
+    } catch (error) {
+      // The provider has rewound; a missing marker must not report failure.
+      backendRegistryLog.warn("failed to record thread rewind", {
+        backend: request.backend,
+        threadId: request.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    await this.emit({
       backend: request.backend,
       notification: {
         method: "thread/rewound",
@@ -23436,15 +23955,72 @@ export class DesktopBackendRegistry {
       target: request.target,
       mode: request.mode,
       updatedAt: result.updatedAt,
+      rewindId,
       ...(result.promptText ? { promptText: result.promptText } : {}),
       ...(result.restoredFileCount !== undefined ? { restoredFileCount: result.restoredFileCount } : {}),
+    };
+  }
+
+  /**
+   * Puts back what a rewind removed. Only Claude keeps the removed turns, and
+   * only until the thread's next turn starts.
+   */
+  async undoThreadRewind(
+    request: UndoThreadRewindRequest,
+  ): Promise<UndoThreadRewindResponse> {
+    if (request.backend !== "claude") {
+      throw new Error("This provider cannot undo a rewind");
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "claude",
+      threadId: request.threadId,
+    });
+    const record = overlay?.rewindLog?.find((entry) => entry.id === request.rewindId);
+    if (!record?.undoable || record.undoneAt !== undefined) {
+      throw new Error("This rewind can no longer be undone");
+    }
+    await this.assertThreadNotLocked("claude", request.threadId);
+    let updatedAt: number;
+    try {
+      ({ updatedAt } = await this.claudeBackend.undoRewind({
+        threadId: request.threadId,
+        rewindId: request.rewindId,
+      }));
+    } finally {
+      this.threadTurnQueue.scheduleThreadDrain({ backend: "claude", threadId: request.threadId });
+    }
+    try {
+      await this.overlayStore.markThreadRewindUndone({
+        backend: "claude",
+        threadId: request.threadId,
+        rewindId: request.rewindId,
+        undoneAt: updatedAt,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("failed to record undone thread rewind", {
+        threadId: request.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    await this.emit({
+      backend: "claude",
+      notification: {
+        method: "thread/rewound",
+        params: { threadId: request.threadId, updatedAt },
+      },
+    });
+    return {
+      backend: "claude",
+      threadId: request.threadId,
+      rewindId: request.rewindId,
+      updatedAt,
     };
   }
 
   private async revertCodexThread(params: {
     threadId: string;
     beforeTurnId?: string;
-  }): Promise<{ announced: boolean; updatedAt: number }> {
+  }): Promise<{ updatedAt: number }> {
     if (!params.beforeTurnId) {
       throw new Error("This prompt has no Codex turn to rewind to");
     }
@@ -23462,7 +24038,7 @@ export class DesktopBackendRegistry {
     // Hold the start reservation so no turn or compaction begins on this
     // thread while Codex replaces its history.
     this.reservedCodexStartThreadIds.add(params.threadId);
-    const revert = { announced: false };
+    const revert = { reported: false };
     this.codexRevertsInFlight.set(params.threadId, revert);
     try {
       await this.withCodexThreadClient(params.threadId, async (client) => {
@@ -23471,6 +24047,16 @@ export class DesktopBackendRegistry {
         }
         await client.revertThread({ threadId: params.threadId, beforeTurnId });
       });
+    } catch (error) {
+      // Codex changed the history before the request failed; readers still
+      // need to reload it.
+      if (revert.reported) {
+        await this.emit({
+          backend: "codex",
+          notification: { method: "thread/rewound", params: { threadId: params.threadId, updatedAt: Date.now() } },
+        });
+      }
+      throw error;
     } finally {
       this.codexRevertsInFlight.delete(params.threadId);
       this.reservedCodexStartThreadIds.delete(params.threadId);
@@ -23479,7 +24065,7 @@ export class DesktopBackendRegistry {
       this.threadTurnQueue.scheduleThreadDrain({ backend: "codex", threadId: params.threadId });
       this.maybeDrainCodexInvalidIdRecoveries();
     }
-    return { announced: revert.announced, updatedAt: Date.now() };
+    return { updatedAt: Date.now() };
   }
 
   async configureGrokWorkflowBudget(
@@ -26565,18 +27151,19 @@ export class DesktopBackendRegistry {
    * `item/completed`. Without this a missed completion holds the thread in
    * the quit prompt and blocks a runtime restart forever. Commands in a live
    * turn may not have a session yet, and other tool kinds never appear in the
-   * list, so both are kept.
+   * list, so both are kept. Absence from the active-turn maps alone cannot
+   * establish completion: a new turn's bookkeeping may still be pending.
    */
   private pruneUnlistedCodexCommands(threadId: string, terminals: CodexBackgroundTerminal[]): void {
     const items = this.liveCodexToolItemsByThread.get(threadId);
-    if (!items || this.backendActiveCodexThreadIds.has(threadId)) return;
+    if (!items) return;
     const listed = new Set(terminals.map((terminal) => terminal.itemId));
     let pruned = false;
-    for (const [itemId, { turnId, itemType }] of items) {
+    for (const [itemId, { itemType, turnEnded }] of items) {
       if (
         itemType === "commandexecution"
         && !listed.has(itemId)
-        && !this.activeTurnKeys.has(buildActiveTurnKey("codex", threadId, turnId))
+        && turnEnded
       ) {
         items.delete(itemId);
         pruned = true;
@@ -28240,7 +28827,9 @@ export class DesktopBackendRegistry {
         taskMonitorHandler: async (request) =>
           await this.handleAgentTaskMonitorRequest(request),
         threadInspectionHandler: this.threadInspectionHandler,
-        forgeReadHandler: this.forgeReadHandler,
+        forgeReadHandler: this.gatedForgeReadHandler,
+        forgePrToolHandler: this.gatedForgePrToolHandler,
+        forgeToolPolicy: this.resolveForgeToolPolicy(),
         threadOrchestrationHandler: this.threadOrchestrationHandler,
         ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore, tokenMiserFocused: this.tokenMiserService?.focused } : {}),
         starMapHandler: this.starMapHandler,
@@ -29240,9 +29829,14 @@ export class DesktopBackendRegistry {
     this.unsubscribers.push(
       client.onNotification(async (notification) => {
         logBackendLifecycleNotification(backend, notification);
+        // The registry announces its own revert once the rewind is recorded,
+        // so the marker arrives with the event.
         if (backend === "codex" && notification.method === "thread/rewound") {
           const revert = this.codexRevertsInFlight.get(notification.params.threadId);
-          if (revert) revert.announced = true;
+          if (revert) {
+            revert.reported = true;
+            return;
+          }
         }
         // Match the client's running-turn ownership before the first await;
         // exit can arrive while lifecycle delivery is still in progress.
@@ -30367,21 +30961,15 @@ export class DesktopBackendRegistry {
         ]),
       ],
     });
-    if (this.overlayStore.getThreadListingOverlayStates && nativeSubAgentThreads.length > 0) {
-      // Discovery repairs worker cards and parent pricing from durable child
-      // turn usage. Only these native workers need history-bearing overlays;
-      // ordinary rows keep the compact listing projection.
-      const nativeIds = new Set(nativeSubAgentThreads.map((thread) => thread.id));
-      const usageThreadIds = [...new Set(threadsWithPending.flatMap((thread) =>
-        (thread.codexNativeSubAgents ?? []).map((worker) => worker.threadId),
-      ))].filter((id) => nativeIds.has(id)
-        && overlaysByThreadId[id]?.handoffOrigin?.groupingMode !== "subthread");
-      if (usageThreadIds.length > 0) {
-        Object.assign(overlaysByThreadId, await this.overlayStore.getThreadOverlayStates({
-          backend: "codex", threadIds: usageThreadIds,
-        }));
-      }
-    }
+    // Discovery repairs worker cards and parent pricing from durable child
+    // turn usage. Only these native workers' usage activities are read;
+    // every row keeps the compact listing projection.
+    const nativeIds = new Set(nativeSubAgentThreads.map((thread) => thread.id));
+    const usageThreadIds = [...new Set(threadsWithPending.flatMap((thread) =>
+      (thread.codexNativeSubAgents ?? []).map((worker) => worker.threadId),
+    ))].filter((id) => nativeIds.has(id)
+      && overlaysByThreadId[id]?.handoffOrigin?.groupingMode !== "subthread");
+    const usageActivitiesByThreadId = await this.readThreadUsageActivities("codex", usageThreadIds);
     // Native-worker cards only: a primary-key range per parent that never
     // reads the parent's Token Miser gate history.
     const nativeCardsByThreadId = await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
@@ -30394,6 +30982,7 @@ export class DesktopBackendRegistry {
       nativeThreads: nativeSubAgentThreads,
       overlaysByThreadId,
       parentThreads: threadsWithPending,
+      usageActivitiesByThreadId,
     });
     await this.reconcilePersistedCodexNativeSubAgents(threadsWithPending, nativeCardsByThreadId);
     const visibleThreads = threadsWithPending.filter(
@@ -30654,10 +31243,15 @@ export class DesktopBackendRegistry {
         },
       });
     }
-    const overlays = await this.overlayStore.getThreadOverlayStates({
-      backend: "codex",
+    // The reconcile reads listing metadata only (a worker's handoff origin);
+    // usage activities are read from their own table below.
+    const overlayRequest = {
+      backend: "codex" as const,
       threadIds: [threadId, ...nativeThreads.map((thread) => thread.id)],
-    });
+    };
+    const overlays = this.overlayStore.getThreadListingOverlayStates
+      ? await this.overlayStore.getThreadListingOverlayStates(overlayRequest)
+      : await this.overlayStore.getThreadOverlayStates(overlayRequest);
     await this.reconcileDiscoveredCodexNativeSubAgents({
       nativeCardsByThreadId: await this.overlayStore.listThreadSubAgentsByMonitorIdPrefix({
         backend: "codex",
@@ -30667,6 +31261,10 @@ export class DesktopBackendRegistry {
       nativeThreads,
       overlaysByThreadId: overlays,
       parentThreads: grouped,
+      usageActivitiesByThreadId: await this.readThreadUsageActivities(
+        "codex",
+        nativeThreads.map((thread) => thread.id),
+      ),
     });
   }
 
@@ -30675,6 +31273,7 @@ export class DesktopBackendRegistry {
     nativeThreads: AppServerThreadSummary[];
     overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
     parentThreads: AppServerThreadSummary[];
+    usageActivitiesByThreadId: Record<string, AppServerThreadActivityEntry[]>;
   }): Promise<void> {
     if (params.nativeThreads.length === 0) {
       return;
@@ -30749,8 +31348,9 @@ export class DesktopBackendRegistry {
           nativeThread.serviceTier
           ?? existing?.monitorUsage?.serviceTier
           ?? parent.serviceTier;
+        const childUsageActivities = params.usageActivitiesByThreadId[nativeThread.id];
         const hasPersistedTurnUsage = Boolean(
-          childOverlay?.immutableUsageActivities?.some(
+          childUsageActivities?.some(
             (activity) =>
               activity.status === "completed"
               && (
@@ -30769,9 +31369,9 @@ export class DesktopBackendRegistry {
           serviceTier ??= parentPricingSettings?.serviceTier;
         }
         const persistedUsageBackfill = buildPersistedCodexNativeUsageBackfill({
+          activities: childUsageActivities,
           fastMode: preferredFastMode,
           model: preferredModel,
-          overlay: childOverlay,
           serviceTier,
         });
         // A running worker's usage can be live in memory, off its card and
@@ -32402,6 +33002,15 @@ export class DesktopBackendRegistry {
     await Promise.all(pending);
   }
 
+  /** Usage activities live in their own table, not the overlay row. */
+  private async readThreadUsageActivities(
+    backend: AppServerBackendKind,
+    threadIds: readonly string[],
+  ): Promise<Record<string, AppServerThreadActivityEntry[]>> {
+    if (threadIds.length === 0 || !this.overlayStore.readThreadUsageActivities) return {};
+    return await this.overlayStore.readThreadUsageActivities({ backend, threadIds: [...threadIds] });
+  }
+
   private async recordLiveThreadUsage(
     event: AgentEvent,
     work?: LiveThreadUsageEmitWork,
@@ -32532,10 +33141,14 @@ export class DesktopBackendRegistry {
       });
     }
 
-    const overlay = await this.overlayStore.getThreadOverlayState({
-      backend: event.backend,
-      threadId,
-    });
+    // Six scalars and this turn's usage row, never the whole overlay: this
+    // runs on every token-usage event.
+    const overlay = this.overlayStore.readThreadUsageSettings
+      ? await this.overlayStore.readThreadUsageSettings({ backend: event.backend, threadId })
+      : await this.overlayStore.getThreadOverlayState({ backend: event.backend, threadId });
+    const turnUsageActivity = turnId && this.overlayStore.readThreadUsageActivityForTurn
+      ? await this.overlayStore.readThreadUsageActivityForTurn({ backend: event.backend, threadId, turnId })
+      : undefined;
     const tokenUsage = notification.params.tokenUsage;
     const model =
       (typeof notification.params.model === "string" && notification.params.model.trim()
@@ -32558,7 +33171,7 @@ export class DesktopBackendRegistry {
       ]) ??
       overlay?.reasoningEffort;
     const resolvedUsageTiming = resolveLiveThreadUsageTiming({
-      overlay,
+      activity: turnUsageActivity,
       reportedStartedAt: turnId
         ? this.usageTurnStartTimes.get(JSON.stringify([event.backend, threadId, turnId]))
         : undefined,
@@ -32837,7 +33450,7 @@ export class DesktopBackendRegistry {
     fastMode?: boolean;
     inheritedTokenUsage?: TaskMonitorTokenUsageBreakdown;
     model?: string;
-    overlay?: ThreadOverlayState;
+    overlay?: Pick<ThreadOverlayState, "forkSourceThreadId" | "forkBaselineCaptured">;
     serviceTier?: string;
     threadId: string;
     turnId?: string;
@@ -33511,6 +34124,8 @@ export class DesktopBackendRegistry {
       && existing
       && existing.status === status
       && existing.agentName === agentName
+      && (!model || existing.preferredModel === model)
+      && (!reasoningEffort || existing.preferredReasoningEffort === reasoningEffort)
       && (!params.call.parentTurnId || existing.monitorTurnId === params.call.parentTurnId)
     ) {
       return;
@@ -33819,6 +34434,7 @@ export class DesktopBackendRegistry {
       monitorId: record.monitorId,
     });
     const subAgent: ThreadSubAgentSummary = {
+      ...record.causalContext,
       monitorId: record.monitorId,
       task: record.task,
       status:
@@ -35245,8 +35861,8 @@ export class DesktopBackendRegistry {
             start: client.startRealtime.bind(client),
             stop: client.stopRealtime.bind(client),
             text: client.appendRealtimeText.bind(client),
-            onEvent: client.onRealtimeEvent.bind(client),
-            onDisconnect: client.onRealtimeDisconnect.bind(client),
+            onEvent: (listener) => client.onRealtimeEvent!(listener, threadId),
+            onDisconnect: (listener) => client.onRealtimeDisconnect!(listener, threadId),
             onToolCall: (listener) => {
               this.nativeVoiceToolListeners.add(listener);
               return () => { this.nativeVoiceToolListeners.delete(listener); };
@@ -38822,16 +39438,6 @@ export class DesktopBackendRegistry {
       method: request.method,
       params: request.params,
     });
-    const toolGuideRouter = new AgentToolRouter([buildPwrAgentToolGuideDefinition()]);
-    if (hostToolCall && toolGuideRouter.acceptsDynamicToolCall(hostToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
-        return toDynamicToolResponse({
-          ok: false, code: "forbidden",
-          message: "Tool guide calls require an active turn on the owning thread.",
-        });
-      }
-      return await toolGuideRouter.handleDynamicToolCall({ backend, call: hostToolCall });
-    }
     // Keep dispatch available after disabling the experiment: older runtimes
     // can retain the previously advertised schema until a new thread starts.
     const toolSearchRouter = new AgentToolRouter([buildPwrAgentToolSearchDefinition([])]);
@@ -38859,24 +39465,6 @@ export class DesktopBackendRegistry {
       return await new AgentToolRouter(buildMcpGatewayToolDefinitions(this.mcpGatewayTools, enabled ? this.tokenMiserStore : undefined))
         .handleDynamicToolCall({ backend, call: hostToolCall });
     }
-    const mcpConnectionRouter = buildPwrAgentMcpConnectionToolRouter(
-      async (connectionRequest) =>
-        await this.handleAgentMcpConnectionRequest(connectionRequest),
-    );
-    if (hostToolCall && mcpConnectionRouter.acceptsDynamicToolCall(hostToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
-        return toDynamicToolResponse({
-          ok: false,
-          code: "forbidden",
-          message: "MCP connection tool calls must originate from an active turn on the owning thread.",
-        });
-      }
-      return await mcpConnectionRouter.handleDynamicToolCall({
-        backend,
-        call: hostToolCall,
-      });
-    }
-
     const tokenMiserRouter = new AgentToolRouter(
       buildTokenMiserToolDefinitions(this.tokenMiserStore, this.tokenMiserService?.focused),
     );
@@ -38908,341 +39496,109 @@ export class DesktopBackendRegistry {
       });
     }
 
-    const dynamicToolCall = readAutomationInspectionDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (
-      dynamicToolCall &&
-      isAutomationInspectionDynamicToolCall(dynamicToolCall)
-    ) {
-      if (!this.isLiveDynamicToolCall(backend, dynamicToolCall)) {
-        backendRegistryLog.warn("rejecting automation inspection dynamic tool call", {
+    if (hostToolCall) {
+      // Use the same definitions as advertisement, including compatibility
+      // facades with advertise:false. Resolve all monitor roles for progress
+      // and completion calls from monitor threads.
+      const catalogs = resolveAgentToolCatalogs({
+        appManagementHandler: this.appManagementHandler,
+        automationInspectionHandler: this.automationInspectionHandler,
+        federationHandler: this.federationHandler,
+        mcpGatewayTools: this.mcpGatewayTools,
+        mcpConnectionHandler: async (connectionRequest) =>
+          await this.handleAgentMcpConnectionRequest(connectionRequest),
+        messagingHandler: this.messagingHandler,
+        taskMonitorHandler: async (monitorRequest) =>
+          await this.handleAgentTaskMonitorRequest(monitorRequest),
+        threadInspectionHandler: this.threadInspectionHandler,
+        forgeReadHandler: this.gatedForgeReadHandler,
+        forgePrToolHandler: this.gatedForgePrToolHandler,
+        // Deliberately omit forgeToolPolicy: stale definitions must reach
+        // the per-call policy gate even after a tool is hidden in Settings.
+        threadOrchestrationHandler: this.threadOrchestrationHandler,
+        tokenMiserStore: this.tokenMiserStore,
+        tokenMiserFocused: this.tokenMiserService?.focused,
+        starMapHandler: this.starMapHandler,
+        threadTodoHandler: this.threadTodoHandler,
+      }, { taskMonitorRole: "all" });
+      const catalog = catalogs.find(({ router }) => router.acceptsDynamicToolCall(hostToolCall));
+      // These adapters retain the historical namespace normalization and
+      // unsupported-operation responses for persisted legacy definitions.
+      const legacyRoutes = hostToolCall.namespace !== PWRAGENT_TOOL_NAMESPACE ? [
+        {
+          id: "automation_inspection" as const,
+          accepts: isAutomationInspectionDynamicToolCall,
+          dispatch: async () => await handleAutomationInspectionDynamicToolCall({
+            backend, call: hostToolCall, handler: this.automationInspectionHandler,
+          }),
+        },
+        {
+          id: "thread_inspection" as const,
+          accepts: isPwrAgentThreadDynamicToolCall,
+          dispatch: async () => await handlePwrAgentThreadDynamicToolCall({
+            backend, call: hostToolCall, handler: this.threadInspectionHandler,
+          }),
+        },
+        {
+          id: "app_management" as const,
+          accepts: isPwrAgentAppDynamicToolCall,
+          dispatch: async () => await handlePwrAgentAppDynamicToolCall({
+            backend, call: hostToolCall, handler: this.appManagementHandler,
+          }),
+        },
+        {
+          id: "messaging_context" as const,
+          accepts: isPwrAgentMessagingDynamicToolCall,
+          dispatch: async () => await handlePwrAgentMessagingDynamicToolCall({
+            backend, call: hostToolCall, handler: this.messagingHandler,
+          }),
+        },
+      ] : [];
+      const route = catalog ? {
+        id: catalog.id,
+        dispatch: async () => await catalog.router.handleDynamicToolCall({ backend, call: hostToolCall, signal }),
+      } : legacyRoutes.find(({ accepts }) => accepts(hostToolCall));
+      if (route) {
+        if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
+          const messages: Partial<Record<AgentToolCatalogId, string>> = {
+            automation_inspection: "Automation inspection tool calls must originate from an active turn on the same thread.",
+            thread_inspection: "Thread inspection tool calls must originate from an active turn on the same thread.",
+            app_management: "App management tool calls must originate from an active turn on the same thread.",
+            thread_orchestration: "Thread handoff tool calls must originate from an active turn on the same thread.",
+            messaging_context: "Messaging context tool calls must originate from an active turn on the same thread.",
+            forge: "Forge tool calls must originate from an active turn on the same thread.",
+            federation: "Federation tool calls must originate from an active turn on the same thread.",
+            star_map: "Star map tool calls must originate from an active turn on the same thread.",
+          };
+          return toDynamicToolResponse({
+            ok: false,
+            code: "forbidden",
+            message: messages[route.id] ?? "PwrAgent tool calls must originate from an active turn on the owning thread.",
+          });
+        }
+        // The static guide requires a live turn but no instance-management permission.
+        const isStaticToolGuide = hostToolCall.namespace === PWRAGENT_TOOL_NAMESPACE
+          && hostToolCall.tool === "read_tool_guide";
+        const category = isStaticToolGuide ? undefined : messagingDynamicToolCategoryForCatalog(route.id);
+        const denied = category && await this.dynamicToolPermissionDenied(backend, category, hostToolCall);
+        if (denied) {
+          return toDynamicToolResponse({
+            ok: false,
+            code: "forbidden",
+            message: `The messaging user who started this turn lacks permission for this tool (${denied}).`,
+          });
+        }
+        backendRegistryLog.info("handling catalog dynamic tool call", {
           backend,
-          callId: dynamicToolCall.callId,
-          namespace: dynamicToolCall.namespace,
-          threadId: dynamicToolCall.threadId,
-          tool: dynamicToolCall.tool,
-          turnId: dynamicToolCall.turnId,
+          catalogId: route.id,
+          callId: hostToolCall.callId,
+          namespace: hostToolCall.namespace,
+          threadId: hostToolCall.threadId,
+          tool: hostToolCall.tool,
+          turnId: hostToolCall.turnId,
         });
-        return buildAutomationInspectionDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Automation inspection tool calls must originate from an active turn on the same thread.",
-        });
+        return await route.dispatch();
       }
-      const automationDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "automation_inspection",
-        dynamicToolCall,
-      );
-      if (automationDenied) {
-        return buildAutomationInspectionDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${automationDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling automation inspection dynamic tool call", {
-        backend,
-        callId: dynamicToolCall.callId,
-        namespace: dynamicToolCall.namespace,
-        threadId: dynamicToolCall.threadId,
-        tool: dynamicToolCall.tool,
-        turnId: dynamicToolCall.turnId,
-      });
-      return await handleAutomationInspectionDynamicToolCall({
-        backend,
-        call: dynamicToolCall,
-        handler: this.automationInspectionHandler,
-      });
-    }
-    const threadToolCall = readPwrAgentThreadDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (threadToolCall && isPwrAgentThreadDynamicToolCall(threadToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, threadToolCall)) {
-        backendRegistryLog.warn("rejecting thread inspection dynamic tool call", {
-          backend,
-          callId: threadToolCall.callId,
-          namespace: threadToolCall.namespace,
-          threadId: threadToolCall.threadId,
-          tool: threadToolCall.tool,
-          turnId: threadToolCall.turnId,
-        });
-        return buildPwrAgentThreadDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Thread inspection tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      const threadInspectionDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "thread_inspection",
-        threadToolCall,
-      );
-      if (threadInspectionDenied) {
-        return buildPwrAgentThreadDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${threadInspectionDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling thread inspection dynamic tool call", {
-        backend,
-        callId: threadToolCall.callId,
-        namespace: threadToolCall.namespace,
-        threadId: threadToolCall.threadId,
-        tool: threadToolCall.tool,
-        turnId: threadToolCall.turnId,
-      });
-      return await handlePwrAgentThreadDynamicToolCall({
-        backend,
-        call: threadToolCall,
-        handler: this.threadInspectionHandler,
-      });
-    }
-    const appToolCall = readPwrAgentAppDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (appToolCall && isPwrAgentAppDynamicToolCall(appToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, appToolCall)) {
-        backendRegistryLog.warn("rejecting app management dynamic tool call", {
-          backend,
-          callId: appToolCall.callId,
-          namespace: appToolCall.namespace,
-          threadId: appToolCall.threadId,
-          tool: appToolCall.tool,
-          turnId: appToolCall.turnId,
-        });
-        return buildPwrAgentAppDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "App management tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      const appManagementDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "app_management",
-        appToolCall,
-      );
-      if (appManagementDenied) {
-        return buildPwrAgentAppDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${appManagementDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling app management dynamic tool call", {
-        backend,
-        callId: appToolCall.callId,
-        namespace: appToolCall.namespace,
-        threadId: appToolCall.threadId,
-        tool: appToolCall.tool,
-        turnId: appToolCall.turnId,
-      });
-      return await handlePwrAgentAppDynamicToolCall({
-        backend,
-        call: appToolCall,
-        handler: this.appManagementHandler,
-      });
-    }
-
-    const threadOrchestrationToolCall =
-      readPwrAgentThreadOrchestrationDynamicToolCall({
-        method: request.method,
-        params: request.params,
-      });
-    if (
-      threadOrchestrationToolCall &&
-      isPwrAgentThreadOrchestrationDynamicToolCall(threadOrchestrationToolCall)
-    ) {
-      if (!this.isLiveDynamicToolCall(backend, threadOrchestrationToolCall)) {
-        backendRegistryLog.warn("rejecting thread orchestration dynamic tool call", {
-          backend,
-          callId: threadOrchestrationToolCall.callId,
-          namespace: threadOrchestrationToolCall.namespace,
-          threadId: threadOrchestrationToolCall.threadId,
-          tool: threadOrchestrationToolCall.tool,
-          turnId: threadOrchestrationToolCall.turnId,
-        });
-        return buildPwrAgentThreadOrchestrationDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Thread handoff tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      const orchestrationDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "thread_orchestration",
-        threadOrchestrationToolCall,
-      );
-      if (orchestrationDenied) {
-        return buildPwrAgentThreadOrchestrationDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${orchestrationDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling thread orchestration dynamic tool call", {
-        backend,
-        callId: threadOrchestrationToolCall.callId,
-        namespace: threadOrchestrationToolCall.namespace,
-        threadId: threadOrchestrationToolCall.threadId,
-        tool: threadOrchestrationToolCall.tool,
-        turnId: threadOrchestrationToolCall.turnId,
-      });
-      return await handlePwrAgentThreadOrchestrationDynamicToolCall({
-        backend,
-        call: threadOrchestrationToolCall,
-        handler: this.threadOrchestrationHandler,
-      });
-    }
-
-    const starMapToolCall = readPwrAgentStarMapDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (starMapToolCall && isPwrAgentStarMapDynamicToolCall(starMapToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, starMapToolCall)) {
-        backendRegistryLog.warn("rejecting star map dynamic tool call", {
-          backend,
-          callId: starMapToolCall.callId,
-          namespace: starMapToolCall.namespace,
-          threadId: starMapToolCall.threadId,
-          tool: starMapToolCall.tool,
-          turnId: starMapToolCall.turnId,
-        });
-        return buildPwrAgentStarMapDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Star map tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      const starMapDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "star_map",
-        starMapToolCall,
-      );
-      if (starMapDenied) {
-        return buildPwrAgentStarMapDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${starMapDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling star map dynamic tool call", {
-        backend,
-        callId: starMapToolCall.callId,
-        namespace: starMapToolCall.namespace,
-        threadId: starMapToolCall.threadId,
-        tool: starMapToolCall.tool,
-        turnId: starMapToolCall.turnId,
-      });
-      return await handlePwrAgentStarMapDynamicToolCall({
-        backend,
-        call: starMapToolCall,
-        handler: this.starMapHandler,
-      });
-    }
-
-    const threadTodoRouter = buildPwrAgentThreadTodoToolRouter(
-      this.threadTodoHandler,
-    );
-    if (hostToolCall && threadTodoRouter.acceptsDynamicToolCall(hostToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, hostToolCall)) {
-        return toDynamicToolResponse({
-          ok: false,
-          code: "forbidden",
-          message:
-            "To-do tool calls must originate from an active turn on the owning thread.",
-        });
-      }
-      return await threadTodoRouter.handleDynamicToolCall({
-        backend,
-        call: hostToolCall,
-      });
-    }
-
-    const federationToolCall = readPwrAgentFederationDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (federationToolCall && isPwrAgentFederationDynamicToolCall(federationToolCall)) {
-      if (!this.isLiveDynamicToolCall(backend, federationToolCall)) {
-        backendRegistryLog.warn("rejecting federation dynamic tool call", {
-          backend,
-          callId: federationToolCall.callId,
-          namespace: federationToolCall.namespace,
-          threadId: federationToolCall.threadId,
-          tool: federationToolCall.tool,
-          turnId: federationToolCall.turnId,
-        });
-        return buildPwrAgentFederationDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Federation tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      backendRegistryLog.info("handling federation dynamic tool call", {
-        backend,
-        callId: federationToolCall.callId,
-        namespace: federationToolCall.namespace,
-        threadId: federationToolCall.threadId,
-        tool: federationToolCall.tool,
-        turnId: federationToolCall.turnId,
-      });
-      return await handlePwrAgentFederationDynamicToolCall({
-        backend,
-        call: federationToolCall,
-        handler: this.federationHandler,
-      });
-    }
-
-    const messagingToolCall = readPwrAgentMessagingDynamicToolCall({
-      method: request.method,
-      params: request.params,
-    });
-    if (
-      messagingToolCall &&
-      isPwrAgentMessagingDynamicToolCall(messagingToolCall)
-    ) {
-      if (!this.isLiveDynamicToolCall(backend, messagingToolCall)) {
-        backendRegistryLog.warn("rejecting messaging context dynamic tool call", {
-          backend,
-          callId: messagingToolCall.callId,
-          namespace: messagingToolCall.namespace,
-          threadId: messagingToolCall.threadId,
-          tool: messagingToolCall.tool,
-          turnId: messagingToolCall.turnId,
-        });
-        return buildPwrAgentMessagingDynamicToolErrorResponse({
-          code: "forbidden",
-          message:
-            "Messaging context tool calls must originate from an active turn on the same thread.",
-        });
-      }
-      const messagingContextDenied = this.dynamicToolPermissionDenied(
-        backend,
-        "messaging_context",
-        messagingToolCall,
-      );
-      if (messagingContextDenied) {
-        return buildPwrAgentMessagingDynamicToolErrorResponse({
-          code: "forbidden",
-          message: `The messaging user who started this turn lacks permission for this tool (${messagingContextDenied}).`,
-        });
-      }
-      backendRegistryLog.info("handling messaging context dynamic tool call", {
-        backend,
-        callId: messagingToolCall.callId,
-        namespace: messagingToolCall.namespace,
-        threadId: messagingToolCall.threadId,
-        tool: messagingToolCall.tool,
-        turnId: messagingToolCall.turnId,
-      });
-      return await handlePwrAgentMessagingDynamicToolCall({
-        backend,
-        call: messagingToolCall,
-        handler: this.messagingHandler,
-      });
     }
 
     const taskMonitorToolCall = readTaskMonitorDynamicToolCall({
@@ -39314,6 +39670,11 @@ export class DesktopBackendRegistry {
         turnId: request.params.turnId,
       });
       return buildHeadlessAutomationRequestCancelResponse(request);
+    }
+
+    if (backend === "codex" && isMcpToolApproval(request)) {
+      const consent = await this.selectedConnectionMcpConsent(request, signal);
+      if (consent) return consent;
     }
 
     const managedReview = this.findManagedReviewForChildRequest({
@@ -39533,6 +39894,46 @@ export class DesktopBackendRegistry {
     });
   }
 
+  private async selectedConnectionMcpConsent(
+    request: AppServerPendingRequestNotification,
+    signal?: AbortSignal,
+  ): Promise<AppServerMcpElicitationResponse | undefined> {
+    const consent = buildMcpToolApprovalConsent(request);
+    const threadId = request.params.threadId;
+    const turnId = request.params.turnId ?? undefined;
+    const service = this.mcpConnectionService;
+    if (!consent || !service?.peekThreadBridge || !service.listConnections
+      || !this.isLiveDynamicToolCall("codex", { threadId, turnId })) return undefined;
+    try {
+      signal?.throwIfAborted();
+      const selected = await this.readThreadMcpConnections({ backend: "codex", threadId });
+      const connectionId = selected.connectionIds.find((id) => {
+        const bridge = service.peekThreadBridge!(id, threadId);
+        return bridge && buildCodexConnectionMcpServerName(bridge) === request.params.serverName;
+      });
+      if (!connectionId) return undefined;
+      const connection = (await service.listConnections({ cachedLocalStatus: true }))
+        .find((entry) => entry.id === connectionId);
+      if (!connection?.enabled || !connection.configured || connection.toolApproval !== "approve"
+        || connection.state === "disconnected" || connection.state === "reauthorization_required") return undefined;
+      // A server prefix is not proof of ownership. Recheck selection, the
+      // exact live bridge and turn after asynchronous policy reads.
+      const current = await this.readThreadMcpConnections({ backend: "codex", threadId });
+      signal?.throwIfAborted();
+      const currentBridge = service.peekThreadBridge(connectionId, threadId);
+      if (!current.connectionIds.includes(connectionId)
+        || !this.isLiveDynamicToolCall("codex", { threadId, turnId })
+        || !currentBridge || buildCodexConnectionMcpServerName(currentBridge) !== request.params.serverName) return undefined;
+      // One invocation only: future requests must reread the connection's
+      // policy rather than inherit a Codex conversation or permanent grant.
+      return consent;
+    } catch {
+      signal?.throwIfAborted();
+      // An unavailable policy or registration keeps the normal prompt.
+    }
+    return undefined;
+  }
+
   // A lookup that fails reads as the default, which still asks for anything
   // the server does not mark safe; it never reads as Allow all tools.
   private async readMcpConnectionToolApproval(connectionId: string): Promise<McpConnectionToolApproval> {
@@ -39547,17 +39948,48 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Whether a forge group set to Auto runs without a card in this turn.
+   *
+   * Auto follows the turn's approval mode. Full Access runs every group. A
+   * Codex Auto turn runs every group but Approve and merge: in that mode Codex
+   * lets its own reviewer clear the same work done through `gh` or its GitHub
+   * connector, without a card. Codex never reviews PwrAgent's dynamic tools,
+   * so asking here made the PwrAgent tool the one path that always stopped,
+   * and the agent is told not to fall back to `gh`. These tools reach only
+   * the thread's linked repositories. Merging and approving stay Full Access
+   * only, because they cannot be taken back. A headless automation also
+   * needs Full Access: nobody is watching it, and in an Auto automation no
+   * reviewer would see these calls at all.
+   */
+  private async forgeAutoRunsWithoutApproval(
+    group: ForgeAgentToolGroup,
+    context: AgentToolCallContext,
+    automation?: { executionMode?: ThreadExecutionMode },
+  ): Promise<boolean> {
+    if (context.backend !== "codex") return await this.isMcpGatewayFullAccess(context, automation?.executionMode);
+    const executionMode = await this.resolveCodexToolCallExecutionMode(context, automation?.executionMode);
+    if (executionMode === "full-access") return true;
+    return executionMode === "auto" && group !== "approve_merge" && !automation;
+  }
+
+  private async resolveCodexToolCallExecutionMode(
+    context: AgentToolCallContext,
+    automationMode?: ThreadExecutionMode,
+  ): Promise<ThreadExecutionMode | undefined> {
+    const activeMode = context.turnId
+      ? this.activeCodexTurnModes.get(buildActiveTurnModeKey(context.threadId, context.turnId))
+      : undefined;
+    return activeMode ?? automationMode
+      ?? await this.resolveCodexThreadExecutionModeForActiveTurn(context.threadId);
+  }
+
   private async isMcpGatewayFullAccess(
     context: AgentToolCallContext,
     automationMode?: ThreadExecutionMode,
   ): Promise<boolean> {
     if (context.backend === "codex") {
-      const activeMode = context.turnId
-        ? this.activeCodexTurnModes.get(buildActiveTurnModeKey(context.threadId, context.turnId))
-        : undefined;
-      const executionMode = activeMode ?? automationMode
-        ?? await this.resolveCodexThreadExecutionModeForActiveTurn(context.threadId);
-      return executionMode === "full-access";
+      return await this.resolveCodexToolCallExecutionMode(context, automationMode) === "full-access";
     }
     if (isAcpBackendId(context.backend)) {
       const session = this.acpBackend.getSession(context.backend, context.threadId);
@@ -39728,25 +40160,30 @@ export class DesktopBackendRegistry {
    * (non-messaging / legacy turns, and ungated tools, always allow). Denials
    * are audited by the messaging layer.
    */
-  private dynamicToolPermissionDenied(
+  private async dynamicToolPermissionDenied(
     backend: AppServerBackendKind,
     category: MessagingDynamicToolCategory,
     call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
-  ): string | null {
+  ): Promise<string | null> {
     const service = this.messagingAgentToolService;
-    if (!service) return null;
+    const causalContext = await this.readCausalMessagingContext({ backend, ...call });
+    if (!service) return causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous ? "message.reply" : null;
     const args =
       call.arguments && typeof call.arguments === "object"
         ? (call.arguments as Record<string, unknown>)
         : null;
-    const result = service.checkDynamicToolPermission({
+    const permissionCheck = {
       backend,
       threadId: call.threadId,
       turnId: call.turnId,
       category,
       tool: call.tool,
       arguments: args,
-    });
+    };
+    const result = causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous
+      ? await service.authorizeRetainedTool?.({ backend, ...call, ...causalContext }, permissionCheck)
+        ?? { allowed: false, permission: "message.reply" }
+      : service.checkDynamicToolPermission(permissionCheck);
     if (result.allowed) return null;
     backendRegistryLog.warn("denying dynamic tool call: messaging RBAC", {
       backend,
@@ -39759,14 +40196,14 @@ export class DesktopBackendRegistry {
     return result.permission ?? "required capability";
   }
 
-  private authorizeAgentToolMcpCall(params: {
+  private async authorizeAgentToolMcpCall(params: {
     backend: AppServerBackendKind;
     catalogId?: AgentToolCatalogId;
     threadId: string;
     tool: string;
     turnId: string;
     arguments?: unknown;
-  }): string | null {
+  }): Promise<string | null> {
     const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
     if (!category) {
       return null;
@@ -39917,6 +40354,7 @@ export class DesktopBackendRegistry {
     try {
       const pending = this.scheduleReviewStart({
         invokingTurnId,
+        turnAttribution: await this.readDelegatedTurnAncestry(request.context),
         idempotencyKey: request.context.callId,
         request: await this.prepareReviewRequest({
           backend: request.context.backend,
@@ -40969,17 +41407,37 @@ export class DesktopBackendRegistry {
     });
   }
 
+  /** Exact provenance only. Failure to learn a root leaves it unknown. */
+  private async readDelegatedTurnAncestry(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId?: string;
+  }): Promise<{ parentTurnId?: string; rootTurnId?: string }> {
+    if (params.backend !== "codex" || !params.turnId) return {};
+    const turnId = params.turnId;
+    const rootTurnId = await this.withCodexThreadClient(params.threadId,
+      async (client) => await client.readTurnRoot?.({ threadId: params.threadId, turnId }),
+      undefined, false).catch(() => undefined);
+    return { parentTurnId: turnId, ...(rootTurnId ? { rootTurnId } : {}) };
+  }
+
   private async buildAgentMessageOrigin(params: {
     backend: AppServerBackendKind;
     threadId: string;
+    turnId?: string;
   }): Promise<AppServerThreadMessageOrigin> {
+    const causalContext = await this.readCausalMessagingContext(params);
     const sourceThread = await this.resolveThread(params).catch(() => undefined);
     const sourceTitle = sourceThread?.title.trim();
+    const ancestry = await this.readDelegatedTurnAncestry(params);
     return {
       kind: "agent",
+      ...causalContext,
       sourceThread: {
         backend: params.backend,
         threadId: params.threadId,
+        ...(ancestry.parentTurnId ? { turnId: ancestry.parentTurnId } : {}),
+        ...(ancestry.rootTurnId ? { rootTurnId: ancestry.rootTurnId } : {}),
         ...(sourceTitle && sourceThread?.titleSource !== "fallback"
           ? { title: sourceTitle }
           : {}),
@@ -41068,6 +41526,7 @@ export class DesktopBackendRegistry {
       const messageOrigin = await this.buildAgentMessageOrigin({
         backend: request.context.backend,
         threadId: request.context.threadId,
+        turnId: request.context.turnId,
       });
       source.title = messageOrigin.sourceThread?.title;
       if (messageOrigin.sourceThread) {
@@ -41454,6 +41913,7 @@ export class DesktopBackendRegistry {
     const messageOrigin = await this.buildAgentMessageOrigin({
       backend: request.context.backend,
       threadId: request.context.threadId,
+      turnId: request.context.turnId,
     });
     const remoteRequest = {
       operation: request.operation === "stop_thread" ? "stop" as const : "steer" as const,
@@ -41679,6 +42139,7 @@ export class DesktopBackendRegistry {
     const sourceBackend = request.context.backend;
     const sourceThreadId = request.context.threadId;
     const sourceTurnId = request.context.turnId?.trim();
+    const causalContext = await this.readCausalMessagingContext(request.context);
     if (
       !sourceTurnId ||
       !this.isLiveDynamicToolCall(sourceBackend, {
@@ -42261,11 +42722,17 @@ export class DesktopBackendRegistry {
       context: request.args.context,
       codexEnvironmentStartupFailure,
     });
+    const ancestry = await this.readDelegatedTurnAncestry({
+      backend: sourceBackend, threadId: sourceThreadId, turnId: sourceTurnId,
+    });
     const messageOrigin: AppServerThreadMessageOrigin = {
       kind: "agent",
+      ...causalContext,
       sourceThread: {
         backend: sourceBackend,
         threadId: sourceThreadId,
+        ...(ancestry.parentTurnId ? { turnId: ancestry.parentTurnId } : {}),
+        ...(ancestry.rootTurnId ? { rootTurnId: ancestry.rootTurnId } : {}),
         ...(sourceThread?.title ? { title: sourceThread.title } : {}),
       },
     };
@@ -42843,6 +43310,7 @@ export class DesktopBackendRegistry {
     args: CreateMonitorDelegationToolArgs,
   ): Promise<TaskMonitorResponse<"create_monitor_delegation">> {
     const parentThreadId = context.threadId;
+    const causalContext = await this.readCausalMessagingContext(context);
     const task = args.task?.trim();
     if (!task) {
       return taskMonitorFailure("create_monitor_delegation", "invalid_arguments", "task is required.");
@@ -42929,7 +43397,10 @@ export class DesktopBackendRegistry {
           : {}),
       });
     }
+    const ancestry = await this.readDelegatedTurnAncestry(context);
     const record: TaskMonitorDelegationRecord = {
+      causalContext,
+      ...(ancestry.rootTurnId ? { rootTurnId: ancestry.rootTurnId } : {}),
       activeCommandCount: 0,
       backend: context.backend,
       createdAt: Date.now(),
@@ -42966,6 +43437,8 @@ export class DesktopBackendRegistry {
     try {
       startedMonitor = await this.startManagedTaskMonitor({
         context,
+        ...(record.rootTurnId ? { rootTurnId: record.rootTurnId } : {}),
+        causalContext,
         cwd: args.cwd,
         monitorId,
         preferredModel,
@@ -43356,6 +43829,8 @@ export class DesktopBackendRegistry {
   }
 
   private async startManagedTaskMonitor(params: {
+    rootTurnId?: string;
+    causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
     context: TaskMonitorRequest<"create_monitor_delegation">["context"];
     cwd?: string;
     monitorId: string;
@@ -43472,6 +43947,11 @@ export class DesktopBackendRegistry {
         model: params.runtimeModel,
         reasoningEffort,
       });
+      const causalContext = params.causalContext ?? {};
+      if (causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous) {
+        await this.persistThreadMessageOrigin({ backend: params.context.backend, threadId: turn.threadId,
+          messageId: buildTurnUserMessageOriginId(turn.turnId), origin: { kind: "sub-agent", ...causalContext } });
+      }
       return {
         cwd,
         executionMode,
@@ -43503,6 +43983,8 @@ export class DesktopBackendRegistry {
     try {
       turn = await client.startTurn({
         threadId: thread.threadId,
+        parentTurnId: params.context.turnId,
+        ...(params.rootTurnId ? { rootTurnId: params.rootTurnId } : {}),
         input: [{ type: "text", text: params.prompt }],
         ...(cwd ? { cwd } : {}),
         approvalPolicy: modeSettings.approvalPolicy,
@@ -43538,6 +44020,12 @@ export class DesktopBackendRegistry {
       monitorTurnId: turn.turnId,
       parentThreadId: params.context.threadId,
     });
+
+    const causalContext = params.causalContext ?? {};
+    if (causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous) {
+      await this.persistThreadMessageOrigin({ backend: "codex", threadId: turn.threadId,
+        messageId: buildTurnUserMessageOriginId(turn.turnId), origin: { kind: "sub-agent", ...causalContext } });
+    }
 
     return {
       cwd,
@@ -43743,6 +44231,7 @@ export class DesktopBackendRegistry {
         summary: params.summary,
         task: params.record.task,
       });
+      Object.assign(messageOrigin, params.record.causalContext);
       const parentWake = {
         backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,
@@ -44011,6 +44500,8 @@ export class DesktopBackendRegistry {
       const client = this.getClient("codex", executionMode);
       const turn = await client.startTurn({
         threadId: record.monitorThreadId,
+        parentTurnId: record.parentTurnId,
+        ...(record.rootTurnId ? { rootTurnId: record.rootTurnId } : {}),
         input: [
           {
             type: "text",
@@ -44597,7 +45088,7 @@ export class DesktopBackendRegistry {
           : {}),
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
-      });
+      }, await this.readCausalMessagingContext(request.context));
     }
 
     if (request.operation === "mark_project_read") {
@@ -47095,22 +47586,43 @@ export class DesktopBackendRegistry {
     return emitted;
   }
 
+  /** A successful turn may leave commands, but cannot leave an MCP/search call running. */
+  private settleCodexToolItems(
+    threadId: string,
+    belongsToEndedTurn: (item: LiveCodexToolItem) => boolean,
+    interrupted = false,
+  ): void {
+    const items = this.liveCodexToolItemsByThread.get(threadId);
+    if (!items) return;
+    for (const [itemId, item] of items) {
+      if (!belongsToEndedTurn(item)) continue;
+      if (item.itemType === "commandexecution" && !interrupted) {
+        // Set this at notification ingress, before asynchronous lifecycle
+        // bookkeeping. An immediate list response can then prune the ended
+        // command even while activeTurnKeys still contains its parent turn.
+        item.turnEnded = true;
+      } else {
+        items.delete(itemId);
+      }
+    }
+    if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
+  }
+
   private trackLiveCodexToolItem(event: AgentEvent): void {
     if (event.backend !== "codex") return;
     const notification = event.notification;
     const params = readRecord(notification.params);
     const threadIdForRevision = readOptionalString(params, ["threadId"]);
-    if (threadIdForRevision && ["item/started", "item/completed", "thread/status/changed"].includes(notification.method)) {
-      // Invalidate only a read in flight; with none, there is nothing stale.
-      if (this.backgroundTerminalReadRevisions.has(threadIdForRevision)) {
-        this.backgroundTerminalReadRevisions.set(threadIdForRevision, ++this.backgroundTerminalReadCounter);
-      }
-      if (notification.method === "thread/status/changed" && readRecord(params?.status)?.type === "notLoaded") {
-        this.publishCodexBackgroundTerminals(threadIdForRevision, []);
-      }
+    if (threadIdForRevision && [
+      "item/started", "item/completed", "thread/status/changed", "turn/started",
+      "turn/completed", "turn/failed", "turn/cancelled",
+    ].includes(notification.method)) {
+      // Removing the token invalidates only reads already in flight. A newer
+      // read receives a fresh counter value; no invalidated token is retained.
+      this.backgroundTerminalReadRevisions.delete(threadIdForRevision);
     }
     if (notification.method === "item/completed") {
-      const item = readRecord(readRecord(notification.params)?.item);
+      const item = readRecord(params?.item);
       const itemId = readOptionalString(item, ["id", "itemId", "item_id", "callId", "call_id"]);
       const threadId = notification.params.threadId;
       const terminals = this.codexBackgroundTerminals.get(threadId);
@@ -47118,37 +47630,35 @@ export class DesktopBackendRegistry {
         this.publishCodexBackgroundTerminals(threadId, terminals.filter((terminal) => terminal.itemId !== itemId));
       }
     }
+    if (notification.method === "thread/status/changed") {
+      const threadId = notification.params.threadId;
+      const status = readStatusType(notification.params.status);
+      if (status === "notLoaded") {
+        // The unloaded thread owns no processes. Child threads have their own
+        // runtime entries and are deliberately untouched by this boundary.
+        this.liveCodexToolItemsByThread.delete(threadId);
+        this.publishCodexBackgroundTerminals(threadId, []);
+      } else if (status === "idle") {
+        this.settleCodexToolItems(threadId, (item) =>
+          !this.threadHasActiveCodexReviewTurn(threadId)
+          || (!this.activeTurnKeys.has(buildActiveTurnKey("codex", threadId, item.turnId))
+            && !this.activeCodexTurnModes.has(buildActiveTurnModeKey(threadId, item.turnId))),
+        );
+      }
+    }
     if (
       notification.method === "turn/completed"
       || notification.method === "turn/failed"
       || notification.method === "turn/cancelled"
     ) {
-      // A command still live when its turn ends is a background terminal. A
-      // later turn can also stop or start one, so recheck a thread with some.
-      // Quit stops turns on purpose; reading then would only query a closing
-      // app server.
-      const threadId = notification.params.threadId;
-      if (
-        !this.closed
-        && !this.stoppingRunningTurnsForShutdown
-        && (this.liveCodexToolItemsByThread.has(threadId) || this.codexBackgroundTerminals.has(threadId))
-      ) {
-        void this.refreshCodexBackgroundTerminalsAfterTurn(threadId);
-      }
-    }
-    if (notification.method === "turn/failed" || notification.method === "turn/cancelled") {
       const threadId = notification.params.threadId;
       const turnId = turnIdFromTerminalNotification(notification);
-      const items = this.liveCodexToolItemsByThread.get(threadId);
-      if (!items) return;
-      if (!turnId) {
-        this.liveCodexToolItemsByThread.delete(threadId);
-        return;
-      }
-      for (const [itemId, item] of items) {
-        if (item.turnId === turnId) items.delete(itemId);
-      }
-      if (items.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
+      this.settleCodexToolItems(threadId, (item) => turnId
+        ? item.turnId === turnId
+        : !this.activeTurnKeys.has(buildActiveTurnKey("codex", threadId, item.turnId))
+          && !this.activeCodexTurnModes.has(buildActiveTurnModeKey(threadId, item.turnId)),
+        notification.method !== "turn/completed",
+      );
       return;
     }
     if (notification.method !== "item/started" && notification.method !== "item/completed") {
@@ -47178,12 +47688,13 @@ export class DesktopBackendRegistry {
     if (items?.size === 0) this.liveCodexToolItemsByThread.delete(threadId);
   }
 
-  private async handleCodexAppServerUnexpectedExit(): Promise<void> {
+  private async handleCodexAppServerUnexpectedExit(affected?: ReadonlySet<string>): Promise<void> {
     this.backgroundTerminalGeneration += 1;
     // The client synthesizes terminal failures only for turns it saw start.
     // Settle accepted compactions it cannot know about at this same boundary.
     const pendingCompactions: CodexRetryableCompaction[] = [];
     for (const [threadId, candidate] of this.codexRetryableOperations) {
+      if (affected && !affected.has(threadId)) continue;
       if (candidate.kind !== "compact" || candidate.lifecycleStarted) continue;
       candidate.terminalObserved = true;
       this.codexRetryableOperations.delete(threadId);
@@ -47192,11 +47703,12 @@ export class DesktopBackendRegistry {
     const threadIds = [...new Set([
       ...this.liveCodexToolItemsByThread.keys(), ...this.codexBackgroundTerminals.keys(),
       ...pendingCompactions.map((candidate) => candidate.params.threadId),
-    ])];
-    this.liveCodexToolItemsByThread.clear();
+    ])].filter((threadId) => !affected || affected.has(threadId));
+    for (const threadId of threadIds) this.liveCodexToolItemsByThread.delete(threadId);
     // The terminals died with the app server. Publish the clear so rows that
     // carried their mark refresh.
     for (const threadId of [...this.codexBackgroundTerminals.keys()]) {
+      if (affected && !affected.has(threadId)) continue;
       this.publishCodexBackgroundTerminals(threadId, []);
     }
     try {
@@ -47963,6 +48475,25 @@ export class DesktopBackendRegistry {
           requestId: event.notification.params.requestId,
           threadId: event.notification.params.threadId,
         });
+      }
+    }
+
+    if (event.backend === "codex" && event.notification.method === "thread/status/changed"
+      && ["idle", "notLoaded"].includes(readStatusType(event.notification.params.status) ?? "")) {
+      void this.maybeRestartCodexForManagedRuntimeChange();
+    }
+
+    if (event.backend === "codex" && (
+      event.notification.method === "turn/completed"
+      || event.notification.method === "turn/failed"
+      || event.notification.method === "turn/cancelled"
+      || (event.notification.method === "thread/status/changed"
+        && readStatusType(event.notification.params.status) === "idle")
+    )) {
+      const threadId = event.notification.params.threadId;
+      if (!this.closed && !this.stoppingRunningTurnsForShutdown
+        && (this.liveCodexToolItemsByThread.has(threadId) || this.codexBackgroundTerminals.has(threadId))) {
+        void this.refreshCodexBackgroundTerminalsAfterTurn(threadId);
       }
     }
 
@@ -48873,6 +49404,50 @@ function queuedTurnDisplayText(input: AppServerTurnInputItem[]): string {
   return text.length > 200 ? `${text.slice(0, 200)}\u2026` : text;
 }
 
+/** The card's title, in the provider's own words: GitLab says merge request and !number. */
+function forgeToolApprovalMessage(operation: ForgePrToolOperation, args: ForgePrToolArgs, provider: ForgeRepository["provider"]): string {
+  const gitlab = provider === "gitlab";
+  const forge = gitlab ? "GitLab" : "GitHub";
+  const request = gitlab ? "merge request" : "pull request";
+  const pr = args.number ? ` ${gitlab ? "!" : "#"}${args.number}` : "";
+  const issue = args.number ? ` #${args.number}` : "";
+  const commentTarget = gitlab && args.kind === "pr" ? pr : issue;
+  switch (operation) {
+    case "create_pull_request": return `Allow the agent to open a ${request} on ${forge}?`;
+    case "update_pull_request": return `Allow the agent to edit ${request}${pr} on ${forge}?`;
+    case "merge_pull_request": return `Allow the agent to merge ${request}${pr} on ${forge}?`;
+    case "submit_pull_request_review": {
+      const verb = args.event === "APPROVE" ? "approve" : args.event === "REQUEST_CHANGES" ? "request changes on" : "review";
+      return `Allow the agent to ${verb} ${request}${pr} on ${forge}?`;
+    }
+    case "reply_to_review_comment": return `Allow the agent to reply to a review comment on${pr || ` ${forge}`}?`;
+    case "resolve_review_thread": return `Allow the agent to ${args.resolved ? "resolve" : "reopen"} a review thread on ${forge}?`;
+    case "add_issue_comment": return `Allow the agent to comment on${commentTarget || ` ${forge}`}?`;
+    case "create_issue": return `Allow the agent to open an issue on ${forge}?`;
+    case "update_issue": return `Allow the agent to edit issue${issue} on ${forge}?`;
+    default: return `Allow the agent to run ${operation} on ${forge}?`;
+  }
+}
+
+/** The card's argument rows: bodies cut to a preview, attachments by file name. */
+function forgeToolParamsDisplay(args: ForgePrToolArgs): Array<{ name: string; value: string }> {
+  const rows: Array<{ name: string; value: string }> = [];
+  for (const [name, value] of Object.entries(args)) {
+    if (value === undefined || name === "repository") continue;
+    if (name === "body" || name === "commitMessage") {
+      const textValue = String(value);
+      rows.push({ name, value: textValue.length > 240 ? `${textValue.slice(0, 240)}… (${textValue.length.toLocaleString("en-US")} characters)` : textValue });
+    } else if (name === "attachments" && Array.isArray(value)) {
+      rows.push({ name, value: value.map((item) => String((item as { path?: unknown }).path ?? "").split("/").pop()).join(", ") });
+    } else if (name === "comments" && Array.isArray(value)) {
+      rows.push({ name, value: `${value.length} inline comment${value.length === 1 ? "" : "s"}` });
+    } else {
+      rows.push({ name, value: typeof value === "string" ? value : JSON.stringify(value) });
+    }
+  }
+  return rows;
+}
+
 function messagingDynamicToolCategoryForCatalog(
   catalogId: AgentToolCatalogId | undefined,
 ): MessagingDynamicToolCategory | undefined {
@@ -48880,6 +49455,7 @@ function messagingDynamicToolCategoryForCatalog(
     case "automation_inspection":
     case "app_management":
     case "thread_inspection":
+    case "forge":
     case "thread_orchestration":
     case "messaging_context":
     case "star_map":

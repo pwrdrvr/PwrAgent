@@ -37,6 +37,29 @@ afterEach(() => {
 });
 
 describe("PendingMcpInteraction", () => {
+  it("renders native tool argument objects and long display names without hiding credentials", () => {
+    const name = "pwragent-hosted-sandboxer-smoke-fixture";
+    const state = createMcpElicitationState({
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: "thread-1", turnId: "turn-1", requestId: "native-1", serverName: "Sandboxer",
+        mode: "form", message: "Create a sandbox?", requestedSchema: { type: "object", properties: {} },
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          tool_params_display: [
+            { name: "name", value: name },
+            { name: "labels", value: { purpose: "smoke", access_token: "fixture-private-value" } },
+          ],
+        },
+      },
+    })!;
+    render(<PendingMcpInteraction state={state} onChange={vi.fn()} onSubmit={vi.fn()} />);
+    expect(screen.getByText(name)).toBeInTheDocument();
+    expect(screen.getByText(/"purpose": "smoke"/)).toHaveTextContent('"access_token": "[redacted]"');
+    expect(screen.queryByText("[object Object]")).toBeNull();
+    expect(screen.queryByText(/fixture-private-value/)).toBeNull();
+  });
+
   it("offers only conversation persistence for a PwrAgent gateway tool approval", () => {
     const onSubmit = vi.fn();
     const state = createMcpElicitationState({

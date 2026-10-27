@@ -38,12 +38,15 @@ export function isSubthreadSectionCollapsed(thread: NavigationPresentedThread): 
   return thread.subthreadsCollapsed === true;
 }
 
+// The group draws native workers only; the thread's other card history stays unread.
+const NATIVE_SUB_AGENT_COLLECTIONS = ["codexNativeSubAgents"] as const;
+
 export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps) {
   const [expanded, setExpanded] = useState(false);
   const desktopApi = useDesktopApi();
   const openSubAgentTranscriptWindow = desktopApi?.openSubAgentTranscriptWindow;
   const target = props.thread.federation?.ref.target ?? readRendererFederationTarget();
-  const detail = useNavigationSelectedDetail({ desktopApi, federationTarget: target,
+  const detail = useNavigationSelectedDetail({ collections: NATIVE_SUB_AGENT_COLLECTIONS, desktopApi, federationTarget: target,
     ref: expanded ? { backend: props.thread.source, threadId: props.thread.id,
       ownerInstanceId: target?.scope === "remote" ? target.instanceId : undefined } : undefined });
   const nativeSubAgents = detail.state?.detail?.thread?.codexNativeSubAgents ?? props.thread.codexNativeSubAgents ?? [];

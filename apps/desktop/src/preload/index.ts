@@ -171,6 +171,7 @@ import type {
   SetMcpConnectionSelectForNewThreadsRequest,
   SetMcpConnectionToolApprovalRequest,
   SetSandboxerCleanupOnPrCloseRequest,
+  SetSandboxerTransportRequest,
   ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
@@ -180,6 +181,8 @@ import type {
   PreviewThreadRewindResponse,
   RewindThreadRequest,
   RewindThreadResponse,
+  UndoThreadRewindRequest,
+  UndoThreadRewindResponse,
   StartCodexMcpServerLoginRequest,
   StartCodexMcpServerLoginResponse,
   LatestCodexConfigWarningResponse,
@@ -710,6 +713,7 @@ import {
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_PREVIEW_THREAD_REWIND_CHANNEL,
   AGENT_REWIND_THREAD_CHANNEL,
+  AGENT_UNDO_THREAD_REWIND_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -914,6 +918,7 @@ import {
   MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL,
   MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL,
   MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL,
+  MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL,
   MCP_CONNECTION_LIST_TOOLS_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
   MCP_CONNECTION_READ_THREAD_CHANNEL,
@@ -1303,6 +1308,8 @@ const desktopApi = Object.freeze({
     request: SetMcpConnectionToolApprovalRequest,
   ): Promise<MutateMcpConnectionResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL, request),
+  setSandboxerTransport: async (request: SetSandboxerTransportRequest): Promise<MutateMcpConnectionResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL, request),
   setSandboxerCleanupOnPrClose: async (
     request: SetSandboxerCleanupOnPrCloseRequest,
   ): Promise<MutateMcpConnectionResponse> =>
@@ -2441,6 +2448,10 @@ const desktopApi = Object.freeze({
     request: RewindThreadRequest,
   ): Promise<RewindThreadResponse> =>
     await ipcRenderer.invoke(AGENT_REWIND_THREAD_CHANNEL, request),
+  undoThreadRewind: async (
+    request: UndoThreadRewindRequest,
+  ): Promise<UndoThreadRewindResponse> =>
+    await ipcRenderer.invoke(AGENT_UNDO_THREAD_REWIND_CHANNEL, request),
   configureGrokWorkflowBudget: async (
     request: ConfigureGrokWorkflowBudgetRequest,
   ): Promise<ConfigureGrokWorkflowBudgetResponse> =>

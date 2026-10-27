@@ -93,7 +93,7 @@ export type AgentToolMcpServerOptions = {
     | undefined;
   authorizeToolCall?: (
     params: AgentToolMcpAuthorization,
-  ) => string | null | undefined;
+  ) => string | null | undefined | Promise<string | null | undefined>;
 };
 
 export class AgentToolMcpServer implements AgentToolMcpServerLike {
@@ -320,7 +320,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
             }),
           );
         }
-        const deniedPermission = this.options.authorizeToolCall?.({
+        const deniedPermission = await this.options.authorizeToolCall?.({
           backend: callContext.backend,
           catalogId: catalog.id,
           threadId: callContext.threadId,

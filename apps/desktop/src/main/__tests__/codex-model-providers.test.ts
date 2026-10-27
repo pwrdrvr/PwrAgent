@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { CodexModelProviderSettings, ThreadUsageLineRecord } from "@pwragent/shared";
+import { validateCodexModelProviders, type CodexModelProviderSettings, type ThreadUsageLineRecord } from "@pwragent/shared";
 import { CodexModelProviderCatalog } from "../app-server/codex-model-provider-catalog";
 import { wrapCodexProviderUsageAttribution } from "../app-server/codex-provider-usage-attribution";
 import { desktopSettingsPatchToEdits, parseDesktopSettingsToml } from "../settings/desktop-config";
@@ -50,6 +50,29 @@ describe("Codex model provider config", () => {
 
   it("refuses a malformed provider in a write", () => {
     expect(() => save("", [{ ...refuseless, baseUrl: "ftp://example.com" }])).toThrow();
+  });
+
+  it("repairs the earlier Bonsai shape and preserves isolated runtime settings on save", () => {
+    const [provider] = validateCodexModelProviders([{
+      id: "bonsai", name: "Bonsai", baseUrl: "http://127.0.0.1:18080/v1", models: ["/models/Bonsai.gguf"],
+    }]);
+    expect(provider.compatibility).toBe("bonsai");
+    const configured = { ...provider, catalogPath: "/profiles/bonsai/models.json" };
+    const written = save("# Keep\n", [refuseless, configured]);
+    expect(parseDesktopSettingsToml(written, "test.toml").models?.codex?.providers).toEqual([refuseless, configured]);
+    expect(written).toContain('catalog_path = "/profiles/bonsai/models.json"');
+    expect(written).toContain("# Keep");
+    expect(validateCodexModelProviders([refuseless])[0]).not.toHaveProperty("compatibility");
+  });
+
+  it.each([
+    { baseUrl: "https://api.example/v1", models: ["Bonsai.gguf"], compatibility: "bonsai" },
+    { baseUrl: "http://localhost:8080/v1", models: [], compatibility: "bonsai" },
+    { baseUrl: "http://localhost:8080/v1", models: ["a", "b"], compatibility: "bonsai" },
+    { baseUrl: "http://localhost:8080/v1", models: ["a"], compatibility: "unknown" },
+    { baseUrl: "http://localhost:8080/v1", models: ["a"], catalogPath: "/tmp/storage.jsonl" },
+  ])("rejects unsupported isolated runtime settings: %j", (fields) => {
+    expect(() => validateCodexModelProviders([{ id: "fixture", ...fields }])).toThrow();
   });
 });
 
@@ -163,6 +186,85 @@ describe("CodexModelProviderCatalog", () => {
     const result = await catalog.test(refuseless, "sk-test");
     expect(result.models).toEqual({ ok: true, count: 1 });
     expect(result.responses).toEqual({ ok: false, model: "glm-5.3-abliterated", error: "HTTP 404: Unknown endpoint" });
-    expect(JSON.parse(requests[1].body ?? "{}")).toMatchObject({ model: "glm-5.3-abliterated", max_output_tokens: 16, store: false });
+    expect(JSON.parse(requests[1].body ?? "{}")).toMatchObject({
+      model: "glm-5.3-abliterated",
+      instructions: expect.any(String),
+      input: [
+        { role: "developer", content: expect.any(String) },
+        { role: "user", content: expect.any(String) },
+      ],
+      tools: [{ type: "namespace", name: "compatibility_check", tools: [{ type: "function", name: "check" }] }],
+      max_output_tokens: 256,
+      store: false,
+    });
+  });
+
+  it("surfaces chat-template failures rather than treating /models as inference success", async () => {
+    const catalog = new CodexModelProviderCatalog({
+      resolveProviders: () => [],
+      resolveKeys: async () => ({}),
+      fetch: async (url, init) => {
+        if (!url.endsWith("/responses")) return jsonResponse({ data: [{ id: "local-model" }] });
+        const body = JSON.parse(String(init?.body));
+        expect(body.instructions).toBeTruthy();
+        expect(body.input[0].role).toBe("developer");
+        expect(body.tools[0].type).toBe("namespace");
+        return jsonResponse({ error: { message: "Jinja Exception: System message must be at the beginning." } }, 500);
+      },
+    });
+    const result = await catalog.test({ ...refuseless, models: ["local-model"] }, undefined);
+    expect(result.models.ok).toBe(true);
+    expect(result.responses).toMatchObject({ ok: false, error: expect.stringContaining("System message must be at the beginning") });
+  });
+
+  it("accepts a completed regular OpenAI response with provider authentication", async () => {
+    const provider = { ...refuseless, id: "openai-key", baseUrl: "https://api.openai.com/v1", models: ["gpt-5.5"] };
+    const catalog = new CodexModelProviderCatalog({
+      resolveProviders: () => [],
+      resolveKeys: async () => ({}),
+      fetch: async (url, init) => {
+        expect((init?.headers as Record<string, string> | undefined)?.authorization).toBe("Bearer test-key");
+        if (!url.endsWith("/responses")) return jsonResponse({ data: [{ id: "gpt-5.5" }] });
+        expect(JSON.parse(String(init?.body)).model).toBe("gpt-5.5");
+        return jsonResponse({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }] });
+      },
+    });
+    expect((await catalog.test(provider, "test-key")).responses).toEqual({ ok: true, model: "gpt-5.5" });
+  });
+
+  it("tests Bonsai through its prepared bridge and always closes its resources", async () => {
+    const close = vi.fn(async () => undefined);
+    const prepareCompatibility = vi.fn(async () => ({ baseUrl: "http://127.0.0.1:12345/v1", overrides: [], close }));
+    const catalog = new CodexModelProviderCatalog({
+      resolveProviders: () => [], resolveKeys: async () => ({}), prepareCompatibility,
+      fetch: async (url) => {
+        if (url.endsWith("/models")) return jsonResponse({ data: [] });
+        expect(url).toBe("http://127.0.0.1:12345/v1/responses");
+        return jsonResponse({ error: { message: "fixture failure" } }, 500);
+      },
+    });
+    const provider = { ...refuseless, id: "bonsai", compatibility: "bonsai" as const };
+    expect((await catalog.test(provider, "fixture-key")).responses.ok).toBe(false);
+    expect(prepareCompatibility).toHaveBeenCalledWith(provider, "fixture-key");
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {},
+    { error: { message: "failed" } },
+    { status: "failed", output: [] },
+    { status: "incomplete", output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }] },
+    { status: "completed", output: [] },
+    { status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: " " }] }] },
+  ])("does not report HTTP 200 as successful inference without completed text (%j)", async (response) => {
+    const catalog = new CodexModelProviderCatalog({
+      resolveProviders: () => [],
+      resolveKeys: async () => ({}),
+      fetch: async (url) => url.endsWith("/responses") ? jsonResponse(response) : jsonResponse({ data: [] }),
+    });
+    expect((await catalog.test(refuseless, undefined)).responses).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("did not return a completed text response"),
+    });
   });
 });

@@ -1,10 +1,14 @@
 import type { DesktopThreadArchivePolicy, ThreadExecutionMode, ThreadTodoMergeMethod } from "@pwragent/shared";
 import {
+  FORGE_AGENT_TOOL_GROUPS,
   isAcpBackendId,
+  isForgeAgentToolAccess,
   isThreadTodoMergeMethod,
   validateCodexModelProviders,
   validateLocalModelIds,
   type CodexModelProviderSettings,
+  type ForgeAgentToolAccess,
+  type ForgeAgentToolGroup,
 } from "@pwragent/shared";
 import fs from "node:fs";
 import { validateCodexConfigOverrides } from "./codex-config-overrides";
@@ -358,6 +362,10 @@ export type DesktopSettingsConfig = {
     prAutoDispatchBudgetRefillPerMinute?: number;
     pausePrAutoDispatchWhenBudgetEmpty?: boolean;
     defaultMergeMethod?: ThreadTodoMergeMethod;
+    agentTools?: {
+      enabled?: boolean;
+      access?: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>>;
+    };
   };
   applications?: {
     editor?: {
@@ -1998,6 +2006,15 @@ export function desktopSettingsPatchToEdits(
   if (patch.git?.defaultMergeMethod !== undefined) {
     set(["git", "default_merge_method"], patch.git.defaultMergeMethod);
   }
+  if (patch.git?.agentTools?.enabled !== undefined) {
+    set(["git", "agent_tools", "enabled"], patch.git.agentTools.enabled);
+  }
+  for (const group of FORGE_AGENT_TOOL_GROUPS) {
+    const access = patch.git?.agentTools?.access?.[group];
+    if (access !== undefined) {
+      set(["git", "agent_tools", group], access);
+    }
+  }
 
   if (patch.applications?.editor?.preferredId !== undefined) {
     set(["applications", "editor", "preferred_id"], patch.applications.editor.preferredId);
@@ -2084,6 +2101,7 @@ function normalizeDesktopConfig(
   const acpAgentsKimi = tables["acp_agents.kimi"];
   const acpAgentsQwen = tables["acp_agents.qwen"];
   const git = tables["git"];
+  const gitAgentTools = tables["git.agent_tools"];
   const editor = tables["applications.editor"];
   const terminal = tables["applications.terminal"];
   const gh = tables["applications.gh"];
@@ -2521,6 +2539,10 @@ function normalizeDesktopConfig(
         git?.pause_pr_auto_dispatch_when_budget_empty,
       ),
       defaultMergeMethod: readMergeMethod(git?.default_merge_method),
+      agentTools: {
+        enabled: readBoolean(gitAgentTools?.enabled),
+        access: readForgeAgentToolAccess(gitAgentTools),
+      },
     },
     applications: {
       editor: {
@@ -3034,6 +3056,19 @@ function readHotCpuProfileStartDelayMs(
     : undefined;
 }
 
+function readForgeAgentToolAccess(
+  table: Record<string, TomlScalar> | undefined,
+): Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>> {
+  const access: Partial<Record<ForgeAgentToolGroup, ForgeAgentToolAccess>> = {};
+  for (const group of FORGE_AGENT_TOOL_GROUPS) {
+    const value = table?.[group];
+    if (isForgeAgentToolAccess(group, value)) {
+      access[group] = value;
+    }
+  }
+  return access;
+}
+
 function readMergeMethod(
   value: TomlScalar | undefined,
 ): ThreadTodoMergeMethod | undefined {
@@ -3298,6 +3333,8 @@ function readCodexModelProviders(
       ...(entry.models === undefined ? {} : { models: entry.models }),
       ...(entry.discover_models === undefined ? {} : { discoverModels: entry.discover_models }),
       ...(entry.local === undefined ? {} : { local: entry.local }),
+      ...(entry.compatibility === undefined ? {} : { compatibility: entry.compatibility }),
+      ...(entry.catalog_path === undefined ? {} : { catalogPath: entry.catalog_path }),
       ...(rates.length ? { rates } : {}),
     };
   }));
@@ -3313,6 +3350,8 @@ function codexModelProviderTableEdits(
     ...(provider.models?.length ? { models: provider.models } : {}),
     ...(provider.discoverModels === undefined ? {} : { discover_models: provider.discoverModels }),
     ...(provider.local ? { local: true } : {}),
+    ...(provider.compatibility ? { compatibility: provider.compatibility } : {}),
+    ...(provider.catalogPath ? { catalog_path: provider.catalogPath } : {}),
   }));
   const rateRows = providers.flatMap((provider) => (provider.rates ?? []).map((rate) => ({
     provider: provider.id,

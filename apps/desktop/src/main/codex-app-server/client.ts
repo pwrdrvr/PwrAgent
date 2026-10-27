@@ -118,6 +118,8 @@ import type {
   ThreadItem as CodexThreadItem,
   ThreadItemsListParams as CodexThreadItemsListParams,
   ThreadItemsListResponse as CodexThreadItemsListResponse,
+  ThreadItemsReadParams as CodexThreadItemsReadParams,
+  ThreadItemsReadResponse as CodexThreadItemsReadResponse,
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
   ThreadReadResponse as CodexThreadReadResponse,
@@ -1382,6 +1384,8 @@ function normalizeFailedTurnCompletedNotification(
       turn: {
         id: turnId,
         status: "failed",
+        ...(typeof turn.rootTurnId === "string" || turn.rootTurnId === null
+          ? { rootTurnId: turn.rootTurnId } : {}),
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(completedAt !== undefined ? { completedAt } : {}),
         ...(durationMs !== undefined ? { durationMs } : {}),
@@ -2868,6 +2872,8 @@ function extractTurnMetadata(
   return {
     id,
     ...(status ? { status } : {}),
+    ...(typeof turn.rootTurnId === "string" || turn.rootTurnId === null
+      ? { rootTurnId: turn.rootTurnId } : {}),
     ...(startedAt ? { startedAt } : {}),
     ...(completedAt ? { completedAt } : {}),
     ...(typeof durationMs === "number" ? { durationMs } : {}),
@@ -4924,6 +4930,11 @@ function summarizeActivityItems(
   return {
     type: "activity",
     id: `activity-${pickString(items[0] ?? {}, ["id", "itemId", "item_id"]) ?? "1"}`,
+    // Only canonical command groups are self-contained here. Legacy calls can
+    // depend on separate output items, and detail IDs can be synthesized.
+    ...(items.length <= 100 && items.every((item) => item.type === "commandExecution"
+      && typeof item.id === "string" && item.id.length > 0)
+      ? { itemIds: items.map((item) => item.id as string) } : {}),
     summary:
       summaryParts.length > 0
         ? formatActivitySummary(summaryParts)
@@ -7155,6 +7166,8 @@ function formatCodexFileReference(
 
 function buildTurnStartPayload(params: {
   threadId: string;
+  parentTurnId?: string;
+  rootTurnId?: string;
   input: CodexUserInput[];
   cwd?: string;
   model?: string;
@@ -7174,6 +7187,10 @@ function buildTurnStartPayload(params: {
     input: params.input,
   };
 
+  if (compatibility.supportsTurnAncestry && params.parentTurnId) {
+    base.parentTurnId = params.parentTurnId;
+    if (params.rootTurnId) base.rootTurnId = params.rootTurnId;
+  }
   if (params.cwd?.trim()) {
     base.cwd = params.cwd.trim();
   }
@@ -7630,6 +7647,7 @@ export class CodexAppServerClient {
   private pendingCloses = 0;
   private serverGeneration = 0;
   private readonly runningTurnIdsByThread = new Map<string, string>();
+  private readonly turnRoots = new Map<string, string | null>();
   private readonly liveUsageSnapshots = new Map<string, {
     tokens: ThreadUsageTokenBreakdown;
     model?: string;
@@ -7945,6 +7963,10 @@ export class CodexAppServerClient {
       const observedTurnId = turnMetadata.turnId
         ?? pickString(asRecord(asRecord(normalized.params)?.turn) ?? {}, ["id"]);
       if (turnMetadata.threadId && observedTurnId) {
+        const turn = asRecord(asRecord(normalized.params)?.turn);
+        if (typeof turn?.rootTurnId === "string" || turn?.rootTurnId === null) {
+          rememberBoundedMap(this.turnRoots, `${turnMetadata.threadId}:${observedTurnId}`, turn.rootTurnId, 1_000);
+        }
         if (normalized.method === "turn/started") {
           this.runningTurnIdsByThread.set(turnMetadata.threadId, observedTurnId);
         } else if (normalized.method === "turn/completed" || normalized.method === "turn/failed") {
@@ -8124,7 +8146,7 @@ export class CodexAppServerClient {
     };
   }
 
-  onAppServerUnexpectedExit(listener: () => void): () => void {
+  onAppServerUnexpectedExit(listener: (threadIds?: ReadonlySet<string>) => void): () => void {
     this.unexpectedExitListeners.add(listener);
     return () => {
       this.unexpectedExitListeners.delete(listener);
@@ -8320,7 +8342,7 @@ export class CodexAppServerClient {
 
   /**
    * Repairs the protocol-identified rollout, which requires stopping this
-   * app-server process: it is the profile's only writer, and Codex unloads an
+   * app-server process: it owns this thread's live writer, and Codex unloads an
    * unsubscribed thread (closing its writer) only after an idle delay — a
    * fixed 30 minutes in 0.153. A stopped stdio app-server sends no terminal
    * for the turns it was running, so the stop waits until no turn runs here.
@@ -8486,12 +8508,12 @@ export class CodexAppServerClient {
     });
   }
 
-  onRealtimeEvent(listener: (event: NativeVoiceNotification) => void): () => void {
+  onRealtimeEvent(listener: (event: NativeVoiceNotification) => void, _threadId?: string): () => void {
     this.realtimeListeners.add(listener);
     return () => { this.realtimeListeners.delete(listener); };
   }
 
-  onRealtimeDisconnect(listener: () => void): () => void {
+  onRealtimeDisconnect(listener: () => void, _threadId?: string): () => void {
     this.realtimeDisconnectListeners.add(listener);
     return () => { this.realtimeDisconnectListeners.delete(listener); };
   }
@@ -9794,6 +9816,36 @@ export class CodexAppServerClient {
     }
   }
 
+  /** Exact server-reported ancestry, using live metadata before metadata-only history pages. */
+  async readTurnRoot(params: { threadId: string; turnId: string }): Promise<string | undefined> {
+    await this.ensureInitialized();
+    const key = `${params.threadId}:${params.turnId}`;
+    if (this.turnRoots.has(key)) return this.turnRoots.get(key) ?? undefined;
+    if (!this.getProtocolCompatibility().supportsTurnAncestry) return undefined;
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    do {
+      const page = await this.connection.request("thread/turns/list", {
+        threadId: params.threadId,
+        ...(cursor ? { cursor } : {}),
+        limit: CODEX_THREAD_HISTORY_PAGE_SIZE,
+        sortDirection: "desc",
+        itemsView: "notLoaded",
+      } satisfies CodexThreadTurnsListParams,
+      this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS) as CodexThreadTurnsListResponse;
+      const turn = page.data.find((turn) => turn.id === params.turnId);
+      if (turn) {
+        const root = typeof turn.rootTurnId === "string" ? turn.rootTurnId : null;
+        rememberBoundedMap(this.turnRoots, key, root, 1_000);
+        return root ?? undefined;
+      }
+      cursor = page.nextCursor ?? undefined;
+      if (!cursor || seen.has(cursor)) return undefined;
+      seen.add(cursor);
+    } while (cursor);
+    return undefined;
+  }
+
   /**
    * One turn's replay, normalized through the same adapter as a history page,
    * so its messages carry the same parts: a turn's tool screenshots attach to
@@ -9815,11 +9867,79 @@ export class CodexAppServerClient {
     } }, { threadId: params.threadId });
   }
 
+  /** A single invocation's bodies, with no claim about its transcript group. */
+  async readThreadToolInvocation(params: {
+    threadId: string;
+    turnId: string;
+    itemId: string;
+  }): Promise<AppServerThreadActivityDetail[]> {
+    if (!params.threadId || !params.turnId || !params.itemId) throw new Error("Invalid tool invocation detail request.");
+    await this.ensureInitialized();
+    let items: CodexThreadItem[] | undefined;
+    try {
+      // initialize deliberately opts into experimentalApi. Exact invocation
+      // reads are isolated from replay: one item cannot establish a group.
+      const payload = { threadId: params.threadId, turnId: params.turnId, itemIds: [params.itemId] } satisfies CodexThreadItemsReadParams;
+      const response = await requestWithThreadMetadataReadRetry(async () =>
+        await this.connection.request("thread/items/read", payload,
+          this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+      ) as CodexThreadItemsReadResponse;
+      const entry = Array.isArray(response?.data) && response.data.length === 1 ? response.data[0] : undefined;
+      if (entry?.turnId === params.turnId && entry.item?.id === params.itemId && entry.item.type === "commandExecution") {
+        items = [entry.item];
+      }
+    } catch (error) {
+      if (!isMethodUnavailableError(error, "thread/items/read")) throw error;
+    }
+    // Older servers enumerate only the requested turn. Select the raw item
+    // before normalization so adjacent commands cannot become its details.
+    items ??= (await listCodexThreadItems({
+      client: this.connection, threadId: params.threadId, turnId: params.turnId,
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    })).filter((item) => item.id === params.itemId && item.type === "commandExecution");
+    if (items.length !== 1) throw new Error("Tool invocation details are no longer available. Reload the thread.");
+    const replay = extractThreadReplayFromReadResult({ thread: { id: params.threadId,
+      turns: [{ id: params.turnId, items }],
+    } }, { threadId: params.threadId });
+    return replay.entries.flatMap((entry) => entry.type === "activity" ? entry.details : []);
+  }
+
   async readThreadActivity(params: {
     threadId: string;
     turnId: string;
     entryId: string;
+    itemIds?: string[];
   }): Promise<AppServerThreadActivityEntry> {
+    const ids = params.itemIds;
+    if (ids && ids.length > 0 && ids.length <= 100
+      && ids.every((id) => typeof id === "string" && id.length > 0)
+      && new Set(ids).size === ids.length && params.entryId === `activity-${ids[0]}`) {
+      await this.ensureInitialized();
+      try {
+        // initialize deliberately opts into experimentalApi. This endpoint is
+        // for an already-discovered group, never transcript enumeration.
+        const payload = { threadId: params.threadId, turnId: params.turnId, itemIds: ids } satisfies CodexThreadItemsReadParams;
+        const response = await requestWithThreadMetadataReadRetry(async () =>
+          await this.connection.request("thread/items/read", payload,
+            this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+        ) as CodexThreadItemsReadResponse;
+        const remaining = new Set(ids);
+        const valid = Array.isArray(response?.data) && response.data.length === ids.length
+          && response.data.every((entry) => entry?.turnId === params.turnId
+            && entry.item?.type === "commandExecution" && remaining.delete(entry.item.id));
+        if (valid) {
+          // Envelopes arrive in canonical stored order, not request order.
+          // The viewer retains the original row's timestamps and turn status.
+          const replay = extractThreadReplayFromReadResult({ thread: { id: params.threadId,
+            turns: [{ id: params.turnId, items: response.data.map((entry) => entry.item) }],
+          } }, { threadId: params.threadId });
+          const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
+          if (entry?.type === "activity") return entry;
+        }
+      } catch (error) {
+        if (!isMethodUnavailableError(error, "thread/items/read")) throw error;
+      }
+    }
     // No transcript file, whole-thread replay, or accounting read is needed.
     const replay = await this.readThreadTurn(params);
     const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
@@ -10265,6 +10385,9 @@ export class CodexAppServerClient {
 
   async startTurn(params: {
     threadId: string;
+    /** Delegation attribution only. */
+    parentTurnId?: string;
+    rootTurnId?: string;
     input: AppServerTurnInputItem[];
     onInputTextPrepared?: (text: string | undefined) => void;
     cwd?: string;
@@ -10392,6 +10515,8 @@ export class CodexAppServerClient {
           {
             threadId: params.threadId,
             input: codexInput,
+            parentTurnId: params.parentTurnId,
+            rootTurnId: params.rootTurnId,
             cwd: params.cwd,
             model: params.model,
             reasoningEffort: params.reasoningEffort,
@@ -10417,6 +10542,10 @@ export class CodexAppServerClient {
 
     const threadId = extractThreadIdFromValue(result) ?? params.threadId;
     const turnId = extractTurnIdFromValue(result) ?? `pending:${threadId}`;
+    const turn = asRecord(asRecord(result)?.turn);
+    if (typeof turn?.rootTurnId === "string" || turn?.rootTurnId === null) {
+      rememberBoundedMap(this.turnRoots, `${threadId}:${turnId}`, turn.rootTurnId, 1_000);
+    }
     this.threadsAwaitingFirstTurn.delete(params.threadId);
     this.freshNativeVoiceThreads.delete(params.threadId);
     this.admittedNativeVoiceThreads.delete(params.threadId);

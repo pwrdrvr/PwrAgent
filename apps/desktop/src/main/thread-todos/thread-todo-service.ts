@@ -6,6 +6,7 @@ import type {
   ThreadTodoAction,
   ThreadTodoItem,
   ThreadTodoMergeMethod,
+  ThreadTodoModelSettings,
   ThreadTodoMergeMethodPreferences,
   ThreadTodoProject,
   ThreadTodoResolution,
@@ -52,7 +53,10 @@ export type ThreadTodoActionRunners = {
     cwd?: string;
     crossProject: boolean;
     action: StartThreadAction;
-  }) => Promise<ThreadTodoStartedThread>;
+    modelSettings?: ThreadTodoModelSettings;
+  }) => Promise<ThreadTodoStartedThread & {
+    dispatchSettings?: { settings: ThreadTodoModelSettings; source: ThreadTodoModelSettings };
+  }>;
   /** The same, on a federation peer, in that peer's copy of `project`. */
   startThreadOnInstance?: (params: {
     instanceId: string;
@@ -163,6 +167,30 @@ export class ThreadTodoService {
       ?? (() => DEFAULT_THREAD_TODO_MERGE_METHOD);
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
+  }
+
+  private readDispatchSettings: ((thread: { backend: AppServerBackendKind; threadId: string }) => Promise<ThreadTodoModelSettings>) | undefined;
+
+  setDispatchSettingsReader(reader: NonNullable<ThreadTodoService["readDispatchSettings"]>): void {
+    this.readDispatchSettings = reader;
+  }
+
+  /** Read once per owner, with the cards, so a remembered pick never flashes. */
+  async withDispatchDefaults(todos: ThreadTodo[]): Promise<ThreadTodo[]> {
+    const defaults = new Map<string, Promise<NonNullable<ThreadTodo["dispatchDefaults"]>>>();
+    return Promise.all(todos.map(async (todo) => {
+      if (todo.action?.type !== "start_thread" || !this.readDispatchSettings) return todo;
+      const key = JSON.stringify([todo.backend, todo.threadId]);
+      let pending = defaults.get(key);
+      if (!pending) {
+        pending = this.readDispatchSettings(todo).then((thread) => ({
+          thread,
+          lastDispatch: this.store.getThreadModelSettings(todo.backend, todo.threadId),
+        }));
+        defaults.set(key, pending);
+      }
+      return { ...todo, dispatchDefaults: await pending };
+    }));
   }
 
   setRunners(runners: ThreadTodoActionRunners | undefined): void {
@@ -547,6 +575,7 @@ export class ThreadTodoService {
       mergeMethod?: ThreadTodoMergeMethod;
       rememberMergeMethod?: boolean;
       startOnInstanceId?: string;
+      modelSettings?: ThreadTodoModelSettings;
       /** A run that succeeds marks the card done, so it asks the same. */
       allowOpenItems?: boolean;
     } = {},
@@ -605,7 +634,7 @@ export class ThreadTodoService {
         });
         return this.finish(id, { result: merged.summary });
       }
-      const started = startOnInstance && options.startOnInstanceId
+      const started: Awaited<ReturnType<ThreadTodoActionRunners["startThread"]>> = startOnInstance && options.startOnInstanceId
         ? await startOnInstance({
             instanceId: options.startOnInstanceId,
             sourceBackend: todo.backend,
@@ -620,12 +649,19 @@ export class ThreadTodoService {
             cwd,
             crossProject,
             action,
+            modelSettings: options.modelSettings
+              ?? this.store.getThreadModelSettings(todo.backend, todo.threadId),
           });
+      if (started.dispatchSettings) {
+        this.store.rememberDispatch(todo.backend, todo.threadId,
+          started.dispatchSettings.settings, started.dispatchSettings.source);
+      }
+      const { backend, threadId, instanceId, instanceLabel } = started;
       return this.finish(id, {
         result: started.instanceLabel
           ? `Started thread on ${started.instanceLabel}`
           : "Started thread",
-        startedThread: started,
+        startedThread: { backend, threadId, ...(instanceId ? { instanceId } : {}), ...(instanceLabel ? { instanceLabel } : {}) },
       });
     } catch (error) {
       const failed = this.store.setError({

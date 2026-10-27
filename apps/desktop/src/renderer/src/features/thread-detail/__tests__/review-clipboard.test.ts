@@ -113,6 +113,28 @@ describe("formatReviewForClipboard", () => {
     );
   });
 
+  it("lists every pull request a review of several covered", () => {
+    const second = {
+      ...CONTEXT.pullRequest!,
+      number: 1920,
+      title: "Lead the rollup chip",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1920",
+    };
+    const text = formatReviewForClipboard(model({
+      context: { ...CONTEXT, pullRequests: [CONTEXT.pullRequest!, second] },
+    }));
+    expect(text).toContain(
+      "- **Pull request:** pwrdrvr/PwrAgent#1918 — Ship the macOS dock icon"
+        + " — https://github.com/pwrdrvr/PwrAgent/pull/1918\n"
+        + "- **Pull request:** pwrdrvr/PwrAgent#1920 — Lead the rollup chip"
+        + " — https://github.com/pwrdrvr/PwrAgent/pull/1920\n",
+    );
+    expect(formatReviewFindingForClipboard(
+      model({ context: { ...CONTEXT, pullRequests: [CONTEXT.pullRequest!, second] } }),
+      finding(),
+    )).toContain("pwrdrvr/PwrAgent#1918, pwrdrvr/PwrAgent#1920");
+  });
+
   it("reports a structured reviewer that found nothing, and stays silent for one that reports no findings at all", () => {
     expect(formatReviewForClipboard(model({ findings: [] }))).toContain(
       "## Findings\n\nNo findings.",

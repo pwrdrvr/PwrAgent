@@ -275,15 +275,37 @@ export function buildMcpElicitationResponse(
   };
 }
 
-export function redactDisplayValue(value: unknown): string {
-  if (typeof value !== "string") {
-    return String(value ?? "");
+export function redactDisplayValue(
+  value: unknown,
+  context: { key?: string; label?: string } = {},
+): string {
+  if (isSecretFieldName(context.key ?? "") || isSecretFieldLabel(context.label ?? "")) return "[redacted]";
+  if (typeof value === "string") {
+    // Gateway approvals can carry serialized JSON; native Codex approvals
+    // can carry the same argument as an object. Redact both structures alike.
+    if (/^\s*[\[{]/.test(value)) {
+      try {
+        const parsed: unknown = JSON.parse(value);
+        if (parsed && typeof parsed === "object") return redactDisplayValue(parsed, context);
+      } catch {
+        // Ordinary text that happens to begin with a bracket.
+      }
+    }
+    return redactDisplayString(value, context.key);
   }
-
-  if (looksSecret(value)) {
-    return "[redacted]";
+  if (value && typeof value === "object") {
+    return JSON.stringify(value, (key, current: unknown) => {
+      if (key && (isSecretFieldName(key) || isSecretFieldLabel(key))) return "[redacted]";
+      return typeof current === "string" ? redactDisplayString(current, key) : current;
+    }, 2);
   }
+  return String(value ?? "");
+}
 
+function redactDisplayString(value: string, key?: string): string {
+  // A tool's display-name argument is not a credential merely because it is
+  // long. Explicit bearer/credential assignments remain hidden in any field.
+  if (looksSecret(value, key === "name")) return "[redacted]";
   return redactUrl(value);
 }
 
@@ -656,11 +678,11 @@ function redactUrl(value: string): string {
   }
 }
 
-function looksSecret(value: string): boolean {
+function looksSecret(value: string, displayName = false): boolean {
   const trimmed = value.trim();
   return (
     /^bearer\s+/i.test(trimmed) ||
-    /^[A-Za-z0-9_-]{32,}$/.test(trimmed) ||
+    (!displayName && /^[A-Za-z0-9_-]{32,}$/.test(trimmed)) ||
     /(api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password)=/i.test(trimmed)
   );
 }

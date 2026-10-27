@@ -22,6 +22,36 @@ function sameRepository(a: Omit<ForgeRepository, "provider"> & { provider?: Forg
   return a.host.toLowerCase() === b.host.toLowerCase()
     && (fold ? a.owner.toLowerCase() === b.owner.toLowerCase() && a.repo.toLowerCase() === b.repo.toLowerCase() : a.owner === b.owner && a.repo === b.repo);
 }
+/**
+ * The repositories a forge tool may touch for one thread: its linked remotes
+ * and the base repositories of its attached PRs/MRs. An explicit repository
+ * or URL narrows that set and must belong to it.
+ */
+export function resolveForgeRepositories(args: Pick<ForgeReadArgs, "repository" | "url">, scope: Pick<ForgeReadScope, "remotes" | "attached">): ForgeRepository[] {
+  const candidates = new Map<string, ForgeRepository>();
+  for (const remote of scope.remotes) {
+    const provider = forgeKindForRemoteHost(remote.host);
+    if (provider) candidates.set(repositoryKey({ ...remote, provider }), { ...remote, provider });
+  }
+  for (const pr of scope.attached) {
+    const repository = repositoryFromPr(pr.url);
+    if (repository) candidates.set(repositoryKey(repository), repository);
+  }
+  const explicit = args.repository ?? (args.url ? repositoryFromPr(args.url) : undefined);
+  if (args.url && !repositoryFromPr(args.url)) throw new ForgeReadError("invalid_arguments", "Use a supported HTTPS PR/MR URL.");
+  if (explicit) {
+    const key = repositoryKey(explicit);
+    const inferred = forgeKindForRemoteHost(explicit.host);
+    if (inferred && inferred !== explicit.provider) throw new ForgeReadError("invalid_arguments", "Provider does not match the known forge host.");
+    if (!candidates.has(key) && !scope.remotes.some((r) => sameRepository(r, explicit))) throw new ForgeReadError("forbidden", "Repository is outside the target thread's linked remotes and attached PR/MR repositories.");
+    if (args.url && (explicit.provider !== repositoryFromPr(args.url)!.provider || !sameRepository(explicit, repositoryFromPr(args.url)!))) throw new ForgeReadError("invalid_arguments", "PR/MR URL does not match repository.");
+    candidates.clear(); candidates.set(key, { ...explicit, host: explicit.host.toLowerCase() });
+  }
+  const repositories = [...candidates.values()];
+  if (!repositories.length) throw new ForgeReadError("not_found", "No supported forge repository is linked to this thread. For a custom host, select an explicit repository with its product and actual host.");
+  return repositories;
+}
+
 export class ForgeReadService {
   constructor(private readonly options: {
     enabled: (provider: ForgeRepository["provider"]) => boolean;
@@ -31,27 +61,7 @@ export class ForgeReadService {
 
   async execute(operation: ForgeReadOperation, args: ForgeReadArgs, scope: ForgeReadScope, signal?: AbortSignal): Promise<unknown> {
     signal?.throwIfAborted();
-    const candidates = new Map<string, ForgeRepository>();
-    for (const remote of scope.remotes) {
-      const provider = forgeKindForRemoteHost(remote.host);
-      if (provider) candidates.set(repositoryKey({ ...remote, provider }), { ...remote, provider });
-    }
-    for (const pr of scope.attached) {
-      const repository = repositoryFromPr(pr.url);
-      if (repository) candidates.set(repositoryKey(repository), repository);
-    }
-    const explicit = args.repository ?? (args.url ? repositoryFromPr(args.url) : undefined);
-    if (args.url && !repositoryFromPr(args.url)) throw new ForgeReadError("invalid_arguments", "Use a supported HTTPS PR/MR URL.");
-    if (explicit) {
-      const key = repositoryKey(explicit);
-      const inferred = forgeKindForRemoteHost(explicit.host);
-      if (inferred && inferred !== explicit.provider) throw new ForgeReadError("invalid_arguments", "Provider does not match the known forge host.");
-      if (!candidates.has(key) && !scope.remotes.some((r) => sameRepository(r, explicit))) throw new ForgeReadError("forbidden", "Repository is outside the target thread's linked remotes and attached PR/MR repositories.");
-      if (args.url && (explicit.provider !== repositoryFromPr(args.url)!.provider || !sameRepository(explicit, repositoryFromPr(args.url)!))) throw new ForgeReadError("invalid_arguments", "PR/MR URL does not match repository.");
-      candidates.clear(); candidates.set(key, { ...explicit, host: explicit.host.toLowerCase() });
-    }
-    const repositories = [...candidates.values()];
-    if (!repositories.length) throw new ForgeReadError("not_found", "No supported forge repository is linked to this thread. For a custom host, select an explicit repository with its product and actual host.");
+    const repositories = resolveForgeRepositories(args, scope);
     if (operation !== "get_forge_status") {
       if (repositories.length !== 1) throw new ForgeReadError("ambiguous_repository", `Select repository from: ${repositories.map(repositoryKey).join(", ")}.`);
       const repository = repositories[0]!;

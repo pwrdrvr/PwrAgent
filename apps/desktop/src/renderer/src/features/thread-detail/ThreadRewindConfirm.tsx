@@ -122,7 +122,12 @@ export function ThreadRewindConfirm(props: ThreadRewindConfirmProps) {
           ) : null}
         </span>
       </label>
-      {props.support.undo ? null : (
+      {props.support.undo ? (
+        <p>
+          {props.providerLabel} keeps the removed turns, so you can undo this
+          rewind until you send the next message.
+        </p>
+      ) : (
         <p className="thread-rewind-confirm__warning">
           This rewind cannot be undone.
         </p>

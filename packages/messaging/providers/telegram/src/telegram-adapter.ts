@@ -278,6 +278,7 @@ export type TelegramForumTopicActionRequest = {
 export type TelegramChatMember = {
   can_delete_messages?: boolean;
   can_manage_topics?: boolean;
+  is_member?: boolean;
   status: "creator" | "administrator" | "member" | "restricted" | "left" | "kicked";
 };
 
@@ -1594,6 +1595,27 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         updatedAt: this.now(),
       };
     }
+  }
+
+  async authorizeRetainedSource(event: MessagingInboundEvent, verifyAccess = true): Promise<boolean | undefined> {
+    if (event.channel.channel !== this.channel || event.actor.isBot
+      || !this.isAuthorizedActor(event.actor.platformUserId)) return false;
+    const conversation = event.channel.conversation;
+    if (conversation.kind === "dm") return conversation.id === event.actor.platformUserId;
+    const target = this.telegramStateFromChannel(conversation);
+    if (!target || !this.options.config.authorizedSupergroupIds?.some((item) => item.id === String(target.chatId))) return false;
+    if (!verifyAccess) return true;
+    try {
+      const member = await this.bot.api.getChatMember(target.chatId, event.actor.platformUserId);
+      return member.status !== "left" && member.status !== "kicked"
+        && (member.status !== "restricted" || member.is_member === true);
+    } catch {
+      return undefined;
+    }
+  }
+
+  retainedSourceConnectionId(): string | undefined {
+    return this.configuredBotId();
   }
 
   async createManagedConversation(

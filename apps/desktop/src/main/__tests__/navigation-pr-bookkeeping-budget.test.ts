@@ -30,7 +30,7 @@ it("bounds sidebar refresh work after archive completion and owner PR bookkeepin
       `codex:${thread.id}`, JSON.stringify({ backend: "codex", threadId: thread.id, prAutoDispatchEnabled: true,
         pinnedRank: thread.id === parent.id ? "a" : undefined,
         parentThreadId: thread.id === parent.id ? undefined : parent.id,
-        immutableUsageActivities: [{ text: "contrived history ".repeat(2_000) }],
+        managedReviewEntries: [{ text: "contrived history ".repeat(2_000) }],
       }),
     );
   })();
@@ -84,7 +84,7 @@ it("bounds sidebar refresh work after archive completion and owner PR bookkeepin
     pool.invalidateQueryOwner();
   };
   const counts = () => {
-    const history = parse.mock.calls.filter(([payload]) => payload.includes("immutableUsageActivities"));
+    const history = parse.mock.calls.filter(([payload]) => payload.includes("managedReviewEntries"));
     const compact = parse.mock.calls.filter(([payload]) => payload.includes("handoffGroupSource"));
     return { logicalRequests, indexConstructions: projection.mock.calls.length, providerListings: listThreads.mock.calls.length,
       paginatedRpcs: rpc.mock.calls.length, fullOverlayParses: history.length,

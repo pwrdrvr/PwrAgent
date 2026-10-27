@@ -39,6 +39,7 @@ export function sandboxerCannotStart(connection: McpConnectionStatus): boolean {
 }
 
 export function sandboxerNeedsSetup(connection: McpConnectionStatus): boolean {
+  if (connection.authMode !== "local_cli") return false;
   const state = connection.sandboxerCliState;
   return state === "cli_missing" || state === "not_signed_in" || isSandboxerAccountLimited(state);
 }
@@ -251,6 +252,18 @@ export function SandboxerSetupDetail(props: {
   detail: string;
   onNotice: (notice: Notice) => void;
 }) {
+  if (props.connection.authMode === "oauth") {
+    return (
+      <>
+        <p className="settings-mcp-row__state">
+          Sandboxer runs cloud Linux machines for your agent. Sign in to Sandboxer in your browser;
+          this is separate from your PwrAgent and coding agent accounts. No CLI or API key is required.
+          Sandboxer charges for its service; signing in does not confirm machine allowance.
+        </p>
+        <p className="settings-mcp-row__state">{props.detail}</p>
+      </>
+    );
+  }
   const state = props.connection.sandboxerCliState;
   const needsSetup = sandboxerNeedsSetup(props.connection);
   const link = (target: SandboxerLinkTarget, label: string) => (
@@ -299,15 +312,16 @@ export function SandboxerSetupDetail(props: {
 
 /** The drawer's extras: the exact launched command and Sandboxer's docs. */
 export function SandboxerDrawerDetail(props: {
+  hosted?: boolean;
   desktopApi?: DesktopApi;
   onNotice: (notice: Notice) => void;
 }) {
   return (
     <dl className="settings-sandboxer-drawer">
       <div>
-        <dt>Runs</dt>
+        <dt>{props.hosted ? "Server" : "Runs"}</dt>
         <dd>
-          <code>{SANDBOXER_RUNS_COMMAND}</code>
+          <code>{props.hosted ? "https://sandboxer.com/mcp" : SANDBOXER_RUNS_COMMAND}</code>
         </dd>
       </div>
       <div>
@@ -327,6 +341,8 @@ export function SandboxerDrawerDetail(props: {
  * with chips and switches for a service they may never use.
  */
 export function SandboxerCompactRow(props: {
+  disabled?: boolean;
+  onConnect?: () => void;
   desktopApi?: DesktopApi;
   onNotice: (notice: Notice) => void;
   onSetUp: () => void;
@@ -348,8 +364,14 @@ export function SandboxerCompactRow(props: {
             variant="inline"
             onNotice={props.onNotice}
           />
+          {props.onConnect ? (
+            <button className="button button--secondary" disabled={props.disabled} type="button" onClick={props.onConnect}>
+              Connect Sandboxer
+            </button>
+          ) : null}
           <button
             aria-label="Set up Sandboxer"
+            disabled={props.disabled}
             className="button button--secondary"
             type="button"
             onClick={props.onSetUp}

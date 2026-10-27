@@ -1,10 +1,24 @@
-import type { ThreadSubAgentSummary } from "@pwragent/shared";
+import {
+  CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS,
+  isThreadSubAgentVisibleInPanel,
+  isTokenMiserSubAgent,
+  subAgentLens,
+  totalTokenMiserGateAccountings,
+  type SubAgentLens,
+  type ThreadSubAgentSummary,
+  type TokenMiserSubAgentAccounting,
+} from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { resetDesktopOverlayStoreForTests, setDesktopOverlayStoreForTests } from "../app-server/desktop-overlay-store";
+import { NavigationDetailService } from "../app-server/navigation-detail-service";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { StateDb } from "../state/state-db";
 import {
+  ensureThreadSubAgentPanelSchema,
   ensureThreadSubAgentSchema,
+  THREAD_SUB_AGENT_LENS_SQL,
   THREAD_SUB_AGENTS_MOVED_META_KEY,
 } from "../state/thread-sub-agents";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
@@ -288,6 +302,364 @@ describe("thread sub-agent table", () => {
         writes: repeat.writes,
       });
       expect(repeat.writes.commits).toBe(0);
+    });
+  });
+
+  describe("panel and pricing reads", () => {
+    const NOW = 1_800_100_000_000;
+    const visibleSince = NOW - CODEX_NATIVE_SUBAGENT_PANEL_RETENTION_MS;
+
+    function accounting(index: number, overrides: Partial<TokenMiserSubAgentAccounting> = {}): TokenMiserSubAgentAccounting {
+      return {
+        baselineParentCostMicros: 5_000 + index,
+        baselineParentTokens: 40_000 + index,
+        currency: "USD",
+        gateCostMicros: 300 + index,
+        gateModel: "gpt-5.4-mini",
+        gateTotalTokens: 2_000,
+        originalModel: "gpt-5.5",
+        revealedParentCostMicros: 700,
+        revealedParentTokens: 4_000,
+        savingsMicros: 4_000 + index,
+        ...overrides,
+      };
+    }
+
+    async function storedTotalsMatchCards(store: SqliteOverlayStore, threadId: string) {
+      const cards = await store.listThreadSubAgents({ backend: "codex", threadId });
+      expect(await store.readThreadTokenMiserGateTotals({ backend: "codex", threadId }))
+        .toEqual(totalTokenMiserGateAccountings(cards.filter(isTokenMiserSubAgent).map((entry) => entry.tokenMiserAccounting)));
+    }
+
+    const mixedGates = () => [
+      card(1, { tokenMiserAccounting: accounting(1, {
+        cachedBaselineCostMicros: 70, cachedRevealedCostMicros: 30, decisionSource: "helper", disposition: "summarized",
+      }) }),
+      card(2, { tokenMiserAccounting: accounting(2, { decisionSource: "policy", disposition: "passed_through" }) }),
+      card(3, { tokenMiserAccounting: accounting(3) }),
+      card(4),
+      card(5, { agentName: "Reviewer", monitorId: "review:turn-5", tokenMiserAccounting: accounting(5) }),
+    ];
+
+    it("classifies every card into the shared lens", async () => {
+      const { stateDb, store } = openStore();
+      const ids = ["system:token-miser:gate-1", "system:token-miserX", "codex-native:worker", "codex-native",
+        "review:turn-1", "system:title-helper:x", "task-monitor:abc", "codex-native:"];
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1",
+        subAgents: ids.map((monitorId, index) => card(index, { monitorId })) });
+      const rows = stateDb.raw.prepare(`SELECT monitor_id, ${THREAD_SUB_AGENT_LENS_SQL} AS lens FROM thread_sub_agents`).all() as Array<{ monitor_id: string; lens: SubAgentLens }>;
+      expect(rows).toHaveLength(ids.length);
+      for (const row of rows) expect([row.monitor_id, row.lens]).toEqual([row.monitor_id, subAgentLens(card(0, { monitorId: row.monitor_id }))]);
+    });
+
+    it("counts and pages the panel as the shared visibility rule filters it", async () => {
+      const { stateDb, store } = openStore();
+      const old = visibleSince - 1;
+      const recent = visibleSince + 1;
+      const native = (index: number, overrides: Partial<ThreadSubAgentSummary>) =>
+        card(index, { completedAt: undefined, monitorId: `codex-native:worker-${index}`, outcome: undefined, status: "running", updatedAt: old, ...overrides });
+      const cards = [
+        native(1, {}),
+        native(2, { status: "success" }),
+        native(3, { status: "success", updatedAt: recent }),
+        native(4, { status: "failure" }),
+        native(5, { status: "cancelled", completedAt: recent, updatedAt: old }),
+        native(6, { status: "failed" }),
+        native(7, { outcome: "success" }),
+        native(8, { completionSource: { type: "monitor_tool" } }),
+        native(9, { completedAt: old }),
+        native(10, { completedAt: visibleSince, status: "success" }),
+        card(11, { monitorId: "review:turn-11", status: "success", updatedAt: old }),
+        ...Array.from({ length: 4 }, (_, index) => card(20 + index)),
+      ];
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1", subAgents: cards });
+      // A harness row whose card is not JSON is skipped, as every card read skips it.
+      stateDb.raw.prepare(`INSERT INTO thread_sub_agents(thread_id, monitor_id, created_at, updated_at, status, card)
+        VALUES ('codex:thread-1', 'codex-native:broken', 1, 1, 'success', '{not json')`).run();
+
+      const expected = (lens: SubAgentLens) => cards
+        .filter((entry) => isThreadSubAgentVisibleInPanel(entry, NOW) && subAgentLens(entry) === lens)
+        .sort((left, right) => right.createdAt - left.createdAt || left.monitorId.localeCompare(right.monitorId))
+        .map((entry) => entry.monitorId);
+      const counts = await store.readThreadSubAgentLensCounts({ backend: "codex", threadId: "thread-1", visibleSince });
+      for (const lens of ["harness", "pwragent", "token-miser"] as const) {
+        expect(counts[lens]).toBe(expected(lens).length);
+        const page = await store.listThreadSubAgentLensPage({
+          backend: "codex", lens, limit: 50, offset: 0, threadId: "thread-1", visibleSince,
+        });
+        expect(page.map((entry) => entry.monitorId)).toEqual(expected(lens));
+      }
+      expect(counts.harness).toBeGreaterThan(0);
+      expect(counts.harness).toBeLessThan(10);
+
+      const excluded = await store.readThreadSubAgentLensCounts({
+        backend: "codex", excludeMonitorIds: [card(20).monitorId], threadId: "thread-1", visibleSince,
+      });
+      expect(excluded["token-miser"]).toBe(3);
+      const second = await store.listThreadSubAgentLensPage({
+        backend: "codex", lens: "token-miser", limit: 2, offset: 1, threadId: "thread-1", visibleSince,
+      });
+      expect(second.map((entry) => entry.monitorId)).toEqual(expected("token-miser").slice(1, 3));
+    });
+
+    it("keeps gate totals equal to a sum over the cards through every kind of write", async () => {
+      const { dbPath, stateDb, store } = openStore();
+      await store.setThreadReaction({ backend: "codex", emoji: "👀", present: true, threadId: "thread-1" });
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1", subAgents: mixedGates() });
+      await storedTotalsMatchCards(store, "thread-1");
+
+      // Changed accounting, removed accounting, an unchanged rewrite.
+      await store.upsertThreadSubAgent({ backend: "codex", threadId: "thread-1",
+        subAgent: card(3, { tokenMiserAccounting: accounting(30, { disposition: "summarized" }) }) });
+      await store.upsertThreadSubAgent({ backend: "codex", threadId: "thread-1", subAgent: card(1) });
+      await store.upsertThreadSubAgent({ backend: "codex", threadId: "thread-1", subAgent: card(1) });
+      await storedTotalsMatchCards(store, "thread-1");
+
+      // An older build's whole-payload write, which the capture trigger moves.
+      const older = StateDb.open(dbPath);
+      try {
+        older.raw.prepare("UPDATE threads SET payload = ? WHERE thread_id = ?").run(legacyPayload("thread-1", [
+          card(2, { tokenMiserAccounting: accounting(2, { decisionSource: "helper", disposition: "summarized" }), updatedAt: 1_900_000_000_000 }),
+          card(6, { tokenMiserAccounting: accounting(6) }),
+        ]), "codex:thread-1");
+      } finally {
+        older.close();
+      }
+      await storedTotalsMatchCards(store, "thread-1");
+
+      stateDb.raw.prepare("DELETE FROM thread_sub_agents WHERE monitor_id = ?").run(card(2).monitorId);
+      await storedTotalsMatchCards(store, "thread-1");
+      // Gates 1, 3, 4 and the older build's 6; the review card is not one.
+      expect((await store.readThreadTokenMiserGateTotals({ backend: "codex", threadId: "thread-1" })).gateCount).toBe(4);
+    });
+
+    it("adds the columns to an existing profile once, and sums its gates on first read", async () => {
+      const { dbPath, stateDb, store } = openStore();
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-1", subAgents: mixedGates() });
+      // The profile as the previous build left it.
+      stateDb.raw.exec(`DROP TRIGGER thread_sub_agent_gate_totals_insert;
+        DROP TRIGGER thread_sub_agent_gate_totals_update_old;
+        DROP TRIGGER thread_sub_agent_gate_totals_update_new;
+        DROP TRIGGER thread_sub_agent_gate_totals_delete;
+        DROP VIEW thread_sub_agent_gate_shares;
+        DROP INDEX thread_sub_agents_by_lens;`);
+      for (const column of (stateDb.raw.prepare("SELECT name FROM pragma_table_info('thread_sub_agent_revisions')").all() as Array<{ name: string }>)
+        .map((row) => row.name).filter((name) => name.startsWith("gate_"))) {
+        stateDb.raw.exec(`ALTER TABLE thread_sub_agent_revisions DROP COLUMN ${column}`);
+      }
+      stateDb.close();
+      // The store's own close cleanup, which ran just now.
+      cleanups.pop();
+
+      const reopened = StateDb.open(dbPath);
+      cleanups.push(() => reopened.close());
+      const upgraded = new SqliteOverlayStore(reopened);
+      expect(reopened.raw.prepare("SELECT gate_totals_ready FROM thread_sub_agent_revisions").all())
+        .toEqual([{ gate_totals_ready: 0 }]);
+      await storedTotalsMatchCards(upgraded, "thread-1");
+      expect(reopened.raw.prepare("SELECT gate_totals_ready FROM thread_sub_agent_revisions").all())
+        .toEqual([{ gate_totals_ready: 1 }]);
+      expect(await upgraded.readThreadSubAgentLensCounts({ backend: "codex", threadId: "thread-1", visibleSince }))
+        .toEqual({ harness: 0, pwragent: 1, "token-miser": 4 });
+      // The triggers came with the columns.
+      await upgraded.upsertThreadSubAgent({ backend: "codex", threadId: "thread-1", subAgent: card(9, { tokenMiserAccounting: accounting(9) }) });
+      await storedTotalsMatchCards(upgraded, "thread-1");
+
+      // A current profile writes nothing on open.
+      const { writes } = await measureSqliteWrites(() => ensureThreadSubAgentPanelSchema(reopened.raw));
+      expect(writes.commits).toBe(0);
+    });
+
+    it("reads the panel and pricing cards from indexes, never a scan or a sort", async () => {
+      const { stateDb, store } = openStore();
+      await seedSmallAndLarge(store, stateDb);
+      const statements: string[] = [];
+      const prepare = stateDb.raw.prepare.bind(stateDb.raw);
+      const spy = vi.spyOn(stateDb.raw, "prepare").mockImplementation((sql: string) => {
+        statements.push(sql);
+        return prepare(sql);
+      });
+      const thread = { backend: "codex" as const, threadId: "thread-large" };
+      await store.getThreadSubAgents({ ...thread, monitorIds: [card(1).monitorId] });
+      await store.readThreadTokenMiserGateTotals(thread);
+      await store.readThreadSubAgentLensCounts({ ...thread, visibleSince });
+      for (const lens of ["harness", "pwragent", "token-miser"] as const) {
+        await store.listThreadSubAgentLensPage({ ...thread, lens, limit: 20, offset: 0, visibleSince });
+      }
+      await store.listThreadSubAgentPage({ ...thread, excludeMonitorIds: [card(2).monitorId], limit: 100, offset: 100 });
+      spy.mockRestore();
+
+      const reads = [...new Set(statements)].filter((sql) => /^\s*SELECT/i.test(sql) && /FROM thread_sub_agent/.test(sql));
+      expect(reads.length).toBeGreaterThanOrEqual(6);
+      for (const sql of reads) {
+        const plan = (stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${sql}`)
+          .all(...Array.from({ length: sql.match(/\?/g)?.length ?? 0 }, () => null)) as Array<{ detail: string }>)
+          .map((row) => row.detail).join("\n");
+        expect(plan, sql).not.toMatch(/SCAN thread_sub_agents\b|TEMP B-TREE/);
+        expect(plan, sql).toMatch(/SEARCH (thread_sub_agents|thread_sub_agent_revisions) USING/);
+      }
+      // The two lenses that never age out are counted from the index alone.
+      const counts = reads.find((sql) => sql.startsWith("SELECT count(*)") && !sql.includes("completedAt"))!;
+      expect((stateDb.raw.prepare(`EXPLAIN QUERY PLAN ${counts}`).all(null, null, null) as Array<{ detail: string }>)
+        .map((row) => row.detail).join("\n")).toMatch(/USING COVERING INDEX thread_sub_agents_by_lens/);
+    });
+
+    it("parses the same card bytes for pricing and a panel page on a thread with 25 or 2,025 gates", async () => {
+      const { stateDb, store } = openStore();
+      // The same 25 newest gates on both threads, 5 of them named by a usage
+      // line; the large thread also holds 2,000 older policy gates with none.
+      const recent = Array.from({ length: 25 }, (_, index) => card(BIG + index, { tokenMiserAccounting: accounting(index) }));
+      const older = Array.from({ length: BIG }, (_, index) => card(index, { tokenMiserAccounting: accounting(index) }));
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-small", subAgents: recent });
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-large", subAgents: [...recent, ...older] });
+      stateDb.raw.pragma("wal_checkpoint(TRUNCATE)");
+      const named = recent.slice(0, 5).map((entry) => entry.monitorId);
+
+      const parsed: number[] = [];
+      const parse = JSON.parse;
+      const spy = vi.spyOn(JSON, "parse").mockImplementation((text: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
+        parsed.push(text.length);
+        return parse(text, reviver);
+      });
+      const read = async (threadId: string) => {
+        parsed.length = 0;
+        const thread = { backend: "codex" as const, threadId };
+        const pricing = await store.getThreadSubAgents({ ...thread, monitorIds: named });
+        const totals = await store.readThreadTokenMiserGateTotals(thread);
+        const counts = await store.readThreadSubAgentLensCounts({ ...thread, visibleSince });
+        const page = await store.listThreadSubAgentLensPage({ ...thread, lens: "token-miser", limit: 20, offset: 0, visibleSince });
+        return { bytes: parsed.reduce((total, bytes) => total + bytes, 0), counts, page: page.length, pricing: pricing.length, totals };
+      };
+      const small = await read("thread-small");
+      const large = await read("thread-large");
+      spy.mockRestore();
+
+      expect(large.bytes).toBe(small.bytes);
+      expect([small.pricing, small.page, large.pricing, large.page]).toEqual([5, 20, 5, 20]);
+      expect(large.counts["token-miser"]).toBe(BIG + 25);
+      expect(large.totals.gateCount).toBe(BIG + 25);
+      expect(large.totals.terms.savingsMicros).toBe(totalTokenMiserGateAccountings([...recent, ...older]
+        .map((entry) => entry.tokenMiserAccounting)).terms.savingsMicros);
+    });
+  });
+
+  describe("selected-detail collection", () => {
+    afterEach(() => resetDesktopOverlayStoreForTests());
+
+    /**
+     * The owner's view of one Codex thread: its live gates and live native
+     * usage, merged by the registry's own methods.
+     */
+    function ownerService(threadId: string, live: {
+      gates?: ThreadSubAgentSummary[];
+      usage?: Array<[string, { monitorUsage: { summary: string }; updatedAt: number; lines: ReadonlyMap<string, unknown> }]>;
+    } = {}) {
+      const registry = {
+        getCachedThreadSummary: () => ({ id: threadId, source: "codex" }),
+        liveTokenMiserSubAgents: new Map([[threadId, new Map((live.gates ?? []).map((gate) => [gate.monitorId, gate]))]]),
+        liveCodexNativeSubAgentUsage: new Map([[threadId, new Map(live.usage ?? [])]]),
+        mergeLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.mergeLiveTokenMiserSubAgents,
+        listLiveTokenMiserSubAgents: DesktopBackendRegistry.prototype.listLiveTokenMiserSubAgents,
+        readLiveSubAgentRevisionSource: DesktopBackendRegistry.prototype.readLiveSubAgentRevisionSource,
+      } as unknown as DesktopBackendRegistry;
+      return { registry, service: new NavigationDetailService(registry) };
+    }
+
+    /** Every page of the `subAgents` collection, as an older viewer pages it. */
+    async function pageCollection(service: NavigationDetailService, threadId: string, onPage?: (cursor: string | undefined) => void) {
+      const pages: ThreadSubAgentSummary[][] = [];
+      let cursor: string | undefined;
+      do {
+        onPage?.(cursor);
+        const response = await service.readSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId },
+          collection: { name: "subAgents", cursor } });
+        const page = response.collectionPage!;
+        pages.push(page.values.subAgents!);
+        expect(page.complete).toBe(!page.nextCursor);
+        cursor = page.nextCursor;
+      } while (cursor);
+      return pages;
+    }
+
+    it("parses the same card bytes for one page on a thread with 25 or 2,025 cards", async () => {
+      const { stateDb, store } = openStore();
+      setDesktopOverlayStoreForTests(store);
+      // The same 25 oldest cards on both threads; the large thread also holds
+      // 2,000 newer ones, so its last page is the small thread's only page.
+      const oldest = Array.from({ length: 25 }, (_, index) => card(index));
+      const newer = Array.from({ length: BIG }, (_, index) => card(25 + index));
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-small", subAgents: oldest });
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-large", subAgents: [...newer, ...oldest] });
+      stateDb.raw.pragma("wal_checkpoint(TRUNCATE)");
+
+      // Bytes parsed per page. A continuation cursor is parsed too; it is left
+      // out, since only the large thread needs one to reach its last page.
+      const perPage: number[] = [];
+      let cursorText: string | undefined;
+      const parse = JSON.parse;
+      const spy = vi.spyOn(JSON, "parse").mockImplementation((text: string, reviver?: Parameters<typeof JSON.parse>[1]) => {
+        if (text !== cursorText) perPage[perPage.length - 1] += text.length;
+        return parse(text, reviver);
+      });
+      const read = async (threadId: string) => {
+        perPage.length = 0;
+        const pages = await pageCollection(ownerService(threadId).service, threadId, (cursor) => {
+          cursorText = cursor && Buffer.from(cursor, "base64url").toString("utf8");
+          perPage.push(0);
+        });
+        return { pages, perPage: [...perPage] };
+      };
+      const small = await read("thread-small");
+      const large = await read("thread-large");
+      spy.mockRestore();
+
+      expect(small.pages.map((page) => page.length)).toEqual([25]);
+      expect(large.pages).toHaveLength(21);
+      expect(large.pages.at(-1)).toEqual(small.pages[0]);
+      expect(large.perPage.at(-1)).toBe(small.perPage[0]);
+      // Paging the whole collection parses each stored card once.
+      const stored = (stateDb.raw.prepare("SELECT sum(length(card)) AS bytes FROM thread_sub_agents WHERE thread_id = ?")
+        .get("codex:thread-large") as { bytes: number }).bytes;
+      expect(large.perPage.reduce((total, bytes) => total + bytes, 0)).toBe(stored);
+    });
+
+    it("ends the collection at a card that does not parse rather than leave a viewer without a cursor", async () => {
+      const { stateDb, store } = openStore();
+      setDesktopOverlayStoreForTests(store);
+      await store.upsertThreadSubAgents({ backend: "codex", threadId: "thread-bad", subAgents: [card(1), card(2), card(3)] });
+      stateDb.raw.prepare("UPDATE thread_sub_agents SET card = 'not json' WHERE monitor_id = ?").run(card(1).monitorId);
+
+      const pages = await pageCollection(ownerService("thread-bad").service, "thread-bad");
+
+      expect(pages.map((page) => page.map((entry) => entry.monitorId))).toEqual([[card(3).monitorId, card(2).monitorId]]);
+    });
+
+    it("pages live gates and live usage into the stored cards in table order", async () => {
+      const { store } = openStore();
+      setDesktopOverlayStoreForTests(store);
+      const threadId = "thread-live";
+      const at = (index: number) => 1_800_000_000_000 + 2 * index;
+      const stored = Array.from({ length: 250 }, (_, index) => card(index, { createdAt: at(index), updatedAt: at(index) }));
+      await store.upsertThreadSubAgents({ backend: "codex", threadId, subAgents: stored });
+      const { registry, service } = ownerService(threadId, {
+        gates: [
+          // A gate this turn rewrote, one newer than every stored card, and
+          // one that sorts between two stored cards on the second page.
+          { ...stored[200]!, task: "Gate rewritten this turn", updatedAt: at(400) },
+          card(1_000, { createdAt: at(1_000), updatedAt: at(1_000) }),
+          card(1_001, { createdAt: at(130) + 1, updatedAt: at(130) + 1 }),
+        ],
+        usage: [[stored[50]!.monitorId, { monitorUsage: { summary: "live usage" }, updatedAt: at(500), lines: new Map() }]],
+      });
+
+      const pages = await pageCollection(service, threadId);
+
+      const expected = registry.mergeLiveTokenMiserSubAgents(threadId, stored).sort((left, right) =>
+        right.createdAt - left.createdAt || (left.monitorId < right.monitorId ? -1 : 1));
+      expect(pages.map((page) => page.length)).toEqual([100, 100, 52]);
+      expect(pages.flat()).toEqual(expected);
+      expect(pages.flat().find((entry) => entry.monitorId === stored[200]!.monitorId)?.task).toBe("Gate rewritten this turn");
+      expect(pages.flat().find((entry) => entry.monitorId === stored[50]!.monitorId)?.monitorUsage?.summary).toBe("live usage");
     });
   });
 

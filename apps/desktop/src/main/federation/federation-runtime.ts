@@ -26,6 +26,8 @@ import type { HandoffInstanceThreadRequest, HandoffInstanceThreadResult } from "
 import { resolveActiveProfileDir } from "../profile";
 import { ThreadInstanceHandoffService, THREAD_HANDOFF_METHODS, type ImportInstanceThreadRequest } from "./thread-instance-handoff-service";
 import { app } from "electron";
+import { FEDERATION_MESSAGING_DESTINATION_METHOD, handleFederationMessagingDestination,
+  type FederationMessagingDestinationOperation, type FederationMessagingDestinationResult } from "./federation-messaging-tools";
 import {
   FederationFilePushReceiver,
   FILE_PUSH_METHOD_CAPABILITIES,
@@ -79,6 +81,7 @@ import type {
   ControlActiveTurnResponse,
   RewindThreadResponse,
   PreviewThreadRewindResponse,
+  UndoThreadRewindResponse,
   CreateScheduledThreadActionRequest,
   CodexEnvironmentSetupProgressEvent,
   FederationCapability,
@@ -196,6 +199,7 @@ import {
   type ControlActiveTurnRequest,
   type RewindThreadRequest,
   type PreviewThreadRewindRequest,
+  type UndoThreadRewindRequest,
   type ForkThreadRequest,
   type EnsureDirectoryLaunchpadRequest,
   type FederationRemoteTarget,
@@ -606,6 +610,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "launchpad_metadata",
   "federated_search",
   "messaging_route",
+  "messaging_destinations",
   "pwrsnap_connection",
   "gateway_relay",
   // Federation is a same-operator trust domain and turn_control already
@@ -1033,6 +1038,18 @@ function eventClassAllowedByCapabilities(
 }
 
 export class DesktopFederationRuntime {
+  messagingSourceInstanceId(): FederationInstanceId {
+    return this.ensureLocalInstanceId();
+  }
+
+  async requestMessagingDestination(instanceId: FederationInstanceId, operation: FederationMessagingDestinationOperation): Promise<FederationMessagingDestinationResult> {
+    if (!this.remotePeerAdvertisesCapability(instanceId, "messaging_destinations")) {
+      throw new Error("The messaging owner is unavailable or does not support retained destinations. Upgrade that owner.");
+    }
+    return await this.rpcFor({ scope: "remote", instanceId }).request({
+      method: FEDERATION_MESSAGING_DESTINATION_METHOD, params: operation, timeoutMs: 30_000,
+    });
+  }
   private durableTurnRequests?: DurableTurnRequestService;
   private unsubscribeDurableTurnEvents?: () => void;
 
@@ -3532,6 +3549,7 @@ export class DesktopFederationRuntime {
           : undefined),
       methodCapabilities: {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
+        [FEDERATION_MESSAGING_DESTINATION_METHOD]: "messaging_route",
         ...FEDERATION_THREAD_TODO_CAPABILITIES,
         ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
@@ -3543,7 +3561,9 @@ export class DesktopFederationRuntime {
         [FILE_PULL_MARKDOWN_METHOD]: "file_pull",
         [FILE_RESOLVE_TRANSCRIPT_METHOD]: "file_pull",
       },
-      additionalRequiredCapabilities: (envelope) => envelope.method === FEDERATION_THREAD_TODO_METHODS.runAction
+      additionalRequiredCapabilities: (envelope) => envelope.method === FEDERATION_MESSAGING_DESTINATION_METHOD
+        ? ["thread_navigation"]
+        : envelope.method === FEDERATION_THREAD_TODO_METHODS.runAction
         ? ["environment_actions"]
         : envelope.method === THREAD_HANDOFF_METHODS.import
           ? ["file_push", "turn_control", "environment_actions"]
@@ -3559,6 +3579,8 @@ export class DesktopFederationRuntime {
         envelope.sourceInstanceId,
       );
     });
+    router.registerHandler(FEDERATION_MESSAGING_DESTINATION_METHOD, async (envelope) =>
+      await handleFederationMessagingDestination(envelope.params as FederationMessagingDestinationOperation, envelope.sourceInstanceId));
     registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
     registerFederationOperatorQuestionHandlers(router);
     registerFederationBackendHandlers({
@@ -7342,6 +7364,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: PreviewThreadRewindRequest,
     ): Promise<PreviewThreadRewindResponse> {
       return await getDesktopBackendRegistry().previewThreadRewind(request);
+    },
+    async undoThreadRewind(
+      request: UndoThreadRewindRequest,
+    ): Promise<UndoThreadRewindResponse> {
+      return await getDesktopBackendRegistry().undoThreadRewind(request);
     },
     async listMcpConnections(): Promise<ListMcpConnectionsResponse> {
       return {

@@ -17,6 +17,7 @@ describe("agent tool contracts", () => {
       "automation_inspection",
       "app_management",
       "thread_inspection",
+      "forge",
       "messaging_context",
       "thread_orchestration",
       "federation",

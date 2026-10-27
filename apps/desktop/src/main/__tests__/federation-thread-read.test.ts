@@ -18,6 +18,27 @@ function fixture(): AppServerReadThreadResponse {
 const wire = <T,>(value: T): T => JSON.parse(JSON.stringify(value));
 
 describe("federation thread read projection", () => {
+  it("round trips isolated invocation bodies through the owning instance without transcript entries", async () => {
+    const response: AppServerReadThreadResponse = {
+      backend: "codex", threadId: "thread-1", fetchedAt: 100,
+      toolInvocationDetails: { turnId: "old-turn", itemId: "middle", details: [{ id: "middle", kind: "command", label: "Ran build",
+        command: { displayCommand: "build", output: "owner output" } }] },
+      replay: { entries: [], messages: [], pagination: { supportsPagination: true, hasPreviousPage: false } },
+    };
+    const readThread = vi.fn(async () => response);
+    const router = new FederationRouter({ localInstanceId: "owner_one", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer_one", remoteInstanceId: "owner_one",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ sourcePeerId: "viewer_one", envelope: wire(envelope) }); } });
+    router.registerConnection({ peerId: "viewer_one", capabilities: ["thread_detail"], sendEnvelope: (envelope) => rpc.receiveEnvelope(wire(envelope)) });
+    registerFederationBackendHandlers({ router, backend: { readThread } as unknown as FederationBackendOperations });
+    const client = new FederationRemoteBackendClient(rpc);
+    const request = { backend: "codex" as const, threadId: "thread-1", viewOnly: true, display: {
+      resource: "activity" as const, activity: { turnId: "old-turn", entryId: "activity-middle", invocationItemId: "middle" },
+    } };
+    expect(await client.readThread(request)).toEqual(response);
+    expect(readThread).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
   it("materializes owner references before the client transforms transcript images", async () => {
     const response = fixture();
     const replies: FederationProtocolEnvelope[] = [];

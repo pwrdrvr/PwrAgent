@@ -58,6 +58,45 @@ export function isThreadTodoMergeMethod(
   );
 }
 
+/** Provider, model and effort for a local to-do dispatch. */
+export type ThreadTodoModelSettings = {
+  backend: AppServerBackendKind;
+  model?: string;
+  reasoningEffort?: string;
+};
+
+export function sameThreadTodoModelSettings(
+  a: ThreadTodoModelSettings,
+  b: ThreadTodoModelSettings,
+): boolean {
+  return a.backend === b.backend
+    && a.model === b.model
+    && a.reasoningEffort === b.reasoningEffort;
+}
+
+/** Shared by the chip and the owner that runs a dispatch. */
+export function resolveThreadTodoModelSettings(params: {
+  thread: ThreadTodoModelSettings;
+  action?: ThreadTodoAction;
+  lastDispatch?: ThreadTodoModelSettings;
+  pick?: ThreadTodoModelSettings;
+}): { settings: ThreadTodoModelSettings; source: "pick" | "memory" | "suggestion" | "thread" } {
+  if (params.pick) return { settings: params.pick, source: "pick" };
+  if (params.lastDispatch) return { settings: params.lastDispatch, source: "memory" };
+  const action = params.action;
+  if (action?.type === "start_thread" && (action.model || action.reasoningEffort)) {
+    return {
+      settings: {
+        backend: params.thread.backend,
+        model: action.model ?? params.thread.model,
+        reasoningEffort: action.reasoningEffort ?? params.thread.reasoningEffort,
+      },
+      source: "suggestion",
+    };
+  }
+  return { settings: params.thread, source: "thread" };
+}
+
 export type ThreadTodoAction =
   | { type: "start_review" }
   | {
@@ -127,6 +166,11 @@ export type ThreadTodo = {
   /** Present only on a viewer projection; state remains on the owner. */
   federationTarget?: FederationRemoteTarget;
   mergeMethod?: ThreadTodoMergeMethod;
+  /** Read-time projection from the owner, delivered with the card. */
+  dispatchDefaults?: {
+    thread: ThreadTodoModelSettings;
+    lastDispatch?: ThreadTodoModelSettings;
+  };
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   /** Current owner title projected when listing cards; never persisted with the card. */
@@ -420,6 +464,8 @@ export type RunThreadTodoActionRequest = {
   rememberMergeMethod?: boolean;
   /** Handoff cards only: start the thread on this federation peer. */
   startOnInstanceId?: string;
+  /** Local starts only; a peer uses its own defaults. */
+  modelSettings?: ThreadTodoModelSettings;
   /**
    * Run although some steps are unchecked. A run that succeeds marks the
    * card done, so it follows the same rule as resolving it.

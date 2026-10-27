@@ -1164,7 +1164,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 nestedDepth={trays.depth(childKey)}
                 revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey}
-                selectedThreadKeys={props.selectedThreadKeys}
+                selected={props.selectedThreadKeys?.has(childKey)}
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 agentCommandThreadKeys={props.agentCommandThreadKeys}
                 thread={child}
@@ -1319,7 +1319,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
             revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
             selectedThreadKey={props.selectedItemKey}
-            selectedThreadKeys={props.selectedThreadKeys}
+            selected={props.selectedThreadKeys?.has(threadKey)}
             subthreadCount={subthreadCount}
             subthreadsCollapsed={subthreadsCollapsed}
             thinkingThreadKeys={props.thinkingThreadKeys}
@@ -1633,7 +1633,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                             rowRevealSelectedThreadRequest
                           }
 	                          selectedThreadKey={props.selectedItemKey}
-	                          selectedThreadKeys={props.selectedThreadKeys}
+	                          selected={props.selectedThreadKeys?.has(threadKey)}
                               subthreadCount={subthreadCount}
                               subthreadsCollapsed={subthreadsCollapsed}
 	                          thinkingThreadKeys={props.thinkingThreadKeys}

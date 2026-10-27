@@ -270,13 +270,16 @@ async function findReadyTextbox(options: { name: string | RegExp }) {
  */
 function admittingQueue(threadId: string, queueEntryId: string) {
   const entries: ThreadQueuedTurnSummary[] = [];
+  const projectionReads = new Set<() => void>();
   let readsSinceAdmission = 0;
+  let revision = 0;
   return {
     startTurn: vi.fn(async (request: { input?: Array<{ type: string; text?: string }> }) => {
       entries.push({
         queueEntryId, origin: "manual", createdAt: 123, position: entries.length,
         displayText: request.input?.find((item) => item.type === "text")?.text ?? "",
       });
+      revision += 1;
       return {
         backend: "codex" as const,
         threadId,
@@ -288,11 +291,61 @@ function admittingQueue(threadId: string, queueEntryId: string) {
     }),
     getNavigationQueueProjection: vi.fn(async (request: Parameters<NonNullable<DesktopApi["getNavigationQueueProjection"]>>[0]) => {
       if (entries.length) readsSinceAdmission += 1;
+      for (const resolve of projectionReads) resolve();
+      projectionReads.clear();
       return {
-        protocol: 2, ref: request.ref, revision: `fifo:${entries.length}`, readiness: "ready", complete: true, entries: [...entries],
+        protocol: 2 as const, ref: request.ref, revision: `fifo:${revision}`, readiness: "ready" as const, complete: true, entries: [...entries],
       };
     }),
+    setQueuedTurnPaused: vi.fn(async (request: { queueEntryId: string; paused: boolean }) => {
+      const index = entries.findIndex((candidate) => candidate.queueEntryId === request.queueEntryId);
+      if (index >= 0) {
+        entries[index] = { ...entries[index]!, paused: request.paused };
+        revision += 1;
+      }
+      return { queueEntryId: request.queueEntryId, disposition: "updated" as const, paused: request.paused };
+    }),
     readsSinceAdmission: () => readsSinceAdmission,
+    nextProjectionRead: () => new Promise<void>((resolve) => projectionReads.add(resolve)),
+    /**
+     * The test's owner answers, with the listed queue following them the way
+     * the owner's FIFO does: a cancelled entry leaves it and a pause sticks.
+     * Without this the next projection read contradicts the answer the row
+     * already shows, and puts a deleted row back or resumes a paused one.
+     */
+    answering(overrides: Partial<DesktopApi>): Partial<DesktopApi> {
+      const { cancelQueuedTurn, setQueuedTurnPaused } = overrides;
+      return {
+        ...overrides,
+        ...(cancelQueuedTurn ? {
+          cancelQueuedTurn: async (request: Parameters<NonNullable<DesktopApi["cancelQueuedTurn"]>>[0]) => {
+            const response = await cancelQueuedTurn(request);
+            if (response.disposition === "cancelled") {
+              const index = entries.findIndex((entry) => entry.queueEntryId === response.queueEntryId);
+              if (index >= 0) {
+                entries.splice(index, 1);
+                revision += 1;
+              }
+            }
+            return response;
+          },
+        } : {}),
+        ...(setQueuedTurnPaused ? {
+          setQueuedTurnPaused: async (request: Parameters<NonNullable<DesktopApi["setQueuedTurnPaused"]>>[0]) => {
+            const response = await setQueuedTurnPaused(request);
+            const index = entries.findIndex((candidate) => candidate.queueEntryId === response.queueEntryId);
+            if (index >= 0 && response.disposition === "updated") {
+              const entry = { ...entries[index]! };
+              if (response.paused) entry.paused = true;
+              else delete entry.paused;
+              entries[index] = entry;
+              revision += 1;
+            }
+            return response;
+          },
+        } : {}),
+      };
+    },
   };
 }
 
@@ -1825,16 +1878,13 @@ describe("StarMapChatCard slash commands", () => {
 
 describe("StarMapChatCard start-turn queue handling", () => {
   it("retains the backend-acknowledged queue entry visibly", async () => {
-    const startTurn = vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId: "t-local",
-      turnId: "turn-queued",
-      queueStatus: "queued" as const,
-      queueEntryId: "queue-owner-1",
-      queueEntryCreatedAt: 123,
-    }));
+    const queue = admittingQueue("t-local", "queue-owner-1");
+    const { startTurn } = queue;
     const { result } = renderHook(() => useComposerDraftStore());
-    const desktopApi = buildApi({ startTurn });
+    const desktopApi = buildApi({
+      startTurn,
+      getNavigationQueueProjection: queue.getNavigationQueueProjection,
+    } as unknown as Partial<DesktopApi>);
     renderCard({
       composerDraftStore: result.current,
       desktopApi,
@@ -1865,32 +1915,35 @@ describe("StarMapChatCard start-turn queue handling", () => {
     ]);
   });
 
-  async function queueOne(overrides: Partial<DesktopApi> = {}) {
-    const startTurn = vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId: "t-local",
-      turnId: "turn-queued",
-      queueStatus: "queued" as const,
-      queueEntryId: "queue-owner-1",
-      queueEntryCreatedAt: 123,
-    }));
+  /**
+   * One queued row whose owner keeps listing it. The projection read that
+   * follows the send drops a row its owner does not list, so each test starts
+   * after that read rather than racing it.
+   */
+  async function queueOne(
+    overrides: Partial<DesktopApi> = {},
+    queue = admittingQueue("t-local", "queue-owner-1"),
+  ) {
     const { result } = renderHook(() => useComposerDraftStore());
     const desktopApi = buildApi({
-      startTurn,
+      startTurn: queue.startTurn,
+      getNavigationQueueProjection: queue.getNavigationQueueProjection,
+      setQueuedTurnPaused: queue.setQueuedTurnPaused,
       // `messages` too, so the transcript renders the optimistic bubble.
       readThread: vi.fn(async () => ({
         backend: "codex",
         threadId: "t-local",
-        replay: { entries: [], messages: [], pagination: undefined },
+        replay: { entries: [], messages: [], pagination: { supportsPagination: false, hasPreviousPage: false } },
       })),
-      ...overrides,
-    } as Partial<DesktopApi>);
+      ...queue.answering(overrides),
+    } as unknown as Partial<DesktopApi>);
     renderCard({
       composerDraftStore: result.current,
       desktopApi,
       thread: localThread(),
     });
     const input = await typeAndSend("Local work", "wait your turn");
+    await settleQueueProjection(queue);
     const row = await screen.findByLabelText("Queued message");
     await waitFor(() => {
       expect(
@@ -1928,16 +1981,16 @@ describe("StarMapChatCard start-turn queue handling", () => {
   });
 
   it("pauses a queued message through the owner and resumes it", async () => {
-    const setQueuedTurnPaused = vi.fn(async (request: { queueEntryId: string; paused: boolean }) => ({
-      queueEntryId: request.queueEntryId,
-      disposition: "updated" as const,
-      paused: request.paused,
-    }));
-    const { row, store } = await queueOne({ setQueuedTurnPaused } as Partial<DesktopApi>);
+    const queue = admittingQueue("t-local", "queue-owner-1");
+    const { setQueuedTurnPaused } = queue;
+    const { row, store } = await queueOne({}, queue);
     const scopeKey = buildThreadComposerScopeKey("codex", "t-local");
+    await settleQueueProjection(queue);
 
+    const pausedProjection = queue.nextProjectionRead();
     await act(async () => {
       fireEvent.click(within(row).getByRole("button", { name: "Pause" }));
+      await pausedProjection;
     });
 
     expect(setQueuedTurnPaused).toHaveBeenCalledWith(
@@ -1948,8 +2001,10 @@ describe("StarMapChatCard start-turn queue handling", () => {
     expect(paused.querySelector(".composer__queued-label")?.textContent).toBe("Paused");
     expect(store.getQueuedTurns(scopeKey)[0]).toMatchObject({ paused: true });
 
+    const resumedProjection = queue.nextProjectionRead();
     await act(async () => {
       fireEvent.click(within(paused).getByRole("button", { name: "Resume" }));
+      await resumedProjection;
     });
 
     expect(setQueuedTurnPaused).toHaveBeenLastCalledWith(
@@ -2680,20 +2735,24 @@ describe("StarMapChatCard sending into a live turn", () => {
     ).toBe(false);
   });
 
-  function queuedStartTurn(threadId = "t-local") {
-    return vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId,
-      turnId: "queue-owner-live",
-      queueStatus: "queued" as const,
-      queueEntryId: "queue-owner-live",
-      queueEntryCreatedAt: 123,
-    }));
+  /**
+   * An owner that queues the turn and keeps listing it. The projection read
+   * that follows a send drops a row the owner does not list.
+   */
+  function queuingOwner(threadId = "t-local") {
+    const queue = admittingQueue(threadId, "queue-owner-live");
+    return {
+      startTurn: queue.startTurn,
+      api: {
+        startTurn: queue.startTurn,
+        getNavigationQueueProjection: queue.getNavigationQueueProjection,
+      } as unknown as Partial<DesktopApi>,
+    };
   }
 
   it("queues behind the running turn on Enter", async () => {
-    const startTurn = queuedStartTurn();
-    const desktopApi = busyApi({ startTurn });
+    const { startTurn, api } = queuingOwner();
+    const desktopApi = busyApi(api);
     const onUserRepliedToThread = vi.fn();
     const thread = localThread(BUSY);
     const { result } = renderHook(() => useComposerDraftStore());
@@ -2736,7 +2795,7 @@ describe("StarMapChatCard sending into a live turn", () => {
   it("keeps a queued copy apart from a running prompt with the same text", async () => {
     // The running turn's own prompt is "continue". Queueing "continue" again
     // is a second message, not that one, so it keeps its own transcript copy.
-    const startTurn = queuedStartTurn();
+    const { api } = queuingOwner();
     const desktopApi = busyApi({
       readThread: vi.fn(async () => ({
         backend: "codex",
@@ -2767,7 +2826,7 @@ describe("StarMapChatCard sending into a live turn", () => {
           pagination: { supportsPagination: false, hasPreviousPage: false },
         },
       })),
-      startTurn,
+      ...api,
     } as unknown as Partial<DesktopApi>);
     const { result } = renderHook(() => useComposerDraftStore());
     renderCard({
@@ -2788,8 +2847,8 @@ describe("StarMapChatCard sending into a live turn", () => {
   });
 
   it("queues from the Queue button too", async () => {
-    const startTurn = queuedStartTurn();
-    const desktopApi = busyApi({ startTurn });
+    const { startTurn, api } = queuingOwner();
+    const desktopApi = busyApi(api);
     const { result } = renderHook(() => useComposerDraftStore());
     renderCard({
       composerDraftStore: result.current,
@@ -2814,7 +2873,7 @@ describe("StarMapChatCard sending into a live turn", () => {
   it("queues before the running turn is identified", async () => {
     // Unlike a steer, Queue never aims at a turn id: the owner decides what
     // the message waits behind.
-    const startTurn = queuedStartTurn();
+    const { startTurn, api } = queuingOwner();
     const desktopApi = busyApi({
       readThread: vi.fn(async () => ({
         backend: "codex",
@@ -2825,7 +2884,7 @@ describe("StarMapChatCard sending into a live turn", () => {
           pagination: { supportsPagination: false, hasPreviousPage: false },
         },
       })),
-      startTurn,
+      ...api,
     } as unknown as Partial<DesktopApi>);
     const { result } = renderHook(() => useComposerDraftStore());
     renderCard({
@@ -2858,8 +2917,8 @@ describe("StarMapChatCard sending into a live turn", () => {
   });
 
   it("queues a peer's message with that peer", async () => {
-    const startTurn = queuedStartTurn("t-remote");
-    const desktopApi = busyApi({ startTurn });
+    const { startTurn, api } = queuingOwner("t-remote");
+    const desktopApi = busyApi(api);
     const { result } = renderHook(() => useComposerDraftStore());
     renderCard({
       composerDraftStore: result.current,

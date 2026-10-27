@@ -7,6 +7,7 @@ import type {
   AgentEvent,
   AppServerThreadReplay,
   AppServerThreadSummary,
+  AppServerThreadMessageOrigin,
   StarMapWorkspaceSnapshot,
   TaskMonitorUsageSnapshot,
   ThreadSubAgentSummary,
@@ -193,7 +194,7 @@ describe("sqlite write metrics", () => {
     } finally { await registry.close(); }
   });
 
-  it("steers Claude once per request and dispatches queued input only after completion", async () => {
+  it.each([false, true])("steers Claude once per request and dispatches queued input only after completion (causal messaging=%s)", async (causal) => {
     const finish = Promise.withResolvers<void>();
     const prompts: SDKUserMessage[] = [];
     const queries: Array<{ resume?: string }> = [];
@@ -230,7 +231,9 @@ describe("sqlite write metrics", () => {
     try {
       const { threadId } = await registry.startThread({ backend: "claude", cwd: tempDir, executionMode: "default" });
       const identity = { backend: "claude" as const, threadId };
-      const started = await registry.startTurn({ ...identity, input: [{ type: "text", text: "Start" }] });
+      const causalMessagingSource = { ownerId: "1".repeat(64), requestId: "2".repeat(64), surfaceSelector: "3".repeat(64) };
+      const started = await registry.startTurn({ ...identity, input: [{ type: "text", text: "Start" }],
+        ...(causal ? { messageOrigin: { kind: "messaging" as const, causalMessagingSource } } : {}) });
       await vi.waitFor(() => expect(prompts).toHaveLength(1));
       // Keep terminal accounting and setup outside the per-steer write budget.
       await vi.waitFor(() => expect(events.some((event) => event.notification.method === "backend/providerStatus/updated")).toBe(true));
@@ -238,12 +241,19 @@ describe("sqlite write metrics", () => {
         .toMatchObject({ status: "queued" });
       const request = { ...identity, expectedTurnId: started.turnId, requestId: "steer-fixture",
         input: [{ type: "text" as const, text: "Focus on the PR" }] };
-      const origin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", title: "Sender" } };
+      const origin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender", title: "Sender" },
+        ...(causal ? { causalMessagingSource } : {}) };
       const { writes } = await measureSqliteWrites(async () => {
         expect(await registry.steerTurn(request, origin)).toMatchObject({ disposition: "steered", turnId: started.turnId });
         expect(await registry.steerTurn(request, origin)).toMatchObject({ disposition: "steered", turnId: started.turnId });
       });
-      expectSqliteWriteBudget({ scenario: "claude-steer", note: "one steer with agent origin plus one idempotent retry; no timer writes", writes });
+      expectSqliteWriteBudget({ scenario: causal ? "messaging-causal-steer" : "claude-steer",
+        note: causal ? "One attributed Claude steer updates its current turn's causal reference once; one idempotent retry adds no writes. No history traversal or timer writes."
+          : "one steer with agent origin plus one idempotent retry; no timer writes", writes });
+      if (causal) {
+        expect(await registry.readCausalMessagingContext({ ...identity, turnId: started.turnId })).toEqual({ causalMessagingSource });
+        expect((await store.readThreadMessageOrigins({ ...identity, messageIds: [`user:${started.turnId}`] }))[`user:${started.turnId}`]?.kind).toBe("messaging");
+      }
       expect(queries).toHaveLength(1);
       expect(prompts).toHaveLength(1);
       finish.resolve();
@@ -1093,6 +1103,45 @@ describe("sqlite write metrics", () => {
     });
   });
 
+  it("holds a thread rewind, and its undo, to one commit each", async () => {
+    // An operator rewinds or undoes by hand, never per turn or per event.
+    // At ~16 KB of WAL per commit, 100 rewinds and undos a day is ~1.6 MB.
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.appendThreadRewind({
+        backend: "claude",
+        threadId: "rewind-thread",
+        rewind: {
+          id: "rewind-1",
+          occurredAt: 1_800_000_000_000,
+          removedTurnCount: 2,
+          restoredFileCount: 2,
+          undoable: true,
+        },
+      });
+      await store.markThreadRewindUndone({
+        backend: "claude",
+        threadId: "rewind-thread",
+        rewindId: "rewind-1",
+        undoneAt: 1_800_000_060_000,
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note: "One operator rewind recorded, then marked undone: one commit each, no per-turn or idle writes. ~16 KB per action: ~1.6 MB/day at 100 rewinds and undos/day, 0 MB/day idle.",
+      scenario: "thread-rewind-and-undo",
+      writes,
+    });
+    expect((await store.getThreadOverlayState({ backend: "claude", threadId: "rewind-thread" }))?.rewindLog)
+      .toEqual([{
+        id: "rewind-1",
+        occurredAt: 1_800_000_000_000,
+        removedTurnCount: 2,
+        restoredFileCount: 2,
+        undoable: false,
+        undoneAt: 1_800_000_060_000,
+      }]);
+  });
+
   it("keeps the transaction variants callable and counted", () => {
     // better-sqlite3 hangs .default/.deferred/.immediate/.exclusive off the
     // callable it returns, and they are not enumerable. The first version of
@@ -1520,7 +1569,7 @@ describe("sqlite write metrics", () => {
     await registry.close();
   });
 
-  it("persists subAgentActivity only at lifecycle boundaries", async () => {
+  it.each(["missing", "reported", "late"])("bounds subAgentActivity metadata writes: %s", async (metadata) => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
@@ -1528,7 +1577,8 @@ describe("sqlite write metrics", () => {
     const recordActivity = (registry as unknown as {
       recordCodexNativeSubAgentActivity(event: AgentEvent): Promise<void>;
     }).recordCodexNativeSubAgentActivity.bind(registry);
-    const activity = (kind: string): AgentEvent => ({
+    const resolved = { model: "resolved-model", reasoningEffort: "high" };
+    const activity = (kind: string, reported = metadata === "reported"): AgentEvent => ({
       backend: "codex",
       notification: {
         method: "item/completed",
@@ -1541,6 +1591,7 @@ describe("sqlite write metrics", () => {
             kind,
             agentThreadId: "worker-review",
             agentPath: "/root/review_savers",
+            ...(reported ? resolved : {}),
           },
         },
       },
@@ -1548,6 +1599,10 @@ describe("sqlite write metrics", () => {
     try {
       const { writes } = await measureSqliteWrites(async () => {
         await recordActivity(activity("started"));
+        if (metadata === "late") {
+          await recordActivity(activity("started", true));
+          await recordActivity(activity("started", true));
+        }
         for (let index = 0; index < 100; index += 1) {
           await recordActivity(activity("started"));
           await recordActivity(activity("interacted"));
@@ -1557,8 +1612,10 @@ describe("sqlite write metrics", () => {
         await recordActivity(activity("started"));
       });
       expectSqliteWriteBudget({
-        scenario: "native-subagent-activity-boundaries",
-        note: "One native worker start and completion; duplicate and interaction reports write nothing. At 100 workers/day, two commits/worker project to approximately 4.1 MB/day with no idle writes.",
+        scenario: metadata === "late" ? "native-subagent-late-metadata" : "native-subagent-activity-boundaries",
+        note: metadata === "late"
+          ? "One worker start, a late resolved-metadata update, and completion; repeated reports write nothing. At 100 workers/day, three commits/worker project to approximately 8.7 MB/day with no idle writes."
+          : "One native worker start and completion; duplicate and interaction reports write nothing. At 100 workers/day, two commits/worker project to approximately 4.1 MB/day with no idle writes.",
         writes,
       });
     } finally {
@@ -2331,12 +2388,13 @@ describe("sqlite write metrics", () => {
     }
   });
 
-  it("bounds one ACP monitor lifecycle independently of heartbeat count", async () => {
+  it.each([false, true])("bounds one ACP monitor lifecycle independently of heartbeat count (causal messaging=%s)", async (causal) => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
     });
     const monitorRecord: {
+      causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
       activeCommandCount: number;
       backend: "acp:kimi";
       createdAt: number;
@@ -2355,6 +2413,7 @@ describe("sqlite write metrics", () => {
       startupTimeoutSeconds: number;
       task: string;
     } = {
+      ...(causal ? { causalContext: { causalMessagingSource: { ownerId: "1".repeat(64), requestId: "2".repeat(64), surfaceSelector: "3".repeat(64) } } } : {}),
       activeCommandCount: 0,
       backend: "acp:kimi",
       createdAt: 1_800_000_000_000,
@@ -2372,6 +2431,7 @@ describe("sqlite write metrics", () => {
       task: "Wait for one bounded external operation.",
     };
     const internal = registry as unknown as {
+      persistThreadMessageOrigin(params: { backend: "acp:kimi"; threadId: string; messageId: string; origin: AppServerThreadMessageOrigin }): Promise<void>;
       completedTaskMonitorsByThread: Map<string, typeof monitorRecord>;
       injectTaskMonitorProgress(
         caller: {
@@ -2395,6 +2455,8 @@ describe("sqlite write metrics", () => {
 
     try {
       const { writes } = await measureSqliteWrites(async () => {
+        if (causal) await internal.persistThreadMessageOrigin({ backend: "acp:kimi", threadId: monitorRecord.monitorThreadId,
+          messageId: `user:${monitorRecord.monitorTurnId}`, origin: { kind: "sub-agent", ...monitorRecord.causalContext } });
         await internal.persistTaskMonitorSubAgent(monitorRecord, {
           status: "running",
         });
@@ -2466,9 +2528,9 @@ describe("sqlite write metrics", () => {
         // Measured at four commits per completed monitor, independent of the
         // 120 heartbeats. At 100 monitors/day that is 400 commits/day; this
         // calibration observed about 115 KB per lifecycle, or about 11 MB/day.
-        note:
-          "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
-        scenario: "acp-task-monitor-lifecycle",
+        note: causal ? "One attributed ACP monitor origin plus lifecycle and final usage; 120 heartbeats add no commits. Provenance is one fixed reference captured at delegation."
+          : "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
+        scenario: causal ? "messaging-causal-monitor-lifecycle" : "acp-task-monitor-lifecycle",
         writes,
       });
       expect(internal.completedTaskMonitorsByThread.size).toBe(0);
@@ -2845,8 +2907,8 @@ describe("sqlite write metrics", () => {
   it("waits for earlier live usage before crossing a terminal durability boundary", async () => {
     const overlayLookupStarted = createDeferred();
     const releaseOverlayLookup = createDeferred();
-    const readOverlay = store.getThreadOverlayState.bind(store);
-    vi.spyOn(store, "getThreadOverlayState").mockImplementationOnce(
+    const readOverlay = store.readThreadUsageSettings.bind(store);
+    vi.spyOn(store, "readThreadUsageSettings").mockImplementationOnce(
       async (params) => {
         overlayLookupStarted.resolve();
         await releaseOverlayLookup.promise;
@@ -2906,9 +2968,9 @@ describe("sqlite write metrics", () => {
   it("persists pre-close live usage after a delayed lookup and ignores new usage", async () => {
     const overlayLookupStarted = createDeferred();
     const releaseOverlayLookup = createDeferred();
-    const readOverlay = store.getThreadOverlayState.bind(store);
+    const readOverlay = store.readThreadUsageSettings.bind(store);
     const overlayLookup = vi
-      .spyOn(store, "getThreadOverlayState")
+      .spyOn(store, "readThreadUsageSettings")
       .mockImplementationOnce(async (params) => {
         overlayLookupStarted.resolve();
         await releaseOverlayLookup.promise;
@@ -2968,7 +3030,7 @@ describe("sqlite write metrics", () => {
   });
 
   it("releases the terminal barrier when earlier live usage derivation fails", async () => {
-    vi.spyOn(store, "getThreadOverlayState").mockRejectedValueOnce(
+    vi.spyOn(store, "readThreadUsageSettings").mockRejectedValueOnce(
       new Error("overlay unavailable"),
     );
     const batchWrite = vi.spyOn(store, "upsertThreadUsageLines");
