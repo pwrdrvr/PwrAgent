@@ -117,6 +117,14 @@ sentinel. Slack membership checks are bounded to five pages in the selected
 channel; missing scopes or an exhausted bound yield unknown authorization.
 Request and attachment boundaries have checked-in SQLite commit budgets;
 streamed output, passive delivery, polls and idle time add no provenance writes.
+CI measured three commits and 32,960 WAL bytes for one request plus attachment
+claim/outcome, two commits and 20,600 bytes for one attributed steer, and five
+commits and 160,680 bytes for an attributed monitor's entire lifecycle. At 100
+of each per day these are 3.30, 2.06 and 16.07 MB/day respectively. The monitor
+baseline is four commits and 115,360 bytes, so attribution adds one commit and
+4.53 MB/day at that rate. These are boundary costs, independent of history age
+and streamed-event count. The added empty schema increases a full database
+vacuum by eight pages (32,960 WAL bytes), with no additional vacuum commits.
 
 Federated tools route to the messaging owner, which can differ from the target
 thread owner. The `messaging_destinations` capability advertises protocol support;

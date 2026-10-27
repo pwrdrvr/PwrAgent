@@ -44876,7 +44876,7 @@ export class DesktopBackendRegistry {
         ...request.args,
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
-      }, await this.readCausalMessagingContext(request.context));
+      });
     }
 
     if (request.operation === "check_thread_pull_request_status") {

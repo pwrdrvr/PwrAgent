@@ -129,9 +129,9 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface. Use new_child for a native child topic when supported. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename the PwrAgent thread.";
     case "list_messaging_surfaces":
-      return "Inspect authorized attachment destinations for the human request behind this turn, including completion and delegated turns with no active inbound origin. Pass the target backend/threadId and intended placement. Rows are newest human interaction first; the causal recommendation takes precedence over unrelated newer traffic. Counts are complete only when countIsComplete is true. Use a returned surfaceSelector with attach_thread_to_surface. This does not browse chat history.";
+      return "Inspect authorized attachment destinations for this human request. Works on completion and delegated turns without an active inbound origin. Pass the target backend/threadId and intended placement. Rows are newest human interaction first. The causal recommendation takes precedence over unrelated newer traffic. Counts are complete only when countIsComplete is true. Use a returned surfaceSelector with attach_thread_to_surface. This does not browse chat history.";
     case "attach_thread_to_surface":
-      return "Attach an existing thread to an authorized messaging destination retained for this request, including after a child or monitor completes. Pass a surfaceSelector from list_messaging_surfaces, or omit it to use a verified causal or sole eligible destination. Use new_child for a native child topic; current_conversation replaces/reuses the selected binding. Permissions and routing are checked again. This does not fabricate an inbound user message or rename the target thread.";
+      return "Attach an existing thread to an authorized destination retained for this request. Works after a child or monitor completes. Pass a surfaceSelector from list_messaging_surfaces, or omit it to use the verified causal destination. Use new_child for a native child topic. current_conversation replaces/reuses the selected binding. Permissions and routing are checked again. This does not fabricate an inbound user message or rename the target thread.";
     case "inspect_messaging_pdfs":
       return "List PDF attachments for the current messaging turn. Use this only when the initial attachment metadata is unavailable. The result contains local metadata and render limits, not PDF content. In Codex Code Mode, parse the JSON string. Native MCP clients receive the response directly.";
     case "search_messaging_pdf_text":
@@ -168,9 +168,9 @@ function inputSchemaForOperation(
         properties: {
           ...(base.properties as Record<string, unknown>),
           surfaceSelector: { type: "string", description: "Authorized selector returned by list_messaging_surfaces. Omit to use the causal or sole eligible destination." },
-          selection: { type: "string", enum: ["causal", "sole_eligible"], description: "Defaults to causal: use this request's source with a point lookup. sole_eligible explicitly requests bounded discovery and succeeds only when the complete authorized candidate set has exactly one eligible surface. Cannot combine sole_eligible with surfaceSelector." },
+          selection: { type: "string", enum: ["causal", "sole_eligible"], description: "Defaults to causal: use this request's source with a point lookup. sole_eligible requests bounded discovery and requires exactly one eligible surface in the complete authorized set. Cannot combine sole_eligible with surfaceSelector." },
           expectedRevision: { type: "string", description: "Revision returned for the selected destination. A changed human reply anchor fails safely." },
-          idempotencyKey: { type: "string", maxLength: 128, description: "Optional operation key. Retries with the same key replay the outcome; omit for one attachment per causal request/target/placement." },
+          idempotencyKey: { type: "string", maxLength: 128, description: "Optional operation key. Retries with the same key replay the outcome. Omit for one attachment per causal request/target/placement." },
         },
       };
     }
