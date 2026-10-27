@@ -15,6 +15,35 @@ if mode == "finder" {
     "bundle": app?.bundleIdentifier ?? NSNull(),
   ]
   print(String(data: try JSONSerialization.data(withJSONObject: row), encoding: .utf8)!)
+} else if mode == "holder" {
+  // Describe the app that holds activation: its on-screen windows and when
+  // it started. Needs no permission: a permission prompt would itself be an
+  // alert that holds activation.
+  let app = NSWorkspace.shared.frontmostApplication
+  let pid = app?.processIdentifier ?? -1
+  let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+  let windows: [[String: Any]] = rows.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == pid }.map {
+    [
+      "layer": $0[kCGWindowLayer as String] ?? NSNull(),
+      "name": $0[kCGWindowName as String] ?? NSNull(),
+      "bounds": $0[kCGWindowBounds as String] ?? NSNull(),
+    ]
+  }
+  // An on-demand agent such as UserNotificationCenter starts to show its
+  // alert, so its start time dates the alert.
+  var info = kinfo_proc()
+  var size = MemoryLayout<kinfo_proc>.stride
+  var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+  let started: Any = sysctl(&mib, 4, &info, &size, nil, 0) == 0 && size > 0
+    ? Double(info.kp_proc.p_un.__p_starttime.tv_sec) : NSNull()
+  let row: [String: Any] = [
+    "pid": pid,
+    "startedAt": started,
+    "bundle": app?.bundleIdentifier ?? NSNull(),
+    "name": app?.localizedName ?? NSNull(),
+    "windows": windows,
+  ]
+  print(String(data: try JSONSerialization.data(withJSONObject: row), encoding: .utf8)!)
 } else {
   let pid = Int32(CommandLine.arguments[2])!
   if mode == "order" {

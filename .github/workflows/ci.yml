@@ -766,6 +766,9 @@ jobs:
         # included) so the log carries evidence next time. Process matching is
         # scoped to this runner's own workspace: the guest is shared with
         # PwrSnap and with operator work, and neither may become collateral.
+        # It also dismisses an Electron "quit unexpectedly" dialog that a
+        # previous job's crash left up: that dialog holds macOS activation and
+        # fails every spec that activates the app.
         # Windows lanes are GitHub-hosted (fresh VM per job), so they need no
         # equivalent.
         shell: bash

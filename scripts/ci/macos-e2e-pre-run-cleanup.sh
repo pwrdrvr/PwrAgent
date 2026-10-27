@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Clear the two kinds of state a previous job leaves behind on the persistent
-# macOS E2E guest: orphaned Electron process trees, and macOS saved
-# application state for the Electron bundle. Report what was found either way.
+# Clear the state a previous job leaves behind on the persistent macOS E2E
+# guest: orphaned Electron process trees, macOS saved application state for
+# the Electron bundle, and the crash dialog an Electron crash leaves up.
+# Report what was found either way.
 #
 # The macOS Desktop E2E lane runs on a persistent Tart guest, not a fresh VM
 # per job, so anything a previous job left behind survives into the next one.
@@ -375,6 +376,119 @@ clear_saved_application_state() {
   done
 }
 
+# `ps` etime ([[dd-]hh:]mm:ss) in seconds.
+etime_seconds() {
+  local etime="$1" days=0
+  local -a parts
+  if [[ "$etime" == *-* ]]; then
+    days="${etime%%-*}"
+    etime="${etime#*-}"
+  fi
+  IFS=: read -r -a parts <<<"$etime"
+  case "${#parts[@]}" in
+    3) echo $((10#$days * 86400 + 10#${parts[0]} * 3600 + 10#${parts[1]} * 60 + 10#${parts[2]})) ;;
+    2) echo $((10#$days * 86400 + 10#${parts[0]} * 60 + 10#${parts[1]})) ;;
+    *) return 1 ;;
+  esac
+}
+
+# Modification time in epoch seconds. GNU first: BSD stat rejects -c, while
+# GNU stat accepts -f as --file-system and would print the wrong thing.
+mtime_seconds() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"
+}
+
+unc_marker="/UserNotificationCenter.app/Contents/MacOS/UserNotificationCenter"
+
+# Dismiss a crash dialog that an Electron crash in a previous job left up.
+#
+# On 2026-10-27 two runner guests each kept a "quit unexpectedly" dialog up
+# for hours. A cancelled job orphaned its E2E Electron, the Electron
+# segfaulted, and ReportCrash had UserNotificationCenter show the dialog.
+# The dialog holds macOS activation, so no app could become active again,
+# and every later macos-window-activation.spec.ts run on those guests failed.
+#
+# UserNotificationCenter starts on demand to show an alert, so a UNC process
+# that started within a minute of an Electron crash report is that crash's
+# dialog. Observed: report written at 00:35:25.659, UNC started at
+# 00:35:25.786. Stopping UNC closes the dialog; ReportCrash takes it as
+# unanswered, and the report stays on disk. Any other UNC process is reported
+# and left alone, because its alert may be a permission prompt that someone
+# on the guest still has to answer.
+#
+# Suppressing the dialog instead does not work here: with
+# `com.apple.CrashReporter DialogType none`, a crash on the macOS 26.6.1
+# runners still showed it, in the same second the report was written.
+dismiss_electron_crash_dialogs() {
+  local state_home report_dir now report bundle_id report_time first_line
+  local pid ppid state etime command started age match i
+  # Indexed by a count rather than "${array[@]}": macOS /bin/bash is 3.2,
+  # which treats an empty array as unbound under `set -u`.
+  local report_count=0
+  local -a report_times report_names
+
+  state_home="${REAP_STATE_HOME:-${HOME:-}}"
+  [[ -n "$state_home" ]] || return 0
+  report_dir="$state_home/Library/Logs/DiagnosticReports"
+  now="${REAP_NOW:-$(date +%s)}"
+
+  # Electron crash reports, identified by the bundle id in the report header,
+  # not just the file name. An alert can stay up for days, so age is no
+  # filter; the start-time match below is.
+  if [[ -d "$report_dir" ]]; then
+    for report in "$report_dir"/*.ips; do
+      [[ -f "$report" ]] || continue
+      for bundle_id in "${ELECTRON_BUNDLE_IDS[@]}"; do
+        first_line=$(head -n 1 "$report")
+        if [[ "$first_line" == *"\"bundleID\":\"$bundle_id\""* ]]; then
+          report_time=$(mtime_seconds "$report") || continue
+          report_times[report_count]="$report_time"
+          report_names[report_count]="$(basename "$report")"
+          report_count=$((report_count + 1))
+        fi
+      done
+    done
+  fi
+
+  while read -r pid ppid state etime command; do
+    [[ "$command" == *"$unc_marker" ]] || continue
+    age=$(etime_seconds "$etime") || continue
+    started=$((now - age))
+    match=""
+    i=0
+    while (( i < report_count )); do
+      if (( started >= report_times[i] - 5 && started <= report_times[i] + 60 )); then
+        match="${report_names[i]}"
+        break
+      fi
+      i=$((i + 1))
+    done
+
+    if [[ -z "$match" ]]; then
+      echo "$LOG: UserNotificationCenter pid $pid (up $etime) is not tied to an Electron crash report; left alone."
+      echo "::warning title=System alert on macOS runner::UserNotificationCenter pid $pid has been up for $etime. Its alert holds macOS activation, so specs that activate the app will fail on this guest until it is answered."
+      continue
+    fi
+
+    echo "$LOG: UserNotificationCenter pid $pid (up $etime) is the crash dialog for $match"
+    if [[ -n "$injected_table" ]]; then
+      echo "$LOG: report-only; would dismiss UserNotificationCenter pid $pid"
+      continue
+    fi
+    # Re-check the pid right before signalling it, as the reap does.
+    [[ "$(ps -o command= -p "$pid" 2>/dev/null || true)" == *"$unc_marker" ]] || continue
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 1
+    if ps -p "$pid" >/dev/null 2>&1; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
+    echo "$LOG: dismissed the crash dialog for $match"
+    echo "::warning title=Electron crash dialog on macOS runner::Dismissed the crash dialog for $match, which a previous job left up. It held macOS activation, so app activation specs could not pass on this guest."
+    summary ""
+    summary "Dismissed the crash dialog for \`$match\` (UserNotificationCenter pid $pid, up $etime)."
+  done < "$snapshot_file"
+}
+
 scan
 echo "$LOG: scope        $scope"
 echo "$LOG: in scope     $orphan_count orphaned Electron process(es)"
@@ -392,6 +506,7 @@ if [[ -n "$injected_table" ]]; then
   else
     echo "$LOG: report-only; REAP_STATE_HOME unset, saved application state left alone."
   fi
+  dismiss_electron_crash_dialogs
   exit 0
 fi
 
@@ -401,5 +516,9 @@ reap_orphans || reap_status=$?
 # After the reap, never before: signalling an Electron can make AppKit write
 # fresh saved state on the way out.
 clear_saved_application_state
+
+# Re-read the process table: the reap may have changed it.
+scan
+dismiss_electron_crash_dialogs
 
 exit "$reap_status"
