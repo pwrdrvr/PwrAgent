@@ -1,6 +1,5 @@
 // Native activation for the isolated E2E Electron PID, never a generic bundle.
 import AppKit
-import ApplicationServices
 import Carbon
 import CoreGraphics
 
@@ -17,10 +16,9 @@ if mode == "finder" {
   ]
   print(String(data: try JSONSerialization.data(withJSONObject: row), encoding: .utf8)!)
 } else if mode == "holder" {
-  // Describe the app that holds activation: its on-screen windows and, when
-  // this process is already trusted for Accessibility, the text they show.
-  // Never prompts: a permission prompt is itself an alert that holds
-  // activation.
+  // Describe the app that holds activation: its on-screen windows and when
+  // it started. Needs no permission: a permission prompt would itself be an
+  // alert that holds activation.
   let app = NSWorkspace.shared.frontmostApplication
   let pid = app?.processIdentifier ?? -1
   let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
@@ -30,26 +28,6 @@ if mode == "finder" {
       "name": $0[kCGWindowName as String] ?? NSNull(),
       "bounds": $0[kCGWindowBounds as String] ?? NSNull(),
     ]
-  }
-  var text: [String] = []
-  let trusted = AXIsProcessTrusted()
-  if trusted && pid > 0 {
-    func collect(_ element: AXUIElement, _ depth: Int) {
-      if depth > 8 || text.count >= 40 { return }
-      for attribute in [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute] {
-        var value: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
-           let string = value as? String, !string.isEmpty {
-          text.append(String(string.prefix(300)))
-        }
-      }
-      var children: CFTypeRef?
-      if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &children) == .success,
-         let list = children as? [AXUIElement] {
-        for child in list { collect(child, depth + 1) }
-      }
-    }
-    collect(AXUIElementCreateApplication(pid), 0)
   }
   // An on-demand agent such as UserNotificationCenter starts to show its
   // alert, so its start time dates the alert.
@@ -64,8 +42,6 @@ if mode == "finder" {
     "bundle": app?.bundleIdentifier ?? NSNull(),
     "name": app?.localizedName ?? NSNull(),
     "windows": windows,
-    "accessibilityTrusted": trusted,
-    "text": text,
   ]
   print(String(data: try JSONSerialization.data(withJSONObject: row), encoding: .utf8)!)
 } else {

@@ -766,17 +766,22 @@ jobs:
         # included) so the log carries evidence next time. Process matching is
         # scoped to this runner's own workspace: the guest is shared with
         # PwrSnap and with operator work, and neither may become collateral.
+        # It also dismisses an Electron "quit unexpectedly" dialog that a
+        # previous job's crash left up: that dialog holds macOS activation and
+        # fails every spec that activates the app.
         # Windows lanes are GitHub-hosted (fresh VM per job), so they need no
         # equivalent.
         shell: bash
         timeout-minutes: 5
         run: bash ./scripts/ci/macos-e2e-pre-run-cleanup.sh
 
-      - name: TEMPORARY crash dialog probe
+      - name: TEMPORARY reset the DialogType an earlier probe wrote
         shell: bash
-        timeout-minutes: 8
         continue-on-error: true
-        run: node scripts/ci/probe-macos-crash-dialog.mjs
+        run: |
+          echo "DialogType before: $(defaults read com.apple.CrashReporter DialogType 2>&1)"
+          defaults delete com.apple.CrashReporter DialogType 2>/dev/null || true
+          echo "DialogType after: $(defaults read com.apple.CrashReporter DialogType 2>&1)"
 
       - name: Build or restore apps/desktop/out
         # A guest usually runs two lanes of one commit, and a re-run repeats

@@ -375,30 +375,6 @@ clear_saved_application_state() {
   done
 }
 
-# Keep a crashing app from putting up the "quit unexpectedly" dialog.
-#
-# On 2026-10-27 two runner guests each kept such a dialog up for hours. A
-# cancelled job orphaned its E2E Electron, the Electron segfaulted, and
-# ReportCrash had UserNotificationCenter show the dialog. The dialog holds
-# macOS activation, so no app could become active again, and every later
-# macos-window-activation.spec.ts run on those guests failed. With DialogType
-# none, ReportCrash still writes the .ips report but shows no dialog. GitHub's
-# hosted macOS images set the same key.
-#
-# Like the Electron defaults below, this goes through cfprefsd for the
-# logged-in user, so it runs on GitHub Actions only and never under a test
-# state home. It is reversible with
-# `defaults delete com.apple.CrashReporter DialogType`. It runs before the
-# reap, so an orphan that crashes while it is signalled shows no dialog.
-suppress_crash_dialogs() {
-  if [[ -n "${REAP_STATE_HOME:-}" || -z "${GITHUB_ACTIONS:-}" ]]; then
-    echo "$LOG: not a CI run on the real home; leaving crash dialog defaults untouched"
-    return 0
-  fi
-  defaults write com.apple.CrashReporter DialogType -string none 2>/dev/null || true
-  echo "$LOG: crash dialogs off (com.apple.CrashReporter DialogType none)"
-}
-
 # `ps` etime ([[dd-]hh:]mm:ss) in seconds.
 etime_seconds() {
   local etime="$1" days=0
@@ -425,6 +401,12 @@ unc_marker="/UserNotificationCenter.app/Contents/MacOS/UserNotificationCenter"
 
 # Dismiss a crash dialog that an Electron crash in a previous job left up.
 #
+# On 2026-10-27 two runner guests each kept a "quit unexpectedly" dialog up
+# for hours. A cancelled job orphaned its E2E Electron, the Electron
+# segfaulted, and ReportCrash had UserNotificationCenter show the dialog.
+# The dialog holds macOS activation, so no app could become active again,
+# and every later macos-window-activation.spec.ts run on those guests failed.
+#
 # UserNotificationCenter starts on demand to show an alert, so a UNC process
 # that started within a minute of an Electron crash report is that crash's
 # dialog. Observed: report written at 00:35:25.659, UNC started at
@@ -432,6 +414,10 @@ unc_marker="/UserNotificationCenter.app/Contents/MacOS/UserNotificationCenter"
 # unanswered, and the report stays on disk. Any other UNC process is reported
 # and left alone, because its alert may be a permission prompt that someone
 # on the guest still has to answer.
+#
+# Suppressing the dialog instead does not work here: with
+# `com.apple.CrashReporter DialogType none`, a crash on the macOS 26.6.1
+# runners still showed it, in the same second the report was written.
 dismiss_electron_crash_dialogs() {
   local state_home report_dir now report bundle_id report_time first_line
   local pid ppid state etime command started age match i
@@ -522,8 +508,6 @@ if [[ -n "$injected_table" ]]; then
   dismiss_electron_crash_dialogs
   exit 0
 fi
-
-suppress_crash_dialogs
 
 reap_status=0
 reap_orphans || reap_status=$?
