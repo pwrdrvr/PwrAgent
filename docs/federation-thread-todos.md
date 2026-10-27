@@ -60,9 +60,13 @@ the card upsert or removal plus merge preferences. A navigation-class event
 reaches sparse mounted-thread subscribers only for their own threads.
 
 Owners that advertise the additive `thread_todo_feed` capability answer
-`threadTodos.snapshot`. They send deltas only to viewers that advertise the
-same capability. They still publish the `thread/todos/changed` and
-`thread/todoDetails/changed` markers for older viewers and review details.
+`threadTodos.snapshot`. They send deltas only to directly connected viewers
+that advertise the same capability. A gateway that predates the feed would
+classify the new event as transcript traffic and not relay it to a
+navigation subscriber. Both ends therefore read the capability from the same
+direct connection, and a relayed owner uses the list fallback. Owners still
+publish the `thread/todos/changed` and `thread/todoDetails/changed` markers
+for older viewers, relayed viewers, and review details.
 
 The viewer's main process keeps one view per window kind. The main window
 view contains the local feed and mounted remote threads. A remote window

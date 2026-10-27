@@ -2423,9 +2423,24 @@ export class DesktopFederationRuntime {
       notification: { method: "thread/todos/delta", params: delta } });
   }
 
-  /** The owner is connected and serves `threadTodos.snapshot` and its deltas. */
+  /**
+   * The owner is directly connected and serves `threadTodos.snapshot` and its
+   * deltas. Both ends read the same connection's capabilities, so an owner
+   * sends deltas exactly when its viewer follows them. A relayed owner is
+   * listed on its markers instead.
+   */
   remotePeerSupportsTodoFeed(target: FederationRemoteTarget): boolean {
-    return this.todoQueueUnavailableInstance(target, "thread_todo_feed") === undefined;
+    return this.directPeerAdvertises(target.instanceId, target.instanceId, "thread_todo_feed")
+      && this.todoQueueUnavailableInstance(target, "thread_todos") === undefined;
+  }
+
+  private directPeerAdvertises(
+    instanceId: FederationInstanceId,
+    viaPeerId: FederationInstanceId | undefined,
+    capability: FederationCapability,
+  ): boolean {
+    if (viaPeerId !== instanceId) return false;
+    return this.router?.getConnection(instanceId)?.capabilities.includes(capability) ?? false;
   }
 
   publishThreadTodosChanged(event: ThreadTodosChangedEvent): void {
@@ -6407,9 +6422,11 @@ export class DesktopFederationRuntime {
     for (const [subscriberInstanceId, subscription] of
       this.incomingEventSubscriptions) {
       if (!subscription.eventClasses.has(eventClass)) continue;
-      // A viewer that predates the feed reads To-dos through markers.
+      // Deltas go only to a capable viewer on a direct connection. A gateway
+      // that predates them would not relay them as navigation events, and an
+      // older viewer reads To-dos through markers.
       if (event.notification.method === "thread/todos/delta"
-        && !this.remotePeerAdvertisesCapability(subscriberInstanceId, "thread_todo_feed")) continue;
+        && !this.directPeerAdvertises(subscriberInstanceId, subscription.viaPeerId, "thread_todo_feed")) continue;
       if (
         eventClass !== "star_map"
         && !eventMatchesThreadSelection(
