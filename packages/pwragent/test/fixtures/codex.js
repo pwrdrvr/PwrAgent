@@ -53,7 +53,13 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
       assert.ok(["read-only", "workspace-write"].includes(params.sandbox));
       assert.equal(params.cwd, process.cwd());
       const threadId = params.threadId || `thread-${Date.now()}-${++sequence}`;
-      if (method === "thread/resume") assert.ok(threads[threadId]);
+      if (method === "thread/resume") {
+        assert.ok(threads[threadId]);
+        if (!threads[threadId].turns.length) {
+          send({ id, error: { code: -32600, message: `no rollout found for thread id ${threadId}` } });
+          continue;
+        }
+      }
       threads[threadId] ||= { id: threadId, turns: [] };
       persist();
       reply({ thread: threads[threadId] });

@@ -218,6 +218,7 @@ export class HeadlessBackend {
     try {
       const result = await this.runtime.codex.request("thread/start", { cwd: this.runtime.workspace, approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
       if (!result?.thread?.id || typeof result.thread.id !== "string" || result.thread.id.length > 256) throw new Error("Invalid thread/start response");
+      this.runtime.loadedThreads.add(result.thread.id);
       const thread = { id: result.thread.id, title: "New outpost thread", titleSource: "fallback", createdAt: Date.now(), sandbox,
         model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier };
       this.threads.set(thread.id, thread);

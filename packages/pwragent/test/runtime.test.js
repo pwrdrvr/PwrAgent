@@ -6,11 +6,29 @@ import { Runtime } from "../src/runtime.js";
 function runningRuntime(request) {
   let job = { id: "job", threadId: "thread", turnId: "turn", status: "running" };
   return Object.assign(Object.create(Runtime.prototype), {
-    active: job.id, codex: { request },
+    active: job.id, loadedThreads: new Set(), codex: { request },
     store: { get: () => job, save: (value) => { job = { ...value }; return job; } },
     onFailure: (error) => { throw error; },
   });
 }
+
+test("loaded threads start turns directly, and closed threads resume from the provider", async () => {
+  const methods = [];
+  const runtime = runningRuntime(async (method) => {
+    methods.push(method);
+    return method === "thread/resume" ? { thread: { id: "thread" } } : { turn: { id: "next-turn", status: "inProgress" } };
+  });
+  runtime.workspace = "/fixture";
+  runtime.loadedThreads.add("thread");
+  await runtime.start({ ...runtime.store.get("job"), sandbox: "read-only" }, "first turn");
+  assert.deepEqual(methods, ["turn/start"], "a new thread has no persisted rollout to resume yet");
+  runtime.notification({ method: "thread/closed", params: { threadId: "thread" } });
+  assert.equal(runtime.loadedThreads.has("thread"), false);
+  methods.length = 0;
+  await runtime.start({ ...runtime.store.get("job"), sandbox: "read-only" }, "next turn");
+  assert.deepEqual(methods, ["thread/resume", "turn/start"]);
+  assert.equal(runtime.loadedThreads.has("thread"), true);
+});
 
 for (const rejection of ["RPC rejection", "pending limit", "synchronous rejection"]) {
   test(`interrupt can retry after ${rejection}`, async () => {

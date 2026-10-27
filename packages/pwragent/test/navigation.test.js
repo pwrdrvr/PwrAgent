@@ -10,7 +10,7 @@ function backendFixture(t, jobs) {
   mkdirSync(local, { recursive: true });
   const directory = mkdtempSync(path.join(local, "navigation-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const runtime = { workspace: directory, store: { directory: path.join(directory, "jobs"), jobs },
+  const runtime = { workspace: directory, loadedThreads: new Set(), store: { directory: path.join(directory, "jobs"), jobs },
     onFailure: (error) => { throw error; } };
   return new HeadlessBackend(runtime, () => {});
 }

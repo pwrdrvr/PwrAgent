@@ -265,9 +265,25 @@ subscription filtering, dropped forwards, restart and identity retention. A
 desktop Vitest integration test runs its real `FederationRemoteBackendClient`
 against the daemon. External providers and Codex are mocked; no live peers,
 operator projects, credentials or compute machines are used. Ubuntu CI runs the
-Node suite; the desktop contract test runs on POSIX lanes. Local validation was
-on macOS. Live inference, Linux sandbox enforcement, systemd and microVM restore
-remain unverified. Windows is not supported.
+Node suite; the desktop contract test runs on POSIX lanes.
+
+A separate live smoke test installed the packed tarball and official Codex
+0.159.2 in a Node 24 Debian Linux arm64 Docker image. It used an unprivileged
+user, a read-only authentication-file mount, container-owned state and workspace,
+and an isolated federation. The desktop backend client created a thread and
+started real model work that ran commands and wrote a marker file. Execution
+survived viewer disconnection; reconnect, transcript reads, submission
+deduplication, container restart, continuation and three-peer gateway relay
+passed. This caught the first-turn requirement to use an already loaded thread
+directly: Codex cannot resume its empty rollout before the first turn starts.
+
+Docker's default seccomp policy blocked the namespaces used by Codex's Linux
+sandbox. The successful run retained dropped container capabilities and
+`no-new-privileges`, using the Docker default profile with additional allowance
+for `clone`, `unshare`, `setns`, `mount`, `umount2` and `pivot_root`. Codex retained
+its workspace-write sandbox. This verifies that container configuration, not
+every Linux host policy. systemd and microVM restore remain unverified. Windows
+is not supported.
 
 ## License
 

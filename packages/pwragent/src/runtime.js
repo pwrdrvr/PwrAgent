@@ -5,6 +5,7 @@ export class Runtime {
   constructor({ store, workspace, home, command, onFailure }) {
     this.store = store;
     this.workspace = workspace;
+    this.loadedThreads = new Set();
     this.onFailure = onFailure;
     this.codex = new Codex({
       command, home, workspace,
@@ -99,14 +100,16 @@ export class Runtime {
   async start(job, prompt) {
     const params = { cwd: this.workspace, approvalPolicy: "never", sandbox: job.sandbox,
       ...(job.model ? { model: job.model } : {}) };
-    const result = await this.codex.request(job.threadId ? "thread/resume" : "thread/start", {
-      ...params,
-      ...(job.threadId ? { threadId: job.threadId } : { ephemeral: false }),
-    });
+    const result = job.threadId && this.loadedThreads.has(job.threadId) ? { thread: { id: job.threadId } }
+      : await this.codex.request(job.threadId ? "thread/resume" : "thread/start", {
+        ...params,
+        ...(job.threadId ? { threadId: job.threadId } : { ephemeral: false }),
+      });
     if (typeof result?.thread?.id !== "string" || !result.thread.id || result.thread.id.length > 256
       || (job.threadId && result.thread.id !== job.threadId)) {
       throw new Error("Codex returned an invalid thread ID");
     }
+    this.loadedThreads.add(result.thread.id);
     this.save({ ...this.store.get(job.id), threadId: result.thread.id });
     const turn = await this.codex.request("turn/start", {
       threadId: result.thread.id,
@@ -135,6 +138,7 @@ export class Runtime {
   }
 
   notification({ method, params }) {
+    if (method === "thread/closed") this.loadedThreads.delete(params?.threadId);
     if (method !== "turn/completed" || !this.active) return;
     const job = this.store.get(this.active);
     if (params?.threadId !== job.threadId) return;
