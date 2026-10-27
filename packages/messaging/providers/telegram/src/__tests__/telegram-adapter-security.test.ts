@@ -1,8 +1,36 @@
 import { describe, expect, it, vi } from "vitest";
-import { TelegramAdapter, type TelegramBotLike } from "../telegram-adapter.ts";
+import { TelegramAdapter, type TelegramBotLike, type TelegramChatMember } from "../telegram-adapter.ts";
 import type { MessagingRejectedInboundEvent } from "@pwragent/messaging-interface";
 
 describe("TelegramAdapter inbound security boundary", () => {
+  it.each([
+    { member: { status: "restricted", is_member: false }, allowed: false },
+    { member: { status: "restricted" }, allowed: false },
+    { member: { status: "restricted", is_member: true }, allowed: true },
+    { member: { status: "member" }, allowed: true },
+    { member: { status: "administrator" }, allowed: true },
+    { member: { status: "creator" }, allowed: true },
+    { member: { status: "left" }, allowed: false },
+    { member: { status: "kicked" }, allowed: false },
+  ] satisfies Array<{ member: TelegramChatMember; allowed: boolean }>)("rechecks retained supergroup membership for $member", async ({ member, allowed }) => {
+    const bot = fakeBot();
+    const getChatMember = vi.spyOn(bot.api, "getChatMember").mockResolvedValue(member);
+    const adapter = new TelegramAdapter({
+      bot, pollOnStart: false,
+      config: {
+        authorizedActorIds: [{ id: "42", displayName: "" }],
+        authorizedSupergroupIds: [{ id: "-1001234567890", displayName: "" }],
+        botToken: "token", channel: "telegram",
+      },
+    });
+    expect(await adapter.authorizeRetainedSource({
+      id: "human-request", kind: "text", receivedAt: 1000, text: "Attach the builder.",
+      actor: { platformUserId: "42" },
+      channel: { channel: "telegram", conversation: { id: "77", kind: "topic", parentId: "-1001234567890" } },
+    })).toBe(allowed);
+    expect(getChatMember).toHaveBeenCalledExactlyOnceWith(-1001234567890, "42");
+  });
+
   it("dispatches pairing tokens from unauthorized actors before allowlist checks", async () => {
     const listener = vi.fn();
     const logger = { debug: vi.fn(), warn: vi.fn() };

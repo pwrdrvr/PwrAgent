@@ -6242,7 +6242,7 @@ describe("MessagingController", () => {
       expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "list_messaging_surfaces", context, args }))
         .toMatchObject({ ok: true, data: { eligibleCount: 1, surfaces: [expect.objectContaining({ route: "default" })] } });
       expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", args,
-        context: { ...context, causalMessagingSource: undefined } })).toMatchObject({ ok: false, error: { code: "forbidden" } });
+        context: { ...context, causalMessagingSource: undefined } })).toMatchObject({ ok: false, error: { code: "not_found" } });
       expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", args,
         context: { ...context, causalMessagingAmbiguous: true } })).toMatchObject({ ok: false, error: { code: "ambiguous_location" } });
       expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", context, args })).toMatchObject({ ok: true });

@@ -719,7 +719,9 @@ export class ThreadTurnQueue {
     // The title named the input being replaced.
     const { title: _staleTitle, ...rest } = found.entry;
     const entry = { ...rest, agentMessages: messages, input: groupedAgentInput(messages),
-      messageOrigin: { ...rest.messageOrigin, kind: "agent" as const, ...mergeCausalMessagingContext(messages.map((message) => message.origin)) } };
+      messageOrigin: { ...rest.messageOrigin, kind: "agent" as const,
+        causalMessagingSource: undefined, causalMessagingAmbiguous: undefined,
+        ...mergeCausalMessagingContext(messages.map((message) => message.origin)) } };
     this.queueFor(found.key)[found.position - 1] = entry;
     return entry;
   }

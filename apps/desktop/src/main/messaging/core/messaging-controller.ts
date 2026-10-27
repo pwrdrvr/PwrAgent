@@ -18286,9 +18286,9 @@ export class MessagingController {
       .every((permission) => permissions.permissions.has(permission));
   }
 
-  private retainedSourceUnavailable(context: PwrAgentMessagingRequest["context"]): PwrAgentMessagingResponse {
+  private retainedSourceUnavailable(context: PwrAgentMessagingRequest["context"], code: "forbidden" | "not_found" = "forbidden"): PwrAgentMessagingResponse {
     return { ok: false, error: {
-      code: context.causalMessagingAmbiguous ? "ambiguous_location" : "forbidden",
+      code: context.causalMessagingAmbiguous ? "ambiguous_location" : code,
       message: context.causalMessagingAmbiguous
         ? "This turn combines different causal messaging requests; choose a separately attributable request before attaching."
         : "No currently authorized human messaging request is available for this operation. Saved bindings do not establish the requesting actor.",
@@ -18299,7 +18299,8 @@ export class MessagingController {
     request: Extract<PwrAgentMessagingRequest, { operation: "list_messaging_surfaces" }>,
   ): Promise<PwrAgentMessagingResponse> {
     const source = this.retainedRequestSource(request.context);
-    if (!source || !this.retainedRequestCanCrossInstance(request.context, source) || !this.options.requestStore || !this.retainedSourceHasPermissions(source)
+    if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(request.context, "not_found");
+    if (!this.retainedRequestCanCrossInstance(request.context, source) || !this.options.requestStore || !this.retainedSourceHasPermissions(source)
       || !await this.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(request.context);
     if (!isAppServerBackendKind(request.args.backend) || !request.args.threadId?.trim()
       || (request.args.limit !== undefined && (!Number.isInteger(request.args.limit) || request.args.limit < 1 || request.args.limit > 25))) {
@@ -18375,7 +18376,8 @@ export class MessagingController {
     request: Extract<PwrAgentMessagingRequest, { operation: "attach_thread_to_surface" }>,
   ): Promise<PwrAgentMessagingResponse> {
     const source = this.retainedRequestSource(request.context);
-    if (!source || !this.retainedRequestCanCrossInstance(request.context, source) || !this.retainedSourceHasPermissions(source)
+    if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(request.context, "not_found");
+    if (!this.retainedRequestCanCrossInstance(request.context, source) || !this.retainedSourceHasPermissions(source)
       || !await this.retainedSourceIsAuthorized(source, false)) return this.retainedSourceUnavailable(request.context);
     if (request.args.instanceId && !this.actorHasPermission(source.event, "federation.remote_control")) return this.retainedSourceUnavailable(request.context);
     let selector = request.args.surfaceSelector;

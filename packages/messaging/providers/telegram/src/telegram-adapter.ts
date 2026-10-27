@@ -278,6 +278,7 @@ export type TelegramForumTopicActionRequest = {
 export type TelegramChatMember = {
   can_delete_messages?: boolean;
   can_manage_topics?: boolean;
+  is_member?: boolean;
   status: "creator" | "administrator" | "member" | "restricted" | "left" | "kicked";
 };
 
@@ -1606,7 +1607,8 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     if (!verifyAccess) return true;
     try {
       const member = await this.bot.api.getChatMember(target.chatId, event.actor.platformUserId);
-      return member.status !== "left" && member.status !== "kicked";
+      return member.status !== "left" && member.status !== "kicked"
+        && (member.status !== "restricted" || member.is_member === true);
     } catch {
       return undefined;
     }
