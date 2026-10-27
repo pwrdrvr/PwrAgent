@@ -30,6 +30,7 @@ export class HeadlessBackend {
     this.runtime = runtime;
     this.publish = publish;
     this.epoch = randomUUID();
+    this.attentionViews = new Map();
     this.file = path.join(path.dirname(runtime.store.directory), "threads.json");
     try {
       const data = JSON.parse(readFileSync(this.file, "utf8"));
@@ -82,13 +83,14 @@ export class HeadlessBackend {
       linkedDirectories: [{ id: this.runtime.workspace, kind: "local", path: this.runtime.workspace, label: path.basename(this.runtime.workspace) }],
       executionMode: mode(thread.sandbox), model: thread.model || undefined,
       reasoningEffort: thread.reasoningEffort, serviceTier: thread.serviceTier,
-      inbox: { inInbox: updatedAt > (thread.seenAt || 0), reason: "updated-since-seen" },
+      inbox: { inInbox: updatedAt > (thread.seenUpdatedAt ?? thread.seenAt ?? 0), reason: "updated-since-seen" },
       workspaceHandoff: { available: false, unavailableReason: "Workspace handoff is unavailable on this outpost" } };
   }
 
   event(message) {
     if (message.method === "headless/jobChanged") {
       this.syncJobs([message.params]);
+      if (message.params.threadId) this.forgetSeenAttentionMember(message.params.threadId);
       this.publish({ backend: "codex", notification: { method: "navigation/invalidated", params: { threadId: message.params.threadId, sourceMethod: "turn/completed" } } }, "navigation");
       return;
     }
@@ -118,7 +120,7 @@ export class HeadlessBackend {
       case "getNavigationLaunchpadConfig": return { protocol: 2, revision: "headless-v1", defaults: { backend: "codex", executionMode: "default", workMode: "local" } };
       case "getNavigationSelectedDetail": return { protocol: 2, ref: params.ref, revision: digest(this.summary(this.owned(params.ref.threadId))), readiness: "ready", identity: "present", thread: this.summary(this.owned(params.ref.threadId)), collections: [] };
       case "getNavigationQueueProjection": return { protocol: 2, ref: params.ref, revision: "no-queue", readiness: "ready", complete: true, entries: [] };
-      case "releaseNavigationAttentionView": return {};
+      case "releaseNavigationAttentionView": this.attentionViews.delete(params.viewId); return {};
       case "resolveThread": return this.threads.has(params.threadId) ? { thread: this.summary(this.owned(params.threadId)) } : {};
       case "resolveThreadAdmissionState": {
         const thread = this.summary(this.owned(params.threadId));
@@ -169,10 +171,16 @@ export class HeadlessBackend {
       }
       case "markThreadSeen": {
         const thread = this.owned(params.threadId);
-        thread.seenAt = Date.now();
+        for (const key of ["seenAt", "seenUpdatedAt"]) {
+          if (params[key] !== undefined && (!Number.isFinite(params[key]) || params[key] < 0)) throw new Error(`Invalid ${key}`);
+        }
+        const seenUpdatedAt = params.seenUpdatedAt ?? this.summary(thread).updatedAt;
+        thread.seenAt = params.seenAt ?? Date.now();
+        thread.seenUpdatedAt = seenUpdatedAt;
         this.persist();
+        this.forgetSeenAttentionMember(thread.id);
         this.invalidate(thread.id);
-        return { backend: "codex", threadId: thread.id, seenAt: thread.seenAt };
+        return { backend: "codex", threadId: thread.id, seenAt: thread.seenAt, seenUpdatedAt };
       }
       case "setThreadExecutionMode": {
         const thread = this.owned(params.threadId);
@@ -253,18 +261,21 @@ export class HeadlessBackend {
     const result = await this.runtime.codex.request("thread/read", { threadId: id, includeTurns: true });
     const entries = [];
     for (const turn of result.thread?.turns || []) {
+      const status = turn.status === "inProgress" ? "in_progress" : turn.status;
+      const metadata = { id: turn.id,
+        ...(["in_progress", "completed", "failed", "cancelled", "interrupted"].includes(status) ? { status } : {}) };
       for (const [index, item] of (turn.items || []).entries()) {
         const itemId = item.id || `${turn.id}-${index}`;
         if (item.type === "agentMessage" || item.type === "userMessage") {
           entries.push({ type: "message", id: itemId, role: item.type === "agentMessage" ? "assistant" : "user",
             text: item.text || (item.content || []).filter((part) => part.type === "text").map((part) => part.text).join("\n"),
-            turn: { id: turn.id, status: turn.status } });
+            turn: metadata });
         } else {
           const details = item.type === "commandExecution" ? [{ id: itemId, kind: "command", label: item.command,
             command: { displayCommand: item.command, cwd: item.cwd, output: item.aggregatedOutput || "", exitCode: item.exitCode, durationMs: item.durationMs } }]
             : [{ id: itemId, kind: item.type === "fileChange" ? "write" : "read", label: item.type, markdown: JSON.stringify(item, null, 2) }];
           entries.push({ type: "activity", id: itemId, summary: item.command || item.type,
-            status: item.status === "inProgress" ? "in_progress" : item.status === "failed" ? "failed" : "completed", details, turn: { id: turn.id, status: turn.status } });
+            status: item.status === "inProgress" ? "in_progress" : item.status === "failed" ? "failed" : "completed", details, turn: metadata });
         }
       }
     }
@@ -275,6 +286,45 @@ export class HeadlessBackend {
         pagination: { supportsPagination: false, hasPreviousPage: false } } };
   }
 
+  forgetSeenAttentionMember(id) {
+    const thread = this.threads.get(id);
+    if (!thread) return;
+    const row = this.summary(thread);
+    if (row.threadStatus !== "active" && !row.inbox.inInbox) {
+      for (const view of this.attentionViews.values()) view.members.delete(id);
+    }
+  }
+
+  attentionOrder(rows, options = { id: "default", promoteOnTurnEnd: true }) {
+    if (typeof options.id !== "string" || !options.id || options.id.length > 256
+      || typeof options.promoteOnTurnEnd !== "boolean") throw new Error("Invalid Attention view");
+    let view = this.attentionViews.get(options.id);
+    if (!view) {
+      if (this.attentionViews.size >= 128) throw new Error("Attention view limit reached; release an unused view");
+      view = { members: new Map(), nextRank: 1 };
+      this.attentionViews.set(options.id, view);
+    }
+    const members = new Map();
+    // Bootstrap oldest turn first. Subsequent ranks follow turn identities and
+    // active/terminal transitions, never mutable thread or job activity stamps.
+    const eligible = rows.filter((row) => row.threadStatus === "active" || row.inbox.inInbox)
+      .sort((a, b) => (Date.parse(this.latest(a.id)?.createdAt) || a.createdAt)
+        - (Date.parse(this.latest(b.id)?.createdAt) || b.createdAt) || a.id.localeCompare(b.id));
+    for (const row of eligible) {
+      const previous = view.members.get(row.id);
+      const job = this.latest(row.id);
+      const turnKey = job?.id;
+      const active = row.threadStatus === "active";
+      const newTurn = turnKey !== previous?.turnKey;
+      const started = active && (!previous?.active || newTurn);
+      const finished = !active && (previous?.active || newTurn);
+      const rank = !previous || started || (finished && options.promoteOnTurnEnd) ? view.nextRank++ : previous.rank;
+      members.set(row.id, { rank, active, turnKey });
+    }
+    view.members = members;
+    return members;
+  }
+
   query(request) {
     if (request.protocol !== 2 || !request.query || request.inventory === "viewer") throw new Error("Expected owner navigation protocol 2");
     let rows = [...this.threads.values()].map((thread) => this.summary(thread));
@@ -283,6 +333,7 @@ export class HeadlessBackend {
     const directory = { key: this.runtime.workspace, kind: "directory", label: path.basename(this.runtime.workspace), path: this.runtime.workspace,
       counts, pinnedRootCount: 0, unpinnedRootCount: rows.length, launchpadPresent: true, launchpadBackend: "codex" };
     const query = request.query;
+    const attention = query.kind === "lens" && query.lens === "attention" ? this.attentionOrder(rows, request.attentionView) : undefined;
     if (!["exact", "children", "group-members", "directory", "lens", "search", "directory-index", "messaging-projects", "messaging-threads", "model-inventory", "star-map", "star-map-geometry"].includes(query.kind)) throw new Error("Unsupported navigation query");
     if (request.backend && !["codex", "all"].includes(request.backend)) rows = [];
     if (query.kind === "exact") rows = rows.filter((row) => query.identities?.some((ref) => ref.backend === "codex" && ref.threadId === row.id));
@@ -304,13 +355,15 @@ export class HeadlessBackend {
     const filter = query.filter || query.text;
     if (filter) rows = rows.filter((row) => row.title.toLowerCase().includes(filter.toLowerCase()));
     const creationOrder = query.kind === "directory" || (query.kind === "lens" && query.lens === "recents");
-    rows.sort((a, b) => (creationOrder ? b.createdAt - a.createdAt : b.updatedAt - a.updatedAt) || a.id.localeCompare(b.id));
-    const queryKey = digest({ backend: request.backend, query });
-    const generation = digest(rows);
+    rows.sort((a, b) => (attention ? attention.get(b.id).rank - attention.get(a.id).rank
+      : creationOrder ? b.createdAt - a.createdAt : b.updatedAt - a.updatedAt) || a.id.localeCompare(b.id));
+    const queryKey = digest({ backend: request.backend, query, ...(attention ? { attentionView: request.attentionView } : {}) });
+    const generation = digest(attention ? rows.map((row) => ({ ...row, attentionRank: attention.get(row.id).rank })) : rows);
+    const countsRevision = digest(counts);
     let offset = 0;
     if (request.cursor) {
       const cursor = JSON.parse(Buffer.from(request.cursor, "base64url").toString());
-      if (cursor.queryKey !== queryKey || cursor.generation !== generation || cursor.epoch !== this.epoch
+      if (cursor.queryKey !== queryKey || cursor.generation !== generation || cursor.countsRevision !== countsRevision || cursor.epoch !== this.epoch
         || !Number.isInteger(cursor.offset) || cursor.offset < 0) throw new Error("Navigation cursor expired; refresh the collection");
       offset = cursor.offset;
     } else if (request.anchor?.kind === "thread") {
@@ -320,11 +373,12 @@ export class HeadlessBackend {
     const limit = Math.min(100, Math.max(1, Number.isInteger(request.pageSize) ? request.pageSize : 50));
     const page = rows.slice(offset, offset + limit);
     const complete = offset + page.length >= rows.length;
-    const result = { protocol: 2, queryKey, generation, ownerEpoch: this.epoch, countsRevision: digest(counts), coverage: { state: "complete" }, counts,
+    const result = { protocol: 2, queryKey, generation, ownerEpoch: this.epoch, countsRevision, coverage: { state: "complete" }, counts,
       collectionSize: rows.length, rangeStart: offset, complete,
       entries: page.map((row, index) => ({ row: { ...row, ref: { backend: "codex", threadId: row.id }, rowRevision: digest(row),
-        ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "ready" }, orderKey: String(offset + index).padStart(8, "0"), placement: { kind: "root" } })),
-      ...(!complete ? { nextCursor: Buffer.from(JSON.stringify({ queryKey, generation, epoch: this.epoch, offset: offset + page.length })).toString("base64url") } : {}) };
+        ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "ready" }, orderKey: String(offset + index).padStart(8, "0"),
+        ...(attention ? { attentionRank: attention.get(row.id).rank } : {}), placement: { kind: "root" } })),
+      ...(!complete ? { nextCursor: Buffer.from(JSON.stringify({ queryKey, generation, countsRevision, epoch: this.epoch, offset: offset + page.length })).toString("base64url") } : {}) };
     if (["directory-index", "messaging-projects", "star-map-geometry"].includes(query.kind)) {
       const matches = (!query.keys || query.keys.includes(directory.key)) && (!query.paths || query.paths.includes(directory.path))
         && (!query.directoryKey || query.directoryKey === directory.key)

@@ -43,7 +43,15 @@ export class Runtime {
         if (!job.turnId) throw new Error("Turn is still starting; retry interrupt after its turn ID is confirmed");
         if (job.status === "interrupting") return job;
         this.save({ ...job, status: "interrupting" });
-        await this.codex.request("turn/interrupt", { threadId: job.threadId, turnId: job.turnId });
+        try {
+          await this.codex.request("turn/interrupt", { threadId: job.threadId, turnId: job.turnId });
+        } catch (error) {
+          const current = this.store.get(job.id);
+          if (current.status === "interrupting" && current.turnId === job.turnId) {
+            this.save({ ...current, status: job.status });
+          }
+          throw error;
+        }
         return this.store.get(job.id);
       }
       default: throw new Error(`Unknown command: ${method}`);
