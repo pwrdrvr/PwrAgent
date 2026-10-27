@@ -168,6 +168,7 @@ function inputSchemaForOperation(
         properties: {
           ...(base.properties as Record<string, unknown>),
           surfaceSelector: { type: "string", description: "Authorized selector returned by list_messaging_surfaces. Omit to use the causal or sole eligible destination." },
+          selection: { type: "string", enum: ["causal", "sole_eligible"], description: "Defaults to causal: use this request's source with a point lookup. sole_eligible explicitly requests bounded discovery and succeeds only when the complete authorized candidate set has exactly one eligible surface. Cannot combine sole_eligible with surfaceSelector." },
           expectedRevision: { type: "string", description: "Revision returned for the selected destination. A changed human reply anchor fails safely." },
           idempotencyKey: { type: "string", maxLength: 128, description: "Optional operation key. Retries with the same key replay the outcome; omit for one attachment per causal request/target/placement." },
         },

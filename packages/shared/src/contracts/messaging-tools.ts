@@ -82,6 +82,8 @@ export type PwrAgentMessagingConversationSummary = {
   id: string;
   kind: MessagingConversationKind;
   parentId?: string;
+  parentConversationId?: string;
+  workspaceId?: string;
   title?: string;
   parentTitle?: string;
   ancestorTitle?: string;
@@ -229,6 +231,8 @@ export type ListMessagingSurfacesToolArgs = Pick<AttachThreadHereToolArgs,
 export type AttachThreadToSurfaceToolArgs = AttachThreadHereToolArgs & {
   /** Omit only when discovery identifies the causal source or a sole eligible surface. */
   surfaceSelector?: string;
+  /** Explicit opt-in to bounded discovery; the default causal path is an indexed point lookup. */
+  selection?: "causal" | "sole_eligible";
   expectedRevision?: string;
   /** Same key/request/target replays the recorded outcome, never a second topic creation. */
   idempotencyKey?: string;

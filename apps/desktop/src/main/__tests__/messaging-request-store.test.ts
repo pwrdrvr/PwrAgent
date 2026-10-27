@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { copyFileSync } from "node:fs";
 import type { MessagingInboundEvent } from "@pwragent/messaging-interface";
 import { SqliteMessagingRequestStore } from "../state/messaging-request-store";
 import { StateDb } from "../state/state-db";
@@ -49,7 +50,7 @@ describe("causal messaging request persistence", () => {
     store.remember({ agent, event: otherWorkspace }); store.remember({ agent, event: otherRoot });
     expect(store.destination(source, actorsSource.selector)).toBeUndefined();
     expect(store.destination(source, agentsSource.selector)).toBeUndefined();
-    expect(store.list(source, 25)).toHaveLength(3);
+    expect(store.list(source, 25)).toHaveLength(2);
     expect(fixture().store.get(source.ref)).toBeUndefined();
   });
 
@@ -77,9 +78,14 @@ describe("causal messaging request persistence", () => {
     expect(store.list(source, 25)).toHaveLength(1);
     expect(prepare).toHaveBeenCalledTimes(2);
     expect(prepare.mock.calls.every(([sql]) => !sql.includes("OFFSET") && !sql.includes("thread_message_origins"))).toBe(true);
+    const listSql = prepare.mock.calls[1]![0];
     prepare.mockRestore();
     const plans = db.raw.prepare("EXPLAIN QUERY PLAN SELECT payload FROM messaging_requests WHERE request_id = ?").all(source.ref.requestId) as { detail: string }[];
     expect(plans.some((p) => p.detail.includes("SEARCH") && p.detail.includes("INDEX"))).toBe(true);
+    const listPlans = db.raw.prepare(`EXPLAIN QUERY PLAN ${listSql}`).all(source.principalScope,
+      Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, "", 25) as { detail: string }[];
+    expect(listPlans.some((p) => p.detail.includes("idx_messaging_human_destinations_scope"))).toBe(true);
+    expect(listPlans.every((p) => !p.detail.includes("SCAN") && !p.detail.includes("TEMP B-TREE"))).toBe(true);
     const refs = Array.from({ length: 100 }, () => ({ kind: "agent" as const, causalMessagingSource: source.ref }));
     expect(JSON.stringify(mergeCausalMessagingContext(refs)).length).toBeLessThan(400);
   });
@@ -92,6 +98,18 @@ describe("causal messaging request persistence", () => {
     db = StateDb.open(f.dbPath);
     try { expect(new SqliteMessagingRequestStore(db.raw).get(source.ref)).toEqual(source); }
     finally { db.close(); removeTempStateDbDir(f.tempDir); }
+  });
+
+  it("does not transfer source authority when a profile database is copied", () => {
+    const original = createTempStateDb("pwragent-messaging-original-");
+    const copied = createTempStateDb("pwragent-messaging-copied-");
+    let db = StateDb.open(original.dbPath);
+    const source = new SqliteMessagingRequestStore(db.raw).remember({ agent, event: event("root") })!;
+    db.close();
+    copyFileSync(original.dbPath, copied.dbPath);
+    db = StateDb.open(copied.dbPath);
+    try { expect(new SqliteMessagingRequestStore(db.raw).get(source.ref)).toBeUndefined(); }
+    finally { db.close(); removeTempStateDbDir(original.tempDir); removeTempStateDbDir(copied.tempDir); }
   });
 
   it("does not let mixed principals/surfaces acquire the last sender's authority", () => {

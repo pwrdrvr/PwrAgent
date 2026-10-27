@@ -118,6 +118,7 @@ import type {
 } from "./messaging-agent-tool-service";
 
 export type DesktopMessagingAdapter = {
+  retainedSourceConnectionId?: MessagingAdapter["retainedSourceConnectionId"];
   authorizeRetainedSource?: MessagingAdapter["authorizeRetainedSource"];
   authorizedActorIds: readonly string[];
   capabilityProfile: MessagingCapabilityProfile;

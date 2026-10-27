@@ -116,6 +116,8 @@ export type MessagingActiveBackendTurn = {
 export type MessagingThreadAdmissionState = ThreadAdmissionState;
 
 export type MessagingAdapter = {
+  /** Stable provider account/workspace identity, never a credential or username. */
+  retainedSourceConnectionId?(): string | undefined;
   /** Reapply provider admission to a retained source without dispatching a new inbound event. */
   authorizeRetainedSource?(event: MessagingInboundEvent, verifyAccess?: boolean): boolean | undefined | Promise<boolean | undefined>;
   capabilityProfile: MessagingCapabilityProfile;

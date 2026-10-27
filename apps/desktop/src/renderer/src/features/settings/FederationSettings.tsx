@@ -1874,6 +1874,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   launchpad_metadata: "read launchpad Git metadata",
   federated_search: "search remote threads",
   messaging_route: "route messaging threads",
+  messaging_destinations: "retain messaging destinations",
   pwrsnap_connection: "read PwrSnap availability",
   gateway_relay: "reach sibling instances",
   remote_pty: "remote terminal protocol",

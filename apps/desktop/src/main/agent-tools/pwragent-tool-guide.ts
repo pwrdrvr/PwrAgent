@@ -17,6 +17,8 @@ Use get_forge_status and the CI read tools to inspect forge data.
 Use the PwrAgent forge tools to open, edit, read back, comment on, review and merge GitHub pull requests and GitLab merge requests, and to work with issues.
 Prefer them to the gh and glab CLIs and to GitHub connectors. If one is declined or off, do not work around it.
 Use get_current_messaging_surface before a messaging action.
+For delegated or completion turns without a live inbound origin, use list_messaging_surfaces and attach_thread_to_surface.
+Prefer the causal recommendation over unrelated newer traffic. Sole-surface selection requires complete discovery.
 Send messages or files only when authorized.
 Use search_mcp_tools to find tools on selected connections.
 Use call_mcp_tool with the returned identity and schemaRevision.

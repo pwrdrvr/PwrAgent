@@ -16545,11 +16545,12 @@ export class MessagingController {
   }
 
   private rememberHumanMessagingSource(binding: MessagingBindingRecord, event: MessagingInboundEvent): MessagingRequestSource | undefined {
-    if (!this.options.adapter.authorizeRetainedSource) return undefined;
+    const connectionId = this.options.adapter.retainedSourceConnectionId?.();
+    if (!this.options.adapter.authorizeRetainedSource || !connectionId) return undefined;
     return this.options.requestStore?.remember({
       agent: { backend: binding.backend, threadId: binding.threadId },
       bindingId: isDefaultAgentRouteBinding(binding) ? undefined : binding.id,
-      event, instanceId: this.options.sourceInstanceId,
+      event, instanceId: this.options.sourceInstanceId, connectionId,
     });
   }
 
@@ -18260,6 +18261,7 @@ export class MessagingController {
 
   private async retainedSourceIsAuthorized(source: MessagingRequestSource, verifyAccess = true): Promise<boolean | undefined> {
     if (!this.isChannelInScope(source.event.channel)
+      || !source.connectionId || source.connectionId !== this.options.adapter.retainedSourceConnectionId?.()
       || !this.options.adapter.authorizeRetainedSource) return false;
     const providerAdmission = await this.options.adapter.authorizeRetainedSource(source.event, verifyAccess);
     if (providerAdmission !== true) return providerAdmission;
@@ -18268,6 +18270,7 @@ export class MessagingController {
       if (!binding || binding.revokedAt || binding.backend !== source.agent.backend
         || binding.id !== source.bindingId || binding.threadId !== source.agent.threadId) return false;
     } else {
+      if (await this.options.store.findActiveBindingForChannel(source.event.channel)) return false;
       // The effective default route, not any older broader matching assignment,
       // must still name the Agent that admitted this human request.
       const assignment = await this.options.store.findActiveDefaultAgentAssignmentForChannel(source.event.channel);
@@ -18302,7 +18305,9 @@ export class MessagingController {
       || (request.args.limit !== undefined && (!Number.isInteger(request.args.limit) || request.args.limit < 1 || request.args.limit > 25))) {
       return { ok: false, error: { code: "invalid_arguments", message: "Provide a target backend/threadId and a limit between 1 and 25." } };
     }
-    const target = await this.resolveAttachTarget({ ...request.args, includeRemote: request.args.includeRemote !== false });
+    const canUseRemote = this.actorHasPermission(source.event, "federation.remote_control");
+    if (request.args.instanceId && !canUseRemote) return this.retainedSourceUnavailable(request.context);
+    const target = await this.resolveAttachTarget({ ...request.args, includeRemote: canUseRemote && request.args.includeRemote !== false });
     if (!target.ok) return target;
     let before: { at: number; selector: string } | undefined;
     if (request.args.cursor) {
@@ -18353,7 +18358,10 @@ export class MessagingController {
       result.recommendedSurfaceSelector = source.selector;
       result.selectionReason = "causal_request";
     } else if (result.surfaces.length) {
-      result.selectionReason = "ambiguous";
+      if (result.countIsComplete && result.surfaces.length === 1) {
+        result.selectionReason = "sole_eligible";
+        result.recommendedSurfaceSelector = result.surfaces[0]!.surfaceSelector;
+      } else result.selectionReason = "ambiguous";
     } else if (result.countIsComplete) result.selectionReason = "none";
     return { ok: true, data: result };
   }
@@ -18368,12 +18376,26 @@ export class MessagingController {
   ): Promise<PwrAgentMessagingResponse> {
     const source = this.retainedRequestSource(request.context);
     if (!source || !this.retainedRequestCanCrossInstance(request.context, source) || !this.retainedSourceHasPermissions(source)
-      || !await this.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(request.context);
-    const selector = request.args.surfaceSelector;
+      || !await this.retainedSourceIsAuthorized(source, false)) return this.retainedSourceUnavailable(request.context);
+    if (request.args.instanceId && !this.actorHasPermission(source.event, "federation.remote_control")) return this.retainedSourceUnavailable(request.context);
+    let selector = request.args.surfaceSelector;
+    if (request.args.selection !== undefined && !["causal", "sole_eligible"].includes(request.args.selection)) {
+      return { ok: false, error: { code: "invalid_arguments", message: "selection must be causal or sole_eligible." } };
+    }
+    if (request.args.selection === "sole_eligible") {
+      if (selector) return { ok: false, error: { code: "invalid_arguments", message: "Choose an explicit surfaceSelector or sole_eligible selection, not both." } };
+      const listed = await this.listRetainedMessagingSurfaces({ operation: "list_messaging_surfaces", context: request.context,
+        args: { ...request.args, limit: 25 } });
+      if (!listed.ok) return listed;
+      if (!("surfaces" in listed.data) || !listed.data.countIsComplete || listed.data.eligibleCount !== 1) {
+        return { ok: false, error: { code: "ambiguous_location", message: "Sole-surface selection requires a complete authorized candidate set with exactly one eligible destination. Inspect and select a destination explicitly." } };
+      }
+      selector = listed.data.surfaces[0]!.surfaceSelector;
+    }
     const selected = !selector || selector === source.selector ? source
       : this.options.requestStore?.destination(source, selector);
     if (!selected || !this.retainedSourceHasPermissions(selected)
-      || !await this.retainedSourceIsAuthorized(selected)) return this.retainedSourceUnavailable(request.context);
+      || !await this.retainedSourceIsAuthorized(selected, false)) return this.retainedSourceUnavailable(request.context);
     if (request.args.expectedRevision && request.args.expectedRevision !== selected.ref.requestId) {
       return { ok: false, error: { code: "forbidden", message: "The selected destination's human reply anchor changed. Inspect its current revision before attaching." } };
     }
@@ -18386,10 +18408,18 @@ export class MessagingController {
       request.args.placement ?? "auto", request.args.targetKind ?? "thread", request.args.title ?? null,
       request.args.idempotencyKey ?? null]);
     if (!claim) return this.retainedSourceUnavailable(request.context);
-    if (!claim.claimed) return claim.result ?? { ok: false, error: { code: "internal_error",
-      message: "This attachment was already claimed and its provider outcome is unresolved. Reconcile it before retrying; no second conversation was created." } };
+    if (!claim.claimed) {
+      if (!await this.retainedSourceIsAuthorized(selected)) return this.retainedSourceUnavailable(request.context);
+      if (claim.result?.ok && "binding" in claim.result.data) {
+        const binding = await this.options.store.getBinding(claim.result.data.binding.id);
+        if (!binding || binding.revokedAt) return this.retainedSourceUnavailable(request.context);
+      }
+      return claim.result ?? { ok: false, error: { code: "internal_error",
+        message: "This attachment was already claimed and its provider outcome is unresolved. Reconcile it before retrying; no second conversation was created." } };
+    }
     const result = await this.attachThreadHereFromAgentMessagingOrigin({
-      operation: "attach_thread_here", context: request.context, args: request.args,
+      operation: "attach_thread_here", context: request.context,
+      args: { ...request.args, includeRemote: this.actorHasPermission(source.event, "federation.remote_control") && request.args.includeRemote !== false },
     }, await this.originForRetainedSource(selected));
     this.options.requestStore!.finishAttachment(claim.id, result);
     return result;
@@ -18503,6 +18533,8 @@ export class MessagingController {
 
     let attachEvent = origin.origin.event;
     let createdConversation: MessagingChannelRef["conversation"] | undefined;
+    if (retainedOrigin?.source && (!this.retainedSourceHasPermissions(retainedOrigin.source)
+      || !await this.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
     if (resolvedPlacement.placement === "new_child") {
       if (!this.options.adapter.createManagedConversation) {
         return {
@@ -18549,6 +18581,8 @@ export class MessagingController {
       };
     }
 
+    if (retainedOrigin?.source && (!this.retainedSourceHasPermissions(retainedOrigin.source)
+      || !await this.retainedSourceIsAuthorized(retainedOrigin.source))) return this.retainedSourceUnavailable(request.context);
     const binding = await this.bindChannelToThread(attachEvent, {
       backend: args.backend,
       federatedThread: target.federatedThread,
@@ -22429,6 +22463,8 @@ function summarizeMessagingConversation(
     id: conversation.id,
     kind: conversation.kind,
     parentId: conversation.parentId,
+    parentConversationId: conversation.parentConversationId,
+    workspaceId: conversation.workspaceId,
     title: conversation.title,
     parentTitle: conversation.parentTitle,
     ancestorTitle: conversation.ancestorTitle,

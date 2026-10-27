@@ -1275,6 +1275,11 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
   }
 
+  retainedSourceConnectionId(): string | undefined {
+    return this.workspaceId && (this.botId || this.botUserId)
+      ? `${this.workspaceId}:${this.botId ?? this.botUserId}` : undefined;
+  }
+
   async createManagedConversation(
     request: MessagingManagedConversationCreateRequest,
   ): Promise<MessagingManagedConversationCreateResult> {

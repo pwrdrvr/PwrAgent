@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { realpathSync } from "node:fs";
 import type Database from "better-sqlite3";
 import type { AppServerBackendKind, MessagingCausalSourceRef, PwrAgentMessagingResponse } from "@pwragent/shared";
 import type { MessagingChannelRef, MessagingInboundEvent } from "@pwragent/messaging-interface";
@@ -27,6 +28,7 @@ export type MessagingRequestSource = {
   principalScope: string;
   agent: { backend: AppServerBackendKind; threadId: string };
   bindingId?: string;
+  connectionId?: string;
   route: "binding" | "default";
   /** Only routing and admission identity, never message text, attachments or credentials. */
   event: MessagingInboundEvent;
@@ -72,19 +74,25 @@ export class SqliteMessagingRequestStore {
   constructor(private readonly db: Database.Database) {
     // Setup is outside the feature write budget; concurrent profile users share it.
     db.prepare("INSERT OR IGNORE INTO messaging_request_owner(singleton, owner_id) VALUES (1, ?)").run(randomUUID());
-    this.ownerId = (db.prepare("SELECT owner_id FROM messaging_request_owner WHERE singleton = 1").get() as { owner_id: string }).owner_id;
+    const persistedOwner = (db.prepare("SELECT owner_id FROM messaging_request_owner WHERE singleton = 1").get() as { owner_id: string }).owner_id;
+    // Copying a profile database must not copy its messaging authority into a
+    // different profile. Processes opening this same file still share identity.
+    this.ownerId = digest([persistedOwner, db.name === ":memory:" ? db.name : realpathSync(db.name)]);
   }
 
   remember(params: {
     agent: MessagingRequestSource["agent"];
     bindingId?: string;
+    connectionId?: string;
     event: MessagingInboundEvent;
     instanceId?: string;
   }): MessagingRequestSource | undefined {
     if (params.event.actor.isBot || params.event.observedOnly
       || !["text", "media", "command", "callback"].includes(params.event.kind)) return undefined;
     const event = routingSnapshot(params.event);
-    const principalScope = digest([this.ownerId, params.agent.backend, params.agent.threadId, event.actor.platformUserId]);
+    const principalScope = digest([this.ownerId, event.channel.channel,
+      event.channel.conversation.workspaceId ?? null, params.connectionId ?? null,
+      params.agent.backend, params.agent.threadId, event.actor.platformUserId]);
     const selector = digest([principalScope, messagingDestinationIdentity(event.channel)]);
     const requestId = digest([selector, event.id]);
     const existing = this.get({ ownerId: this.ownerId, requestId });
@@ -95,6 +103,7 @@ export class SqliteMessagingRequestStore {
       principalScope,
       agent: params.agent,
       ...(params.bindingId ? { bindingId: params.bindingId } : {}),
+      ...(params.connectionId ? { connectionId: params.connectionId } : {}),
       route: params.bindingId ? "binding" : "default",
       event,
     };

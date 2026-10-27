@@ -3156,6 +3156,7 @@ type TaskMonitorCancellationState = {
 };
 
 type TaskMonitorDelegationRecord = {
+  causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
   activeCommandCount: number;
   backend: AppServerBackendKind;
   createdAt: number;
@@ -34336,6 +34337,7 @@ export class DesktopBackendRegistry {
       monitorId: record.monitorId,
     });
     const subAgent: ThreadSubAgentSummary = {
+      ...record.causalContext,
       monitorId: record.monitorId,
       task: record.task,
       status:
@@ -41281,11 +41283,12 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId?: string;
   }): Promise<AppServerThreadMessageOrigin> {
+    const causalContext = await this.readCausalMessagingContext(params);
     const sourceThread = await this.resolveThread(params).catch(() => undefined);
     const sourceTitle = sourceThread?.title.trim();
     return {
       kind: "agent",
-      ...await this.readCausalMessagingContext(params),
+      ...causalContext,
       sourceThread: {
         backend: params.backend,
         threadId: params.threadId,
@@ -41990,6 +41993,7 @@ export class DesktopBackendRegistry {
     const sourceBackend = request.context.backend;
     const sourceThreadId = request.context.threadId;
     const sourceTurnId = request.context.turnId?.trim();
+    const causalContext = await this.readCausalMessagingContext(request.context);
     if (
       !sourceTurnId ||
       !this.isLiveDynamicToolCall(sourceBackend, {
@@ -42574,7 +42578,7 @@ export class DesktopBackendRegistry {
     });
     const messageOrigin: AppServerThreadMessageOrigin = {
       kind: "agent",
-      ...await this.readCausalMessagingContext({ backend: sourceBackend, threadId: sourceThreadId, turnId: sourceTurnId }),
+      ...causalContext,
       sourceThread: {
         backend: sourceBackend,
         threadId: sourceThreadId,
@@ -43155,6 +43159,7 @@ export class DesktopBackendRegistry {
     args: CreateMonitorDelegationToolArgs,
   ): Promise<TaskMonitorResponse<"create_monitor_delegation">> {
     const parentThreadId = context.threadId;
+    const causalContext = await this.readCausalMessagingContext(context);
     const task = args.task?.trim();
     if (!task) {
       return taskMonitorFailure("create_monitor_delegation", "invalid_arguments", "task is required.");
@@ -43242,6 +43247,7 @@ export class DesktopBackendRegistry {
       });
     }
     const record: TaskMonitorDelegationRecord = {
+      causalContext,
       activeCommandCount: 0,
       backend: context.backend,
       createdAt: Date.now(),
@@ -43278,6 +43284,7 @@ export class DesktopBackendRegistry {
     try {
       startedMonitor = await this.startManagedTaskMonitor({
         context,
+        causalContext,
         cwd: args.cwd,
         monitorId,
         preferredModel,
@@ -43668,6 +43675,7 @@ export class DesktopBackendRegistry {
   }
 
   private async startManagedTaskMonitor(params: {
+    causalContext?: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
     context: TaskMonitorRequest<"create_monitor_delegation">["context"];
     cwd?: string;
     monitorId: string;
@@ -43784,7 +43792,7 @@ export class DesktopBackendRegistry {
         model: params.runtimeModel,
         reasoningEffort,
       });
-      const causalContext = await this.readCausalMessagingContext(params.context);
+      const causalContext = params.causalContext ?? {};
       if (causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous) {
         await this.persistThreadMessageOrigin({ backend: params.context.backend, threadId: turn.threadId,
           messageId: buildTurnUserMessageOriginId(turn.turnId), origin: { kind: "sub-agent", ...causalContext } });
@@ -43856,7 +43864,7 @@ export class DesktopBackendRegistry {
       parentThreadId: params.context.threadId,
     });
 
-    const causalContext = await this.readCausalMessagingContext(params.context);
+    const causalContext = params.causalContext ?? {};
     if (causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous) {
       await this.persistThreadMessageOrigin({ backend: "codex", threadId: turn.threadId,
         messageId: buildTurnUserMessageOriginId(turn.turnId), origin: { kind: "sub-agent", ...causalContext } });
@@ -44066,9 +44074,7 @@ export class DesktopBackendRegistry {
         summary: params.summary,
         task: params.record.task,
       });
-      Object.assign(messageOrigin, await this.readCausalMessagingContext({
-        backend: params.record.parentBackend, threadId: params.record.parentThreadId, turnId: params.record.parentTurnId,
-      }));
+      Object.assign(messageOrigin, params.record.causalContext);
       const parentWake = {
         backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,

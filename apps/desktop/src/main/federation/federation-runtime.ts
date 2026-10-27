@@ -3549,7 +3549,7 @@ export class DesktopFederationRuntime {
           : undefined),
       methodCapabilities: {
         ...FEDERATION_BACKEND_METHOD_CAPABILITIES,
-        [FEDERATION_MESSAGING_DESTINATION_METHOD]: "messaging_destinations",
+        [FEDERATION_MESSAGING_DESTINATION_METHOD]: "messaging_route",
         ...FEDERATION_THREAD_TODO_CAPABILITIES,
         ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
@@ -3562,7 +3562,7 @@ export class DesktopFederationRuntime {
         [FILE_RESOLVE_TRANSCRIPT_METHOD]: "file_pull",
       },
       additionalRequiredCapabilities: (envelope) => envelope.method === FEDERATION_MESSAGING_DESTINATION_METHOD
-        ? ["messaging_route", "thread_navigation"]
+        ? ["thread_navigation"]
         : envelope.method === FEDERATION_THREAD_TODO_METHODS.runAction
         ? ["environment_actions"]
         : envelope.method === THREAD_HANDOFF_METHODS.import

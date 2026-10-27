@@ -1612,6 +1612,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
   }
 
+  retainedSourceConnectionId(): string | undefined {
+    return this.configuredBotId();
+  }
+
   async createManagedConversation(
     request: MessagingManagedConversationCreateRequest,
   ): Promise<MessagingManagedConversationCreateResult> {

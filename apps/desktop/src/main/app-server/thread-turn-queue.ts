@@ -321,7 +321,7 @@ export class ThreadTurnQueue {
         ],
         input: groupedAgentInput(messages),
         messageOrigin: { ...input.messageOrigin, kind: "agent",
-          ...mergeCausalMessagingContext(messages.map((message) => message.origin)) },
+          ...mergeCausalMessagingContext(current ? [current.messageOrigin, message.origin] : [message.origin]) },
         ...(holdReason ? { manualReleaseRequired: true, holdReason } : {}),
       };
       if (

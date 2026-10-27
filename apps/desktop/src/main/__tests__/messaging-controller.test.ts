@@ -6165,7 +6165,7 @@ describe("MessagingController", () => {
       await harness.store.upsertBinding({ id: "manager-binding", backend: "codex", threadId: "thread-1", targetKind: "agent_thread",
         channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
       await harness.controller.handleInboundEvent(event);
-      const source = requests.remember({ agent: { backend: "codex", threadId: "thread-1" }, bindingId: "manager-binding", event })!;
+      const source = requests.remember({ connectionId: "fixture", agent: { backend: "codex", threadId: "thread-1" }, bindingId: "manager-binding", event })!;
       expect(harness.startTurn).toHaveBeenCalledWith(expect.objectContaining({ messageOrigin: expect.objectContaining({ causalMessagingSource: source.ref }) }));
       await harness.controller.handleBackendEvent({ backend: "codex", notification: { method: "turn/completed",
         params: { threadId: "thread-1", turnId: "turn-1", turn: { id: "turn-1", status: "completed", output: [] } } } });
@@ -6177,7 +6177,7 @@ describe("MessagingController", () => {
         .toMatchObject({ ok: true, data: { eligibleCount: 1, countIsComplete: true,
           selectionReason: "causal_request", recommendedSurfaceSelector: source.selector } });
       const request = { operation: "attach_thread_to_surface" as const, context,
-        args: { backend: "codex" as const, threadId: "thread-1", placement: "new_child" as const } };
+        args: { backend: "codex" as const, threadId: "thread-1", placement: "new_child" as const, selection: "sole_eligible" as const } };
       expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({ ok: true, data: { outcome: "created_and_attached" } });
       expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({ ok: true });
       expect(createManagedConversation).toHaveBeenCalledTimes(1);
@@ -6203,7 +6203,7 @@ describe("MessagingController", () => {
         await harness.store.upsertBinding({ id: `binding-${id}`, backend: "codex", threadId: "thread-1", targetKind: "agent_thread",
           channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
         await harness.controller.handleInboundEvent(event);
-        if (id === "C4") root = requests.remember({ agent: { backend: "codex", threadId: "thread-1" }, bindingId: "binding-C4", event });
+        if (id === "C4") root = requests.remember({ connectionId: "fixture", agent: { backend: "codex", threadId: "thread-1" }, bindingId: "binding-C4", event });
       }
       const context = { backend: "codex" as const, threadId: "thread-1", turnId: "child-completion", causalMessagingSource: root!.ref };
       const listed = await harness.controller.handlePwrAgentMessagingRequest({ operation: "list_messaging_surfaces", context,
@@ -6211,6 +6211,14 @@ describe("MessagingController", () => {
       expect(listed).toMatchObject({ ok: true, data: { eligibleCount: 5, recommendedSurfaceSelector: root!.selector } });
       if (!listed.ok || !("surfaces" in listed.data)) throw new Error("Missing destination list");
       expect(listed.data.surfaces.map((s) => s.location.conversation.id)).toEqual(["C1", "C2", "C3", "C5", "C4"]);
+      const page = await harness.controller.handlePwrAgentMessagingRequest({ operation: "list_messaging_surfaces", context,
+        args: { backend: "codex", threadId: "thread-1", placement: "new_child", limit: 1 } });
+      expect(page).toMatchObject({ ok: true, data: { countIsComplete: false, eligibleCount: null,
+        recommendedSurfaceSelector: root!.selector, nextCursor: expect.any(String), surfaces: [expect.objectContaining({ location: expect.objectContaining({ conversation: expect.objectContaining({ id: "C1" }) }) })] } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", context,
+        args: { backend: "codex", threadId: "thread-1", placement: "new_child", selection: "sole_eligible" } }))
+        .toMatchObject({ ok: false, error: { code: "ambiguous_location" } });
+      expect(createManagedConversation).not.toHaveBeenCalled();
       expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", context,
         args: { backend: "codex", threadId: "thread-1", placement: "new_child" } })).toMatchObject({ ok: true });
       expect(createManagedConversation).toHaveBeenCalledWith(expect.objectContaining({ parent: expect.objectContaining({ conversation: expect.objectContaining({ id: "C4" }) }) }));
@@ -6227,7 +6235,7 @@ describe("MessagingController", () => {
       const event = buildTextEvent("attach", { botMention: true, channel: buildTopicChannel("400") });
       await seedConversationDefaultAgent(harness.store, event.channel);
       await harness.controller.handleInboundEvent(event);
-      const source = requests.remember({ agent: { backend: "codex", threadId: "thread-1" }, event })!;
+      const source = requests.remember({ connectionId: "fixture", agent: { backend: "codex", threadId: "thread-1" }, event })!;
       expect(await harness.store.findActiveBindingsForThread({ backend: "codex", threadId: "thread-1" })).toHaveLength(0);
       const context = { backend: "codex" as const, threadId: "thread-1", turnId: "completion", causalMessagingSource: source.ref };
       const args = { backend: "codex" as const, threadId: "thread-1", placement: "current_conversation" as const };
@@ -6238,6 +6246,31 @@ describe("MessagingController", () => {
       expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", args,
         context: { ...context, causalMessagingAmbiguous: true } })).toMatchObject({ ok: false, error: { code: "ambiguous_location" } });
       expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface", context, args })).toMatchObject({ ok: true });
+    } finally { db.close(); }
+  });
+
+  it("rechecks revocation after provider preflight and before creating a retained destination", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      let authorized = true;
+      const createManagedConversation = vi.fn(async () => ({ channel: "telegram" as const, outcome: "created" as const,
+        conversation: buildTopicChannel("200").conversation, updatedAt: 2000 }));
+      const harness = await createHarness({ requestStore: requests, authorizeRetainedSource: () => authorized, createManagedConversation,
+        getManagedConversationRights: async () => {
+          authorized = false;
+          return { channel: "telegram", conversation: buildTopicChannel("100").conversation,
+            operations: [{ operation: "create_child", supported: true }], outcome: "ok", updatedAt: 1000 };
+        } });
+      const event = buildTextEvent("attach", { channel: buildTopicChannel("100") });
+      await harness.store.upsertBinding({ id: "manager-binding", backend: "codex", threadId: "thread-1", targetKind: "agent_thread",
+        channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+      await harness.controller.handleInboundEvent(event);
+      const source = requests.remember({ connectionId: "fixture", agent: { backend: "codex", threadId: "thread-1" }, bindingId: "manager-binding", event })!;
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "attach_thread_to_surface",
+        context: { backend: "codex", threadId: "thread-1", turnId: "completion", causalMessagingSource: source.ref },
+        args: { backend: "codex", threadId: "thread-1", placement: "new_child" } })).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(createManagedConversation).not.toHaveBeenCalled();
     } finally { db.close(); }
   });
 
@@ -27036,6 +27069,7 @@ async function createHarness<
   const store = (options?.store ?? await createStore()) as Store;
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter: MessagingAdapter = {
+    retainedSourceConnectionId: options?.authorizeRetainedSource ? () => "fixture" : undefined,
     authorizeRetainedSource: options?.authorizeRetainedSource,
     capabilityProfile: options?.capabilityProfile ?? PERMISSIVE_CAPABILITY_PROFILE,
     ...(options?.downloadAttachment
