@@ -7,6 +7,14 @@ let mode = CommandLine.arguments[1]
 if mode == "finder" {
   guard let target = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first else { exit(2) }
   print(target.processIdentifier)
+} else if mode == "frontmost" {
+  // The app that owns activation, for traces when a focus is not granted.
+  let app = NSWorkspace.shared.frontmostApplication
+  let row: [String: Any] = [
+    "pid": app?.processIdentifier ?? -1,
+    "bundle": app?.bundleIdentifier ?? NSNull(),
+  ]
+  print(String(data: try JSONSerialization.data(withJSONObject: row), encoding: .utf8)!)
 } else {
   let pid = Int32(CommandLine.arguments[2])!
   if mode == "order" {
