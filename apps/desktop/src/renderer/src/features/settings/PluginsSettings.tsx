@@ -2305,6 +2305,24 @@ function ManagedMcpConnectionRow(props: {
   const refreshSandboxerRef = useRef(props.onAuthorize);
   refreshSandboxerRef.current = props.onAuthorize;
   const authorizing = props.authorizing;
+  const changeSandboxerTransport = async (transport: SandboxerTransport, connect = false) => {
+    const change = props.desktopApi?.setSandboxerTransport;
+    if (!change || transportBusy) return;
+    setTransportBusy(true);
+    setSandboxerSetupOpen(true);
+    try {
+      await change({ transport });
+      props.onChanged();
+      if (connect) props.onAuthorize();
+    } catch (cause) {
+      props.onNotice({ kind: "error", text: cause instanceof Error ? cause.message : String(cause) });
+    } finally {
+      setTransportBusy(false);
+    }
+  };
+  const connectHosted = props.desktopApi?.setSandboxerTransport
+    ? () => void changeSandboxerTransport("hosted", true)
+    : undefined;
   useEffect(() => {
     if (!sandboxerSetupPending || authorizing) return;
     const refresh = () => refreshSandboxerRef.current();
@@ -2320,6 +2338,8 @@ function ManagedMcpConnectionRow(props: {
       <SandboxerCompactRow
         desktopApi={props.desktopApi}
         onNotice={props.onNotice}
+        disabled={disabled}
+        onConnect={connectHosted}
         onSetUp={() => setSandboxerSetupOpen(true)}
       />
     );
@@ -2412,6 +2432,11 @@ function ManagedMcpConnectionRow(props: {
             <>
               {localSandboxer ? (
                 <>
+                  {!connection.configured && connectHosted ? (
+                    <button className="button button--secondary" disabled={disabled} type="button" onClick={connectHosted}>
+                      Connect Sandboxer
+                    </button>
+                  ) : null}
                   <SandboxerSetupAction
                     connection={connection}
                     desktopApi={props.desktopApi}
@@ -2632,15 +2657,7 @@ function ManagedMcpConnectionRow(props: {
               { value: "hosted", label: "Hosted · browser sign-in" },
               { value: "local_cli", label: "Local CLI · existing login or API key" },
             ]}
-            onChange={(value) => {
-              setTransportBusy(true);
-              void props.desktopApi!.setSandboxerTransport!({ transport: value as SandboxerTransport })
-                .then(() => props.onChanged())
-                .catch((cause: unknown) => props.onNotice({
-                  kind: "error", text: cause instanceof Error ? cause.message : String(cause),
-                }))
-                .finally(() => setTransportBusy(false));
-            }}
+            onChange={(value) => void changeSandboxerTransport(value as SandboxerTransport)}
           />
         </label>
       ) : null}

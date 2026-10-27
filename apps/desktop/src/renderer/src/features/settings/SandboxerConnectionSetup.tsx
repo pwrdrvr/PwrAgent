@@ -341,6 +341,8 @@ export function SandboxerDrawerDetail(props: {
  * with chips and switches for a service they may never use.
  */
 export function SandboxerCompactRow(props: {
+  disabled?: boolean;
+  onConnect?: () => void;
   desktopApi?: DesktopApi;
   onNotice: (notice: Notice) => void;
   onSetUp: () => void;
@@ -362,8 +364,14 @@ export function SandboxerCompactRow(props: {
             variant="inline"
             onNotice={props.onNotice}
           />
+          {props.onConnect ? (
+            <button className="button button--secondary" disabled={props.disabled} type="button" onClick={props.onConnect}>
+              Connect Sandboxer
+            </button>
+          ) : null}
           <button
             aria-label="Set up Sandboxer"
+            disabled={props.disabled}
             className="button button--secondary"
             type="button"
             onClick={props.onSetUp}

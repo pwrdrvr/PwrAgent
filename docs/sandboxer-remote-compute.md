@@ -51,7 +51,9 @@ opt-in and are not changed by sign-in or a method change.
 
 ### Optional local CLI
 
-Profiles with existing Sandboxer preferences retain local mode. It launches
+Profiles with existing Sandboxer preferences retain local mode. An unconfigured
+local profile also offers **Connect Sandboxer**, which explicitly switches to
+hosted mode and opens browser sign-in without requiring CLI setup. Local mode launches
 `/usr/local/bin/sbx mcp --type small --ttl 1800 --no-update` and reads
 `/usr/local/bin/sbx status --json --no-update`, with the existing bounded cache.
 PwrAgent does not read CLI credential files or own the CLI's login. Local mode

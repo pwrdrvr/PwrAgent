@@ -2,7 +2,7 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 
-test("fresh Sandboxer setup offers hosted sign-in without a local CLI", async ({}, testInfo) => {
+test("fresh Sandboxer setup offers hosted sign-in without a local CLI", async ({ browserName: _browserName }, testInfo) => {
   const app = await launchElectronApp({
     fixturePath: path.join(import.meta.dirname, "fixtures/smoke/replay.fixture.json"),
   });

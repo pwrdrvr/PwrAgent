@@ -97,7 +97,10 @@ export function SandboxerConnectionPrompt(props: {
   // A main without the built-in connection has nothing to offer.
   if (!read || connection === null) return null;
 
-  const ready = connection?.configured === true && connection.enabled;
+  const needsSignIn = !connection?.configured
+    || connection.state === "disconnected"
+    || connection.state === "reauthorization_required";
+  const ready = Boolean(connection?.enabled && !needsSignIn);
   const backendSupported = backendLoadsMcpConnections(props.backend);
   const state = connection?.sandboxerCliState;
   const limited = isSandboxerAccountLimited(state);
@@ -111,7 +114,7 @@ export function SandboxerConnectionPrompt(props: {
     [line, tone] = [readError, "error"];
   } else if (!connection) {
     // Checking; the pitch says what this is meanwhile.
-  } else if (connection.authMode === "oauth" && !connection.configured) {
+  } else if (connection.authMode === "oauth" && needsSignIn) {
     [line, tone] = ["Sign in to Sandboxer in Settings", "state"];
   } else if (state === "cli_missing") {
     // An ad: the pitch, and Get Sandboxer.

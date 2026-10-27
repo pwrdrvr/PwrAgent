@@ -615,6 +615,7 @@ export function disposeMcpConnectionIpcHandlers(): void {
   ipcMain.removeHandler(MCP_CONNECTION_SET_SELECT_FOR_NEW_THREADS_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_TOOL_APPROVAL_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_CLEANUP_ON_PR_CLOSE_CHANNEL);
+  ipcMain.removeHandler(MCP_CONNECTION_SET_SANDBOXER_TRANSPORT_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_CREATE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_AUTHORIZE_CHANNEL);
   ipcMain.removeHandler(MCP_CONNECTION_SANDBOXER_OPEN_CHANNEL);
