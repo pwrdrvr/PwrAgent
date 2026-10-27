@@ -81,6 +81,19 @@ describe("codexModelProviderImportsFromConfig", () => {
     expect(entry).toMatchObject({ sourceId: "gpu", compatibility: "bonsai", notes: [expect.stringContaining("compatibility bridge")] });
   });
 
+  it("retains a named profile's catalog and blocks conflicting catalogs for one provider", () => {
+    const config = [
+      'model_provider = "bonsai"', 'model = "Bonsai.gguf"', '[model_providers.bonsai]',
+      'base_url = "http://localhost:8080/v1"', '[profiles.local]', 'model_catalog_json = "models.json"',
+    ];
+    expect(importsFrom(config.join("\n"))[0]).toMatchObject({
+      compatibility: "bonsai", catalogPath: "/home/me/.codex/profiles/bonsai/models.json",
+    });
+    expect(importsFrom([...config, '[profiles.other]', 'model_catalog_json = "other.json"'].join("\n"))[0]).toMatchObject({
+      reason: expect.stringContaining("different model catalogs"),
+    });
+  });
+
   it("does not assume every local GGUF endpoint needs Bonsai's compatibility settings", () => {
     const [entry] = importsFrom([
       "model_provider = \"gpu\"",

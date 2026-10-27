@@ -213,7 +213,9 @@ export function codexModelProviderImportsFromConfig(
     const localBonsai = isLoopbackCodexBaseUrl(baseUrl)
       && (/bonsai/iu.test(`${sourceId} ${name}`) || models.some((model) => /bonsai/iu.test(model)));
     const contexts = providerContexts(config, sourceId);
-    const supportedBonsai = localBonsai && models.length === 1 && contexts.every((context) =>
+    const catalogPaths = [...new Set(contexts.flatMap((context) => typeof context.model_catalog_json === "string"
+      ? [path.resolve(path.dirname(source.configPath), context.model_catalog_json)] : []))];
+    const supportedBonsai = localBonsai && models.length === 1 && catalogPaths.length <= 1 && contexts.every((context) =>
       (context.model_context_window === undefined || context.model_context_window === 65536)
       && (context.model_auto_compact_token_limit === undefined || context.model_auto_compact_token_limit === 49152)
       && ["model_reasoning_effort", "model_reasoning_summary"].every((key) => context[key] === undefined || context[key] === "none")
@@ -221,7 +223,8 @@ export function codexModelProviderImportsFromConfig(
       && (!isCodexTomlTable(context.features) || ["multi_agent", "goals", "apps", "plugins", "image_generation"]
         .every((key) => (context.features as CodexTomlTable)[key] !== true)));
     if (!supportedBonsai && (localBonsai || compatibility.length > 0)) {
-      const requirements = compatibility.length ? ` It sets ${compatibility.join(", ")}.` : "";
+      const requirements = (compatibility.length ? ` It sets ${compatibility.join(", ")}.` : "")
+        + (catalogPaths.length > 1 ? " Its profiles select different model catalogs for the same provider." : "");
       return {
         ...skip(
           localBonsai
@@ -265,9 +268,7 @@ export function codexModelProviderImportsFromConfig(
       notes,
       sources: [source],
       ...(supportedBonsai ? { compatibility: "bonsai" as const } : {}),
-      ...(supportedBonsai && typeof contexts[0]?.model_catalog_json === "string" ? {
-        catalogPath: path.resolve(path.dirname(source.configPath), contexts[0].model_catalog_json),
-      } : {}),
+      ...(supportedBonsai && catalogPaths.length ? { catalogPath: catalogPaths[0] } : {}),
     };
   });
 }

@@ -8342,7 +8342,7 @@ export class CodexAppServerClient {
 
   /**
    * Repairs the protocol-identified rollout, which requires stopping this
-   * app-server process: it is the profile's only writer, and Codex unloads an
+   * app-server process: it owns this thread's live writer, and Codex unloads an
    * unsubscribed thread (closing its writer) only after an idle delay — a
    * fixed 30 minutes in 0.153. A stopped stdio app-server sends no terminal
    * for the turns it was running, so the stop waits until no turn runs here.

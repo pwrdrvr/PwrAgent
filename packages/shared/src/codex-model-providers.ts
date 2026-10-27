@@ -2,10 +2,12 @@
  * Model providers that Codex runs threads on besides its default provider.
  *
  * A provider is an OpenAI Responses-compatible endpoint (Refuseless, a second
- * OpenAI API key, a local llama.cpp server). PwrAgent gives it to the single
+ * OpenAI API key, a local llama.cpp server). PwrAgent gives it to a
  * Codex App Server as a `model_providers.<id>` table and pins a thread to it
  * with `thread/start.modelProvider`. Codex then reports `Thread.modelProvider`
  * on every read.
+ * Ordinary providers share the primary runtime. Bonsai compatibility runs in
+ * a separate client and process so its catalog and feature limits stay local.
  *
  * Every PwrAgent surface names one of these models with a qualified id,
  * `@<provider>/<model>`. Codex model ids never start with `@`, so the prefix

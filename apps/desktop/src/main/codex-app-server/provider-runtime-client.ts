@@ -104,8 +104,8 @@ export function createProviderRuntimeClient(
     (client[method] as Callback).apply(client, args);
   const providerForThread = (threadId: string): string | undefined => {
     if (owners.has(threadId)) return owners.get(threadId);
-    return primary.modelProviderForThread(threadId)
-      ?? [...runtimes.values()].map((client) => client.modelProviderForThread(threadId)).find(Boolean);
+    return primary.modelProviderForThread?.(threadId)
+      ?? [...runtimes.values()].map((client) => client.modelProviderForThread?.(threadId)).find(Boolean);
   };
   const observe = (value: unknown, runtimeProvider?: string): void => {
     const fields = record(value);
@@ -172,7 +172,8 @@ export function createProviderRuntimeClient(
   attach(primary);
   return new Proxy(primary, {
     get(target, property) {
-      if (typeof property !== "string" || !(property in ROUTES)) return Reflect.get(target, property, target);
+      if (typeof property !== "string" || !Object.hasOwn(ROUTES, property)
+        || typeof Reflect.get(target, property, target) !== "function") return Reflect.get(target, property, target);
       const method = property as Method;
       const route = ROUTES[method];
       if (route === "status") return () => [primary, ...runtimes.values()]
