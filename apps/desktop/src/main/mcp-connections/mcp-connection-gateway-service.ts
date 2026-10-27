@@ -1591,7 +1591,7 @@ export class McpConnectionGatewayService {
       && !(connection.id === PWRSNAP_MCP_CONNECTION_ID && this.sessionRevoked)
     ) {
       throw new Error(
-        connection.kind === "sandboxer" || connection.kind === "stdio" ? status.detail
+        connection.authMode === "local_cli" || connection.kind === "stdio" ? status.detail
           : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
       );
     }
@@ -3004,7 +3004,7 @@ export class McpConnectionGatewayService {
       const status = await this.connectionStatus(connection);
       if (!status.configured) {
         throw new Error(
-          connection.kind === "sandboxer" || connection.kind === "stdio" ? status.detail
+          connection.authMode === "local_cli" || connection.kind === "stdio" ? status.detail
             : `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,
         );
       }

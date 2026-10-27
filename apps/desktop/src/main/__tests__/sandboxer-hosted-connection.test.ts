@@ -127,6 +127,32 @@ describe("built-in Sandboxer hosted connection", () => {
     await expect(f.service.disconnectConnection(id)).resolves.toMatchObject({ configured: false, enabled: true });
   });
 
+  it.each(["bridge", "broker", "cleanup"] as const)(
+    "keeps a sign-in remedy for %s registration after hosted Disconnect",
+    async (registrationPath) => {
+      const f = fixture();
+      const id = SANDBOXER_MCP_CONNECTION_ID;
+      await f.service.authorizeConnection(id);
+      await Promise.all(f.callbacks);
+      await f.service.setConnectionEnabled(id, true);
+      const status = await f.service.disconnectConnection(id);
+      expect(status).toMatchObject({ configured: false, enabled: true });
+      expect(status.detail).toBeUndefined();
+      const broker = f.service as unknown as {
+        dispatchBrokerOperation: (operation: string, params: Record<string, unknown>) => Promise<unknown>;
+      };
+      const registration = registrationPath === "broker"
+        ? broker.dispatchBrokerOperation("broker/register", { connectionId: id, threadId: "fixture-thread" })
+        : registrationPath === "cleanup"
+          ? f.service.openPwrAgentToolSession({ connectionId: id, scopeKey: "fixture-cleanup", signal: new AbortController().signal })
+          : f.service.registerBridge(id, "fixture-thread");
+      await expect(registration).rejects.toThrow(
+        "Sandboxer is not connected to PwrAgent. Reauthorize it in Settings → Plugins.",
+      );
+      expect(f.cli).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps built-in ownership and rechecks selection for hosted tool calls", async () => {
     const f = fixture();
     await f.service.authorizeConnection(SANDBOXER_MCP_CONNECTION_ID);
