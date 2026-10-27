@@ -28,6 +28,8 @@ const REMOTE_INSTANCES_LABEL = "Remote Instances";
  */
 const MAX_INLINE_FEDERATION_PEERS = 5;
 
+export const ACTIVE_PROFILE_MENU_ITEM_ID = "active-profile";
+
 export type ApplicationMenuActions = {
   checkForUpdates: () => void;
   copyLocalDiagnosticsInfo: () => void;
@@ -254,6 +256,7 @@ function buildProfilesMenu(options: ApplicationMenuOptions): MenuItemConstructor
     .map((profile) => {
       const digit = shortcutDigits.get(profile.name);
       return {
+        id: profile.active ? ACTIVE_PROFILE_MENU_ITEM_ID : undefined,
         label: profile.displayName || profile.name,
         type: "checkbox",
         // Each profile runs in its own process with its own menu bar, so a
