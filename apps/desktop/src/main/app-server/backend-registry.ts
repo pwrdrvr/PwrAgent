@@ -23602,7 +23602,7 @@ export class DesktopBackendRegistry {
     params: ListThreadMcpServersRequest,
   ): Promise<ListThreadMcpServersResponse> {
     if (isAcpBackendId(params.backend)) {
-      throw new Error("MCP inventory is only available for Codex threads");
+      throw new Error("MCP inventory is only available for Codex and Claude threads");
     }
     const detail = params.detail ?? "toolsAndAuthOnly";
     if (params.backend === "claude") {

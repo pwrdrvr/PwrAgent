@@ -35,6 +35,7 @@ async function fixture(params: {
   messages?: () => AsyncGenerator<SDKMessage>;
   supportedCommands?: () => Promise<SlashCommand[]>;
   readCommands?: ClaudeBackendOptions["readCommands"];
+  readMcpServers?: ClaudeBackendOptions["readMcpServers"];
 } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-claude-commands-"));
   roots.push(root);
@@ -49,6 +50,7 @@ async function fixture(params: {
     discoverModels: async () => [],
     inspectInstallation: async () => ({ executable: "/fixture/claude", authStatus: "signed-in" as const }),
     readCommands: params.readCommands,
+    readMcpServers: params.readMcpServers,
     resolveEnv: async () => ({ PATH: "/fixture" }),
     emit: async (event) => { events.push(event); },
     request: async () => ({ decision: "accept" }),
@@ -131,5 +133,22 @@ describe("Claude slash commands", () => {
     expect(await f.backend.listCommands({ cwd: f.root })).toEqual([]);
     expect(readCommands).toHaveBeenCalledTimes(1);
     expect(await f.backend.listCommands({})).toEqual([]);
+  });
+});
+
+describe("Claude MCP inventory", () => {
+  it("asks Claude Code for its own config's servers while the thread is idle", async () => {
+    const readMcpServers = vi.fn(async () => [
+      { name: "acme-docs", status: "connected" as const, tools: [{ name: "search_docs" }] },
+      { name: "weather-lab", status: "needs-auth" as const },
+    ]);
+    const f = await fixture({ readMcpServers });
+    const { threadId } = await f.backend.startThread({ cwd: f.root, executionMode: "default" });
+
+    expect(await f.backend.listMcpServers(threadId)).toEqual([
+      { name: "acme-docs", authStatus: "unsupported", startupStatus: "ready", startupError: undefined, tools: ["search_docs"] },
+      { name: "weather-lab", authStatus: "notLoggedIn", startupStatus: "failed", startupError: undefined, tools: [] },
+    ]);
+    expect(readMcpServers).toHaveBeenCalledWith(expect.objectContaining({ executable: "/fixture/claude", cwd: f.root }));
   });
 });

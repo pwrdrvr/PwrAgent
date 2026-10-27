@@ -4656,7 +4656,9 @@ export function ThreadView(props: ThreadViewProps) {
         }
       />
 
-      {mcpInventoryRequest && selectedThread?.source === "codex" ? (
+      {mcpInventoryRequest
+        && (selectedThread?.source === "codex"
+          || selectedThread?.source === "claude") ? (
         <McpInventoryPanel
           desktopApi={props.desktopApi}
           onDismiss={() => setMcpInventoryRequest(undefined)}

@@ -3,7 +3,7 @@ import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  getSessionInfo, getSessionMessages, query, type AccountInfo, type Options, type Query, type SDKMessage,
+  getSessionInfo, getSessionMessages, query, type AccountInfo, type McpServerStatus, type Options, type Query, type SDKMessage,
   type SDKResultMessage, type SDKUserMessage, type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -20,7 +20,7 @@ import { toTranscriptImageProtocolUrl } from "../transcript-image-protocol";
 import { CLAUDE_SETUP_INSTRUCTIONS, claudeEnvironment, inspectClaudeInstallation, type ClaudeInstallation } from "./claude-executable";
 import { CLAUDE_EXIT_PLAN_TOOL, createClaudePermissionHandler, claudePermissionMode } from "./claude-permissions";
 import { createClaudeElicitationHandler } from "./claude-elicitation";
-import { claudeHarnessOptions, discoverClaudeModels, readClaudeMetadata } from "./claude-models";
+import { claudeHarnessOptions, discoverClaudeModels, readClaudeMcpServerStatus, readClaudeMetadata } from "./claude-models";
 import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
 import {
   claudeRateLimits, claudeStreamRateLimits, claudeTelemetry, claudeTurnUsage, liveClaudeRateLimits,
@@ -47,6 +47,7 @@ export type ClaudeBackendOptions = {
   inspectInstallation?: typeof inspectClaudeInstallation;
   discoverModels?: typeof discoverClaudeModels;
   readCommands?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<SlashCommand[]>;
+  readMcpServers?: (params: { executable: string; env: NodeJS.ProcessEnv; cwd: string }) => Promise<McpServerStatus[]>;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   emit: (event: AgentEvent) => Promise<void>;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
@@ -1791,10 +1792,22 @@ export class ClaudeBackend {
     return await probe;
   }
 
+  /**
+   * The thread's MCP servers. A running turn answers from its own session,
+   * which also holds the PwrAgent servers the turn added. An idle thread has
+   * no session, so Claude Code is asked once for its own config's servers.
+   */
   async listMcpServers(threadId: string): Promise<CodexMcpServerSummary[]> {
     const query = this.sessions.get(threadId)?.query;
-    if (!query) throw new Error("Claude MCP inventory is available while Claude is running.");
-    const servers = await query.mcpServerStatus();
+    let servers: McpServerStatus[];
+    if (query) {
+      servers = await query.mcpServerStatus();
+    } else {
+      const { cwd } = await this.store.read(threadId);
+      const executable = await this.requireInstallation();
+      const env = claudeEnvironment(await this.options.resolveEnv?.() ?? process.env);
+      servers = await (this.options.readMcpServers ?? readClaudeMcpServerStatus)({ executable, env, cwd });
+    }
     return servers.map((server) => ({
       name: server.name,
       authStatus: server.status === "needs-auth" ? "notLoggedIn" as const : "unsupported" as const,

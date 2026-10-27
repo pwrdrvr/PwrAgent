@@ -1999,6 +1999,14 @@ function mergeDerivedLocalFileInputs(
   return merged;
 }
 
+const MCP_ACCESS_TOOLTIP =
+  "Choose PwrAgent gateway connections for this thread. "
+  + "They are added to the agent's own MCP servers.";
+const CODEX_MCP_CONFIG_TOOLTIP =
+  "List the MCP servers Codex loads from its own config.";
+const CLAUDE_MCP_CONFIG_TOOLTIP =
+  "List the MCP servers Claude Code loads from its own settings, "
+  + ".mcp.json and plugins.";
 
 function ComposerThreadOptionsMenu(props: {
   agentThread: boolean;
@@ -2011,6 +2019,8 @@ function ComposerThreadOptionsMenu(props: {
   mcpConnectionCount?: number;
   onAgentThreadChange?: (agentThread: boolean) => void;
   onShowMcpInventory?: () => void;
+  /** Whose own MCP config the inventory row opens. */
+  mcpInventoryAgent?: "codex" | "claude";
   onShowMcpAccess?: () => void;
   /**
    * Effective Token Miser state for this thread. Undefined hides the item.
@@ -2253,20 +2263,37 @@ function ComposerThreadOptionsMenu(props: {
             </>
           ) : null}
           {props.onShowMcpAccess || props.onShowMcpInventory ? (
-            <div className="composer-dropdown__separator" role="separator" />
+            <>
+              <div className="composer-dropdown__separator" role="separator" />
+              {/* Two kinds of MCP servers reach a thread: PwrAgent gateway
+                  connections and the agent's own config. Each row names its
+                  owner so the two cannot be mistaken for each other. */}
+              <div
+                aria-hidden="true"
+                className="composer-dropdown__group-label composer-thread-options__group-label"
+              >
+                MCP
+              </div>
+            </>
           ) : null}
           {props.onShowMcpAccess ? (
             <button
               className="composer-dropdown__option composer-thread-options__option"
+              aria-describedby={menuTooltipVisible ? menuTooltipId : undefined}
               role="menuitem"
               type="button"
               onClick={() => {
+                hideMenuTooltip();
                 setOpen(false);
                 props.onShowMcpAccess?.();
               }}
+              onMouseEnter={(event) => {
+                showMenuTooltipAfterDelay(event.currentTarget, MCP_ACCESS_TOOLTIP);
+              }}
+              onMouseLeave={hideMenuTooltip}
             >
               <span className="composer-thread-options__label">
-                MCP access&hellip;
+                PwrAgent access&hellip;
                 <span className="composer-thread-options__note">
                   {props.mcpConnectionCount === undefined
                     ? ""
@@ -2282,12 +2309,26 @@ function ComposerThreadOptionsMenu(props: {
               className="composer-dropdown__option composer-thread-options__option"
               role="menuitem"
               type="button"
+              aria-describedby={menuTooltipVisible ? menuTooltipId : undefined}
               onClick={() => {
+                hideMenuTooltip();
                 setOpen(false);
                 props.onShowMcpInventory?.();
               }}
+              onMouseEnter={(event) => {
+                showMenuTooltipAfterDelay(
+                  event.currentTarget,
+                  props.mcpInventoryAgent === "claude"
+                    ? CLAUDE_MCP_CONFIG_TOOLTIP
+                    : CODEX_MCP_CONFIG_TOOLTIP,
+                );
+              }}
+              onMouseLeave={hideMenuTooltip}
             >
-              <span className="composer-thread-options__label">MCP tools</span>
+              <span className="composer-thread-options__label">
+                {props.mcpInventoryAgent === "claude" ? "Claude" : "Codex"}
+                {" config"}&hellip;
+              </span>
             </button>
           ) : null}
         </div>
@@ -3638,6 +3679,14 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     !isLaunchpad
     && props.thread?.source === "codex"
     && Boolean(props.onShowMcpInventory);
+  // The menu row also serves Claude. `/mcp` stays Codex-only: Claude Code
+  // has its own `/mcp` command.
+  const mcpInventoryAgent =
+    !isLaunchpad
+    && props.onShowMcpInventory
+    && (props.thread?.source === "codex" || props.thread?.source === "claude")
+      ? props.thread.source
+      : undefined;
   // No `/unlock`: a locked thread's composer is disabled, and its lock card
   // carries Unlock.
   const supportsLockCommand =
@@ -14532,8 +14581,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
                     }
                   : undefined
             }
+            mcpInventoryAgent={mcpInventoryAgent}
             onShowMcpInventory={
-              supportsMcpInventory
+              mcpInventoryAgent
                 ? () => props.onShowMcpInventory?.("toolsAndAuthOnly")
                 : undefined
             }

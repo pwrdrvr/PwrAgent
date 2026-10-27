@@ -132,9 +132,13 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
     (total, server) => total + server.tools.length,
     0,
   );
+  // Name the owner: these are the agent's own servers, not the PwrAgent
+  // gateway connections chosen under PwrAgent access.
+  const isClaude = props.thread.source === "claude";
+  const heading = isClaude ? "Claude MCP config" : "Codex MCP config";
   const title = loading
-    ? "MCP Tools"
-    : `MCP Tools · ${servers.length} server${servers.length === 1 ? "" : "s"}`
+    ? heading
+    : `${heading} · ${servers.length} server${servers.length === 1 ? "" : "s"}`
       + ` · ${toolCount} tool${toolCount === 1 ? "" : "s"}`;
 
   return (
@@ -156,6 +160,9 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
           <span className="live-work-rail__title">{title}</span>
         </button>
         <div className="live-work-rail__header-actions">
+          {/* Claude reads its config as each turn starts; only Codex queues
+              a reload. */}
+          {isClaude ? null : (
           <button
             type="button"
             className={
@@ -190,12 +197,13 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
               </>
             ) : reloading ? "Reloading…" : "Reload Config"}
           </button>
+          )}
           {reloadTooltip.tooltipNode}
           <button
             type="button"
             className="mcp-inventory-panel__dismiss"
-            aria-label="Close MCP tools"
-            title="Close MCP tools"
+            aria-label={`Close ${heading}`}
+            title={`Close ${heading}`}
             onClick={props.onDismiss}
           >
             <CloseIcon size={13} aria-hidden="true" />
@@ -203,6 +211,12 @@ export function McpInventoryPanel(props: McpInventoryPanelProps) {
         </div>
       </header>
       <div id={bodyId} className="live-work-rail__body" hidden={collapsed}>
+        <p className="mcp-inventory-panel__lede">
+          {isClaude
+            ? "Servers Claude Code loads from its own settings, .mcp.json and plugins."
+            : "Servers Codex loads from its own config."}
+          {" Gateway connections are under PwrAgent access."}
+        </p>
         {loading ? (
           <p className="mcp-inventory-panel__state" role="status">
             Reading MCP inventory…
