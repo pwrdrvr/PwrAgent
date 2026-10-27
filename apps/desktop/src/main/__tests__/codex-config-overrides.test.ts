@@ -102,7 +102,8 @@ config_overrides = [
   it("changes only Codex's runtime fingerprint and restores it when overrides are cleared", () => {
     const original = normalizeConfigDomains({ config: {} });
     const withOverlay = normalizeConfigDomains({ config: { models: { codex: { configOverrides: ['model="fixture"'] } } } });
-    expect(withOverlay.providers.codex.dependencyFingerprint).not.toBe(original.providers.codex.dependencyFingerprint);
+    expect(withOverlay.providers.codex.runtimeFingerprint).not.toBe(original.providers.codex.runtimeFingerprint);
+    expect(withOverlay.providers.codex.dependencyFingerprint).toBe(original.providers.codex.dependencyFingerprint);
     expect(withOverlay.providers.gemini).toEqual(original.providers.gemini);
     const cleared = normalizeConfigDomains({ config: { models: { codex: { configOverrides: [] } } } });
     expect(cleared.providers.codex).toEqual(original.providers.codex);
