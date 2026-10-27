@@ -123,7 +123,7 @@ describe("owner index source event admission", () => {
     }
   });
 
-  it("shares one follow-up across durable revisions while an owner scan is pending", async () => {
+  it("shares one replacement across durable revisions while an owner scan is pending", async () => {
     const source = createSource();
     const reads = [source.read()];
     try {
@@ -139,11 +139,9 @@ describe("owner index source event admission", () => {
       const results = await Promise.allSettled(reads);
       expect(results).toEqual(reads.map(() => expect.objectContaining({ status: "fulfilled" })));
       expect(source.listThreads).toHaveBeenCalledTimes(2);
-      // The first scan serves its own reader; every later revision shares one follow-up.
-      const followUp = await reads[1];
-      expect(await reads[0]).not.toBe(followUp);
-      for (const read of reads.slice(1)) expect(await read).toBe(followUp);
-      expect(await source.read()).toBe(followUp);
+      const first = await reads[0];
+      for (const read of reads) expect(await read).toBe(first);
+      expect(await source.read()).toBe(first);
       expect(source.listThreads).toHaveBeenCalledTimes(2);
       expect(source.listeners.size).toBe(1);
     } finally {
@@ -181,9 +179,7 @@ describe("owner index source event admission", () => {
     source.finish();
     const [a, b] = await Promise.all([first, second]);
     expect(source.listThreads).toHaveBeenCalledTimes(2);
-    expect(a).not.toBe(b);
-    expect(await source.read()).toBe(b);
-    expect(source.listThreads).toHaveBeenCalledTimes(2);
+    expect(a).toBe(b);
     expect(source.listeners.size).toBe(1);
     source.emit("thread/name/updated");
     expect(source.listeners.size).toBe(0);
@@ -240,7 +236,7 @@ describe("owner index source event admission", () => {
     }
   });
 
-  it("shares one follow-up scan across consumers admitted between related events", async () => {
+  it("shares one replacement scan across consumers admitted between related events", async () => {
     const source = createSource();
     const reads = [source.read()];
     await Promise.resolve();
@@ -252,8 +248,7 @@ describe("owner index source event admission", () => {
     source.finish();
     const results = await Promise.all(reads);
     expect(source.listThreads).toHaveBeenCalledTimes(2);
-    expect(results[0]).not.toBe(results[1]);
-    expect(results.slice(1).every((result) => result === results[1])).toBe(true);
+    expect(results.every((result) => result === results[0])).toBe(true);
     expect(source.listeners.size).toBe(1);
     source.emit("thread/name/updated");
     expect(source.listeners.size).toBe(0);

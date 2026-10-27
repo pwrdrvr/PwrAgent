@@ -12,7 +12,7 @@ import { getDesktopOverlayStore } from "./desktop-overlay-store";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
-import { NavigationIndexReadPool } from "./navigation-index-read-pool";
+import { NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
 import {
   directorySetMayHaveChanged,
   NavigationDirectorySetAnnouncer,
@@ -53,9 +53,9 @@ export async function loadLocalNavigationQueryIndex(params: {
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   const version = overlayStore.readNavigationSourceVersion?.();
   let subscribed = false;
-  return indexReads.read(key, async (signal) => {
+  return indexReads.read(key, async (signal, checkpoint) => {
     // An event during a scan stops later readers from joining it; they share
-    // one follow-up scan. The scan itself always finishes for its readers.
+    // one follow-up scan. The pool owns retries: there are none.
     if (!subscribed) {
       subscribed = true;
       const unsubscribe = registry.onEvent?.((event) => {
@@ -65,7 +65,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       // Eviction/expiry/cancellation aborts the lifetime and releases it.
       signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
     }
-    const index = await buildLocalNavigationQueryIndex({ ...params, registry, signal });
+    const index = await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint });
     // Only the whole-owner index is what viewers read as its directory set.
     if (backend === "all" && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
@@ -113,6 +113,7 @@ async function buildLocalNavigationQueryIndex(params: {
   refreshProviders?: boolean;
   registry: DesktopBackendRegistry;
   signal: AbortSignal;
+  checkpoint: NavigationIndexCheckpoint;
 }): Promise<NavigationQueryIndex> {
   const registry = params.registry;
   const overlayStore = getDesktopOverlayStore();
@@ -124,6 +125,9 @@ async function buildLocalNavigationQueryIndex(params: {
     ...(params.refreshProviders ? { forceRefresh: true } : {}),
   });
   params.signal?.throwIfAborted();
+  // An overtaken scan whose follow-up already has readers hands them over
+  // here instead of spending CPU on a projection nobody would keep.
+  params.checkpoint();
   const index = overlayStore.readNavigationQueryIndex({
     backend,
     threads: listedThreads,

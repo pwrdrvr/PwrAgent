@@ -23,13 +23,22 @@ function retainedIndexBytes(index: NavigationQueryIndex): number {
   return bytes;
 }
 
-type Load = (signal: AbortSignal) => Promise<NavigationQueryIndex>;
+/**
+ * Called by a scan after its provider listing and before its SQLite
+ * projection. It throws only when the scan should hand its readers to the
+ * follow-up instead (see `NavigationIndexReadPool`).
+ */
+export type NavigationIndexCheckpoint = () => void;
+type Load = (signal: AbortSignal, checkpoint: NavigationIndexCheckpoint) => Promise<NavigationQueryIndex>;
+type Member = { pending: Pending };
 type Pending = {
   controller: AbortController;
-  readers: number;
+  members: Set<Member>;
   version?: string;
   /** A change landed after this scan began. Its readers still get it. */
   stale: boolean;
+  /** It took readers from an overtaken scan, so it finishes no matter what. */
+  inherited: boolean;
   started: boolean;
   load: Load;
   promise: Promise<NavigationQueryIndex>;
@@ -37,14 +46,22 @@ type Pending = {
 };
 type Slot = { current?: Pending; next?: Pending };
 
+class HandOff extends Error {}
+
 /**
  * Shared physical reads with optional short, version-keyed, byte-bounded reuse.
  *
- * A scan that has started always finishes for the readers waiting on it. A
- * change during the scan never cancels or restarts it: it only stops later
- * readers from joining. They wait for one queued follow-up, which every
+ * A change during a scan never fails or restarts it. It only stops later
+ * readers from joining; they wait for one queued follow-up, which every
  * reader that arrives meanwhile shares. A key has at most one scan running
  * and one queued, however many changes land.
+ *
+ * An overtaken scan finishes for its readers, with one saving: if it is
+ * still before its SQLite projection and the follow-up already has readers,
+ * it hands its readers to that follow-up and stops. The follow-up has to run
+ * anyway, so this adds no scan and skips a projection nobody would keep. A
+ * scan that received readers this way never hands them on, so a reader waits
+ * for at most two scans.
  */
 export class NavigationIndexReadPool {
   private readonly slots = new Map<string, Slot>();
@@ -91,12 +108,30 @@ export class NavigationIndexReadPool {
     this.physical.add(owned);
     const settle = owned.settle!;
     owned.settle = undefined;
-    const traced = listingDiagnostics.trace("index", {}, () => owned.load(owned.controller.signal));
+    const checkpoint = (): void => {
+      if (owned.stale && !owned.inherited && slot.next?.members.size) throw new HandOff();
+    };
+    const traced = listingDiagnostics.trace("index", {}, () => owned.load(owned.controller.signal, checkpoint));
     listingDiagnostics.remember(owned.promise, traced);
     traced.then((index) => {
       if (!owned.stale) this.retain(key, index, owned);
-      return index;
-    }).then(settle.resolve, settle.reject).finally(() => {
+      settle.resolve(index);
+    }, (error: unknown) => {
+      if (!(error instanceof HandOff) || !owned.members.size) return settle.reject(error);
+      // The follow-up's own readers may have left since the checkpoint.
+      const next = slot.next ??= this.create(owned.load, owned.version);
+      for (const member of owned.members) {
+        member.pending = next;
+        next.members.add(member);
+      }
+      owned.members.clear();
+      // Nobody reads this scan now; end its lifetime and event listener.
+      owned.stale = true;
+      owned.controller.abort();
+      next.inherited = true;
+      next.promise.then(settle.resolve, settle.reject);
+      listingDiagnostics.link("index", "coalesced", next.promise);
+    }).finally(() => {
       this.physical.delete(owned);
       if (slot.current === owned) slot.current = undefined;
       const next = slot.next;
@@ -107,8 +142,8 @@ export class NavigationIndexReadPool {
   }
 
   private create(load: Load, version: string | undefined): Pending {
-    const owned: Pending = { controller: new AbortController(), readers: 0, version, stale: false, started: false, load,
-      promise: undefined as unknown as Promise<NavigationQueryIndex> };
+    const owned: Pending = { controller: new AbortController(), members: new Set(), version, stale: false, inherited: false,
+      started: false, load, promise: undefined as unknown as Promise<NavigationQueryIndex> };
     owned.promise = new Promise<NavigationQueryIndex>((resolve, reject) => { owned.settle = { resolve, reject }; });
     // A reader that leaves sees its own rejection; no one else awaits this.
     owned.promise.catch(() => undefined);
@@ -131,8 +166,10 @@ export class NavigationIndexReadPool {
       owned = current;
       listingDiagnostics.link("index", "coalesced", owned.promise);
     } else if (slot && current) {
-      // The running scan predates this reader's changes. Share the one
-      // follow-up; it has not read anything yet, so it takes the latest version.
+      // The running scan predates this reader's changes, durable or evented.
+      // Share the one follow-up; it has not read anything yet, so it takes
+      // the latest version.
+      current.stale = true;
       owned = slot.next ??= this.create(load, version);
       owned.version = version;
       listingDiagnostics.link("index", "coalesced", owned.promise);
@@ -144,7 +181,8 @@ export class NavigationIndexReadPool {
       this.start(key, slot, owned);
     }
     const ownedSlot = slot;
-    owned.readers += 1;
+    const member: Member = { pending: owned };
+    owned.members.add(member);
     this.readers += 1;
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -153,19 +191,21 @@ export class NavigationIndexReadPool {
         settled = true;
         signal?.removeEventListener("abort", abort);
         this.readers -= 1;
-        owned.readers -= 1;
-        if (!owned.readers) {
-          if (!owned.started) {
-            if (ownedSlot.next === owned) ownedSlot.next = undefined;
-          } else if (this.retained.get(key)?.owner !== owned) {
-            owned.stale = true;
-            owned.controller.abort();
+        // A hand-off may have moved this reader to the follow-up.
+        const pending = member.pending;
+        pending.members.delete(member);
+        if (!pending.members.size) {
+          if (!pending.started) {
+            if (ownedSlot.next === pending) ownedSlot.next = undefined;
+          } else if (this.retained.get(key)?.owner !== pending) {
+            pending.stale = true;
+            pending.controller.abort();
           }
         }
         return true;
       };
       const abort = (): void => { if (release()) {
-        listingDiagnostics.link("index", "cancel", owned.promise);
+        listingDiagnostics.link("index", "cancel", member.pending.promise);
         reject(signal?.reason ?? new Error("Navigation index read cancelled."));
       } };
       signal?.addEventListener("abort", abort, { once: true });

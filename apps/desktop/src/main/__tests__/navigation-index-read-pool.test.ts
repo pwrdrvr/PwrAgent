@@ -120,6 +120,92 @@ describe("shared owner index reads", () => {
     expect(load).toHaveBeenCalledTimes(3);
   });
 
+  describe("hand-off before projection", () => {
+    // Each scan waits on its own gate (the provider listing), calls the
+    // checkpoint, then counts a projection.
+    function scans() {
+      const gates = Array.from({ length: 4 }, () => deferred());
+      const projections: string[] = [];
+      const load = vi.fn(async (_signal: AbortSignal, checkpoint: () => void) => {
+        const scan = load.mock.calls.length;
+        const listed = await gates[scan - 1]!.promise;
+        checkpoint();
+        projections.push(`scan-${scan}`);
+        return { ...listed, localInstanceId: `scan-${scan}` };
+      });
+      return { gates, projections, load, list: (scan: number) => gates[scan - 1]!.resolve(index) };
+    }
+
+    it("hands an overtaken scan's readers to the follow-up instead of projecting", async () => {
+      const pool = new NavigationIndexReadPool();
+      const { projections, load, list } = scans();
+      const first = pool.read("owner", load);
+      await Promise.resolve();
+      pool.invalidate("owner");
+      const second = pool.read("owner", load);
+      list(1);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      list(2);
+      expect((await Promise.all([first, second])).map((result) => result.localInstanceId)).toEqual(["scan-2", "scan-2"]);
+      expect(projections).toEqual(["scan-2"]);
+      expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
+    });
+
+    it("finishes a scan that took readers over, even when overtaken again", async () => {
+      const pool = new NavigationIndexReadPool();
+      const { projections, load, list } = scans();
+      const first = pool.read("owner", load);
+      await Promise.resolve();
+      pool.invalidate("owner");
+      const second = pool.read("owner", load);
+      list(1);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      pool.invalidate("owner");
+      const third = pool.read("owner", load);
+      list(2);
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+      list(3);
+      expect((await Promise.all([first, second, third])).map((result) => result.localInstanceId))
+        .toEqual(["scan-2", "scan-2", "scan-3"]);
+      expect(projections).toEqual(["scan-2", "scan-3"]);
+    });
+
+    it("finishes an overtaken scan when no later reader is waiting", async () => {
+      const pool = new NavigationIndexReadPool();
+      const { projections, load, list } = scans();
+      const first = pool.read("owner", load);
+      await Promise.resolve();
+      pool.invalidate("owner");
+      list(1);
+      expect((await first).localInstanceId).toBe("scan-1");
+      expect(projections).toEqual(["scan-1"]);
+      expect(load).toHaveBeenCalledTimes(1);
+    });
+
+    it("still serves handed-over readers when the follow-up's own readers leave first", async () => {
+      const pool = new NavigationIndexReadPool();
+      const { load, list } = scans();
+      let leaving!: AbortController;
+      const first = pool.read("owner", async (signal, checkpoint) => {
+        // The only later reader leaves between the checkpoint decision and the hand-off.
+        const result = load(signal, () => {
+          try { checkpoint(); } finally { leaving.abort(); }
+        });
+        return await result;
+      });
+      await Promise.resolve();
+      pool.invalidate("owner");
+      leaving = new AbortController();
+      const second = pool.read("owner", load, leaving.signal);
+      list(1);
+      await expect(second).rejects.toThrow();
+      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+      list(2);
+      expect((await first).localInstanceId).toBe("scan-2");
+      expect(pool.usage()).toEqual({ physical: 0, readers: 0 });
+    });
+  });
+
   it("retains physical admission for non-cooperative work after zero-ref cancellation", async () => {
     const pool = new NavigationIndexReadPool();
     const pending = deferred();
