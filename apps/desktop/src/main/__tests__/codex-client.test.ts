@@ -6605,11 +6605,13 @@ describe("CodexAppServerClient", () => {
     }
   });
 
-  it("reads exact command groups in canonical order with experimental opt-in", async () => {
+  it.each([3, 100])("reads an exact %i-command group in canonical order with experimental opt-in", async (count) => {
     const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
     const threadId = "bounded-thread";
     const turnId = "bounded-turn";
-    const items = ["one", "two", "three"].map((id) => ({ id, type: "commandExecution", command: id,
+    const ids = Array.from({ length: count }, (_, index) => `command-${index}`);
+    const requestedIds = [ids[0], ...ids.slice(1).reverse()];
+    const items = ids.map((id) => ({ id, type: "commandExecution", command: id,
       aggregatedOutput: `${id} output`, status: "completed", exitCode: 0,
     }));
     const expected = extractThreadReplayFromReadResult({ thread: { id: threadId, turns: [{ id: turnId, items }] } }, { threadId });
@@ -6619,13 +6621,13 @@ describe("CodexAppServerClient", () => {
     })) };
     const client = new CodexAppServerClient({ command: "codex", directoryResolver: async () => [] });
     try {
-      const entry = await client.readThreadActivity({ threadId, turnId, entryId: first.id, itemIds: ["one", "three", "two"] });
+      const entry = await client.readThreadActivity({ threadId, turnId, entryId: first.id, itemIds: requestedIds });
       expect(entry).toEqual(first);
-      expect(entry.itemIds).toEqual(["one", "two", "three"]);
+      expect(entry.itemIds).toEqual(ids);
       const requests = MockTransport.instances.at(-1)!.sentMessages.map((message) => JSON.parse(message));
       expect(requests.find((request) => request.method === "initialize").params.capabilities.experimentalApi).toBe(true);
       expect(requests.filter((request) => request.method === "thread/items/read").map((request) => request.params))
-        .toEqual([{ threadId, turnId, itemIds: ["one", "three", "two"] }]);
+        .toEqual([{ threadId, turnId, itemIds: requestedIds }]);
       expect(requests.some((request) => ["thread/items/list", "thread/read", "thread/turns/list"].includes(request.method))).toBe(false);
     } finally {
       await client.close();
@@ -6664,8 +6666,12 @@ describe("CodexAppServerClient", () => {
     },
   );
 
-  it.each([{ ids: [] }, { ids: ["one", "one"] }, { ids: Array.from({ length: 101 }, (_, index) => `item-${index}`) }])(
-    "uses turn pagination when item IDs cannot form one bounded request (%j)", async ({ ids }) => {
+  it.each([
+    { name: "empty", ids: [] },
+    { name: "duplicate", ids: ["one", "one"] },
+    { name: "over 100", ids: Array.from({ length: 101 }, (_, index) => `item-${index}`) },
+  ])(
+    "uses turn pagination for $name item IDs", async ({ ids }) => {
       const { CodexAppServerClient } = await import("../codex-app-server/client");
       MockTransport.threadItemsListResultByRequest.set("limit-thread:limit-turn:", {
         data: [{ turnId: "limit-turn", item: { id: "one", type: "commandExecution", command: "one", status: "completed" } }],
