@@ -1125,7 +1125,7 @@ describe("Claude SDK backend", () => {
     let count = 0;
     const context = vi.fn().mockResolvedValue({ totalTokens: 1200, maxTokens: 200_000 });
     const usage = vi.fn().mockResolvedValue({ rate_limits_available: true, rate_limits: {
-      seven_day: { utilization: 35, resets_at: "2026-10-27T00:00:00Z" },
+      seven_day: { utilization: 35, resets_at: new Date(Date.now() + 7 * 86_400_000).toISOString() },
     }, session: { model_usage: {} } });
     const f = await fixture(async function* () {
       count += 1;
