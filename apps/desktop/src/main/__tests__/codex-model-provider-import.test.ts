@@ -43,7 +43,7 @@ describe("codexModelProviderImportsFromConfig", () => {
       baseUrl: "http://127.0.0.1:18080/v1",
       models: ["/models/Ternary-Bonsai-2-27B.gguf"],
       compatibility: "bonsai",
-      catalogPath: "/home/me/.codex/profiles/bonsai/models.json",
+      catalogPath: path.resolve("/home/me/.codex/profiles/bonsai/models.json"),
       notes: [expect.stringContaining("isolated Codex runtime")],
       sources: [source],
     })]);
@@ -87,7 +87,7 @@ describe("codexModelProviderImportsFromConfig", () => {
       'base_url = "http://localhost:8080/v1"', '[profiles.local]', 'model_catalog_json = "models.json"',
     ];
     expect(importsFrom(config.join("\n"))[0]).toMatchObject({
-      compatibility: "bonsai", catalogPath: "/home/me/.codex/profiles/bonsai/models.json",
+      compatibility: "bonsai", catalogPath: path.resolve("/home/me/.codex/profiles/bonsai/models.json"),
     });
     expect(importsFrom([...config, '[profiles.other]', 'model_catalog_json = "other.json"'].join("\n"))[0]).toMatchObject({
       reason: expect.stringContaining("different model catalogs"),

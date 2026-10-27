@@ -40,7 +40,9 @@ describe("isolated Bonsai launch resources", () => {
         slug: "/models/Bonsai.gguf", context_window: 65536, apply_patch_tool_type: null,
         supported_reasoning_levels: [], input_modalities: ["text"], supports_search_tool: false,
       });
-      expect((await stat(catalogPath)).mode & 0o777).toBe(0o600);
+      if (process.platform !== "win32") {
+        expect((await stat(catalogPath)).mode & 0o777).toBe(0o600);
+      }
       expect(runtime.overrides).toEqual(expect.arrayContaining([
         'model_provider="bonsai"', 'model_providers.bonsai.base_url="http://127.0.0.1:12345/v1"',
         "model_context_window=65536", "model_auto_compact_token_limit=49152", "features.apps=false", "features.plugins=false",
