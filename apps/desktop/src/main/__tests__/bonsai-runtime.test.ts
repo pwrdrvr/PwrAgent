@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexModelProviderSettings } from "@pwragent/shared";
-import { prepareBonsaiRuntime, readBonsaiCatalog } from "../codex-app-server/bonsai-runtime";
+import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime, readBonsaiCatalog } from "../codex-app-server/bonsai-runtime";
 
 const bridge = vi.hoisted(() => ({
   discover: vi.fn(async (_upstream: string, template: unknown) => template),
@@ -24,6 +24,12 @@ afterEach(async () => {
 });
 
 describe("isolated Bonsai launch resources", () => {
+  it("disables native MCPs with CLI-compatible keys and rejects names the CLI would misparse", () => {
+    expect(bonsaiNativeMcpOverrides(["awsdocs", "computer-use", "node_repl"])).toEqual([
+      "mcp_servers.awsdocs.enabled=false", "mcp_servers.computer-use.enabled=false", "mcp_servers.node_repl.enabled=false",
+    ]);
+    expect(() => bonsaiNativeMcpOverrides(["server.with.dots"])).toThrow("Cannot isolate native MCP server");
+  });
   it("generates a private catalog with model capabilities and process-local compatibility overrides", async () => {
     const runtime = await prepareBonsaiRuntime(provider);
     try {

@@ -49,7 +49,7 @@ import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-
 import { wrapCodexProviderUsageAttribution } from "./codex-provider-usage-attribution";
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
 import { createProviderRuntimeClient } from "../codex-app-server/provider-runtime-client";
-import { prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
+import { bonsaiNativeMcpOverrides, prepareBonsaiRuntime } from "../codex-app-server/bonsai-runtime";
 import { generateAcpStructuredObject, hasAcpStructuredHelper } from "./acp-structured-generation";
 import { USAGE_ANALYSIS_MODEL_BACKENDS, type ReadUsageActivityRequest, type ReadUsageActivityResponse, type AnalyzeUsageActivityRequest, type AnalyzeUsageActivityResponse, type UsageLimitObservation } from "@pwragent/shared";
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
@@ -10459,7 +10459,7 @@ export class DesktopBackendRegistry {
             const nativeMcpNames = await this.codexClient.readConfiguredMcpServerNames?.() ?? [];
             return [
               ...args,
-              ...nativeMcpNames.flatMap((name) => ["-c", `mcp_servers.${JSON.stringify(name)}.enabled=false`]),
+              ...bonsaiNativeMcpOverrides(nativeMcpNames).flatMap((override) => ["-c", override]),
               ...prepared.overrides.flatMap((override) => ["-c", override]),
             ];
           } catch (error) {

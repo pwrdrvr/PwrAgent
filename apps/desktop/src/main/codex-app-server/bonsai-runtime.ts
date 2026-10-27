@@ -4,6 +4,16 @@ import type { CodexModelProviderSettings } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
 import { discoverModelCatalog, startBridge, type LocalModelCatalog } from "./local-responses-bridge.mjs";
 
+export function bonsaiNativeMcpOverrides(names: readonly string[]): string[] {
+  return names.map((name) => {
+    // Codex's CLI splits dotted override keys without parsing quoted segments.
+    if (!/^[A-Za-z0-9_-]+$/u.test(name)) {
+      throw new Error(`Cannot isolate native MCP server ${JSON.stringify(name)}: its name cannot be used in a Codex config override.`);
+    }
+    return `mcp_servers.${name}.enabled=false`;
+  });
+}
+
 export async function readBonsaiCatalog(provider: CodexModelProviderSettings): Promise<LocalModelCatalog> {
   const slug = provider.models?.[0];
   if (provider.compatibility !== "bonsai" || provider.models?.length !== 1 || !slug) {
