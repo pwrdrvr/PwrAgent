@@ -24,6 +24,7 @@ import type {
   PrSummary,
   PullRequestTerminalDetails,
   RefreshThreadPullRequestsRequest,
+  RefreshThreadPullRequestsResponse,
   RenameThreadRequest,
   RestoreWorktreeRequest,
   RestoreThreadRequest,
@@ -6735,6 +6736,75 @@ describe("app server ipc", () => {
       prs: [passingPr],
     });
     expect(detectPullRequestsForThread).toHaveBeenCalledOnce();
+  });
+
+  it("never shares one thread's PR history with another thread on the same branch and checkout", async () => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    // An older thread worked on a feature branch in the primary checkout,
+    // kept that PR as history, and the checkout is now back on main.
+    const historyPr = githubPr({
+      number: 81,
+      org: "pwrdrvr",
+      repo: "PwrSuiteLab",
+      state: "merged",
+      headRefName: "fix/control-admission-guidance-build-identity",
+      url: "https://github.com/pwrdrvr/PwrSuiteLab/pull/81",
+    });
+    const baseRequest = {
+      backend: "codex",
+      trigger: "scheduled",
+      branch: "main",
+      directoryPaths: ["/repo"],
+    } satisfies Omit<RefreshThreadPullRequestsRequest, "threadId">;
+    const olderRequest = {
+      ...baseRequest,
+      threadId: "older-thread",
+    } satisfies RefreshThreadPullRequestsRequest;
+    const newRequest = {
+      ...baseRequest,
+      threadId: "new-thread",
+    } satisfies RefreshThreadPullRequestsRequest;
+    getThreadOverlayState.mockImplementation(async (request: { threadId: string }) =>
+      request.threadId === olderRequest.threadId
+        ? {
+            backend: "codex",
+            threadId: olderRequest.threadId,
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            prs: [historyPr],
+            prsFetchedAt: Date.now(),
+            prsRefreshKey: buildThreadPrRequestKey({
+              backend: "codex",
+              threadId: olderRequest.threadId,
+              branch: "main",
+              directoryPaths: ["/repo"],
+            }),
+          }
+        : undefined);
+    // A default-branch lookup attaches nothing.
+    detectPullRequestsForThread.mockResolvedValue([]);
+
+    registerAppServerIpcHandlers();
+
+    const olderResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      olderRequest,
+    ) as RefreshThreadPullRequestsResponse;
+    expect(olderResponse.prs.map((pr) => pr.number)).toEqual([81]);
+
+    const newResponse = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      {},
+      newRequest,
+    ) as RefreshThreadPullRequestsResponse;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(newResponse.prs).toEqual([]);
+    expect(setThreadPullRequests).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: newRequest.threadId,
+        prs: expect.arrayContaining([expect.objectContaining({ number: 81 })]),
+      }),
+    );
   });
 
   it("hydrates canonical PR state from persisted cache without scheduled GitHub refresh", async () => {
