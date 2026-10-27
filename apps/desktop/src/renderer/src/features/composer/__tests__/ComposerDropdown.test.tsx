@@ -216,3 +216,40 @@ describe("ComposerDropdown provider groups", () => {
     expect(screen.getByText(/hand it off to a new thread/u)).toBeInTheDocument();
   });
 });
+
+describe("ComposerDropdown menu action", () => {
+  function renderWithAction(menuPlacement?: "above" | "below") {
+    const onSelect = vi.fn();
+    render(
+      <ComposerDropdown
+        ariaLabel="Environment"
+        menuAction={{ label: "Edit environments…", onSelect }}
+        menuPlacement={menuPlacement}
+        onChange={vi.fn()}
+        options={[{ label: "No environment", value: "" }, { label: "PwrAgent", value: "env" }]}
+        value=""
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Environment/u }));
+    return {
+      action: screen.getByRole("button", { name: "Edit environments…" }),
+      listbox: screen.getByRole("listbox", { name: "Environment" }),
+      onSelect,
+    };
+  }
+
+  // The last row of a menu sits beside its trigger. A command there is the
+  // row the pointer lands on first, so it goes to the far end instead.
+  it("draws the command above the list when the menu opens up", () => {
+    const { action, listbox, onSelect } = renderWithAction();
+    expect(action.compareDocumentPosition(listbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.click(action);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("listbox", { name: "Environment" })).not.toBeInTheDocument();
+  });
+
+  it("draws the command below the list when the menu opens down", () => {
+    const { action, listbox } = renderWithAction("below");
+    expect(action.compareDocumentPosition(listbox) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+  });
+});
