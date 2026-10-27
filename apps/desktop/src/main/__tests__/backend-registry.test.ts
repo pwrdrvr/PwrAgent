@@ -43987,6 +43987,8 @@ script = "printf setup"
     });
     expect(inspectWorkspaceGit).toHaveBeenCalledTimes(2);
     expect(codexClient.lastStartTurnParams?.threadId).toBe("thread-1");
+    expect(codexClient.lastStartTurnParams?.parentTurnId).toBe("turn-1");
+    expect(codexClient.lastStartTurnParams?.rootTurnId).toBeUndefined();
     const prompt =
       (codexClient.lastStartTurnParams?.input[0] as { text?: string } | undefined)
         ?.text ?? "";
@@ -44002,6 +44004,8 @@ script = "printf setup"
         methods: ["thread/start", "turn/start", "review/start", "thread/resume"],
       },
     });
+    const readTurnRoot = vi.fn(async () => "review-root");
+    Object.assign(codexClient, { readTurnRoot });
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -44057,6 +44061,7 @@ script = "printf setup"
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
+      parentTurnId: "turn-1", rootTurnId: "review-root",
       cwd: "/repo/pwragent",
     });
 
@@ -45222,6 +45227,7 @@ script = "printf setup"
                 backend: "codex",
                 threadId: "parent-thread",
                 title: "M4 runner-host conversion preflight",
+          turnId: "turn-1", rootTurnId: "root-original",
           messageId: expect.stringMatching(/^correspondence:/),
               },
             },
@@ -45239,6 +45245,7 @@ script = "printf setup"
           backend: "codex",
           threadId: "parent-thread",
           title: "M4 runner-host conversion preflight",
+          turnId: "turn-1", rootTurnId: "root-original",
           messageId: expect.stringMatching(/^correspondence:/),
         },
       },
@@ -46991,6 +46998,7 @@ script = "printf setup"
       backend: "codex",
       threadId: "019fd821-1450-7952-85ca-3bb8e5d150da",
       resolutionMode: "discover_only",
+      replaceQueueEntryId: undefined,
       input: [
         { type: "text", text: "Please handle the expanded reconnect scope." },
       ],
@@ -47000,6 +47008,7 @@ script = "printf setup"
           backend: "codex",
           threadId: "parent-thread",
           title: "M4 runner-host conversion preflight",
+          turnId: "turn-1",
           messageId: expect.stringMatching(/^correspondence:/),
         },
       },
@@ -47145,6 +47154,7 @@ script = "printf setup"
           backend: "codex",
           threadId: "parent-thread",
           title: "M4 runner-host conversion preflight",
+          turnId: "parent-turn",
         },
       },
     });
@@ -52003,12 +52013,13 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("creates task monitor delegations from namespace-less legacy calls", async () => {
+  it.each(["monitor-root", undefined])("creates task monitors with exact legacy-call ancestry: %s", async (rootTurnId) => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
     });
+    Object.assign(codexClient, { readTurnRoot: vi.fn(async () => rootTurnId) });
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -52044,6 +52055,8 @@ script = "printf setup"
       (response as { contentItems: Array<{ text: string }> }).contentItems[0]?.text ?? "{}",
     ) as Record<string, unknown>;
 
+    expect(codexClient.lastStartTurnParams?.parentTurnId).toBe("turn-1");
+    expect(codexClient.lastStartTurnParams?.rootTurnId).toBe(rootTurnId);
     expect(response).toMatchObject({ success: true });
     expect(payload).toMatchObject({
       parentThreadId: "thread-1",

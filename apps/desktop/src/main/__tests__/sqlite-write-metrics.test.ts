@@ -1614,7 +1614,7 @@ describe("sqlite write metrics", () => {
       expectSqliteWriteBudget({
         scenario: metadata === "late" ? "native-subagent-late-metadata" : "native-subagent-activity-boundaries",
         note: metadata === "late"
-          ? "One worker start, a late resolved-metadata update, and completion; repeated reports write nothing. At 100 workers/day, three commits/worker project to approximately 6.2 MB/day with no idle writes."
+          ? "One worker start, a late resolved-metadata update, and completion; repeated reports write nothing. At 100 workers/day, three commits/worker project to approximately 8.7 MB/day with no idle writes."
           : "One native worker start and completion; duplicate and interaction reports write nothing. At 100 workers/day, two commits/worker project to approximately 4.1 MB/day with no idle writes.",
         writes,
       });

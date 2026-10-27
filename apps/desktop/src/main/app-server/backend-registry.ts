@@ -1,4 +1,4 @@
-import { delegatedTurnAttribution } from "./delegated-turn-attribution";
+import { delegatedTurnAttribution, withoutTurnAttribution } from "./delegated-turn-attribution";
 import { ClaudeBackend, ClaudeTurnActiveError, type ClaudeBackendOptions } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
@@ -8615,7 +8615,7 @@ function buildSteerRequestSignature(
   return createHash("sha256")
     .update(JSON.stringify({
       input: params.input,
-      messageOrigin: messageOrigin ?? null,
+      messageOrigin: withoutTurnAttribution(messageOrigin) ?? null,
       // An interrupt and a steer of the same text are different requests.
       ...(params.delivery === "now" ? { delivery: "now" } : {}),
     }))
@@ -22407,7 +22407,6 @@ export class DesktopBackendRegistry {
       const turn = await this.startAcpTurn({
         backend: params.backend,
         threadId: thread.threadId,
-        ...params.turnAttribution,
         input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
         model: params.modelSettings.model,
         reasoningEffort: params.modelSettings.reasoningEffort,
@@ -22470,6 +22469,7 @@ export class DesktopBackendRegistry {
     this.reservedCodexStartThreadIds.add(thread.threadId);
     try {
       const turn = await client.startTurn({
+        ...params.turnAttribution,
         threadId: thread.threadId,
         input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
         ...(params.cwd ? { cwd: params.cwd } : {}),
@@ -22915,7 +22915,7 @@ export class DesktopBackendRegistry {
       .update(JSON.stringify({
         expectedTurnId: request.expectedTurnId ?? null,
         input: request.input ?? [],
-        messageOrigin: request.messageOrigin ?? null,
+        messageOrigin: withoutTurnAttribution(request.messageOrigin) ?? null,
         operation: request.operation,
       }))
       .digest("hex");

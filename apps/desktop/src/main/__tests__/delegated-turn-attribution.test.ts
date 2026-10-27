@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AppServerThreadMessageOrigin } from "@pwragent/shared";
-import { delegatedTurnAttribution } from "../app-server/delegated-turn-attribution";
+import { delegatedTurnAttribution, withoutTurnAttribution } from "../app-server/delegated-turn-attribution";
 
 const origin: AppServerThreadMessageOrigin = {
   kind: "agent",
@@ -8,6 +8,11 @@ const origin: AppServerThreadMessageOrigin = {
 };
 
 describe("delegated turn attribution", () => {
+  it("keeps optional ancestry out of retry identity without dropping source identity", () => {
+    expect(withoutTurnAttribution(origin)).toEqual({ kind: "agent", sourceThread: { backend: "codex", threadId: "source" } });
+    expect(origin.sourceThread?.turnId).toBe("parent");
+  });
+
   it("forwards exact parent and root through stored provenance", () => {
     expect(delegatedTurnAttribution(structuredClone(origin))).toEqual({ parentTurnId: "parent", rootTurnId: "root" });
   });
