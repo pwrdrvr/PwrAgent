@@ -40041,12 +40041,12 @@ export class DesktopBackendRegistry {
     call: { threadId: string; turnId?: string; tool: string; arguments?: unknown },
   ): Promise<string | null> {
     const service = this.messagingAgentToolService;
-    if (!service) return null;
+    const causalContext = await this.readCausalMessagingContext({ backend, ...call });
+    if (!service) return causalContext.causalMessagingSource || causalContext.causalMessagingAmbiguous ? "message.reply" : null;
     const args =
       call.arguments && typeof call.arguments === "object"
         ? (call.arguments as Record<string, unknown>)
         : null;
-    const causalContext = await this.readCausalMessagingContext({ backend, ...call });
     const permissionCheck = {
       backend,
       threadId: call.threadId,
