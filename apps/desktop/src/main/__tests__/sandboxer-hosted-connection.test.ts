@@ -116,10 +116,10 @@ describe("built-in Sandboxer hosted connection", () => {
     const id = SANDBOXER_MCP_CONNECTION_ID;
     expect((await f.service.listConnections()).find((entry) => entry.id === id)).toMatchObject({ configured: false, authMode: "oauth", enabled: false });
     await expect(f.service.authorizeConnection(id)).resolves.toMatchObject({ configured: true, enabled: false });
-    expect((await Promise.all(f.callbacks))[0].status).toBe(200);
-    expect(f.redirects[0].searchParams.get("scope")).toBe("sandboxer");
-    expect(f.redirects[0].searchParams.get("resource")).toBe(SANDBOXER_MCP_URL);
-    expect(f.redirects[0].searchParams.get("code_challenge_method")).toBe("S256");
+    expect((await Promise.all(f.callbacks))[0]!.status).toBe(200);
+    expect(f.redirects[0]!.searchParams.get("scope")).toBe("sandboxer");
+    expect(f.redirects[0]!.searchParams.get("resource")).toBe(SANDBOXER_MCP_URL);
+    expect(f.redirects[0]!.searchParams.get("code_challenge_method")).toBe("S256");
     expect(f.settings.saveMcpConnectionCredentials).toHaveBeenCalled();
     await f.service.setConnectionEnabled(id, true);
     await expect(f.service.listConnectionTools({ connectionId: id })).resolves.toMatchObject({ tools: ["list_sandboxes", "create_sandbox"] });
@@ -176,7 +176,7 @@ describe("built-in Sandboxer hosted connection", () => {
     expect(f.settings.saveMcpConnectionCredentials).not.toHaveBeenCalled();
     const second = f.service.authorizeConnection(id).catch((error: unknown) => error);
     await vi.waitFor(() => expect(f.redirects).toHaveLength(2));
-    expect(f.redirects[1].searchParams.get("state")).not.toBe(f.redirects[0].searchParams.get("state"));
+    expect(f.redirects[1]!.searchParams.get("state")).not.toBe(f.redirects[0]!.searchParams.get("state"));
     await f.service.setSandboxerTransport("local_cli");
     expect(await second).toBeInstanceOf(Error);
     expect(f.registry.get(id)).toMatchObject({ authMode: "local_cli", serverUrl: "sandboxer:compute" });

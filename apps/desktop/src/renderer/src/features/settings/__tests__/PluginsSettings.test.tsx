@@ -1038,8 +1038,8 @@ describe("PluginsSettings", () => {
         serverUrl: "https://sandboxer.com/mcp", configured: false, state: "disconnected", enabled: false,
       });
       const api = managedApi([sandboxer]);
-      api.authorizeMcpConnection = vi.fn(() => new Promise(() => {}));
-      api.cancelMcpConnectionAuthorization = vi.fn(async () => ({ connection: sandboxer }));
+      api.authorizeMcpConnection = vi.fn(() => new Promise<AuthorizeMcpConnectionResponse>(() => {}));
+      api.cancelMcpConnectionAuthorization = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
       api.setSandboxerTransport = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
       render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
       const row = within((await screen.findByText("Sandboxer")).closest("article")!);
