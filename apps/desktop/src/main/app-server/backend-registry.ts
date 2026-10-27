@@ -8875,7 +8875,9 @@ function readProviderRuntimeFingerprints(
   return Object.fromEntries(
     PROVIDER_IDS.map((provider) => [
       provider,
-      providers[provider]?.dependencyFingerprint ?? "",
+      providers[provider]?.runtimeFingerprint
+        ?? providers[provider]?.dependencyFingerprint
+        ?? "",
     ]),
   ) as Record<ProviderId, string>;
 }
