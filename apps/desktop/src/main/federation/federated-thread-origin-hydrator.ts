@@ -146,13 +146,17 @@ export async function hydrateFederatedThreadMessageOrigins(params: {
     const instanceId = source.instanceId ?? params.ownerInstanceId;
     return {
       ...origin,
-      sourceThread:
-        hydratedByKey.get(sourceThreadKey({
+      sourceThread: {
+        ...(hydratedByKey.get(sourceThreadKey({
           backend: source.backend,
           instanceId,
           threadId: source.threadId,
-        }))
-        ?? source,
+        })) ?? source),
+        // These belong to the individual message, not its thread's display cache.
+        ...(source.messageId ? { messageId: source.messageId } : {}),
+        ...(source.turnId ? { turnId: source.turnId } : {}),
+        ...(source.rootTurnId ? { rootTurnId: source.rootTurnId } : {}),
+      },
     };
   };
 

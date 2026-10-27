@@ -631,6 +631,13 @@
     "rowsChanged": 4,
     "statements": 4
   },
+  "native-subagent-late-metadata": {
+    "commits": 3,
+    "note": "One worker start, a late resolved-metadata update, and completion; repeated reports write nothing. At 100 workers/day, three commits/worker project to approximately 8.7 MB/day with no idle writes.",
+    "observedWalBytes": 86520,
+    "rowsChanged": 3,
+    "statements": 3
+  },
   "native-subagent-model-repair": {
     "commits": 2,
     "note": "One worker's model-less usage line filled in place and its card given the model, once; repeated discovery writes nothing. At 100 legacy workers, approximately 7 MB once, then nothing.",

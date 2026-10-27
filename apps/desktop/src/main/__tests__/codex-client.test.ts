@@ -1493,6 +1493,77 @@ async function waitForLatestTransportRequest(
 }
 
 describe("CodexAppServerClient", () => {
+  it.each([
+    { version: "0.164.0", parentTurnId: "parent", rootTurnId: "root", expected: { parentTurnId: "parent", rootTurnId: "root" } },
+    { version: "0.164.0", parentTurnId: "parent", expected: { parentTurnId: "parent" } },
+    { version: "0.164.0", expected: {} },
+    { version: "0.163.0", parentTurnId: "parent", rootTurnId: "root", expected: {} },
+    { version: "unknown", parentTurnId: "parent", rootTurnId: "root", expected: {} },
+  ])("serializes delegation attribution for $version: $expected", async ({ version, parentTurnId, rootTurnId, expected }) => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverVersion = version;
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      await client.startTurn({ threadId: "child", input: [{ type: "text", text: "Work" }], parentTurnId, rootTurnId });
+      const request = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)))
+        .findLast((message) => message.method === "turn/start");
+      expect(Object.fromEntries(Object.entries(request.params).filter(([key]) => ["parentTurnId", "rootTurnId"].includes(key))))
+        .toEqual(expected);
+    } finally { await client.close(); }
+  });
+
+  it.each(["root", null, undefined])("reads the exact parent root from metadata pages: %s", async (rootTurnId) => {
+    const { CodexAppServerClient, extractThreadReplayFromReadResult } = await import("../codex-app-server/client");
+    MockTransport.threadTurnsListResultByRequest.set("source:", {
+      data: [{ id: "unrelated", rootTurnId: "wrong-root" }], nextCursor: "older",
+    });
+    MockTransport.threadTurnsListResultByRequest.set("source:older", {
+      data: [{ id: "parent", rootTurnId }], nextCursor: null,
+    });
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      expect(await client.readTurnRoot({ threadId: "source", turnId: "parent" })).toBe(rootTurnId ?? undefined);
+      const requests = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message)));
+      expect(requests.filter((request) => request.method === "thread/turns/list").map((request) => request.params.itemsView))
+        .toEqual(["notLoaded", "notLoaded"]);
+      expect(requests.some((request) => request.method === "thread/items/list")).toBe(false);
+      const replay = extractThreadReplayFromReadResult({ thread: { turns: [{
+        id: "parent", rootTurnId, items: [{ type: "userMessage", id: "user", content: [{ type: "text", text: "Work" }] }],
+      }] } });
+      expect(replay.entries[0]?.turn?.rootTurnId).toBe(rootTurnId);
+    } finally { await client.close(); }
+  });
+
+  it("keeps exact ancestry from live turns without a history lookup", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      await client.getInitializeResult();
+      const transport = MockTransport.instances.at(-1)!;
+      const observed = new Promise<void>((resolve) => client.onNotification((event) => {
+        if (event.method === "turn/started") resolve();
+      }));
+      transport.emitInbound({ method: "turn/started", params: {
+        threadId: "source", turn: { id: "parent", rootTurnId: "original-root" },
+      } });
+      await observed;
+      expect(await client.readTurnRoot({ threadId: "source", turnId: "parent" })).toBe("original-root");
+      const methods = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message).method));
+      expect(methods).not.toContain("thread/turns/list");
+    } finally { await client.close(); }
+  });
+
+  it("does not read ancestry from older servers", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.serverVersion = "0.163.0";
+    const client = new CodexAppServerClient({ command: "codex" });
+    try {
+      expect(await client.readTurnRoot({ threadId: "source", turnId: "parent" })).toBeUndefined();
+      const methods = MockTransport.instances.flatMap((transport) => transport.sentMessages.map((message) => JSON.parse(message).method));
+      expect(methods).not.toContain("thread/turns/list");
+    } finally { await client.close(); }
+  });
+
   it.each([false, true])("applies the compaction model before compacting (already loaded: %s)", async (alreadyLoaded) => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient();
@@ -9388,7 +9459,8 @@ describe("CodexAppServerClient", () => {
           status: "completed",
           items: [
             { type: "subAgentActivity", id: "started-review", kind: "started",
-              agentThreadId: "worker-review", agentPath: "/root/review_savers" },
+              agentThreadId: "worker-review", agentPath: "/root/review_savers",
+              model: "resolved-model", reasoningEffort: "high" },
             { type: "subAgentActivity", id: "completed-review", kind: "completed",
               agentThreadId: "worker-review", agentPath: "/root/review_savers" },
           ],
@@ -9406,7 +9478,7 @@ describe("CodexAppServerClient", () => {
           id: "started-review",
           label: "Started review_savers",
           command: expect.objectContaining({ subAgent: expect.objectContaining({
-            origin: "codex-native", operation: "spawn",
+            origin: "codex-native", operation: "spawn", model: "resolved-model", reasoningEffort: "high",
             agents: [{ threadId: "worker-review", name: "review_savers", status: "running" }],
           }) }),
         }),

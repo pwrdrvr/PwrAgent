@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSubAgentActivityDetail,
   codexAgentPathName,
   codexNativeSubAgentName,
   readCodexNativeSubAgentName,
@@ -47,5 +48,26 @@ describe("Codex worker names", () => {
       type: "subAgentActivity", id: "a", kind: "started",
       agentThreadId: "worker-1", agentPath: "/root/breakfast_poem",
     })).toMatchObject({ agentName: "breakfast_poem" });
+  });
+});
+
+describe("Codex worker metadata", () => {
+  it.each([
+    { model: "resolved-model", reasoningEffort: "high" },
+    { model: null, reasoningEffort: null },
+    {},
+    { model: 42, reasoningEffort: false },
+    { model: "", reasoningEffort: " " },
+  ])("preserves only reported metadata: %j", (metadata) => {
+    const report = readSubAgentActivity({
+      type: "subAgentActivity", id: "a", kind: "started",
+      agentThreadId: "worker", agentPath: "/root/worker", ...metadata,
+    })!;
+    const detail = buildSubAgentActivityDetail(report).command!.subAgent!;
+    const known = metadata.model === "resolved-model";
+    expect(report.model).toBe(known ? "resolved-model" : undefined);
+    expect(report.reasoningEffort).toBe(known ? "high" : undefined);
+    expect(detail.model).toBe(report.model);
+    expect(detail.reasoningEffort).toBe(report.reasoningEffort);
   });
 });

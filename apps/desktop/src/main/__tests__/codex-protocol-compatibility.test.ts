@@ -7,6 +7,13 @@ import {
 
 describe("Codex App Server protocol compatibility", () => {
   it.each([
+    [undefined, false], ["unknown", false], ["0.163.0", false],
+    ["0.164.0", true], ["0.164.0-pwragent.1", true], ["1.0.0", true],
+  ])("gates delegation attribution for %s", (version, supported) => {
+    expect(resolveCodexProtocolCompatibility(version).supportsTurnAncestry).toBe(supported);
+  });
+
+  it.each([
     [undefined, false],
     ["0.152.0", false],
     ["0.153.0", true],
@@ -34,6 +41,7 @@ describe("Codex App Server protocol compatibility", () => {
         supportsOnFailureApprovalPolicy: true,
         supportsThreadScopedMcpServerStatus: false,
         supportsThreadRevert: false,
+        supportsTurnAncestry: false,
       },
     },
     {
@@ -45,6 +53,7 @@ describe("Codex App Server protocol compatibility", () => {
         supportsOnFailureApprovalPolicy: true,
         supportsThreadScopedMcpServerStatus: false,
         supportsThreadRevert: false,
+        supportsTurnAncestry: false,
       },
     },
     {
@@ -56,6 +65,7 @@ describe("Codex App Server protocol compatibility", () => {
         supportsOnFailureApprovalPolicy: true,
         supportsThreadScopedMcpServerStatus: false,
         supportsThreadRevert: false,
+        supportsTurnAncestry: false,
       },
     },
     {
@@ -67,6 +77,7 @@ describe("Codex App Server protocol compatibility", () => {
         supportsOnFailureApprovalPolicy: true,
         supportsThreadScopedMcpServerStatus: false,
         supportsThreadRevert: false,
+        supportsTurnAncestry: false,
       },
     },
     {
@@ -78,6 +89,7 @@ describe("Codex App Server protocol compatibility", () => {
         supportsOnFailureApprovalPolicy: false,
         supportsThreadScopedMcpServerStatus: false,
         supportsThreadRevert: false,
+        supportsTurnAncestry: false,
       },
     },
     {
@@ -89,6 +101,7 @@ describe("Codex App Server protocol compatibility", () => {
         supportsOnFailureApprovalPolicy: false,
         supportsThreadScopedMcpServerStatus: true,
         supportsThreadRevert: false,
+        supportsTurnAncestry: false,
       },
     },
   ])("negotiates the wire features for $version", ({ version, expected }) => {

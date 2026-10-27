@@ -1569,7 +1569,7 @@ describe("sqlite write metrics", () => {
     await registry.close();
   });
 
-  it("persists subAgentActivity only at lifecycle boundaries", async () => {
+  it.each(["missing", "reported", "late"])("bounds subAgentActivity metadata writes: %s", async (metadata) => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
@@ -1577,7 +1577,8 @@ describe("sqlite write metrics", () => {
     const recordActivity = (registry as unknown as {
       recordCodexNativeSubAgentActivity(event: AgentEvent): Promise<void>;
     }).recordCodexNativeSubAgentActivity.bind(registry);
-    const activity = (kind: string): AgentEvent => ({
+    const resolved = { model: "resolved-model", reasoningEffort: "high" };
+    const activity = (kind: string, reported = metadata === "reported"): AgentEvent => ({
       backend: "codex",
       notification: {
         method: "item/completed",
@@ -1590,6 +1591,7 @@ describe("sqlite write metrics", () => {
             kind,
             agentThreadId: "worker-review",
             agentPath: "/root/review_savers",
+            ...(reported ? resolved : {}),
           },
         },
       },
@@ -1597,6 +1599,10 @@ describe("sqlite write metrics", () => {
     try {
       const { writes } = await measureSqliteWrites(async () => {
         await recordActivity(activity("started"));
+        if (metadata === "late") {
+          await recordActivity(activity("started", true));
+          await recordActivity(activity("started", true));
+        }
         for (let index = 0; index < 100; index += 1) {
           await recordActivity(activity("started"));
           await recordActivity(activity("interacted"));
@@ -1606,8 +1612,10 @@ describe("sqlite write metrics", () => {
         await recordActivity(activity("started"));
       });
       expectSqliteWriteBudget({
-        scenario: "native-subagent-activity-boundaries",
-        note: "One native worker start and completion; duplicate and interaction reports write nothing. At 100 workers/day, two commits/worker project to approximately 4.1 MB/day with no idle writes.",
+        scenario: metadata === "late" ? "native-subagent-late-metadata" : "native-subagent-activity-boundaries",
+        note: metadata === "late"
+          ? "One worker start, a late resolved-metadata update, and completion; repeated reports write nothing. At 100 workers/day, three commits/worker project to approximately 8.7 MB/day with no idle writes."
+          : "One native worker start and completion; duplicate and interaction reports write nothing. At 100 workers/day, two commits/worker project to approximately 4.1 MB/day with no idle writes.",
         writes,
       });
     } finally {

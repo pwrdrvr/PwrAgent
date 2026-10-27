@@ -677,6 +677,7 @@ export class ThreadTurnQueue {
   updateQueuedEntryInput(
     entryId: string,
     input: AppServerTurnInputItem[],
+    sourceTurn?: Pick<NonNullable<AppServerThreadMessageOrigin["sourceThread"]>, "turnId" | "rootTurnId">,
   ): ThreadTurnQueueEntry | undefined {
     for (const queue of this.queuedEntries.values()) {
       const index = queue.findIndex((entry) => entry.id === entryId);
@@ -688,6 +689,16 @@ export class ThreadTurnQueue {
       const updated = {
         ...rest,
         input,
+        ...(sourceTurn && current.messageOrigin?.sourceThread ? {
+          messageOrigin: {
+            ...current.messageOrigin,
+            sourceThread: {
+              ...current.messageOrigin.sourceThread,
+              turnId: sourceTurn.turnId,
+              rootTurnId: sourceTurn.rootTurnId,
+            },
+          },
+        } : {}),
         // An operator edit replaces the complete batch. Do not subsequently
         // rebuild it from stale per-sender input when another message arrives.
         ...(current.agentMessages ? { agentMessages: undefined } : {}),
