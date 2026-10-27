@@ -251,6 +251,16 @@ describe("backend forge tool dispatch", () => {
     expect(github).toHaveBeenCalledTimes(3);
   });
 
+  it("refuses Auto writes from an Auto-mode automation, which no one can review", async () => {
+    internals.activeCodexTurnModes.set("thread-1:turn-1", "auto");
+    (registry as unknown as { headlessAutomationTurns: Map<string, unknown> }).headlessAutomationTurns.set("codex:thread-1:turn-1", {
+      agentThreadId: "thread-1", automationRunId: "run-1", executionMode: "auto", queueEntryId: "queue-1",
+    });
+    const result = await internals.handleServerRequest("codex", request("create_pull_request", { title: "fix: tests", draft: true }, "call-automation-pr"));
+    expect(text(result)).toContain("approval_required");
+    expect(github).not.toHaveBeenCalled();
+  });
+
   it("treats an approving review as an approve-and-merge decision", async () => {
     policy.access.comments = "allow";
     policy.access.approve_merge = "off";

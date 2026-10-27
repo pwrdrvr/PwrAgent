@@ -9686,7 +9686,7 @@ export class DesktopBackendRegistry {
       },
     };
     const automation = this.findHeadlessAutomationTurnForRequest(context.backend, notification);
-    if (access === "auto" && await this.forgeAutoRunsWithoutApproval(group, context, automation?.executionMode)) {
+    if (access === "auto" && await this.forgeAutoRunsWithoutApproval(group, context, automation)) {
       signal.throwIfAborted();
       backendRegistryLog.info("running Auto forge write without an approval card", {
         backend: context.backend,
@@ -39873,16 +39873,19 @@ export class DesktopBackendRegistry {
    * so asking here made the PwrAgent tool the one path that always stopped,
    * and the agent is told not to fall back to `gh`. These tools reach only
    * the thread's linked repositories. Merging and approving stay Full Access
-   * only, because they cannot be taken back.
+   * only, because they cannot be taken back. A headless automation also
+   * needs Full Access: nobody is watching it, and in an Auto automation no
+   * reviewer would see these calls at all.
    */
   private async forgeAutoRunsWithoutApproval(
     group: ForgeAgentToolGroup,
     context: AgentToolCallContext,
-    automationMode?: ThreadExecutionMode,
+    automation?: { executionMode?: ThreadExecutionMode },
   ): Promise<boolean> {
-    if (await this.isMcpGatewayFullAccess(context, automationMode)) return true;
-    if (group === "approve_merge" || context.backend !== "codex") return false;
-    return await this.resolveCodexToolCallExecutionMode(context, automationMode) === "auto";
+    if (context.backend !== "codex") return await this.isMcpGatewayFullAccess(context, automation?.executionMode);
+    const executionMode = await this.resolveCodexToolCallExecutionMode(context, automation?.executionMode);
+    if (executionMode === "full-access") return true;
+    return executionMode === "auto" && group !== "approve_merge" && !automation;
   }
 
   private async resolveCodexToolCallExecutionMode(
