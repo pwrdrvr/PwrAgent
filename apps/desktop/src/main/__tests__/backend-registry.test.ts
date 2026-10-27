@@ -10151,6 +10151,63 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("keeps Codex available while applying model provider changes at idle", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-provider-import-"));
+    const configPath = path.join(tempRoot, "config.toml");
+    await writeFile(configPath, "");
+    const configStore = new DesktopConfigStore({ configPath });
+    configStore.recordProviderDiscovery("codex", {
+      candidates: [],
+      selectedCommand: "/opt/pwragent/codex",
+      selectedVersion: "0.162.1",
+    });
+    const codexClient = new MockBackendClient({});
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      configStore,
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      discoverLocalAcpAgents: async () => [],
+    });
+    const internals = registry as unknown as {
+      activeTurnKeys: Set<string>;
+      maybeRestartCodexForManagedRuntimeChange(): Promise<boolean>;
+    };
+    const bonsai = {
+      id: "bonsai",
+      name: "Bonsai (local)",
+      baseUrl: "http://127.0.0.1:18080/v1",
+      local: true,
+      models: ["fixture.gguf"],
+    };
+    try {
+      for (const providers of [[bonsai], [{ ...bonsai, baseUrl: "http://127.0.0.1:18081/v1" }], []]) {
+        const closesBefore = codexClient.closeCallCount;
+        internals.activeTurnKeys.add("codex:thread-1:turn-1");
+        await configStore.write({ models: { codex: { providers } } }, ["providers"]);
+        await registry.synchronizeProviderRuntimeSelections();
+        expect(codexClient.closeCallCount).toBe(closesBefore);
+        expect((await registry.listBackends({ includeUnavailable: true })).backends
+          .find((backend) => backend.kind === "codex")).toMatchObject({ available: true });
+        internals.activeTurnKeys.clear();
+        await expect(internals.maybeRestartCodexForManagedRuntimeChange()).resolves.toBe(true);
+        expect(codexClient.closeCallCount).toBe(closesBefore + 1);
+        expect((await registry.listBackends({ includeUnavailable: true })).backends
+          .find((backend) => backend.kind === "codex")).toMatchObject({ available: true });
+      }
+      await configStore.write({ models: { codex: { providers: [bonsai] } } }, ["providers"]);
+      await registry.synchronizeProviderRuntimeSelections();
+      const closesBefore = codexClient.closeCallCount;
+      await configStore.write({ models: { codex: { providers: [{ ...bonsai, models: ["other.gguf"] }] } } }, ["providers"]);
+      await registry.synchronizeProviderRuntimeSelections();
+      expect(codexClient.closeCallCount).toBe(closesBefore);
+    } finally {
+      await registry.close();
+      configStore.dispose();
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("invalidates only Codex and waits for idle when a profile overlay changes", async () => {
     const tempRoot = await mkdtemp(
       path.join(os.tmpdir(), "pwragent-backend-registry-"),
