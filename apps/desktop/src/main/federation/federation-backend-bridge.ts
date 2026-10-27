@@ -509,6 +509,8 @@ export function authenticateMessageOrigin(params: {
         : {}),
       threadId: sourceThread.threadId,
       ...(sourceThread.messageId ? { messageId: sourceThread.messageId } : {}),
+      ...(typeof sourceThread.turnId === "string" ? { turnId: sourceThread.turnId } : {}),
+      ...(typeof sourceThread.rootTurnId === "string" ? { rootTurnId: sourceThread.rootTurnId } : {}),
       ...(sourceThread.title ? { title: sourceThread.title } : {}),
     },
   };

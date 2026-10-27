@@ -3,6 +3,30 @@ import type { AppServerReadThreadResponse } from "@pwragent/shared";
 import { hydrateFederatedThreadMessageOrigins } from "../federation/federated-thread-origin-hydrator";
 
 describe("federated thread origin hydration", () => {
+  it("preserves each message's ancestry when several turns share one source thread", async () => {
+    const sources = [
+      { messageId: "first", turnId: "turn-one", rootTurnId: "root-one" },
+      { messageId: "second", turnId: "turn-two", rootTurnId: "root-two" },
+      {},
+    ];
+    const messages = sources.map((source, index) => ({
+      id: `message-${index}`, role: "user" as const, text: "Delegated work",
+      origin: { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "source", ...source } },
+    }));
+    const resolveThread = vi.fn(async () => undefined);
+    const hydrated = await hydrateFederatedThreadMessageOrigins({
+      localInstanceId: "viewer", ownerInstanceId: "owner", resolveThread,
+      resolveInstance: () => ({ label: "Owner" }),
+      response: { backend: "codex", fetchedAt: 1, threadId: "recipient", replay: {
+        entries: messages.map((message) => ({ ...message, type: "message" as const })), messages,
+      } },
+    });
+    expect(resolveThread).toHaveBeenCalledTimes(1);
+    const expected = sources.map((source) => ({ backend: "codex", instanceId: "owner", instanceLabel: "Owner", threadId: "source", ...source }));
+    expect(hydrated.replay.messages.map((message) => message.origin?.sourceThread)).toEqual(expected);
+    expect(hydrated.replay.entries.map((entry) => entry.type === "message" ? entry.origin?.sourceThread : undefined)).toEqual(expected);
+  });
+
   it("hydrates unmounted source names and scopes legacy origins to the owner", async () => {
     const response: AppServerReadThreadResponse = {
       backend: "codex",
