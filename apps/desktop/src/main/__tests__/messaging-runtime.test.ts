@@ -1670,7 +1670,7 @@ describe("DesktopMessagingRuntime", () => {
     navigation.threads.push({ ...navigation.threads[0]!, id: "thread-2", title: "Builder" });
     navigation.threads[0]!.agent = { name: "Manager", instructionLineCount: 1, instructionsTooLong: false, updatedAt: 1000 };
     bridge.readNavigationFixturePopulation = vi.fn(async () => navigation);
-    const event = { ...buildTextEvent("Attach the builder."),
+    const event = { ...buildTextEvent("Attach the builder."), botMention: true,
       channel: { channel: "slack" as const, conversation: { id: "C4", kind: "channel" as const, workspaceId: "T1" } } };
     const { getDesktopMessagingStore } = await import("../messaging/desktop-messaging-store");
     await getDesktopMessagingStore().upsertBinding({ id: "slack-manager", backend: "codex", threadId: "thread-1",
@@ -1687,6 +1687,7 @@ describe("DesktopMessagingRuntime", () => {
     }));
     await runtime.start();
     await slackAdapter.listener!(event);
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
     const source = vi.mocked(bridge.startTurn).mock.calls[0]?.[0].messageOrigin?.causalMessagingSource;
     expect(source).toBeDefined();
     const args = { backend: "codex" as const, threadId: "thread-2", placement: "new_child" as const };
