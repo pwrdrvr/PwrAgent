@@ -118,6 +118,8 @@ import type {
   ThreadItem as CodexThreadItem,
   ThreadItemsListParams as CodexThreadItemsListParams,
   ThreadItemsListResponse as CodexThreadItemsListResponse,
+  ThreadItemsReadParams as CodexThreadItemsReadParams,
+  ThreadItemsReadResponse as CodexThreadItemsReadResponse,
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
   ThreadReadResponse as CodexThreadReadResponse,
@@ -4924,6 +4926,11 @@ function summarizeActivityItems(
   return {
     type: "activity",
     id: `activity-${pickString(items[0] ?? {}, ["id", "itemId", "item_id"]) ?? "1"}`,
+    // Only canonical command groups are self-contained here. Legacy calls can
+    // depend on separate output items, and detail IDs can be synthesized.
+    ...(items.length <= 100 && items.every((item) => item.type === "commandExecution"
+      && typeof item.id === "string" && item.id.length > 0)
+      ? { itemIds: items.map((item) => item.id as string) } : {}),
     summary:
       summaryParts.length > 0
         ? formatActivitySummary(summaryParts)
@@ -9819,7 +9826,38 @@ export class CodexAppServerClient {
     threadId: string;
     turnId: string;
     entryId: string;
+    itemIds?: string[];
   }): Promise<AppServerThreadActivityEntry> {
+    const ids = params.itemIds;
+    if (ids && ids.length > 0 && ids.length <= 100
+      && ids.every((id) => typeof id === "string" && id.length > 0)
+      && new Set(ids).size === ids.length && params.entryId === `activity-${ids[0]}`) {
+      await this.ensureInitialized();
+      try {
+        // initialize deliberately opts into experimentalApi. This endpoint is
+        // for an already-discovered group, never transcript enumeration.
+        const payload = { threadId: params.threadId, turnId: params.turnId, itemIds: ids } satisfies CodexThreadItemsReadParams;
+        const response = await requestWithThreadMetadataReadRetry(async () =>
+          await this.connection.request("thread/items/read", payload,
+            this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS),
+        ) as CodexThreadItemsReadResponse;
+        const remaining = new Set(ids);
+        const valid = Array.isArray(response?.data) && response.data.length === ids.length
+          && response.data.every((entry) => entry?.turnId === params.turnId
+            && entry.item?.type === "commandExecution" && remaining.delete(entry.item.id));
+        if (valid) {
+          // Envelopes arrive in canonical stored order, not request order.
+          // The viewer retains the original row's timestamps and turn status.
+          const replay = extractThreadReplayFromReadResult({ thread: { id: params.threadId,
+            turns: [{ id: params.turnId, items: response.data.map((entry) => entry.item) }],
+          } }, { threadId: params.threadId });
+          const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);
+          if (entry?.type === "activity") return entry;
+        }
+      } catch (error) {
+        if (!isMethodUnavailableError(error, "thread/items/read")) throw error;
+      }
+    }
     // No transcript file, whole-thread replay, or accounting read is needed.
     const replay = await this.readThreadTurn(params);
     const entry = replay.entries.find((candidate) => candidate.type === "activity" && candidate.id === params.entryId);

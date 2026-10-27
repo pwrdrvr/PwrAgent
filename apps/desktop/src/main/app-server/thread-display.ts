@@ -247,6 +247,7 @@ export function projectThreadDisplay(
           detailsRef: { backend: response.backend, threadId: response.threadId,
             turnId: entry.turn.id, entryId: entry.id,
             revision: createHash("sha256").update(JSON.stringify(entry.details)).digest("hex"),
+            ...(entry.itemIds ? { itemIds: entry.itemIds } : {}),
           },
           // Keep fileDiff metadata/bodies for the independent Edits panel.
           // Only the activity's expandable command/Markdown bodies are deferred.

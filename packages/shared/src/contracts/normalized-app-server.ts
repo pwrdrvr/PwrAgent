@@ -919,6 +919,8 @@ export type AppServerThreadActivityEntry = {
   tone?: "warning";
   status?: AppServerThreadActivityStatus;
   details: AppServerThreadActivityDetail[];
+  /** Exact provider item IDs for a group that can be reloaded independently. */
+  itemIds?: string[];
   /** Owner-prepared collapsed history; resolve before expanding its details. */
   detailsRef?: {
     backend: AppServerBackendKind;
@@ -926,6 +928,7 @@ export type AppServerThreadActivityEntry = {
     turnId: string;
     entryId: string;
     revision: string;
+    itemIds?: string[];
   };
   turn?: AppServerThreadTurnMetadata;
   usageLine?: ThreadUsageLineRecord;
@@ -1350,7 +1353,7 @@ export type ThreadDisplayRead = {
   /** New viewers load folded Pricing gate cards only on expansion. */
   deferPricingGates?: boolean;
   pricingGateGroup?: { usageLineId: string; filter: "primary" | "small" };
-  activity?: { turnId: string; entryId: string };
+  activity?: { turnId: string; entryId: string; itemIds?: string[] };
   firstWarningAt?: number;
   largeOutputThresholdChars?: number;
   monitorId?: string;
