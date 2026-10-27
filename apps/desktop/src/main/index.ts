@@ -219,7 +219,8 @@ import { requestOpenSettings } from "./window-open-settings";
 import { PROFILES_SETTINGS_CREATE_SUBSECTION } from "../shared/settings-routes";
 import { requestReplayOnboarding } from "./window-replay-onboarding";
 import { requestCopyLocalDiagnosticsInfo } from "./window-copy-local-diagnostics-info";
-import { buildApplicationMenuTemplate } from "./menu";
+import { ACTIVE_PROFILE_MENU_ITEM_ID, buildApplicationMenuTemplate } from "./menu";
+import { selectWindowForProfileFocus } from "./window-profile-focus";
 import { wireAppMenuBridge } from "./app-menu-bridge";
 import { wireWindowControlsBridge } from "./window-controls-bridge";
 import { installWindowFrameSync } from "./window-frame-sync";
@@ -1081,6 +1082,11 @@ function installDevelopmentDockIcon(): void {
   app.dock?.setIcon(icon);
 }
 
+let lastFocusedWindow: BrowserWindow | undefined;
+let applicationMenu: Electron.Menu | undefined;
+// On macOS isVisible() also becomes false when another app covers a window.
+const shownWindows = new WeakSet<BrowserWindow>();
+
 function focusPwrAgentWindows(): void {
   if (isWindowCreationBlocked()) {
     mainLog.info("ignoring focus request during shutdown");
@@ -1104,14 +1110,19 @@ function focusPwrAgentWindows(): void {
     return;
   }
 
-  for (const window of windows) {
-    if (window.isMinimized()) {
-      window.restore();
-    }
-    window.show();
-    window.focus();
-  }
+  const window = selectWindowForProfileFocus(
+    BrowserWindow.getAllWindows(),
+    BrowserWindow.getFocusedWindow(),
+    lastFocusedWindow,
+    windows[0]!,
+    (candidate) => shownWindows.has(candidate),
+  );
   app.focus({ steal: true });
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  window.show();
+  window.focus();
 }
 
 function installProfileFocusRequestWatcher(): void {
@@ -1286,18 +1297,46 @@ function installApplicationMenu(): void {
     },
   });
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+  applicationMenu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(applicationMenu);
   reapplyAuxiliaryWindowMenuBars();
 }
 
 function installWindowMenuRefreshHandlers(): void {
   app.on("browser-window-created", (_event, window) => {
     const refresh = (): void => {
-      installApplicationMenu();
+      if (!isMac) {
+        installApplicationMenu();
+      }
     };
 
-    window.on("focus", refresh);
-    window.on("closed", refresh);
+    window.on("focus", () => {
+      lastFocusedWindow = window;
+      if (isMac) {
+        // AppKit owns the native Window menu and its window ordering. A focus
+        // change only changes this check mark; keep the installed menu intact.
+        const activeProfile = applicationMenu?.getMenuItemById(ACTIVE_PROFILE_MENU_ITEM_ID);
+        if (activeProfile) {
+          activeProfile.checked = !isFederationWindowWebContents(window.webContents);
+        }
+      }
+      refresh();
+    });
+    window.on("show", () => {
+      shownWindows.add(window);
+    });
+    window.on("hide", () => {
+      shownWindows.delete(window);
+      if (lastFocusedWindow === window) {
+        lastFocusedWindow = undefined;
+      }
+    });
+    window.on("closed", () => {
+      if (lastFocusedWindow === window) {
+        lastFocusedWindow = undefined;
+      }
+      refresh();
+    });
     window.on("page-title-updated", refresh);
   });
   // Keep Profiles → Remote Instances in sync with peer connectivity.
