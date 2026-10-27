@@ -5,7 +5,6 @@ import type {
 import {
   buildThreadIdentityKey,
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
-  navigationInvalidationMayChangeMembership,
   navigationQueryEventRequiresRefresh,
 } from "@pwragent/shared";
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
@@ -39,13 +38,6 @@ function sourceId(value: object): number {
 export async function loadLocalNavigationQueryIndex(params: {
   backend?: AppServerBackendScope;
   callerReason: string;
-  /**
-   * The caller reads only which threads exist, whether they are archived,
-   * and their titles. Row-only changes (turn status, Git state, seen marks)
-   * then do not restart its scan. A busy owner's live turns emit those
-   * continuously, and restarting for them exhausted the read's retries.
-   */
-  membershipOnly?: boolean;
   /** List provider threads afresh rather than from the thread-list cache. */
   refreshProviders?: boolean;
   registry?: DesktopBackendRegistry;
@@ -57,32 +49,23 @@ export async function loadLocalNavigationQueryIndex(params: {
   const backend = params.backend ?? "all";
   // A refresh reads under its own key: it must not be served a retained or
   // in-flight index that predates it, nor cost other readers a retry.
-  // A membership read has its own key, so a row read's restarts cannot
-  // cost it a retry either.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
-    ...(params.refreshProviders ? ["refresh-providers"] : []),
-    ...(params.membershipOnly ? ["membership"] : [])]);
+    ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   const version = overlayStore.readNavigationSourceVersion?.();
   let subscribed = false;
-  return indexReads.read(key, async (signal, assertCurrent) => {
-    // An event during a scan makes its result stale. The read pool shares one
-    // replacement with all consumers admitted in the meantime. Own one event
-    // listener for the whole read, including any replacement attempt.
+  return indexReads.read(key, async (signal) => {
+    // An event during a scan stops later readers from joining it; they share
+    // one follow-up scan. The scan itself always finishes for its readers.
     if (!subscribed) {
       subscribed = true;
       const unsubscribe = registry.onEvent?.((event) => {
-        const { method, params: eventParams } = event.notification;
-        if (!navigationQueryEventRequiresRefresh(method, eventParams)) return;
-        if (params.membershipOnly && !navigationInvalidationMayChangeMembership(method === "navigation/invalidated"
-          ? (eventParams as { sourceMethod?: unknown } | undefined)?.sourceMethod
-          : method)) return;
-        indexReads.invalidate(key);
+        if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) indexReads.invalidate(key);
       });
       // The pool owns this listener through its bounded completed reuse window.
       // Eviction/expiry/cancellation aborts the lifetime and releases it.
       signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
     }
-    const index = await buildLocalNavigationQueryIndex({ ...params, registry, signal, assertCurrent });
+    const index = await buildLocalNavigationQueryIndex({ ...params, registry, signal });
     // Only the whole-owner index is what viewers read as its directory set.
     if (backend === "all" && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);
@@ -130,7 +113,6 @@ async function buildLocalNavigationQueryIndex(params: {
   refreshProviders?: boolean;
   registry: DesktopBackendRegistry;
   signal: AbortSignal;
-  assertCurrent: () => void;
 }): Promise<NavigationQueryIndex> {
   const registry = params.registry;
   const overlayStore = getDesktopOverlayStore();
@@ -142,10 +124,6 @@ async function buildLocalNavigationQueryIndex(params: {
     ...(params.refreshProviders ? { forceRefresh: true } : {}),
   });
   params.signal?.throwIfAborted();
-  // A mutation during provider pagination already requires a replacement.
-  // Reject that generation before spending CPU on SQLite overlay projection.
-  // Later mutations are still fenced by the pool after hydration completes.
-  params.assertCurrent();
   const index = overlayStore.readNavigationQueryIndex({
     backend,
     threads: listedThreads,

@@ -1,10 +1,7 @@
 import { listingDiagnostics } from "../diagnostics/listing-diagnostics";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
-import { NavigationQueryError } from "./navigation-query-store";
 
 const RETAINED_BYTE_BUDGET = 8 * 1024 * 1024;
-// One initial scan plus two fresh attempts for mutations during replacement.
-const MAX_INVALIDATED_RETRIES = 2;
 
 /** Measure only enough of a snapshot to admit it. Native JSON serialization
  * runs on bounded row batches, avoiding one full temporary snapshot string.
@@ -26,11 +23,31 @@ function retainedIndexBytes(index: NavigationQueryIndex): number {
   return bytes;
 }
 
-type Pending = { controller: AbortController; readers: number; revision: number; version?: string; done: boolean; promise: Promise<NavigationQueryIndex> };
+type Load = (signal: AbortSignal) => Promise<NavigationQueryIndex>;
+type Pending = {
+  controller: AbortController;
+  readers: number;
+  version?: string;
+  /** A change landed after this scan began. Its readers still get it. */
+  stale: boolean;
+  started: boolean;
+  load: Load;
+  promise: Promise<NavigationQueryIndex>;
+  settle?: { resolve: (index: NavigationQueryIndex) => void; reject: (error: unknown) => void };
+};
+type Slot = { current?: Pending; next?: Pending };
 
-/** Shared physical reads with optional short, version-keyed, byte-bounded reuse. */
+/**
+ * Shared physical reads with optional short, version-keyed, byte-bounded reuse.
+ *
+ * A scan that has started always finishes for the readers waiting on it. A
+ * change during the scan never cancels or restarts it: it only stops later
+ * readers from joining. They wait for one queued follow-up, which every
+ * reader that arrives meanwhile shares. A key has at most one scan running
+ * and one queued, however many changes land.
+ */
 export class NavigationIndexReadPool {
-  private readonly joinable = new Map<string, Pending>();
+  private readonly slots = new Map<string, Slot>();
   private readonly physical = new Set<Pending>();
   private readers = 0;
   private readonly retained = new Map<string, { index: NavigationQueryIndex; bytes: number; expires: number; timer: ReturnType<typeof setTimeout>; owner: Pending }>();
@@ -48,7 +65,7 @@ export class NavigationIndexReadPool {
   }
 
   private retain(key: string, index: NavigationQueryIndex, owner: Pending): void {
-    if (!this.retentionMs || this.joinable.get(key) !== owner || owner.controller.signal.aborted) return;
+    if (!this.retentionMs || owner.stale || owner.controller.signal.aborted) return;
     const bytes = retainedIndexBytes(index);
     if (bytes > RETAINED_BYTE_BUDGET) return;
     this.evict(key);
@@ -61,14 +78,44 @@ export class NavigationIndexReadPool {
 
   retainedUsage(): { entries: number; bytes: number } { return { entries: this.retained.size, bytes: this.retainedBytes }; }
 
+  /** A change landed: the running scan stops admitting readers. */
   invalidate(key: string): void {
-    const pending = this.joinable.get(key);
-    if (pending?.done) this.joinable.delete(key);
-    else if (pending) pending.revision += 1;
+    const current = this.slots.get(key)?.current;
+    if (current) current.stale = true;
     this.evict(key);
   }
 
-  read(key: string, load: (signal: AbortSignal, assertCurrent: () => void) => Promise<NavigationQueryIndex>, signal?: AbortSignal, version?: string): Promise<NavigationQueryIndex> {
+  private start(key: string, slot: Slot, owned: Pending): void {
+    owned.started = true;
+    slot.current = owned;
+    this.physical.add(owned);
+    const settle = owned.settle!;
+    owned.settle = undefined;
+    const traced = listingDiagnostics.trace("index", {}, () => owned.load(owned.controller.signal));
+    listingDiagnostics.remember(owned.promise, traced);
+    traced.then((index) => {
+      if (!owned.stale) this.retain(key, index, owned);
+      return index;
+    }).then(settle.resolve, settle.reject).finally(() => {
+      this.physical.delete(owned);
+      if (slot.current === owned) slot.current = undefined;
+      const next = slot.next;
+      slot.next = undefined;
+      if (next) this.start(key, slot, next);
+      else if (!slot.current && this.slots.get(key) === slot) this.slots.delete(key);
+    });
+  }
+
+  private create(load: Load, version: string | undefined): Pending {
+    const owned: Pending = { controller: new AbortController(), readers: 0, version, stale: false, started: false, load,
+      promise: undefined as unknown as Promise<NavigationQueryIndex> };
+    owned.promise = new Promise<NavigationQueryIndex>((resolve, reject) => { owned.settle = { resolve, reject }; });
+    // A reader that leaves sees its own rejection; no one else awaits this.
+    owned.promise.catch(() => undefined);
+    return owned;
+  }
+
+  read(key: string, load: Load, signal?: AbortSignal, version?: string): Promise<NavigationQueryIndex> {
     signal?.throwIfAborted();
     const retained = this.retained.get(key);
     if (retained && retained.owner.version === version && retained.expires > Date.now()) {
@@ -77,69 +124,26 @@ export class NavigationIndexReadPool {
     }
     if (retained) this.evict(key);
     if (this.readers >= 256) return Promise.reject(new Error("Navigation index consumer admission is full."));
-    let pending = this.joinable.get(key);
-    if (pending) {
-      // Revisions invalidate the owner's result, not its physical identity.
-      // A burst of writes still shares one bounded replacement scan.
-      if (pending.version !== version) {
-        pending.version = version;
-        pending.revision += 1;
-      }
-      listingDiagnostics.link("index", "coalesced", pending.promise);
-    }
-    if (!pending) {
+    let slot = this.slots.get(key);
+    let owned: Pending;
+    const current = slot?.current;
+    if (slot && current && !current.stale && current.version === version) {
+      owned = current;
+      listingDiagnostics.link("index", "coalesced", owned.promise);
+    } else if (slot && current) {
+      // The running scan predates this reader's changes. Share the one
+      // follow-up; it has not read anything yet, so it takes the latest version.
+      owned = slot.next ??= this.create(load, version);
+      owned.version = version;
+      listingDiagnostics.link("index", "coalesced", owned.promise);
+    } else {
       if (this.physical.size >= 8) return Promise.reject(new Error("Navigation index source admission is full."));
-      const controller = new AbortController();
-      pending = { controller, readers: 0, revision: 0, version, done: false,
-        promise: Promise.resolve(undefined as unknown as NavigationQueryIndex) };
-      const owned = pending;
-      this.physical.add(owned);
-      this.joinable.set(key, owned);
-      owned.promise = listingDiagnostics.trace("index", {}, async () => {
-        let invalidatedRetries = 0;
-        const retryInvalidated = (): void => {
-          if (invalidatedRetries >= MAX_INVALIDATED_RETRIES) {
-            throw new NavigationQueryError("navigation_busy", "Navigation changed repeatedly during its owner index read. Retry the operation.");
-          }
-          invalidatedRetries += 1;
-          listingDiagnostics.record("index", "retry", { reason: "owner-invalidated" });
-        };
-        try {
-          for (;;) {
-            controller.signal.throwIfAborted();
-            const revision = owned.revision;
-            let index: NavigationQueryIndex;
-            try {
-              index = await load(controller.signal, () => {
-                controller.signal.throwIfAborted();
-                if (revision !== owned.revision) {
-                  throw new NavigationQueryError("navigation_busy", "Owner navigation inputs changed before index construction.");
-                }
-              });
-            } catch (error) {
-              controller.signal.throwIfAborted();
-              if (revision !== owned.revision) {
-                retryInvalidated();
-                continue;
-              }
-              throw error;
-            }
-            controller.signal.throwIfAborted();
-            if (revision !== owned.revision) {
-              retryInvalidated();
-              continue;
-            }
-            owned.done = true;
-            this.retain(key, index, owned);
-            return index;
-          }
-        } finally {
-          this.physical.delete(owned);
-          if (this.joinable.get(key) === owned) this.joinable.delete(key);
-        }
-      });
+      slot = {};
+      this.slots.set(key, slot);
+      owned = this.create(load, version);
+      this.start(key, slot, owned);
     }
-    const owned = pending;
+    const ownedSlot = slot;
     owned.readers += 1;
     this.readers += 1;
     return new Promise((resolve, reject) => {
@@ -151,8 +155,12 @@ export class NavigationIndexReadPool {
         this.readers -= 1;
         owned.readers -= 1;
         if (!owned.readers) {
-          if (this.joinable.get(key) === owned) this.joinable.delete(key);
-          if (this.retained.get(key)?.owner !== owned) owned.controller.abort();
+          if (!owned.started) {
+            if (ownedSlot.next === owned) ownedSlot.next = undefined;
+          } else if (this.retained.get(key)?.owner !== owned) {
+            owned.stale = true;
+            owned.controller.abort();
+          }
         }
         return true;
       };

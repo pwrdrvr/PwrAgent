@@ -123,7 +123,7 @@ describe("owner index source event admission", () => {
     }
   });
 
-  it("shares one replacement across durable revisions while an owner scan is pending", async () => {
+  it("shares one follow-up across durable revisions while an owner scan is pending", async () => {
     const source = createSource();
     const reads = [source.read()];
     try {
@@ -139,9 +139,11 @@ describe("owner index source event admission", () => {
       const results = await Promise.allSettled(reads);
       expect(results).toEqual(reads.map(() => expect.objectContaining({ status: "fulfilled" })));
       expect(source.listThreads).toHaveBeenCalledTimes(2);
-      const first = await reads[0];
-      for (const read of reads) expect(await read).toBe(first);
-      expect(await source.read()).toBe(first);
+      // The first scan serves its own reader; every later revision shares one follow-up.
+      const followUp = await reads[1];
+      expect(await reads[0]).not.toBe(followUp);
+      for (const read of reads.slice(1)) expect(await read).toBe(followUp);
+      expect(await source.read()).toBe(followUp);
       expect(source.listThreads).toHaveBeenCalledTimes(2);
       expect(source.listeners.size).toBe(1);
     } finally {
@@ -179,7 +181,9 @@ describe("owner index source event admission", () => {
     source.finish();
     const [a, b] = await Promise.all([first, second]);
     expect(source.listThreads).toHaveBeenCalledTimes(2);
-    expect(a).toBe(b);
+    expect(a).not.toBe(b);
+    expect(await source.read()).toBe(b);
+    expect(source.listThreads).toHaveBeenCalledTimes(2);
     expect(source.listeners.size).toBe(1);
     source.emit("thread/name/updated");
     expect(source.listeners.size).toBe(0);
@@ -236,7 +240,7 @@ describe("owner index source event admission", () => {
     }
   });
 
-  it("shares one replacement scan across consumers admitted between related events", async () => {
+  it("shares one follow-up scan across consumers admitted between related events", async () => {
     const source = createSource();
     const reads = [source.read()];
     await Promise.resolve();
@@ -248,17 +252,20 @@ describe("owner index source event admission", () => {
     source.finish();
     const results = await Promise.all(reads);
     expect(source.listThreads).toHaveBeenCalledTimes(2);
-    expect(results.every((result) => result === results[0])).toBe(true);
+    expect(results[0]).not.toBe(results[1]);
+    expect(results.slice(1).every((result) => result === results[1])).toBe(true);
     expect(source.listeners.size).toBe(1);
     source.emit("thread/name/updated");
     expect(source.listeners.size).toBe(0);
   });
 });
 
-describe("membership-only owner index reads", () => {
-  // Each scan stays open until the test has emitted its event, the way a
-  // busy owner's live turns land while a slow listing is in flight.
-  function createBusySource() {
+describe("owner index reads under live turns", () => {
+  it("finishes the scan it started while row events keep landing", async () => {
+    // Each scan stays open until the test has emitted its events, the way a
+    // busy owner's live turns land while a slow listing is in flight. The
+    // pool used to restart for each one and failed the third time with
+    // "Navigation changed repeatedly during its owner index read".
     const scans: Array<() => void> = [];
     const listeners = new Set<(event: AgentEvent) => void>();
     const listThreads = vi.fn(() => new Promise<[]>((resolve) => { scans.push(() => resolve([])); }));
@@ -273,73 +280,25 @@ describe("membership-only owner index reads", () => {
       withNavigationSubAgentActivity: (threads: []) => threads,
       getNavigationInputRequestThreadKeys: () => new Set<string>(),
     } as unknown as DesktopBackendRegistry;
-    const emit = (method: string, params: Record<string, unknown> = { threadId: "thread" }) => {
-      const event = { backend: "codex", notification: { method, params } } as AgentEvent;
+    const emit = (method: string) => {
+      const event = { backend: "codex", notification: { method, params: { threadId: "thread" } } } as AgentEvent;
       for (const listener of listeners) listener(event);
     };
-    const settleScan = async () => {
-      await vi.waitFor(() => expect(scans.length).toBeGreaterThan(0));
-      scans.shift()!();
-    };
-    return { listThreads, listeners, registry, emit, settleScan, scanCount: () => listThreads.mock.calls.length };
-  }
-
-  it("finishes while live turns keep changing rows", async () => {
-    const source = createBusySource();
     let settled = false;
-    const read = loadLocalNavigationQueryIndex({
-      registry: source.registry, callerReason: "thread-todo-owners", membershipOnly: true,
-    }).finally(() => { settled = true; });
-    // Three scans is the read pool's whole budget, so a read that restarts
-    // for these rows fails here with navigation_busy.
+    const read = loadLocalNavigationQueryIndex({ registry, callerReason: "thread-todo-owners" })
+      .finally(() => { settled = true; });
     for (let scan = 1; scan <= 3 && !settled; scan += 1) {
-      await vi.waitFor(() => expect(source.scanCount()).toBe(scan));
-      source.emit("turn/started");
-      source.emit("thread/status/changed");
-      source.emit("navigation/threadGitWorkingState/updated", { worktreePath: "/repo" });
-      source.emit("navigation/invalidated", { sourceMethod: "turn/completed" });
-      await source.settleScan();
-      await vi.waitFor(() => expect(settled || source.scanCount() > scan).toBe(true));
+      await vi.waitFor(() => expect(scans.length).toBe(1));
+      emit("turn/started");
+      emit("thread/status/changed");
+      emit("thread/archived");
+      scans.shift()!();
+      await vi.waitFor(() => expect(settled || scans.length === 1).toBe(true));
     }
     await expect(read).resolves.toMatchObject({ threads: [] });
-    expect(source.scanCount()).toBe(1);
-    source.emit("thread/archived");
-    expect(source.listeners.size).toBe(0);
-  });
-
-  it("restarts for a change that can add or remove a thread", async () => {
-    const source = createBusySource();
-    const read = loadLocalNavigationQueryIndex({
-      registry: source.registry, callerReason: "thread-todo-owners", membershipOnly: true,
-    });
-    await vi.waitFor(() => expect(source.scanCount()).toBe(1));
-    source.emit("thread/archived");
-    await source.settleScan();
-    await vi.waitFor(() => expect(source.scanCount()).toBe(2));
-    source.emit("navigation/invalidated", {});
-    await source.settleScan();
-    await vi.waitFor(() => expect(source.scanCount()).toBe(3));
-    await source.settleScan();
-    await expect(read).resolves.toMatchObject({ threads: [] });
-    source.emit("thread/started");
-  });
-
-  it("does not let a row read's restarts cost a membership read", async () => {
-    const source = createBusySource();
-    const rows = loadLocalNavigationQueryIndex({ registry: source.registry, callerReason: "rows" });
-    const membership = loadLocalNavigationQueryIndex({
-      registry: source.registry, callerReason: "thread-todo-owners", membershipOnly: true,
-    });
-    await vi.waitFor(() => expect(source.scanCount()).toBe(2));
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      source.emit("thread/status/changed");
-      await source.settleScan();
-      if (attempt === 0) await source.settleScan();
-      if (attempt < 2) await vi.waitFor(() => expect(source.scanCount()).toBe(attempt + 3));
-    }
-    await expect(rows).rejects.toThrow(/changed repeatedly/);
-    await expect(membership).resolves.toMatchObject({ threads: [] });
-    source.emit("thread/started");
+    expect(listThreads).toHaveBeenCalledTimes(1);
+    // An overtaken scan is not reused, so it holds no listener afterwards.
+    await vi.waitFor(() => expect(listeners.size).toBe(0));
   });
 });
 
