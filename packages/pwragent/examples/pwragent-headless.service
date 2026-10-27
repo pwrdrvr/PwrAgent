@@ -1,0 +1,25 @@
+# Example only. Provision paths, the unprivileged account and Codex login
+# separately. This package never installs or enables a service automatically.
+[Unit]
+Description=PwrAgent headless outpost
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=pwragent
+Group=pwragent
+WorkingDirectory=/srv/pwragent/workspace
+Environment=PWRAGENT_HOME=/var/lib/pwragent
+Environment=PWRAGENT_PROFILE=outpost
+ExecStart=/usr/bin/node /opt/pwragent/bin/pwragent.js serve --workspace /srv/pwragent/workspace --codex-home /var/lib/codex-outpost --codex-bin /usr/local/bin/codex
+UMask=0077
+KillMode=control-group
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

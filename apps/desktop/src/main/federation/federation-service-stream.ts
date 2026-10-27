@@ -1,8 +1,8 @@
 import type { Socket } from "node:net";
 import type {
-  FederationServiceDataEnvelope, ServiceStreamClose, ServiceStreamData, ServiceStreamWindow,
+  ServiceStreamClose, ServiceStreamData, ServiceStreamWindow,
 } from "@pwragent/shared";
-import { FEDERATION_PROTOCOL_VERSION, FEDERATION_SERVICE_V2_NOTIFICATIONS as FRAMES } from "@pwragent/shared";
+import { FEDERATION_SERVICE_V2_NOTIFICATIONS as FRAMES } from "@pwragent/shared";
 
 const MiB = 1024 * 1024;
 const EMPTY = new Uint8Array(0);
@@ -28,16 +28,7 @@ function message(error: unknown, fallback: string): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
 
-/** The binary `service_data` envelope that carries `frame`; `route` names it and its ends. */
-export function serviceDataEnvelope(
-  frame: ServiceStreamData,
-  route: Pick<FederationServiceDataEnvelope, "id" | "sourceInstanceId" | "targetInstanceId" | "createdAt">,
-): FederationServiceDataEnvelope {
-  return {
-    ...route, kind: "service_data", protocolVersion: FEDERATION_PROTOCOL_VERSION,
-    streamId: frame.streamId, seq: frame.seq, ...(frame.fin ? { fin: true } : {}), data: frame.data,
-  };
-}
+export { serviceDataEnvelope } from "@pwragent/federation/federation-service-envelope";
 
 /** The frame's bytes, unless it is not binary or exceeds `maxBytes`. */
 export function serviceStreamFrameBytes(value: unknown, maxBytes: number): Uint8Array {

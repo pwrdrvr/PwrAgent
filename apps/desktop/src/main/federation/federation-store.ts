@@ -20,45 +20,8 @@ import type { StateDb } from "../state/state-db";
 const FEDERATION_ENROLLMENT_SECRET_META_KEY =
   "federation_enrollment_secret_v1";
 
-export type FederationEnrollmentStatus =
-  | "pending"
-  | "used"
-  | "expired"
-  | "revoked";
-
-export type FederationEnrollmentEntry = {
-  id: string;
-  status: FederationEnrollmentStatus;
-  generatedAt: number;
-  expiresAt: number;
-  usedAt?: number;
-  peerId?: FederationPeerId;
-  label?: string;
-  role?: FederationInstanceRole;
-  endpoint?: string;
-  gatewayInstanceId?: string;
-};
-
-export type FederationSessionAuditKind =
-  | "connect_attempt"
-  | "connected"
-  | "rejected"
-  | "disconnected"
-  | "relay"
-  | "error"
-  | "remote_pty_open"
-  | "remote_pty_close";
-
-export type FederationSessionAuditEntry = {
-  eventId: number;
-  peerId?: FederationPeerId;
-  sessionId?: FederationSessionId;
-  kind: FederationSessionAuditKind;
-  createdAt: number;
-  detail?: string;
-  repeatCount?: number;
-  firstSeenAt?: number;
-};
+import type { FederationEnrollmentStatus, FederationEnrollmentEntry, FederationSessionAuditKind, FederationSessionAuditEntry } from "@pwragent/federation/federation-store";
+export type { FederationEnrollmentStatus, FederationEnrollmentEntry, FederationSessionAuditKind, FederationSessionAuditEntry } from "@pwragent/federation/federation-store";
 
 /**
  * A repeat of the newest matching audit row inside this window collapses

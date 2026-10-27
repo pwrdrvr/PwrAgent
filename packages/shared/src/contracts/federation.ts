@@ -242,6 +242,17 @@ export type FederationReceiverPermissions = {
 };
 
 export type FederationHostInfo = {
+  /** Retained peer identity on finite-lived compute; absence means unspecified.
+   * Connection loss never implies pause, deletion or peer expiry. */
+  outpost?: {
+    kind: "outpost";
+    /** Compute/product role, separate from federation client/gateway/dual. */
+    role: "remote_agent";
+    persistence: "memory_and_disk" | "disk_only" | "none" | "unknown";
+    retainUntil: number | null;
+    /** Codex history remains on the owner; federation is not disaster recovery. */
+    threadStorage: "owner";
+  };
   platform?: string;
   osVersion?: string;
   hostname?: string;
