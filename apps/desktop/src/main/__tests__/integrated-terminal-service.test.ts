@@ -1869,6 +1869,55 @@ describe("local terminal owner read lifecycle", () => {
   const address = { ownerInstanceId: "owner", terminalId: "one" };
   const request = { sessionId: "one", threadKey: "codex:one", cwd: os.tmpdir(), cols: 80, rows: 24 };
 
+  it("keeps final and cached output readable while a natural exit checkpoint is pending", async () => {
+    const pty = fakePty();
+    const service = new IntegratedTerminalService({
+      loadNodePty: async () => ({ spawn: (() => pty) as unknown as typeof import("node-pty").spawn }),
+    });
+    let releaseCheckpoint!: () => void;
+    const checkpointGate = new Promise<void>((resolve) => { releaseCheckpoint = resolve; });
+    try {
+      await service.createOrAttach(request, fakeWebContents());
+      vi.mocked(pty.onData).mock.calls[0]![0]("retained screen");
+      const reader = readerFor(service);
+      const page = await reader.read(context, { ...address, format: "plain", maxChars: 3 });
+      expect(page.hasMore).toBe(true);
+      const replay = service.outputForThread("codex:one", "one")!;
+      const snapshot = replay.snapshot.bind(replay);
+      vi.spyOn(replay, "snapshot").mockImplementationOnce(async () => {
+        const result = await snapshot();
+        await checkpointGate;
+        return result;
+      });
+      vi.mocked(pty.onData).mock.calls[0]![0]("\r\nfinal output");
+      vi.mocked(pty.onExit).mock.calls[0]![0]({ exitCode: 0 });
+      expect(service.outputForThread("codex:one", "one")).toBeUndefined();
+
+      const reads = Promise.allSettled([
+        reader.list(context),
+        reader.read(context, { ...address, format: "plain" }),
+        reader.read(context, { ...address, format: "plain", cursor: page.nextCursor! }),
+        service.snapshotForThread("codex:one", "one"),
+      ]);
+      // Let reads reach the owner boundary while archival is held open.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      releaseCheckpoint();
+      const results = await reads;
+      expect(results).toMatchObject([
+        { status: "fulfilled", value: { terminals: [{ terminalId: "one", status: "exited" }] } },
+        { status: "fulfilled", value: { data: expect.stringContaining("final output"), status: "exited" } },
+        { status: "fulfilled", value: { data: "ained screen", snapshotId: page.snapshotId } },
+        { status: "fulfilled", value: { data: expect.stringContaining("final output") } },
+      ]);
+      expect(await service.listForOwnerThread("codex:other")).toEqual([]);
+      expect(await service.snapshotForThread("codex:other", "one")).toBeUndefined();
+      expect(pty.write).not.toHaveBeenCalled();
+    } finally {
+      releaseCheckpoint();
+      await service.dispose();
+    }
+  });
+
   it("rejects old raw cursors before and after a resumed shell reaches their sequence", async () => {
     const first = fakePty();
     const second = fakePty();
