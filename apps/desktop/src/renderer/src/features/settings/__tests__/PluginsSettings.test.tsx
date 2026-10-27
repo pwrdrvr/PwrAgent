@@ -1032,6 +1032,39 @@ describe("PluginsSettings", () => {
       return article;
     }
 
+    it("connects hosted Sandboxer without CLI setup and offers cancellation", async () => {
+      const sandboxer = managed({
+        id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "oauth",
+        serverUrl: "https://sandboxer.com/mcp", configured: false, state: "disconnected", enabled: false,
+      });
+      const api = managedApi([sandboxer]);
+      api.authorizeMcpConnection = vi.fn(() => new Promise<AuthorizeMcpConnectionResponse>(() => {}));
+      api.cancelMcpConnectionAuthorization = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
+      api.setSandboxerTransport = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const row = within((await screen.findByText("Sandboxer")).closest("article")!);
+      expect(row.getByText(/separate from your PwrAgent/)).toBeInTheDocument();
+      expect(row.queryByRole("button", { name: "Get Sandboxer CLI" })).toBeNull();
+      expect(row.queryByRole("button", { name: "Copy setup command" })).toBeNull();
+      expect(row.queryByRole("button", { name: "Refresh status" })).toBeNull();
+      fireEvent.click(row.getByRole("button", { name: "Connect Sandboxer" }));
+      await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: sandboxer.id }));
+      fireEvent.click(await row.findByRole("button", { name: "Cancel sign-in to Sandboxer" }));
+      await waitFor(() => expect(api.cancelMcpConnectionAuthorization).toHaveBeenCalledWith({ connectionId: sandboxer.id }));
+    });
+
+    it("offers explicit hosted/local selection and hosted reauthorization and disconnect", async () => {
+      const sandboxer = managed({ id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", serverUrl: "https://sandboxer.com/mcp" });
+      const api = managedApi([sandboxer]);
+      api.setSandboxerTransport = vi.fn(async () => ({ connectionId: sandboxer.id, connection: sandboxer }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const row = within((await screen.findByText("Sandboxer")).closest("article")!);
+      expect(row.getByRole("button", { name: "Reauthorize" })).toBeInTheDocument();
+      expect(row.getByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+      chooseSelectOption(row.getByRole("combobox", { name: "Sandboxer connection method" }), "Local CLI · existing login or API key");
+      await waitFor(() => expect(api.setSandboxerTransport).toHaveBeenCalledWith({ transport: "local_cli" }));
+    });
+
     it("offers Sandboxer CLI status and compute controls without OAuth actions", async () => {
       const sandboxer = managed({
         id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
@@ -1070,6 +1103,25 @@ describe("PluginsSettings", () => {
       fireEvent.click(within(row).getByRole("button", { name: "Refresh status" }));
       await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: "builtin:sandboxer" }));
       await waitFor(() => expect(within(row).getByRole("button", { name: "Refresh status" })).toBeEnabled());
+    });
+
+    it("offers browser Connect to an unconfigured legacy profile without requiring CLI setup", async () => {
+      const sandboxer = managed({
+        id: "builtin:sandboxer", displayName: "Sandboxer", kind: "sandboxer", authMode: "local_cli",
+        serverUrl: "sandboxer:compute", configured: false, state: "disconnected", sandboxerCliState: "cli_missing",
+      });
+      const hosted = { ...sandboxer, authMode: "oauth" as const, serverUrl: "https://sandboxer.com/mcp", sandboxerCliState: undefined };
+      const api = managedApi([sandboxer]);
+      api.setSandboxerTransport = vi.fn(async () => {
+        api.listMcpConnections = vi.fn(async () => ({ connections: [hosted] }));
+        return { connectionId: sandboxer.id, connection: hosted };
+      });
+      api.authorizeMcpConnection = vi.fn(async () => ({ connection: hosted }));
+      render(<PluginsSettings desktopApi={api} snapshot={createSnapshot()} />);
+      const row = within((await screen.findByText("Sandboxer")).closest("article")!);
+      fireEvent.click(row.getByRole("button", { name: "Connect Sandboxer" }));
+      await waitFor(() => expect(api.setSandboxerTransport).toHaveBeenCalledWith({ transport: "hosted" }));
+      await waitFor(() => expect(api.authorizeMcpConnection).toHaveBeenCalledWith({ connectionId: sandboxer.id }));
     });
 
     it("folds Sandboxer to one line until its CLI is found, then explains it", async () => {

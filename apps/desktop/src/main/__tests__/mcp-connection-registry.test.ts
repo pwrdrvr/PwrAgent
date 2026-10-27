@@ -26,7 +26,7 @@ describe("McpConnectionRegistry", () => {
     const target = configPath();
     const registry = new McpConnectionRegistry({ configPath: target, randomId: () => "custom" });
     expect(registry.get("builtin:sandboxer")).toMatchObject({
-      kind: "sandboxer", authMode: "local_cli", sandboxerRole: "compute",
+      kind: "sandboxer", authMode: "oauth", serverUrl: "https://sandboxer.com/mcp", sandboxerRole: "compute",
       enabled: false, selectForNewThreads: false, toolApproval: "approve",
     });
     expect(registry.get("pwrsnap")?.toolApproval).toBe("auto");
@@ -48,6 +48,44 @@ describe("McpConnectionRegistry", () => {
     expect(() => registry.update({ connectionId: "builtin:sandboxer", serverUrl: "https://example.com" })).toThrow("Built-in");
     expect(registry.create({ displayName: "Sandboxer", serverUrl: "https://example.com/mcp" }).id).toBe("sandboxer");
     expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer:compute");
+  });
+
+  it("retains legacy local transport without writing on read and switches explicitly", () => {
+    const target = configPath();
+    const legacy = "# Keep my comment\n[mcp_connections]\nsandboxer_enabled = true\nsandboxer_tool_approval = \"prompt\"\n";
+    fs.writeFileSync(target, legacy);
+    const registry = new McpConnectionRegistry({ configPath: target });
+    expect(registry.get("builtin:sandboxer")).toMatchObject({ authMode: "local_cli", serverUrl: "sandboxer:compute" });
+    expect(fs.readFileSync(target, "utf8")).toBe(legacy);
+    registry.setSandboxerTransport("hosted");
+    expect(registry.get("builtin:sandboxer")).toMatchObject({ authMode: "oauth", enabled: true, toolApproval: "prompt" });
+    expect(fs.readFileSync(target, "utf8")).toContain("# Keep my comment");
+    registry.setSandboxerTransport("local_cli");
+    expect(registry.get("builtin:sandboxer")?.authMode).toBe("local_cli");
+  });
+
+  it("pins the fresh hosted default before saving preferences and falls back from invalid modes", () => {
+    const target = configPath();
+    const registry = new McpConnectionRegistry({ configPath: target });
+    registry.setEnabled("builtin:sandboxer", true);
+    expect(new McpConnectionRegistry({ configPath: target }).get("builtin:sandboxer")?.authMode).toBe("oauth");
+    fs.writeFileSync(target, '[mcp_connections]\nsandboxer_transport = "invalid"\nsandboxer_enabled = true\n');
+    expect(registry.get("builtin:sandboxer")?.authMode).toBe("local_cli");
+    expect(() => registry.setSandboxerTransport("invalid" as "hosted")).toThrow("transport");
+  });
+
+  it("pins only Sandboxer saves and preserves unrelated config on mode changes", () => {
+    const target = configPath();
+    fs.writeFileSync(target, '# operator comment\n[mcp_connections]\npwrsnap_enabled = false\n');
+    const registry = new McpConnectionRegistry({ configPath: target });
+    registry.setEnabled("pwrsnap", true);
+    expect(fs.readFileSync(target, "utf8")).not.toContain("sandboxer_transport");
+    registry.setSandboxerTransport("hosted");
+    registry.setSandboxerTransport("hosted");
+    const saved = fs.readFileSync(target, "utf8");
+    expect(saved).toContain("# operator comment");
+    expect(saved).toContain("pwrsnap_enabled = true");
+    expect(saved.match(/sandboxer_transport/g)).toHaveLength(1);
   });
 
   it("cleans up Sandboxer sandboxes on PR close unless the profile turns it off", () => {

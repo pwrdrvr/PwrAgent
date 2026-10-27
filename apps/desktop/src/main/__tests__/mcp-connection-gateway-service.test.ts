@@ -67,9 +67,11 @@ const temporaryDirectories: string[] = [];
 function temporaryRegistry(): McpConnectionRegistry {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-mcp-gateway-"));
   temporaryDirectories.push(directory);
-  return new McpConnectionRegistry({
+  const registry = new McpConnectionRegistry({
     configPath: path.join(directory, "config.toml"),
   });
+  registry.setSandboxerTransport("local_cli");
+  return registry;
 }
 
 afterEach(async () => {

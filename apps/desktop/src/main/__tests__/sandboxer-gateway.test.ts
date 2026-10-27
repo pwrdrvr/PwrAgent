@@ -16,6 +16,7 @@ afterEach(async () => { for (const dispose of disposals.splice(0)) await dispose
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sandboxer-gateway-"));
   const registry = new McpConnectionRegistry({ configPath: path.join(root, "config.toml") });
+  registry.setSandboxerTransport("local_cli");
   registry.setEnabled("builtin:sandboxer", true);
   let status = '{"signedIn":true,"apiReachable":true}';
   const sandboxer = new SandboxerConnection(async () => status);

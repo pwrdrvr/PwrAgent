@@ -8,7 +8,7 @@ import { launchElectronApp } from "./fixtures/electron-app";
 
 const mcpElicitationSpecDir = path.dirname(fileURLToPath(import.meta.url));
 
-async function openMcpElicitationReplay(gatewayApproval = false, urlLogin = false, fixturePath?: string) {
+async function openMcpElicitationReplay(gatewayApproval = false, urlLogin = false, fixturePath?: string, expectedTool = "browser_tabs") {
   const app = await launchElectronApp({
     fixturePath: fixturePath ?? path.resolve(
       mcpElicitationSpecDir,
@@ -54,7 +54,7 @@ async function openMcpElicitationReplay(gatewayApproval = false, urlLogin = fals
   });
   await expect(pendingMcp).toBeVisible();
   await expect(pendingMcp.getByText(urlLogin ? "MCP link" : "Tool approval")).toBeVisible();
-  await expect(pendingMcp.getByText(urlLogin ? /restore access to repositories/ : /browser_tabs/)).toBeVisible();
+  await expect(pendingMcp.getByText(urlLogin ? /restore access to repositories/ : new RegExp(expectedTool))).toBeVisible();
   await expect(app.window.getByRole("group", { name: "Pending input" })).toHaveCount(0);
   await expect(app.window.getByRole("group", { name: "Pending approval" })).toHaveCount(0);
 
@@ -107,6 +107,46 @@ test("recovers concurrent MCP login prompts and answers from To-dos", async ({ b
     } finally {
       await rm(fixtureRoot, { recursive: true, force: true });
     }
+  }
+});
+
+test("shows structured native tool arguments and long sandbox names", async ({ browserName: _browserName }, testInfo) => {
+  const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-mcp-display-"));
+  let closeApp: (() => Promise<void>) | undefined;
+  try {
+    const fixture = JSON.parse(await readFile(path.resolve(
+      mcpElicitationSpecDir, "fixtures/mcp-elicitation/replay.fixture.json",
+    ), "utf8")) as ReplayFixture;
+    const step = fixture.steps.find((entry) => entry.id === "mcp-elicitation-1");
+    if (!step || step.kind !== "request") throw new Error("Missing MCP elicitation fixture");
+    const name = "pwragent-hosted-sandboxer-smoke-fixture";
+    step.request.params = {
+      ...step.request.params, serverName: "Sandboxer", message: 'Allow Sandboxer to run tool "create_sandbox"?',
+      _meta: {
+        codex_approval_kind: "mcp_tool_call", persist: ["session", "always"],
+        tool_params_display: [
+          { name: "name", value: name },
+          { name: "labels", value: { purpose: "smoke", access_token: "fixture-private-value" } },
+          { name: "noEnv", value: true },
+        ],
+      },
+    };
+    const fixturePath = path.join(fixtureRoot, "replay.fixture.json");
+    await writeFile(fixturePath, JSON.stringify(fixture));
+    const app = await openMcpElicitationReplay(false, false, fixturePath, "create_sandbox");
+    closeApp = app.close;
+    const card = app.window.getByRole("group", { name: "Pending MCP interaction" });
+    await expect(card.getByText(name, { exact: true })).toBeVisible();
+    await expect(card).toContainText('"purpose": "smoke"');
+    await expect(card).toContainText('"access_token": "[redacted]"');
+    await expect(card).not.toContainText("fixture-private-value");
+    await expect(card).not.toContainText("[object Object]");
+    await card.screenshot({ path: testInfo.outputPath("mcp-structured-approval.png") });
+    await card.getByRole("button", { name: "Decline", exact: true }).click();
+    await expect(card).toHaveCount(0);
+  } finally {
+    try { await closeApp?.(); }
+    finally { await rm(fixtureRoot, { recursive: true, force: true }); }
   }
 });
 
