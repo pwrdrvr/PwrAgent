@@ -84,6 +84,23 @@ describe.skipIf(process.platform === "win32")("desktop client against the standa
       expect((await client.startTurn({ ...ref, input: [{ type: "text", text: "hello" }], queueEntryId: "stable-submission" })).turnId).toBe(turn.turnId);
       await expect(client.startTurn({ ...ref, input: [{ type: "text", text: "different" }], queueEntryId: "stable-submission" })).rejects.toThrow("different input");
       expect((await client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", query: { kind: "directory-index", keys: ["missing"] } })).directories).toEqual([]);
+      const config = await client.getNavigationLaunchpadConfig({ protocol: 2, directoryKey: workspace });
+      expect(config.directoryKey).toBe(workspace);
+      expect(config.defaults?.workMode).toBe("local");
+      const materialized = await client.materializeDirectoryLaunchpad({ directoryKey: workspace,
+        launchpad: { ...config.defaults!, executionMode: "auto", workMode: "local", directoryKey: workspace, directoryKind: "directory",
+          directoryLabel: "workspace", directoryPath: workspace, prompt: "", createdAt: Date.now(), updatedAt: Date.now() },
+        input: [{ type: "text", text: "hello" }],
+      });
+      expect(materialized.workMode).toBe("local");
+      expect(materialized.turnId).toBeTruthy();
+      expect(materialized.turnStartFailure).toBeUndefined();
+      let launchpadRead = await client.readThread({ backend: "codex", threadId: materialized.threadId });
+      for (let attempt = 0; !launchpadRead.replay.lastAssistantMessage && attempt < 100; attempt++) {
+        await delay(20);
+        launchpadRead = await client.readThread({ backend: "codex", threadId: materialized.threadId });
+      }
+      expect(launchpadRead.replay.lastAssistantMessage).toBe("Fixture result");
     } finally {
       connection?.close();
       daemon.kill("SIGTERM");

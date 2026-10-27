@@ -6,7 +6,7 @@ import { ACTIVE, atomicJson, digest } from "./store.js";
 export const METHOD_CAPABILITIES = Object.fromEntries([
   ...["getNavigationQueryPage", "getNavigationLaunchpadConfig", "getNavigationSelectedDetail", "getNavigationQueueProjection", "releaseNavigationAttentionView", "listThreads", "listBackends", "resolveThread", "resolveThreadAdmissionState", "markThreadSeen", "getProjectPage", "lookupArchivedThreads"].map((method) => [`backend.${method}`, "thread_navigation"]),
   ...["readThread", "listSkills", "listThreadMcpServers"].map((method) => [`backend.${method}`, "thread_detail"]),
-  ...["startThread", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread", "setThreadModelSettings", "setThreadExecutionMode"].map((method) => [`backend.${method}`, "turn_control"]),
+  ...["startThread", "materializeDirectoryLaunchpad", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread", "setThreadModelSettings", "setThreadExecutionMode"].map((method) => [`backend.${method}`, "turn_control"]),
 ]);
 
 function mode(sandbox) { return sandbox === "workspace-write" ? "auto" : "default"; }
@@ -117,7 +117,12 @@ export class HeadlessBackend {
       case "listBackends": return this.listBackends();
       case "listThreads": return { backend: "codex", fetchedAt: Date.now(), threads: [...this.threads.values()].map((thread) => this.summary(thread)), workspaceRoots: [this.runtime.workspace] };
       case "getNavigationQueryPage": return this.query(params);
-      case "getNavigationLaunchpadConfig": return { protocol: 2, revision: "headless-v1", defaults: { backend: "codex", executionMode: "default", workMode: "local" } };
+      case "getNavigationLaunchpadConfig": {
+        if (params.protocol !== 2) throw new Error("Unsupported navigation protocol");
+        if (params.directoryKey !== undefined && params.directoryKey !== this.runtime.workspace) throw new Error("Requested workspace is not owned by this outpost");
+        return { protocol: 2, revision: "headless-v1", ...(params.directoryKey ? { directoryKey: params.directoryKey } : {}),
+          ...(params.knownRevision === "headless-v1" ? { unchanged: true } : { defaults: { backend: "codex", executionMode: "default", workMode: "local" } }) };
+      }
       case "getNavigationSelectedDetail": return { protocol: 2, ref: params.ref, revision: digest(this.summary(this.owned(params.ref.threadId))), readiness: "ready", identity: "present", thread: this.summary(this.owned(params.ref.threadId)), collections: [] };
       case "getNavigationQueueProjection": return { protocol: 2, ref: params.ref, revision: "no-queue", readiness: "ready", complete: true, entries: [] };
       case "releaseNavigationAttentionView": this.attentionViews.delete(params.viewId); return {};
@@ -136,6 +141,7 @@ export class HeadlessBackend {
           ? [{ key: this.runtime.workspace, kind: "directory", path: this.runtime.workspace, label: path.basename(this.runtime.workspace), threadKeys: [] }] : [] };
       case "readThread": return this.readThread(params.threadId);
       case "startThread": return this.startThread(params);
+      case "materializeDirectoryLaunchpad": return this.materializeLaunchpad(params, envelope);
       case "startTurn": return this.startTurn(params, envelope);
       case "interruptTurn": {
         this.owned(params.threadId);
@@ -205,6 +211,28 @@ export class HeadlessBackend {
   }
 
   invalidate(threadId) { this.publish({ backend: "codex", notification: { method: "navigation/invalidated", params: { threadId } } }, "navigation"); }
+
+  async materializeLaunchpad(params, envelope) {
+    if (params.directoryKey !== this.runtime.workspace) throw new Error("Requested workspace is not owned by this outpost");
+    const draft = params.launchpad || {};
+    if (draft.backend && draft.backend !== "codex") throw new Error("This outpost serves Codex only");
+    if (draft.directoryPath && draft.directoryPath !== this.runtime.workspace) throw new Error("Requested workspace is not owned by this outpost");
+    if (params.parentThreadId || params.agent || params.reviewTarget || params.scheduledFor || params.collaborationMode
+      || (params.codexEnvironmentSelector && params.codexEnvironmentSelector !== "none") || draft.codexEnvironmentId
+      || draft.branchName || draft.acpRuntime || draft.fastMode || draft.tokenMiserEnabled || draft.mcpConnectionIds?.length) {
+      throw new Error("This outpost supports local workspace launchpads without grouping, environments or provider extensions");
+    }
+    const input = params.input?.length ? params.input : draft.prompt ? [{ type: "text", text: draft.prompt }] : undefined;
+    if (input) textInput(input);
+    const created = { ...await this.startThread(draft), workMode: "local" };
+    if (!input) return created;
+    try {
+      const turn = await this.startTurn({ ...draft, threadId: created.threadId, input }, envelope);
+      return { ...created, turnId: turn.turnId };
+    } catch (error) {
+      return { ...created, turnStartFailure: { message: error.message, phase: "turn" } };
+    }
+  }
 
   async startThread(params) {
     if (this.runtime.active || this.creating) throw new Error("Outpost is busy");

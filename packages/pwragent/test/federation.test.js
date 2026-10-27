@@ -79,6 +79,37 @@ test("encrypted desktop protocol enrolls, browses, runs, reconnects and reads wh
   await assert.rejects(viewer(invite, v.identity, "reconnect"), /revoked_peer/);
 });
 
+test("launchpad creation validates ownership and unsupported settings before creating a thread", { timeout: 20000 }, async (t) => {
+  const h = await setup(t);
+  const invite = decodeFederationInvite((await h.rpc("federation-invite", { port: await port() })).invite);
+  const v = await viewer(invite);
+  t.after(() => v.connection.close());
+  const config = await v.call("getNavigationLaunchpadConfig", { protocol: 2, directoryKey: h.workspace });
+  assert.equal(config.directoryKey, h.workspace);
+  assert.equal(config.defaults.workMode, "local");
+  assert.equal((await v.call("getNavigationLaunchpadConfig", { protocol: 2, directoryKey: h.workspace, knownRevision: config.revision })).unchanged, true);
+  await assert.rejects(v.call("getNavigationLaunchpadConfig", { protocol: 2, directoryKey: "/outside" }), /not owned/);
+  const params = { directoryKey: h.workspace, launchpad: { ...config.defaults, executionMode: "auto" } };
+  for (const invalid of [
+    { directoryKey: "/outside" }, { launchpad: { ...params.launchpad, workMode: "worktree" } },
+    { launchpad: { ...params.launchpad, executionMode: "full-access" } },
+    { launchpad: { ...params.launchpad, backend: "acp:fixture" } },
+    { codexEnvironmentSelector: "production" }, { parentThreadId: "parent" },
+    { input: [{ type: "image", url: "fixture" }] },
+  ]) await assert.rejects(v.call("materializeDirectoryLaunchpad", { ...params, ...invalid }));
+  assert.equal((await v.call("listThreads")).threads.length, 0, "unsupported requests cannot leave empty threads");
+  const created = await v.call("materializeDirectoryLaunchpad", { ...params, input: [{ type: "text", text: "hello" }] });
+  assert.equal(created.workMode, "local");
+  assert.ok(created.turnId);
+  assert.equal(created.turnStartFailure, undefined);
+  await eventually(() => {
+    try { return readFileSync(path.join(h.workspace, "fixture-result.txt"), "utf8") === "hello"; } catch { return false; }
+  });
+  const restricted = await viewer(decodeFederationInvite((await h.rpc("federation-invite", { port: Number(new URL(invite.gatewayUrl).port) })).invite), undefined, "enroll", ["thread_navigation"]);
+  t.after(() => restricted.connection.close());
+  await assert.rejects(restricted.call("materializeDirectoryLaunchpad", params), /capability|forbidden/i);
+});
+
 test("SCP-style invite import joins through an outbound SSH-forward equivalent, survives tunnel loss and rejoins", { timeout: 20000 }, async (t) => {
   const gateway = await setup(t);
   const outpost = await setup(t);

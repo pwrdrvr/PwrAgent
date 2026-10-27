@@ -189,6 +189,12 @@ protocol-2 pages, and remote submissions carrying a stable `queueEntryId` reuse
 the same durable job after a lost response. There is still no turn queue: a
 second distinct submission while busy is rejected.
 
+Directory launchpads and `create_instance_thread` can create an independent
+thread and start its first text turn in the configured workspace. Select
+`workMode: local` and `executionMode: auto` when workspace edits are needed;
+the defaults remain local and read-only. Launchpad requests for worktrees,
+grouping, environments or provider extensions are rejected before creation.
+
 ## Identity, compute lifetime and remaining scope
 
 The private `federation.json` stores the retained peer ID, signing/Noise keys,
@@ -276,6 +282,14 @@ survived viewer disconnection; reconnect, transcript reads, submission
 deduplication, container restart, continuation and three-peer gateway relay
 passed. This caught the first-turn requirement to use an already loaded thread
 directly: Codex cannot resume its empty rollout before the first turn starts.
+
+A subsequent live test enrolled the Docker outpost into an existing desktop
+gateway using a one-use invite copied privately into the container. PwrAgent's
+instance tools discovered its workspace and models, created a thread through
+the directory launchpad, ran commands and wrote a marker file. A continuation
+completed while the gateway forward was closed; reconnecting exposed its
+transcript through the gateway. This caught missing launchpad configuration
+and materialization contracts, now covered by the mocked integration tests.
 
 Docker's default seccomp policy blocked the namespaces used by Codex's Linux
 sandbox. The successful run retained dropped container capabilities and
