@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, rm } from "node:fs/promises";
+import { mkdir, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createGitHandoffService, ThreadInstanceHandoffService, FederationFilePushReceiver,
   registerFilePushHandlers, pushFederationFile, THREAD_HANDOFF_METHODS, FILE_PUSH_METHOD_CAPABILITIES } from "../dist/federation-core.js";
@@ -130,5 +130,5 @@ export function setupHandoffs(federation, directory) {
       return result;
     } finally { runtime.intakeBusy = false; }
   });
-  return { stop: async () => { await receiver.dispose(); await rm(path.join(directory, "incoming"), { recursive: true, force: true }); } };
+  return { stop: () => receiver.dispose() };
 }

@@ -177,7 +177,7 @@ export class Runtime {
       this.blockedReason || params.turn.error?.message);
   }
 
-  async dispatchTool(message, call) {
+  async dispatchTool(call) {
     const job = this.active && this.store.get(this.active);
     if (!job || job.threadId !== call.threadId || (job.turnId && job.turnId !== call.turnId)) throw new Error("Dynamic tool call does not belong to the active outpost turn");
     const key = digest([call.threadId, call.turnId, call.callId]);
@@ -214,7 +214,7 @@ export class Runtime {
   serverRequest(message) {
     const call = readPwrAgentMessagingDynamicToolCall(message);
     if (call) {
-      void this.dispatchTool(message, call).then((result) => this.codex.send({ id: message.id, result }),
+      void this.dispatchTool(call).then((result) => this.codex.send({ id: message.id, result }),
         (error) => this.codex.send({ id: message.id, result: { success: false, contentItems: [{ type: "inputText", text: error.message }] } }));
       return;
     }

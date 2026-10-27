@@ -27,17 +27,17 @@ test("tool-call receipts survive cold restart without replaying successful or un
   let sends = 0;
   runtime.messagingTools = { handleDynamicToolCall: async () => { sends++; throw new Error("Owner disconnected after accepting the send"); } };
   const call = { threadId: "thread", turnId: "turn", callId: "uncertain", namespace: "pwragent", tool: "send_private_response", arguments: { text: "mock reply" } };
-  await assert.rejects(runtime.dispatchTool({}, call), /disconnected/);
+  await assert.rejects(runtime.dispatchTool(call), /disconnected/);
   runtime.toolLedger = new Map();
-  await assert.rejects(runtime.dispatchTool({}, call), /uncertain/);
+  await assert.rejects(runtime.dispatchTool(call), /uncertain/);
   assert.equal(sends, 1);
-  await assert.rejects(runtime.dispatchTool({}, { ...call, arguments: { text: "different" } }), /different input/);
+  await assert.rejects(runtime.dispatchTool({ ...call, arguments: { text: "different" } }), /different input/);
   const response = { success: true, contentItems: [{ type: "inputText", text: "delivered" }] };
   runtime.messagingTools = { handleDynamicToolCall: async () => { sends++; return response; } };
   const accepted = { ...call, callId: "confirmed" };
-  assert.deepEqual(await runtime.dispatchTool({}, accepted), response);
+  assert.deepEqual(await runtime.dispatchTool(accepted), response);
   runtime.toolLedger = new Map();
-  assert.deepEqual(await runtime.dispatchTool({}, accepted), response);
+  assert.deepEqual(await runtime.dispatchTool(accepted), response);
   assert.equal(sends, 2);
 });
 
