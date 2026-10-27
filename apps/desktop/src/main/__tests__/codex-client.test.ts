@@ -10370,6 +10370,137 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  describe("guardian denial limit", () => {
+    const denialLimitMessage =
+      "Automatic approval review rejected too many approval requests for this turn"
+      + " (3 consecutive, 3 in the last 50 reviews); interrupting the turn.";
+
+    async function startClient() {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+      });
+      await client.getInitializeResult();
+      const notifications: Array<{ method: string; params: Record<string, unknown> }> = [];
+      client.onNotification((notification) => {
+        notifications.push(notification as { method: string; params: Record<string, unknown> });
+      });
+      const transport = MockTransport.instances.at(-1)!;
+      const emit = (method: string, params: Record<string, unknown>) =>
+        transport.emitInbound({ jsonrpc: "2.0", method, params });
+      const startTurn = (turnId: string) =>
+        emit("turn/started", {
+          threadId: "thread-1",
+          turn: { id: turnId, status: "inProgress", items: [] },
+        });
+      const completeTurn = (
+        turnId: string,
+        status: string,
+        error?: Record<string, unknown>,
+      ) =>
+        emit("turn/completed", {
+          threadId: "thread-1",
+          turn: {
+            id: turnId,
+            status,
+            items: [],
+            error: error ?? null,
+            startedAt: 1_793_139_395,
+            completedAt: 1_793_139_403,
+            durationMs: 8_281,
+          },
+        });
+      return { client, notifications, emit, startTurn, completeTurn };
+    }
+
+    it("fails the turn Codex interrupts after the default-mode denial warning", async () => {
+      const { client, notifications, emit, startTurn, completeTurn } = await startClient();
+      startTurn("turn-1");
+      emit("guardianWarning", { threadId: "thread-1", message: denialLimitMessage });
+      completeTurn("turn-1", "interrupted");
+
+      await vi.waitFor(() => expect(notifications).toHaveLength(3));
+      expect(notifications[1]).toEqual({
+        method: "warning",
+        params: {
+          threadId: "thread-1",
+          message: denialLimitMessage,
+          presentation: "activity-only",
+        },
+      });
+      expect(notifications[2]).toEqual({
+        method: "turn/failed",
+        params: expect.objectContaining({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: expect.objectContaining({
+            id: "turn-1",
+            status: "failed",
+            error: { message: denialLimitMessage },
+          }),
+        }),
+      });
+      await client.close();
+    });
+
+    it("fails a strict-mode interrupted turn that carries tooManyDenials", async () => {
+      const { client, notifications, startTurn, completeTurn } = await startClient();
+      startTurn("turn-1");
+      completeTurn("turn-1", "interrupted", {
+        message: denialLimitMessage,
+        codexErrorInfo: "tooManyDenials",
+        additionalDetails: null,
+      });
+
+      await vi.waitFor(() => expect(notifications).toHaveLength(2));
+      expect(notifications[1]).toEqual({
+        method: "turn/failed",
+        params: expect.objectContaining({
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: expect.objectContaining({
+            status: "failed",
+            error: { message: denialLimitMessage },
+          }),
+        }),
+      });
+      await client.close();
+    });
+
+    it("keeps operator interrupts and later turns as interrupted", async () => {
+      const { client, notifications, emit, startTurn, completeTurn } = await startClient();
+      // An ordinary Stop with no denial warning.
+      startTurn("turn-1");
+      completeTurn("turn-1", "interrupted");
+      // A denial warning whose turn ended before Codex could abort it does not
+      // carry over to the next turn.
+      startTurn("turn-2");
+      emit("guardianWarning", { threadId: "thread-1", message: denialLimitMessage });
+      completeTurn("turn-2", "completed");
+      startTurn("turn-3");
+      completeTurn("turn-3", "interrupted");
+      // A routine guardian decision does not fail the turn.
+      startTurn("turn-4");
+      emit("guardianWarning", {
+        threadId: "thread-1",
+        message: "Automatic approval review denied (risk: high, authorization: low): Deletes data.",
+      });
+      completeTurn("turn-4", "interrupted");
+
+      await vi.waitFor(() => expect(
+        notifications.filter((n) => n.method === "turn/completed" || n.method === "turn/failed"),
+      ).toHaveLength(4));
+      expect(notifications.filter((n) => n.method === "turn/failed")).toEqual([]);
+      expect(
+        notifications
+          .filter((n) => n.method === "turn/completed")
+          .map((n) => (n.params.turn as { status?: string }).status),
+      ).toEqual(["interrupted", "completed", "interrupted", "interrupted"]);
+      await client.close();
+    });
+  });
+
   it("normalizes config warnings with project trust metadata", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
