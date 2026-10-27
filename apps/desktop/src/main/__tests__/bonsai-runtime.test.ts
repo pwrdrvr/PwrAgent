@@ -24,11 +24,11 @@ afterEach(async () => {
 });
 
 describe("isolated Bonsai launch resources", () => {
-  it("disables native MCPs with CLI-compatible keys and rejects names the CLI would misparse", () => {
-    expect(bonsaiNativeMcpOverrides(["awsdocs", "computer-use", "node_repl"])).toEqual([
-      "mcp_servers.awsdocs.enabled=false", "mcp_servers.computer-use.enabled=false", "mcp_servers.node_repl.enabled=false",
+  it("disables native MCPs in one table override, including names the CLI dotted-key parser would misparse", () => {
+    expect(bonsaiNativeMcpOverrides(["awsdocs", "computer-use", "server.with.dots"])).toEqual([
+      'mcp_servers={"awsdocs"={enabled=false},"computer-use"={enabled=false},"server.with.dots"={enabled=false}}',
     ]);
-    expect(() => bonsaiNativeMcpOverrides(["server.with.dots"])).toThrow("Cannot isolate native MCP server");
+    expect(bonsaiNativeMcpOverrides([])).toEqual([]);
   });
   it("generates a private catalog with model capabilities and process-local compatibility overrides", async () => {
     const runtime = await prepareBonsaiRuntime(provider);

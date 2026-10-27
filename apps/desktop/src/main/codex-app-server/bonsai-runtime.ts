@@ -5,13 +5,11 @@ import { resolveActiveProfilePath } from "../profile";
 import { discoverModelCatalog, startBridge, type LocalModelCatalog } from "./local-responses-bridge.mjs";
 
 export function bonsaiNativeMcpOverrides(names: readonly string[]): string[] {
-  return names.map((name) => {
-    // Codex's CLI splits dotted override keys without parsing quoted segments.
-    if (!/^[A-Za-z0-9_-]+$/u.test(name)) {
-      throw new Error(`Cannot isolate native MCP server ${JSON.stringify(name)}: its name cannot be used in a Codex config override.`);
-    }
-    return `mcp_servers.${name}.enabled=false`;
-  });
+  // Quoted keys work inside a TOML value; the CLI's dotted key parser treats
+  // quotes literally. Merge these flags into the existing server tables.
+  return names.length
+    ? [`mcp_servers={${names.map((name) => `${JSON.stringify(name)}={enabled=false}`).join(",")}}`]
+    : [];
 }
 
 export async function readBonsaiCatalog(provider: CodexModelProviderSettings): Promise<LocalModelCatalog> {
