@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FederationTarget, FederationPeerSummary, NavigationIdentity, NavigationDetailCollections, NavigationDetailCollectionName, NavigationSelectedDetailResponse } from "@pwragent/shared";
 import { buildPullRequestStatusKey, NAVIGATION_DETAIL_COLLECTION_NAMES } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
@@ -6,6 +6,7 @@ import { applyNavigationThreadEvent } from "./navigation-thread-event";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
 import {
   applyNavigationSelectedDetail,
+  navigationIdentitiesEqual,
   navigationIdentityKey,
   selectNavigationIdentity,
   type NavigationSelectionState,
@@ -34,8 +35,16 @@ export function useNavigationSelectedDetail(params: {
   refresh: () => Promise<void>;
 } {
   const { desktopApi, ref, federationTarget } = params;
-  const identityKey = ref ? navigationIdentityKey(ref) : undefined;
-  const targetKey = JSON.stringify(federationTarget);
+  const backend = ref?.backend;
+  const threadId = ref?.threadId;
+  const ownerInstanceId = ref?.ownerInstanceId;
+  const identityKey = useMemo(() => backend !== undefined && threadId !== undefined
+    ? navigationIdentityKey({ backend, threadId, ownerInstanceId }) : undefined, [backend, threadId, ownerInstanceId]);
+  const targetScope = federationTarget?.scope;
+  const targetInstanceId = federationTarget?.scope === "remote" ? federationTarget.instanceId : undefined;
+  const targetKey = useMemo(() => JSON.stringify(targetScope === "remote"
+    ? { scope: targetScope, instanceId: targetInstanceId } : targetScope ? { scope: targetScope } : undefined),
+  [targetScope, targetInstanceId]);
   const paramsRef = useRef(params);
   paramsRef.current = params;
   const currentRef = useRef<NavigationSelectionState | undefined>(undefined);
@@ -291,6 +300,6 @@ export function useNavigationSelectedDetail(params: {
     return () => { if (timer !== undefined) clearTimeout(timer); unsubscribe?.(); unsubscribeBindings?.(); };
   }, [desktopApi, identityKey, refresh, targetKey]);
   // A render for a new owner must never expose the previous owner's ready configuration.
-  const visibleState = state && identityKey === navigationIdentityKey(state.ref) ? state : undefined;
+  const visibleState = state && ref && navigationIdentitiesEqual(state.ref, ref) ? state : undefined;
   return { state: visibleState, refresh };
 }

@@ -3,6 +3,32 @@ import type {
   FederationTarget, NavigationDirectoryRow, NavigationIdentity, NavigationQueryRequest,
 } from "@pwragent/shared";
 import { navigationIdentityKey } from "./navigation-query-state";
+import type { NavigationPresentedThread } from "./navigation-loaded-rows";
+
+/** Row metadata changes do not change the window's ordinary-child disclosure. */
+export function projectDisclosedNavigationParents(
+  rows: ReadonlyMap<string, NavigationPresentedThread> | undefined,
+  previous: readonly NavigationIdentity[],
+): readonly NavigationIdentity[] {
+  let index = 0;
+  let same = true;
+  for (const thread of rows?.values() ?? []) {
+    if (thread.subthreadsCollapsed || !thread.ordinaryChildCount) continue;
+    const ref = previous[index++];
+    const owner = thread.federation?.ref.target;
+    if (!ref || ref.backend !== thread.source || ref.threadId !== thread.id
+      || ref.ownerInstanceId !== (owner?.scope === "remote" ? owner.instanceId : undefined)) same = false;
+  }
+  if (same && index === previous.length) return previous;
+  const refs: NavigationIdentity[] = [];
+  for (const thread of rows?.values() ?? []) {
+    if (thread.subthreadsCollapsed || !thread.ordinaryChildCount) continue;
+    const owner = thread.federation?.ref.target;
+    refs.push({ backend: thread.source, threadId: thread.id,
+      ...(owner?.scope === "remote" ? { ownerInstanceId: owner.instanceId } : {}) });
+  }
+  return refs;
+}
 
 /** The Updated and Created lenses' Pinned group: its own collection beside `lens`. */
 export const PINNED_GROUP_RESOURCE_ID = "lens-pins";

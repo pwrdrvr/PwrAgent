@@ -6,7 +6,7 @@ import { useBoundedNavigationWindow } from "./useBoundedNavigationWindow";
 import { readNavigationArchiveGroup, type NavigationArchiveMember } from "./navigation-archive-group";
 import { useNavigationLaunchpadConfiguration } from "./useNavigationLaunchpadConfiguration";
 import { navigationQueryEventRequiresRefresh } from "./navigation-query-events";
-import { isLensCollectionId } from "./navigation-window-demand";
+import { isLensCollectionId, projectDisclosedNavigationParents } from "./navigation-window-demand";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import { useRecoverableRef, useRecoverableState } from "./RendererRecoveryState";
 import { buildStartingLaunchpadComposerScopeKey } from "../features/composer/launchpad-composer-scope";
@@ -598,7 +598,7 @@ function upsertLaunchpadDirectory(
   );
 }
 
-function directoryKeysForThread(thread?: NavigationThreadSummary): string[] {
+function directoryKeysForThread(thread?: Pick<NavigationThreadSummary, "linkedDirectories">): string[] {
   if (!thread) return [];
   return thread.linkedDirectories.length
     ? thread.linkedDirectories.map((directory) => classifyDirectory(directory).key)
@@ -3537,6 +3537,13 @@ export function useThreadNavigation(
   >(undefined);
   const suppressedArchivedThreadKeysRef = useRef<Set<string>>(new Set());
   const removedDirectoryKeysRef = useRef(new Set<string>());
+  const updateRemovedDirectoryKey = useCallback((key: string, removed: boolean): void => {
+    if (removedDirectoryKeysRef.current.has(key) === removed) return;
+    const next = new Set(removedDirectoryKeysRef.current);
+    if (removed) next.add(key);
+    else next.delete(key);
+    removedDirectoryKeysRef.current = next;
+  }, []);
   const scheduledRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined
   );
@@ -3620,9 +3627,9 @@ export function useThreadNavigation(
   }, []);
 
   const attentionViewId = useId();
-  const selectedIdentity = selectedItemKey
+  const selectedIdentity = useMemo(() => selectedItemKey
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
-    : undefined;
+    : undefined, [selectedItemKey, rendererFederationTarget]);
   const selectedDetail = useNavigationSelectedDetail({
     collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "rewindLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
     desktopApi, enabled: enabled && viewVisible,
@@ -3653,16 +3660,23 @@ export function useThreadNavigation(
       ...(owner.target.scope === "remote" ? { ownerInstanceId: owner.target.instanceId } : {}) }];
   }), [draftStore, draftVersion, rendererFederationTarget]);
   const selectedConfiguration = selectedDetail.state?.detail?.thread;
-  const selectedDirectoryKeys = selectedConfiguration ? directoryKeysForThread(selectedConfiguration)
-    : (getLaunchpadSelectionDirectoryKey(selectedItemKey) ? [getLaunchpadSelectionDirectoryKey(selectedItemKey)!] : []);
+  const selectedLinkedDirectories = selectedConfiguration?.linkedDirectories;
+  const selectedDirectoryKeys = useMemo(() => selectedLinkedDirectories ? directoryKeysForThread({ linkedDirectories: selectedLinkedDirectories })
+    : (getLaunchpadSelectionDirectoryKey(selectedItemKey) ? [getLaunchpadSelectionDirectoryKey(selectedItemKey)!] : []),
+  [selectedLinkedDirectories, selectedItemKey]);
+  const attentionView = useMemo(() => ({ id: attentionViewId, promoteOnTurnEnd: options.attentionPromoteOnTurnEnd ?? true }),
+    [attentionViewId, options.attentionPromoteOnTurnEnd]);
+  const removedDirectoryKeySet = removedDirectoryKeysRef.current;
+  const removedDirectoryKeys = useMemo(() => [...removedDirectoryKeySet], [removedDirectoryKeySet]);
+  const disclosedParentsRef = useRef<ReturnType<typeof projectDisclosedNavigationParents>>([]);
+  const disclosedParents = useMemo(() => projectDisclosedNavigationParents(state.rows?.threadRows, disclosedParentsRef.current),
+    [state.rows?.threadRows]);
+  disclosedParentsRef.current = disclosedParents;
   const boundedNavigation = useBoundedNavigationWindow({ desktopApi, enabled, visible: viewVisible, observeEvents: false,
-    browseMode, target: rendererFederationTarget, attentionView: { id: attentionViewId, promoteOnTurnEnd: options.attentionPromoteOnTurnEnd ?? true },
+    browseMode, target: rendererFederationTarget, attentionView,
     pinnedThreadsOnTop,
     expandedByKey: directoryDisclosure.expandedByKey, unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
-    selectedRef: selectedIdentity, selectedDirectoryKeys, removedDirectoryKeys: [...removedDirectoryKeysRef.current],
-    disclosedParents: loadedThreadRows(state.rows).filter((thread) => !thread.subthreadsCollapsed && Boolean(thread.ordinaryChildCount))
-      .map((thread) => ({ backend: thread.source, threadId: thread.id,
-        ...(thread.federation?.ref.target.scope === "remote" ? { ownerInstanceId: thread.federation.ref.target.instanceId } : {}) })),
+    selectedRef: selectedIdentity, selectedDirectoryKeys, removedDirectoryKeys, disclosedParents,
     draftRefs,
   });
   const { invalidate: invalidateNavigation, refresh: refreshBoundedNavigation } = boundedNavigation;
@@ -7046,7 +7060,7 @@ export function useThreadNavigation(
           recordPickDirectoryError(result.message);
           return undefined;
         }
-        removedDirectoryKeysRef.current.delete(result.directoryKey);
+        updateRemovedDirectoryKey(result.directoryKey, false);
         pendingPickedDirectoryKey = result.directoryKey;
         pendingPickedLaunchpadRef.current.set(result.directoryKey, result.launchpad);
         setLocalLaunchpads((current) => ({
@@ -7099,7 +7113,7 @@ export function useThreadNavigation(
         setPickingDirectory(false);
       }
     },
-    [desktopApi, recordPickDirectoryError, refresh, rendererFederationTarget, setLocalLaunchpads, setSelectedItemKey],
+    [desktopApi, recordPickDirectoryError, refresh, rendererFederationTarget, setLocalLaunchpads, setSelectedItemKey, updateRemovedDirectoryKey],
   );
 
   const pickDirectoryForReference = useCallback(async (): Promise<
@@ -7137,7 +7151,7 @@ export function useThreadNavigation(
         recordPickDirectoryError(result.message);
         return undefined;
       }
-      removedDirectoryKeysRef.current.delete(result.directoryKey);
+      updateRemovedDirectoryKey(result.directoryKey, false);
       setLocalLaunchpads((current) => ({
         ...current,
         [result.directoryKey]: result.launchpad,
@@ -7162,7 +7176,7 @@ export function useThreadNavigation(
     } finally {
       setPickingDirectory(false);
     }
-  }, [desktopApi, recordPickDirectoryError, rendererFederationTarget, setLocalLaunchpads]);
+  }, [desktopApi, recordPickDirectoryError, rendererFederationTarget, setLocalLaunchpads, updateRemovedDirectoryKey]);
 
   const addProjectDirectory = useCallback(async (): Promise<string | undefined> => {
     const directoryKey = await pickAndRegisterDirectory();
@@ -7593,7 +7607,7 @@ export function useThreadNavigation(
         const notice = formatArchiveCleanupNotice(response.cleanup ?? []);
         if (notice) setArchiveThreadNotice(notice);
         if (!directoryKey.startsWith("directory:")) continue;
-        removedDirectoryKeysRef.current.add(directoryKey);
+        updateRemovedDirectoryKey(directoryKey, true);
         setLocalLaunchpads((current) => {
           const next = { ...current };
           delete next[directoryKey];
@@ -7609,7 +7623,7 @@ export function useThreadNavigation(
     invalidateNavigation();
     await refresh();
     if (failures.length) setArchiveThreadError(failures.join("\n"));
-  }, [desktopApi, invalidateNavigation, refresh, setLocalLaunchpads, setSelectedItemKey]);
+  }, [desktopApi, invalidateNavigation, refresh, setLocalLaunchpads, setSelectedItemKey, updateRemovedDirectoryKey]);
 
   /** The owner validates complete membership before local state is removed. */
   const removeDirectory = useCallback(
@@ -7634,7 +7648,7 @@ export function useThreadNavigation(
         await desktopApi.removeNavigationDirectory({
           directoryKey, federationTarget: readRendererFederationTarget(),
         });
-        removedDirectoryKeysRef.current.add(directoryKey);
+        updateRemovedDirectoryKey(directoryKey, true);
         invalidateNavigation();
         setLocalLaunchpads((current) => {
           if (!current[directoryKey]) {
@@ -7667,7 +7681,7 @@ export function useThreadNavigation(
         await refresh();
       }
     },
-    [desktopApi, directories, refresh, invalidateNavigation, setLocalLaunchpads, setSelectedItemKey],
+    [desktopApi, directories, refresh, invalidateNavigation, setLocalLaunchpads, setSelectedItemKey, updateRemovedDirectoryKey],
   );
 
   const materializeDirectoryLaunchpad = useCallback(
