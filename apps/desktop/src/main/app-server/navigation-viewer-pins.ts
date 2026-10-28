@@ -1,5 +1,6 @@
 import path from "node:path";
-import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey } from "@pwragent/shared";
+import { buildFederatedThreadRef, buildThreadIdentityKey, classifyDirectory, federatedThreadIdentityKey,
+  orderByHomePreference } from "@pwragent/shared";
 import type { LinkedDirectorySummary, NavigationDirectorySummary, NavigationIdentity, NavigationThreadSummary } from "@pwragent/shared";
 import type { NavigationQueryIndex } from "./navigation-query-projection";
 import type { RemoteThreadSummaryCache } from "../federation/remote-thread-summary-cache";
@@ -64,8 +65,8 @@ export function appendViewerNavigationPins(index: NavigationQueryIndex, pins: re
  * the row made selection "jump" groups, because `selectedDirectory` resolves
  * to the first directory containing the key, which is whichever sorts first,
  * not the group the user clicked in. The owner's `projectKey` is authoritative
- * when it identifies a linked directory; fallback preference is a local
- * checkout before a worktree, then linked-directory order.
+ * when it identifies a linked directory; otherwise both sides share
+ * `orderByHomePreference`.
  *
  * Remote threads whose project has no local counterpart receive an
  * unconfigured placeholder group. That keeps Cmd+K-mounted rows discoverable
@@ -76,9 +77,9 @@ export function appendViewerNavigationPins(index: NavigationQueryIndex, pins: re
  * identity (directory label / path basename — peer paths never match viewer
  * paths). When the owner's projectKey identifies one of its linked
  * directories, that primary project wins even if a secondary @-referenced
- * directory is a local checkout. Otherwise, home preference mirrors
- * `pickHomeDirectory`: repo checkouts (`kind: "local"`) before worktree
- * links, then the owner's linked order.
+ * directory is a local checkout. Otherwise, home preference is the owner's
+ * own rule (`orderByHomePreference`): tool-managed worktree folders last,
+ * otherwise linked order.
  */
 export function findRemoteHomeDirectoryIndex(
   directories: ReadonlyArray<{ label: string; path?: string; kind?: NavigationDirectorySummary["kind"] }>,
@@ -86,7 +87,8 @@ export function findRemoteHomeDirectoryIndex(
 ): number | undefined {
   // Scratch folder names are per-thread identities, not project identities.
   // Match the containing workspace by kind before considering any raw names.
-  const home = remoteLinkedDirectoriesByHomePreference(thread)[0];
+  const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
+  const home = linkedByHomePreference[0];
   if (home && classifyDirectory(home).kind === "workspace") {
     const index = directories.findIndex((directory) => directory.kind === "workspace");
     return index === -1 ? undefined : index;
@@ -104,8 +106,14 @@ export function findRemoteHomeDirectoryIndex(
       }
     }
   });
-  const linkedByHomePreference = remoteLinkedDirectoriesByHomePreference(thread);
   for (const linked of linkedByHomePreference) {
+    // A secondary Workspaces link is matched by kind only when it is home.
+    // Its folder name (`projects`, a scratch hash) names no project, and a
+    // name match would file the thread under Workspaces whenever its real
+    // project has no local checkout.
+    if (classifyDirectory(linked).kind === "workspace") {
+      continue;
+    }
     const names = [linked.label, path.basename(linked.path)]
       .map((name) => (name ?? "").trim().toLowerCase())
       .filter(Boolean);
@@ -133,12 +141,7 @@ function remoteLinkedDirectoriesByHomePreference(
     return [primaryProjectDirectory];
   }
 
-  return [...linkedDirectories].sort((left, right) => {
-    if (left.kind !== right.kind) {
-      return left.kind === "worktree" ? 1 : -1;
-    }
-    return 0;
-  });
+  return orderByHomePreference(linkedDirectories, (directory) => classifyDirectory(directory).path);
 }
 
 function remoteDirectoryPlaceholder(

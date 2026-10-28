@@ -313,36 +313,37 @@ function normalizeDirectoryDescriptor(
 // highlight as "selected") under two/three parent folders at once, which the
 // product forbids. Pick a single canonical "home" row instead.
 //
-// Preference order:
-//   1. A stable repo/local/workspace row over an ephemeral tool-managed
-//      worktree row, so the thread groups under its project (the main checkout)
-//      rather than a throwaway worktree folder.
-//   2. Existing linked-directory order, so provider/home metadata keeps
-//      precedence over user-attached secondary directories until true
-//      multi-homed directory listings are implemented.
+// Preference order: see `orderByHomePreference`.
 function pickHomeDirectory(
   descriptors: DirectoryDescriptor[],
 ): DirectoryDescriptor | undefined {
-  if (descriptors.length <= 1) {
-    return descriptors[0];
-  }
+  return orderByHomePreference(descriptors, (descriptor) => descriptor.path)[0];
+}
 
-  return descriptors
-    .map((descriptor, index) => ({ descriptor, index }))
-    .sort((left, right) => {
-      const leftDescriptor = left.descriptor;
-      const rightDescriptor = right.descriptor;
-      const leftIsWorktree = leftDescriptor.path
-        ? isToolManagedWorktreePath(leftDescriptor.path)
-        : false;
-      const rightIsWorktree = rightDescriptor.path
-        ? isToolManagedWorktreePath(rightDescriptor.path)
-        : false;
-      if (leftIsWorktree !== rightIsWorktree) {
-        return leftIsWorktree ? 1 : -1;
-      }
-      return left.index - right.index;
-    })[0]?.descriptor;
+/**
+ * Order a thread's directories by which one should be its home row. The
+ * owner's directory rows and a viewer's mount of a remote thread both use
+ * this, so one thread files under the same project on every machine.
+ *
+ *   1. A stable repo/local/workspace directory over an ephemeral
+ *      tool-managed worktree folder, so the thread groups under its project
+ *      (the main checkout) rather than a throwaway worktree folder.
+ *   2. Existing linked-directory order, so provider/home metadata keeps
+ *      precedence over user-attached secondary directories until true
+ *      multi-homed directory listings are implemented.
+ *
+ * `pathOf` returns the classified directory path. A `kind: "worktree"` link
+ * classifies to its repository checkout, so it is a project, not a folder
+ * to demote.
+ */
+export function orderByHomePreference<T>(
+  items: readonly T[],
+  pathOf: (item: T) => string | undefined,
+): T[] {
+  return items
+    .map((item) => ({ item, demoted: isToolManagedWorktreePath(pathOf(item)) }))
+    .sort((left, right) => Number(left.demoted) - Number(right.demoted))
+    .map(({ item }) => item);
 }
 
 function ensureSummary(

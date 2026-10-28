@@ -4093,23 +4093,23 @@ describe("app server ipc", () => {
           id: "remote-multi",
           title: "MCP registration",
           titleSource: "derived" as const,
-          // Home directory on the owner prefers the repo checkout over the
-          // worktree entry, then linked order — so PwrAgent, even though the
-          // worktree link for agent-kit comes first. The extra links must not
-          // duplicate the row into other local groups — one row per thread,
-          // like local threads.
+          // Home directory on the owner is the first linked project; only a
+          // tool-managed worktree folder ranks last. A `worktree` link's path
+          // is its repo checkout, so PwrAgent wins over the later plain
+          // agent-kit folder. The extra links must not duplicate the row into
+          // other local groups — one row per thread, like local threads.
           linkedDirectories: [
-            {
-              id: "dir-b",
-              label: "agent-kit",
-              path: "/peer/dev/agent-kit",
-              kind: "worktree" as const,
-              worktreePath: "/peer/worktrees/x/agent-kit",
-            },
             {
               id: "dir-a",
               label: "PwrAgent",
               path: "/peer/dev/PwrAgent",
+              kind: "worktree" as const,
+              worktreePath: "/peer/.pwragent/worktrees/x/PwrAgent",
+            },
+            {
+              id: "dir-b",
+              label: "agent-kit",
+              path: "/peer/dev/agent-kit",
               kind: "local" as const,
             },
           ],

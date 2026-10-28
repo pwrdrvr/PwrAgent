@@ -5515,12 +5515,12 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     autocompleteListboxId && autocompleteKind && autocompleteLength > 0
       ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
       : undefined;
-  // Directories the draft references: `@` chips (authoritative, from the
-  // token state) unioned with paths typed or pasted as plain text (from
-  // the serialized-draft scan). Deleting a chip or a typed path drops the
-  // reference. Directories that are already linked (the launchpad's own
-  // directory; a thread's linked directories, including worktree
-  // checkouts) are excluded so send-time attach only sees new references.
+  // Directories the draft references: `@` chips only, from the token state
+  // and the chips serialized in the draft. A path typed or pasted as plain
+  // text is not a reference. Deleting a chip drops the reference.
+  // Directories that are already linked (the launchpad's own directory; a
+  // thread's linked directories, including worktree checkouts) are excluded
+  // so send-time attach only sees new references.
   const listDraftReferencedDirectories = (
     text: string,
     tokens?: ComposerSkillToken[],
@@ -5538,8 +5538,8 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const fromTokens: NavigationDirectorySummary[] = [];
     for (const token of tokens ?? []) {
       // Only directory-kind tokens are attachable directories. File-kind
-      // tokens are excluded here — a file's containing repo still links
-      // via the text scan's deeper-path matching above.
+      // tokens are excluded here — a file chip's containing repo still
+      // links through `listReferencedDirectories` below.
       if (token.kind !== "directory" || !token.path) {
         continue;
       }
@@ -5566,7 +5566,13 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const scanned = listReferencedDirectories(text, [
       ...(props.directories ?? []),
       ...fromTokens,
-    ], { excludePaths });
+    ], {
+      excludePaths,
+      // A file chip's label can break the link syntax (`[id].tsx`); it then
+      // serializes as a bare path, so pass its target from the token state.
+      referencePaths: (tokens ?? []).flatMap((token) =>
+        token.kind === "file" && token.path ? [token.path] : []),
+    });
     const scannedPaths = new Set(scanned.map((directory) =>
       normalizeDirectoryReferencePath(directory.path!),
     ));
