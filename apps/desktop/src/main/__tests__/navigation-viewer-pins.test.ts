@@ -147,6 +147,52 @@ it("groups a remote parent with its local child across checkout paths and resolv
 });
 
 
+// A thread started in a PwrAgnt worktree, with two secondary folders linked
+// later. Without a projectKey the viewer once ranked every plain `local`
+// link ahead of the `worktree` link, so the thread jumped from PwrAgnt to
+// Workspaces after Cmd+K mounted it. The owner keeps linked order there.
+it("files a remote thread under its first linked project, not a later plain folder", () => {
+  const remote: NavigationThreadSummary = { id: "remote", source: "claude", title: "Remote", titleSource: "explicit",
+    linkedDirectories: [
+      { id: "/m2/pwrdrvr/PwrAgnt", kind: "worktree", label: "PwrAgnt", path: "/m2/pwrdrvr/PwrAgnt",
+        worktreePath: "/m2/.pwragent/worktrees/mvrhqobw/PwrAgnt" },
+      { id: "/m2/.pwragent/profiles/default/projects", kind: "local", label: "projects",
+        path: "/m2/.pwragent/profiles/default/projects" },
+      { id: "/m2/pwrdrvr/PwrSnap", kind: "local", label: "PwrSnap", path: "/m2/pwrdrvr/PwrSnap" },
+    ], inbox: { inInbox: false },
+    federation: { ref: buildFederatedThreadRef({ backend: "claude", threadId: "remote", instanceId: "m2" }), instanceLabel: "M2" } };
+  const directory = (key: string, kind: "directory" | "workspace", label: string, path: string) => ({
+    key, kind, label, path, threadKeys: [], needsAttentionCount: 0 });
+  const viewer = appendViewerNavigationPins({ threads: [], directories: [
+    directory("workspace:/m5/.pwragent/profiles/default/projects", "workspace", "Workspaces",
+      "/m5/.pwragent/profiles/default/projects"),
+    directory("directory:/m5/pwrdrvr/PwrSnap", "directory", "PwrSnap", "/m5/pwrdrvr/PwrSnap"),
+    directory("directory:/m5/pwrdrvr/PwrAgnt", "directory", "PwrAgnt", "/m5/pwrdrvr/PwrAgnt"),
+  ] }, [remote]);
+  expect(viewer.directories.filter((entry) => entry.threadKeys.length).map((entry) => entry.key))
+    .toEqual(["directory:/m5/pwrdrvr/PwrAgnt"]);
+  const exact = projectNavigationQuery({ index: viewer, request: { protocol: 2, consumer: "main-sidebar",
+    inventory: "viewer", query: { kind: "exact", identities: [{ backend: "claude", threadId: "remote",
+      ownerInstanceId: "m2" }], includeAncestry: true } } });
+  expect(exact.selectionDirectory?.key).toBe("directory:/m5/pwrdrvr/PwrAgnt");
+});
+
+it("still files a remote thread under its checkout before a tool-managed worktree folder", () => {
+  const remote: NavigationThreadSummary = { id: "remote", source: "codex", title: "Remote", titleSource: "explicit",
+    linkedDirectories: [
+      { id: "scratch", kind: "local", label: "Lab", path: "/peer/.codex/worktrees/a1b2/Lab" },
+      { id: "repo", kind: "local", label: "PwrAgnt", path: "/peer/github/PwrAgnt" },
+    ], inbox: { inInbox: false },
+    federation: { ref: buildFederatedThreadRef({ backend: "codex", threadId: "remote", instanceId: "peer" }), instanceLabel: "Peer" } };
+  const viewer = appendViewerNavigationPins({ threads: [], directories: [
+    { key: "directory:/viewer/Lab", kind: "directory", label: "Lab", path: "/viewer/Lab", threadKeys: [], needsAttentionCount: 0 },
+    { key: "directory:/viewer/PwrAgnt", kind: "directory", label: "PwrAgnt", path: "/viewer/PwrAgnt", threadKeys: [],
+      needsAttentionCount: 0 },
+  ] }, [remote]);
+  expect(viewer.directories.filter((entry) => entry.threadKeys.length).map((entry) => entry.key))
+    .toEqual(["directory:/viewer/PwrAgnt"]);
+});
+
 it.each(["complete", "checking"] as const)("mounts a remote child under its owner-qualified local parent with %s coverage without confusing another peer", (state) => {
   const parent: NavigationThreadSummary = { id: "parent", source: "codex", title: "Parent", titleSource: "explicit",
     linkedDirectories: [{ id: "repo", kind: "local", label: "repo", path: "/viewer/repo" }], inbox: { inInbox: false } };

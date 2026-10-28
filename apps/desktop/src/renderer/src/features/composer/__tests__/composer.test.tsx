@@ -20530,7 +20530,18 @@ describe("Composer", () => {
     },
   );
 
-  it("links a hand-typed directory reference after sending a reply", async () => {
+  // Only an @ chip links a project. A path typed or pasted as plain text (a
+  // diagnostics block, a log line) names a project without asking for it,
+  // and linking it filed the thread under that project's group.
+  it.each([
+    ["typed path", "It might be in ~/Projects/catalog-portal."],
+    ["pasted code block", [
+      "what went wrong here?",
+      "```",
+      "Project directory/worktree path: /Users/example/Projects/catalog-portal/2026-10-27-ae1587",
+      "```",
+    ].join("\n")],
+  ])("does not link a project named only in a %s", async (_label, draft) => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
       "/Users/example";
     try {
@@ -20573,17 +20584,15 @@ describe("Composer", () => {
       );
 
       fireEvent.change(screen.getByLabelText("Reply"), {
-        target: { value: "It might be in ~/Projects/catalog-portal." },
+        target: { value: draft },
       });
+      expect(document.querySelector(".composer__directory-reference")).toBeNull();
       await clickButton("Send");
 
       await waitFor(() => {
         expect(startTurn).toHaveBeenCalled();
       });
-      expect(onAttachDirectoryReferences).toHaveBeenCalledWith(
-        ["/Users/example/Projects/catalog-portal"],
-        { backend: "codex", threadId: "thread-1" },
-      );
+      expect(onAttachDirectoryReferences).not.toHaveBeenCalled();
     } finally {
       delete (window as unknown as { __pwragentHomeDir?: string })
         .__pwragentHomeDir;
