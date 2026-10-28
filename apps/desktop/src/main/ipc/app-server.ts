@@ -4598,7 +4598,13 @@ class DesktopAppServerService {
     // from this thread's overlay: that list carries the thread's own history
     // (PRs from earlier branches, detached PRs), and a seeded entry attached
     // that history to every other thread in the same checkout.
-    const lookupEntry = this.prLookupRegistry.get(lookupKey);
+    // A claim leaves a placeholder entry (fetchedAt 0) until its lookup
+    // answers. Only an answered entry is a result; until then this thread's
+    // own matching overlay stands in for it.
+    const registryEntry = this.prLookupRegistry.get(lookupKey);
+    const lookupEntry = registryEntry && registryEntry.fetchedAt > 0
+      ? registryEntry
+      : undefined;
     const lookupPrs = lookupEntry
       ? this.canonicalizePrs(lookupEntry.prs)
       : existingLookupMatches
@@ -4639,7 +4645,9 @@ class DesktopAppServerService {
     const visibleKnownPrs = (): PrSummary[] =>
       filterDetachedPullRequests(knownPrs, existing?.detachedPrKeys);
     const statusFetchedAt = lookupEntry?.fetchedAt
-      ?? (existingPrs.length > 0 ? existing?.prsFetchedAt : undefined);
+      ?? (existingPrs.length > 0 || existingLookupMatches
+        ? existing?.prsFetchedAt
+        : undefined);
     const freshness = pullRequestStatusFreshness(statusFetchedAt, now);
     const fetcher = this.getPrFetcher();
     const providerAvailability = await fetcher.getProviderAvailability(
@@ -4695,7 +4703,7 @@ class DesktopAppServerService {
         ghAvailable: false,
       };
     }
-    if (lookupEntry && lookupEntry.fetchedAt > 0) {
+    if (lookupEntry) {
       knownPrs = await this.persistPullRequestLookupHit({
         backend,
         request,

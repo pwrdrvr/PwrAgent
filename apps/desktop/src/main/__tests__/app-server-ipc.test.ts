@@ -6796,7 +6796,12 @@ describe("app server ipc", () => {
       {},
       newRequest,
     ) as RefreshThreadPullRequestsResponse;
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Let the new thread's own background lookup answer and persist.
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith(
+        expect.objectContaining({ threadId: newRequest.threadId }),
+      );
+    });
 
     expect(newResponse.prs).toEqual([]);
     expect(setThreadPullRequests).not.toHaveBeenCalledWith(
