@@ -10771,6 +10771,7 @@ describe("app server ipc", () => {
         backend,
         executionMode: "auto",
         prompt: "",
+        branchName: undefined,
         createdAt: 100,
         updatedAt: 100,
       },
