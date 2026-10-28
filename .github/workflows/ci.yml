@@ -648,19 +648,14 @@ jobs:
           exit "$status"
   macos-install-deps:
     name: Setup macOS Dependencies
-    # GitHub-hosted Apple Silicon, matching the self-hosted Tart runners
-    # (macOS 26.6.1). Do not use macos-26-intel. configure-nodejs keys the
-    # store on runner.os + runner.arch (macOS/ARM64), not the macOS version,
-    # so this gate is shared with those E2E lanes and the macos-15
-    # signed-release prepare job. Keep the fork guard: a public fork still
-    # cannot run the self-hosted E2E consumer, so priming this cache there
-    # would only spend hosted macOS minutes.
+    # Use the same restricted persistent guests as the Mac test lanes.
+    # Keep the fork guard: public-fork code must never run on this pool.
     if: >-
       needs.changes.outputs.code_impacting == 'true' &&
       (github.event_name == 'push' ||
        (github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository))
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     needs: changes
     timeout-minutes: 15
     steps:
@@ -678,13 +673,73 @@ jobs:
             apps/desktop/scripts/ensure-electron-runtime.mjs
           sparse-checkout-cone-mode: false
 
+      - name: Locate the guest cache root
+        shell: bash
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
         timeout-minutes: 10
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
-          lookup-only: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
+
+  test-macos:
+    name: macOS unit tests (lane ${{ matrix.lane }} of 2)
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
+    needs: [changes, macos-install-deps]
+    # Exercise the release unit-test platform before a tag is cut.
+    if: >-
+      needs.changes.outputs.code_impacting == 'true' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [1, 2]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      # Clear the local flag before disabling worktree sparse state; otherwise
+      # checkout exposes a previous non-cone bootstrap's local true value.
+      - name: Restore complete checkout
+        shell: bash
+        run: |
+          git config --local core.sparseCheckout false
+          git sparse-checkout disable
+          git config --local --unset-all extensions.worktreeConfig
+
+      - name: Locate the guest cache root
+        shell: bash
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
+
+      # electron-builder compiles build/icon.icon with actool 26. The macOS 26
+      # guest supplies the matching AssetCatalogAgent runtime; this action
+      # verifies the selected Xcode still has actool 26+. Only the test step
+      # sets DEVELOPER_DIR, so native setup keeps the image toolchain and SDK.
+      - name: Select an Xcode with actool 26
+        id: xcode
+        uses: ./.github/actions/select-xcode-for-actool
+
+      - name: Test (unit)
+        env:
+          # Require the icon compile check wherever Vitest assigns its suite.
+          DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
+          PWRAGENT_REQUIRE_ACTOOL: "1"
+        run: pnpm test --shard=${{ matrix.lane }}/2
 
   desktop-e2e-macos:
     name: macOS Desktop E2E (lane ${{ matrix.lane }} of 4)
@@ -731,6 +786,15 @@ jobs:
           # In a reused partial clone, LFS can otherwise miss packs created
           # by Git's concurrent lazy fetch and report a source blob missing.
           lfs: false
+
+      # Clear the local flag before disabling worktree sparse state; otherwise
+      # checkout exposes a previous non-cone bootstrap's local true value.
+      - name: Restore complete checkout
+        shell: bash
+        run: |
+          git config --local core.sparseCheckout false
+          git sparse-checkout disable
+          git config --local --unset-all extensions.worktreeConfig
 
       - name: Materialize Git LFS assets
         id: lfs

@@ -17,6 +17,9 @@ import {
   removeTempStateDbDir,
 } from "./sqlite-test-utils";
 
+const logger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock("../log", () => ({ getMainLogger: () => logger }));
+
 // Every turn's pricing-ledger row needs an end time, including turns that end
 // without a terminal event reaching the completion path. These drive the real
 // registry against a real ledger.
@@ -109,6 +112,7 @@ describe("DesktopBackendRegistry usage turn ends", () => {
   ).get(turnId) as { completed_at: number | null } | undefined)?.completed_at;
 
   beforeEach(() => {
+    logger.warn.mockClear();
     tempDir = undefined;
     stateDb = openInMemoryStateDb();
     store = new SqliteOverlayStore(stateDb);
@@ -493,6 +497,64 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       expect(Date.now() - beforeClose).toBeLessThan(1_000);
       expect(completedAt("turn-hung")).toBeGreaterThanOrEqual(beforeClose);
       expect(completedAt(acpTurnId)).toBeGreaterThanOrEqual(beforeClose);
+    });
+
+    it("keeps the shutdown deadline while an answered ACP terminal is still adopting its branch", async () => {
+      const registry = createRegistry();
+      const internal = registry as unknown as {
+        activeTurnKeys: ReadonlySet<string>;
+        adoptThreadBranchChangeFromActiveTurn(params: { backend: AppServerBackendKind; threadId: string }): Promise<void>;
+      };
+      let releaseBranch!: () => void;
+      let branchEntered!: () => void;
+      const branch = new Promise<void>((resolve) => { releaseBranch = resolve; });
+      const entered = new Promise<void>((resolve) => { branchEntered = resolve; });
+      const adopt = vi.spyOn(internal, "adoptThreadBranchChangeFromActiveTurn")
+        .mockImplementation(async () => { branchEntered(); await branch; });
+      let terminal: Promise<void> | undefined;
+      vi.spyOn(internals(registry).acpBackend, "cancelRunningSession")
+        .mockImplementation(async () => {
+          terminal = internals(registry).emit(acpCancelled(acpTurnId));
+          return true;
+        });
+      await runTurn(registry, "acp:grok", acpTurnId);
+      const heard = vi.fn();
+      registry.onEvent((event) => {
+        if (event.notification.method === "turn/cancelled") heard(event);
+      });
+      vi.useFakeTimers();
+      try {
+        let stopped = false;
+        const stop = registry.stopRunningTurnsForShutdown().then(() => { stopped = true; });
+        await entered;
+        expect(internal.activeTurnKeys.size).toBe(0);
+        expect(heard).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1_999);
+        expect(stopped).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await stop;
+        expect(logger.warn).toHaveBeenCalledWith(
+          "running turns still unanswered at the shutdown deadline",
+          expect.objectContaining({
+            durationMs: 2_000,
+            turns: 1,
+            unanswered: 0,
+            unasked: 0,
+            requests: { requested: 1, failed: 0, unsupported: 0 },
+          }),
+        );
+        expect(heard).not.toHaveBeenCalled();
+        releaseBranch();
+        await terminal;
+        expect(heard).toHaveBeenCalledWith(expect.objectContaining({
+          notification: expect.objectContaining({ method: "turn/cancelled" }),
+        }));
+      } finally {
+        releaseBranch();
+        await terminal;
+        adopt.mockRestore();
+        vi.useRealTimers();
+      }
     });
 
     it("waits only for the turns a backend was asked to stop", async () => {
