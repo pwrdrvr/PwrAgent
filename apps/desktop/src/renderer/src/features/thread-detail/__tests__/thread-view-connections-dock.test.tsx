@@ -112,7 +112,12 @@ describe("ThreadView launchpad connections dock", () => {
     // A pointer move leaves focus alone, so an unpinned rail is not revealed.
     expect(tab).not.toHaveFocus();
     // The ring plays once per move, not on every remount of the tab.
-    fireEvent.animationEnd(tab);
+    // jsdom has no AnimationEvent constructor, so React registers the
+    // legacy event name there.
+    fireEvent(tab, new Event(
+      "AnimationEvent" in window ? "animationend" : "webkitAnimationEnd",
+      { bubbles: true },
+    ));
     expect(tab).not.toHaveClass("is-landing");
     const rail = screen.getByRole("complementary", { name: "New thread context" });
     await waitFor(() => {
