@@ -5,7 +5,7 @@ import type { AgentEvent } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
-import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { measureSqliteWrites, resetSqliteWriteMetrics, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
@@ -77,6 +77,7 @@ it.each(scenarios)("replays active and idle usage cadence: $name", async (scenar
         })();
       }
       db.raw.pragma("wal_checkpoint(TRUNCATE)");
+      resetSqliteWriteMetrics();
       const emit = (registry as unknown as { emit(event: AgentEvent): Promise<void> }).emit.bind(registry);
       let flushCpuMs = 0;
       let activityReadCpuMs = 0;
