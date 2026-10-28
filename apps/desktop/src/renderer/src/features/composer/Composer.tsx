@@ -3439,16 +3439,18 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const [imageAttachments, setImageAttachments] = useState<ComposerImageAttachment[]>(
     latestDraftSnapshotRef.current.snapshot.imageAttachments
   );
-  const pendingImageBatchesRef = useRef(new Map<string, number>());
+  const pendingImageBatchesRef = useRef(new Map<{ scopeKey: string }, number>());
   const [pendingImageBatches, setPendingImageBatches] = useState(
     pendingImageBatchesRef.current,
   );
-  const preparingImages = (pendingImageBatches.get(composerScopeKey) ?? 0) > 0;
-  const updatePendingImageBatches = (scopeKey: string, delta: number): void => {
+  const preparingImages = Array.from(pendingImageBatches.keys()).some(
+    (destination) => destination.scopeKey === composerScopeKey,
+  );
+  const updatePendingImageBatches = (destination: { scopeKey: string }, delta: number): void => {
     const next = new Map(pendingImageBatchesRef.current);
-    const count = (next.get(scopeKey) ?? 0) + delta;
-    if (count > 0) next.set(scopeKey, count);
-    else next.delete(scopeKey);
+    const count = (next.get(destination) ?? 0) + delta;
+    if (count > 0) next.set(destination, count);
+    else next.delete(destination);
     pendingImageBatchesRef.current = next;
     setPendingImageBatches(next);
   };
@@ -8876,7 +8878,9 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     // files the owner does not have yet.
     if (
       remoteFileUploads.uploads.length > 0
-      || (pendingImageBatchesRef.current.get(composerScopeKey) ?? 0) > 0
+      || Array.from(pendingImageBatchesRef.current.keys()).some(
+        (destination) => destination.scopeKey === composerScopeKey,
+      )
     ) {
       return;
     }
@@ -10162,7 +10166,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
     const pasteEditorDocument = editorDocument;
     const pasteImageAttachments = imageAttachments;
     const pasteFileAttachments = fileAttachments;
-    updatePendingImageBatches(pasteScope.key, 1);
+    updatePendingImageBatches(destination, 1);
 
     try {
       const nextAttachments = await Promise.all(
@@ -10314,7 +10318,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         error instanceof Error ? error.message : "The pasted image could not be read."
       );
     } finally {
-      updatePendingImageBatches(pasteScope.key, -1);
+      updatePendingImageBatches(destination, -1);
     }
   };
 

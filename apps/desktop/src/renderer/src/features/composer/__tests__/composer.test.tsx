@@ -844,6 +844,7 @@ describe("Composer", () => {
     act(() => handoffLaunchpadComposer(store, `launchpad:${launchpad.directoryKey}`, thread));
     view.rerender(<Composer backends={[backendSummary("codex")]} thread={thread}
       activeTurnId="first-turn" draftStore={store} skills={[]} />);
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
     await act(async () => {
       normalization.resolve({
         dataUrl: "data:image/png;base64,AQID", height: 24, width: 24, size: 3,
