@@ -217,6 +217,11 @@ pnpm dev
 
 ## Renderer update diagnostics in release builds
 
+For continuous compositor/GPU work, use the opt-in, bounded
+[rendering capture](../../docs/rendering-diagnostics.md). It associates native
+Chromium frame counters with numeric window IDs, visibility and known animation
+sources, without enabling continuous profiling.
+
 The renderer keeps a 64-entry in-memory history of selected composer, Tiptap,
 context-card, and tooltip update requests. Consecutive identical requests
 coalesce; counters retain totals since renderer startup. These are requests,
