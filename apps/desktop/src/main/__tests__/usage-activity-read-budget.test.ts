@@ -37,20 +37,14 @@ function fixture(db = openInMemoryStateDb()) {
 /** Count actual sqlite -> JS rows, rather than the response's already bounded rows. */
 function observe(db: ReturnType<typeof openInMemoryStateDb>) {
   const prepare = db.raw.prepare.bind(db.raw);
-  let seeks = 0;
-  db.raw.function("usage_budget_seek", (key: string) => { seeks++; return key; });
-  const reads: Array<{ sql: string; args: unknown[]; rows: number; seeks: number; plan: string[] }> = [];
+  const reads: Array<{ sql: string; args: unknown[]; rows: number; plan: string[] }> = [];
   vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
-    // Count each candidate's actual ledger lookup, including rejected rows.
-    // The RHS function preserves the indexed lookup and query result.
-    const statement = prepare(sql.replaceAll("l.usage_line_id = k.usage_line_id",
-      "l.usage_line_id = usage_budget_seek(k.usage_line_id)"));
+    const statement = prepare(sql);
     if (!/^\s*(SELECT|WITH)\b/i.test(sql)) return statement;
     const all = statement.all.bind(statement);
     vi.spyOn(statement, "all").mockImplementation((...args: unknown[]) => {
-      const before = seeks;
       const result = all(...args);
-      reads.push({ sql, args, rows: result.length, seeks: seeks - before,
+      reads.push({ sql, args, rows: result.length,
         plan: (prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>)
           .map((row) => row.detail),
       });
@@ -90,7 +84,7 @@ describe("Usage Activity read budgets", () => {
     } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
   });
 
-  it("measures index maintenance inside a real helper ledger write", async () => {
+  it("keeps a real helper ledger write at its original write budget", async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-activity-helper-write-");
     const { db, store } = fixture(StateDb.open(temp.dbPath));
@@ -103,8 +97,8 @@ describe("Usage Activity read budgets", () => {
         reasoningOutputTokens: 1, totalTokens: 13, currency: "USD", priceStatus: "unpriced",
         uncachedInputCostMicros: 0, cachedInputCostMicros: 0, outputCostMicros: 0, totalCostMicros: 0,
       } }));
-      expectSqliteWriteBudget({ scenario: "usage-activity-index-helper-write", writes,
-        note: "One real finalized helper line with parent summaries; interval admission shares the existing ledger transaction, no separate commit; 86,520 bytes per helper (~43.3 MB/day at 500/day, ~10.3 MB/day added by the new indexes)" });
+      expectSqliteWriteBudget({ scenario: "usage-activity-helper-write", writes,
+        note: "One real finalized helper line with parent summaries: one existing commit, 65,920 bytes (~33.0 MB/day at 500/day), no persistent interval maintenance" });
     } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
   });
 
@@ -142,7 +136,7 @@ describe("Usage Activity read budgets", () => {
     } finally { db.close(); }
   });
 
-  it("retains exact overlap and order at sub-minute boundaries despite coarse admission", async () => {
+  it("retains exact overlap and order at sub-minute boundaries", async () => {
     const { db, store, add } = fixture();
     try {
       add("at-end", { created: window.to, completed: window.to });
@@ -182,28 +176,23 @@ describe("Usage Activity read budgets", () => {
     } finally { other.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
   });
 
-  it.each(["within-minute", "minute-boundaries"] as const)("measures interval maintenance for live updates: %s", async (scenario) => {
+  it.each(["within-minute", "minute-boundaries"] as const)("adds no activity-index writes to live updates: %s", async (scenario) => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-activity-budget-");
     const { db, store, add } = fixture(StateDb.open(temp.dbPath));
     try {
       db.raw.pragma("wal_autocheckpoint = 0");
       add("live-budget", { created: start, completed: null, updated: start });
-      let indexUpdates = 0;
-      db.raw.function("usage_test_index_update", () => { indexUpdates++; return null; });
-      db.raw.exec(`CREATE TEMP TRIGGER usage_test_index_update AFTER UPDATE ON usage_activity_keys
-        BEGIN SELECT usage_test_index_update(); END`);
       const update = db.raw.prepare("UPDATE thread_usage_lines SET updated_at = ?, output_tokens = ? WHERE usage_line_id = 'live-budget'");
       const { writes } = await measureSqliteWrites(() => {
         for (let index = 1; index <= 100; index++) {
           update.run(start + index * (scenario === "within-minute" ? 100 : 60_000), index);
         }
       });
-      expectSqliteWriteBudget({ scenario: `usage-activity-index-${scenario}`, writes,
+      expectSqliteWriteBudget({ scenario: `usage-activity-${scenario}`, writes,
         note: scenario === "within-minute"
-          ? "100 existing live-row commits within ten seconds; 412,000 bytes WAL, no interval-tree changes within the minute and no added commits"
-          : "100 existing live-row commits, one minute apart; 1,648,000 bytes WAL (~23.7 MB/day at 1/minute; ~17.8 MB/day above the same 100 row writes without tree changes), no added commits or idle writes" });
-      expect(indexUpdates).toBe(budgets.maintenance[scenario]);
+          ? "100 existing live-row commits within ten seconds: 412,000 bytes WAL, no additional activity-index writes"
+          : "100 existing live-row commits, one minute apart: 412,000 bytes WAL (~5.9 MB/day at 1/minute), no additional activity-index writes" });
       const read = await measureSqliteWrites(async () => {
         await store.readUsageActivity(window);
         await store.readUsageActivity(window);
@@ -213,7 +202,7 @@ describe("Usage Activity read budgets", () => {
     } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
   });
 
-  it.each([1_000, 20_000])("seeks a narrow interval across %i past and future rows", async (count) => {
+  it.each([1_000, 20_000])("bounds materialization for a narrow interval across %i past and future rows", async (count) => {
     const { db, store, add } = fixture();
     try {
       db.raw.transaction(() => {
@@ -232,9 +221,7 @@ describe("Usage Activity read budgets", () => {
       expect(snapshot.rows.map((row) => row.line.usageLineId).sort()).toEqual(["contained", "live", "spanning"]);
       const ledger = reads.filter((read) => /thread_usage_lines/.test(read.sql));
       expect(ledger.length).toBeGreaterThan(0);
-      expect(ledger.flatMap((read) => read.plan).filter((plan) => /SCAN (l|t|k)\b/.test(plan))).toEqual([]);
       expect(ledger.reduce((sum, read) => sum + read.rows, 0)).toBeLessThanOrEqual(budgets.narrow.ledgerRows);
-      expect(ledger.reduce((sum, read) => sum + read.seeks, 0)).toBeLessThanOrEqual(budgets.narrow.ledgerSeeks);
       expect(reads.length).toBeLessThanOrEqual(budgets.narrow.materializingQueries);
     } finally { db.close(); }
   });
@@ -257,7 +244,6 @@ describe("Usage Activity read budgets", () => {
         line: { totalTokens: 78_000, totalCostMicros: 78_000, threadId: "fixture-thread" } });
       expect(reads.filter((read) => /thread_usage_lines/.test(read.sql))
         .reduce((sum, read) => sum + read.rows, 0)).toBeLessThanOrEqual(budgets.monitors.ledgerRows);
-      expect(reads.reduce((sum, read) => sum + read.seeks, 0)).toBeLessThanOrEqual(budgets.monitors.ledgerSeeks);
       expect(reads.length).toBeLessThanOrEqual(budgets.monitors.materializingQueries);
     } finally { db.close(); }
   });
@@ -276,6 +262,21 @@ describe("Usage Activity read budgets", () => {
       add("new");
       expect((await store.readUsageActivity(window)).rows).toHaveLength(2);
       expect(reads.length).toBeGreaterThan(0);
+    } finally { db.close(); }
+  });
+
+  it("materializes moving windows even when the database is unchanged", async () => {
+    const { db, store, add } = fixture();
+    try {
+      add("current");
+      const reads = observe(db);
+      for (let index = 0; index < 5; index++) {
+        await store.readUsageActivity({ from: window.from + index, to: window.to + index });
+      }
+      expect(reads.filter((read) => /LIMIT 5001/.test(read.sql))).toHaveLength(5);
+      const before = reads.length;
+      await store.readUsageActivity({ from: window.from + 4, to: window.to + 4 });
+      expect(reads).toHaveLength(before);
     } finally { db.close(); }
   });
 });

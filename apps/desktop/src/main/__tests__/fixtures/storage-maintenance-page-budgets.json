@@ -5,5 +5,5 @@
     "commits": 1,
     "bytes": 119512
   },
-  "vacuum": {"frames": 325, "uniquePages": 324, "commits": 2, "bytes": 1339032}
+  "vacuum": {"frames": 317, "uniquePages": 316, "commits": 2, "bytes": 1306072}
 }

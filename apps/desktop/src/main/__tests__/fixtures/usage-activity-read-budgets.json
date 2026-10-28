@@ -1,5 +1,4 @@
 {
-  "narrow": { "materializingQueries": 5, "ledgerRows": 4, "ledgerSeeks": 8 },
-  "monitors": { "materializingQueries": 4, "ledgerRows": 2, "ledgerSeeks": 12002 },
-  "maintenance": { "within-minute": 0, "minute-boundaries": 100 }
+  "narrow": { "materializingQueries": 5, "ledgerRows": 4 },
+  "monitors": { "materializingQueries": 4, "ledgerRows": 2 }
 }
