@@ -39,6 +39,8 @@ import type {
   SetThreadTodoProjectRequest,
   ThreadTodoMutationResponse,
   ThreadTodosChangedEvent,
+  ThreadTodoFeedDelta,
+  ThreadTodoFeedSnapshot,
   ThreadReview,
   ListThreadReviewsRequest,
   UpdateThreadReviewRequest,
@@ -678,7 +680,9 @@ import {
   SCHEDULED_ACTIONS_SEND_NOW_CHANNEL,
   SCHEDULED_ACTIONS_UPDATE_CHANNEL,
   THREAD_TODOS_CHANGED_EVENT_CHANNEL,
+  THREAD_TODOS_DELTA_EVENT_CHANNEL,
   THREAD_TODOS_LIST_CHANNEL,
+  THREAD_TODOS_SNAPSHOT_CHANNEL,
   THREAD_REVIEWS_LIST_CHANNEL,
   THREAD_REVIEWS_UPDATE_CHANNEL,
   THREAD_TODOS_LIST_PROJECTS_CHANNEL,
@@ -2381,6 +2385,20 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(THREAD_TODOS_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  snapshotThreadTodos: async (): Promise<ThreadTodoFeedSnapshot> =>
+    await ipcRenderer.invoke(THREAD_TODOS_SNAPSHOT_CHANNEL),
+  onThreadTodosDelta: (
+    callback: (delta: ThreadTodoFeedDelta) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ThreadTodoFeedDelta,
+    ) => callback(payload);
+    ipcRenderer.on(THREAD_TODOS_DELTA_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(THREAD_TODOS_DELTA_EVENT_CHANNEL, listener);
     };
   },
   listOperatorRequests: async (request?: ListOperatorRequestsRequest): Promise<ListOperatorRequestsResponse> =>

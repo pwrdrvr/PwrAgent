@@ -55,6 +55,12 @@ export const FEDERATION_CAPABILITIES = [
   "thread_mcp_connections",
   /** Owner-local To-do and tracked review reads, mutations, and invalidations. */
   "thread_todos",
+  /**
+   * The owner answers `threadTodos.snapshot` and sends `thread/todos/delta`
+   * events, so a viewer applies card changes instead of re-listing. A viewer
+   * keeps `threadTodos.list` and the change markers without it.
+   */
+  "thread_todo_feed",
   /** Owner-persisted async question dismissals and change notifications. */
   "operator_questions",
   "operator_requests",

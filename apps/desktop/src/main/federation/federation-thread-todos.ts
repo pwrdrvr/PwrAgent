@@ -1,4 +1,7 @@
-import type { FederationCapability, FederationRemoteTarget, ThreadTodo, ListThreadTodosRequest, TodoUnavailableInstance } from "@pwragent/shared";
+import type {
+  FederationCapability, FederationRemoteTarget, ThreadTodo, ListThreadTodosRequest, ThreadTodoMergeMethodPreferences,
+  TodoUnavailableInstance,
+} from "@pwragent/shared";
 import { normalizeThreadReview, resolveThreadTodoMergeMethod } from "@pwragent/shared";
 import type { FederationRouter } from "./federation-router";
 import type { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
@@ -15,12 +18,15 @@ export const FEDERATION_THREAD_TODO_METHODS = {
   listTodos: "threadTodos.list", listReviews: "threadReviews.list", updateReview: "threadReviews.update",
   resolveTodo: "threadTodos.resolve", runAction: "threadTodos.runAction", listProjects: "threadTodos.listProjects",
   setItemChecked: "threadTodos.setItemChecked", setProject: "threadTodos.setProject",
+  // Needs `thread_todo_feed` on the owner; viewers fall back to `threadTodos.list`.
+  snapshotFeed: "threadTodos.snapshot",
 } as const;
 
 export const FEDERATION_THREAD_TODO_CAPABILITIES: Record<string, FederationCapability> = {
   [FEDERATION_THREAD_TODO_METHODS.listTodos]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.listReviews]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.listProjects]: "thread_detail",
+  [FEDERATION_THREAD_TODO_METHODS.snapshotFeed]: "thread_detail",
   [FEDERATION_THREAD_TODO_METHODS.updateReview]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.resolveTodo]: "turn_control",
   [FEDERATION_THREAD_TODO_METHODS.setItemChecked]: "turn_control",
@@ -41,9 +47,21 @@ export function registerFederationThreadTodoHandlers(router: FederationRouter, o
 }
 
 /** Opaque viewer ids keep equal owner-local ids distinct in cards and pending actions. */
+export function remoteThreadTodoId(target: FederationRemoteTarget, id: string): string {
+  return `remote-todo:${encodeURIComponent(target.instanceId)}:${encodeURIComponent(id)}`;
+}
+
 function projectTodo(todo: ThreadTodo, target: FederationRemoteTarget): ThreadTodo {
-  return { ...todo, id: `remote-todo:${encodeURIComponent(target.instanceId)}:${encodeURIComponent(todo.id)}`,
-    federationTarget: target };
+  return { ...todo, id: remoteThreadTodoId(target, todo.id), federationTarget: target };
+}
+
+/** An owner's card as a viewer shows it: its owner's id, target, and merge method. */
+export function projectRemoteThreadTodo(
+  todo: ThreadTodo,
+  target: FederationRemoteTarget,
+  mergeMethods: ThreadTodoMergeMethodPreferences | undefined,
+): ThreadTodo {
+  return projectTodo({ ...todo, mergeMethod: resolveThreadTodoMergeMethod(todo, mergeMethods) }, target);
 }
 
 export class FederatedThreadTodoService {
@@ -78,9 +96,8 @@ export class FederatedThreadTodoService {
       const response = await this.options.remote(target, operation, request as ThreadTodoOperationRequest<K>);
       if (operation === "listTodos") {
         const listed = response as ThreadTodoOperationResponse<"listTodos">;
-        return { ...listed, todos: listed.todos.map((todo) => projectTodo({ ...todo,
-          mergeMethod: resolveThreadTodoMergeMethod(todo, listed.mergeMethods),
-        }, target)) } as ThreadTodoOperationResponse<K>;
+        return { ...listed, todos: listed.todos.map((todo) => projectRemoteThreadTodo(todo, target, listed.mergeMethods)),
+        } as ThreadTodoOperationResponse<K>;
       }
       if ("todo" in response) return { ...response, todo: projectTodo(response.todo, target) } as ThreadTodoOperationResponse<K>;
       // An older owner's findings can still say `dismissed`.

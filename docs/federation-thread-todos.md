@@ -14,6 +14,7 @@ pairings advertise the capability on reconnect; re-enrollment is unnecessary.
 | RPC method | Required capability | Behavior on the owner |
 | --- | --- | --- |
 | `threadTodos.list` | `thread_detail` | List cards, projected reviews, and merge preferences |
+| `threadTodos.snapshot` | `thread_detail` | Open cards at the owner feed's epoch and revision; needs `thread_todo_feed` on the owner |
 | `threadReviews.list` | `thread_detail` | Read tracked findings and their resolutions |
 | `threadTodos.listProjects` | `thread_detail` | List projects available to the card |
 | `threadReviews.update` | `turn_control` | Address, decline, dismiss, or reopen findings/reviews |
@@ -39,9 +40,53 @@ A companion `thread/todoDetails/changed` transcript marker reaches selected
 thread-detail viewers without requiring navigation or pending-request control.
 Sparse mounted-thread subscribers receive their own invalidations; remote
 windows receive the owner's full invalidation stream. Gateway relay, subscription
-filtering, and reconnect use the existing event machinery. The viewer converts
-these notifications into To-do refresh markers. Peer-status transitions also
-refresh the queue, and navigation mount changes trigger another read.
+filtering, and reconnect use the existing event machinery. Review details refresh
+on these markers. The To-do queue follows the owner's snapshot and deltas,
+which are described below. It falls back to these markers only for owners
+that predate the feed.
+
+## Snapshot and deltas
+
+An owner keeps its open, eligible cards live in memory, as a Kubernetes
+list+watch server does. The first snapshot seeds this state: every open card
+and tracked review, plus one provider listing for owner eligibility. After
+that, a card change re-reads only that thread's cards. Archive and delete
+remove the owner's cards, and a rename retitles them. An unarchive or provider
+refresh reads the listing again. A new thread has no cards, so the owner
+reads the listing again only when a card names a thread the last listing
+did not include. Each published card change increments the revision and
+emits one `thread/todos/delta` event. The event names one thread and carries
+the card upsert or removal plus merge preferences. A navigation-class event
+reaches sparse mounted-thread subscribers only for their own threads.
+
+Owners that advertise the additive `thread_todo_feed` capability answer
+`threadTodos.snapshot`. They send deltas only to directly connected viewers
+that advertise the same capability. A gateway that predates the feed would
+classify the new event as transcript traffic and not relay it to a
+navigation subscriber. Both ends therefore read the capability from the same
+direct connection, and a relayed owner uses the list fallback. Owners still
+publish the `thread/todos/changed` and `thread/todoDetails/changed` markers
+for older viewers, relayed viewers, and review details.
+
+The viewer's main process keeps one view per window kind. The main window
+view contains the local feed and mounted remote threads. A remote window
+view contains its owner's cards. Each window reads one snapshot at a view
+revision, then applies one delta per card change. A window reads a new
+snapshot only after a revision gap, a new epoch, a `resync` delta, or a
+change to its mounted threads. The view follows a capable owner through
+its deltas. A gap, a new epoch, a reconnect
+(`federation/eventStream/changed`), or a peer-status change takes one new
+owner snapshot. The viewer diffs that snapshot into deltas. An owner without
+the capability is listed again on each marker, and that list is also diffed
+into deltas. A mounted thread is listed when it is mounted, after a reconnect,
+and on each `thread/todos/changed` marker for that thread. It does not follow
+deltas, because a list does not seed the owner's feed. Only a snapshot does,
+so an owner without a window may never send deltas. The
+`thread/todoDetails/changed` companion marker triggers no second list.
+A remote view is dropped when no window shows its owner. A sparse stream
+would otherwise appear to have revision gaps. Unavailable owners keep the
+quiet `unavailableInstances` footnote. The Done list still lists with
+`status: "all"` when it opens.
 
 No remote To-do or review state is copied into the viewer's database. The routing
 and invalidation paths add no SQLite writes; mutations use the existing owner
