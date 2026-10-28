@@ -345,6 +345,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   const resolvePassSetupVariablesToAgentsFn =
     options?.resolvePassSetupVariablesToAgents ??
     (() => settingsService?.resolvePassSetupVariablesToAgents?.() ?? true);
+  const resolveBlockAgentMessagesToHigherAccessFn =
+    options?.resolveBlockAgentMessagesToHigherAccess
+    ?? (() => settingsService?.resolveBlockAgentMessagesToHigherAccess?.() ?? true);
   const resolveUsageAccountGroupsFn = options?.resolveUsageAccountGroups
     ?? (() => settingsService?.resolveUsageAccountGroups?.() ?? {});
   const resolveProviderThreadModelMigrationsFn =
@@ -1616,6 +1619,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     resolveHelperModelSettingsFn,
     resolveTaskMonitorModelsFn,
     resolvePassSetupVariablesToAgentsFn,
+    resolveBlockAgentMessagesToHigherAccessFn,
     resolveUsageAccountGroupsFn,
     resolveProviderThreadModelMigrationsFn,
     resolveCodexLocalModelIdsFn,
