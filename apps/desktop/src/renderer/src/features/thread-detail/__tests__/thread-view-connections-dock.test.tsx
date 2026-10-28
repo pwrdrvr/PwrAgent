@@ -85,7 +85,9 @@ describe("ThreadView launchpad connections dock", () => {
       onLaunchpadConnectionsDockChange: onDockChange,
     });
     const group = screen.getByRole("group", { name: "Connections" });
-    expect(within(group).getByLabelText("PwrSnap connection")).toBeInTheDocument();
+    expect(
+      await within(group).findByRole("button", { name: "Connect to PwrSnap" }),
+    ).toBeInTheDocument();
     // Only the launchpad offers the cards; the rail has no tab for them yet.
     expect(screen.queryByRole("tab", { name: "Connections" })).not.toBeInTheDocument();
 
@@ -132,7 +134,7 @@ describe("ThreadView launchpad connections dock", () => {
     expect(onDockChange).toHaveBeenLastCalledWith("launchpad");
   });
 
-  it("keeps the cards in the rail when the stored choice is the sidebar", () => {
+  it("keeps the cards in the rail when the stored choice is the sidebar", async () => {
     renderLaunchpad({
       launchpadConnectionsDock: "sidebar",
       onLaunchpadConnectionsDockChange: vi.fn(),
@@ -141,6 +143,10 @@ describe("ThreadView launchpad connections dock", () => {
     const tab = screen.getByRole("tab", { name: "Connections" });
     // A stored dock is not a move: no arrival ring at launch.
     expect(tab).not.toHaveClass("is-landing");
+    // Let the card's status read land before leaving the tab.
+    expect(
+      await screen.findByRole("button", { name: "Connect to PwrSnap" }),
+    ).toBeInTheDocument();
     // The provider tab is still one click away.
     fireEvent.click(screen.getByRole("tab", { name: "AI provider info" }));
     expect(screen.getByRole("tab", { name: "AI provider info" })).toHaveAttribute(
@@ -158,10 +164,12 @@ describe("ThreadView launchpad connections dock", () => {
     expect(screen.queryByRole("tab", { name: "Connections" })).not.toBeInTheDocument();
   });
 
-  it("offers no move when nothing persists the choice", () => {
+  it("offers no move when nothing persists the choice", async () => {
     renderLaunchpad({});
     const group = screen.getByRole("group", { name: "Connections" });
-    expect(within(group).getByLabelText("PwrSnap connection")).toBeInTheDocument();
+    expect(
+      await within(group).findByRole("button", { name: "Connect to PwrSnap" }),
+    ).toBeInTheDocument();
     expect(
       within(group).queryByRole("button", { name: "Move to sidebar" }),
     ).not.toBeInTheDocument();
