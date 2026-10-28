@@ -359,8 +359,8 @@
     "statements": 1001
   },
   "federation-star-map-unchanged-reconnect": {
-    "commits": 11,
-    "note": "11 identical arrangement pages on reconnect; no changed rows or WAL",
+    "commits": 0,
+    "note": "11 identical arrangement pages on reconnect; read-only transactions flush no pages and count as zero write commits",
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0
@@ -597,8 +597,8 @@
     "statements": 10
   },
   "messaging-project-move-picker": {
-    "commits": 6,
-    "note": "one bounded project-picker page through the shared messaging controller, excluding binding setup",
+    "commits": 5,
+    "note": "one bounded project-picker page through the shared messaging controller, excluding binding setup; five write commits, read-only transactions excluded",
     "observedWalBytes": 78280,
     "rowsChanged": 5,
     "statements": 5
@@ -858,8 +858,8 @@
     "statements": 0
   },
   "pr-activity-unchanged-observations": {
-    "commits": 200,
-    "note": "100 unchanged conflict observations after dispatch plus activity reads: 200 read-only transaction commits, zero write statements/rows/WAL bytes; 0 MB/day additional WAL",
+    "commits": 0,
+    "note": "100 unchanged conflict observations after dispatch plus activity reads: read-only transactions, zero write commits/statements/rows/WAL bytes; 0 MB/day additional WAL",
     "observedWalBytes": 0,
     "rowsChanged": 0,
     "statements": 0

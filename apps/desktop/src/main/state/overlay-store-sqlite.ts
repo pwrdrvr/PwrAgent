@@ -10741,13 +10741,17 @@ function rollUpBackgroundHelperRows(
     const kind = (row.source_item_id ?? "").split(":")[1] || "helper";
     const threadId = row.parent_thread_id ?? row.thread_id;
     const bucket = Math.floor(completed / step) * step;
-    const groupKey = JSON.stringify(["monitor-rollup", row.provider, row.backend, kind, threadId, row.model ?? "",
-      row.price_status, row.currency, window.from, window.to, bucket]);
-    const usageLineId = JSON.stringify([groupKey, row.account_key || ""]);
+    // Keep the wire ids compatible with older owners sharing this ledger.
+    // Backend belongs in the local grouping key too; viewers already include
+    // it when deduplicating the wire id across owners.
+    const groupKey = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
+      row.price_status, row.currency, window.from, window.to, bucket].join(":");
+    const usageLineId = row.account_key ? `${groupKey}:${row.account_key}` : groupKey;
+    const identity = JSON.stringify([row.backend, usageLineId]);
     const line = threadUsageLineFromRow(row);
-    const existing = groups.get(usageLineId);
+    const existing = groups.get(identity);
     if (!existing) {
-      groups.set(usageLineId, {
+      groups.set(identity, {
         line: {
           backend: line.backend, provider: line.provider, threadId, usageLineId,
           ...(line.accountKey ? { accountKey: line.accountKey } : {}),

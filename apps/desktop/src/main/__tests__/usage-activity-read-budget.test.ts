@@ -5,7 +5,7 @@ import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
-import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared";
+import { buildLegacyEncodedThreadIdentityKey, usageRollupStep } from "@pwragent/shared";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import budgets from "./fixtures/usage-activity-read-budgets.json";
@@ -108,7 +108,12 @@ describe("Usage Activity read budgets", () => {
       })();
       const { rows } = await store.readUsageActivity(window);
       expect(rows).toHaveLength(3);
-      expect(new Set(rows.map((row) => row.line.usageLineId)).size).toBe(3);
+      expect(new Set(rows.map((row) => JSON.stringify([row.line.backend, row.line.usageLineId]))).size).toBe(3);
+      const legacyKey = ["monitor-rollup", "openai", "title", "same-parent", "", "priced", "USD",
+        window.from, window.to, Math.floor((start + 1000) / usageRollupStep(window.from, window.to))
+          * usageRollupStep(window.from, window.to)].join(":");
+      expect(rows.every((row) => row.rollup?.groupKey === legacyKey)).toBe(true);
+      expect(rows.map((row) => row.line.usageLineId).sort()).toEqual([legacyKey, legacyKey, `${legacyKey}:other`].sort());
       expect(rows.map((row) => [row.line.backend, row.title, row.rollup?.count, row.line.cacheWriteInputTokens,
         row.line.cacheWriteInputCostMicros]).sort()).toEqual([
         ["acp:qwen", "acp:qwen title", 3, 15, 21],
