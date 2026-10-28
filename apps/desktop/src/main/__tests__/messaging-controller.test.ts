@@ -6216,6 +6216,52 @@ describe("MessagingController", () => {
     } finally { db.close(); }
   });
 
+  it("delivers received outpost bytes and rechecks actor, provider and route authority before upload", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      let admitted = true;
+      const permissions = new Set<MessagingPermissionId>(["message.reply", "thread.resume", "tools.thread_inspection", "federation.remote_control"]);
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const resolvePrivateConversation = vi.fn(async () => ({ channel: "telegram" as const, outcome: "resolved" as const,
+        conversation: { id: "fixture-private-file", kind: "dm" as const }, updatedAt: 2000 }));
+      const harness = await createHarness({ requestStore: requests, authorizeRetainedSource: () => admitted, resolvePrivateConversation,
+        rbacPolicy: { isEnforcing: () => true, resolve: () => ({ permissions, roleIds: ["fixture-role"], matchedSubjects: [], rejected: false }) } });
+      const event = buildTextEvent("file from outpost", { channel: buildTopicChannel("100") });
+      await harness.store.upsertBinding({ id: "remote-file-binding", backend: "codex", threadId: "thread-1", targetKind: "thread",
+        channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+      const source = requests.remember({ connectionId: "fixture", agent: { backend: "codex", threadId: "thread-1" }, bindingId: "remote-file-binding", event })!;
+      const context = { backend: "codex" as const, threadId: "outpost-thread", turnId: "outpost-turn", causalMessagingSource: source.ref,
+        requestingInstanceId: "pwr_outpost_fixture" };
+      const request = { operation: "send_messaging_file" as const, context, args: { path: "/owner/never-read-this.pdf", filename: "report.pdf", private: true } };
+      const data = Buffer.from("%PDF-1.7\nmock authorized bytes");
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request, data)).toMatchObject({ ok: true, data: {
+        outcome: "delivered", filename: "report.pdf", mimeType: "application/pdf", private: true, sizeBytes: data.length,
+      } });
+      const delivered = harness.delivered.filter((intent) => intent.kind === "message");
+      expect(delivered).toHaveLength(1);
+      expect(delivered[0]).toMatchObject({ parts: [expect.objectContaining({ type: "file", data })] });
+      for (const permission of ["message.reply", "federation.remote_control"] as const) {
+        permissions.delete(permission);
+        expect(await harness.controller.handlePwrAgentMessagingRequest(request, data)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+        permissions.add(permission);
+      }
+      admitted = false;
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request, data)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      admitted = true;
+      // A private-route await is a permission-change boundary too.
+      resolvePrivateConversation.mockImplementationOnce(async () => {
+        permissions.delete("message.reply");
+        return { channel: "telegram", outcome: "resolved", conversation: { id: "fixture-private-file", kind: "dm" }, updatedAt: 2000 };
+      });
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request, data)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      permissions.add("message.reply");
+      await harness.store.revokeBinding({ bindingId: "remote-file-binding", revokedAt: 3000 });
+      expect(await harness.controller.handlePwrAgentMessagingRequest(request, data)).toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(harness.delivered.filter((intent) => intent.kind === "message")).toHaveLength(1);
+    } finally { db.close(); }
+  });
+
   it("keeps Slack channel4 causal through a completion despite newer human traffic in four other channels", async () => {
     const db = StateDb.open(":memory:");
     try {
@@ -16324,6 +16370,41 @@ describe("MessagingController", () => {
         },
       ],
     });
+  });
+
+  it("keeps single-page outpost PDFs on the provider owner and binds tools to the exact source and turn", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const navigation = buildNavigationSnapshot();
+      const target = buildFederatedThreadRef({ backend: "codex", instanceId: "pwr_pdf_outpost", threadId: "thread-1" });
+      navigation.threads[0]!.federation = { ref: target, instanceLabel: "Fixture outpost", peerStatus: "connected" };
+      const pdfData = Buffer.from("%PDF-1.7\nfixture");
+      vi.mocked(inspectPdfDocument).mockResolvedValueOnce({ pageCount: 1,
+        firstPage: { width: 612, height: 792, renderWidth: 612, renderHeight: 792 } });
+      vi.mocked(renderPdfPages).mockClear();
+      const supportsMessagingPdfTools = vi.fn(async () => true);
+      const harness = await createHarness({ navigation, requestStore: requests, authorizeRetainedSource: () => true, supportsMessagingPdfTools,
+        downloadAttachment: async ({ attachment }) => ({ data: pdfData, fileName: attachment.name, mimeType: attachment.mimeType, sizeBytes: pdfData.length }) });
+      const event = { ...buildTextEvent("inspect this outpost PDF"), kind: "media" as const, disposition: "available" as const,
+        attachments: [{ id: "fixture-pdf", kind: "file" as const, name: "fixture.pdf", disposition: "available" as const, mimeType: "application/pdf", sizeBytes: pdfData.length }] };
+      await harness.store.upsertBinding({ id: "pdf-outpost-binding", backend: "codex", threadId: "thread-1", targetKind: "thread", federatedThread: target,
+        channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+      await harness.controller.handleInboundEvent(event);
+      expect(supportsMessagingPdfTools).toHaveBeenCalledWith({ backend: "codex", threadId: "thread-1", federationTarget: target.target });
+      expect(harness.startTurn).toHaveBeenCalledWith(expect.objectContaining({ input: [expect.objectContaining({ type: "text" })] }));
+      expect(renderPdfPages).not.toHaveBeenCalled();
+      const origin = harness.startTurn.mock.calls[0]![0].messageOrigin;
+      const context = { backend: "codex" as const, threadId: "thread-1", turnId: "turn-1", causalMessagingSource: origin!.causalMessagingSource,
+        requestingInstanceId: "pwr_pdf_outpost" };
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "inspect_messaging_pdfs", context, args: {} }))
+        .toMatchObject({ ok: true, data: { attachments: [expect.objectContaining({ name: "fixture.pdf", pageCount: 1 })] } });
+      for (const wrong of [{ requestingInstanceId: "pwr_other" }, { turnId: "other-turn" },
+        { causalMessagingSource: { ...context.causalMessagingSource!, requestId: "other-request" } }]) {
+        expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "inspect_messaging_pdfs", context: { ...context, ...wrong }, args: {} }))
+          .toMatchObject({ ok: false, error: { code: "forbidden" } });
+      }
+    } finally { db.close(); }
   });
 
   it("leaves messaging PDFs as normal file input when PDF analysis is disabled", async () => {

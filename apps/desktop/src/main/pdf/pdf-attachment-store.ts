@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  MessagingCausalSourceRef,
   PwrAgentMessagingPdfAttachmentSummary,
   PwrAgentMessagingPdfTextSearchResult,
   PwrAgentMessagingRenderedPdfPagesResult,
@@ -46,6 +47,8 @@ export class PdfAttachmentStore {
   private readonly attachmentsByTurnKey = new Map<
     string,
     {
+      sourceInstanceId?: string;
+      sourceRequest?: MessagingCausalSourceRef;
       attachments: PendingPdfAttachment[];
       renderedBytes: number;
       renderedPages: number;
@@ -58,7 +61,7 @@ export class PdfAttachmentStore {
   >();
 
   bindTurn(
-    context: PdfAttachmentToolContext,
+    context: PdfAttachmentToolContext & { sourceInstanceId?: string; sourceRequest?: MessagingCausalSourceRef },
     attachments: PendingPdfAttachment[],
   ): void {
     if (attachments.length === 0) {
@@ -66,6 +69,8 @@ export class PdfAttachmentStore {
     }
     this.attachmentsByTurnKey.set(turnKey(context), {
       attachments,
+      sourceInstanceId: context.sourceInstanceId,
+      sourceRequest: context.sourceRequest,
       renderedBytes: 0,
       renderedPages: 0,
       claimedPageNumbersByAttachmentId: new Map(),
@@ -74,6 +79,12 @@ export class PdfAttachmentStore {
       renderedWireBytes: 0,
       textSearchRequests: 0,
     });
+  }
+
+  authorizesSource(context: PdfAttachmentToolContext, instanceId: string, source?: MessagingCausalSourceRef): boolean {
+    const turn = this.attachmentsByTurnKey.get(turnKey(context));
+    return !!source && turn?.sourceInstanceId === instanceId
+      && turn.sourceRequest?.ownerId === source.ownerId && turn.sourceRequest.requestId === source.requestId;
   }
 
   releaseTurn(context: PdfAttachmentToolContext): void {

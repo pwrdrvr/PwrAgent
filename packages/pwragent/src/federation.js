@@ -7,13 +7,13 @@ import {
   generateFederationIdentityKeyPair, generateFederationNoiseStaticKeyPair,
   noiseKeyPairFromRawPrivate, decodeFederationInvite, encodeFederationInvite,
   FEDERATION_PROTOCOL_VERSION, FEDERATION_INVITE_VERSION, FederationRpcEndpoint,
-  authenticateMessageOrigin, FederationPtyService, TerminalHistoryStore, FEDERATION_PTY_METHOD_CAPABILITIES, registerFederationPtyHandlers,
+  pushFederationFile, authenticateMessageOrigin, FederationPtyService, TerminalHistoryStore, FEDERATION_PTY_METHOD_CAPABILITIES, registerFederationPtyHandlers,
 } from "../dist/federation-core.js";
 import { setupHandoffs, HANDOFF_CAPABILITIES } from "./handoffs.js";
 import { atomicJson } from "./store.js";
 import { HeadlessBackend, METHOD_CAPABILITIES } from "./federation-backend.js";
 
-export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "environment_actions", "thread_handoff", "file_push"];
+export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions", "thread_handoff", "file_push"];
 
 const EVENT_CAPABILITIES = new Map([
   ["navigation", "thread_navigation"], ["star_map", "thread_navigation"],
@@ -51,7 +51,7 @@ export class HeadlessFederation {
     } catch (error) { if (error.code !== "ENOENT") throw error; }
     this.backend = new HeadlessBackend(runtime, (event, eventClass) => this.publish(event, eventClass));
     runtime.onEvent = (message) => this.backend.event(message);
-    runtime.requestMessaging = (request) => this.requestMessaging(request);
+    runtime.requestMessaging = (request, loadFile) => this.requestMessaging(request, loadFile);
     this.backend.authenticateOrigin = (origin, envelope) => this.authenticateOrigin(origin, envelope);
     this.pty = new FederationPtyService({
       historyStore: new TerminalHistoryStore(path.join(directory, "terminal-history")),
@@ -308,19 +308,34 @@ export class HeadlessFederation {
     sourceInstanceId: envelope.sourceInstanceId });
   }
 
-  async requestMessaging(request) {
+  async requestMessaging(request, loadFile) {
     const owner = request.context.causalMessagingSource?.instanceId;
     if (!owner || request.context.causalMessagingAmbiguous) return { ok: false, error: { code: "forbidden", message: "No unambiguous original messaging destination is retained for this turn" } };
     // Capability negotiation is necessary on the selected route, and the owner
     // repeats admission/RBAC/route checks. Connection alone grants no service.
     const route = this.router?.getConnection(owner) || this.router?.getConnection(this.state?.gateway?.gatewayInstanceId);
     if (!route?.capabilities.includes("messaging_route") || !route.capabilities.includes("messaging_destinations")) return { ok: false, error: { code: "peer_unavailable", message: "The original messaging owner is unavailable or messaging_route is not granted" } };
+    const attachmentTool = request.operation === "send_messaging_file" || ["inspect_messaging_pdfs", "search_messaging_pdf_text", "render_messaging_pdf_pages"].includes(request.operation);
+    if (attachmentTool && !route.capabilities.includes("messaging_files")) return { ok: false, error: { code: "unsupported_operation", message: "The original messaging owner requires a file/PDF tools upgrade" } };
+    if (loadFile && !route.capabilities.includes("file_push")) return { ok: false, error: { code: "forbidden", message: "File transfer is not granted on the messaging route" } };
     try {
       const endpoint = this.endpoint(owner);
       const check = { ...request.context, category: "messaging_context", tool: request.operation, arguments: request.args };
       const permission = await endpoint.request({ method: "messaging.destination", params: { kind: "authorize", context: request.context, check } });
       if (!permission.allowed) return { ok: false, error: { code: "forbidden", message: "The original messaging owner denied this operation" } };
-      return await endpoint.request({ method: "messaging.destination", params: { kind: "request", request } });
+      let file;
+      if (loadFile) {
+        const surface = await endpoint.request({ method: "messaging.destination", params: { kind: "request", request: { ...request, operation: "get_current_messaging_surface", args: {} } } });
+        if (!surface.ok) return surface;
+        const capabilities = surface.data?.location?.outboundAttachments;
+        if (!capabilities) return { ok: false, error: { code: "unsupported_operation", message: "The messaging owner did not supply upload limits" } };
+        const outbound = await loadFile(capabilities);
+        if (!outbound.ok) return { ok: false, error: { code: outbound.code, message: outbound.message } };
+        // Transfer the validated snapshot, never reopen its original path.
+        file = await pushFederationFile(endpoint, outbound.data, "messaging-upload.bin");
+        request = { ...request, args: { ...request.args, path: "", filename: outbound.filename } };
+      }
+      return await endpoint.request({ method: "messaging.destination", params: { kind: "request", request, ...(file ? { file } : {}) } });
     } catch {
       return { ok: false, error: { code: "peer_unavailable", message: "The original messaging service is unavailable. A send may have an uncertain outcome; it was not replayed." } };
     }

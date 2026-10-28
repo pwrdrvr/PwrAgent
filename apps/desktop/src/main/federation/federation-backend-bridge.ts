@@ -539,6 +539,7 @@ export const FEDERATION_BACKEND_METHODS = {
   analyzeThreadToolHistory: "backend.analyzeThreadToolHistory",
   readTranscriptImage: "backend.readTranscriptImage",
   listSkills: "backend.listSkills",
+  supportsMessagingPdfTools: "backend.supportsMessagingPdfTools",
   listBackends: "backend.listBackends",
   markThreadSeen: "backend.markThreadSeen",
   setThreadReaction: "backend.setThreadReaction",
@@ -689,6 +690,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.analyzeThreadToolHistory]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readTranscriptImage]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
+  [FEDERATION_BACKEND_METHODS.supportsMessagingPdfTools]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.markThreadSeen]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.setThreadReaction]: "thread_navigation",
@@ -910,6 +912,7 @@ export type FederationBackendOperations = {
   readTranscriptImage(
     request: FederationReadTranscriptImageRequest,
   ): Promise<FederatedTranscriptImageResponse>;
+  supportsMessagingPdfTools?(request: { backend: AppServerBackendKind; threadId: string }): Promise<boolean>;
   listSkills(
     request?: AppServerListSkillsRequest,
   ): Promise<AppServerListSkillsResponse>;
@@ -1461,6 +1464,8 @@ export function registerFederationBackendHandlers(params: {
         envelope.params as FederationReadTranscriptImageRequest,
       ),
   );
+  params.router.registerHandler(FEDERATION_BACKEND_METHODS.supportsMessagingPdfTools, async (envelope) =>
+    await params.backend.supportsMessagingPdfTools?.(envelope.params as { backend: AppServerBackendKind; threadId: string }) ?? false);
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.listSkills,
     async (envelope) =>
@@ -2533,6 +2538,10 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       method: FEDERATION_BACKEND_METHODS.readTranscriptImage,
       params: request,
     });
+  }
+
+  async supportsMessagingPdfTools(request: { backend: AppServerBackendKind; threadId: string }): Promise<boolean> {
+    return await this.rpc.request({ method: FEDERATION_BACKEND_METHODS.supportsMessagingPdfTools, params: request });
   }
 
   async listSkills(

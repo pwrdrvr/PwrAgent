@@ -382,8 +382,30 @@ Connection alone establishes neither a provider service nor a destination.
 Retained-source messaging tools require an owner/provider that supports that
 contract (currently Telegram and Slack). Other providers can still route text
 turns and normal replies through their owning peer. Their outpost tools fail
-closed when retained authorization is unavailable. File/PDF messaging tools are
-not advertised: a local file path must not be interpreted on the provider owner.
+closed when retained authorization is unavailable. File/PDF tools additionally
+require the `messaging_files` protocol capability on the original owner's route.
+
+`send_messaging_file` reads only an explicit file in the active outpost thread's
+workspace. Shared file validation rejects private Codex/PwrAgent storage,
+selected Git authentication files, symlink escapes, hard links, empty files and
+provider upload-limit violations before transfer. The shared chunked file-push
+protocol transfers the validated byte snapshot; it never reopens the original
+path. The owner must grant `file_push` and allow incoming files. Its receiver
+issues an authenticated-source receipt; delivery consumes that receipt once,
+checks the received checksum, revalidates provider file limits/MIME and rechecks
+the original actor, provider admission, RBAC and route. Outpost paths never become
+provider-owner read requests. Transfers use the owner's configured receiving
+folder, as other federation file pushes do.
+
+`inspect_messaging_pdfs`, `search_messaging_pdf_text` and
+`render_messaging_pdf_pages` execute against the original owner's turn-bound PDF
+store. The owner checks the exact outpost identity, turn and retained human
+request before exposing an attachment. PDF bytes stay there; bounded rendered
+pages return as native tool image content. Both single-page and multi-page PDFs
+use this path on supported outpost threads. Owner restart releases those
+in-memory attachments and receipts; tools fail closed instead of recovering
+from arbitrary paths.
+
 Existing/forked Codex threads keep their creation-time tool catalog; this change
 does not retrofit tools into older persisted threads.
 

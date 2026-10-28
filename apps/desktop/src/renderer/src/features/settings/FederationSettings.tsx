@@ -1875,6 +1875,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   federated_search: "search remote threads",
   messaging_route: "route messaging threads",
   messaging_destinations: "retain messaging destinations",
+  messaging_files: "use messaging file and PDF tools",
   pwrsnap_connection: "read PwrSnap availability",
   gateway_relay: "reach sibling instances",
   remote_pty: "remote terminal protocol",

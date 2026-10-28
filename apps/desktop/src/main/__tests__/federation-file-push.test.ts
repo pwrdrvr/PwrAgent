@@ -8,7 +8,7 @@ import type { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FederationRouter } from "../federation/federation-router";
 import { FederationRpcEndpoint as Rpc } from "../federation/federation-rpc";
 import {
-  FederationFilePushReceiver, FILE_PUSH_CHUNK_BYTES, FILE_PUSH_MAX_BYTES,
+  FederationFilePushReceiver, FederationFilePushReceipts, FILE_PUSH_CHUNK_BYTES, FILE_PUSH_MAX_BYTES,
   FILE_PUSH_METHODS as methods, FILE_PUSH_METHOD_CAPABILITIES,
   pushFederationFile, registerFilePushHandlers,
 } from "../federation/federation-file-push";
@@ -56,6 +56,43 @@ describe("Federation push files", () => {
     expect(await fs.readFile(path.join(downloads, "report.txt"), "utf8")).toBe("existing");
     expect(await fs.readdir(downloads)).toEqual(["report (1).txt", "report.txt"]);
     expect(result.sha256).toBe(createHash("sha256").update(content).digest("hex"));
+  });
+
+  it("transfers an authorized byte snapshot and consumes receipts only for the authenticated peer", async () => {
+    const receipts = new FederationFilePushReceipts();
+    await receiver.dispose();
+    receiver = new FederationFilePushReceiver({ allowed: () => allowed, directory: () => downloads,
+      onCompleted: (peerId, file) => receipts.record(peerId, file) });
+    const bytes = Buffer.alloc(FILE_PUSH_CHUNK_BYTES + 13, 72);
+    const rpc = { request: ({ method, params }: { method: string; params: unknown }) => call(method, params) } as Pick<FederationRpcEndpoint, "request">;
+    const file = await pushFederationFile(rpc, new Uint8Array(bytes), "authorized.bin");
+    await expect(receipts.consume("other-peer", file, FILE_PUSH_MAX_BYTES)).rejects.toThrow("authenticated source");
+    await expect(receipts.consume(peer, { ...file, path: path.join(root, "owner-secret") }, FILE_PUSH_MAX_BYTES)).rejects.toThrow("authenticated source");
+    await expect(receipts.consume(peer, { ...file, sha256: digest("forged") }, FILE_PUSH_MAX_BYTES)).rejects.toThrow("authenticated source");
+    const results = await Promise.allSettled([receipts.consume(peer, file, FILE_PUSH_MAX_BYTES), receipts.consume(peer, file, FILE_PUSH_MAX_BYTES)]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect((results.find((result) => result.status === "fulfilled") as PromiseFulfilledResult<Uint8Array>).value).toEqual(bytes);
+    await expect(receipts.consume(peer, file, FILE_PUSH_MAX_BYTES)).rejects.toThrow("authenticated source");
+  });
+
+  it("refuses changed, oversized, expired and cold-start file receipts", async () => {
+    const receipts = new FederationFilePushReceipts();
+    await fs.writeFile(path.join(root, "received.bin"), "abc");
+    const file = { path: path.join(root, "received.bin"), sizeBytes: 3, sha256: digest("abc") };
+    receipts.record(peer, file);
+    await fs.writeFile(file.path, "xyz");
+    await expect(receipts.consume(peer, file, 10)).rejects.toThrow("changed");
+    await fs.writeFile(file.path, "abc");
+    receipts.record(peer, file);
+    await expect(receipts.consume(peer, file, 2)).rejects.toThrow("limit");
+    receipts.record(peer, file);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6 * 60_000);
+    await expect(receipts.consume(peer, file, 10)).rejects.toThrow("authenticated source");
+    vi.restoreAllMocks();
+    receipts.record(peer, file);
+    receipts.clear();
+    await expect(receipts.consume(peer, file, 10)).rejects.toThrow("authenticated source");
+    await expect(new FederationFilePushReceipts().consume(peer, file, 10)).rejects.toThrow("authenticated source");
   });
 
   it("rejects disabled receivers before touching the destination", async () => {

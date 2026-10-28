@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import test from "node:test";
 import { connectFederationClient, decodeFederationInvite, FederationRpcEndpoint, generateFederationIdentityKeyPair,
-  generateNoiseStaticKeyPair } from "../dist/federation-core.js";
+  generateNoiseStaticKeyPair, FederationFilePushReceiver, FederationFilePushReceipts } from "../dist/federation-core.js";
 import { HEADLESS_CAPABILITIES } from "../src/federation.js";
 import { OutpostGit } from "../src/projects.js";
 import { setup, eventually } from "./helpers.js";
@@ -19,7 +19,7 @@ async function port() {
   return result;
 }
 
-async function peer(h, prior, onRequest) {
+async function peer(h, prior, onRequest, capabilities = HEADLESS_CAPABILITIES) {
   const listener = (await h.rpc("federation-status")).listener;
   const invite = prior?.invite || decodeFederationInvite((await h.rpc("federation-invite", { port: listener ? Number(new URL(listener.url).port) : await port() })).invite);
   const identity = prior?.identity || { id: randomUUID(), ...generateFederationIdentityKeyPair(), noiseStatic: generateNoiseStaticKeyPair() };
@@ -29,14 +29,15 @@ async function peer(h, prior, onRequest) {
   const connection = await connectFederationClient({ url: invite.gatewayUrl, mode: prior ? "reconnect" : "enroll", deferReceiving: true,
     gatewayInstanceId: invite.gatewayInstanceId, gatewayPublicKeyPem: invite.gatewayPublicKeyPem,
     gatewayNoisePublicKey: Buffer.from(invite.gatewayNoisePublicKey, "base64"), peerInstanceId: identity.id,
-    ...identity, capabilities: HEADLESS_CAPABILITIES, role: "client", inviteToken: prior ? undefined : invite.token,
+    ...identity, capabilities, role: "client", inviteToken: prior ? undefined : invite.token,
     onEnvelope: (envelope) => {
       if (rpc.receiveEnvelope(envelope) || endpoints.some((endpoint) => endpoint.receiveEnvelope(envelope))) return;
       events.push(envelope);
       if (envelope.kind === "request" && onRequest) void Promise.resolve(onRequest(envelope)).then((result) => connection.sendEnvelope({
         kind: "response", id: randomUUID(), requestId: envelope.id, protocolVersion: envelope.protocolVersion,
-        sourceInstanceId: identity.id, targetInstanceId: invite.gatewayInstanceId, createdAt: Date.now(), result,
-      }));
+        sourceInstanceId: identity.id, targetInstanceId: envelope.sourceInstanceId, createdAt: Date.now(), result,
+      }), (error) => connection.sendEnvelope({ kind: "response", id: randomUUID(), requestId: envelope.id, protocolVersion: envelope.protocolVersion,
+        sourceInstanceId: identity.id, targetInstanceId: envelope.sourceInstanceId, createdAt: Date.now(), error: { code: "invalid_request", message: error.message } }));
     }, onClose: () => rpc.rejectAll(new Error("Fixture peer disconnected")),
   });
   rpc = new FederationRpcEndpoint({ localInstanceId: identity.id, remoteInstanceId: invite.gatewayInstanceId,
@@ -76,7 +77,8 @@ test("project creation, clone, project-specific turns and restart use owner cwd"
   const created = await v.call("backend.startThread", { backend: "codex", cwd: project.path, executionMode: "auto" });
   const specs = h.calls().find((call) => call.method === "thread/start").params.dynamicTools;
   assert.ok(specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "send_private_response")));
-  assert.ok(!specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "send_messaging_file")));
+  assert.ok(specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "send_messaging_file")));
+  assert.ok(specs.some((namespace) => namespace.tools?.some((tool) => tool.name === "render_messaging_pdf_pages")));
   await v.call("backend.startTurn", { threadId: created.threadId, input: [{ type: "text", text: "project marker" }] });
   await eventually(() => existsSync(path.join(project.path, "fixture-result.txt")));
   assert.equal(existsSync(path.join(h.workspace, "fixture-result.txt")), false);
@@ -305,4 +307,156 @@ test("incoming messaging preserves causal context and authorized tools return to
     input: [{ type: "text", text: "independent work" }] });
   owner.connection.close();
   await eventually(() => existsSync(path.join(h.workspace, "fixture-result.txt")) && readFileSync(path.join(h.workspace, "fixture-result.txt"), "utf8") === "independent work");
+});
+
+
+test("outpost files transfer only authorized snapshots and PDFs return native images without adapters", { timeout: 30000 }, async (t) => {
+  const h = await setup(t);
+  const receipts = new FederationFilePushReceipts();
+  let uploaded = 0;
+  let authorized = true;
+  const sends = [];
+  let disconnectAfterSend = false;
+  let snapshotSource;
+  let uploadLimit = 300000;
+  const receiver = new FederationFilePushReceiver({ allowed: () => true, directory: () => path.join(h.root, "mock-provider-incoming"),
+    onCompleted: (source, file) => { uploaded++; receipts.record(source, file); } });
+  t.after(() => receiver.dispose());
+  const handle = async (envelope) => {
+    if (envelope.method.startsWith("file.push.")) {
+      if (snapshotSource && envelope.method === "file.push.begin") writeFileSync(snapshotSource, "changed after validation");
+      return receiver.handle(envelope.sourceInstanceId, envelope.method, envelope.params);
+    }
+    assert.equal(envelope.method, "messaging.destination");
+    const { kind, request, file } = envelope.params;
+    if (kind === "authorize") return { allowed: authorized };
+    if (request.operation === "get_current_messaging_surface") return { ok: true, data: { location: {
+      outboundAttachments: { supportsFileUpload: true, supportsImageUpload: true, maxUploadBytes: uploadLimit },
+    } } };
+    if (request.operation === "send_messaging_file") {
+      assert.equal(authorized, true);
+      assert.equal(request.args.path, "", "no outpost path may be read by the owner");
+      const data = await receipts.consume(envelope.sourceInstanceId, file, 300000);
+      sends.push({ data, request });
+      if (disconnectAfterSend) { owner.connection.close(); return new Promise(() => {}); }
+      return { ok: true, data: { outcome: "delivered", filename: request.args.filename } };
+    }
+    if (request.operation === "render_messaging_pdf_pages") return { ok: true, data: { attachmentId: "fixture-pdf", pages: [{ pageNumber: 1, width: 1, height: 1 }] },
+      imageContent: [{ base64: "AQID", mimeType: "image/png", pageNumber: 1 }] };
+    return { ok: true, data: { attachments: [{ attachmentId: "fixture-pdf", pageCount: 2 }] } };
+  };
+  let owner = await peer(h, undefined, handle);
+  t.after(() => owner.connection.close());
+  const thread = await owner.call("backend.startThread", { cwd: h.workspace });
+  assert.equal(await owner.call("backend.supportsMessagingPdfTools", { backend: "codex", threadId: thread.threadId }), true);
+  const messageOrigin = { kind: "messaging", causalMessagingSource: { ownerId: "fixture-profile", requestId: "file-request", instanceId: owner.identity.id },
+    messaging: { platform: "slack", surface: { id: "fixture-files", kind: "thread" }, actor: { platformUserId: "fixture-user" } } };
+  let count = 0;
+  async function tool(operation, args) {
+    await eventually(async () => !(await h.rpc("status")).activeJob);
+    await owner.call("backend.startTurn", { threadId: thread.threadId, messageOrigin,
+      input: [{ type: "text", text: "tool " + JSON.stringify({ operation, args }) }] });
+    const expected = ++count;
+    return await eventually(() => {
+      if (!existsSync(path.join(h.data, "tool-results.jsonl"))) return false;
+      const raw = readFileSync(path.join(h.data, "tool-results.jsonl"), "utf8");
+      if (!raw.endsWith("\n")) return false;
+      const results = raw.trim().split("\n");
+      return results.length === expected && JSON.parse(results.at(-1));
+    });
+  }
+  const selected = path.join(h.workspace, "report.pdf");
+  const bytes = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(270000, 32)]);
+  writeFileSync(selected, bytes);
+  snapshotSource = selected;
+  assert.equal((await tool("send_messaging_file", { path: selected, caption: "mock file", private: true })).success, true);
+  assert.deepEqual(sends[0].data, bytes, "the original path is never reopened after validation");
+  snapshotSource = undefined;
+  writeFileSync(selected, bytes);
+  assert.equal(sends[0].request.args.filename, "report.pdf");
+  assert.equal(sends[0].request.args.private, true);
+  assert.equal(uploaded, 1);
+  const privateFile = path.join(h.home, "auth.json");
+  writeFileSync(privateFile, "fixture private bytes");
+  const linked = path.join(h.workspace, "private-link.pdf");
+  symlinkSync(privateFile, linked);
+  const hardlink = path.join(h.workspace, "private-hardlink.pdf");
+  linkSync(privateFile, hardlink);
+  const outside = path.join(h.root, "outside.pdf");
+  writeFileSync(outside, "not in workspace");
+  const session = path.join(h.workspace, ".codex/sessions/fixture.jsonl");
+  mkdirSync(path.dirname(session), { recursive: true });
+  writeFileSync(session, "fixture session");
+  const huge = path.join(h.workspace, "huge.bin");
+  writeFileSync(huge, Buffer.alloc(300001));
+  const empty = path.join(h.workspace, "empty.bin");
+  writeFileSync(empty, "");
+  for (const file of [privateFile, linked, hardlink, outside, session, huge, empty, "relative.pdf", h.workspace]) {
+    assert.equal((await tool("send_messaging_file", { path: file })).success, false, file);
+  }
+  assert.equal((await tool("send_messaging_file", { path: selected, caption: "x".repeat(4001) })).success, false);
+  assert.equal((await tool("send_messaging_file", { path: selected, mediaKind: "bogus" })).success, false);
+  uploadLimit = -1;
+  assert.equal((await tool("send_messaging_file", { path: selected })).success, false);
+  uploadLimit = 300000;
+  assert.equal(uploaded, 1, "invalid or private local files never cross the socket");
+  const authHelper = path.join(h.workspace, "git-helper");
+  writeFileSync(authHelper, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+  await h.rpc("git-auth-configure", { credentialHelperPath: authHelper });
+  assert.equal((await tool("send_messaging_file", { path: authHelper })).success, false);
+  assert.equal(uploaded, 1, "explicitly selected Git credentials remain private inside a workspace");
+  authorized = false;
+  assert.equal((await tool("send_messaging_file", { path: selected })).success, false);
+  assert.equal(uploaded, 1, "denied provider authority prevents transfer");
+  authorized = true;
+  assert.equal((await tool("inspect_messaging_pdfs", {})).success, true);
+  assert.equal((await tool("search_messaging_pdf_text", { attachmentId: "fixture-pdf", query: "fixture" })).success, true);
+  const rendered = await tool("render_messaging_pdf_pages", { attachmentId: "fixture-pdf", pageNumbers: [1] });
+  assert.equal(rendered.success, true);
+  assert.deepEqual(rendered.contentItems.filter((item) => item.type === "inputImage"), [{ type: "inputImage", imageUrl: "data:image/png;base64,AQID" }]);
+  disconnectAfterSend = true;
+  const uncertain = await tool("send_messaging_file", { path: selected });
+  assert.equal(uncertain.success, false);
+  assert.match(uncertain.contentItems[0].text, /uncertain|peer_unavailable/);
+  assert.equal(sends.length, 2);
+  await h.stop(h.daemon);
+  await h.start();
+  disconnectAfterSend = false;
+  owner = await peer(h, owner, handle);
+  assert.equal(sends.length, 2, "restart/reconnect never replays an accepted-but-unacknowledged file send");
+  assert.equal(await owner.call("backend.supportsMessagingPdfTools", { backend: "codex", threadId: thread.threadId }), true);
+});
+
+
+test("older messaging owners and persisted catalogs fail closed for file/PDF consumption", async (t) => {
+  const h = await setup(t);
+  const requests = [];
+  const oldCapabilities = HEADLESS_CAPABILITIES.filter((capability) => capability !== "messaging_files");
+  let owner = await peer(h, undefined, (envelope) => { requests.push(envelope); return { allowed: true }; }, oldCapabilities);
+  t.after(() => owner.connection.close());
+  const thread = await owner.call("backend.startThread", { cwd: h.workspace });
+  const selected = path.join(h.workspace, "fixture.pdf");
+  writeFileSync(selected, "%PDF-1.7 fixture");
+  await owner.call("backend.startTurn", { threadId: thread.threadId,
+    messageOrigin: { kind: "messaging", causalMessagingSource: { ownerId: "fixture-owner", requestId: "fixture-request", instanceId: owner.identity.id },
+      messaging: { platform: "slack", surface: { id: "fixture", kind: "thread" }, actor: { platformUserId: "fixture-user" } } },
+    input: [{ type: "text", text: "tool " + JSON.stringify({ operation: "send_messaging_file", args: { path: selected } }) }] });
+  const result = await eventually(() => {
+    if (!existsSync(path.join(h.data, "tool-results.jsonl"))) return false;
+    const raw = readFileSync(path.join(h.data, "tool-results.jsonl"), "utf8");
+    return raw.endsWith("\n") && JSON.parse(raw.trim());
+  });
+  assert.equal(result.success, false);
+  assert.match(result.contentItems[0].text, /upgrade/);
+  assert.deepEqual(requests, [], "old owners receive neither attachment bytes nor file/PDF requests");
+  owner.connection.close();
+  await h.stop(h.daemon);
+  const registry = path.join(h.directory, "threads.json");
+  const prior = JSON.parse(readFileSync(registry, "utf8"));
+  delete prior.threads.find((item) => item.id === thread.threadId).messagingFileTools;
+  writeFileSync(registry, JSON.stringify(prior));
+  await h.start();
+  owner = await peer(h, owner, undefined, oldCapabilities);
+  assert.equal(await owner.call("backend.supportsMessagingPdfTools", { backend: "codex", threadId: thread.threadId }), false,
+    "an older creation-time catalog cannot acquire PDF tools by restarting the daemon");
 });
