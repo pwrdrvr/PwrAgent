@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent, FederationRemoteTarget, ListThreadTodosResponse, ThreadTodo, ThreadTodoFeedDelta, ThreadTodoFeedSnapshot,
 } from "@pwragent/shared";
-import { ThreadTodoViewHub } from "../thread-todos/thread-todo-views";
+import { THREAD_TODO_BUSY_RETRY_MS, ThreadTodoViewHub } from "../thread-todos/thread-todo-views";
 
 const peer: FederationRemoteTarget = { scope: "remote", instanceId: "peer" };
 const prefs = { defaultMethod: "squash" as const, byProject: {} };
@@ -162,5 +162,99 @@ describe("ThreadTodoViewHub", () => {
       threadId: "t", upserts: [card("a", "t", 1)], mergeMethods: prefs }));
     await Promise.resolve();
     expect(remote.snapshot).toHaveBeenCalledTimes(1);
+  });
+
+  describe("a busy owner", () => {
+    // How a peer's NavigationQueryError reaches this instance over federation.
+    const busy = () => Object.assign(new Error("handler_failed: [navigation_busy] Navigation changed during its owner read."), {
+      code: "handler_failed",
+    });
+    const reconnect = () => ownerEvent("federation/eventStream/changed", { instanceId: "peer", epoch: "s2" });
+    const flush = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
+    const errorsSent = (sent: Array<{ delta: ThreadTodoFeedDelta }>) => sent.flatMap((entry) => entry.delta.errors ?? []);
+    const upsertsSent = (sent: Array<{ delta: ThreadTodoFeedDelta }>) =>
+      sent.flatMap((entry) => entry.delta.upserts?.map((todo) => todo.id) ?? []);
+
+    afterEach(() => { vi.useRealTimers(); });
+
+    function busyFeed() {
+      vi.useFakeTimers();
+      return harness({ capable: true, remoteSnapshots: [
+        { epoch: "owner", revision: 1, todos: [card("a", "t", 1)], mergeMethods: prefs },
+        { epoch: "owner", revision: 2, todos: [card("a", "t", 1), card("b", "t", 2)], mergeMethods: prefs },
+      ] });
+    }
+
+    it("keeps its last cards without an error and reads it once more after a short delay", async () => {
+      const { hub, remote, sent } = busyFeed();
+      await hub.snapshot(peer);
+      remote.snapshot.mockRejectedValueOnce(busy());
+      hub.handleRemoteEvent(reconnect());
+      await flush();
+      expect(remote.snapshot).toHaveBeenCalledTimes(2);
+      expect(sent).toEqual([]);
+      await flush(THREAD_TODO_BUSY_RETRY_MS);
+      expect(remote.snapshot).toHaveBeenCalledTimes(3);
+      expect(upsertsSent(sent)).toEqual([remoteId("b")]);
+      expect(errorsSent(sent)).toEqual([]);
+    });
+
+    it("reads a still-busy owner only once more, then again on its next delta", async () => {
+      const { hub, remote, sent } = busyFeed();
+      await hub.snapshot(peer);
+      remote.snapshot.mockRejectedValueOnce(busy()).mockRejectedValueOnce(busy());
+      hub.handleRemoteEvent(reconnect());
+      await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
+      expect(remote.snapshot).toHaveBeenCalledTimes(3);
+      expect(sent).toEqual([]);
+      // The feed stopped following, so the owner's next delta reads it again.
+      hub.handleRemoteEvent(ownerEvent("thread/todos/delta", { epoch: "owner", revision: 2, backend: "codex",
+        threadId: "t", upserts: [card("b", "t", 2)], mergeMethods: prefs }));
+      await flush();
+      expect(remote.snapshot).toHaveBeenCalledTimes(4);
+      expect(upsertsSent(sent)).toEqual([remoteId("b")]);
+    });
+
+    it("re-lists a busy owner without the feed once, quietly", async () => {
+      vi.useFakeTimers();
+      const list = vi.fn((): ListThreadTodosResponse => ({ todos: [card("a", "t", 1)], mergeMethods: prefs }));
+      const { hub, remote, sent } = harness({ list });
+      await hub.snapshot(peer);
+      remote.list.mockRejectedValueOnce(busy());
+      list.mockReturnValue({ todos: [card("b", "t", 2)], mergeMethods: prefs });
+      hub.handleRemoteEvent(ownerEvent("thread/todos/changed", { backend: "codex", threadId: "t", at: 2 }));
+      await flush();
+      expect(sent).toEqual([]);
+      await flush(THREAD_TODO_BUSY_RETRY_MS);
+      expect(remote.list).toHaveBeenCalledTimes(3);
+      expect(upsertsSent(sent)).toEqual([remoteId("b")]);
+      expect(errorsSent(sent)).toEqual([]);
+    });
+
+    it("still shows a failure that is not owner contention, without reading again", async () => {
+      const { hub, remote, sent } = busyFeed();
+      await hub.snapshot(peer);
+      remote.snapshot.mockRejectedValueOnce(Object.assign(new Error("handler_failed: Unexpected failure"), { code: "handler_failed" }));
+      hub.handleRemoteEvent(reconnect());
+      await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
+      expect(remote.snapshot).toHaveBeenCalledTimes(2);
+      expect(errorsSent(sent)).toEqual(["handler_failed: Unexpected failure"]);
+    });
+
+    it("cancels a pending read when no window shows the owner any more", async () => {
+      let viewers = true;
+      vi.useFakeTimers();
+      const { hub, remote } = harness({ capable: true, hasViewers: () => viewers, remoteSnapshots: [
+        { epoch: "owner", revision: 1, todos: [], mergeMethods: prefs },
+      ] });
+      await hub.snapshot(peer);
+      remote.snapshot.mockRejectedValueOnce(busy());
+      hub.handleRemoteEvent(reconnect());
+      await flush();
+      viewers = false;
+      hub.peerStatusChanged();
+      await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
+      expect(remote.snapshot).toHaveBeenCalledTimes(2);
+    });
   });
 });

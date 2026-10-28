@@ -599,6 +599,15 @@ describe("thread to-do checklists", () => {
     expect(screen.getByRole("alert").textContent).toContain("Owner disconnected");
   });
 
+  it("keeps a busy owner's resolved queue quiet", async () => {
+    const busy = Object.assign(new Error("handler_failed: [navigation_busy] Busy"), { code: "navigation_busy" });
+    const view = createView([], { listResolved: vi.fn(async () => { throw busy; }) });
+    render(<ThreadTodosPanel view={view} threadKey="remote:owner:codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(view.listResolved).toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shows a rejected owner action without hiding the card", async () => {
     const card = todo({ id: "remote-todo:owner:card", title: "Ship it", federationTarget: { scope: "remote", instanceId: "owner" } });
     const view = createView([card], { resolve: vi.fn(async () => { throw new Error("Owner disconnected"); }) });

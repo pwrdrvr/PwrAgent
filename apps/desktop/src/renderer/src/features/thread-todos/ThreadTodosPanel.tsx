@@ -25,6 +25,7 @@ import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
 import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
 import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
 import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
+import { isNavigationBusy } from "../../../../shared/navigation-ipc-result";
 
 export type ThreadTodoScope = "thread" | "project" | "all";
 
@@ -127,7 +128,8 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     void listResolved().then((todos) => {
       if (!cancelled) setResolved(todos);
     }).catch((error: unknown) => {
-      if (!cancelled) {
+      // A busy owner keeps the last list; the next revision reads it again.
+      if (!cancelled && !isNavigationBusy(error)) {
         setActionError(String(error));
         setResolved([]);
       }

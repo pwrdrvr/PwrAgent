@@ -7,6 +7,7 @@ import {
   THREAD_TODOS_CHANGED_EVENT_CHANNEL, THREAD_TODOS_DELTA_EVENT_CHANNEL, THREAD_TODOS_LIST_CHANNEL,
   THREAD_TODOS_RESOLVE_CHANNEL, THREAD_TODOS_SNAPSHOT_CHANNEL, THREAD_REVIEWS_UPDATE_CHANNEL,
 } from "../../shared/ipc";
+import { unwrapNavigationRead } from "../../shared/navigation-ipc-result";
 
 const fixture = vi.hoisted(() => {
   const target = { scope: "remote" as const, instanceId: "owner" };
@@ -96,6 +97,24 @@ describe("owner-routed To-do IPC", () => {
     expect(fixture.localResolve).not.toHaveBeenCalled();
     await fixture.handlers.get(THREAD_REVIEWS_UPDATE_CHANNEL)!({ sender }, { id: "review", itemId: "finding", status: "addressed" });
     expect(fixture.remote).toHaveBeenLastCalledWith(fixture.target, "updateReview", { id: "review", itemId: "finding", status: "addressed" });
+  });
+
+  // A busy owner is expected contention, not a failed handler: it crosses IPC
+  // as data, so Electron never wraps it as "Error invoking remote method".
+  it("returns a remote owner's navigation_busy listing as an expected failure", async () => {
+    const busy = Object.assign(new Error("handler_failed: [navigation_busy] Navigation changed during its owner read."), {
+      code: "handler_failed",
+    });
+    fixture.remote.mockRejectedValueOnce(busy);
+    const result = await fixture.handlers.get(THREAD_TODOS_LIST_CHANNEL)!({ sender: fixture.windows[1] }, { status: "open" });
+    expect(result).toEqual({ navigationReadFailure: true, code: "navigation_busy", message: busy.message });
+    expect(() => unwrapNavigationRead(result)).toThrow(expect.objectContaining({ code: "navigation_busy" }));
+  });
+
+  it("still rejects a remote owner's unexpected listing failure", async () => {
+    fixture.remote.mockRejectedValueOnce(Object.assign(new Error("handler_failed: Unexpected failure"), { code: "handler_failed" }));
+    await expect(fixture.handlers.get(THREAD_TODOS_LIST_CHANNEL)!({ sender: fixture.windows[1] }, { status: "open" }))
+      .rejects.toThrow("handler_failed: Unexpected failure");
   });
 
   it("refreshes local mounted viewers and the correct remote window after owner changes and reconnect", () => {
