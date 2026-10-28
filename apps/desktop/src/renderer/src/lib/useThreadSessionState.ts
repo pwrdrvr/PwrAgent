@@ -1851,8 +1851,8 @@ function findUniqueTranscriptOrderSource(
   entry: AppServerThreadEntry,
   exactSourcesById: ReadonlyMap<string, AppServerThreadEntry>,
   logicalSourceIndex: LogicalTranscriptMatchIndex,
-  readDetailOwners: ReadonlyMap<string, AppServerThreadEntry>,
-  sourceDetailOwners: ReadonlyMap<string, ReadonlySet<AppServerThreadEntry>>,
+  readDetailOwners: DetailOwners,
+  sourceDetailOwners: DetailOwners,
 ): AppServerThreadEntry | undefined {
   const exactMatch = exactSourcesById.get(entry.id);
   if (exactMatch) {
@@ -1893,28 +1893,52 @@ function sameTurnOrUnknown(
 function sourceToolBelongsToAnotherRow(
   entry: AppServerThreadEntry,
   source: AppServerThreadEntry,
-  readDetailOwners: ReadonlyMap<string, AppServerThreadEntry>,
+  readDetailOwners: DetailOwners,
 ): boolean {
-  if (source.type !== "activity") {
-    return false;
-  }
-  return source.details.some((detail) => {
-    const owner = readDetailOwners.get(detail.id);
-    return owner !== undefined && owner !== entry;
-  });
+  return hasDetailOwnedElsewhere(source, entry, readDetailOwners);
 }
 
 function entryToolHasAnotherSource(
   entry: AppServerThreadEntry,
   source: AppServerThreadEntry,
-  sourceDetailOwners: ReadonlyMap<string, ReadonlySet<AppServerThreadEntry>>,
+  sourceDetailOwners: DetailOwners,
 ): boolean {
-  if (entry.type !== "activity") {
+  return hasDetailOwnedElsewhere(entry, source, sourceDetailOwners);
+}
+
+type DetailOwners = ReadonlyMap<string, ReadonlySet<AppServerThreadEntry>>;
+
+/** Each activity detail id, mapped to the rows that hold it. */
+function indexDetailOwners(entries: AppServerThreadEntry[]): DetailOwners {
+  const owners = new Map<string, Set<AppServerThreadEntry>>();
+  for (const entry of entries) {
+    if (entry.type !== "activity") {
+      continue;
+    }
+    for (const detail of entry.details) {
+      const detailOwners = owners.get(detail.id);
+      if (detailOwners) {
+        detailOwners.add(entry);
+      } else {
+        owners.set(detail.id, new Set([entry]));
+      }
+    }
+  }
+  return owners;
+}
+
+/** Whether a detail of `row` is held by rows that do not include `expected`. */
+function hasDetailOwnedElsewhere(
+  row: AppServerThreadEntry,
+  expected: AppServerThreadEntry,
+  owners: DetailOwners,
+): boolean {
+  if (row.type !== "activity") {
     return false;
   }
-  return entry.details.some((detail) => {
-    const owners = sourceDetailOwners.get(detail.id);
-    return owners !== undefined && !owners.has(source);
+  return row.details.some((detail) => {
+    const detailOwners = owners.get(detail.id);
+    return detailOwners !== undefined && !detailOwners.has(expected);
   });
 }
 
@@ -2038,27 +2062,8 @@ function carryForwardTranscriptEntryOrder(
     }
   }
   const logicalSourceIndex = createLogicalTranscriptMatchIndex(logicalSources);
-  const readDetailOwners = new Map<string, AppServerThreadEntry>();
-  for (const entry of response.replay.entries) {
-    if (entry.type === "activity") {
-      for (const detail of entry.details) {
-        readDetailOwners.set(detail.id, entry);
-      }
-    }
-  }
-  const sourceDetailOwners = new Map<string, Set<AppServerThreadEntry>>();
-  for (const source of logicalSources) {
-    if (source.type === "activity") {
-      for (const detail of source.details) {
-        const owners = sourceDetailOwners.get(detail.id);
-        if (owners) {
-          owners.add(source);
-        } else {
-          sourceDetailOwners.set(detail.id, new Set([source]));
-        }
-      }
-    }
-  }
+  const readDetailOwners = indexDetailOwners(response.replay.entries);
+  const sourceDetailOwners = indexDetailOwners(logicalSources);
   const sourceByHydratedEntry = new Map<
     AppServerThreadEntry,
     AppServerThreadEntry
