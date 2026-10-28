@@ -285,6 +285,20 @@ describe("ThreadTodoViewHub", () => {
         expect(remote.list).toHaveBeenCalledTimes(2);
         expect(errorsSent(sent)).toEqual(["peer: Owner store failed"]);
       });
+
+      it("drops a pending re-list when the thread is unpinned", async () => {
+        vi.useFakeTimers();
+        const current = [...mounts];
+        const { hub, remote } = harness({ mounts: current, list: () => ({ todos: [card("a", "t", 1)], mergeMethods: prefs }) });
+        await hub.snapshot(undefined);
+        remote.list.mockRejectedValueOnce(busy());
+        hub.handleRemoteEvent(changed());
+        await flush();
+        current.length = 0;
+        await hub.snapshot(undefined);
+        await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
+        expect(remote.list).toHaveBeenCalledTimes(2);
+      });
     });
 
     it("cancels a pending read when no window shows the owner any more", async () => {
