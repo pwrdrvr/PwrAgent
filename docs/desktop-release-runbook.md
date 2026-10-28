@@ -358,7 +358,10 @@ The macOS no-secret prepare job:
 The macOS environment-gated signing job:
 
 1. Verifies the prepared artifact SHA-256 from the build job output.
-2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
+2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file. The job
+   sets `TMPDIR` to a private, job-specific directory for decoded keys,
+   certificates and temporary keychains. An always-run cleanup removes it
+   immediately after signing, including when signing fails or is cancelled.
 3. Imports `CSC_LINK` into a generated temporary keychain, verifies its
    Developer ID identity, and makes that keychain first in the user search
    list. It then clears `CSC_KEYCHAIN`, `CSC_LINK`, and `CSC_KEY_PASSWORD`
