@@ -601,6 +601,16 @@ describe("thread to-do checklists", () => {
     expect(screen.getByRole("alert").textContent).toContain("Owner disconnected");
   });
 
+  // One pinned owner's failure must not hide the cards every other owner sent.
+  it("shows a pinned owner's failure beside the resolved cards that did load", async () => {
+    const done = todo({ id: "d0", status: "done", title: "Shipped locally", resolvedAt: 1 });
+    const view = createView([], { listResolved: vi.fn(async () => ({ todos: [done], errors: ["peer: Owner store failed"] })) });
+    render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Resolved" })); });
+    expect(screen.getByText("Shipped locally")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("peer: Owner store failed");
+  });
+
   it("keeps a busy owner's resolved queue quiet", async () => {
     const busy = Object.assign(new Error("handler_failed: [navigation_busy] Busy"), { code: "navigation_busy" });
     const view = createView([], { listResolved: vi.fn(async () => { throw busy; }) });
