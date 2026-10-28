@@ -241,6 +241,66 @@ describe("ThreadTodoViewHub", () => {
       expect(errorsSent(sent)).toEqual(["handler_failed: Unexpected failure"]);
     });
 
+    describe("of a thread pinned into the main window", () => {
+      const mounts = [{ target: peer, backend: "codex" as const, threadId: "t" }];
+      const changed = () => ownerEvent("thread/todos/changed", { backend: "codex", threadId: "t", at: 2 });
+
+      function pinned() {
+        vi.useFakeTimers();
+        const list = vi.fn((): ListThreadTodosResponse => ({ todos: [card("a", "t", 1)], mergeMethods: prefs }));
+        return { list, ...harness({ list, mounts }) };
+      }
+
+      it("keeps the thread's last cards without an error and re-lists it once", async () => {
+        const { hub, remote, sent, list } = pinned();
+        await hub.snapshot(undefined);
+        remote.list.mockRejectedValueOnce(busy());
+        list.mockReturnValue({ todos: [card("b", "t", 2)], mergeMethods: prefs });
+        hub.handleRemoteEvent(changed());
+        await flush();
+        expect(remote.list).toHaveBeenCalledTimes(2);
+        expect(sent).toEqual([]);
+        await flush(THREAD_TODO_BUSY_RETRY_MS);
+        expect(remote.list).toHaveBeenCalledTimes(3);
+        expect(upsertsSent(sent)).toEqual([remoteId("b")]);
+        expect(errorsSent(sent)).toEqual([]);
+      });
+
+      it("re-lists a still-busy thread only once", async () => {
+        const { hub, remote, sent } = pinned();
+        await hub.snapshot(undefined);
+        remote.list.mockRejectedValueOnce(busy()).mockRejectedValueOnce(busy());
+        hub.handleRemoteEvent(changed());
+        await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
+        expect(remote.list).toHaveBeenCalledTimes(3);
+        expect(sent).toEqual([]);
+      });
+
+      it("still shows a failure that is not owner contention, without re-listing", async () => {
+        const { hub, remote, sent } = pinned();
+        await hub.snapshot(undefined);
+        remote.list.mockRejectedValueOnce(new Error("Owner store failed"));
+        hub.handleRemoteEvent(changed());
+        await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
+        expect(remote.list).toHaveBeenCalledTimes(2);
+        expect(errorsSent(sent)).toEqual(["peer: Owner store failed"]);
+      });
+
+      it("drops a pending re-list when the thread is unpinned", async () => {
+        vi.useFakeTimers();
+        const current = [...mounts];
+        const { hub, remote } = harness({ mounts: current, list: () => ({ todos: [card("a", "t", 1)], mergeMethods: prefs }) });
+        await hub.snapshot(undefined);
+        remote.list.mockRejectedValueOnce(busy());
+        hub.handleRemoteEvent(changed());
+        await flush();
+        current.length = 0;
+        await hub.snapshot(undefined);
+        await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
+        expect(remote.list).toHaveBeenCalledTimes(2);
+      });
+    });
+
     it("cancels a pending read when no window shows the owner any more", async () => {
       let viewers = true;
       vi.useFakeTimers();

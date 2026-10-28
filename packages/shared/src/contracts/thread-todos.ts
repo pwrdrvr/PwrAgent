@@ -381,9 +381,20 @@ export type TodoUnavailableInstance = {
   reason: "disconnected" | "unsupported";
 };
 
+/**
+ * A pinned thread whose owner was busy, so the listing holds none of its
+ * cards. A viewer keeps that thread's last cards and lists again later.
+ */
+export type TodoBusyThread = {
+  federationTarget: FederationRemoteTarget;
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+};
+
 export type ListThreadTodosResponse = {
   errors?: string[];
   unavailableInstances?: TodoUnavailableInstance[];
+  busyThreads?: TodoBusyThread[];
   todos: ThreadTodo[];
   /** What a merge card's primary button does, so its label can say so. */
   mergeMethods?: ThreadTodoMergeMethodPreferences;

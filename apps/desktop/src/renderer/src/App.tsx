@@ -2724,6 +2724,13 @@ function DesktopAppShell(props: {
       listResolved: async () => {
         const response = await listThreadTodos({ status: "all" });
         if (response.errors?.length) throw new Error(response.errors.join("\n"));
+        // A partial list would drop a busy pinned owner's cards. A busy
+        // rejection keeps the panel's last list instead.
+        if (response.busyThreads?.length) {
+          throw Object.assign(new Error("A pinned thread's owner is busy."), {
+            name: "NavigationQueryError", code: "navigation_busy",
+          });
+        }
         return response.todos
           .filter((todo) => todo.status !== "open")
           .sort((left, right) =>
