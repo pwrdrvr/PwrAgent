@@ -1543,7 +1543,7 @@ export function ThreadView(props: ThreadViewProps) {
   const composerSlotView = composerLaunchpad
     ? {
         launchpadScope: launchpadComposerScope(
-          composerLaunchpad.directoryKey,
+          composerLaunchpad,
           props.pendingLaunchpadCreation?.composerScopeKey,
         ),
       }

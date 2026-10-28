@@ -1674,6 +1674,62 @@ export function isSubthreadLaunchpadKey(directoryKey: string): boolean {
   return directoryKey.startsWith(SUBTHREAD_LAUNCHPAD_KEY_PREFIX);
 }
 
+/**
+ * Where a viewer stores its draft for a directory another instance owns:
+ * `peer:<encoded instance id>:<owner's directory key>`.
+ *
+ * A remote window speaks the owner's own keys, such as
+ * `directory:/Users/name/src/app`. Two Macs with one home layout share those
+ * keys, so a viewer that stored the remote draft under the owner's key shared
+ * one row with its own local draft for the same path. The owner's key stays on
+ * the wire; only the viewer's storage adds the owner.
+ *
+ * Sub-thread keys already name the parent's machine, so they keep their key.
+ * The composer scope for the same draft is `launchpad:<storage key>`.
+ */
+export const REMOTE_LAUNCHPAD_KEY_PREFIX = "peer:";
+
+export function buildRemoteLaunchpadStorageKey(
+  instanceId: FederationInstanceId,
+  directoryKey: string,
+): string {
+  return `${REMOTE_LAUNCHPAD_KEY_PREFIX}${encodeURIComponent(instanceId)}:${directoryKey}`;
+}
+
+export function isRemoteLaunchpadStorageKey(key: string): boolean {
+  return parseRemoteLaunchpadStorageKey(key) !== undefined;
+}
+
+export function parseRemoteLaunchpadStorageKey(
+  key: string,
+): { instanceId: FederationInstanceId; directoryKey: string } | undefined {
+  if (!key.startsWith(REMOTE_LAUNCHPAD_KEY_PREFIX)) return undefined;
+  const rest = key.slice(REMOTE_LAUNCHPAD_KEY_PREFIX.length);
+  const separator = rest.indexOf(":");
+  if (separator <= 0 || separator === rest.length - 1) return undefined;
+  try {
+    return {
+      instanceId: decodeURIComponent(rest.slice(0, separator)),
+      directoryKey: rest.slice(separator + 1),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The key a viewer stores a launchpad draft under: the directory key itself
+ * for a local draft or a sub-thread, otherwise one that names the owner.
+ */
+export function launchpadStorageKey(
+  directoryKey: string,
+  owner: FederationTarget | undefined,
+): string {
+  return owner?.scope === "remote" && !isSubthreadLaunchpadKey(directoryKey)
+    ? buildRemoteLaunchpadStorageKey(owner.instanceId, directoryKey)
+    : directoryKey;
+}
+
 export function parseThreadIdentityKey(
   threadKey: string,
 ): ThreadIdentityKeyParts | undefined {

@@ -78,6 +78,12 @@ import {
 import { codexNativeSubAgentName, readCodexNativeSubAgentName } from "@pwragent/shared";
 import { isThreadLockRefusal, normalizeThreadLockNote, threadLockRefusalMessage } from "@pwragent/shared";
 import { navigationWorkingStatePath as resolveThreadWorkingStatePath } from "@pwragent/shared";
+import {
+  isRemoteLaunchpadStorageKey,
+  launchpadStorageKey,
+  parseRemoteLaunchpadStorageKey,
+  type FederationTarget,
+} from "@pwragent/shared";
 import { validateCodexConfigOverrides } from "../settings/codex-config-overrides";
 import {
   buildPullRequestReferenceUrl,
@@ -6561,11 +6567,13 @@ function defaultLaunchpadWorkMode(
 }
 
 function fallbackLaunchpadIdentity(
-  directoryKey: string,
+  storageKey: string,
 ): Pick<
   EnsureDirectoryLaunchpadRequest,
   "directoryKind" | "directoryLabel" | "directoryPath"
 > {
+  const directoryKey =
+    parseRemoteLaunchpadStorageKey(storageKey)?.directoryKey ?? storageKey;
   if (directoryKey.startsWith("directory:")) {
     const directoryPath = directoryKey.slice("directory:".length);
     if (directoryPath.length > 0) {
@@ -8651,6 +8659,7 @@ type CodexRetryableTurnStart = {
 type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
   Pick<
     SqliteOverlayStore,
+    | "adoptLegacyRemoteDirectoryLaunchpad"
     | "readThreadGitWorkingStateCache"
     | "completeThreadUsageTurn"
     | "completeThreadUsageTurns"
@@ -26588,7 +26597,12 @@ export class DesktopBackendRegistry {
     const resolvedCwd = await realpath(cwd).catch(() => path.resolve(cwd));
     const launchpads = await this.overlayStore.listDirectoryLaunchpads();
     for (const launchpad of launchpads) {
-      if (launchpad.directoryKind !== "directory" || !launchpad.directoryPath) {
+      if (
+        launchpad.directoryKind !== "directory"
+        || !launchpad.directoryPath
+        // A draft for a peer's directory names a path on the peer.
+        || isRemoteLaunchpadStorageKey(launchpad.directoryKey)
+      ) {
         continue;
       }
       const launchpadPath = await realpath(launchpad.directoryPath).catch(() =>
@@ -26701,8 +26715,28 @@ export class DesktopBackendRegistry {
        * it for there.
        */
       skipMcpConnectionDefaults?: boolean;
+      /**
+       * The instance that owns `directoryKey`. A peer's draft is stored under
+       * a key that names the peer (`launchpadStorageKey`), so it never shares
+       * a row with this machine's draft for the same key. The response keeps
+       * the owner's key.
+       */
+      owner?: FederationTarget;
     },
   ): Promise<EnsureDirectoryLaunchpadResponse> {
+    const { owner, ...storageOptions } = options ?? {};
+    const storageKey = launchpadStorageKey(request.directoryKey, owner);
+    if (storageKey !== request.directoryKey) {
+      await this.adoptLegacyRemoteDirectoryLaunchpad(owner, request.directoryKey, storageKey);
+      const response = await this.ensureDirectoryLaunchpad(
+        { ...request, directoryKey: storageKey },
+        storageOptions,
+      );
+      return {
+        ...response,
+        launchpad: { ...response.launchpad, directoryKey: request.directoryKey },
+      };
+    }
     const codexEnvironmentOptions = options?.skipFilesystemInspection
       ? []
       : await listCodexEnvironmentOptions(request.directoryPath);
@@ -26864,6 +26898,32 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * Seed a peer's draft with text this viewer kept under the owner's bare key
+   * before drafts named their owner (see the overlay store). A failure only
+   * costs that copy; the draft still opens.
+   */
+  private async adoptLegacyRemoteDirectoryLaunchpad(
+    owner: FederationTarget | undefined,
+    directoryKey: string,
+    storageKey: string,
+  ): Promise<void> {
+    if (owner?.scope !== "remote" || !this.overlayStore.adoptLegacyRemoteDirectoryLaunchpad) {
+      return;
+    }
+    try {
+      await this.overlayStore.adoptLegacyRemoteDirectoryLaunchpad({
+        instanceId: owner.instanceId,
+        directoryKey,
+        storageKey,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("remote_launchpad_legacy_adoption_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async updateDirectoryLaunchpad(
     request: UpdateDirectoryLaunchpadRequest,
     options?: {
@@ -26871,16 +26931,37 @@ export class DesktopBackendRegistry {
       skipFilesystemInspection?: boolean;
       /** Leave the stored draft as it is unless this holds for it. */
       onlyIf?: (current: NavigationLaunchpadDraft) => boolean;
+      /** The instance that owns `directoryKey`, as on an ensure. */
+      owner?: FederationTarget;
     },
   ): Promise<UpdateDirectoryLaunchpadResponse> {
+    const { owner, ...storageOptions } = options ?? {};
+    const storageKey = launchpadStorageKey(request.directoryKey, owner);
+    if (storageKey !== request.directoryKey) {
+      const { federationTarget: _federationTarget, ...storageRequest } = request;
+      const response = await this.updateDirectoryLaunchpad(
+        { ...storageRequest, directoryKey: storageKey },
+        storageOptions,
+      );
+      return {
+        ...response,
+        launchpad: { ...response.launchpad, directoryKey: request.directoryKey },
+      };
+    }
     const current =
       (await this.overlayStore.getDirectoryLaunchpad({
         directoryKey: request.directoryKey,
       })) ??
-      (await this.ensureDirectoryLaunchpad({
-        directoryKey: request.directoryKey,
-        ...fallbackLaunchpadIdentity(request.directoryKey),
-      })).launchpad;
+      (await this.ensureDirectoryLaunchpad(
+        {
+          directoryKey: request.directoryKey,
+          ...fallbackLaunchpadIdentity(request.directoryKey),
+        },
+        // A peer's draft takes nothing from this machine's copy of its path.
+        isRemoteLaunchpadStorageKey(request.directoryKey)
+          ? { skipFilesystemInspection: true, skipMcpConnectionDefaults: true }
+          : undefined,
+      )).launchpad;
     if (options?.onlyIf && !options.onlyIf(current)) {
       return {
         launchpad: current,
@@ -27008,14 +27089,19 @@ export class DesktopBackendRegistry {
 
   async resetDirectoryLaunchpad(
     request: ResetDirectoryLaunchpadRequest,
+    options?: {
+      /** The instance that owns `directoryKey`, as on an ensure. */
+      owner?: FederationTarget;
+    },
   ): Promise<ResetDirectoryLaunchpadResponse> {
+    const storageKey = launchpadStorageKey(request.directoryKey, options?.owner);
     const launchpad = request.preserveEnvironment
-      ? await this.overlayStore.getDirectoryLaunchpad({ directoryKey: request.directoryKey })
+      ? await this.overlayStore.getDirectoryLaunchpad({ directoryKey: storageKey })
       : undefined;
     if (launchpad) {
       await this.resetLaunchpadDraft(launchpad);
     } else {
-      await this.overlayStore.resetDirectoryLaunchpad({ directoryKey: request.directoryKey });
+      await this.overlayStore.resetDirectoryLaunchpad({ directoryKey: storageKey });
     }
     return {
       directoryKey: request.directoryKey,

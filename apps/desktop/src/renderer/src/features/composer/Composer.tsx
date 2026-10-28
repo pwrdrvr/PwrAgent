@@ -20,6 +20,7 @@ import {
   subscribeLaunchpadAttachmentHandoffs,
 } from "./launchpad-composer-handoff";
 import {
+  buildLaunchpadComposerScopeKey,
   getEditableLaunchpadDirectoryKey,
   getLaunchpadScopeDirectoryKey,
   isStartingLaunchpadComposerScopeKey,
@@ -3140,7 +3141,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
   const pendingProgrammaticComposerChangeRef =
     useRef<PendingProgrammaticComposerChange | undefined>(undefined);
   const composerScopeKey = props.launchpad
-    ? props.launchpadComposerScopeKey ?? `launchpad:${props.launchpad.directoryKey}`
+    ? props.launchpadComposerScopeKey ?? buildLaunchpadComposerScopeKey(
+        props.launchpad.directoryKey,
+        props.launchpad.federationTarget ?? rendererFederationTarget,
+      )
     : props.thread
       ? buildThreadComposerScopeKey(props.thread.source, props.thread.id, props.thread.federation?.ref.target ?? rendererFederationTarget ?? { scope: "local" })
       : "empty";
@@ -4152,7 +4156,11 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       || (snapshot.fileAttachments?.length ?? 0) > 0,
     );
   const prepareDraftRetarget = (directoryKey: string): void => {
-    const targetScopeKey = `launchpad:${directoryKey}`;
+    // A retarget stays with the owner of the launchpad it leaves.
+    const targetScopeKey = buildLaunchpadComposerScopeKey(
+      directoryKey,
+      props.launchpad?.federationTarget ?? rendererFederationTarget,
+    );
     const latest = latestDraftSnapshotRef.current;
     if (
       latest.scopeKey === targetScopeKey

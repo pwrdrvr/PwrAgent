@@ -1,6 +1,10 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  NavigationLaunchpadDraft,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveLaunchpadComposerScope } from "../composer/launchpad-composer-handoff";
+import { buildLaunchpadComposerScopeKey } from "../composer/launchpad-composer-scope";
 import {
   buildThreadComposerScopeKey,
   type ComposerDraftStore,
@@ -33,10 +37,13 @@ const COMPOSER_SLOT_KEYS = ["composer-slot-a", "composer-slot-b"] as const;
 
 /** The scope a launchpad Composer uses, from the props ThreadView passes it. */
 export function launchpadComposerScope(
-  directoryKey: string,
+  launchpad: Pick<NavigationLaunchpadDraft, "directoryKey" | "federationTarget">,
   composerScopeKey: string | undefined,
 ): string {
-  return composerScopeKey ?? `launchpad:${directoryKey}`;
+  return composerScopeKey ?? buildLaunchpadComposerScopeKey(
+    launchpad.directoryKey,
+    launchpad.federationTarget ?? readRendererFederationTarget(),
+  );
 }
 
 /** The scope a thread Composer uses for this thread. */
