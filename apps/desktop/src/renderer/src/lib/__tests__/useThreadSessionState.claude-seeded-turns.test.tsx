@@ -22,13 +22,13 @@ import { useThreadSessionState } from "../useThreadSessionState";
 // each turn in the order the read reports.
 
 // Each seed failed before the fix it names:
-// - 6 and 19: a re-read refilled rows across turns, so earlier turns' tools
-//   and totals landed below a turn that compacted in the background.
-// - 23: a row matched by content took a live row from another turn, with
-//   that row's time and place.
-// - 107: two runs of one command in a turn both took one live row's place.
-// - 231: fails until all three are in.
-const SEEDS = [6, 19, 23, 107, 231];
+// - 19 and 24: a re-read refilled rows across turns, so earlier turns' tools
+//   and totals landed below a later turn.
+// - 20 and 40: a row matched by content took a live row from another turn,
+//   with that row's time and place.
+// - 3 and 44: two runs of one command in a turn both took one live row's
+//   place.
+const SEEDS = [3, 19, 20, 24, 40, 44];
 
 function rng(seed: number): () => number {
   let state = seed >>> 0 || 1;
@@ -168,6 +168,9 @@ async function runSeed(seed: number): Promise<{ problems: string[]; transcript: 
   const random = rng(seed);
   const chance = (p: number) => random() < p;
   const pick = (min: number, max: number) => min + Math.floor(random() * (max - min + 1));
+  // Read lag draws from its own stream. The session's events then do not
+  // depend on how many reads the hook issues, so a seed keeps its scenario.
+  const readRandom = rng(seed + 0x9e3779b9);
   const store = new ClaudeStore();
   let now = 1_793_150_000_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -178,7 +181,7 @@ async function runSeed(seed: number): Promise<{ problems: string[]; transcript: 
     const response = params.threadId === "thread-1"
       ? store.read(now)
       : { ...new ClaudeStore().read(now), threadId: params.threadId };
-    const lag = chance(0.5) ? 0 : pick(1, 6);
+    const lag = readRandom() < 0.5 ? 0 : 1 + Math.floor(readRandom() * 6);
     if (lag > 0) {
       await new Promise<void>((resolve) => {
         pendingReads.push({ resolve, due: step + lag });
@@ -431,6 +434,9 @@ async function runSeed(seed: number): Promise<{ problems: string[]; transcript: 
       await tick();
     }
   }
+  // Return to the thread, then let every read land, including reads that
+  // returning or an earlier read started.
+  await select("thread-1");
   while (pendingReads.length) {
     const read = pendingReads.shift()!;
     await act(async () => {
@@ -438,7 +444,6 @@ async function runSeed(seed: number): Promise<{ problems: string[]; transcript: 
     });
     await flush();
   }
-  await select("thread-1");
 
   const entries = result.current.entries;
   const problems = orderProblems(entries, store.read(now));
