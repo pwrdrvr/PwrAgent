@@ -444,6 +444,43 @@ describe("SidebarSearchPopup", () => {
     expect(onJumpToRemoteThread.mock.calls[0][0].id).toBe("r1");
   });
 
+  it("wraps the arrow keys from the first row to the last and back", async () => {
+    const onJumpToThread = vi.fn();
+    render(
+      <SidebarSearchPopup
+        threads={[
+          localThread({ id: "a", title: "Fix alpha" }),
+          localThread({ id: "b", title: "Fix bravo" }),
+          localThread({ id: "c", title: "Fix charlie" }),
+        ]}
+        onJumpToThread={onJumpToThread}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const input = screen.getByRole("textbox", { name: "Jump to thread" });
+    fireEvent.change(input, { target: { value: "fix" } });
+    await settleRemoteSearch();
+
+    const selectedIndex = () =>
+      screen
+        .getAllByRole("option")
+        .findIndex((option) => option.getAttribute("aria-selected") === "true");
+    const rowCount = screen.getAllByRole("option").length;
+    expect(rowCount).toBe(3);
+    expect(selectedIndex()).toBe(0);
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    expect(selectedIndex()).toBe(rowCount - 1);
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(selectedIndex()).toBe(0);
+
+    fireEvent.keyDown(input, { key: "ArrowUp" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onJumpToThread.mock.calls[0][0].id).toBe("c");
+  });
+
   it("keeps a remote result when its backend and id collide locally", async () => {
     jumpSearchRemoteThreads.mockResolvedValue({
       results: [remoteThread({ threadId: "shared", title: "Remote fix" })],
