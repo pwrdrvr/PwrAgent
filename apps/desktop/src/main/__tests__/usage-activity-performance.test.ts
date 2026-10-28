@@ -41,6 +41,8 @@ it.skipIf(!directory)("measures contrived closed and moving-window workloads", a
     for (const shape of ["past", "two-sided", "dense"] as const) {
       for (const workload of ["raw-fast", "raw-minute", "ledger-live", "helper"] as const) {
         for (const readEvery of [0, 1, 60]) {
+          const filter = process.env.PWRAGENT_USAGE_PERF_FILTER;
+          if (filter && !new RegExp(filter).test(`${shape}/${workload}/${readEvery}`)) continue;
           for (let repetition = 0; repetition < repetitions; repetition++) {
             now = start;
             const temp = createTempStateDb("pwragent-usage-perf-");

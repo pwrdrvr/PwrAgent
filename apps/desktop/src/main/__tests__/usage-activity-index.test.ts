@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { removeUsageActivityIndex } from "../state/usage-activity-index";
+import { ensureUsageActivityLookupIndex } from "../state/usage-activity-index";
 import { StateDb } from "../state/state-db";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
@@ -32,7 +32,7 @@ it("removes the experimental derived index on reopen without changing ledger fac
     expect(db.raw.prepare("SELECT * FROM thread_usage_turns").all()).toEqual(turns);
     expect(await new SqliteOverlayStore(db).readUsageActivity(request)).toEqual(activity);
     const before = db.raw.prepare("SELECT total_changes() AS n").get();
-    removeUsageActivityIndex(db.raw);
+    ensureUsageActivityLookupIndex(db.raw);
     expect(db.raw.prepare("SELECT total_changes() AS n").get()).toEqual(before);
     db.raw.exec("VACUUM");
     db.raw.prepare("UPDATE thread_usage_lines SET account_key = 'changed' WHERE usage_line_id = 'fixture-helper'").run();
