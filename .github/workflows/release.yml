@@ -19,7 +19,7 @@ permissions:
 jobs:
   install-deps:
     name: Install macOS dependencies
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     timeout-minutes: 15
     steps:
       - name: Checkout repository
@@ -37,18 +37,22 @@ jobs:
             apps/desktop/scripts/ensure-electron-runtime.mjs
           sparse-checkout-cone-mode: false
 
-      # As in CI, only populate the dependency cache on a miss. The parallel
-      # consumers restore it after this job (including cache saves) succeeds.
+      # Keep pnpm, Corepack and Electron downloads on the persistent guest.
+      # Unlike lookup-only mode, this also reuses a warm store without restore.
+      - name: Locate the guest cache root
+        shell: bash
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
-          lookup-only: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
 
   lint:
     name: Lint and typecheck
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     needs:
       - install-deps
     timeout-minutes: 30
@@ -59,11 +63,16 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
 
+      - name: Locate the guest cache root
+        shell: bash
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
 
       - name: Check release metadata
         env:
@@ -85,7 +94,7 @@ jobs:
 
   test:
     name: macOS unit tests (lane ${{ matrix.lane }} of 2)
-    runs-on: macos-26
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     needs:
       - install-deps
     timeout-minutes: 30
@@ -100,14 +109,19 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
 
+      - name: Locate the guest cache root
+        shell: bash
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
 
-      # electron-builder compiles build/icon.icon with actool 26. The macos-26
-      # host supplies the matching AssetCatalogAgent runtime; this action
+      # electron-builder compiles build/icon.icon with actool 26. The macOS 26
+      # guest supplies the matching AssetCatalogAgent runtime; this action
       # verifies the selected Xcode still has actool 26+. Only the test step
       # sets DEVELOPER_DIR, so native setup keeps the image toolchain and SDK.
       - name: Select an Xcode with actool 26
@@ -123,9 +137,8 @@ jobs:
 
   prepare:
     name: Prepare macOS signing input
-    # Xcode 26's AssetCatalogAgent links against macOS 26 frameworks. Selecting
-    # Xcode 26 on macos-15 reaches actool but crashes while compiling .icon.
-    runs-on: macos-26
+    # The restricted macOS 26 guests supply the runtime actool 26 requires.
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     needs:
       - install-deps
     timeout-minutes: 45
@@ -141,11 +154,16 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
 
+      - name: Locate the guest cache root
+        shell: bash
+        run: echo "PWRAGENT_CI_CACHE_ROOT=$HOME/Library/Caches/pwragent-ci" >> "$GITHUB_ENV"
+
       - name: Install Node.js and dependencies
         uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
         with:
           node-version: "^24.22.1"
           cache-electron: "true"
+          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}
 
       - name: Stage pinned Grok ACP runtime
         env:
@@ -219,9 +237,8 @@ jobs:
 
   sign:
     name: Sign, notarize, package macOS
-    # Keep packaging on the same macOS 26 host used by the unit test lanes
-    # to validate Icon Composer; Xcode 26's AssetCatalogAgent needs it.
-    runs-on: macos-26
+    # Use the same restricted macOS 26 runner pool as validation and staging.
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
     # The unsigned stage is prepared in parallel, but signing still requires
     # every validation lane to pass, including both jobs in the test matrix.
     needs:
@@ -230,15 +247,26 @@ jobs:
       - test
     timeout-minutes: 60
     environment: apple-signing
+    defaults:
+      run:
+        working-directory: .release-signing
     permissions:
       contents: read
       id-token: none
     steps:
+      # A self-hosted workspace survives jobs. Extract only into a fresh
+      # directory, so a previous checkout cannot supply signing-time files.
+      - name: Initialize isolated signing workspace
+        working-directory: .
+        run: |
+          rm -rf -- .release-signing
+          mkdir .release-signing
+
       - name: Download signing input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: desktop-release-signing-input
-          path: .release-input
+          path: .release-signing/.release-input
 
       - name: Verify signing input
         env:
@@ -257,7 +285,7 @@ jobs:
       # tarball the prepare job archived (see its tar list).
       - name: Select an Xcode with actool 26
         id: xcode
-        uses: ./.github/actions/select-xcode-for-actool
+        uses: ./.release-signing/.github/actions/select-xcode-for-actool
 
       - name: Sign, notarize, package macOS
         env:
@@ -297,13 +325,18 @@ jobs:
         with:
           name: desktop-release-artifacts
           path: |
-            apps/desktop/release-stage/dist/*.dmg
-            apps/desktop/release-stage/dist/*.zip
-            apps/desktop/release-stage/dist/*.blockmap
-            apps/desktop/release-stage/dist/latest-mac.yml
-            apps/desktop/release-stage/dist/PwrAgent-macos-SHA256SUMS
-            apps/desktop/release-stage/dist/builder-debug.yml
+            .release-signing/apps/desktop/release-stage/dist/*.dmg
+            .release-signing/apps/desktop/release-stage/dist/*.zip
+            .release-signing/apps/desktop/release-stage/dist/*.blockmap
+            .release-signing/apps/desktop/release-stage/dist/latest-mac.yml
+            .release-signing/apps/desktop/release-stage/dist/PwrAgent-macos-SHA256SUMS
+            .release-signing/apps/desktop/release-stage/dist/builder-debug.yml
           retention-days: 90
+
+      - name: Remove isolated signing workspace
+        if: always()
+        working-directory: .
+        run: rm -rf -- .release-signing
 
   linux-package:
     name: Package Linux (${{ matrix.builder_arch }})

@@ -77,6 +77,40 @@ test.each(
   expect(result.stderr).toContain(`${job} must depend on ${dependency}`);
 });
 
+test.each([
+  ...["install-deps", "lint", "test", "prepare", "sign"].map((job) => ({ file: "release.yml", job })),
+  { file: "ci.yml", job: "macos-install-deps" },
+  { file: "ci.yml", job: "test-macos" },
+  { file: "preview-build.yml", job: "preview" },
+])("rejects GitHub-hosted Mac compute in $file $job", ({ file, job }) => {
+  const root = fixture();
+  const path = `.github/workflows/${file}`;
+  const source = readFileSync(join(root, path), "utf8");
+  const body = source.split(`\n  ${job}:\n`)[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
+  const hosted = body.replace("runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]", "runs-on: macos-26");
+  expect(hosted).not.toBe(body);
+  replace(root, path, body, hosted);
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(`${job} must run on [self-hosted, macOS, ARM64, pwrdrvr-macos]`);
+});
+
+test("rejects a release dependency install that loses the persistent store", () => {
+  const root = fixture();
+  replace(root, ".github/workflows/release.yml", "          persistent-store-dir: ${{ env.PWRAGENT_CI_CACHE_ROOT }}\n", "");
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("persistent-store-dir");
+});
+
+test("rejects signing without an isolated artifact workspace", () => {
+  const root = fixture();
+  replace(root, ".github/workflows/release.yml", "        working-directory: .release-signing", "        working-directory: .");
+  const result = check(root);
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("working-directory: .release-signing");
+});
+
 test("rejects a release test matrix that omits half the suite", () => {
   const root = fixture();
   replace(root, ".github/workflows/release.yml", "lane: [1, 2]", "lane: [1]");

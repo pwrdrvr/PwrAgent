@@ -26,7 +26,7 @@ runs:
         host_version="$(sw_vers -productVersion)"
         host_major="${host_version%%.*}"
         if [ "$host_major" -lt 26 ]; then
-          echo "::error::actool 26 needs a macOS 26 host runtime; found macOS $host_version. Use runs-on: macos-26 for Icon Composer packaging." >&2
+          echo "::error::actool 26 needs a macOS 26 host runtime; found macOS $host_version. Use a macOS 26+ runner for Icon Composer packaging." >&2
           exit 1
         fi
         selected=""

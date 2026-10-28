@@ -268,13 +268,20 @@ git push origin v1.0.0-alpha.7
 
 The `Release Desktop (macOS universal + arm64 + Windows + Linux DEB)` workflow contains
 ten job definitions (unit tests fan out across two lanes and Linux packaging
-across two architectures). All macOS jobs use standard `macos-26` runners:
+across two architectures). Every macOS job, including signing, uses the
+restricted `[self-hosted, macOS, ARM64, pwrdrvr-macos]` runner pool. These
+persistent guests must supply macOS 26 and stable Xcode 26 or newer:
 
-1. `Install macOS dependencies` populates the dependency and Electron caches
-   on a miss, using the same lookup-only setup as CI.
+1. `Install macOS dependencies` seeds or reuses the guest's persistent pnpm,
+   Corepack, and Electron caches under `~/Library/Caches/pwragent-ci`. Every
+   source job installs its own workspace links against that store. A warm
+   store skips the GitHub dependency-cache download; cold guests seed it
+   through the pinned `configure-nodejs` action. This mode replaces lookup-only
+   setup, which cannot be combined with a persistent store.
 2. `Lint and typecheck` restores dependencies, checks release metadata and
    authoritative Homebrew/Winget channels, and runs `pnpm lint`, including
-   typecheck, licensing, ESLint, and the repository's correctness gates.
+   native typecheck, licensing, syntax and typed Oxlint, and the repository's
+   correctness gates. There is no formatting pass.
 3. `macOS unit tests (lane N of 2)` runs the complete workspace suite split
    with `pnpm test --shard=<lane>/2`. Both lanes select Xcode with actool 26 and
    set `PWRAGENT_REQUIRE_ACTOOL=1`, so the icon compile test cannot silently skip.
@@ -288,7 +295,9 @@ across two architectures). All macOS jobs use standard `macos-26` runners:
 5. `Sign, notarize, package macOS`, gated by the protected `apple-signing`
    environment, with `contents: read` and explicit `id-token: none`. It does
    not check out the repository or run dependency installation/postinstall
-   scripts. It downloads the prepared artifact, verifies its SHA-256 digest,
+   scripts. It starts with a fresh `.release-signing` directory and removes it
+   even on failure, so a prior runner checkout cannot supply extra signing
+   files. It downloads the prepared artifact, verifies its SHA-256 digest,
    expands it, and runs `apps/desktop/scripts/release.mjs --sign-stage-only
    --no-publish`
    with the environment-scoped Apple secrets.
