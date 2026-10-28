@@ -10725,6 +10725,13 @@ a.button {
   color: var(--text-primary);
 }
 
+/* A split action takes the card's own `.button` corners. The composer's
+   pill radius beside a card of 6px controls read as a different control,
+   and changed shape when an answer replaced it with the plain button. */
+.app-notice-toast .todo-split__pill {
+  border-radius: 6px;
+}
+
 /* A split action's menu leaves the card, which clips to its rounded edge
    otherwise. The content keeps its own scroller. */
 .app-notice-toast:has(.todo-split--open) {

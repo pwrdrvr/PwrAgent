@@ -211,9 +211,11 @@ export function useApprovalNotices(
         Promise.resolve()
           .then(() => respond(wait, choice.buildResponse()))
           .catch((cause: unknown) => {
+            const reason = cause instanceof Error ? cause.message : String(cause);
+            // Named as a failure, or it reads as the request's own text.
             setAnswer(wait.key, {
               busyLabel: choice.busyLabel,
-              error: cause instanceof Error ? cause.message : String(cause),
+              error: `Could not answer: ${reason}`,
             });
           });
       }

@@ -293,7 +293,8 @@ describe("answering from an approval notice", () => {
     expect(labels).toContain("Decline");
 
     fireEvent.click(within(menu).getAllByRole("menuitem")[0]!);
-    expect(await screen.findByText("The turn already ended.")).toBeInTheDocument();
+    // Named as a failure, so it does not read as the request's own text.
+    expect(await screen.findByText("Could not answer: The turn already ended.")).toBeInTheDocument();
     // A refused answer can be sent again.
     expect(screen.getByRole("button", { name: "Approval options" })).toBeInTheDocument();
   });
