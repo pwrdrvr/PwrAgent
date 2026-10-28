@@ -22,6 +22,7 @@ import {
 import {
   buildLaunchpadComposerScopeKey,
   getEditableLaunchpadDirectoryKey,
+  getEditableLaunchpadOwner,
   getLaunchpadScopeDirectoryKey,
   isStartingLaunchpadComposerScopeKey,
 } from "./launchpad-composer-scope";
@@ -524,7 +525,11 @@ export type ComposerProps = {
         | "agent"
       >
     >,
-    options?: { stickySettingsChanged?: boolean }
+    options?: {
+      stickySettingsChanged?: boolean;
+      /** Whose draft this is, when the caller knows (see useThreadNavigation). */
+      owner?: FederationTarget;
+    }
   ) => Promise<void>;
   removeOptimisticMessage?: (id: string) => void;
   /**
@@ -5268,6 +5273,10 @@ export const Composer = memo(function Composer(props: ComposerProps) {
       fileAttachments:
         snapshot.fileAttachments?.length ? snapshot.fileAttachments : undefined,
       prompt: serializeDraftWithSkillTokens(snapshot.draft, snapshot.skillTokens),
+    }, {
+      // A scope left behind can share its key with the launchpad now open
+      // for another owner. Its text goes to its own owner's draft.
+      owner: getEditableLaunchpadOwner(scopeKey),
     });
   };
   const flushComposerDraftSnapshot = (
@@ -6620,7 +6629,7 @@ export const Composer = memo(function Composer(props: ComposerProps) {
         fileAttachments: fileAttachments.length > 0 ? fileAttachments : undefined,
         prompt: canonicalDraft,
         editorDocument: editorDocument as Record<string, unknown> | undefined,
-      });
+      }, { owner: getEditableLaunchpadOwner(composerScopeKey) });
     }, 250);
 
     return () => {

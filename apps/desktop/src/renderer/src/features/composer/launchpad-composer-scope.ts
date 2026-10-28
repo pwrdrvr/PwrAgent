@@ -1,4 +1,5 @@
 import {
+  isSubthreadLaunchpadKey,
   launchpadStorageKey,
   parseRemoteLaunchpadStorageKey,
   type FederationTarget,
@@ -59,14 +60,44 @@ export function isStartingLaunchpadComposerScopeKey(scopeKey: string): boolean {
 export function getEditableLaunchpadDirectoryKey(
   scopeKey: string,
 ): string | undefined {
-  if (
-    !scopeKey.startsWith(LAUNCHPAD_SCOPE_PREFIX)
-    || isStartingLaunchpadComposerScopeKey(scopeKey)
-  ) {
+  const storageKey = getEditableLaunchpadStorageKey(scopeKey);
+  return storageKey === undefined
+    ? undefined
+    : parseRemoteLaunchpadStorageKey(storageKey)?.directoryKey ?? storageKey;
+}
+
+/**
+ * Who owns an editable draft scope: the peer its key names, else this window's
+ * own owner (`{ scope: "local" }`). Undefined for a starting scope, and for a
+ * sub-thread draft, whose key names its machine without naming an owner.
+ */
+export function getEditableLaunchpadOwner(
+  scopeKey: string,
+): FederationTarget | undefined {
+  const storageKey = getEditableLaunchpadStorageKey(scopeKey);
+  if (storageKey === undefined || isSubthreadLaunchpadKey(storageKey)) {
     return undefined;
   }
-  const storageKey = scopeKey.slice(LAUNCHPAD_SCOPE_PREFIX.length);
-  return parseRemoteLaunchpadStorageKey(storageKey)?.directoryKey ?? storageKey;
+  const peer = parseRemoteLaunchpadStorageKey(storageKey);
+  return peer ? { scope: "remote", instanceId: peer.instanceId } : { scope: "local" };
+}
+
+/**
+ * The key a launchpad scope's draft is stored under: the owner-scoped key for
+ * an editable draft, the directory key for a starting one.
+ */
+export function getLaunchpadScopeStorageKey(
+  scopeKey: string,
+): string | undefined {
+  return getEditableLaunchpadStorageKey(scopeKey)
+    ?? getLaunchpadScopeDirectoryKey(scopeKey);
+}
+
+function getEditableLaunchpadStorageKey(scopeKey: string): string | undefined {
+  return scopeKey.startsWith(LAUNCHPAD_SCOPE_PREFIX)
+    && !isStartingLaunchpadComposerScopeKey(scopeKey)
+    ? scopeKey.slice(LAUNCHPAD_SCOPE_PREFIX.length)
+    : undefined;
 }
 
 /** The directory a launchpad scope belongs to, editable or starting. */

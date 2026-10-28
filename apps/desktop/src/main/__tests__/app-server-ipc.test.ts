@@ -10994,18 +10994,20 @@ describe("app server ipc", () => {
     // A pinned peer's draft in the main window names its peer.
     await update({}, { federationTarget: pinnedPeer, directoryKey, patch: { prompt: "pinned" } });
     await reset({}, { federationTarget: pinnedPeer, directoryKey, preserveEnvironment: true });
-    // A remote window edits only its own peer's drafts.
+    // A remote window's drafts are its peer's, never this machine's.
     await update(remoteWindow, { directoryKey, patch: { prompt: "remote" } });
+    await reset(remoteWindow, { federationTarget: { scope: "local" }, directoryKey });
+    // A draft it moved to another peer with the Machine chip stays that peer's.
+    await update(remoteWindow, { federationTarget: pinnedPeer, directoryKey, patch: { prompt: "moved" } });
     await reset(remoteWindow, { federationTarget: pinnedPeer, directoryKey });
 
     const windowOwner = { scope: "remote", instanceId: "window_owner" };
-    expect(updateDirectoryLaunchpad.mock.calls.map((call) => (call as unknown[])[1]))
-      .toEqual([{ owner: undefined }, { owner: pinnedPeer }, { owner: windowOwner }]);
-    expect(resetDirectoryLaunchpad.mock.calls.map((call) => (call as unknown[])[1]))
-      .toEqual([{ owner: undefined }, { owner: pinnedPeer }, { owner: windowOwner }]);
+    const owners = [{ owner: undefined }, { owner: pinnedPeer }, { owner: windowOwner }, { owner: pinnedPeer }];
+    expect(updateDirectoryLaunchpad.mock.calls.map((call) => (call as unknown[])[1])).toEqual(owners);
+    expect(resetDirectoryLaunchpad.mock.calls.map((call) => (call as unknown[])[1])).toEqual(owners);
     // The owner's key reaches the registry unchanged; it picks the row.
     expect(updateDirectoryLaunchpad.mock.calls.map(([request]) => request.directoryKey))
-      .toEqual([directoryKey, directoryKey, directoryKey]);
+      .toEqual([directoryKey, directoryKey, directoryKey, directoryKey]);
   });
 
   it("falls back to owner snapshot metadata when the peer lacks launchpad metadata RPC support", async () => {

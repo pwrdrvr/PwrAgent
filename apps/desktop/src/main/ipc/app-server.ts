@@ -605,8 +605,10 @@ function rejectNonUserDirectoryKey(directoryKey: string): void {
 }
 
 /**
- * A remote window edits only its peer's drafts, whatever the request says.
- * The main window names the peer itself for a pinned peer's draft.
+ * The owner of a draft a request edits. A remote window's drafts belong to
+ * its peer unless the request names another peer, as for a draft moved to
+ * another machine with the Machine chip. It never edits this machine's own
+ * drafts. The main window names the peer itself for a pinned peer's draft.
  */
 function withLaunchpadWindowOwner<
   Request extends { federationTarget?: FederationTarget },
@@ -615,7 +617,9 @@ function withLaunchpadWindowOwner<
   request: Request,
 ): Request {
   const windowTarget = federationWindowTargetForWebContents(event?.sender);
-  return windowTarget ? { ...request, federationTarget: windowTarget } : request;
+  return windowTarget && request.federationTarget?.scope !== "remote"
+    ? { ...request, federationTarget: windowTarget }
+    : request;
 }
 
 /**

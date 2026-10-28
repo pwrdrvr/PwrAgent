@@ -23055,6 +23055,39 @@ command = "pnpm grok"
         await close();
       }
     });
+
+    it("keeps the earlier text when an edit reaches the peer's draft first", async () => {
+      const { persisted, registry, close } = openStore();
+      try {
+        await persisted.upsertDirectoryLaunchpad({
+          ...request,
+          backend: "codex",
+          executionMode: "default",
+          prompt: "typed before the upgrade",
+          workMode: "local",
+          createdAt: 10,
+          updatedAt: 20,
+        });
+
+        // A settings change from another window, before any ensure.
+        const updated = await registry.updateDirectoryLaunchpad(
+          { directoryKey: request.directoryKey, patch: { executionMode: "full-access" } },
+          { owner },
+        );
+        expect(updated.launchpad).toMatchObject({
+          directoryKey: request.directoryKey,
+          executionMode: "full-access",
+          prompt: "typed before the upgrade",
+        });
+        await expect(persisted.getDirectoryLaunchpad({ directoryKey: request.directoryKey }))
+          .resolves.toMatchObject({
+            executionMode: "default",
+            prompt: "typed before the upgrade",
+          });
+      } finally {
+        await close();
+      }
+    });
   });
 
   it("keeps selected Codex environments sticky after materializing", async () => {

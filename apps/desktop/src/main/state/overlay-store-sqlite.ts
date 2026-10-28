@@ -5639,21 +5639,34 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     directoryKey: string;
     collapsed: boolean;
   }): Promise<DirectoryOverlayState> {
-    const current = this.stateDb.raw
+    const nextState: RemoteDirectoryOverlayPayload = {
+      ...this.readRemoteDirectoryOverlay(params.instanceId, params.directoryKey),
+      directoryKey: params.directoryKey,
+      directoryThreadsCollapsed: params.collapsed,
+    };
+    this.writeRemoteDirectoryOverlay(params.instanceId, nextState);
+    return nextState;
+  }
+
+  private readRemoteDirectoryOverlay(
+    instanceId: string,
+    directoryKey: string,
+  ): RemoteDirectoryOverlayPayload | undefined {
+    const row = this.stateDb.raw
       .prepare(
         `SELECT payload FROM remote_directory_overlay
          WHERE instance_id = ? AND directory_key = ?`,
       )
-      .get(params.instanceId, params.directoryKey) as
-        | { payload: string }
-        | undefined;
-    const nextState: DirectoryOverlayState = {
-      ...(current
-        ? JSON.parse(current.payload) as DirectoryOverlayState
-        : {}),
-      directoryKey: params.directoryKey,
-      directoryThreadsCollapsed: params.collapsed,
-    };
+      .get(instanceId, directoryKey) as { payload: string } | undefined;
+    return row
+      ? JSON.parse(row.payload) as RemoteDirectoryOverlayPayload
+      : undefined;
+  }
+
+  private writeRemoteDirectoryOverlay(
+    instanceId: string,
+    payload: RemoteDirectoryOverlayPayload,
+  ): void {
     this.stateDb.raw
       .prepare(
         `INSERT OR REPLACE INTO remote_directory_overlay(
@@ -5662,8 +5675,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
            payload
          ) VALUES (?, ?, ?)`,
       )
-      .run(params.instanceId, params.directoryKey, JSON.stringify(nextState));
-    return nextState;
+      .run(instanceId, payload.directoryKey, JSON.stringify(payload));
   }
 
   async readRemoteDirectoryOverlays(params: {
@@ -8812,32 +8824,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (readLaunchpad.get(params.storageKey)) return undefined;
     return this.stateDb.raw.transaction(() => {
       if (readLaunchpad.get(params.storageKey)) return undefined;
-      const marker = this.stateDb.raw
-        .prepare(
-          `SELECT payload FROM remote_directory_overlay
-           WHERE instance_id = ? AND directory_key = ?`,
-        )
-        .get(params.instanceId, params.directoryKey) as
-          | { payload: string }
-          | undefined;
-      const overlay = marker
-        ? JSON.parse(marker.payload) as RemoteDirectoryOverlayPayload
-        : undefined;
+      const overlay = this.readRemoteDirectoryOverlay(
+        params.instanceId,
+        params.directoryKey,
+      );
       if (overlay?.legacyLaunchpadSettledAt !== undefined) return undefined;
       const now = Date.now();
-      this.stateDb.raw
-        .prepare(
-          `INSERT OR REPLACE INTO remote_directory_overlay(
-             instance_id,
-             directory_key,
-             payload
-           ) VALUES (?, ?, ?)`,
-        )
-        .run(params.instanceId, params.directoryKey, JSON.stringify({
-          ...overlay,
-          directoryKey: params.directoryKey,
-          legacyLaunchpadSettledAt: now,
-        } satisfies RemoteDirectoryOverlayPayload));
+      this.writeRemoteDirectoryOverlay(params.instanceId, {
+        ...overlay,
+        directoryKey: params.directoryKey,
+        legacyLaunchpadSettledAt: now,
+      });
       const legacyRow = readLaunchpad.get(params.directoryKey) as
         | { payload: string }
         | undefined;

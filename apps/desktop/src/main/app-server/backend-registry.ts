@@ -26924,6 +26924,29 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * The draft an update reaches before any ensure created it. For a peer's
+   * draft this is also its first open, so it takes the text kept under the
+   * shared key first, as an ensure would.
+   */
+  private async ensureLaunchpadForLateUpdate(
+    storageKey: string,
+  ): Promise<EnsureDirectoryLaunchpadResponse> {
+    const peer = parseRemoteLaunchpadStorageKey(storageKey);
+    if (peer) {
+      await this.adoptLegacyRemoteDirectoryLaunchpad(
+        { scope: "remote", instanceId: peer.instanceId },
+        peer.directoryKey,
+        storageKey,
+      );
+    }
+    return await this.ensureDirectoryLaunchpad(
+      { directoryKey: storageKey, ...fallbackLaunchpadIdentity(storageKey) },
+      // A peer's draft takes nothing from this machine's copy of its path.
+      peer ? { skipFilesystemInspection: true, skipMcpConnectionDefaults: true } : undefined,
+    );
+  }
+
   async updateDirectoryLaunchpad(
     request: UpdateDirectoryLaunchpadRequest,
     options?: {
@@ -26954,16 +26977,7 @@ export class DesktopBackendRegistry {
       (await this.overlayStore.getDirectoryLaunchpad({
         directoryKey: request.directoryKey,
       })) ??
-      (await this.ensureDirectoryLaunchpad(
-        {
-          directoryKey: request.directoryKey,
-          ...fallbackLaunchpadIdentity(request.directoryKey),
-        },
-        // A peer's draft takes nothing from this machine's copy of its path.
-        isRemoteLaunchpadStorageKey(request.directoryKey)
-          ? { skipFilesystemInspection: true, skipMcpConnectionDefaults: true }
-          : undefined,
-      )).launchpad;
+      (await this.ensureLaunchpadForLateUpdate(request.directoryKey)).launchpad;
     if (options?.onlyIf && !options.onlyIf(current)) {
       return {
         launchpad: current,

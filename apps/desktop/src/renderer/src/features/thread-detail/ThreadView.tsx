@@ -1111,7 +1111,7 @@ export type ThreadViewProps = {
         | "agent"
       >
     >,
-    options?: { stickySettingsChanged?: boolean }
+    options?: { stickySettingsChanged?: boolean; owner?: FederationTarget }
   ) => Promise<void>;
   removeOptimisticMessage: (id: string) => void;
   transcriptViewport?: {

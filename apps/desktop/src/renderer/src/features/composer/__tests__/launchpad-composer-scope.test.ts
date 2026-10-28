@@ -3,7 +3,9 @@ import {
   buildLaunchpadComposerScopeKey,
   buildStartingLaunchpadComposerScopeKey,
   getEditableLaunchpadDirectoryKey,
+  getEditableLaunchpadOwner,
   getLaunchpadScopeDirectoryKey,
+  getLaunchpadScopeStorageKey,
   isStartingLaunchpadComposerScopeKey,
 } from "../launchpad-composer-scope";
 
@@ -40,6 +42,24 @@ describe("launchpad composer scopes", () => {
     // Edits still go out under the owner's key.
     expect(getEditableLaunchpadDirectoryKey(remote)).toBe(directoryKey);
     expect(getLaunchpadScopeDirectoryKey(remote)).toBe(directoryKey);
+  });
+
+  it("names the owner and storage key a scope's draft belongs to", () => {
+    const owner = { scope: "remote" as const, instanceId: "owner_one" };
+    const local = buildLaunchpadComposerScopeKey(directoryKey, { scope: "local" });
+    const remote = buildLaunchpadComposerScopeKey(directoryKey, owner);
+    const starting = buildStartingLaunchpadComposerScopeKey("abc1", directoryKey);
+
+    expect(getEditableLaunchpadOwner(local)).toEqual({ scope: "local" });
+    expect(getEditableLaunchpadOwner(remote)).toEqual(owner);
+    expect(getEditableLaunchpadOwner(starting)).toBeUndefined();
+    expect(getEditableLaunchpadOwner("thread:codex:thread-1")).toBeUndefined();
+
+    // Recovery records keep the two drafts apart.
+    expect(getLaunchpadScopeStorageKey(local)).toBe(directoryKey);
+    expect(getLaunchpadScopeStorageKey(remote)).toBe(remote.slice("launchpad:".length));
+    expect(getLaunchpadScopeStorageKey(remote)).not.toBe(getLaunchpadScopeStorageKey(local));
+    expect(getLaunchpadScopeStorageKey(starting)).toBe(directoryKey);
   });
 
   describe("in a window fronting a peer", () => {

@@ -3154,7 +3154,7 @@ export function useThreadNavigation(
   updateDirectoryLaunchpad: (
     directoryKey: string,
     patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
-    options?: { stickySettingsChanged?: boolean }
+    options?: { stickySettingsChanged?: boolean; owner?: FederationTarget }
   ) => Promise<void>;
   setBrowseMode: (browseMode: BrowseMode) => void;
   selectThread: (thread: NavigationThreadSummary) => void;
@@ -7317,7 +7317,15 @@ export function useThreadNavigation(
     async (
       directoryKey: string,
       patch: Parameters<NonNullable<DesktopApi["updateDirectoryLaunchpad"]>>[0]["patch"],
-      options?: { stickySettingsChanged?: boolean }
+      options?: {
+        stickySettingsChanged?: boolean;
+        /**
+         * Whose draft this is. A pinned peer's draft and this window's own
+         * draft can share a directory key, so the key alone picks whichever
+         * one is open. Composer names the owner of the scope it saves.
+         */
+        owner?: FederationTarget;
+      }
     ): Promise<void> => {
       if (!desktopApi?.updateDirectoryLaunchpad) {
         setLaunchpadError("Desktop bridge is missing updateDirectoryLaunchpad().");
@@ -7325,11 +7333,35 @@ export function useThreadNavigation(
       }
 
       setLaunchpadError(undefined);
+      const owner = options?.owner;
+      // This window's own drafts: local in the main window, the peer's in a
+      // remote window, where main fills the owner in.
+      const ownsWindowDraft = owner !== undefined && (
+        owner.scope === "local"
+        || federationTargetsEqual(owner, rendererFederationTarget)
+      );
       const federatedSelection =
         activeFederatedLaunchpad
         && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
+        && !ownsWindowDraft
+        && (!owner || federationTargetsEqual(owner, activeFederatedLaunchpad.target))
           ? activeFederatedLaunchpad
           : undefined;
+      if (owner?.scope === "remote" && !ownsWindowDraft && !federatedSelection) {
+        // A peer's draft this window no longer shows: save it, change nothing
+        // on screen.
+        try {
+          await desktopApi.updateDirectoryLaunchpad({
+            federationTarget: owner,
+            directoryKey,
+            patch,
+            stickySettingsChanged: options?.stickySettingsChanged,
+          });
+        } catch (error) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+        }
+        return;
+      }
       const launchpadUpdateKey = federatedSelection
         ? `${federatedSelection.target.instanceId}:${directoryKey}`
         : directoryKey;
@@ -7519,7 +7551,7 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [activeFederatedLaunchpad, desktopApi, isRendererFederationWindow, setFederatedLaunchpad, setLocalLaunchpads]
+    [activeFederatedLaunchpad, desktopApi, isRendererFederationWindow, rendererFederationTarget, setFederatedLaunchpad, setLocalLaunchpads]
   );
 
   const resetDirectoryLaunchpad = useCallback(

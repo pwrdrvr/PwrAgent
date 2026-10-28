@@ -8148,6 +8148,40 @@ describe("useThreadNavigation", () => {
       codexEnvironmentId: "environment",
       codexEnvironmentOptions: [expect.objectContaining({ name: "Owner environment" })],
     });
+
+    // Saves for the same key that belong to another owner leave the open
+    // peer's draft alone.
+    updateDirectoryLaunchpad.mockClear();
+    const otherPeer = { scope: "remote" as const, instanceId: "other-instance" };
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(
+        project.key,
+        { prompt: "for the other peer" },
+        { owner: otherPeer },
+      );
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenCalledWith({
+      federationTarget: otherPeer,
+      directoryKey: project.key,
+      patch: { prompt: "for the other peer" },
+      stickySettingsChanged: undefined,
+    });
+    await act(async () => {
+      await result.current.updateDirectoryLaunchpad(
+        project.key,
+        { prompt: "for this machine" },
+        { owner: { scope: "local" } },
+      );
+    });
+    expect(updateDirectoryLaunchpad).toHaveBeenLastCalledWith({
+      directoryKey: project.key,
+      patch: { prompt: "for this machine" },
+      stickySettingsChanged: undefined,
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget,
+      prompt: "",
+    });
   });
 
   it("keeps launchpad updates stable across remote viewer rerenders", async () => {
