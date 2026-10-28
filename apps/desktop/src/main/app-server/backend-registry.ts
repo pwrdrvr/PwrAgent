@@ -9773,13 +9773,15 @@ export class DesktopBackendRegistry {
     requests: AppServerPendingRequestNotification[],
   ): Promise<void> {
     const asked = requests.flatMap((request) => {
-      if (request.method !== "mcpServer/elicitation/request") return [];
-      const target = readRecord(request.params._meta)?.connector_name;
-      return [`“${request.params.message}”${typeof target === "string" ? ` for ${target}` : ""}`];
+      const params = readRecord(request.params);
+      const target = readRecord(params?._meta)?.connector_name;
+      return typeof params?.message === "string"
+        ? [`“${params.message}”${typeof target === "string" ? ` for ${target}` : ""}`]
+        : [];
     });
-    const first = requests[0];
-    if (!this.threadTodoHandler || !first || asked.length === 0) return;
-    const forge = first.method === "mcpServer/elicitation/request" ? first.params.serverName : "forge";
+    if (!this.threadTodoHandler || asked.length === 0) return;
+    const serverName = readRecord(requests[0]?.params)?.serverName;
+    const forge = typeof serverName === "string" ? serverName : "forge";
     try {
       await this.threadTodoHandler.add({ backend, threadId }, {
         key: FORGE_APPROVAL_WITHDRAWN_TODO_KEY,
@@ -9801,12 +9803,12 @@ export class DesktopBackendRegistry {
     for (const pending of this.pendingServerRequests.values()) {
       const request = pending.notification;
       if (pending.backend !== backend || request.params.threadId !== threadId) continue;
-      const elicitation = request.method === "mcpServer/elicitation/request" ? request.params : undefined;
+      const params = request.method === "mcpServer/elicitation/request" ? readRecord(request.params) : undefined;
       approvals.push({
         method: request.method,
-        ...(elicitation ? { serverName: elicitation.serverName } : {}),
+        ...(typeof params?.serverName === "string" ? { serverName: params.serverName } : {}),
         // Another thread's prompt can quote its work; only the asker sees it.
-        ...(elicitation && includeMessages ? { message: elicitation.message } : {}),
+        ...(includeMessages && typeof params?.message === "string" ? { message: params.message } : {}),
       });
     }
     return approvals;
@@ -48055,7 +48057,7 @@ export class DesktopBackendRegistry {
         // they may still be looking for a card the agent pointed them at.
         const endedWithoutOperator = event.notification.method === "turn/failed"
           || (event.notification.method === "turn/completed"
-            && event.notification.params.turn?.status === "completed");
+            && readRecord(readRecord(event.notification.params)?.turn)?.status === "completed");
         const withdrawnForgeApprovals: AppServerPendingRequestNotification[] = [];
         for (const [key, pending] of this.pendingServerRequests) {
           const request = pending.notification;
