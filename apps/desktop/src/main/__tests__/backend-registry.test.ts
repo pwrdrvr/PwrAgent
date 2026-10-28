@@ -22960,6 +22960,7 @@ command = "pnpm grok"
           executionMode: "default",
           model: "gpt-5.5",
           prompt: "typed before the upgrade",
+          workMode: "local",
           settingsTouchedAt: 50,
           createdAt: 10,
           updatedAt: 20,

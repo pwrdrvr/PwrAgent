@@ -5391,7 +5391,12 @@ describe("useThreadNavigation", () => {
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       expect.objectContaining({ federationTarget }),
     );
-    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({ directoryKey, preserveEnvironment: true });
+    // The viewer's copy is cleared under its owner, apart from its own draft.
+    expect(resetDirectoryLaunchpad).toHaveBeenCalledWith({
+      federationTarget,
+      directoryKey,
+      preserveEnvironment: true,
+    });
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
 

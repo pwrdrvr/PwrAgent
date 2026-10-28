@@ -8863,6 +8863,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         directoryPath: legacy.directoryPath,
         backend: legacy.backend,
         executionMode: legacy.executionMode,
+        workMode: legacy.workMode,
         prompt: legacy.prompt,
         editorDocument: legacy.editorDocument,
         imageAttachments: legacy.imageAttachments,
