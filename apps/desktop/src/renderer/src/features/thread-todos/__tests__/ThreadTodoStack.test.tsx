@@ -874,7 +874,7 @@ describe("ThreadTodosPanel", () => {
       result: "Squash-merged #42",
       resolvedAt: Date.now(),
     });
-    const view = createView([], { listResolved: async () => [handled, merged] });
+    const view = createView([], { listResolved: async () => ({ todos: [handled, merged] }) });
     render(<ThreadTodosPanel view={view} threadKey="codex:thread-a" onStartReview={vi.fn()} />);
 
     await act(async () => {

@@ -174,6 +174,7 @@ import {
   ThreadTodoCountsContext,
   useThreadTodos,
 } from "./features/thread-todos/useThreadTodos";
+import { newestResolvedFirst } from "./features/thread-todos/busy-thread-todos";
 import type {
   ThreadTodoProjectMenu,
   ThreadTodosView,
@@ -2731,10 +2732,7 @@ function DesktopAppShell(props: {
             name: "NavigationQueryError", code: "navigation_busy",
           });
         }
-        return response.todos
-          .filter((todo) => todo.status !== "open")
-          .sort((left, right) =>
-            (right.resolvedAt ?? right.updatedAt) - (left.resolvedAt ?? left.updatedAt));
+        return { todos: response.todos.filter((todo) => todo.status !== "open").sort(newestResolvedFirst) };
       },
       queueError: [threadTodoController.error, operatorRequests.error].filter(Boolean).join("\n") || undefined,
       unavailableInstances: [...threadTodoController.unavailableInstances, ...operatorRequests.unavailableInstances],

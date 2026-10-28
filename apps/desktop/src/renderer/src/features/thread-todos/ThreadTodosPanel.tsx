@@ -125,8 +125,8 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     if (!showResolved || !listResolved) return;
     let cancelled = false;
     setActionError(undefined);
-    void listResolved().then((todos) => {
-      if (!cancelled) setResolved(todos);
+    void listResolved().then((listing) => {
+      if (!cancelled) setResolved(listing.todos);
     }).catch((error: unknown) => {
       // A busy owner keeps the last list; the next revision reads it again.
       if (!cancelled && !isNavigationBusy(error)) {
