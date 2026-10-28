@@ -78,8 +78,11 @@ its deltas. A gap, a new epoch, a reconnect
 (`federation/eventStream/changed`), or a peer-status change takes one new
 owner snapshot. The viewer diffs that snapshot into deltas. An owner without
 the capability is listed again on each marker, and that list is also diffed
-into deltas. A mounted thread is listed when it is mounted and after a
-reconnect. Between those reads, its owner's deltas or markers keep it current.
+into deltas. A mounted thread is listed when it is mounted, after a reconnect,
+and on each `thread/todos/changed` marker for that thread. It does not follow
+deltas, because a list does not seed the owner's feed. Only a snapshot does,
+so an owner without a window may never send deltas. The
+`thread/todoDetails/changed` companion marker triggers no second list.
 A remote view is dropped when no window shows its owner. A sparse stream
 would otherwise appear to have revision gaps. Unavailable owners keep the
 quiet `unavailableInstances` footnote. The Done list still lists with
