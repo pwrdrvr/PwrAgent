@@ -2579,10 +2579,13 @@ textarea,
   top: var(--win-titlebar-h);
 }
 
+/* Grows with the window, from 640px to 800px at 60vw. Each row carries
+   chips, branch, project and age on one line, and a fixed 640px left a wide
+   window's titles clipped beside empty scrim. */
 .jump-palette__panel {
   display: flex;
   flex-direction: column;
-  width: min(640px, 100%);
+  width: min(100%, clamp(640px, 60vw, 800px));
   max-height: 66vh;
   overflow: hidden;
   border: 1px solid var(--border-strong);
@@ -2791,11 +2794,12 @@ textarea,
 }
 
 /* The sidebar row's time column, in its type. It never shrinks, so the title
-   and branch give way first, and its minimum fits "Aug 16" so short and long
-   labels share one right edge down the list. */
+   and branch give way first. Its minimum fits the widest date label ("May 28",
+   41.7px in Geist at 12px), so the project chips beside it line up down the
+   list whatever age each row prints. */
 .jump-palette__row-time {
   flex: none;
-  min-width: 3.2em;
+  min-width: 3.5em;
   color: var(--text-muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
