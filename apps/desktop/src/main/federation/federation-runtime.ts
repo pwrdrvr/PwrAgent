@@ -6392,8 +6392,11 @@ export class DesktopFederationRuntime {
     }
     this.publishedPeerStatuses.set(instanceId, { status, unavailableReason });
     this.unacknowledgeDirectorySetWatch(instanceId);
+    // Only a lost connection voids the To-do feed proof. A gateway replays
+    // relayed subscriptions before it announces the owner as connected, so
+    // the owner's acknowledgement can arrive before that transition.
     const todoFeedWatch = this.todoFeedWatches.get(instanceId);
-    if (todoFeedWatch) delete todoFeedWatch.route;
+    if (todoFeedWatch && status !== "connected") delete todoFeedWatch.route;
     // A connection transition changes whether cached remote rows are live.
     // Drop both the snapshot and any remembered refresh failure before the
     // renderer refreshes. Otherwise a fetch that races the disconnect can

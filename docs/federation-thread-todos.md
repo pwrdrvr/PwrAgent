@@ -78,8 +78,8 @@ every hop relays them:
 
 A relayed viewer follows the feed only after the acknowledgement arrives,
 and only while envelopes to the owner still leave through the gateway that
-carried it. An owner status change clears it until the owner acknowledges
-again. Before then, the view uses the list fallback, then reads one snapshot
+carried it. A lost connection to the owner clears it until the owner
+acknowledges again. Before then, the view uses the list fallback, then reads one snapshot
 when the acknowledgement arrives. Behind an older gateway it never arrives,
 and the view keeps the list fallback. Owners still publish the
 `thread/todos/changed` and `thread/todoDetails/changed` markers for older

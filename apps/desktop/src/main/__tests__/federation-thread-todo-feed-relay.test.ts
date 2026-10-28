@@ -156,9 +156,15 @@ describe("To-do feed through a gateway relay", () => {
     expect(remote.snapshot).toHaveBeenCalledTimes(1);
     expect(remote.list).not.toHaveBeenCalled();
 
-    // A status change clears the proof until the owner acknowledges again.
+    // A lost connection clears the proof until the owner acknowledges again.
     viewer.publishPeerStatus("owner_one", "disconnected");
     expect(viewer.remotePeerSupportsTodoFeed(owner)).toBe(false);
+    // The gateway replays the subscription before it announces the owner, so
+    // the acknowledgement can come first; the announcement must not void it.
+    viewer.setTodoFeedWatches([]);
+    viewer.setTodoFeedWatches(["owner_one"]);
+    viewer.publishPeerStatus("owner_one", "connected");
+    expect(viewer.remotePeerSupportsTodoFeed(owner)).toBe(true);
   });
 
   it("lists a relayed owner behind an older gateway, which never relays the acknowledgement", async () => {
