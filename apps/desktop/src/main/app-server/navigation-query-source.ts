@@ -13,6 +13,7 @@ import type { NavigationQueryIndex } from "./navigation-query-projection";
 import { resolveScratchProjectsRoots } from "./scratch-projects";
 import { buildNavigationIndexMessagingBindings } from "../messaging/messaging-bindings-snapshot";
 import { NavigationIndexReadPool, type NavigationIndexCheckpoint } from "./navigation-index-read-pool";
+import { nextNavigationObservation } from "./navigation-observation-clock";
 import {
   directorySetMayHaveChanged,
   NavigationDirectorySetAnnouncer,
@@ -62,7 +63,11 @@ export async function loadLocalNavigationQueryIndex(params: {
     // The pool owns this listener through its bounded completed reuse window.
     // Eviction/expiry/cancellation aborts the lifetime and releases it.
     signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
-    const index = await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint });
+    // Taken before listing. The registry drops its cached and pending
+    // listings for a boundary before it tells listeners, so this listing
+    // reflects every boundary observed before this value.
+    const observedAt = nextNavigationObservation();
+    const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint }), observedAt };
     // Only the whole-owner index is what viewers read as its directory set.
     if (backend === "all" && !params.registry) {
       getNavigationDirectorySetAnnouncer().observe(index.directories);

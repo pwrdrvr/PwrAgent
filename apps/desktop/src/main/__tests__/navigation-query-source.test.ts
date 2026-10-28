@@ -295,6 +295,37 @@ describe("owner index reads under live turns", () => {
     // An overtaken scan is not reused, so it holds no listener afterwards.
     await vi.waitFor(() => expect(listeners.size).toBe(0));
   });
+
+  it("stamps each scan as it begins, and a reused index keeps the stamp of the listing it holds", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const listThreads = vi.fn(async () => []);
+    const registry = {
+      listThreads,
+      onEvent: (listener: (event: AgentEvent) => void) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      canonicalizeNavigationThreadPullRequests: async (threads: []) => threads,
+      hydrateThreadGitWorkingStates: async (threads: []) => threads,
+      withNavigationSubAgentActivity: (threads: []) => threads,
+      getNavigationInputRequestThreadKeys: () => new Set<string>(),
+    } as unknown as DesktopBackendRegistry;
+    const load = () => loadLocalNavigationQueryIndex({ registry, callerReason: "observation-stamp" });
+    const first = await load();
+    expect(first.observedAt).toEqual(expect.any(Number));
+    const reused = await load();
+    expect(listThreads).toHaveBeenCalledTimes(1);
+    expect(reused.observedAt).toBe(first.observedAt);
+    for (const listener of listeners) {
+      listener({ backend: "codex", notification: { method: "thread/archived", params: { threadId: "thread" } } } as AgentEvent);
+    }
+    const next = await load();
+    expect(listThreads).toHaveBeenCalledTimes(2);
+    expect(next.observedAt).toBeGreaterThan(first.observedAt!);
+    for (const listener of listeners) {
+      listener({ backend: "codex", notification: { method: "thread/archived", params: { threadId: "thread" } } } as AgentEvent);
+    }
+  });
 });
 
 it.each([
