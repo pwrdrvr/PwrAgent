@@ -41526,16 +41526,22 @@ export class DesktopBackendRegistry {
     }
     // Checked here, on the caller's instance, before a local or federated
     // send: a peer only sees a mode, not that an agent asked for it.
-    const accessRefusal = checkAgentAccessRequest(
-      await this.resolveAgentCallerExecutionMode({
-        backend: request.context.backend,
-        threadId: request.context.threadId,
-        turnId: sourceTurnId,
-      }),
-      request.args,
-    );
-    if (accessRefusal) {
-      return threadOrchestrationFailure(accessRefusal.code, accessRefusal.message);
+    if (
+      request.args.executionMode !== undefined
+      || request.args.approvalPolicy !== undefined
+      || request.args.sandbox !== undefined
+    ) {
+      const accessRefusal = checkAgentAccessRequest(
+        await this.resolveAgentCallerExecutionMode({
+          backend: request.context.backend,
+          threadId: request.context.threadId,
+          turnId: sourceTurnId,
+        }),
+        request.args,
+      );
+      if (accessRefusal) {
+        return threadOrchestrationFailure(accessRefusal.code, accessRefusal.message);
+      }
     }
 
     const correspondenceId = `correspondence:${randomUUID()}`;
@@ -42256,7 +42262,7 @@ export class DesktopBackendRegistry {
     }
 
     // The child starts at the caller's access or less; only the operator
-    // raises it. Omitted, it inherits the caller's mode below.
+    // raises it. Omitted, it inherits this mode below.
     const callerExecutionMode = await this.resolveAgentCallerExecutionMode({
       backend: sourceBackend,
       threadId: sourceThreadId,
@@ -42340,14 +42346,10 @@ export class DesktopBackendRegistry {
       linkedDirectory: sourceLinkedDirectory,
       mode: "same_workspace",
     });
+    // Inheriting takes the same ceiling as asking, so a lower mode the
+    // operator queued for this thread is not passed over by omission.
     const requestedOrInheritedExecutionMode =
-      request.args.executionMode ??
-      await this.resolveHandoffSourceExecutionMode({
-        backend: sourceBackend,
-        threadId: sourceThreadId,
-        turnId: sourceTurnId,
-        overlay: sourceOverlay,
-      });
+      request.args.executionMode ?? callerExecutionMode;
     // Auto review belongs to Codex. An implicit cross-provider handoff keeps
     // approvals enabled using ACP's default mode; explicit Auto remains invalid.
     const executionMode =
@@ -45144,7 +45146,11 @@ export class DesktopBackendRegistry {
           : {}),
         backend: request.args.backend ?? request.context.backend,
         threadId: request.args.threadId ?? request.context.threadId,
-      }, await this.readCausalMessagingContext(request.context));
+      }, await this.readCausalMessagingContext({
+        // Only the thread, as before the calling turn reached this context.
+        backend: request.context.backend,
+        threadId: request.context.threadId,
+      }));
     }
 
     if (request.operation === "mark_project_read") {

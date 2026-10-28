@@ -67471,6 +67471,37 @@ describe("agent tool access ceiling", () => {
     );
   });
 
+  describe("a lower mode the operator queued mid-turn", () => {
+    it("caps what the agent may ask for and what a handoff inherits", async () => {
+      const { registry, call } = await startCaller({ callerMode: "full-access" });
+      await registry.setThreadExecutionMode({
+        backend: "codex",
+        threadId: "agent-thread",
+        executionMode: "auto",
+      });
+      expect(registry.getQueuedExecutionModeForThread({
+        backend: "codex",
+        threadId: "agent-thread",
+      })?.mode).toBe("auto");
+
+      expect(await call("mutate_thread", {
+        backend: "codex",
+        threadId: "target-thread",
+        executionMode: "full-access",
+        dryRun: true,
+      })).toMatchObject(forbidden);
+      const handoff = await call("handoff_task", {
+        task: "Investigate the flaky test.",
+        title: "Flaky test",
+        workspaceMode: "none",
+      });
+      expect(handoff.success).toBe(true);
+      expect(handoff.payload.inheritedSettings).toMatchObject({ executionMode: "auto" });
+
+      await registry.close();
+    });
+  });
+
   describe("the caller's mode is its live Codex turn's", () => {
     it("refuses Full Access when only the stored mode was raised mid-turn", async () => {
       const { registry, call } = await startCaller({

@@ -251,7 +251,11 @@ function inputSchemaForOperation(
               "Exact model ID from list_instance_projects. Match modelOptions.label and pass its id, which may be an alias. Omit to inherit the launchpad model.",
           },
           reasoningEffort: { type: "string" },
-          executionMode: { type: "string" },
+          executionMode: {
+            type: "string",
+            description:
+              "default, auto, or full-access. Omit to use the project's own mode. No more access than the calling thread's own mode; only the operator raises access.",
+          },
           fastMode: { type: "boolean" },
           tokenMiserEnabled: {
             type: "boolean",

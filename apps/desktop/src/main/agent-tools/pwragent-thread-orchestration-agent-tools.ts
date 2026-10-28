@@ -333,7 +333,11 @@ function inputSchemaForOperation(
           reasoningEffort: { type: "string" },
           serviceTier: { type: "string" },
           fastMode: { type: "boolean" },
-          executionMode: { type: "string" },
+          executionMode: {
+            type: "string",
+            description:
+              "default, auto, or full-access. Omit to inherit this thread's mode. No more access than the calling thread's own mode; only the operator raises access.",
+          },
           approvalPolicy: { type: "string" },
           sandbox: { type: "string" },
           branchName: {
@@ -441,7 +445,11 @@ function inputSchemaForOperation(
           reasoningEffort: { type: "string" },
           serviceTier: { type: "string" },
           fastMode: { type: "boolean" },
-          executionMode: { type: "string" },
+          executionMode: {
+            type: "string",
+            description:
+              "default, auto, or full-access. Omit to keep the target thread's mode. No more access than the calling thread's own mode; only the operator raises access.",
+          },
           approvalPolicy: { type: "string" },
           sandbox: { type: "string" },
         },
