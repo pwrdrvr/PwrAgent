@@ -18304,7 +18304,7 @@ export class MessagingController {
       .every((permission) => permissions.permissions.has(permission));
   }
 
-  private retainedSourceUnavailable(context: PwrAgentMessagingRequest["context"], code: "forbidden" | "not_found" = "forbidden"): PwrAgentMessagingResponse {
+  private retainedSourceUnavailable(context: PwrAgentMessagingRequest["context"], code: "forbidden" | "not_found" = "forbidden"): Extract<PwrAgentMessagingResponse, { ok: false }> {
     return { ok: false, error: {
       code: context.causalMessagingAmbiguous ? "ambiguous_location" : code,
       message: context.causalMessagingAmbiguous
@@ -19697,6 +19697,13 @@ export class MessagingController {
   private async resolveAgentMessagingOrigin(
     context: PwrAgentMessagingRequest["context"],
   ): Promise<AgentMessagingOriginResolution> {
+    if (context.requestingInstanceId && context.causalMessagingSource) {
+      const source = this.retainedRequestSource(context);
+      if (!source || !this.isChannelInScope(source.event.channel)) return this.retainedSourceUnavailable(context, "not_found");
+      if (!this.retainedRequestCanCrossInstance(context, source) || !this.retainedSourceHasPermissions(source)
+        || !await this.retainedSourceIsAuthorized(source)) return this.retainedSourceUnavailable(context);
+      return { ok: true, origin: await this.originForRetainedSource(source) };
+    }
     if (context.turnId) {
       const origin = this.activeAgentMessagingOriginsByTurnKey.get(
         agentMessagingTurnKey(context.backend, context.threadId, context.turnId),

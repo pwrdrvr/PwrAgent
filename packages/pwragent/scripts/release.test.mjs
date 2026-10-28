@@ -38,11 +38,15 @@ test("publishing requires an existing reviewed environment restricted to main", 
   assert.throws(() => checkEnvironment(environment, { branch_policies: [...policies.branch_policies, { name: "*", type: "tag" }] }));
 });
 
-test("release validation rejects changed package identity, license and unbundled runtime dependencies", () => {
+test("release validation permits only the pinned native PTY dependency and bundled JavaScript", () => {
   for (const change of [{ name: "other" }, { private: true }, { license: "UNLICENSED" },
     { engines: { node: ">=20" } }, { bin: { pwragent: "src/cli.js" } },
     { repository: { url: "https://example.com", directory: "packages/pwragent" } },
     { dependencies: { "@pwragent/federation": "workspace:*" } },
+    { dependencies: {} }, { dependencies: undefined },
+    { dependencies: { "node-pty": "*" } },
+    { dependencies: { "node-pty": "1.2.0-beta.14" } },
+    { dependencies: { ...pkg.dependencies, ws: "*" } },
     { optionalDependencies: { ws: "*" } }, { peerDependencies: { ws: "*" } }]) {
     assert.throws(() => releaseMetadata({ ...pkg, ...change }));
   }

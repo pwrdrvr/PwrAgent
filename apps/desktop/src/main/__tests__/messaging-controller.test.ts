@@ -6188,6 +6188,34 @@ describe("MessagingController", () => {
     } finally { db.close(); }
   });
 
+  it("authorizes federated retained-source inspection and private replies on the provider owner", async () => {
+    const db = StateDb.open(":memory:");
+    try {
+      let authorized = true;
+      const requests = new SqliteMessagingRequestStore(db.raw);
+      const resolvePrivateConversation = vi.fn(async () => ({ channel: "telegram" as const, outcome: "resolved" as const,
+        conversation: { id: "fixture-private", kind: "dm" as const }, updatedAt: 2000 }));
+      const harness = await createHarness({ requestStore: requests, authorizeRetainedSource: () => authorized, resolvePrivateConversation });
+      const event = buildTextEvent("reply from an outpost", { channel: buildTopicChannel("100") });
+      await harness.store.upsertBinding({ id: "remote-binding", backend: "codex", threadId: "thread-1", targetKind: "thread",
+        channel: event.channel, authorizedActorIds: ["user-1"], createdAt: 1000, updatedAt: 1000 });
+      const source = requests.remember({ connectionId: "fixture", agent: { backend: "codex", threadId: "thread-1" }, bindingId: "remote-binding", event })!;
+      const context = { backend: "codex" as const, threadId: "thread-1", turnId: "outpost-turn", causalMessagingSource: source.ref,
+        requestingInstanceId: "pwr_outpost_fixture" };
+      expect(await harness.controller.authorizeRetainedTool(context, { ...context, category: "messaging_context", tool: "send_private_response" }))
+        .toMatchObject({ owns: true, allowed: true });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "get_current_messaging_surface", context, args: {} }))
+        .toMatchObject({ ok: true, data: { location: { channel: "telegram" } } });
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "send_private_response", context, args: { text: "mock provider reply" } }))
+        .toMatchObject({ ok: true, data: { outcome: "delivered" } });
+      expect(resolvePrivateConversation).toHaveBeenCalledTimes(1);
+      authorized = false;
+      expect(await harness.controller.handlePwrAgentMessagingRequest({ operation: "send_private_response", context, args: { text: "revoked" } }))
+        .toMatchObject({ ok: false, error: { code: "forbidden" } });
+      expect(resolvePrivateConversation).toHaveBeenCalledTimes(1);
+    } finally { db.close(); }
+  });
+
   it("keeps Slack channel4 causal through a completion despite newer human traffic in four other channels", async () => {
     const db = StateDb.open(":memory:");
     try {

@@ -115,3 +115,6 @@ export * from "./thread-archive-policy";
 export * from "./transcript-file-reference";
 export * from "./acp-permission-mode";
 export * from "./uuid-v7";
+
+export type { IntegratedTerminalRemoteInfo, IntegratedTerminalSessionSummary, TerminalSnapshot } from "./contracts/terminal";
+export { mergeCausalMessagingContext } from "./messaging-causal-context";

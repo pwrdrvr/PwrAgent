@@ -4,12 +4,15 @@ Experimental Node-only daemon and CLI for a dedicated Linux outpost. The daemon
 owns a local Codex App Server and keeps an accepted turn running after the CLI
 or its SSH connection disconnects. Federation uses the same encrypted transport,
 signed enrollment and capability-checked routing as the desktop. There is no
-Electron, display server, native addon, or Sandboxer API dependency. The packaged
-CLI includes its JavaScript transport dependencies.
+Electron, display server, provider SDK, or Sandboxer API dependency. Remote
+terminals use the pinned `node-pty` native dependency, loaded when a terminal
+opens. The packaged CLI bundles its shared JavaScript services and their notices.
 
 It supports one active Codex turn per profile, local job commands, and remote
-desktop navigation, thread creation, continuation, transcript reads, subscribed
+desktop navigation, project creation/cloning, repository-aware thread intake,
+remote terminals, thread creation, continuation, transcript reads, subscribed
 streaming events, steering, interruption, naming and model/execution settings.
+It can consume authorized messaging services from a provider-owning peer.
 The daemon owns its execution lifetime; an SSH forward only provides access.
 
 ## Install and update
@@ -151,7 +154,7 @@ select `workspace-write` explicitly when edits are wanted.
   create another job. There is no queue: a new ID while busy is rejected.
 - Both thread and turn setup specify `approvalPolicy: never`. Full access is
   not offered. Turn sandbox policy disables tool network access; workspace-write
-  grants the configured workspace and excludes ambient temporary directories.
+  grants the thread's registered project directory and excludes ambient temporary directories.
   Codex/provider access and operator-configured MCP integrations still follow
   Codex configuration. This CLI is not a replacement for VM isolation.
 - Unexpected command/file/permission approvals are denied. Questions and other
@@ -182,7 +185,8 @@ explicit enrollment or invite creation. Its optional listener binds only to
 resolved workspace, Codex home and headless state must not overlap. Unix socket
 paths must fit in 100 bytes; choose a shorter PwrAgent root if needed.
 
-The registry is bound to one canonical workspace and Codex home. It stores job
+The registry is bound to one canonical workspace root and Codex home. Projects
+are registered canonical directories inside that root. It stores job
 IDs, input hashes, thread/turn IDs, settings, timestamps and terminal outcomes.
 It does not persist prompts or duplicate provider transcripts. `read` obtains
 history only through `thread/read`; no Codex-owned storage file is inspected.
@@ -268,7 +272,8 @@ the same durable job after a lost response. There is still no turn queue: a
 second distinct submission while busy is rejected.
 
 Directory launchpads and `create_instance_thread` can create an independent
-thread and start its first text turn in the configured workspace. Select
+thread and start its first text turn in a registered owner-side project. Supply
+its `directoryKey`/`cwd`; omitting it selects the configured workspace root. Select
 `workMode: local` and `executionMode: auto` when workspace edits are needed;
 the defaults remain local and read-only. Launchpad requests for worktrees,
 grouping, environments or provider extensions are rejected before creation.
@@ -298,13 +303,94 @@ if replacement/recovery matters; gateway-side transcript backup and recovery
 onto a new lease remain work to implement. A new empty disk cannot recover a
 lost private identity or conversation merely by reusing a label.
 
-Desktop Agent tools, messaging, automations, goals, worktree management, Token
-Miser, image/blob input, interactive approvals, remote PTY/file transfer, provider
-installation/login, and automatic thread migration are not exposed. The current
-adapter serves one configured workspace and text turns. It has no archive/delete
-API, compute lifecycle UI, or automatic retention policy. Plan/collaboration and
-fast mode requests are rejected explicitly. Full history is bounded by the
-transport frame limit; pagination of large transcripts is not implemented.
+General desktop Agent tools, automations/goals, Token Miser, image/blob input,
+interactive approvals and provider installation/login remain outside this
+execution host. General worktree creation is unavailable; Git thread intake
+uses the shared worktree import service. Plan/collaboration and fast mode
+requests are rejected explicitly. One active text turn is supported across all
+projects in a profile. Transcript reads remain bounded by the transport frame
+limit. No provider connections or provider credentials run here.
+
+## Project and service contract
+
+The CLI and federation project RPCs operate on outpost paths. They never resolve
+a laptop path or borrow the viewer's Git environment. These checkout examples
+use disposable directories under the configured `--workspace` root:
+
+```sh
+node packages/pwragent/bin/pwragent.js project-create --name scratch
+node packages/pwragent/bin/pwragent.js project-clone --name repo --remote https://example.invalid/org/repo.git
+node packages/pwragent/bin/pwragent.js project-add --path /srv/pwragent/workspace/existing
+node packages/pwragent/bin/pwragent.js project-list
+node packages/pwragent/bin/pwragent.js submit --id project-task --cwd /srv/pwragent/workspace/repo --prompt-file /task.txt
+```
+
+`project-remove --path PATH` unregisters an unused project without deleting its
+files. Registered threads retain their actual cwd across restart. Turns,
+launchpads and terminals resolve that owner-side directory again before use;
+a missing directory, changed symlink or conflicting caller cwd fails explicitly.
+
+Private Git access is destination-local and opt-in. `git-auth-configure
+--config-file /outpost/git-auth-settings.json` accepts only `sshKeyPath`,
+`knownHostsPath` and `credentialHelperPath`. The referenced files must already
+exist on the outpost, belong to its service user and be private regular files;
+a helper must also be executable. SSH requires both a key and pinned known-hosts
+file. An empty object clears the selection. The persisted configuration contains
+paths, not key or credential contents.
+
+Git confines ancestor-repository discovery to the configured workspace and
+disables ambient system/global configuration, interactive prompts,
+credential helpers, SSH configuration, default keys and SSH agents. Only the
+explicit helper/key is enabled. Clone URLs cannot embed HTTP credentials.
+Authentication failure removes only the new clone directory and does not
+register a project. Enrollment and Git intake do not import the sender's Git or SSH environment.
+
+| Service | Required grants | Supported behavior |
+| --- | --- | --- |
+| `outpost.projects.list` | `thread_navigation` | Owner project inventory |
+| `outpost.projects.create/add/remove` | `environment_actions` | Create/clone, register and unregister projects |
+| `pty.*` | `remote_pty` | Input, resize, ack flow control, snapshots, history and close |
+| `thread.handoff.*` | `thread_handoff`, `turn_control`, `environment_actions`, `file_push` | Explicit copy/move with receiver preflight and validated history |
+| Messaging consumption | `messaging_route`, owner protocol support and owner authorization | Text replies, surface inspection/rename and authorized attachment of threads |
+
+Terminals use the same Electron-free PTY service as desktop, including opener
+ownership through relays, bounded replay, ack-window backpressure and cleanup.
+A brief disconnect can reattach the same shell. The normal disconnect grace is
+10 seconds; after expiry or daemon shutdown, the shell is reaped and its saved
+history can open under a new shell. Agent execution has a separate lifetime.
+
+Repository intake requires an existing registered destination clone with a
+matching remote and accessible published commit. The shared handoff service
+preflights it before transferring history or workspace bytes. A move archives
+the source only after destination history validation and acknowledgement.
+Git supplies the new destination worktree; App Server supplies thread export
+bytes through its protocol and imports them through `thread/fork`. Unknown
+intake outcomes survive restart and require inspection instead of another fork.
+
+Messaging is an explicitly consumed service. Configure/enroll the always-on
+provider owner separately and route/bind the chat to an outpost-owned thread.
+That owner retains its adapters, credentials, actor permissions and original
+conversation. It starts turns and subscribes to their events for normal replies.
+The outpost stores the full origin and causal destination with the accepted job.
+New outpost threads advertise the shared PwrAgent messaging tools. App Server
+must support namespaced dynamic tools; intake additionally requires protocol
+`fs/readFile` and `thread/fork`. Authorized
+tool calls go to the original owner through `messaging.destination`, which
+rechecks retained-source/provider admission, RBAC and remote-control authority.
+Connection alone establishes neither a provider service nor a destination.
+
+Retained-source messaging tools require an owner/provider that supports that
+contract (currently Telegram and Slack). Other providers can still route text
+turns and normal replies through their owning peer. Their outpost tools fail
+closed when retained authorization is unavailable. File/PDF messaging tools are
+not advertised: a local file path must not be interpreted on the provider owner.
+Existing/forked Codex threads keep their creation-time tool catalog; this change
+does not retrofit tools into older persisted threads.
+
+When the owner is unavailable, the tool reports `peer_unavailable`; it never
+moves the destination to another peer. Tool-call outcomes are recorded at call
+boundaries. Lost acknowledgements, reconnect and restart do not replay an
+uncertain send. No messaging queue or automatic retry runs on the outpost.
 
 ## Architecture
 
@@ -314,8 +400,11 @@ package instead owns a small App Server adapter and durable job registry.
 `@pwragent/federation` extracts the existing host-independent Noise transport,
 enrollment, router and RPC implementation. Desktop wrappers preserve existing
 imports and inject desktop diagnostics; the headless host supplies private JSON
-identity storage and its backend adapter. Neither package imports desktop code.
-The CLI bundles the transport and `ws`, including its MIT license, at build time.
+identity storage and its backend adapter. The same package now owns the PTY,
+file transfer and transactional thread-intake services. `@pwragent/agent-tools`
+owns the host-independent dynamic tool schemas/router; desktop imports wrappers
+for both packages. Neither shared package imports desktop code. The CLI bundles
+the JavaScript services and produces `dist/THIRD_PARTY_LICENSES` at build time.
 
 [Amp's retention contract](https://ampcode.com/security) distinguishes paused
 compute from deletion: paused orb disk and memory remain until thread deletion.

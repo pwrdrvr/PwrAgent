@@ -57,7 +57,7 @@ describe.skipIf(process.platform === "win32")("desktop client against the standa
         peerInstanceId: viewerId, role: "client", inviteToken: invite.token,
         gatewayInstanceId: invite.gatewayInstanceId, gatewayPublicKeyPem: invite.gatewayPublicKeyPem,
         gatewayNoisePublicKey: Buffer.from(invite.gatewayNoisePublicKey!, "base64"), noiseStatic: generateNoiseStaticKeyPair(),
-        capabilities: ["remote_window", "thread_navigation", "thread_detail", "turn_control"], deferReceiving: true,
+        capabilities: ["remote_window", "thread_navigation", "thread_detail", "turn_control", "messaging_route", "messaging_destinations", "environment_actions"], deferReceiving: true,
         onEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
       });
       const connected = connection;
@@ -106,6 +106,23 @@ describe.skipIf(process.platform === "win32")("desktop client against the standa
         launchpadRead = await client.readThread({ backend: "codex", threadId: materialized.threadId });
       }
       expect(launchpadRead.replay.lastAssistantMessage).toBe("Fixture result");
+      const projectOutput = await promisify(execFile)(process.execPath, [cli, "project-create", "--name", "contract-project"], { env });
+      const project = JSON.parse(projectOutput.stdout) as { path: string };
+      const projectThread = await client.startThread({ backend: "codex", cwd: project.path });
+      const messageOrigin = { kind: "messaging" as const,
+        causalMessagingSource: { ownerId: "fixture-provider-owner", requestId: "fixture-human-request", instanceId: viewerId },
+        messaging: { platform: "slack" as const, surface: { id: "fixture-conversation", kind: "thread" as const }, actor: { platformUserId: "fixture-actor" } } };
+      const projectTurn = await client.startTurn({ backend: "codex", threadId: projectThread.threadId,
+        messageOrigin, input: [{ type: "text", text: "project-specific chat turn" }] });
+      let reply = await client.readTurnAssistantReply({ backend: "codex", threadId: projectThread.threadId, turnId: projectTurn.turnId, text: "Fixture result" });
+      for (let attempt = 0; !reply.message && attempt < 100; attempt++) {
+        await delay(20);
+        reply = await client.readTurnAssistantReply({ backend: "codex", threadId: projectThread.threadId, turnId: projectTurn.turnId, text: "Fixture result" });
+      }
+      expect(reply.message?.text).toBe("Fixture result");
+      const projectPage = await client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", query: { kind: "directory", directoryKey: project.path } });
+      expect(projectPage.entries[0].row.ref.threadId).toBe(projectThread.threadId);
+      expect(projectPage.entries[0].row.projectKey).toBe(project.path);
     } finally {
       connection?.close();
       daemon.kill("SIGTERM");

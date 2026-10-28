@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { mergeCausalMessagingContext } from "../dist/federation-core.js";
 import { ACTIVE, atomicJson, digest } from "./store.js";
 
 export const METHOD_CAPABILITIES = Object.fromEntries([
-  ...["getNavigationQueryPage", "getNavigationLaunchpadConfig", "getNavigationSelectedDetail", "getNavigationQueueProjection", "releaseNavigationAttentionView", "listThreads", "listBackends", "resolveThread", "resolveThreadAdmissionState", "markThreadSeen", "getProjectPage", "lookupArchivedThreads"].map((method) => [`backend.${method}`, "thread_navigation"]),
-  ...["readThread", "listSkills", "listThreadMcpServers"].map((method) => [`backend.${method}`, "thread_detail"]),
+  ["backend.resolveThreadAdmissionState", "messaging_route"],
+  ...["getNavigationQueryPage", "getNavigationLaunchpadConfig", "getNavigationSelectedDetail", "getNavigationQueueProjection", "releaseNavigationAttentionView", "listThreads", "listBackends", "resolveThread", "markThreadSeen", "getProjectPage", "lookupArchivedThreads"].map((method) => [`backend.${method}`, "thread_navigation"]),
+  ...["readThread", "readTurnAssistantReply", "listSkills", "listThreadMcpServers"].map((method) => [`backend.${method}`, "thread_detail"]),
   ...["startThread", "materializeDirectoryLaunchpad", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread", "setThreadModelSettings", "setThreadExecutionMode"].map((method) => [`backend.${method}`, "turn_control"]),
 ]);
 
@@ -40,7 +42,9 @@ export class HeadlessBackend {
       if (error.code !== "ENOENT") throw error;
       this.threads = new Map();
     }
-    runtime.ownsThread = (id) => this.threads.has(id);
+    runtime.ownsThread = (id) => this.threads.has(id) && !this.threads.get(id).archived;
+    runtime.threadCwd = (id) => this.owned(id).cwd || runtime.workspace;
+    runtime.listOwnedThreads = () => [...this.threads.values()].filter((thread) => !thread.archived);
     this.latestJobs = new Map();
     this.syncJobs();
   }
@@ -58,7 +62,7 @@ export class HeadlessBackend {
       if (!previous || previous.id === job.id || job.createdAt > previous.createdAt) this.latestJobs.set(job.threadId, job);
       if (this.threads.has(job.threadId)) continue;
       this.threads.set(job.threadId, { id: job.threadId, title: `Thread ${job.threadId.slice(0, 8)}`, titleSource: "fallback",
-        createdAt: Date.parse(job.createdAt), sandbox: job.sandbox, model: job.model });
+        createdAt: Date.parse(job.createdAt), cwd: job.cwd || this.runtime.workspace, sandbox: job.sandbox, model: job.model });
       changed = true;
     }
     if (changed) this.persist();
@@ -66,7 +70,7 @@ export class HeadlessBackend {
 
   owned(id) {
     const thread = this.threads.get(id);
-    if (!thread) throw new Error("Thread is not owned by this outpost");
+    if (!thread || thread.archived) throw new Error("Thread is not owned by this outpost");
     return thread;
   }
 
@@ -75,12 +79,13 @@ export class HeadlessBackend {
   }
 
   summary(thread) {
+    const cwd = thread.cwd || this.runtime.workspace;
     const job = this.latest(thread.id);
     const updatedAt = Math.max(thread.updatedAt || thread.createdAt, job ? Date.parse(job.updatedAt) : 0);
     return { id: thread.id, title: thread.title, titleSource: thread.titleSource, source: "codex",
-      createdAt: thread.createdAt, updatedAt, projectKey: this.runtime.workspace,
+      createdAt: thread.createdAt, updatedAt, projectKey: cwd,
       threadStatus: job && ACTIVE.has(job.status) ? "active" : "idle",
-      linkedDirectories: [{ id: this.runtime.workspace, kind: "local", path: this.runtime.workspace, label: path.basename(this.runtime.workspace) }],
+      linkedDirectories: [{ id: cwd, kind: "local", path: cwd, label: path.basename(cwd) }],
       executionMode: mode(thread.sandbox), model: thread.model || undefined,
       reasoningEffort: thread.reasoningEffort, serviceTier: thread.serviceTier,
       inbox: { inInbox: updatedAt > (thread.seenUpdatedAt ?? thread.seenAt ?? 0), reason: "updated-since-seen" },
@@ -111,15 +116,15 @@ export class HeadlessBackend {
     if (!params || typeof params !== "object" || Array.isArray(params)) throw new Error("Expected request parameters");
     if (params.backend && !["codex", "all"].includes(params.backend)) throw new Error("This outpost serves Codex only");
     if (params.ref && params.ref.backend !== "codex") throw new Error("This outpost serves Codex only");
-    if (params.cwd && path.resolve(params.cwd) !== this.runtime.workspace) throw new Error("Requested workspace is not owned by this outpost");
+    if (params.cwd) this.runtime.projects.resolve(params.cwd);
     const name = method.replace(/^backend\./, "");
     switch (name) {
       case "listBackends": return this.listBackends();
-      case "listThreads": return { backend: "codex", fetchedAt: Date.now(), threads: [...this.threads.values()].map((thread) => this.summary(thread)), workspaceRoots: [this.runtime.workspace] };
+      case "listThreads": return { backend: "codex", fetchedAt: Date.now(), threads: [...this.threads.values()].filter((thread) => !thread.archived).map((thread) => this.summary(thread)), workspaceRoots: this.runtime.projects.list().map((project) => project.path) };
       case "getNavigationQueryPage": return this.query(params);
       case "getNavigationLaunchpadConfig": {
         if (params.protocol !== 2) throw new Error("Unsupported navigation protocol");
-        if (params.directoryKey !== undefined && params.directoryKey !== this.runtime.workspace) throw new Error("Requested workspace is not owned by this outpost");
+        if (params.directoryKey !== undefined) this.runtime.projects.resolve(params.directoryKey);
         return { protocol: 2, revision: "headless-v1", ...(params.directoryKey ? { directoryKey: params.directoryKey } : {}),
           ...(params.knownRevision === "headless-v1" ? { unchanged: true } : { defaults: { backend: "codex", executionMode: "default", workMode: "local" } }) };
       }
@@ -136,9 +141,13 @@ export class HeadlessBackend {
       case "lookupArchivedThreads": return { threads: [] };
       case "getProjectPage": return { backend: "codex", fetchedAt: Date.now(),
         launchpadDefaults: { backend: "codex", executionMode: "default", workMode: "local" },
-        directories: (!params.projectKey || params.projectKey === this.runtime.workspace)
-          && (!params.afterKey || this.runtime.workspace > params.afterKey)
-          ? [{ key: this.runtime.workspace, kind: "directory", path: this.runtime.workspace, label: path.basename(this.runtime.workspace), threadKeys: [] }] : [] };
+        directories: this.runtime.projects.list().filter((project) => (!params.projectKey || params.projectKey === project.path)
+          && (!params.afterKey || project.path > params.afterKey)).map((project) => ({ key: project.path, kind: "directory", path: project.path, label: project.label, threadKeys: [] })) };
+      case "readTurnAssistantReply": {
+        const history = await this.readThread(params.threadId);
+        const messages = history.replay.messages.filter((message) => message.role === "assistant" && message.turn?.id === params.turnId);
+        return { message: messages.find((message) => params.itemId ? message.id === params.itemId : message.text === params.text) || null };
+      }
       case "readThread": return this.readThread(params.threadId);
       case "startThread": return this.startThread(params);
       case "materializeDirectoryLaunchpad": return this.materializeLaunchpad(params, envelope);
@@ -162,6 +171,11 @@ export class HeadlessBackend {
         }
         if (name === "controlActiveTurn" && params.operation !== "steer") throw new Error("Unsupported active-turn operation");
         const input = [{ type: "text", text: textInput(params.input), text_elements: [] }];
+        const incoming = this.authenticateOrigin?.(params.messageOrigin, envelope);
+        if (incoming) {
+          const original = job.messageOrigin;
+          this.runtime.save({ ...job, messageOrigin: { ...incoming, ...mergeCausalMessagingContext([original, incoming]) } });
+        }
         const result = await this.runtime.codex.request("turn/steer", { threadId: params.threadId, expectedTurnId: params.expectedTurnId || job.turnId, input });
         return { backend: "codex", threadId: params.threadId, turnId: result.turnId || job.turnId, disposition: "steered",
           ...(name === "controlActiveTurn" ? { ok: true, requestId: params.requestId } : {}) };
@@ -213,10 +227,10 @@ export class HeadlessBackend {
   invalidate(threadId) { this.publish({ backend: "codex", notification: { method: "navigation/invalidated", params: { threadId } } }, "navigation"); }
 
   async materializeLaunchpad(params, envelope) {
-    if (params.directoryKey !== this.runtime.workspace) throw new Error("Requested workspace is not owned by this outpost");
+    const cwd = this.runtime.projects.resolve(params.directoryKey);
     const draft = params.launchpad || {};
     if (draft.backend && draft.backend !== "codex") throw new Error("This outpost serves Codex only");
-    if (draft.directoryPath && draft.directoryPath !== this.runtime.workspace) throw new Error("Requested workspace is not owned by this outpost");
+    if (draft.directoryPath && draft.directoryPath !== cwd) throw new Error("Requested workspace is not owned by this outpost");
     if (params.parentThreadId || params.agent || params.reviewTarget || params.scheduledFor || params.collaborationMode
       || (params.codexEnvironmentSelector && params.codexEnvironmentSelector !== "none") || draft.codexEnvironmentId
       || draft.branchName || draft.acpRuntime || draft.fastMode || draft.tokenMiserEnabled || draft.mcpConnectionIds?.length) {
@@ -224,7 +238,7 @@ export class HeadlessBackend {
     }
     const input = params.input?.length ? params.input : draft.prompt ? [{ type: "text", text: draft.prompt }] : undefined;
     if (input) textInput(input);
-    const created = { ...await this.startThread(draft), workMode: "local" };
+    const created = { ...await this.startThread({ ...draft, cwd }), workMode: "local" };
     if (!input) return created;
     try {
       const turn = await this.startTurn({ ...draft, threadId: created.threadId, input }, envelope);
@@ -235,19 +249,20 @@ export class HeadlessBackend {
   }
 
   async startThread(params) {
-    if (this.runtime.active || this.creating) throw new Error("Outpost is busy");
+    if (this.runtime.active || this.runtime.intakeBusy || this.creating) throw new Error("Outpost is busy");
     if (params.workMode && params.workMode !== "local") throw new Error("Outpost threads use the configured workspace; worktree creation is unavailable");
     if (this.threads.size >= 10000) throw new Error("Thread retention limit reached");
     const sandbox = sandboxFor(params);
     for (const key of ["model", "reasoningEffort", "serviceTier"]) {
       if (params[key] !== undefined && (typeof params[key] !== "string" || !params[key] || params[key].length > 200)) throw new Error(`Invalid ${key}`);
     }
+    const cwd = this.runtime.projects.resolve(params.cwd || params.directoryPath || params.projectKey);
     this.creating = true;
     try {
-      const result = await this.runtime.codex.request("thread/start", { cwd: this.runtime.workspace, approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
+      const result = await this.runtime.codex.request("thread/start", { cwd, dynamicTools: this.runtime.messagingTools.buildDynamicToolSpecs(), approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
       if (!result?.thread?.id || typeof result.thread.id !== "string" || result.thread.id.length > 256) throw new Error("Invalid thread/start response");
       this.runtime.loadedThreads.add(result.thread.id);
-      const thread = { id: result.thread.id, title: "New outpost thread", titleSource: "fallback", createdAt: Date.now(), sandbox,
+      const thread = { id: result.thread.id, title: "New outpost thread", titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
         model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier };
       this.threads.set(thread.id, thread);
       this.persist();
@@ -259,11 +274,12 @@ export class HeadlessBackend {
   async startTurn(params, envelope) {
     if (params.collaborationMode || params.fastMode || params.acpRuntime) throw new Error("Collaboration modes, fast mode and ACP settings are unavailable on this outpost");
     const thread = this.owned(params.threadId);
+    if (params.cwd && params.cwd !== (thread.cwd || this.runtime.workspace)) throw new Error("Turn cwd differs from its owner thread project");
     const sandbox = sandboxFor(params, thread.sandbox);
     const prompt = textInput(params.input);
     if (params.queueEntryId !== undefined && (typeof params.queueEntryId !== "string" || !params.queueEntryId || params.queueEntryId.length > 256)) throw new Error("Invalid submission identity");
     const job = this.runtime.submit({ id: `fed-${digest([envelope.sourceInstanceId, params.queueEntryId || envelope.id])}`, prompt,
-      threadId: thread.id, sandbox, model: params.model || thread.model,
+      threadId: thread.id, cwd: thread.cwd || this.runtime.workspace, messageOrigin: this.authenticateOrigin?.(params.messageOrigin, envelope), sandbox, model: params.model || thread.model,
       reasoningEffort: params.reasoningEffort || thread.reasoningEffort, serviceTier: params.serviceTier || thread.serviceTier });
     await this.runtime.work;
     const started = this.runtime.store.get(job.id);
@@ -291,6 +307,7 @@ export class HeadlessBackend {
     const entries = [];
     for (const turn of result.thread?.turns || []) {
       const status = turn.status === "inProgress" ? "in_progress" : turn.status;
+      const job = [...this.runtime.store.jobs.values()].find((job) => job.threadId === id && job.turnId === turn.id);
       const metadata = { id: turn.id,
         ...(["in_progress", "completed", "failed", "cancelled", "interrupted"].includes(status) ? { status } : {}) };
       for (const [index, item] of (turn.items || []).entries()) {
@@ -298,7 +315,7 @@ export class HeadlessBackend {
         if (item.type === "agentMessage" || item.type === "userMessage") {
           entries.push({ type: "message", id: itemId, role: item.type === "agentMessage" ? "assistant" : "user",
             text: item.text || (item.content || []).filter((part) => part.type === "text").map((part) => part.text).join("\n"),
-            turn: metadata });
+            turn: metadata, ...(item.type === "userMessage" && job?.messageOrigin ? { origin: job.messageOrigin } : {}) });
         } else {
           const details = item.type === "commandExecution" ? [{ id: itemId, kind: "command", label: item.command,
             command: { displayCommand: item.command, cwd: item.cwd, output: item.aggregatedOutput || "", exitCode: item.exitCode, durationMs: item.durationMs } }]
@@ -356,22 +373,27 @@ export class HeadlessBackend {
 
   query(request) {
     if (request.protocol !== 2 || !request.query || request.inventory === "viewer") throw new Error("Expected owner navigation protocol 2");
-    let rows = [...this.threads.values()].map((thread) => this.summary(thread));
+    let rows = [...this.threads.values()].filter((thread) => !thread.archived).map((thread) => this.summary(thread));
     const counts = { total: rows.length, active: rows.filter((row) => row.threadStatus === "active").length,
       unread: rows.filter((row) => row.inbox.inInbox).length, review: rows.filter((row) => row.inbox.inInbox && row.threadStatus !== "active").length, pinned: 0 };
-    const directory = { key: this.runtime.workspace, kind: "directory", label: path.basename(this.runtime.workspace), path: this.runtime.workspace,
-      counts, pinnedRootCount: 0, unpinnedRootCount: rows.length, launchpadPresent: true, launchpadBackend: "codex" };
+    const directories = this.runtime.projects.list().map((project) => {
+      const members = rows.filter((row) => row.projectKey === project.path);
+      return { key: project.path, kind: "directory", label: project.label, path: project.path,
+        counts: { total: members.length, active: members.filter((row) => row.threadStatus === "active").length,
+          unread: members.filter((row) => row.inbox.inInbox).length, review: members.filter((row) => row.inbox.inInbox && row.threadStatus !== "active").length, pinned: 0 },
+        pinnedRootCount: 0, unpinnedRootCount: members.length, launchpadPresent: true, launchpadBackend: "codex" };
+    });
     const query = request.query;
     const attention = query.kind === "lens" && query.lens === "attention" ? this.attentionOrder(rows, request.attentionView) : undefined;
     if (!["exact", "children", "group-members", "directory", "lens", "search", "directory-index", "messaging-projects", "messaging-threads", "model-inventory", "star-map", "star-map-geometry"].includes(query.kind)) throw new Error("Unsupported navigation query");
     if (request.backend && !["codex", "all"].includes(request.backend)) rows = [];
     if (query.kind === "exact") rows = rows.filter((row) => query.identities?.some((ref) => ref.backend === "codex" && ref.threadId === row.id));
     else if (["children", "group-members"].includes(query.kind) || query.roots === "pinned") rows = [];
-    else if (query.kind === "directory" && query.directoryKey !== this.runtime.workspace) rows = [];
+    else if (query.kind === "directory") rows = rows.filter((row) => row.projectKey === query.directoryKey);
     else if (query.kind === "lens" && query.lens === "attention") rows = rows.filter((row) => row.threadStatus === "active" || row.inbox.inInbox);
     if (query.agentOnly || (query.allowedBackends && !query.allowedBackends.includes("codex"))) rows = [];
-    if (query.projectKey && query.projectKey !== this.runtime.workspace) rows = [];
-    if (query.directoryKey && query.directoryKey !== this.runtime.workspace) rows = [];
+    if (query.projectKey) rows = rows.filter((row) => row.projectKey === query.projectKey);
+    if (query.directoryKey) rows = rows.filter((row) => row.projectKey === query.directoryKey);
     if (query.kind === "star-map") {
       for (const [key, selection] of Object.entries(query.filters || {})) {
         if (selection === "neutral") continue;
@@ -409,11 +431,11 @@ export class HeadlessBackend {
         ...(attention ? { attentionRank: attention.get(row.id).rank } : {}), placement: { kind: "root" } })),
       ...(!complete ? { nextCursor: Buffer.from(JSON.stringify({ queryKey, generation, countsRevision, epoch: this.epoch, offset: offset + page.length })).toString("base64url") } : {}) };
     if (["directory-index", "messaging-projects", "star-map-geometry"].includes(query.kind)) {
-      const matches = (!query.keys || query.keys.includes(directory.key)) && (!query.paths || query.paths.includes(directory.path))
+      result.directories = directories.filter((directory) => (!query.keys || query.keys.includes(directory.key)) && (!query.paths || query.paths.includes(directory.path))
         && (!query.directoryKey || query.directoryKey === directory.key)
         && (!query.allowedBackends || query.allowedBackends.includes("codex")) && !query.agentOnly
-        && (!filter || `${directory.label} ${directory.path}`.toLowerCase().includes(filter.toLowerCase()));
-      result.directories = matches ? [directory] : []; result.collectionSize = result.directories.length;
+        && (!filter || `${directory.label} ${directory.path}`.toLowerCase().includes(filter.toLowerCase())));
+      result.collectionSize = result.directories.length;
       result.entries = []; result.complete = true; delete result.nextCursor;
     }
     if (query.kind === "model-inventory") {
@@ -422,7 +444,7 @@ export class HeadlessBackend {
       result.modelGroups = [...groups.values()]; result.collectionSize = groups.size;
       result.entries = []; result.complete = true; delete result.nextCursor;
     }
-    if (query.kind === "directory" && query.directoryKey === directory.key) result.selectionDirectory = directory;
+    if (query.kind === "directory") result.selectionDirectory = directories.find((directory) => query.directoryKey === directory.key);
     if (Buffer.byteLength(JSON.stringify(result)) > 256 * 1024) throw new Error("Navigation page exceeds its byte budget; request fewer rows");
     return result;
   }

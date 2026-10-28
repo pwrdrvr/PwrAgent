@@ -9,8 +9,8 @@ const cli = process.env.PWRAGENT_TEST_CLI || fileURLToPath(new URL("../bin/pwrag
 const fixture = fileURLToPath(new URL("./fixtures/codex.js", import.meta.url));
 const timeout = 10000;
 
-export async function eventually(check) {
-  const end = Date.now() + timeout;
+export async function eventually(check, waitMs = timeout) {
+  const end = Date.now() + waitMs;
   while (Date.now() < end) {
     const value = await check();
     if (value) return value;
