@@ -14,8 +14,7 @@ test("rendering capture distinguishes static pixels from a compositor animation"
     // polling or rAF loop can explain its compositor frames.
     const windowCreated = app.electronApp.waitForEvent("window");
     const probePid = await app.electronApp.evaluate(async ({ BrowserWindow }) => {
-      const preload = BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences().preload;
-      const window = new BrowserWindow({ width: 640, height: 480, webPreferences: { preload, contextIsolation: true, sandbox: true } });
+      const window = new BrowserWindow({ width: 640, height: 480, webPreferences: { contextIsolation: true, sandbox: true } });
       await window.loadURL("data:text/html," + encodeURIComponent(`<!doctype html>
         <style>@keyframes pending-spinner-spin { to { transform: rotate(360deg); } }
         .pending-spinner { width:80px;height:80px;border:8px solid gray;border-top-color:orange;
@@ -25,7 +24,7 @@ test("rendering capture distinguishes static pixels from a compositor animation"
     });
     const page = await windowCreated;
     await page.waitForLoadState("domcontentloaded");
-    const capture = () => page.evaluate(async () => {
+    const capture = () => app.window.evaluate(async () => {
       const api = (window as unknown as { pwragent: {
         captureRenderingDiagnostics: (seconds: number) => Promise<RenderingCaptureResult>;
       } }).pwragent;
