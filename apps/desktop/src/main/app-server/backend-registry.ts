@@ -26876,19 +26876,17 @@ export class DesktopBackendRegistry {
         ...fallbackLaunchpadIdentity(request.directoryKey),
       })).launchpad;
 
-    // A draft never names a provider this instance cannot start. A viewer
-    // opening a sub-thread here asks for the parent's provider, which this
-    // machine may not have signed in. Fall back the way ensure does, and
-    // resolve that provider's model settings below.
-    const requestedBackend = request.patch.backend;
-    const resolvedBackend = requestedBackend
-      ? await this.resolveLaunchpadBackend(requestedBackend)
+    // A draft does not name a provider this instance reports it cannot start
+    // while another one can. A viewer opening a sub-thread here asks for the
+    // parent's provider, which this machine may not have signed in. Fall back
+    // the way ensure does, and resolve that provider's model settings below.
+    const fallbackBackend = request.patch.backend
+      ? await this.resolveUnstartableLaunchpadBackendFallback(request.patch.backend)
       : undefined;
-    const backendFellBack =
-      resolvedBackend !== undefined && resolvedBackend.kind !== requestedBackend;
+    const backendFellBack = fallbackBackend !== undefined;
     const patch = {
       ...request.patch,
-      ...(backendFellBack ? { backend: resolvedBackend.kind } : {}),
+      ...(fallbackBackend ? { backend: fallbackBackend.kind } : {}),
       ...("fastMode" in request.patch && !("serviceTier" in request.patch)
         ? { serviceTier: undefined } : {}),
       // An edit to the selection makes it the operator's. Re-seeding after
@@ -29028,6 +29026,31 @@ export class DesktopBackendRegistry {
     // A missing runtime fails the start on its own, and a provider without
     // Auto keeps rejecting it.
     return auto && !auto.available && defaultAvailable ? "default" : "auto";
+  }
+
+  /**
+   * The provider a launchpad patch should use instead of `requested`, or
+   * undefined to keep `requested`.
+   *
+   * Only a provider this instance lists as unable to start a thread is
+   * replaced, and only by one that can. An unlisted provider, or a moment
+   * when nothing can start (discovery still running), keeps the operator's
+   * pick.
+   */
+  private async resolveUnstartableLaunchpadBackendFallback(
+    requested: AppServerBackendKind,
+  ): Promise<BackendSummary | undefined> {
+    const { backends } = await this.listBackends({ includeUnavailable: true });
+    const startable = (backend: BackendSummary) =>
+      backend.available && backend.capabilities.createThread;
+    const listed = backends.find((backend) => backend.kind === requested);
+    if (!listed || startable(listed)) {
+      return undefined;
+    }
+    return (
+      backends.find((backend) => backend.kind === "codex" && startable(backend))
+      ?? backends.find(startable)
+    );
   }
 
   private async resolveLaunchpadBackend(
