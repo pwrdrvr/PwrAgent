@@ -269,7 +269,6 @@ function pageBase(params: {
 }
 
 export class NavigationQueryStore {
-  private attentionEventVersion = 0;
   private readonly ownerEpoch = randomUUID();
   private readonly attentionLifetimes = new Map<string, { closedAt?: number }>();
   private readonly generations = new Map<string, NavigationQueryGeneration>();
@@ -341,17 +340,11 @@ export class NavigationQueryStore {
       generation = retained;
       offset = cursor.offset;
     } else {
-      let eventVersion = this.attentionEventVersion;
-      let index = await params.loadIndex();
-      if (eventVersion !== this.attentionEventVersion) {
-        listingDiagnostics.record("owner-page", "retry", { reason: "owner-invalidated" });
-        eventVersion = this.attentionEventVersion;
-        index = await params.loadIndex();
-        if (eventVersion !== this.attentionEventVersion) throw new NavigationQueryError("navigation_busy", "Navigation changed during its owner read. Refresh the retained range.");
-      }
+      const orderBeforeRead = attentionKey ? this.attentionViews.get(attentionKey)?.order : undefined;
+      const index = await params.loadIndex();
       if (lifetime?.closedAt !== undefined) throw new NavigationQueryError("navigation_invalid_request", "This Attention view closed during its owner read.");
       anchorIndex = index;
-      const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index);
+      const attentionOrder = this.reconcileAttentionView(params.scopeKey, params.request, index, orderBeforeRead);
       const materialization = projectNavigationQuery({
         index,
         request: params.request,
@@ -458,10 +451,18 @@ export class NavigationQueryStore {
     this.attentionViews.delete(JSON.stringify([scopeKey, viewId]));
   }
 
+  /**
+   * An owner boundary can land while the index loads. The index is still
+   * served and reconciled, never reread: it applies on top of the order that
+   * already holds the boundary. A turn boundary's member awaits a baseline
+   * that agrees with it, and a member the boundary removed (archive, seen)
+   * stays removed rather than being admitted again from the older listing.
+   */
   private reconcileAttentionView(
     scopeKey: string,
     request: NavigationQueryRequest,
     index: NavigationQueryIndex,
+    orderBeforeRead: NavigationAttentionOrder | undefined,
   ): NavigationAttentionOrder | undefined {
     if (!request.attentionView) return undefined;
     const { id, promoteOnTurnEnd } = request.attentionView;
@@ -477,6 +478,12 @@ export class NavigationQueryStore {
       complete: !index.coverage || index.coverage.state === "complete",
       promoteOnTurnEnd,
     });
+    if (previous && previous.order !== orderBeforeRead) {
+      listingDiagnostics.record("owner-page", "overtaken", { reason: "owner-invalidated" });
+      for (const member of orderBeforeRead?.members.keys() ?? []) {
+        if (!previous.order.members.has(member)) order.members.delete(member);
+      }
+    }
     const remoteMembers = index.coverage && index.coverage.state !== "complete" ? new Set(previous?.remoteMembers) : new Set<string>();
     for (const thread of index.threads) if (thread.federation?.ref.target.scope === "remote") remoteMembers.add(navigationAttentionIdentity(thread));
     const bytes = navigationAttentionOrderBytes(order) + serializedBytes([...remoteMembers]);
@@ -506,7 +513,6 @@ export class NavigationQueryStore {
     const owner = event.federationTarget?.scope === "remote" ? event.federationTarget.instanceId : null;
     const key = JSON.stringify([owner, event.backend, params.threadId]);
     if (owner && ![...this.attentionViews.values()].some((view) => view.remoteMembers.has(key))) return;
-    this.attentionEventVersion += 1;
     let retainedBytes = [...this.attentionViews.values()].reduce((sum, view) => sum + view.bytes, 0);
     for (const view of this.attentionViews.values()) {
       if (view.failed || (view.backend && view.backend !== "all" && view.backend !== event.backend)

@@ -25,6 +25,8 @@ type Load<T extends Result> = (options: { signal: AbortSignal; deadlineAt: numbe
 type Read = {
   controller: AbortController;
   promise: Promise<Result>;
+  /** The invalidation sequence its load began under; unset while it waits for admission. */
+  loadedAt?: number;
 };
 
 type Query = {
@@ -35,8 +37,15 @@ type Query = {
   invalidationSequence: number;
   consumers: Set<string>;
   pages: Map<string, { page: Result; bytes: number }>;
+  /** The read each operation's new readers join. */
   reads: Map<string, Read>;
+  /** Reads an invalidation overtook. They finish only for the readers they already have. */
+  overtaken: Set<Read>;
 };
+
+function readsOf(query: Query): Read[] {
+  return [...query.reads.values(), ...query.overtaken];
+}
 
 function ownerKey(target?: FederationTarget): string {
   return JSON.stringify(target?.scope === "remote" ? ["remote", target.instanceId] : ["local"]);
@@ -127,7 +136,7 @@ export class NavigationQueryPool {
     for (const [otherKey, other] of this.queries) {
       if (otherKey === key || !other.consumers.delete(params.consumerId)) continue;
       if (other.consumers.size === 0) {
-        for (const read of other.reads.values()) {
+        for (const read of readsOf(other)) {
           if (other.kind === "query" && !read.controller.signal.aborted) listingDiagnostics.link("owner-page", "cancel", read.promise);
           read.controller.abort(navigationReadCancelled());
         }
@@ -145,7 +154,7 @@ export class NavigationQueryPool {
           // Preserve consumer leases separately so eviction cannot bypass the
           // consumer budget or cancel physical work still in progress.
           for (const [idleKey, idle] of this.queries) {
-            if ((idle.kind === "query") !== isQuery || idle.active || idle.reads.size) continue;
+            if ((idle.kind === "query") !== isQuery || idle.active || idle.reads.size || idle.overtaken.size) continue;
             for (const page of idle.pages.values()) this.retainedBytes -= page.bytes;
             this.queries.delete(idleKey);
             occupied -= 1;
@@ -154,7 +163,7 @@ export class NavigationQueryPool {
         }
         if (occupied < (isQuery ? MAX_QUERIES : MAX_EXACT_RESOURCES)) {
           query = { kind: params.kind, ownerKey: params.ownerKey, threadKey: params.threadKey,
-            active: false, invalidationSequence: 0, consumers: new Set(), pages: new Map(), reads: new Map() };
+            active: false, invalidationSequence: 0, consumers: new Set(), pages: new Map(), reads: new Map(), overtaken: new Set() };
           this.queries.set(key, query);
           break;
         }
@@ -167,7 +176,15 @@ export class NavigationQueryPool {
     }
     query.consumers.add(params.consumerId);
     const operationKey = params.operationKey;
-    const pending = query.reads.get(operationKey);
+    let pending = query.reads.get(operationKey);
+    // A read whose load began before an invalidation still finishes for the
+    // readers it has. Later readers share one follow-up that starts after it,
+    // so an operation has at most one read loading and one waiting.
+    if (pending?.loadedAt !== undefined && pending.loadedAt !== query.invalidationSequence) {
+      query.reads.delete(operationKey);
+      query.overtaken.add(pending);
+      pending = undefined;
+    }
     // Keys are constructed by the typed public entry points and partition result kinds.
     if (pending && !pending.controller.signal.aborted) {
       if (params.kind === "query") listingDiagnostics.link("navigation", "coalesced", pending.promise);
@@ -178,11 +195,11 @@ export class NavigationQueryPool {
       void pending.promise.then(release, release);
       return this.waitForRead(pending.promise, deadlineAt) as Promise<T>;
     }
-    const controller = new AbortController();
+    const read: Read = { controller: new AbortController(), promise: undefined as unknown as Promise<Result> };
     const retainedQuery = query;
     this.pendingReads += 1;
     const fetch = () => this.fetch({
-      controller,
+      read,
       deadlineAt,
       load: params.load,
       operationKey,
@@ -191,12 +208,14 @@ export class NavigationQueryPool {
     const execution = params.kind === "query" ? listingDiagnostics.trace("owner-page", {}, fetch) : fetch();
     const promise = execution.finally(() => {
       this.pendingReads -= 1;
-      if (retainedQuery.reads.get(operationKey)?.promise === promise) retainedQuery.reads.delete(operationKey);
+      if (retainedQuery.reads.get(operationKey) === read) retainedQuery.reads.delete(operationKey);
+      retainedQuery.overtaken.delete(read);
       this.evictUnused();
       this.wake();
     });
+    read.promise = promise;
     if (params.kind === "query") listingDiagnostics.remember(promise, execution);
-    query.reads.set(operationKey, { controller, promise });
+    query.reads.set(operationKey, read);
     return promise;
   }
 
@@ -205,8 +224,8 @@ export class NavigationQueryPool {
     const owner = ownerKey(target);
     for (const query of this.queries.values()) {
       if (query.kind !== "query" || query.ownerKey !== owner) continue;
-      // A post-event refresh may join an older physical read. Replace its
-      // result under the original deadline before satisfying either reader.
+      // A read already loading finishes for its own readers but stops
+      // admitting new ones; a post-event refresh gets a read built after it.
       query.invalidationSequence += 1;
       for (const page of query.pages.values()) this.retainedBytes -= page.bytes;
       query.pages.clear();
@@ -221,9 +240,9 @@ export class NavigationQueryPool {
       if (query.kind === "query" || query.ownerKey !== owner || (kind && query.kind !== kind)) continue;
       if (thread && query.threadKey !== thread) continue;
       // Canonical changes invalidate the result, not the consumer's demand.
-      // Finish the physical read and replace it under its existing deadline;
-      // otherwise ordinary owner events reject all mounted configuration/FIFO
-      // readers as though the operator had cancelled them.
+      // A loading read still finishes for its readers rather than rejecting
+      // mounted configuration/FIFO readers as though the operator had
+      // cancelled them; readers admitted after the change get a new read.
       query.invalidationSequence += 1;
       for (const page of query.pages.values()) this.retainedBytes -= page.bytes;
       query.pages.clear();
@@ -237,7 +256,7 @@ export class NavigationQueryPool {
     for (const query of this.queries.values()) {
       query.consumers.delete(consumerId);
       if (query.consumers.size === 0) {
-        for (const read of query.reads.values()) {
+        for (const read of readsOf(query)) {
           if (query.kind === "query" && !read.controller.signal.aborted) listingDiagnostics.link("owner-page", "cancel", read.promise);
           read.controller.abort(navigationReadCancelled());
         }
@@ -253,13 +272,13 @@ export class NavigationQueryPool {
   }
 
   private async fetch<T extends Result>(params: {
-    controller: AbortController;
+    read: Read;
     deadlineAt: number;
     load: Load<T>;
     operationKey: string;
     query: Query;
   }): Promise<T> {
-    const { signal } = params.controller;
+    const { signal } = params.read.controller;
     // A query has one owner read, including requests for different pages.
     while (this.activeReads >= MAX_ACTIVE_READS || params.query.active) {
       await this.waitForCapacity(params.deadlineAt, signal);
@@ -269,25 +288,23 @@ export class NavigationQueryPool {
     params.query.active = true;
     const timer = setTimeout(() => {
       if (params.query.kind === "query") listingDiagnostics.record("owner-page", "cancel");
-      params.controller.abort(navigationReadCancelled());
+      params.read.controller.abort(navigationReadCancelled());
     },
       Math.max(0, params.deadlineAt - Date.now()));
     const completion = (async () => {
-      let page: T;
-      for (;;) {
-        const sequence = params.query.invalidationSequence;
-        const load = () => params.load({ signal, deadlineAt: params.deadlineAt });
-        page = await (params.query.kind === "query" ? listingDiagnostics.trace("owner-read", {}, load) : load());
-        signal.throwIfAborted();
-        if (Date.now() >= params.deadlineAt) {
-          throw new NavigationQueryError("navigation_busy", "Navigation read deadline expired.");
-        }
-        if (sequence === params.query.invalidationSequence) break;
-        if (params.query.kind === "query") listingDiagnostics.record("owner-page", "retry", { reason: "owner-invalidated" });
-      }
+      params.read.loadedAt = params.query.invalidationSequence;
+      const load = () => params.load({ signal, deadlineAt: params.deadlineAt });
+      const page = await (params.query.kind === "query" ? listingDiagnostics.trace("owner-read", {}, load) : load());
+      signal.throwIfAborted();
       const bytes = Buffer.byteLength(JSON.stringify(page), "utf8");
       if (bytes > NAVIGATION_QUERY_MAX_RESULT_BYTES) {
         throw new NavigationQueryError("navigation_item_too_large", "Navigation page exceeds its result budget.");
+      }
+      if (params.read.loadedAt !== params.query.invalidationSequence) {
+        // Its readers asked before the change and get this page. It is not
+        // the query's current result; the follow-up's page replaces it.
+        if (params.query.kind === "query") listingDiagnostics.record("owner-page", "overtaken", { reason: "owner-invalidated" });
+        return page;
       }
       if ("unchanged" in page && page.unchanged) return page;
       // Exact consumers retain their own complete revision. The process pool
@@ -336,7 +353,7 @@ export class NavigationQueryPool {
 
   private evictUnused(except?: Query): void {
     for (const [key, query] of this.queries) {
-      if (query === except || query.consumers.size > 0 || query.reads.size > 0 || query.active) continue;
+      if (query === except || query.consumers.size > 0 || query.reads.size > 0 || query.overtaken.size > 0 || query.active) continue;
       for (const page of query.pages.values()) this.retainedBytes -= page.bytes;
       this.queries.delete(key);
     }
