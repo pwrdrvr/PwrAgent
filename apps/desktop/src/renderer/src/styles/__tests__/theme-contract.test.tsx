@@ -3084,6 +3084,113 @@ describe("color theme contract", () => {
     }
   });
 
+  it("lifts a highlighted option's supporting text off --text-muted in every theme", () => {
+    // Select, the composer's dropdowns, the send menu, and the messaging
+    // surface picker each set a muted second line under an option's name, on
+    // a raised panel whose highlighted row lays the 12% accent tint. Muted
+    // text on that tint is 4.37:1 in Tangerine, so the highlighted row lifts
+    // it to `--text-secondary`, as the picker paths above do. The inks are
+    // read from each menu's own rules and measured on the surface each one
+    // meets: the base ink on the panel, the lifted ink on the tinted row.
+    const rules = collectAppCssRules();
+    const declared = (selector: string, property: "background" | "color"): string | undefined => {
+      const pattern = new RegExp(`(?:^|[;\\s])${property}:\\s*var\\(--([a-z0-9-]+)\\)`);
+      for (const rule of rules) {
+        if (!rule.selector.split(/,\s*/).includes(selector)) continue;
+        const token = rule.body.match(pattern)?.[1];
+        if (token) return token;
+      }
+      return undefined;
+    };
+    const menus = [
+      {
+        panel: ".select-listbox",
+        text: ".select-option__description",
+        rows: [{ tint: ".select-option.is-active" }],
+      },
+      {
+        panel: ".composer-dropdown__menu",
+        text: ".composer-dropdown__option-description",
+        rows: [
+          { tint: '.composer-dropdown__option:hover:not([aria-disabled="true"])' },
+          { tint: '.composer-dropdown__option:focus-visible:not([aria-disabled="true"])' },
+        ],
+      },
+      {
+        // A disabled item takes no tint, so its description keeps the
+        // base ink, measured on the panel.
+        panel: ".composer__schedule-menu",
+        text: ".composer__schedule-menu-item-description",
+        rows: [
+          {
+            tint: ".composer__schedule-menu-item:hover",
+            row: '.composer__schedule-menu-item:hover:not([aria-disabled="true"])',
+          },
+          {
+            tint: ".composer__schedule-menu-item:focus-visible",
+            row: '.composer__schedule-menu-item:focus-visible:not([aria-disabled="true"])',
+          },
+        ],
+      },
+      {
+        panel: ".messaging-surface-picker__panel",
+        text: ".messaging-surface-picker__context",
+        rows: [
+          {
+            tint: ".project-picker__row:hover:not(:disabled)",
+            row: ".messaging-surface-picker__list .project-picker__row:hover:not(:disabled)",
+          },
+          {
+            tint: ".project-picker__row:focus-visible:not(:disabled)",
+            row: ".messaging-surface-picker__list .project-picker__row:focus-visible:not(:disabled)",
+          },
+          { tint: ".messaging-surface-picker__list .project-picker__row.is-cursor" },
+        ],
+      },
+    ];
+    const reach = { panel: new Set<string>(), "active row": new Set<string>() };
+    for (const { panel, text, rows } of menus) {
+      expect(declared(panel, "background"), panel).toBe("bg-panel-elevated");
+      const rest = declared(text, "color");
+      expect(rest, text).toBe("text-muted");
+      reach.panel.add(rest ?? "");
+      for (const { tint, row = tint } of rows) {
+        expect(declared(tint, "background"), tint).toBe("accent-soft");
+        const lifted = declared(`${row} ${text}`, "color");
+        expect(lifted, `${row} ${text}`).toBe("text-secondary");
+        reach["active row"].add(lifted ?? "");
+      }
+    }
+
+    // Tangerine is held to plain AA, as its own blocks are.
+    const TANGERINE_TEXT_FLOOR = 4.5;
+    const root = extractRootTokens(css);
+    const appearances = {
+      "tangerine-dark": root,
+      "tangerine-light": {
+        ...root,
+        ...extractTokensForSelector(css, ':root[data-theme="light"]'),
+      },
+      ...themes,
+    };
+    for (const [name, theme] of Object.entries(appearances)) {
+      const floor = name.startsWith("tangerine-") ? TANGERINE_TEXT_FLOOR : TEXT_FLOOR;
+      const panel = paint(theme, theme["bg-panel-elevated"], "#000000");
+      const surfaces = {
+        panel,
+        "active row": paint(theme, theme["accent-soft"], panel),
+      };
+      const misses: string[] = [];
+      for (const [surface, background] of Object.entries(surfaces)) {
+        for (const token of reach[surface as keyof typeof reach]) {
+          const ratio = contrastRatio(paint(theme, theme[token], background), background);
+          if (ratio < floor) misses.push(`${token} on the ${surface}: ${ratio.toFixed(2)}`);
+        }
+      }
+      expect(misses, name).toEqual([]);
+    }
+  });
+
   it("keeps the text and accent ladders in emphasis order", () => {
     for (const [name, theme] of Object.entries(themes)) {
       const backgrounds = textBackgrounds(theme);
