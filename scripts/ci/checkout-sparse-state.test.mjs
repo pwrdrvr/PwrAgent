@@ -23,8 +23,17 @@ test.each([
   )];
   expect(restorations).toHaveLength((body.match(/uses: actions\/checkout@/g) ?? []).length);
   for (const restoration of restorations) {
-    const directory = mkdtempSync(path.join(os.tmpdir(), "checkout-sparse-state-"));
-    const git = (...args) => execFileSync("git", args, { cwd: directory, encoding: "utf8", stdio: "pipe" }).trim();
+    const temporary = mkdtempSync(path.join(os.tmpdir(), "checkout-sparse-state-"));
+    const directory = path.join(temporary, "repo");
+    mkdirSync(directory);
+    const globalConfig = path.join(temporary, "gitconfig");
+    writeFileSync(globalConfig, "[core]\n\tautocrlf = true\n\teol = crlf\n");
+    const git = (...args) => execFileSync("git", args, {
+      cwd: directory,
+      encoding: "utf8",
+      stdio: "pipe",
+      env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: globalConfig },
+    }).trim();
     try {
       git("init", "-q");
       git("config", "user.name", "Fixture");
@@ -62,7 +71,7 @@ test.each([
         expect(git("config", "--local", "core.sparseCheckout")).toBe("false");
       }
     } finally {
-      rmSync(directory, { recursive: true, force: true });
+      rmSync(temporary, { recursive: true, force: true });
     }
   }
 });
