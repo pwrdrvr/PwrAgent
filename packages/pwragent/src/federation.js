@@ -7,13 +7,15 @@ import {
   generateFederationIdentityKeyPair, generateFederationNoiseStaticKeyPair,
   noiseKeyPairFromRawPrivate, decodeFederationInvite, encodeFederationInvite,
   FEDERATION_PROTOCOL_VERSION, FEDERATION_INVITE_VERSION, FederationRpcEndpoint,
-  pushFederationFile, authenticateMessageOrigin, FederationPtyService, TerminalHistoryStore, FEDERATION_PTY_METHOD_CAPABILITIES, registerFederationPtyHandlers,
+  FederationReplacementReceiver, pushFederationFile, authenticateMessageOrigin, FederationPtyService, TerminalHistoryStore, FEDERATION_PTY_METHOD_CAPABILITIES, registerFederationPtyHandlers,
 } from "../dist/federation-core.js";
 import { setupHandoffs, HANDOFF_CAPABILITIES } from "./handoffs.js";
 import { atomicJson } from "./store.js";
 import { HeadlessBackend, METHOD_CAPABILITIES } from "./federation-backend.js";
 
 export const HEADLESS_CAPABILITIES = ["remote_window", "thread_navigation", "thread_detail", "turn_control", "event_subscriptions", "gateway_relay", "transport_brotli", "remote_pty", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions", "thread_handoff", "file_push"];
+
+const RECEIVER_PERMISSIONS = Object.freeze({ remoteShells: true, portForwarding: false, filePush: true, filePull: false, filePullOutsideThreadDirectories: false });
 
 const EVENT_CAPABILITIES = new Map([
   ["navigation", "thread_navigation"], ["star_map", "thread_navigation"],
@@ -39,6 +41,8 @@ export class HeadlessFederation {
     this.onFailure = onFailure;
     this.connections = new Map();
     this.endpoints = new Map();
+    this.remotePeers = new Map();
+    this.peerDirectory = new FederationReplacementReceiver();
     this.ptyRoutes = new Map();
     this.subscriptions = new Map();
     this.retryDelay = 1000;
@@ -89,9 +93,11 @@ export class HeadlessFederation {
       trustedRelayPeerId: () => this.state.gateway?.gatewayInstanceId, methodCapabilities: { ...METHOD_CAPABILITIES, ...FEDERATION_PTY_METHOD_CAPABILITIES, ...HANDOFF_CAPABILITIES,
         "outpost.projects.list": "thread_navigation", "outpost.projects.create": "environment_actions",
         "outpost.projects.add": "environment_actions", "outpost.projects.remove": "environment_actions" },
-      additionalRequiredCapabilities: (envelope) => envelope.params?.messageOrigin?.kind === "messaging"
-        || envelope.params?.messageOrigin?.causalMessagingSource ? ["messaging_route"]
-          : envelope.method.startsWith("thread.handoff.") ? ["turn_control", "environment_actions", "file_push"] : [] });
+      additionalRequiredCapabilities: (envelope) => {
+        const required = envelope.method.startsWith("thread.handoff.") ? ["turn_control", "environment_actions", "file_push"] : [];
+        if (envelope.params?.messageOrigin?.kind === "messaging" || envelope.params?.messageOrigin?.causalMessagingSource) required.push("messaging_route");
+        return required;
+      } });
     this.handoffs = setupHandoffs(this, path.dirname(this.file));
     registerFederationPtyHandlers({ router: this.router, service: this.pty });
     for (const [method, command] of [["list", "project-list"], ["create", "project-create"], ["add", "project-add"], ["remove", "project-remove"]]) {
@@ -205,7 +211,7 @@ export class HeadlessFederation {
       noiseStatic: noiseKeyPairFromRawPrivate(Buffer.from(this.state.noise.privateKeyBase64, "base64")),
       peerInstanceId: this.state.instanceId, ...this.state.identity, capabilities: HEADLESS_CAPABILITIES,
       inviteToken: mode === "enroll" ? gateway.token : undefined, label: this.state.label,
-      role: this.listener ? "dual" : "client", profileName: this.profile,
+      role: this.listener ? "dual" : "client", profileName: this.profile, receiverPermissions: RECEIVER_PERMISSIONS,
       notes: "Headless outpost: retained identity; tunnel loss does not stop work or imply deletion.", host: this.host(),
       deferReceiving: true, connectTimeoutMs: 5000,
       onEnvelope: (envelope) => this.receive(envelope, gateway.gatewayInstanceId),
@@ -266,6 +272,7 @@ export class HeadlessFederation {
     if (this.connections.get(id) !== connection) return;
     this.connections.delete(id);
     this.router.unregisterConnection(id);
+    if (id === this.state.gateway?.gatewayInstanceId) { this.remotePeers.clear(); this.peerDirectory.clear(); }
     this.pty.notifyPeerDisconnected(id);
     for (const [origin, via] of this.ptyRoutes) {
       if (via === id) { this.pty.notifyPeerDisconnected(origin); this.ptyRoutes.delete(origin); }
@@ -342,6 +349,26 @@ export class HeadlessFederation {
   }
 
   receive(envelope, peerId) {
+    if (envelope.kind === "notification" && envelope.method === "federation.peerDirectoryPage") {
+      // Only the pinned gateway can replace routing metadata. A sibling's
+      // relayed notification must never authorize a handoff destination.
+      if (peerId !== this.state.gateway?.gatewayInstanceId || envelope.sourceInstanceId !== peerId
+        || envelope.targetInstanceId !== this.state.instanceId || !this.router.getConnection(peerId)?.capabilities.includes("gateway_relay")
+        || !this.router.authenticatesOrigin(envelope, peerId)) return;
+      try {
+        const peers = this.peerDirectory.accept(envelope.params);
+        if (peers) {
+          const replacement = new Map();
+          for (const peer of peers) {
+            if (!peer || typeof peer.id !== "string" || !peer.id || !Array.isArray(peer.capabilities)
+              || peer.capabilities.some((capability) => typeof capability !== "string")) throw new Error("Invalid peer directory entry");
+            if (peer.id !== this.state.instanceId) replacement.set(peer.id, peer);
+          }
+          this.remotePeers = replacement;
+        }
+      } catch { this.remotePeers.clear(); this.peerDirectory.clear(); }
+      return;
+    }
     if (envelope.kind === "request" && envelope.targetInstanceId === this.state.instanceId && envelope.method.startsWith("pty.")
       && this.router.authenticatesOrigin(envelope, peerId) && this.router.getConnection(peerId)?.capabilities.includes("remote_pty")) {
       if (!this.ptyRoutes.has(envelope.sourceInstanceId)) this.pty.notifyPeerConnected(envelope.sourceInstanceId);
@@ -394,6 +421,8 @@ export class HeadlessFederation {
     this.retryTimer = null;
     const gatewayId = this.state?.gateway?.gatewayInstanceId;
     const client = this.client;
+    this.remotePeers.clear();
+    this.peerDirectory.clear();
     if (this.state) { delete this.state.gateway; this.save(); }
     if (client) this.unregister(gatewayId, client);
     this.client = null;

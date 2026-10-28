@@ -1,6 +1,7 @@
 import { probe } from "../../test-setup/phase-probes";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { constants, promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -93,6 +94,34 @@ describe("Federation push files", () => {
     receipts.clear();
     await expect(receipts.consume(peer, file, 10)).rejects.toThrow("authenticated source");
     await expect(new FederationFilePushReceipts().consume(peer, file, 10)).rejects.toThrow("authenticated source");
+  });
+
+  it.skipIf(process.platform === "win32")("rejects FIFOs, symlinks to FIFOs and directories before starting a transfer", async () => {
+    const fifo = path.join(root, "source.fifo");
+    execFileSync("mkfifo", [fifo]);
+    const link = path.join(root, "fifo-link");
+    await fs.symlink(fifo, link);
+    const request = vi.fn();
+    const rpc = { request } as Pick<FederationRpcEndpoint, "request">;
+    // No writer is opened: blocking O_RDONLY would strand the request here.
+    for (const source of [fifo, link, root]) {
+      let stalled = false;
+      let rescue: Promise<void> | undefined;
+      // Release a regressed blocking open so a failing test cannot strand a
+      // libuv worker. The watchdog is test cleanup, never a transfer retry.
+      const watchdog = setTimeout(() => {
+        stalled = true;
+        rescue = fs.open(fifo, constants.O_RDWR | constants.O_NONBLOCK).then((writer) => writer.close());
+      }, 1000);
+      try {
+        await expect(pushFederationFile(rpc, source)).rejects.toThrow("regular file");
+        expect(stalled, "source validation blocked waiting for a FIFO writer").toBe(false);
+      } finally {
+        clearTimeout(watchdog);
+        await rescue;
+      }
+    }
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("rejects disabled receivers before touching the destination", async () => {

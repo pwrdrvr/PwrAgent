@@ -254,7 +254,9 @@ export async function pushFederationFile(
   const bytes = typeof sourcePath === "string" ? undefined
     : Buffer.from(sourcePath.buffer, sourcePath.byteOffset, sourcePath.byteLength);
   if (typeof sourcePath === "string" && !path.isAbsolute(sourcePath)) throw new Error("The source file path must be absolute.");
-  const file = typeof sourcePath === "string" ? await fs.open(sourcePath, "r") : undefined;
+  // A FIFO must not block before descriptor validation; this also covers
+  // a regular path replaced by a pipe between selection and open.
+  const file = typeof sourcePath === "string" ? await fs.open(sourcePath, constants.O_RDONLY | constants.O_NONBLOCK) : undefined;
   let transferId: string | undefined;
   try {
     const stat = file ? await file.stat() : { size: bytes!.byteLength, mtimeMs: 0, isFile: () => true };

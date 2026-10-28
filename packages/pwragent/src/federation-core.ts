@@ -20,3 +20,5 @@ export { mergeCausalMessagingContext } from "@pwragent/shared";
 export { authenticateMessageOrigin } from "@pwragent/federation/federation-message-origin";
 
 export { resolveMessagingOutboundFile, validateMessagingFileMetadata } from "@pwragent/agent-tools/messaging-outbound-file";
+
+export * from "@pwragent/federation/federation-replacement-receiver";

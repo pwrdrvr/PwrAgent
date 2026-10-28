@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { connectFederationClient, decodeFederationInvite, FederationRpcEndpoint, generateFederationIdentityKeyPair,
   generateNoiseStaticKeyPair, FederationFilePushReceiver, FederationFilePushReceipts } from "../dist/federation-core.js";
-import { HEADLESS_CAPABILITIES } from "../src/federation.js";
+import { HEADLESS_CAPABILITIES, HeadlessFederation } from "../src/federation.js";
 import { OutpostGit } from "../src/projects.js";
 import { setup, eventually } from "./helpers.js";
 
@@ -212,6 +212,71 @@ test("repository intake preflights before file transfer or source archive, then 
   assert.ok(row.thread.projectKey.startsWith(destProject.path + path.sep));
   await destinationViewer.call("backend.startTurn", { threadId: result.threadId, input: [{ type: "text", text: "intake continued" }] });
   assert.equal(destination.calls().filter((call) => call.method === "turn/start").at(-1).params.cwd, row.thread.projectKey);
+});
+
+test("handoffs validate trusted gateway destinations and transfer between sibling clients", { timeout: 30000 }, async (t) => {
+  const source = await setup(t);
+  const destination = await setup(t);
+  const gatewayDirectory = path.join(source.root, "fixture-gateway");
+  mkdirSync(gatewayDirectory, { mode: 0o700 });
+  // A real encrypted relay with a mocked desktop peer-directory publisher.
+  const gateway = new HeadlessFederation({ directory: gatewayDirectory, profile: "fixture",
+    runtime: { store: { directory: path.join(gatewayDirectory, "jobs"), jobs: new Map() }, projects: { git: {} } },
+    onFailure: (error) => { throw error; } });
+  t.after(() => gateway.stop());
+  const listenPort = await port();
+  await source.rpc("federation-join", { invite: (await gateway.invite({ port: listenPort })).invite });
+  await destination.rpc("federation-join", { invite: (await gateway.invite({ port: listenPort })).invite });
+  const sourceId = (await source.rpc("federation-status")).instanceId;
+  const destinationId = (await destination.rpc("federation-status")).instanceId;
+  const controller = await peer(source);
+  t.after(() => controller.connection.close());
+  const thread = await controller.call("backend.startThread", {});
+  await controller.call("backend.startTurn", { threadId: thread.threadId, input: [{ type: "text", text: "sibling handoff" }] });
+  await eventually(() => existsSync(path.join(source.workspace, "fixture-result.txt")));
+  await eventually(async () => (await source.rpc("status")).activeJob === null);
+  const request = { sourceThreadId: thread.threadId, targetInstanceId: destinationId, operation: "move" };
+  const send = () => controller.call("thread.handoff.send", request);
+  const target = { id: destinationId, status: "connected", capabilities: HEADLESS_CAPABILITIES, receiverPermissions: { filePush: true } };
+  const page = (entries, extra = {}) => ({ generation: randomUUID(), index: 0, total: 1, entries, ...extra });
+  const publish = async (params, origin = gateway.state.instanceId) => {
+    gateway.connections.get(sourceId).sendEnvelope({ kind: "notification", method: "federation.peerDirectoryPage",
+      id: randomUUID(), protocolVersion: 1, sourceInstanceId: origin, targetInstanceId: sourceId, createdAt: Date.now(),
+      ...(origin !== gateway.state.instanceId ? { hopCount: 1 } : {}), params });
+    // A request on this same socket is an ordering barrier for the notification.
+    await gateway.endpoint(sourceId).request({ method: "backend.listBackends", params: {} });
+  };
+  await assert.rejects(send(), /receiving peer must be connected/);
+  await publish(page([target]), destinationId);
+  await assert.rejects(send(), /receiving peer must be connected/);
+  await publish(page([target], { total: 2 }));
+  await assert.rejects(send(), /receiving peer must be connected/);
+  for (const change of [
+    { status: "disconnected" }, { status: "revoked" },
+    ...["thread_handoff", "turn_control", "environment_actions", "file_push"].map((missing) => ({ capabilities: HEADLESS_CAPABILITIES.filter((capability) => capability !== missing) })),
+    { receiverPermissions: { filePush: false } }, { receiverPermissions: undefined },
+  ]) {
+    await publish(page([{ ...target, ...change }]));
+    await assert.rejects(send(), /receiving peer must/);
+  }
+  await publish(page([]));
+  await assert.rejects(send(), /receiving peer must be connected/);
+  assert.equal(destination.calls().filter((call) => call.method === "thread/fork").length, 0);
+  assert.equal(source.calls().filter((call) => ["fs/readFile", "thread/archive"].includes(call.method)).length, 0);
+  await publish(page([target]));
+  const result = await send();
+  assert.equal(result.instanceId, destinationId);
+  assert.equal(result.sourceArchived, true);
+  assert.equal(destination.calls().filter((call) => call.method === "thread/fork").length, 1);
+  assert.equal(source.calls().filter((call) => call.method === "thread/archive").length, 1);
+  const reader = await peer(destination);
+  t.after(() => reader.connection.close());
+  assert.equal((await reader.call("backend.readThread", { threadId: result.threadId })).replay.lastAssistantMessage, "Fixture result");
+  // A lost gateway invalidates its cached directory before any further export.
+  await gateway.stop();
+  await eventually(async () => (await source.rpc("federation-status")).gateway.status === "unreachable");
+  await assert.rejects(send(), /receiving peer must be connected/);
+  assert.equal(destination.calls().filter((call) => call.method === "thread/fork").length, 1);
 });
 
 test("gateway loss reaps a relayed viewer's terminal while outpost execution continues", { timeout: 30000 }, async (t) => {
