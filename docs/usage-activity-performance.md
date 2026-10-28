@@ -95,3 +95,52 @@ python3 scripts/summarize-usage-activity-performance.py .local/usage-perf
 Raw contrived JSONL is retained under `.local/usage-tradeoff/results/` in the evaluation worktree and archived as `.local/usage-tradeoff/raw-results.tar.gz` (SHA-256 `be9434e39085cc21fe75cb0e37c2f1b585f352c10f5f27d535708f42fb0af57d`). The sandbox-only harness commits are preserved in `.local/usage-tradeoff/measurement-harness-commits.bundle`. The checked-in result file stores every case's phase medians/ranges, WAL, operation counts, and cache hits. The performance tests are opt-in and do not impose flaky timing thresholds on CI. No live profile was opened or mutated, and no operator records were used as fixtures.
 
 Code commit `b7be6f73d40aa2828c96aeff15fbf488dfc9a3e2` passed full verification in Sandboxer `sb_ptv1u843it`: `lint exit=0 secs=62`, including syntax/typed Oxlint, types and the other lint gates; `unit exit=0 secs=138`, with 21,616 passed and 83 skipped across two shards. Candidate-only pricing/account compatibility checks passed 76 tests. All benchmark invocations exited 0. Budget calibration ran with `UPDATE_SQLITE_WRITE_BUDGETS=1`; only the relevant measured scenario changes were retained, and the final committed budgets passed without update mode. Verification is Linux-only; no headed macOS/Windows run was made. The prior 21,611-test pass belongs to verified head 860a894c; the later static review added no dynamic evidence.
+
+## Cadence follow up
+
+The cadence to-do is complete in this thread. The default recommendation remains to split the persistent interval index. Real application code has a one-second **maximum buffering delay**, not a global one-commit-per-second limit. Pending lines are keyed by usage-line identity and written together in one transaction. Terminal events, hydration, Token Miser reconciliation, and shutdown can drain the buffer early. Empty buffers produce no usage writes. No persistence delay, durability boundary, or accounting semantics were changed by this follow-up.
+
+`usage-activity-cadence.test.ts` replays contrived `AgentEvent` notifications through the real `DesktopBackendRegistry.emit` and a real file-backed `SqliteOverlayStore`. The transport is stubbed; these are application-pipeline measurements, not observations of operator/provider traffic or an Electron end-to-end benchmark. Arrival spacing is an explicit input. External providers' real notification frequency is not established by these fixtures. The default tests use small databases; the opt-in report repeats each scenario five times with 20,000 old ledger rows. A one-second drain follows each observation sequence, then terminal completion and 30 idle minutes are measured separately.
+
+| Observation sequence | Observations | Active commits | Later terminal commits | Idle commits |
+| --- | ---: | ---: | ---: | ---: |
+| One observation every five seconds for one minute | 12 | 12 | 1 | 0 |
+| Ten observations/second for one minute | 600 | 60 | 1 | 0 |
+| Same cumulative snapshot repeated at ten/second | 600 | 60 | 1 | 0 |
+| Ten concurrent turns, ten observations/second each | 6,000 | 60 | 10 | 0 |
+| Five hundred observations arriving together | 500 | 1 | 1 | 0 |
+| Twenty short turns, each ending after its observation, over one second | 20 | 20 | 0 | 0 |
+| Busy minute followed by one stale-focus read | 600 | 60 | 1 | 0 |
+
+Counts matched baseline, PR, and revision in all 105 successful report samples. A later terminal needs its own commit after a timer already flushed the pending line; a terminal arriving before that flush carries completion in the existing batch instead. Therefore elapsed seconds alone cannot bound total commits: arrival windows and explicit durability drains must both be counted. Concurrent lines amortize commits and changed pages. Identical cumulative snapshots still update live timing, so skipping them indiscriminately could change pending interval semantics.
+
+Active-phase WAL in the history fixture, decimal MB:
+
+| Sequence | Baseline | PR R-tree | Revision |
+| --- | ---: | ---: | ---: |
+| Twelve spaced observations | 0.655 | 0.725 | 0.655 |
+| Busy minute, one turn | 3.226 | 3.510 | 3.226 |
+| Busy minute, ten concurrent turns | 3.523 | 3.807 | 3.523 |
+| One large instantaneous burst | 0.066 | 0.091 | 0.066 |
+| Twenty terminal-driven batches | 1.504 | 1.982 | 1.504 |
+
+The steady existing-row measurement of 53,560 bytes per flush projects to approximately 193 MB per active hour at one flush/second, or 39 MB/hour at twelve flushes/minute. The earlier 4.63 GB/day figure is thus a configured busy-stream possibility under uninterrupted arrivals, not a universal daily rate. An idle half hour added zero bytes in every replay. Duty cycle and terminal/hydration drains must be specified for a daily projection. The follow-up preserves the existing persistence contract and adds no write-volume premium to these workloads.
+
+The replay records active-phase total CPU, ledger-flush CPU, explicit Activity-read CPU, and separate active/terminal/idle write counts. Active CPU includes event derivation, automatic pricing reads/publication, fake-timer dispatch, and metrics instrumentation. It excludes later completion/idle CPU; it must not be read as a whole-session or whole-app CPU result. For the busy minute with one focus read, baseline/PR/revision active CPU medians were 451.1/467.6/440.3 ms, with overlapping ranges. Flush medians were 74.2/94.0/69.5 ms, and the Activity read took 4.4/0.9/4.7 ms. This gives no convincing overall CPU win for installing the R-tree for that cadence. The terminal-driven active phase took 173.4/73.4/62.2 ms; the existing-index completion query preserves that benefit with baseline WAL. Raw per-phase medians and ranges are in [the cadence result data](usage-activity-cadence-results.json).
+
+The component replay also exercised an hour with the window mounted, fresh focus, focus at the exact 60-second stale boundary, manual refresh, and an hour after unmount. It observed one initial read, no timed polling, one read on stale focus, none on fresh focus, one on manual refresh, and none after unmount. Every requested ordinary refresh used the new `Date.now()` endpoint. This validates the caller cadence independently of the store's cache test; it does not imply a production user visits once per minute.
+
+Twenty-one checked-in write budgets cover all seven scenarios' active, terminal, and idle phases. They assert deterministic commit/statement/row counts and retain WAL observations with explicit MB/day assumptions. WAL bytes remain observations rather than flaky exact-byte assertions. The source comment now describes the delay/drain contract instead of claiming a global per-second ceiling. Optional interval indexing still needs a demonstrated read-heavy deployment workload; neither these caller paths nor the measured write premium supports enabling it by default.
+
+The successful reports ran serially on the same Sandboxer VM. Revision commit `7329897bcd6dc1713483ad8277eb84740348b56e` passed the 115 focused cadence/renderer/write-budget tests without update mode and the full lint/types job (`lint exit=0 secs=62`). Production behavior beyond the already verified split is unchanged; the follow-up changes tests, budgets, documentation, and the explanatory flush comment. The baseline report commit is `3ff410fe29d2daf525396db04ae9873ed900a8a3`, and the PR report commit is `c8366343a07745dbef099aef1d52298541833ffe`. Baseline received the PR's corrected development-only write-metrics implementation so read-only transaction accounting is comparable; its production usage writer was unchanged.
+
+Fixture checkpointing resets the metrics collector before measurement, so the new WAL header and first commit are counted. An early pre-reset calibration and a later reporting attempt interrupted by the default test timeout were discarded. The opt-in report now has a separate execution budget for five large-fixture repetitions; normal tests retain the repository's configured timeout. The retained files contain only complete successful runs, with five samples per variant/scenario.
+
+```sh
+PWRAGENT_USAGE_CADENCE_DIR="$PWD/.local/usage-cadence" \
+PWRAGENT_USAGE_CADENCE_VARIANT=revision \
+pnpm test apps/desktop/src/main/__tests__/usage-activity-cadence.test.ts
+python3 scripts/summarize-usage-activity-cadence.py .local/usage-cadence
+```
+
+Run verification through Sandboxer when connected. The harness can be cherry-picked onto the baseline and PR for comparison, with the shared metrics correction on baseline. Raw successful cadence JSONL is retained under `.local/usage-tradeoff/cadence-results/`. No live profile or operator records were used.
