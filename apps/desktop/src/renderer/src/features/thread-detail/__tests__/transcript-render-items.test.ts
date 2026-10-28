@@ -452,6 +452,26 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("keeps a Codex answer in view without commentary only when the backend tags just its answer final", () => {
+    // A short Codex turn: tools, then the answer alone, then the call Codex
+    // cancelled at turn end. With no commentary only the backend says which
+    // reply is the answer; ACP tags every reply final, so it still folds.
+    const turn = completedTurn("turn-1", 70_000);
+    const firstTool = tool("tool-1", turn);
+    const answer = final("f1", "Fix pushed. PR creation is still pending.", turn);
+    const cancelledTool: AppServerThreadActivityEntry = { ...tool("tool-2", turn), status: "failed" };
+    const entries = [firstTool, answer, cancelledTool];
+
+    expect(buildTranscriptRenderItems({ entries, finalPhaseIsAnswer: true })).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: [firstTool] }),
+      { type: "entry", entry: answer },
+      expect.objectContaining({ type: "workPhaseGroup", entries: [cancelledTool], label: "More work" }),
+    ]);
+    expect(buildTranscriptRenderItems({ entries })).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: [firstTool, answer, cancelledTool] }),
+    ]);
+  });
+
   it("keeps a finished turn's closing replies in view when only non-work entries follow them", () => {
     const turn = completedTurn("turn-1", 70_000);
     const first = reply("m1", "Running the suite:", turn);
