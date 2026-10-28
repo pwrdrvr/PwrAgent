@@ -63,6 +63,9 @@ can bind workspace imports to the donor checkout's source. Installs and native
 staging would also mutate shared dependencies. A symlink to a repaired helper
 inherits its permissions, but sharing dependencies is not a complete setup fix.
 
+For stacked pull requests, see [the gh-stack workflow](docs/gh-stack-workflow.md),
+including recovery when an older extension replays a squash-merged parent.
+
 ### Checks
 
 Useful checks (all run from the repo root):
@@ -407,6 +410,7 @@ Screenshots" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 | [pwragent.ai](https://pwragent.ai) | Product site. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Process model, storage layers, messaging layer summary, dependency boundaries, workspace map. |
 | [AGENTS.md](AGENTS.md) | Load-bearing architecture, runtime, testing, and release guidance. |
+| [docs/gh-stack-workflow.md](docs/gh-stack-workflow.md) | Stacked PR rebases, merged-parent boundary recovery, and an isolated regression fixture. |
 | [SECURITY.md](SECURITY.md) | How to report vulnerabilities. |
 | [docs/messaging-architecture.md](docs/messaging-architecture.md) | Layered messaging architecture, capability profiles, callback delivery models. |
 | [docs/messaging-adapter-contract.md](docs/messaging-adapter-contract.md) | Formal per-adapter contract for the messaging interface. |
