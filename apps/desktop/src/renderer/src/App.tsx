@@ -2578,7 +2578,10 @@ function DesktopAppShell(props: {
     });
   }, [showThreadFromLink]);
   const submitServerRequest = desktopApi?.submitServerRequest;
-  // One answer path for the To-dos rows and the approval notices.
+  const refreshOperatorRequests = operatorRequests.refresh;
+  // One answer path for the To-dos rows and the approval notices. It reads
+  // the owner queue once the answer is taken: a peer's change event can be
+  // lost, and the read is what tells a surface the request is still open.
   const respondToOperatorWait = useCallback(async (
     wait: OperatorWait,
     response: SubmitServerRequestRequest["response"],
@@ -2595,7 +2598,8 @@ function DesktopAppShell(props: {
       requestId: request.params.requestId,
       response,
     });
-  }, [submitServerRequest]);
+    await refreshOperatorRequests();
+  }, [refreshOperatorRequests, submitServerRequest]);
   const approvalNotices = useApprovalNotices({
     waits: operatorRequests.waits,
     selectedThreadKey,

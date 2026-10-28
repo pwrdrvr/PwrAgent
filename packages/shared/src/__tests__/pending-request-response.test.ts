@@ -153,7 +153,7 @@ describe("buildPendingRequestResponse", () => {
       }),
       expect.objectContaining({
         decision: "cancel",
-        label: "Cancel Turn",
+        label: "Cancel turn",
         response: { decision: "cancel" },
       }),
     ]);
@@ -250,11 +250,11 @@ describe("buildPendingRequestResponse", () => {
     expect(actions).toEqual([
       expect.objectContaining({
         decision: "accept",
-        label: "Approve Once",
+        label: "Approve once",
       }),
       expect.objectContaining({
         decision: "accept_with_execpolicy_amendment",
-        label: "Always Allow Prefix: pnpm test",
+        label: "Always allow prefix: pnpm test",
         response: { decision: structuredDecision },
         style: "secondary",
       }),

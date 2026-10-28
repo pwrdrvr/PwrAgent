@@ -64,17 +64,17 @@ async function openApprovalPendingReplay() {
     app.window.getByText("Waiting for approval before this turn can continue.")
   ).toHaveCount(0);
   await expect(
-    app.window.getByRole("button", { name: "Approve Once" })
+    app.window.getByRole("button", { name: "Approve once" })
   ).toBeVisible();
   const allowPrefix = app.window.getByRole("button", {
-    name: `Always Allow Prefix: ${approvalPrefix}`,
+    name: `Always allow prefix: ${approvalPrefix}`,
   });
   await expect(allowPrefix).toBeVisible();
   await expect(allowPrefix).toHaveClass(/button--ghost/);
   await expect(allowPrefix).toHaveClass(/transcript-request__action--detailed/);
   await expect(allowPrefix).toHaveAttribute(
     "title",
-    `Always Allow Prefix: ${approvalPrefix}`
+    `Always allow prefix: ${approvalPrefix}`
   );
   const detail = allowPrefix.locator(".transcript-request__action-detail");
   await expect(detail).toHaveText(approvalCommand);
@@ -109,7 +109,7 @@ async function openApprovalPendingReplay() {
   );
   expect(prefixLayout.actionHeight).toBeLessThan(60);
   await expect(
-    app.window.getByRole("button", { name: "Cancel Turn" })
+    app.window.getByRole("button", { name: "Cancel turn" })
   ).toBeVisible();
 
   return app;
@@ -119,7 +119,7 @@ test("dismisses the pending approval UI after approval", async () => {
   const app = await openApprovalPendingReplay();
 
   try {
-    await app.window.getByRole("button", { name: "Approve Once" }).click();
+    await app.window.getByRole("button", { name: "Approve once" }).click();
 
     await expect(
       app.window.getByRole("group", { name: "Pending approval" })

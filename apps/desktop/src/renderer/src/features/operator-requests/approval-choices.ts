@@ -10,6 +10,12 @@ import {
 } from "../thread-detail/mcp-elicitation";
 import type { OperatorWait } from "./operator-waits";
 
+/**
+ * Shown when an answer was taken but a fresh read of the owner queue still
+ * lists the request. The answers come back, so the operator is not stuck.
+ */
+export const APPROVAL_STILL_OPEN_MESSAGE = "Answer sent, but the request is still open.";
+
 /** One answer an approval takes outside its thread's card. */
 export type ApprovalChoice = {
   id: string;

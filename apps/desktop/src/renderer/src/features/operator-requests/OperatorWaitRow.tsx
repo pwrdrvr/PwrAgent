@@ -13,7 +13,11 @@ import {
 } from "../../icons";
 import { formatTodoAge } from "../thread-todos/ThreadTodoCard";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
-import { approvalChoices, type ApprovalChoice } from "./approval-choices";
+import {
+  APPROVAL_STILL_OPEN_MESSAGE,
+  approvalChoices,
+  type ApprovalChoice,
+} from "./approval-choices";
 import { OperatorQuestionForm } from "./OperatorQuestionForm";
 import {
   operatorWaitLabel,
@@ -82,16 +86,25 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
   const age = formatTodoAge(wait.createdAt);
   const sub = [wait.detail, props.threadName].filter(Boolean).join(" · ");
 
-  const run = async (label: string, work: () => Promise<void>): Promise<void> => {
+  const run = async (
+    label: string,
+    work: () => Promise<void>,
+    stillOpenMessage?: string,
+  ): Promise<void> => {
     setBusyLabel(label);
     setError(undefined);
     try {
       await work();
+      // An answer re-reads the owner queue before it resolves, so a row
+      // still here is a request the owner still lists. Give its answers back.
+      if (stillOpenMessage) {
+        setError(stillOpenMessage);
+        setBusyLabel(undefined);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setBusyLabel(undefined);
     }
-    // On success the row leaves the list, so the busy label stays until then.
   };
 
   const main = (
@@ -238,7 +251,11 @@ export function OperatorWaitRow(props: OperatorWaitRowProps) {
     const choices = approvalChoices(wait);
     if (!choices) return null;
     const answer = (choice: ApprovalChoice): void => {
-      void run(choice.busyLabel, () => props.respond(wait, choice.buildResponse()));
+      void run(
+        choice.busyLabel,
+        () => props.respond(wait, choice.buildResponse()),
+        APPROVAL_STILL_OPEN_MESSAGE,
+      );
     };
     const declineChoice = choices.decline;
     const decline = declineChoice ? (

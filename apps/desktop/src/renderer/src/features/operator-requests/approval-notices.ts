@@ -4,7 +4,11 @@ import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { approvalDisplayCommand } from "../thread-detail/approval-display-command";
 import { cleanComposerErrorMessage } from "../composer/composer-error-message";
 import type { TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
-import { approvalChoices, type ApprovalChoice } from "./approval-choices";
+import {
+  APPROVAL_STILL_OPEN_MESSAGE,
+  approvalChoices,
+  type ApprovalChoice,
+} from "./approval-choices";
 import { operatorWaitLabel, type OperatorWait } from "./operator-waits";
 
 const APPROVAL_NOTICE_PREFIX = "operator-approval:";
@@ -169,7 +173,10 @@ export function useApprovalNotices(
     ApprovalNoticeInput,
     "hiddenKeys" | "onHide" | "onHideAll" | "onAnswer" | "answers"
   > & {
-    /** Sends an answer. Without it the notices offer Review alone. */
+    /**
+     * Sends an answer, then re-reads the owner queue before it resolves.
+     * Without it the notices offer Review alone.
+     */
     respond?: (
       wait: OperatorWait,
       response: SubmitServerRequestRequest["response"],
@@ -196,8 +203,8 @@ export function useApprovalNotices(
   const onHideAll = useCallback((): void => {
     hide(waits.filter(isApprovalNoticeWait).map((wait) => wait.key));
   }, [hide, waits]);
-  // A sent answer keeps its notice busy until the request leaves the queue,
-  // as a To-dos row does. Each change drops keys for requests that are gone.
+  // A sent answer keeps its notice busy until `respond` settles. Each change
+  // drops keys for requests that are gone.
   const setAnswer = useCallback((key: string, answer: ApprovalNoticeAnswer): void => {
     setAnswers((current) => {
       const pending = new Set(waits.map((wait) => wait.key));
@@ -211,6 +218,15 @@ export function useApprovalNotices(
         setAnswer(wait.key, { busyLabel: choice.busyLabel });
         Promise.resolve()
           .then(() => respond(wait, choice.buildResponse()))
+          .then(() => {
+            // `respond` re-reads the queue, so a request that is gone has
+            // already taken its card with it. One still listed gets its
+            // answers back rather than a busy card that never clears.
+            setAnswer(wait.key, {
+              busyLabel: choice.busyLabel,
+              error: APPROVAL_STILL_OPEN_MESSAGE,
+            });
+          })
           .catch((cause: unknown) => {
             // Without Electron's "Error invoking remote method …" wrapper.
             const reason = cleanComposerErrorMessage(

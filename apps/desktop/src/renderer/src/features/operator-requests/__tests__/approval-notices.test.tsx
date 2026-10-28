@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerPendingRequestNotification, OperatorServerRequest } from "@pwragent/shared";
 import { AppNoticeStack } from "../../notifications/AppNoticeStack";
 import type { AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
+import { APPROVAL_STILL_OPEN_MESSAGE } from "../approval-choices";
 import {
   APPROVAL_NOTICE_HIDE_LABEL,
   approvalNoticeId,
@@ -317,5 +318,16 @@ describe("answering from an approval notice", () => {
     expect(screen.getByText("Allow the agent to open a pull request on GitHub?")).toBeInTheDocument();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("gives the answers back when the owner still lists the request", async () => {
+    // `respond` re-reads the queue before resolving, and the wait stays.
+    const respond = vi.fn(async () => undefined);
+    render(<Harness initialWaits={waitsFor([commandApproval])} respond={respond} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Approval options" }));
+    fireEvent.click(within(screen.getByRole("menu")).getAllByRole("menuitem")[0]!);
+    expect(await screen.findByText(APPROVAL_STILL_OPEN_MESSAGE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approval options" })).toBeInTheDocument();
   });
 });
