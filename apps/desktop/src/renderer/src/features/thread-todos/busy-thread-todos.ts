@@ -1,8 +1,5 @@
 import { threadTodoThreadKey, type ThreadTodo, type TodoBusyThread } from "@pwragent/shared";
 
-/** How long a listing that met a busy owner waits before its one re-list. */
-export const THREAD_TODOS_BUSY_RETRY_MS = 1_000;
-
 export function newestResolvedFirst(left: ThreadTodo, right: ThreadTodo): number {
   return (right.resolvedAt ?? right.updatedAt) - (left.resolvedAt ?? left.updatedAt);
 }

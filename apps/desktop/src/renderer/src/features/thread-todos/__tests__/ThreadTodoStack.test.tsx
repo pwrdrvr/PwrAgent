@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary, ThreadReview, ThreadTodo, ThreadTodoProject } from "@pwragent/shared";
 import type { AppServerPendingRequestNotification } from "@pwragent/shared";
 import {
+  THREAD_TODO_BUSY_RETRY_MS,
   codexAsyncQuestionItemId,
   threadTodoThreadKey,
   threadReviewTodo,
@@ -14,7 +15,6 @@ import { ThreadMetaChips } from "../../navigation/ThreadMetaChips";
 import { ThreadTodoStack } from "../ThreadTodoStack";
 import { ThreadTodosPanel } from "../ThreadTodosPanel";
 import { ThreadTodoCountsContext } from "../useThreadTodos";
-import { THREAD_TODOS_BUSY_RETRY_MS } from "../busy-thread-todos";
 import { unwrapNavigationRead } from "../../../../../shared/navigation-ipc-result";
 import type { ThreadTodosView } from "../thread-todos-view";
 import { buildOperatorWaits, type OperatorWait } from "../../operator-requests/operator-waits";
@@ -669,7 +669,7 @@ describe("thread to-do checklists", () => {
       expect(listResolved).toHaveBeenCalledTimes(2);
       expect(screen.getByText("Shipped the fix")).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
-      await flush(THREAD_TODOS_BUSY_RETRY_MS);
+      await flush(THREAD_TODO_BUSY_RETRY_MS);
       expect(listResolved).toHaveBeenCalledTimes(3);
       expect(screen.getByText("Merged the docs")).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
@@ -679,9 +679,9 @@ describe("thread to-do checklists", () => {
       const { listResolved, change } = setup({ todos: [done] }, busy(), busy(), { todos: [] });
       await flush();
       change();
-      await flush(THREAD_TODOS_BUSY_RETRY_MS);
+      await flush(THREAD_TODO_BUSY_RETRY_MS);
       expect(listResolved).toHaveBeenCalledTimes(3);
-      await flush(THREAD_TODOS_BUSY_RETRY_MS * 10);
+      await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
       expect(listResolved).toHaveBeenCalledTimes(3);
       expect(screen.getByText("Shipped the fix")).toBeTruthy();
       expect(screen.queryByRole("alert")).toBeNull();
@@ -697,7 +697,7 @@ describe("thread to-do checklists", () => {
       expect(screen.getByText("Pinned owner card")).toBeTruthy();
       expect(screen.queryByText("Shipped the fix")).toBeNull();
       expect(screen.queryByRole("alert")).toBeNull();
-      await flush(THREAD_TODOS_BUSY_RETRY_MS * 10);
+      await flush(THREAD_TODO_BUSY_RETRY_MS * 10);
       expect(listResolved).toHaveBeenCalledTimes(3);
       expect(screen.getByText("Pinned owner card")).toBeTruthy();
     });

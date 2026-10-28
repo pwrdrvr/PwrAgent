@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { FederationRemoteTarget, ThreadTodo, ThreadTodoKind } from "@pwragent/shared";
 import {
+  THREAD_TODO_BUSY_RETRY_MS,
   THREAD_TODO_RESOLUTION_RESULTS,
   codexAsyncQuestionItemId,
   operatorTodoItemKey,
@@ -23,7 +24,7 @@ import { OperatorWaitRow } from "../operator-requests/OperatorWaitRow";
 import { isBlockingWait, type OperatorWait } from "../operator-requests/operator-waits";
 import { ThreadTodoCard, formatTodoAge } from "./ThreadTodoCard";
 import type { ThreadTodoDoHereOptions, ThreadTodoResolveOptions, ThreadTodosView } from "./thread-todos-view";
-import { keepBusyThreadTodos, newestResolvedFirst, THREAD_TODOS_BUSY_RETRY_MS } from "./busy-thread-todos";
+import { keepBusyThreadTodos, newestResolvedFirst } from "./busy-thread-todos";
 import { operatorWaitMatchesFilter, threadTodoMatchesFilter, type ThreadTodoFilter } from "./thread-todo-filters";
 import { tooltipHandlers, useViewportTooltip } from "../../lib/useViewportTooltip";
 import { isNavigationBusy } from "../../../../shared/navigation-ipc-result";
@@ -132,12 +133,13 @@ export function ThreadTodosPanel(props: ThreadTodosPanelProps) {
     // event. A later change event lists again, so it needs no loop.
     const relistOnce = (): void => {
       if (busyRelistedRevision === view.revision) return;
-      busyRelist = setTimeout(() => setBusyRelistedRevision(view.revision), THREAD_TODOS_BUSY_RETRY_MS);
+      busyRelist = setTimeout(() => setBusyRelistedRevision(view.revision), THREAD_TODO_BUSY_RETRY_MS);
     };
     setActionError(undefined);
     void listResolved().then((listing) => {
       if (cancelled) return;
       setResolved((current) => keepBusyThreadTodos(current, listing.todos, listing.busyThreads, newestResolvedFirst));
+      if (listing.errors?.length) setActionError(listing.errors.join("\n"));
       if (listing.busyThreads?.length) relistOnce();
     }).catch((error: unknown) => {
       if (cancelled) return;

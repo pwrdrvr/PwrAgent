@@ -382,6 +382,12 @@ export type TodoUnavailableInstance = {
 };
 
 /**
+ * How long a To-do read that met a busy owner waits before its one read
+ * more. The main-process view hub and the renderer's Done list share it.
+ */
+export const THREAD_TODO_BUSY_RETRY_MS = 1_000;
+
+/**
  * A pinned thread whose owner was busy, so the listing holds none of its
  * cards. A viewer keeps that thread's last cards and lists again later.
  */

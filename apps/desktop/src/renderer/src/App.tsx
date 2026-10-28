@@ -2724,9 +2724,10 @@ function DesktopAppShell(props: {
       },
       listResolved: async () => {
         const response = await listThreadTodos({ status: "all" });
-        if (response.errors?.length) throw new Error(response.errors.join("\n"));
-        // A busy pinned owner is named, so the panel keeps its last cards.
+        // A failed or busy pinned owner travels beside the cards that did
+        // load, so one owner never empties the list.
         return { todos: response.todos.filter((todo) => todo.status !== "open").sort(newestResolvedFirst),
+          ...(response.errors?.length ? { errors: response.errors } : {}),
           ...(response.busyThreads?.length ? { busyThreads: response.busyThreads } : {}) };
       },
       queueError: [threadTodoController.error, operatorRequests.error].filter(Boolean).join("\n") || undefined,
