@@ -359,6 +359,11 @@ test.describe("federation remote window", () => {
       });
       await restoreE2eFederationIdentity({ page: owner.window, identityPrivateKeyPem: ownerIdentity.privateKeyPem,
         noiseStaticPrivateKeyBase64: ownerNoiseIdentity.privateKeyBase64, restartMode: "gateway" });
+      // An instance id exists before a gateway binds. Require the actual
+      // listener after identity restoration before minting an invite for it.
+      await expect.poll(async () => owner!.window.evaluate(async () =>
+        (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health),
+      { timeout: 30_000 }).toMatchObject({ status: "listening", listenUrl: `ws://127.0.0.1:${port}` });
       const ownerInstanceId = await owner.window.evaluate(async () =>
         (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.instanceId);
       expect(ownerInstanceId).toBeTruthy();
@@ -373,7 +378,8 @@ test.describe("federation remote window", () => {
         await (window as unknown as { pwragent: DesktopApi }).pwragent.importFederationInvite!({ invite: encodedInvite });
       }, invite);
       await expect.poll(async () => viewer!.window.evaluate(async () =>
-        (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health.status), { timeout: 30_000 }).toBe("connected");
+        (await (window as unknown as { pwragent: DesktopApi }).pwragent.readFederationHealth!()).health),
+      { timeout: 30_000 }).toMatchObject({ status: "connected" });
       await viewer.window.evaluate(async ({ instanceId, id }) => {
         const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
         const ref = { backend: "codex" as const, threadId: id, target: { scope: "remote" as const, instanceId } };

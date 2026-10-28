@@ -1301,6 +1301,7 @@ export class DesktopFederationRuntime {
   >();
   private unsubscribeLocalBackendEvents?: () => void;
   private restartPromise: Promise<void> | undefined;
+  private restartRequested = false;
   private remoteThreadSummaryCache: RemoteThreadSummaryCache | undefined;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private accessRefreshTimer?: ReturnType<typeof setTimeout>;
@@ -1624,10 +1625,23 @@ export class DesktopFederationRuntime {
   }
 
   async restart(): Promise<void> {
-    this.restartPromise ??= this.restartNow().finally(() => {
-      this.restartPromise = undefined;
-    });
+    // Startup reads config before asynchronous host/key/lease work. A later
+    // request may carry an invite or mode change that startup has not seen.
+    // Coalesce requests into another pass, and await all passes before returning.
+    this.restartRequested = true;
+    this.restartPromise ??= this.drainRestarts();
     return await this.restartPromise;
+  }
+
+  private async drainRestarts(): Promise<void> {
+    try {
+      do {
+        this.restartRequested = false;
+        await this.restartNow();
+      } while (this.restartRequested);
+    } finally {
+      this.restartPromise = undefined;
+    }
   }
 
   async stop(): Promise<void> {
