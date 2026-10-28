@@ -11,6 +11,7 @@ import {
   type ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { NAVIGATION_BACKEND_METADATA_SCHEMA } from "./navigation-backend-metadata.js";
+import { ensureUsageActivityIndex } from "./usage-activity-index";
 import {
   THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA,
   THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA,
@@ -2168,6 +2169,7 @@ export class StateDb {
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
       ensureThreadUsageActivitySchema(db);
+      ensureUsageActivityIndex(db);
       db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
       // Additive columns on the card tables, with no version of their own so
       // no branch can claim it: one immediate transaction the first time,

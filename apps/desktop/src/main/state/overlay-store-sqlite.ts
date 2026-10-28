@@ -772,6 +772,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     pricing: ThreadPricingLedgerRead;
   }>();
 
+  private usageActivityCache?: {
+    from: number; to: number; dataVersion: number; changes: number;
+    activity: { rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[] };
+  };
+
   private navigationUnreadBaseline?: NavigationUnreadBaseline;
   private readonly directoryLaunchpadListeners = new Set<() => void>();
   private transactionNavigationRead = 0;
@@ -2747,6 +2752,28 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[];
   }> {
     validateUsageActivityWindow(request);
+    const db = this.stateDb.raw;
+    // total_changes catches local SQL, including title and automation writes;
+    // data_version catches every other connection, including older builds.
+    // Never cache a transaction's snapshot or expose a cached object to callers.
+    const dataVersion = db.pragma("data_version", { simple: true }) as number;
+    const { changes } = db.prepare("SELECT total_changes() AS changes").get() as { changes: number };
+    const cached = this.usageActivityCache;
+    if (!db.inTransaction && cached && cached.from === request.from && cached.to === request.to
+      && cached.dataVersion === dataVersion && cached.changes === changes) {
+      return structuredClone(cached.activity);
+    }
+    // The version checks and all dependent reads share one read snapshot.
+    // A writer committing between the checks and BEGIN only invalidates the
+    // cache early on the next read; it cannot leave stale data cached as current.
+    const activity = db.transaction(() => this.materializeUsageActivity(request))();
+    if (!db.inTransaction) this.usageActivityCache = { ...request, dataVersion, changes, activity };
+    return structuredClone(activity);
+  }
+
+  private materializeUsageActivity(request: ReadUsageActivityRequest): {
+    rows: UsageActivityRow[]; truncated: boolean; limitHistory: UsageLimitObservation[];
+  } {
     type ActivityRow = ThreadUsageLineRow & {
       activity_started_at: number | null; activity_completed_at: number | null;
       activity_rate_limit_snapshot: string | null;
@@ -2764,7 +2791,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // contained ones are read separately and rolled up per parent thread, so
     // they cannot spend the row bound meant for turns.
     const bounds = `
-        FROM thread_usage_lines l
+        FROM usage_activity_intervals i
+        CROSS JOIN usage_activity_keys k ON k.id = i.id
+        CROSS JOIN thread_usage_lines l ON l.usage_line_id = k.usage_line_id
         LEFT JOIN thread_usage_turns t ON t.usage_turn_id = l.usage_turn_id`;
     const started = "COALESCE(t.started_at, l.created_at)";
     const completed = `COALESCE(t.completed_at, l.completed_at,
@@ -2778,6 +2807,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const rows = this.stateDb.raw.prepare(`
       ${columns}${bounds}
        WHERE l.status != 'superseded'
+         AND i.start_min < @to AND i.end_max >= @from
          AND ${started} < @to
          AND CASE WHEN ${completed} IS NULL THEN l.updated_at >= @from
                   ELSE ${completed} >= @from END
@@ -2785,10 +2815,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
        ORDER BY l.updated_at DESC, l.usage_line_id
        LIMIT 5001
     `).all({ from: request.from, to: request.to }) as ActivityRow[];
+    // Aggregate in SQLite. Only one representative ledger row per group
+    // crosses into JS, including in a window containing thousands of helpers.
     const helperRows = this.stateDb.raw.prepare(`
-      ${columns}${bounds}
-       WHERE ${backgroundHelper}
-    `).all({ from: request.from, to: request.to }) as ActivityRow[];
+      WITH groups AS (
+        SELECT MIN(k.id) AS representative,
+          MIN(${started}) AS activity_started_at, MAX(${completed}) AS activity_completed_at,
+          MAX(l.updated_at) AS updated_at, COUNT(*) AS rollup_count,
+          SUM(l.input_tokens) AS input_tokens, SUM(l.cached_input_tokens) AS cached_input_tokens,
+          SUM(l.uncached_input_tokens) AS uncached_input_tokens,
+          SUM(l.cache_write_input_tokens) AS cache_write_input_tokens,
+          SUM(l.output_tokens) AS output_tokens, SUM(l.reasoning_output_tokens) AS reasoning_output_tokens,
+          SUM(l.total_tokens) AS total_tokens,
+          SUM(l.cached_input_cost_micros) AS cached_input_cost_micros,
+          SUM(l.uncached_input_cost_micros) AS uncached_input_cost_micros,
+          SUM(l.cache_write_input_cost_micros) AS cache_write_input_cost_micros,
+          SUM(l.output_cost_micros) AS output_cost_micros, SUM(l.total_cost_micros) AS total_cost_micros
+        ${bounds}
+        WHERE i.start_max >= @from AND i.end_min < @to AND ${backgroundHelper}
+        GROUP BY l.backend, l.provider,
+          COALESCE(NULLIF(CASE WHEN instr(substr(l.source_item_id, 8), ':') > 0
+            THEN substr(l.source_item_id, 8, instr(substr(l.source_item_id, 8), ':') - 1)
+            ELSE substr(l.source_item_id, 8) END, ''), 'helper'),
+          COALESCE(l.parent_thread_id, l.thread_id), COALESCE(l.model, ''), l.price_status, l.currency,
+          COALESCE(l.account_key, ''),
+          CAST(${completed} / @step AS INTEGER) - (${completed} < 0 AND ${completed} % @step != 0)
+      )
+      SELECT l.*, g.* FROM groups g
+        JOIN usage_activity_keys k ON k.id = g.representative
+        JOIN thread_usage_lines l ON l.usage_line_id = k.usage_line_id
+      ORDER BY g.representative
+    `).all({ from: request.from, to: request.to, step: usageRollupStep(request.from, request.to) }) as ActivityRow[];
     const visibleRows = rows.slice(0, 5000);
     const identityFor = (row: { backend: string; thread_id: string }) => buildLegacyEncodedThreadIdentityKey(
       row.backend as AppServerBackendKind, row.thread_id,
@@ -10664,7 +10721,9 @@ function toThreadToolInvocationAlertRowParams(
  * produce the same rollup and the viewer counts it once.
  */
 function rollUpBackgroundHelperRows(
-  rows: Array<ThreadUsageLineRow & { activity_started_at: number | null; activity_completed_at: number | null }>,
+  rows: Array<ThreadUsageLineRow & {
+    activity_started_at: number | null; activity_completed_at: number | null; rollup_count?: number;
+  }>,
   window: { from: number; to: number },
 ): Array<{ line: ThreadUsageLineRecord; rollup: UsageActivityRollup; updatedAt: number }> {
   const step = usageRollupStep(window.from, window.to);
@@ -10675,7 +10734,7 @@ function rollUpBackgroundHelperRows(
     const kind = (row.source_item_id ?? "").split(":")[1] || "helper";
     const threadId = row.parent_thread_id ?? row.thread_id;
     const bucket = Math.floor(completed / step) * step;
-    const groupKey = ["monitor-rollup", row.provider, kind, threadId, row.model ?? "",
+    const groupKey = ["monitor-rollup", row.provider, row.backend, kind, threadId, row.model ?? "",
       row.price_status, row.currency, window.from, window.to, bucket].join(":");
     const usageLineId = row.account_key ? `${groupKey}:${row.account_key}` : groupKey;
     const line = threadUsageLineFromRow(row);
@@ -10698,7 +10757,7 @@ function rollUpBackgroundHelperRows(
           cacheWriteInputCostMicros: line.cacheWriteInputCostMicros, outputCostMicros: line.outputCostMicros,
           totalCostMicros: line.totalCostMicros,
         } as ThreadUsageLineRecord,
-        rollup: { kind, count: 1, groupKey },
+        rollup: { kind, count: row.rollup_count ?? 1, groupKey },
         updatedAt: row.updated_at,
       });
       continue;
@@ -10719,7 +10778,7 @@ function rollUpBackgroundHelperRows(
     sum.cacheWriteInputCostMicros = (sum.cacheWriteInputCostMicros ?? 0) + (line.cacheWriteInputCostMicros ?? 0);
     sum.outputCostMicros += line.outputCostMicros;
     sum.totalCostMicros += line.totalCostMicros;
-    existing.rollup.count += 1;
+    existing.rollup.count += row.rollup_count ?? 1;
     existing.updatedAt = Math.max(existing.updatedAt, row.updated_at);
   }
   return [...groups.values()];
