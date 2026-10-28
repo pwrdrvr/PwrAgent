@@ -2467,17 +2467,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     /** The owner's account limits at completion; rides the same UPDATE. */
     limitObservation?: UsageLimitObservation;
   }): Promise<boolean> {
+    // Most lines share their turn's identity, so existing thread indexes can
+    // answer this without a new write-maintained index. The fallback preserves
+    // the original usage_turn_id-only relationship for every other ledger row.
     const turn = this.stateDb.raw.prepare(
       `SELECT turn.completed_at, turn.completed_at_inferred FROM thread_usage_turns AS turn
         WHERE turn.backend = ? AND turn.thread_id = ? AND turn.turn_id = ?
-          AND EXISTS (
+          AND CASE WHEN EXISTS (
+            SELECT 1 FROM thread_usage_lines AS line
+             WHERE line.backend = turn.backend AND line.thread_id = turn.thread_id
+               AND line.usage_turn_id = turn.usage_turn_id
+               AND line.source = 'live' AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL AND line.status != 'superseded'
+          ) THEN 1 ELSE EXISTS (
             SELECT 1 FROM thread_usage_lines AS line
              WHERE line.usage_turn_id = turn.usage_turn_id
-               AND line.source = 'live'
-               AND line.scope = 'turn'
-               AND line.parent_thread_id IS NULL
-               AND line.status != 'superseded'
-          )`,
+               AND line.source = 'live' AND line.scope = 'turn'
+               AND line.parent_thread_id IS NULL AND line.status != 'superseded'
+          ) END`,
     ).get(params.backend, params.threadId, params.turnId) as {
       completed_at: number | null;
       completed_at_inferred: number | null;
