@@ -132,6 +132,35 @@ describe("SidebarSearchPopup", () => {
     expect(releaseNavigationQuery).toHaveBeenCalled();
   });
 
+  it("prints each result's age as the sidebar does, with the full date on hover", async () => {
+    const now = new Date(2026, 9, 28, 12, 0).getTime();
+    vi.setSystemTime(now);
+    const older = now - 40 * 24 * 60 * 60 * 1000;
+    const project = { key: "directory:/repos/focus-lab", kind: "directory" as const, label: "focus-lab",
+      path: "/repos/focus-lab", latestUpdatedAt: now - 2 * 24 * 60 * 60 * 1000 };
+    render(<SidebarSearchPopup
+      projects={[project]}
+      threads={[
+        localThread({ id: "recent", title: "Focus ring fix", updatedAt: now - 60 * 60 * 1000 }),
+        localThread({ id: "older", title: "Focus trap audit", updatedAt: older }),
+      ]}
+      onJumpToProject={vi.fn()} onJumpToThread={vi.fn()} onClose={vi.fn()}
+    />);
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "focus" } });
+    await settleRemoteSearch();
+    const timeOf = (text: string) =>
+      screen.getAllByRole("option").find((row) => row.textContent?.includes(text))
+        ?.querySelector(".jump-palette__row-time");
+    expect(timeOf("Focus ring fix")).toHaveTextContent(/^1h$/);
+    const olderTime = timeOf("Focus trap audit");
+    expect(olderTime).toHaveTextContent(
+      new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(older),
+    );
+    // "Sep 18" leaves out the year; the tooltip carries it.
+    expect(olderTime).toHaveAttribute("data-tooltip", expect.stringContaining("2026"));
+    expect(timeOf("/repos/focus-lab")).toHaveTextContent(/^2d$/);
+  });
+
   it("finds Agent threads by role and marks the result", async () => {
     const threads: NavigationThreadSummary[] = [
       localThread({

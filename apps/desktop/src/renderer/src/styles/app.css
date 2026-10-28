@@ -2790,6 +2790,20 @@ textarea,
   font-weight: 600;
 }
 
+/* The sidebar row's time column, in its type. It never shrinks, so the title
+   and branch give way first, and its minimum fits "Aug 16" so short and long
+   labels share one right edge down the list. */
+.jump-palette__row-time {
+  flex: none;
+  min-width: 3.2em;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .jump-palette__row .chip--agent,
 .jump-palette__row .chip--instance {
   flex: none;
