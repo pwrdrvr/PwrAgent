@@ -1578,6 +1578,12 @@ test.describe("federation remote window", () => {
       const ensureCalls = () => gateway!.calls
         .filter((call) => call.method === "ensureDirectoryLaunchpad")
         .map((call) => call.params as { directoryKey: string; preferredBackend?: string });
+      // The provider the peer is told to start. The Provider control is no
+      // evidence: it lists the peer's providers only, so it reads OpenAI
+      // even over a draft that holds this machine's Kimi Code.
+      const startedBackends = () => gateway!.calls
+        .filter((call) => call.method === "materializeDirectoryLaunchpad")
+        .map((call) => (call.params as { launchpad?: { backend?: string } }).launchpad?.backend);
 
       // A top-level draft names no provider, so this machine's Kimi Code
       // would fill it. The peer is asked about Kimi and answers OpenAI.
@@ -1585,12 +1591,16 @@ test.describe("federation remote window", () => {
       await remote
         .getByRole("button", { name: "Open new thread launchpad for ProviderRepo" })
         .click();
-      await expect(remote.getByRole("textbox", { name: "New thread" })).toBeVisible();
+      const prompt = remote.getByRole("textbox", { name: "New thread" });
+      await expect(prompt).toBeVisible();
       await expect(provider).toContainText("OpenAI", { timeout: 15_000 });
       expect(ensureCalls()).toContainEqual(expect.objectContaining({
         directoryKey: "directory:/remote/ProviderRepo",
         preferredBackend: "acp:kimi",
       }));
+      await prompt.fill("Start on a provider the peer has");
+      await remote.getByRole("button", { name: "Start thread" }).click();
+      await expect.poll(startedBackends, { timeout: 30_000 }).toEqual(["codex"]);
 
       // A sub-thread asks for its parent's Kimi Code and gets OpenAI too.
       const callsBeforeChild = ensureCalls().length;
@@ -1598,13 +1608,15 @@ test.describe("federation remote window", () => {
       await remote
         .getByRole("menuitem", { name: "Sub-thread in Same Worktree" })
         .click();
-      await expect(
-        remote.getByRole("button", { name: "Start sub-thread" }),
-      ).toBeVisible();
       await expect(provider).toContainText("OpenAI", { timeout: 15_000 });
       expect(ensureCalls().slice(callsBeforeChild)).toContainEqual(
         expect.objectContaining({ preferredBackend: "acp:kimi" }),
       );
+      await prompt.fill("Start the child on a provider the peer has");
+      await remote.getByRole("button", { name: "Start sub-thread" }).click();
+      await expect
+        .poll(startedBackends, { timeout: 30_000 })
+        .toEqual(["codex", "codex"]);
     } finally {
       await app?.close();
       await gateway?.close();
