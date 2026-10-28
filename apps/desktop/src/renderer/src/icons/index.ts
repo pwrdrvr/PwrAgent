@@ -1,3 +1,5 @@
+export { ArrowLeftToLineIcon } from "./ArrowLeftToLineIcon";
+export { ArrowRightToLineIcon } from "./ArrowRightToLineIcon";
 export { ArrowUpIcon } from "./ArrowUpIcon";
 export { AutomationsIcon } from "./AutomationsIcon";
 export { BanIcon } from "./BanIcon";
@@ -18,6 +20,7 @@ export { ChevronRightIcon } from "./ChevronRightIcon";
 export { ChevronUpIcon } from "./ChevronUpIcon";
 export { CloseIcon } from "./CloseIcon";
 export { CommitIcon } from "./CommitIcon";
+export { ConnectionsIcon } from "./ConnectionsIcon";
 export { CopyIcon } from "./CopyIcon";
 export { DiscordIcon } from "./DiscordIcon";
 export { DraftIcon } from "./DraftIcon";

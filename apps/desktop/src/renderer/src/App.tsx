@@ -111,9 +111,11 @@ import {
   isActionRunsDock,
   isContextTabId,
   isEditedFilesDock,
+  isLaunchpadConnectionsDock,
   type ActionRunsDock,
   type ContextTabId,
   type EditedFilesDock,
+  type LaunchpadConnectionsDock,
 } from "./features/thread-detail/context-panels/context-tab";
 import { ThreadPlaceholderHeader } from "./features/thread-detail/ThreadPlaceholderHeader";
 import { handoffLaunchpadComposer } from "./features/composer/launchpad-composer-handoff";
@@ -474,6 +476,10 @@ function DesktopAppShell(props: {
   const [actionRunsDock, setActionRunsDock] = useState<ActionRunsDock>(
     DEFAULT_ACTION_RUNS_DOCK,
   );
+  // "pending" until the snapshot says where the cards live, so cards the
+  // operator moved to the rail never flash on the launchpad at launch.
+  const [launchpadConnectionsDock, setLaunchpadConnectionsDock] =
+    useState<LaunchpadConnectionsDock | "pending">("pending");
   const [mainView, setMainViewState] = useRecoverableState<MainView>("app.mainView", "thread");
   const mainViewRef = useRef<MainView>(mainView);
   // The control that opened Settings or Automations. The layer covers the
@@ -1785,6 +1791,14 @@ function DesktopAppShell(props: {
     },
     [writeConfig],
   );
+  const setLaunchpadConnectionsDockPersisted = useCallback(
+    (dock: LaunchpadConnectionsDock) => {
+      layoutPrefsChosenRef.current.add("launchpadConnectionsDock");
+      setLaunchpadConnectionsDock(dock);
+      void writeConfig({ ui: { launchpadConnectionsDock: dock } });
+    },
+    [writeConfig],
+  );
 
   // Adopt the persisted layout prefs once the settings snapshot arrives.
   // Guarded so later snapshot refreshes never clobber an in-session toggle.
@@ -1831,6 +1845,12 @@ function DesktopAppShell(props: {
       && isActionRunsDock(actionRunsDockPref)
     ) {
       setActionRunsDock(actionRunsDockPref);
+    }
+    if (!chosen.has("launchpadConnectionsDock")) {
+      const connectionsDockPref = uiPrefs.launchpadConnectionsDock?.value;
+      setLaunchpadConnectionsDock(
+        isLaunchpadConnectionsDock(connectionsDockPref) ? connectionsDockPref : "launchpad",
+      );
     }
   }, [uiPrefs]);
 
@@ -3869,6 +3889,13 @@ function DesktopAppShell(props: {
     onEditedFilesDockChange: setEditedFilesDockPersisted,
     actionRunsDock,
     onActionRunsDockChange: setActionRunsDockPersisted,
+    // A settings read that failed never delivers the stored choice; show the
+    // cards where they live by default rather than nowhere.
+    launchpadConnectionsDock:
+      launchpadConnectionsDock === "pending" && settings.error
+        ? "launchpad"
+        : launchpadConnectionsDock,
+    onLaunchpadConnectionsDockChange: setLaunchpadConnectionsDockPersisted,
     sidebarHidden,
     onToggleSidebar: () => setSidebarHiddenPersisted(!sidebarHidden),
     mastheadActions,
