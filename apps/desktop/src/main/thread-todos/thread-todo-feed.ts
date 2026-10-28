@@ -38,8 +38,8 @@ export type ThreadTodoFeedSource = {
  * an event names. A card change re-reads that thread's cards from SQLite.
  * Archive and delete drop an owner, a rename retitles its cards, and an
  * unarchive or provider refresh reads the listing again. A new thread has
- * no cards, so the listing is read again only when a card names a thread
- * the last listing did not hold.
+ * no cards, so the listing is read again only when a thread with no owner
+ * changes its cards.
  *
  * Every read runs in one queue, so changes apply in the order they were
  * read. The feed reads SQLite and never writes it.
@@ -52,8 +52,6 @@ export class ThreadTodoFeed {
   private readonly scheduled = new Set<string>();
   /** Owner thread key → title, from the last listing. */
   private owners = new Map<string, string | undefined>();
-  /** Thread keys that had cards when the listing was last read. */
-  private listed = new Set<string>();
   /** Open cards per thread key, before owner filtering. */
   private readonly cards = new Map<string, ThreadTodo[]>();
   /** Published cards by id. */
@@ -119,8 +117,8 @@ export class ThreadTodoFeed {
         this.schedule("owners", () => this.reloadOwners());
         return;
       case "navigation/providerThreads/refreshed":
+        // Owners can appear or go; card rows do not change.
         this.schedule("owners", () => this.reloadOwners());
-        this.cardsChanged();
         return;
       case "thread/pullRequests/updated":
       case "thread/modelSettings/updated":
@@ -176,6 +174,9 @@ export class ThreadTodoFeed {
     const todos = this.source.readOpenCards(scope);
     if (todos.length > 0) this.cards.set(key, todos);
     else this.cards.delete(key);
+    // A thread the listing lacked may be newer than its cached copy; the
+    // listing is the sidebar's cache, so asking again costs a lookup.
+    if (todos.length > 0 && !this.owners.has(key)) this.setOwners(await this.source.loadOwners());
     await this.publish([key]);
   }
 
@@ -206,28 +207,34 @@ export class ThreadTodoFeed {
     const upserts = [...this.visible.values()]
       .filter((todo) => buildThreadIdentityKey(todo.backend, todo.threadId) === key)
       .map((todo) => ({ ...todo, threadTitle: title }));
-    for (const todo of upserts.sort(compareThreadTodosNewestFirst)) this.emit(todo, { upsert: todo });
+    if (upserts.length === 0) return;
+    const mergeMethods = this.source.mergeMethods();
+    for (const todo of upserts.sort(compareThreadTodosNewestFirst)) {
+      this.visible.set(todo.id, todo);
+      this.emit(todo, { upsert: todo }, mergeMethods);
+    }
   }
 
   /** Re-projects the named threads' cards and publishes what changed. */
   private async publish(keys: string[]): Promise<void> {
-    if (keys.some((key) => this.cards.has(key) && !this.owners.has(key) && !this.listed.has(key))) {
-      this.setOwners(await this.source.loadOwners());
-    }
     const scope = new Set(keys);
     const next = new Map((await this.project(keys)).map((todo) => [todo.id, todo]));
     const removed = [...this.visible.values()]
       .filter((todo) => scope.has(buildThreadIdentityKey(todo.backend, todo.threadId)) && !next.has(todo.id))
       .sort(compareThreadTodosNewestFirst);
+    const upserts = [...next.values()].sort(compareThreadTodosNewestFirst).filter((todo) => {
+      const current = this.visible.get(todo.id);
+      return !current || JSON.stringify(current) !== JSON.stringify(todo);
+    });
+    if (removed.length === 0 && upserts.length === 0) return;
+    const mergeMethods = this.source.mergeMethods();
     for (const todo of removed) {
       this.visible.delete(todo.id);
-      this.emit(todo, { removedId: todo.id });
+      this.emit(todo, { removedId: todo.id }, mergeMethods);
     }
-    for (const todo of [...next.values()].sort(compareThreadTodosNewestFirst)) {
-      const current = this.visible.get(todo.id);
-      if (current && JSON.stringify(current) === JSON.stringify(todo)) continue;
+    for (const todo of upserts) {
       this.visible.set(todo.id, todo);
-      this.emit(todo, { upsert: todo });
+      this.emit(todo, { upsert: todo }, mergeMethods);
     }
   }
 
@@ -246,7 +253,6 @@ export class ThreadTodoFeed {
     this.owners = new Map(owners
       .filter((owner) => !owner.federation && owner.archivedAt === undefined)
       .map((owner) => [buildThreadIdentityKey(owner.source, owner.id), owner.title]));
-    this.listed = new Set(this.cards.keys());
   }
 
   private addCard(todo: ThreadTodo): void {
@@ -256,7 +262,11 @@ export class ThreadTodoFeed {
     else this.cards.set(key, [todo]);
   }
 
-  private emit(todo: ThreadTodo, change: { upsert: ThreadTodo } | { removedId: string }): void {
+  private emit(
+    todo: ThreadTodo,
+    change: { upsert: ThreadTodo } | { removedId: string },
+    mergeMethods: ThreadTodoMergeMethodPreferences,
+  ): void {
     this.revision += 1;
     this.onDelta({
       epoch: this.epoch,
@@ -264,7 +274,7 @@ export class ThreadTodoFeed {
       backend: todo.backend,
       threadId: todo.threadId,
       ...("upsert" in change ? { upserts: [change.upsert] } : { removedIds: [change.removedId] }),
-      mergeMethods: this.source.mergeMethods(),
+      mergeMethods,
     });
   }
 }

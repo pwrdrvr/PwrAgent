@@ -51,10 +51,6 @@ class Coalesced {
 
   constructor(private readonly task: () => Promise<void>) {}
 
-  get busy(): boolean {
-    return this.running !== undefined;
-  }
-
   run(): Promise<void> {
     if (this.running) {
       this.again = true;
@@ -191,8 +187,7 @@ type MountEntry = { mount: Mount; source: string; refresh: Coalesced };
  * followed through its deltas; an older owner is listed again on each of its
  * change markers. Either way a window receives deltas: one snapshot, then
  * one delta per card that changed. A pinned thread is listed when it is
- * pinned and after a reconnect; between those its owner's deltas, or its
- * markers for an older owner, keep it current.
+ * pinned, after a reconnect, and on each of its owner's change markers for it.
  */
 export class ThreadTodoViewHub {
   private localView: TodoView | undefined;
@@ -247,7 +242,9 @@ export class ThreadTodoViewHub {
     const method = event.notification.method;
     const params = event.notification.params as Partial<ThreadTodoFeedDelta & ThreadTodosChangedEvent>;
     const isDelta = method === "thread/todos/delta";
-    const isMarker = method === "thread/todos/changed" || method === "thread/todoDetails/changed";
+    // Its `thread/todoDetails/changed` companion names the same change for
+    // detail viewers; reading both would list twice.
+    const isMarker = method === "thread/todos/changed";
     const isReconnect = method === "federation/eventStream/changed";
     if (!isDelta && !isMarker && !isReconnect) return;
 
@@ -270,13 +267,14 @@ export class ThreadTodoViewHub {
       for (const entry of mounts) void entry.refresh.run();
       return;
     }
-    const feed = this.options.remote.supportsFeed(target);
-    const matching = mounts.filter((entry) => params.backend === undefined
-      || (entry.mount.backend === params.backend && entry.mount.threadId === params.threadId));
-    if (isMarker && !feed) {
-      for (const entry of matching) void entry.refresh.run();
-    } else if (isDelta && feed && params.backend !== undefined) {
-      for (const entry of matching) this.applyMountDelta(entry, params as ThreadTodoFeedDelta);
+    // A pinned thread follows its markers, never deltas: a list does not
+    // seed the owner's feed, which sends deltas only once a snapshot has.
+    if (!isMarker) return;
+    for (const entry of mounts) {
+      if (params.backend === undefined
+        || (entry.mount.backend === params.backend && entry.mount.threadId === params.threadId)) {
+        void entry.refresh.run();
+      }
     }
   }
 
@@ -340,7 +338,7 @@ export class ThreadTodoViewHub {
   private async resyncRemote(remote: RemoteView): Promise<void> {
     if (this.options.remote.supportsFeed(remote.target)) {
       remote.mode = "feed";
-      await remote.follower.sync();
+      await remote.follower.refresh();
     } else {
       remote.mode = "list";
       await remote.listing.run();
@@ -386,24 +384,6 @@ export class ThreadTodoViewHub {
       this.options.onUnavailable?.(error);
       view.replaceSource(source, []);
       view.setStatus(source, [`${mount.target.instanceId}: ${errorMessage(error)}`]);
-    }
-  }
-
-  /**
-   * A pinned thread's own delta. The sparse stream skips other threads'
-   * revisions, so it is applied without a gap check; a reconnect lists the
-   * thread again. A delta during a list could predate it, so it lists again.
-   */
-  private applyMountDelta(entry: MountEntry, delta: ThreadTodoFeedDelta): void {
-    if (entry.refresh.busy) {
-      void entry.refresh.run();
-      return;
-    }
-    const view = this.local();
-    const target = entry.mount.target;
-    for (const id of delta.removedIds ?? []) view.remove(remoteThreadTodoId(target, id));
-    for (const todo of delta.upserts ?? []) {
-      view.upsert(entry.source, projectRemoteThreadTodo(todo, target, delta.mergeMethods));
     }
   }
 }

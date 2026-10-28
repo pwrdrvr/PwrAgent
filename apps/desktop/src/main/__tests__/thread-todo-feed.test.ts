@@ -89,6 +89,11 @@ describe("ThreadTodoFeed", () => {
     expect(deltas[0]!.upserts).toEqual([card("a", "t", 1, { threadTitle: "Renamed" })]);
     expect(source.loadOwners).toHaveBeenCalledTimes(1);
     expect(source.withDispatchDefaults).not.toHaveBeenCalled();
+    expect((await feed.snapshot()).todos).toEqual([card("a", "t", 1, { threadTitle: "Renamed" })]);
+    // The stored title matches, so a later read of the thread publishes nothing.
+    feed.cardsChanged({ backend: "codex", threadId: "t" });
+    await feed.idle();
+    expect(deltas).toHaveLength(1);
   });
 
   it("reads the listing once for a card on a thread it has not seen", async () => {
@@ -107,6 +112,27 @@ describe("ThreadTodoFeed", () => {
     expect(deltas).toHaveLength(2);
   });
 
+  it("asks the listing again when a card changes on a thread a stale listing lacked", async () => {
+    const { feed, cards, source, deltas, setListing } = harness([card("a", "late", 1)], []);
+    expect((await feed.snapshot()).todos).toEqual([]);
+    setListing([owner("late")]);
+    cards.set("b", card("b", "late", 2));
+    feed.cardsChanged({ backend: "codex", threadId: "late" });
+    await feed.idle();
+    expect(source.loadOwners).toHaveBeenCalledTimes(2);
+    expect(deltas.flatMap((delta) => delta.upserts ?? []).map((todo) => todo.id)).toEqual(["b", "a"]);
+  });
+
+  it("reads merge preferences once per published change", async () => {
+    const { feed, cards, source } = harness([], [owner("t")]);
+    await feed.snapshot();
+    source.mergeMethods.mockClear();
+    for (const id of ["a", "b", "c"]) cards.set(id, card(id, "t", 1));
+    feed.cardsChanged({ backend: "codex", threadId: "t" });
+    await feed.idle();
+    expect(source.mergeMethods).toHaveBeenCalledTimes(1);
+  });
+
   it("re-reads owners after unarchive and provider refresh", async () => {
     const { feed, source, deltas, setListing } = harness([card("a", "t", 1)], []);
     expect((await feed.snapshot()).todos).toEqual([]);
@@ -115,8 +141,11 @@ describe("ThreadTodoFeed", () => {
     await feed.idle();
     expect(deltas.map((delta) => delta.upserts?.[0]?.id)).toEqual(["a"]);
     setListing([]);
+    source.readOpenCards.mockClear();
     feed.handleBackendEvent(event("navigation/providerThreads/refreshed", { failedProviders: 0 }));
     await feed.idle();
+    // A provider refresh changes owners, not card rows.
+    expect(source.readOpenCards).not.toHaveBeenCalled();
     expect(deltas.map((delta) => delta.removedIds?.[0])).toEqual([undefined, "a"]);
     expect(source.loadOwners).toHaveBeenCalledTimes(3);
   });

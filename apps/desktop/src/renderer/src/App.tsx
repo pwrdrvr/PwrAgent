@@ -2491,7 +2491,10 @@ function DesktopAppShell(props: {
   const unassignedThreadDraftCount = useUnassignedThreadDraftCount(composerDraftStore);
   const mountedTodoThreadKeys = useMemo(() => navigation.threads.filter((thread) => thread.federation)
     .map(threadSummaryIdentityKey).sort().join("\n"), [navigation.threads]);
-  const threadTodoController = useThreadTodos(desktopApi, mountedTodoThreadKeys);
+  // A viewer window shows one owner and mounts nothing. Every row there is
+  // the owner's, so a row change must not take a new To-do snapshot.
+  const threadTodoController = useThreadTodos(desktopApi,
+    readRendererFederationTarget() ? "" : mountedTodoThreadKeys);
   const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
   // Providers with threads, from the directory index that counts them all.
   // Keyed by the joined list so a refreshed page keeps one array identity.

@@ -61,6 +61,11 @@ export class ThreadTodoFeedFollower {
     return this.epoch === undefined ? this.sync() : Promise.resolve();
   }
 
+  /** Reads a snapshot, or joins the read already in flight. */
+  refresh(): Promise<void> {
+    return this.syncing ?? this.sync();
+  }
+
   /** Reads a snapshot. A call during a read asks for one more after it. */
   sync(): Promise<void> {
     if (this.syncing) {
