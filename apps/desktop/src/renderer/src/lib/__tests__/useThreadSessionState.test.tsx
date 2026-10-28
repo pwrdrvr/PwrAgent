@@ -5747,7 +5747,7 @@ describe("useThreadSessionState", () => {
       { itemId: "thought-1", phase: "commentary", text: "Checking the layout." },
       { itemId: "reply-1", phase: "final", text: "Putting the duration beside the headline." },
       { itemId: "reply-2", phase: "final", text: "The duration now sits beside the headline." },
-    ];
+    ] as const;
     act(() => {
       for (const { itemId, phase, text } of messages) {
         agentEventHandler?.({
