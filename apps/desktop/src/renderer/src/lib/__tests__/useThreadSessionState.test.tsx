@@ -5639,6 +5639,85 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingAssistantMessage).toBeUndefined();
   });
 
+  // Claude reports every assistant message of the turn as its own output
+  // part. ACP agents can report the whole turn's text as one part.
+  it.each([
+    { shape: "one part per message", output: (texts: string[]) => texts },
+    { shape: "the messages joined", output: (texts: string[]) => [texts.join("\n\n")] },
+    { shape: "the messages run together", output: (texts: string[]) => [texts.join("")] },
+  ])("does not repeat completed messages as a final answer when the turn output is $shape", async ({ output }) => {
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: vi.fn(async () => readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+      })),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries).toEqual([]);
+    });
+
+    const texts = [
+      "Putting the duration beside the headline.",
+      "Now re-rendering the screenshot.",
+      "The duration now sits beside the headline.",
+    ];
+    act(() => {
+      texts.forEach((text, index) => {
+        const itemId = `message-${index + 1}`;
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "item/agentMessage/delta",
+            params: { threadId: "thread-1", turnId: "turn-1", itemId, delta: text },
+          },
+        });
+        agentEventHandler?.({
+          backend: "codex",
+          notification: {
+            method: "item/completed",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              item: { id: itemId, type: "agentMessage", text },
+            },
+          },
+        });
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              output: output(texts).map((text) => ({ type: "text", text })),
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+      )
+    ).toEqual(texts.map((text) => `assistant:${text}`));
+  });
+
   it("replaces a transient message without persisting it in the transcript", async () => {
     let agentEventHandler:
       | ((event: {
