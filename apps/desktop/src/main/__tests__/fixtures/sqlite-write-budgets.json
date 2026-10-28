@@ -1356,6 +1356,20 @@
     "rowsChanged": 26,
     "statements": 27
   },
+  "usage-activity-index-minute-boundaries": {
+    "commits": 100,
+    "note": "100 existing live-row commits, one minute apart; 1,648,000 bytes WAL (~23.7 MB/day at 1/minute; ~17.8 MB/day above the same 100 row writes without tree changes), no added commits or idle writes",
+    "observedWalBytes": 1648000,
+    "rowsChanged": 100,
+    "statements": 100
+  },
+  "usage-activity-index-within-minute": {
+    "commits": 100,
+    "note": "100 existing live-row commits within ten seconds; 412,000 bytes WAL, no interval-tree changes within the minute and no added commits",
+    "observedWalBytes": 412000,
+    "rowsChanged": 100,
+    "statements": 100
+  },
   "usage-line-account-attribution": {
     "commits": 1,
     "note": "Identity rides the existing line transaction: zero additional commits and observed WAL bytes versus the baseline; ~6.6 MB/day existing ledger cost at 100 new lines/day, 0 MB/day measured attribution overhead",

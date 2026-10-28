@@ -8,6 +8,7 @@ import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import budgets from "./fixtures/usage-activity-read-budgets.json";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
@@ -36,14 +37,20 @@ function fixture(db = openInMemoryStateDb()) {
 /** Count actual sqlite -> JS rows, rather than the response's already bounded rows. */
 function observe(db: ReturnType<typeof openInMemoryStateDb>) {
   const prepare = db.raw.prepare.bind(db.raw);
-  const reads: Array<{ sql: string; args: unknown[]; rows: number; plan: string[] }> = [];
+  let seeks = 0;
+  db.raw.function("usage_budget_seek", (key: string) => { seeks++; return key; });
+  const reads: Array<{ sql: string; args: unknown[]; rows: number; seeks: number; plan: string[] }> = [];
   vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
-    const statement = prepare(sql);
+    // Count each candidate's actual ledger lookup, including rejected rows.
+    // The RHS function preserves the indexed lookup and query result.
+    const statement = prepare(sql.replaceAll("l.usage_line_id = k.usage_line_id",
+      "l.usage_line_id = usage_budget_seek(k.usage_line_id)"));
     if (!/^\s*(SELECT|WITH)\b/i.test(sql)) return statement;
     const all = statement.all.bind(statement);
     vi.spyOn(statement, "all").mockImplementation((...args: unknown[]) => {
+      const before = seeks;
       const result = all(...args);
-      reads.push({ sql, args, rows: result.length,
+      reads.push({ sql, args, rows: result.length, seeks: seeks - before,
         plan: (prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args) as Array<{ detail: string }>)
           .map((row) => row.detail),
       });
@@ -64,6 +71,24 @@ async function report(name: string, db: ReturnType<typeof openInMemoryStateDb>, 
 }
 
 describe("Usage Activity read budgets", () => {
+  it("measures index maintenance inside a real helper ledger write", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-activity-helper-write-");
+    const { db, store } = fixture(StateDb.open(temp.dbPath));
+    try {
+      const { writes } = await measureSqliteWrites(() => store.upsertThreadUsageLine({ line: {
+        usageLineId: "fixture-helper", backend: "codex", provider: "openai", threadId: "helper",
+        parentThreadId: "parent", scope: "monitor", status: "finalized", source: "monitor",
+        sourceItemId: "system:title:fixture", createdAt: start, model: "fixture-unknown",
+        inputTokens: 10, cachedInputTokens: 2, uncachedInputTokens: 8, outputTokens: 3,
+        reasoningOutputTokens: 1, totalTokens: 13, currency: "USD", priceStatus: "unpriced",
+        uncachedInputCostMicros: 0, cachedInputCostMicros: 0, outputCostMicros: 0, totalCostMicros: 0,
+      } }));
+      expectSqliteWriteBudget({ scenario: "usage-activity-index-helper-write", writes,
+        note: "One real finalized helper line with parent summaries; interval admission shares the existing ledger transaction, no separate commit" });
+    } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
+  });
+
   it("keeps backend identity and account groups separate and aggregates every cost component", async () => {
     const { db, store, add } = fixture();
     try {
@@ -147,7 +172,9 @@ describe("Usage Activity read budgets", () => {
         }
       });
       expectSqliteWriteBudget({ scenario: `usage-activity-index-${scenario}`, writes,
-        note: "100 existing live-row commits; minute-wide interval coordinates avoid tree maintenance within a minute; no timer or added commit" });
+        note: scenario === "within-minute"
+          ? "100 existing live-row commits within ten seconds; 412,000 bytes WAL, no interval-tree changes within the minute and no added commits"
+          : "100 existing live-row commits, one minute apart; 1,648,000 bytes WAL (~23.7 MB/day at 1/minute; ~17.8 MB/day above the same 100 row writes without tree changes), no added commits or idle writes" });
       const read = await measureSqliteWrites(async () => {
         await store.readUsageActivity(window);
         await store.readUsageActivity(window);
@@ -176,9 +203,10 @@ describe("Usage Activity read budgets", () => {
       expect(snapshot.rows.map((row) => row.line.usageLineId).sort()).toEqual(["contained", "live", "spanning"]);
       const ledger = reads.filter((read) => /thread_usage_lines/.test(read.sql));
       expect(ledger.length).toBeGreaterThan(0);
-      expect(ledger.flatMap((read) => read.plan).filter((plan) => /SCAN (l|t)\b/.test(plan))).toEqual([]);
-      expect(ledger.reduce((sum, read) => sum + read.rows, 0)).toBeLessThanOrEqual(4);
-      expect(reads.length).toBeLessThanOrEqual(8);
+      expect(ledger.flatMap((read) => read.plan).filter((plan) => /SCAN (l|t|k)\b/.test(plan))).toEqual([]);
+      expect(ledger.reduce((sum, read) => sum + read.rows, 0)).toBeLessThanOrEqual(budgets.narrow.ledgerRows);
+      expect(ledger.reduce((sum, read) => sum + read.seeks, 0)).toBeLessThanOrEqual(budgets.narrow.ledgerSeeks);
+      expect(reads.length).toBeLessThanOrEqual(budgets.narrow.materializingQueries);
     } finally { db.close(); }
   });
 
@@ -199,7 +227,9 @@ describe("Usage Activity read budgets", () => {
       expect(snapshot.rows[0]).toMatchObject({ rollup: { count: 6000 },
         line: { totalTokens: 78_000, totalCostMicros: 78_000, threadId: "fixture-thread" } });
       expect(reads.filter((read) => /thread_usage_lines/.test(read.sql))
-        .reduce((sum, read) => sum + read.rows, 0)).toBeLessThanOrEqual(2);
+        .reduce((sum, read) => sum + read.rows, 0)).toBeLessThanOrEqual(budgets.monitors.ledgerRows);
+      expect(reads.reduce((sum, read) => sum + read.seeks, 0)).toBeLessThanOrEqual(budgets.monitors.ledgerSeeks);
+      expect(reads.length).toBeLessThanOrEqual(budgets.monitors.materializingQueries);
     } finally { db.close(); }
   });
 
