@@ -1,8 +1,9 @@
 import type {
   FederationCapability, FederationRemoteTarget, ThreadTodo, ListThreadTodosRequest, ThreadTodoMergeMethodPreferences,
-  TodoUnavailableInstance,
+  TodoBusyThread, TodoUnavailableInstance,
 } from "@pwragent/shared";
 import { normalizeThreadReview, resolveThreadTodoMergeMethod } from "@pwragent/shared";
+import { expectedNavigationReadFailure } from "../../shared/navigation-ipc-result";
 import type { FederationRouter } from "./federation-router";
 import type { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
 
@@ -117,6 +118,7 @@ export class FederatedThreadTodoService {
       && (!filter.threadId || mount.threadId === filter.threadId))
       .map((mount) => [JSON.stringify([mount.target.instanceId, mount.backend, mount.threadId]), mount]));
     const errors: string[] = [];
+    const busyThreads: TodoBusyThread[] = [];
     const unavailableInstances = new Map<string, TodoUnavailableInstance>();
     const remote = await Promise.all([...unique.values()].map(async (mount) => {
       try {
@@ -126,12 +128,18 @@ export class FederatedThreadTodoService {
         errors.push(...response.errors ?? []);
         return response.todos;
       } catch (error) {
+        // A busy owner is expected contention. Name the thread instead, so
+        // the panel keeps its last cards while local cards stay fresh.
+        if (expectedNavigationReadFailure(error)?.code === "navigation_busy") {
+          busyThreads.push({ federationTarget: mount.target, backend: mount.backend, threadId: mount.threadId });
+          return [];
+        }
         this.options.onUnavailable?.(error);
         errors.push(`${mount.target.instanceId}: ${error instanceof Error ? error.message : String(error)}`);
         return [];
       }
     }));
-    return { ...listed, ...(errors.length ? { errors } : {}),
+    return { ...listed, ...(errors.length ? { errors } : {}), ...(busyThreads.length ? { busyThreads } : {}),
       ...(unavailableInstances.size ? { unavailableInstances: [...unavailableInstances.values()] } : {}),
       todos: [...listed.todos, ...remote.flat()].sort((a, b) => b.createdAt - a.createdAt) } as ThreadTodoOperationResponse<K>;
   }

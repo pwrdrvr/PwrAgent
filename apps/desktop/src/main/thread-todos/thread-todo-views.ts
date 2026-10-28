@@ -183,7 +183,15 @@ type RemoteView = {
   busyRetrySpent: boolean;
 };
 
-type MountEntry = { mount: Mount; source: string; refresh: Coalesced };
+type MountEntry = {
+  key: string;
+  mount: Mount;
+  source: string;
+  refresh: Coalesced;
+  /** The one deferred re-list a busy owner gets. */
+  busyRetry?: ReturnType<typeof setTimeout>;
+  busyRetrySpent: boolean;
+};
 
 /**
  * The To-do state each window shows, kept in step with its owners.
@@ -275,7 +283,7 @@ export class ThreadTodoViewHub {
     const mounts = [...this.mounts.values()].filter((entry) => entry.mount.target.instanceId === target.instanceId);
     if (mounts.length === 0) return;
     if (isReconnect) {
-      for (const entry of mounts) void entry.refresh.run();
+      for (const entry of mounts) void this.relistMount(entry);
       return;
     }
     // A pinned thread follows its markers, never deltas: a list does not
@@ -284,7 +292,7 @@ export class ThreadTodoViewHub {
     for (const entry of mounts) {
       if (params.backend === undefined
         || (entry.mount.backend === params.backend && entry.mount.threadId === params.threadId)) {
-        void entry.refresh.run();
+        void this.relistMount(entry);
       }
     }
   }
@@ -295,7 +303,7 @@ export class ThreadTodoViewHub {
       if (this.options.hasViewers(remote.target)) void this.resyncRemote(remote);
       else this.dropRemote(remote);
     }
-    for (const entry of this.mounts.values()) void entry.refresh.run();
+    for (const entry of this.mounts.values()) void this.relistMount(entry);
   }
 
   private local(): TodoView {
@@ -394,28 +402,50 @@ export class ThreadTodoViewHub {
     for (const [key, entry] of this.mounts) {
       if (next.has(key)) continue;
       this.mounts.delete(key);
+      clearTimeout(entry.busyRetry);
       view.clearSource(entry.source);
     }
     const added: MountEntry[] = [];
     for (const [key, mount] of next) {
       if (this.mounts.has(key)) continue;
       const source = `mount:${key}`;
-      const entry: MountEntry = { mount, source, refresh: new Coalesced(() => this.refreshMount(mount, source)) };
+      const entry: MountEntry = { key, mount, source, busyRetrySpent: false,
+        refresh: new Coalesced(() => this.refreshMount(entry)) };
       this.mounts.set(key, entry);
       added.push(entry);
     }
-    await Promise.all(added.map((entry) => entry.refresh.run()));
+    await Promise.all(added.map((entry) => this.relistMount(entry)));
   }
 
-  private async refreshMount(mount: Mount, source: string): Promise<void> {
+  /** Each pin, marker, reconnect or peer change earns one busy re-list. */
+  private relistMount(entry: MountEntry, busyRetry = false): Promise<void> {
+    if (!busyRetry) entry.busyRetrySpent = false;
+    return entry.refresh.run();
+  }
+
+  private async refreshMount(entry: MountEntry): Promise<void> {
+    const { mount, source } = entry;
     const view = this.local();
     try {
       const response = await this.options.remote.list(mount.target,
         { status: "open", backend: mount.backend, threadId: mount.threadId });
+      clearTimeout(entry.busyRetry);
+      entry.busyRetry = undefined;
       view.replaceSource(source, response.todos.map((todo) =>
         projectRemoteThreadTodo(todo, mount.target, response.mergeMethods)));
       view.setStatus(source, response.errors, response.unavailableInstances);
     } catch (error) {
+      // A busy owner is transient: the thread keeps its last cards with no
+      // error and is listed once more. Any other failure shows.
+      if (expectedNavigationReadFailure(error)?.code === "navigation_busy") {
+        if (entry.busyRetry || entry.busyRetrySpent) return;
+        entry.busyRetrySpent = true;
+        entry.busyRetry = setTimeout(() => {
+          entry.busyRetry = undefined;
+          if (this.mounts.get(entry.key) === entry) void this.relistMount(entry, true);
+        }, THREAD_TODO_BUSY_RETRY_MS);
+        return;
+      }
       this.options.onUnavailable?.(error);
       view.replaceSource(source, []);
       view.setStatus(source, [`${mount.target.instanceId}: ${errorMessage(error)}`]);
