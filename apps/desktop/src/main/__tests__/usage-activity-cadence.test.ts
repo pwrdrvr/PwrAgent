@@ -10,6 +10,8 @@ import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 const start = Date.UTC(2026, 9, 27, 15);
+// The opt-in report rebuilds 20,000-row fixtures for five samples per case.
+const reportTimeout = process.env.PWRAGENT_USAGE_CADENCE_DIR ? 120_000 : undefined;
 const scenarios = [
   { name: "request-boundaries", steps: 12, interval: 5000, threads: 1, flushes: 12 },
   { name: "steady-10hz", steps: 600, interval: 100, threads: 1, flushes: 60 },
@@ -148,4 +150,4 @@ it.each(scenarios)("replays active and idle usage cadence: $name", async (scenar
       vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers();
     }
   }
-});
+}, reportTimeout);
