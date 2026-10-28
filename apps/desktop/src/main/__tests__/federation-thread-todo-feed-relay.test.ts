@@ -73,10 +73,10 @@ function relayed(options: { legacyGateway?: boolean } = {}) {
   const ownerFrames: string[] = [];
   viewer.router.registerConnection(connection("gateway_one", (envelope) => {
     const params = (envelope as { params?: { eventClasses?: string[] } }).params;
-    gateway.applyEventSubscription(options.legacyGateway && params?.eventClasses
+    const relayed = options.legacyGateway && params?.eventClasses
       ? { ...envelope, params: { ...params, eventClasses: params.eventClasses.filter((name) => name !== "todo_feed") } }
-        as FederationProtocolEnvelope
-      : envelope, "viewer_one");
+      : envelope;
+    gateway.applyEventSubscription(relayed as FederationProtocolEnvelope, "viewer_one");
   }));
   gateway.router.registerConnection(connection("viewer_one",
     (envelope) => viewer.publishRemoteBackendEvent(envelope, "gateway_one")));
