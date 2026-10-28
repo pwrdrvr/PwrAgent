@@ -189,6 +189,7 @@ describe("desktop config [ui] section", () => {
       "sidebar_hidden = true",
       'active_context_tab = "providers"',
       'edited_files_dock = "sidebar"',
+      'launchpad_connections_dock = "sidebar"',
       "",
     ].join("\n");
 
@@ -199,6 +200,7 @@ describe("desktop config [ui] section", () => {
       sidebarHidden: true,
       activeContextTab: "providers",
       editedFilesDock: "sidebar",
+      launchpadConnectionsDock: "sidebar",
     });
   });
 
@@ -216,6 +218,7 @@ describe("desktop config [ui] section", () => {
         contextRailPinned: false,
         activeContextTab: "providers",
         editedFilesDock: "sidebar",
+        launchpadConnectionsDock: "sidebar",
       },
     });
     const written = applyTomlEdits("", edits);
@@ -226,6 +229,7 @@ describe("desktop config [ui] section", () => {
       contextRailPinned: false,
       activeContextTab: "providers",
       editedFilesDock: "sidebar",
+      launchpadConnectionsDock: "sidebar",
     });
   });
 
@@ -236,16 +240,19 @@ describe("desktop config [ui] section", () => {
       "context_rail_pinned = false",
       'active_context_tab = "providers"',
       'edited_files_dock = "sidebar"',
+      'launchpad_connections_dock = "sidebar"',
       "",
     ].join("\n");
     const edits = desktopSettingsPatchToEdits(
       {
         ui: {
-          // Defaults: sidebar shown, rail pinned-open, info tab, dock above.
+          // Defaults: sidebar shown, rail pinned-open, info tab, dock above,
+          // connection cards on the launchpad.
           sidebarHidden: false,
           contextRailPinned: true,
           activeContextTab: "info",
           editedFilesDock: "above",
+          launchpadConnectionsDock: "launchpad",
         },
       },
       parseTomlTables(existing, "test.toml"),
@@ -253,7 +260,7 @@ describe("desktop config [ui] section", () => {
     const written = applyTomlEdits(existing, edits);
     const config = parseDesktopSettingsToml(written, "test.toml");
 
-    // All four reverted to defaults → the section carries no values.
+    // All five reverted to defaults → the section carries no values.
     expect(config.ui).toBeUndefined();
   });
 });

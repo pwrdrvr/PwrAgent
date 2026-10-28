@@ -1233,6 +1233,10 @@ export class DesktopSettingsService {
           value: config.ui?.actionRunsDock ?? "above",
           source: config.ui?.actionRunsDock === undefined ? "default" : "config",
         },
+        launchpadConnectionsDock: {
+          value: config.ui?.launchpadConnectionsDock ?? "launchpad",
+          source: config.ui?.launchpadConnectionsDock === undefined ? "default" : "config",
+        },
       },
       federation: {
         mode: this.resolveFederationMode(config.federation?.mode),

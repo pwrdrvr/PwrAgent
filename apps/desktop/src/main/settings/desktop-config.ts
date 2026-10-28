@@ -201,6 +201,7 @@ export type DesktopSettingsConfig = {
     activeContextTab?: string;
     editedFilesDock?: string;
     actionRunsDock?: string;
+    launchpadConnectionsDock?: string;
     logs?: Partial<DesktopLogsViewerPreferences>;
   };
   federation?: {
@@ -1166,6 +1167,13 @@ export function desktopSettingsPatchToEdits(
       edits.push({ op: "delete", path: ["ui", "action_runs_dock"] });
     } else {
       set(["ui", "action_runs_dock"], patch.ui.actionRunsDock);
+    }
+  }
+  if (patch.ui?.launchpadConnectionsDock !== undefined) {
+    if (patch.ui.launchpadConnectionsDock === "launchpad") {
+      edits.push({ op: "delete", path: ["ui", "launchpad_connections_dock"] });
+    } else {
+      set(["ui", "launchpad_connections_dock"], patch.ui.launchpadConnectionsDock);
     }
   }
   // Help → Logs viewer prefs: same delete-on-default rule, in [ui.logs].
@@ -2276,6 +2284,7 @@ function normalizeDesktopConfig(
       activeContextTab: readString(ui?.active_context_tab),
       editedFilesDock: readString(ui?.edited_files_dock),
       actionRunsDock: readString(ui?.action_runs_dock),
+      launchpadConnectionsDock: readString(ui?.launchpad_connections_dock),
       logs: readLogsViewerConfig(uiLogs),
     },
     federation: {

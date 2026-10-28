@@ -124,13 +124,16 @@ import {
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { ThreadContextPanel } from "./ThreadContextPanel";
+import { ArrowRightToLineIcon } from "../../icons/ArrowRightToLineIcon";
 import {
   DEFAULT_CONTEXT_TAB,
   DEFAULT_ACTION_RUNS_DOCK,
   DEFAULT_EDITED_FILES_DOCK,
+  DEFAULT_LAUNCHPAD_CONNECTIONS_DOCK,
   type ActionRunsDock,
   type ContextTabId,
   type EditedFilesDock,
+  type LaunchpadConnectionsDock,
 } from "./context-panels/context-tab";
 import {
   createEditedFileGroupsCollector,
@@ -960,6 +963,13 @@ export type ThreadViewProps = {
   onEditedFilesDockChange?: (dock: EditedFilesDock) => void;
   actionRunsDock?: ActionRunsDock;
   onActionRunsDockChange?: (dock: ActionRunsDock) => void;
+  /**
+   * Where the new-thread connection cards render: the launchpad (default)
+   * or the context rail's Connections tab. "pending" until App has read the
+   * stored choice, so a docked card set never flashes on the launchpad.
+   */
+  launchpadConnectionsDock?: LaunchpadConnectionsDock | "pending";
+  onLaunchpadConnectionsDockChange?: (dock: LaunchpadConnectionsDock) => void;
   sidebarHidden?: boolean;
   onToggleSidebar?: () => void;
   /**
@@ -1356,11 +1366,15 @@ export function ThreadView(props: ThreadViewProps) {
       : props.activeContextTab ?? DEFAULT_CONTEXT_TAB;
   const editedFilesDock = props.editedFilesDock ?? DEFAULT_EDITED_FILES_DOCK;
   const actionRunsDock = props.actionRunsDock ?? DEFAULT_ACTION_RUNS_DOCK;
+  const launchpadConnectionsDock =
+    props.launchpadConnectionsDock ?? DEFAULT_LAUNCHPAD_CONNECTIONS_DOCK;
   const sidebarHidden = props.sidebarHidden ?? false;
   const onContextRailPinnedChange = props.onContextRailPinnedChange ?? noop;
   const onActiveContextTabChange = props.onActiveContextTabChange ?? noop;
   const onEditedFilesDockChange = props.onEditedFilesDockChange ?? noop;
   const onActionRunsDockChange = props.onActionRunsDockChange ?? noop;
+  const onLaunchpadConnectionsDockChange =
+    props.onLaunchpadConnectionsDockChange ?? noop;
   const onToggleSidebar = props.onToggleSidebar ?? noop;
   const [rewindConfirm, setRewindConfirm] = useState<RewindConfirmState>();
   const rewoundPromptRestoreId = useRef(0);
@@ -1930,6 +1944,53 @@ export function ThreadView(props: ThreadViewProps) {
   // composer's thread options the same way sandbox and approval do, and it
   // closes when the operator moves to another thread.
   const [launchpadMcpAccessOpen, setLaunchpadMcpAccessOpen] = useState(false);
+  // The launchpad's connection cards can move to the rail's Connections tab.
+  // The move flies the card list into the rail's first tab slot, then the
+  // tab replays its arrival ring (`connectionsLanding` counts moves).
+  const launchpadConnectionsRef = useRef<HTMLDivElement>(null);
+  const [connectionsDeparting, setConnectionsDeparting] = useState(false);
+  const [connectionsArriving, setConnectionsArriving] = useState(false);
+  const [connectionsLanding, setConnectionsLanding] = useState(0);
+  const moveConnectionsToSidebar = useCallback(() => {
+    const commit = (): void => {
+      setConnectionsDeparting(false);
+      setConnectionsArriving(false);
+      setConnectionsLanding((count) => count + 1);
+      onLaunchpadConnectionsDockChange("sidebar");
+    };
+    const list = launchpadConnectionsRef.current;
+    const spine = list
+      ?.closest(".thread-view__layout")
+      ?.querySelector<HTMLElement>(".context-rail__spine");
+    if (
+      !list
+      || !spine
+      || typeof list.animate !== "function"
+      || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
+      commit();
+      return;
+    }
+    const from = list.getBoundingClientRect();
+    const to = spine.getBoundingClientRect();
+    // The first tab's centre: the spine's 8px padding plus half a 34px tab.
+    const dx = to.left + to.width / 2 - (from.left + from.width / 2);
+    const dy = to.top + 25 - (from.top + from.height / 2);
+    setConnectionsDeparting(true);
+    list
+      .animate(
+        [
+          { transform: "none", opacity: 1 },
+          { transform: `translate(${dx}px, ${dy}px) scale(0.08)`, opacity: 0 },
+        ],
+        { duration: 320, easing: "cubic-bezier(0.5, 0, 0.75, 0)", fill: "forwards" },
+      )
+      .finished.then(commit, commit);
+  }, [onLaunchpadConnectionsDockChange]);
+  const showConnectionsOnLaunchpad = useCallback(() => {
+    setConnectionsArriving(true);
+    onLaunchpadConnectionsDockChange("launchpad");
+  }, [onLaunchpadConnectionsDockChange]);
   const [threadMcpAccessOpen, setThreadMcpAccessOpen] = useState(false);
   // Closing the panel is the cheap, reliable signal that the selection may
   // have changed; re-reading then keeps the composer badge honest without
@@ -4346,6 +4407,92 @@ export function ThreadView(props: ThreadViewProps) {
       }
     />
   );
+  // The connection cards, shared by the launchpad and the rail's Connections
+  // tab: the operator picks where they live, and they work the same in both.
+  const launchpadConnectionTiles = composerLaunchpad && !launchpadMaterializing ? (
+    <>
+      <PwrGitConnectionPrompt
+        backend={composerLaunchpad.backend}
+        desktopApi={props.desktopApi}
+        enabled={
+          composerLaunchpad.mcpConnectionIds?.includes(
+            PWRGIT_MCP_CONNECTION_ID,
+          ) === true
+        }
+        remoteOwnerLabel={
+          props.activeFederationTarget
+            ? props.activeFederationOwnerLabel ?? "the remote machine"
+            : undefined
+        }
+        onEnabledChange={async (enabled) => {
+          await props.onUpdateLaunchpad?.(
+            composerLaunchpad.directoryKey,
+            {
+              mcpConnectionIds: pwrGitConnectionIds(
+                composerLaunchpad.mcpConnectionIds,
+                enabled,
+              ),
+            },
+          );
+        }}
+      />
+      {/* Both PwrSuite apps get a card, so each can be discovered,
+          downloaded, and paired from here; per-thread selection also
+          lives in the composer's MCP access panel, which reaches an
+          existing thread too. The remote card offers access from the
+          machine that owns the thread, and the local panel refuses to
+          edit a remote thread's selection. */}
+      <PwrSnapConnectionPrompt
+        backend={composerLaunchpad.backend}
+        desktopApi={props.desktopApi}
+        enabled={
+          composerLaunchpad.mcpConnectionIds?.includes(
+            PWRSNAP_MCP_CONNECTION_ID,
+          ) === true
+        }
+        remoteOwnerLabel={
+          props.activeFederationTarget
+            ? props.activeFederationOwnerLabel ?? "the remote machine"
+            : undefined
+        }
+        onEnabledChange={async (enabled) => {
+          await props.onUpdateLaunchpad?.(
+            composerLaunchpad.directoryKey,
+            {
+              mcpConnectionIds: pwrSnapConnectionIds(
+                composerLaunchpad.mcpConnectionIds,
+                enabled,
+              ),
+            },
+          );
+        }}
+      />
+      {/* A third-party service, advertised until set up. Its remote
+          owner's CLI is invisible here, so a remote thread shows none. */}
+      <SandboxerConnectionPrompt
+        backend={composerLaunchpad.backend}
+        desktopApi={props.desktopApi}
+        enabled={
+          composerLaunchpad.mcpConnectionIds?.includes(
+            SANDBOXER_MCP_CONNECTION_ID,
+          ) === true
+        }
+        remote={props.activeFederationTarget !== undefined}
+        onEnabledChange={async (enabled) => {
+          await props.onUpdateLaunchpad?.(
+            composerLaunchpad.directoryKey,
+            {
+              mcpConnectionIds: sandboxerConnectionIds(
+                composerLaunchpad.mcpConnectionIds,
+                enabled,
+              ),
+            },
+          );
+        }}
+        onOpenSettings={openMcpConnectionSettings}
+      />
+    </>
+  ) : null;
   // Each view's own part of the chat column, ahead of the composer slot. The
   // fragments are keyed so React never matches one view's children against
   // another's; only the composer slot, a sibling of these, crosses views.
@@ -4369,101 +4516,36 @@ export function ThreadView(props: ThreadViewProps) {
     </div>
   ) : composerLaunchpad ? (
     <Fragment key="launchpad">
-      <div
-        aria-label="Connections"
-        className="thread-view__connections"
-        role="group"
-        tabIndex={0}
-      >
-        <div className="pwrsuite-tiles">
-          {!launchpadMaterializing ? (
-            <PwrGitConnectionPrompt
-              backend={composerLaunchpad.backend}
-              desktopApi={props.desktopApi}
-              enabled={
-                composerLaunchpad.mcpConnectionIds?.includes(
-                  PWRGIT_MCP_CONNECTION_ID,
-                ) === true
-              }
-              remoteOwnerLabel={
-                props.activeFederationTarget
-                  ? props.activeFederationOwnerLabel ?? "the remote machine"
-                  : undefined
-              }
-              onEnabledChange={async (enabled) => {
-                await props.onUpdateLaunchpad?.(
-                  composerLaunchpad.directoryKey,
-                  {
-                    mcpConnectionIds: pwrGitConnectionIds(
-                      composerLaunchpad.mcpConnectionIds,
-                      enabled,
-                    ),
-                  },
-                );
-              }}
-            />
+      {launchpadConnectionsDock === "launchpad" ? (
+        <div
+          ref={launchpadConnectionsRef}
+          aria-label="Connections"
+          className={`thread-view__connections${
+            connectionsArriving ? " is-arriving" : ""
+          }`}
+          role="group"
+          tabIndex={0}
+          onAnimationEnd={(event) => {
+            if (event.target === event.currentTarget) setConnectionsArriving(false);
+          }}
+        >
+          {props.onLaunchpadConnectionsDockChange ? (
+          <div className="thread-view__connections-bar">
+            <button
+              className="thread-view__connections-dock tooltip-target"
+              data-tooltip="Move the connection cards to the sidebar"
+              disabled={connectionsDeparting}
+              type="button"
+              onClick={moveConnectionsToSidebar}
+            >
+              <ArrowRightToLineIcon size={14} aria-hidden="true" />
+              Move to sidebar
+            </button>
+          </div>
           ) : null}
-          {/* Both PwrSuite apps get a card, so each can be discovered,
-              downloaded, and paired from here; per-thread selection also
-              lives in the composer's MCP access panel, which reaches an
-              existing thread too. The remote card offers access from the
-              machine that owns the thread, and the local panel refuses to
-              edit a remote thread's selection. */}
-          {!launchpadMaterializing ? (
-            <PwrSnapConnectionPrompt
-              backend={composerLaunchpad.backend}
-              desktopApi={props.desktopApi}
-              enabled={
-                composerLaunchpad.mcpConnectionIds?.includes(
-                  PWRSNAP_MCP_CONNECTION_ID,
-                ) === true
-              }
-              remoteOwnerLabel={
-                props.activeFederationTarget
-                  ? props.activeFederationOwnerLabel ?? "the remote machine"
-                  : undefined
-              }
-              onEnabledChange={async (enabled) => {
-                await props.onUpdateLaunchpad?.(
-                  composerLaunchpad.directoryKey,
-                  {
-                    mcpConnectionIds: pwrSnapConnectionIds(
-                      composerLaunchpad.mcpConnectionIds,
-                      enabled,
-                    ),
-                  },
-                );
-              }}
-            />
-          ) : null}
-          {/* A third-party service, advertised until set up. Its remote
-              owner's CLI is invisible here, so a remote thread shows none. */}
-          {!launchpadMaterializing ? (
-            <SandboxerConnectionPrompt
-              backend={composerLaunchpad.backend}
-              desktopApi={props.desktopApi}
-              enabled={
-                composerLaunchpad.mcpConnectionIds?.includes(
-                  SANDBOXER_MCP_CONNECTION_ID,
-                ) === true
-              }
-              remote={props.activeFederationTarget !== undefined}
-              onEnabledChange={async (enabled) => {
-                await props.onUpdateLaunchpad?.(
-                  composerLaunchpad.directoryKey,
-                  {
-                    mcpConnectionIds: sandboxerConnectionIds(
-                      composerLaunchpad.mcpConnectionIds,
-                      enabled,
-                    ),
-                  },
-                );
-              }}
-              onOpenSettings={openMcpConnectionSettings}
-            />
-          ) : null}
+          <div className="pwrsuite-tiles">{launchpadConnectionTiles}</div>
         </div>
-      </div>
+      ) : null}
       {launchpadMcpAccessOpen && !props.activeFederationTarget ? (
         <McpAccessPanel
           backend={composerLaunchpad.backend}
@@ -4847,6 +4929,15 @@ export function ThreadView(props: ThreadViewProps) {
             onWidthChange={setContextRailWidth}
             width={contextRailWidth}
             pinned={contextRailPinned}
+            launchpadConnections={
+              launchpadConnectionTiles && launchpadConnectionsDock === "sidebar"
+                ? {
+                    content: launchpadConnectionTiles,
+                    landing: connectionsLanding,
+                    onShowOnLaunchpad: showConnectionsOnLaunchpad,
+                  }
+                : undefined
+            }
             {...contextPanelThreadProps}
           />
         </div>

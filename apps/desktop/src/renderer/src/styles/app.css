@@ -23431,10 +23431,122 @@ a.button {
   }
 }
 
+/* The "Move to sidebar" row above the tiles. Its 30px (24px button plus
+   6px gap) comes out of the list's top air, so the composer below sits
+   where it did before the row existed. */
+.thread-view__connections:has(> .thread-view__connections-bar) {
+  padding-top: clamp(4px, calc(5vh - 30px), 26px);
+}
+
+.thread-view__connections-bar {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  width: calc(100% - 32px);
+  max-width: var(--chat-column-max);
+  margin-bottom: 6px;
+}
+
+/* Quiet until wanted: it belongs to the whole group, so it must not
+   compete with the tiles' own actions. Hover and focus take the rail tab's
+   paint, since that is where the cards go. */
+.thread-view__connections-dock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.thread-view__connections-dock:hover:not([disabled]),
+.thread-view__connections-dock:focus-visible {
+  border-color: var(--border-subtle);
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+.thread-view__connections-dock:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Back from the rail: the list slides in from the side it left by. */
+.thread-view__connections.is-arriving {
+  animation: thread-view-connections-arrive 260ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+@keyframes thread-view-connections-arrive {
+  from {
+    opacity: 0;
+    transform: translateX(48px) scale(0.96);
+  }
+}
+
 /* Short windows: the list already scrolls; give its air back first. */
 @media (max-height: 780px) {
   .thread-view__connections {
     padding-top: 12px;
+  }
+
+  .thread-view__connections:has(> .thread-view__connections-bar) {
+    padding-top: 4px;
+  }
+}
+
+/* The same cards in the rail's Connections tab. The rail is 300-560px, too
+   narrow for the launchpad's one-line tile, so the action drops under the
+   copy and the pitch wraps instead of truncating. */
+.connections-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pwrsuite-tiles.connections-panel__tiles {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  width: auto;
+  max-width: none;
+}
+
+.connections-panel__tiles > .mcp-connection {
+  grid-template-columns: 32px minmax(0, 1fr);
+  row-gap: 10px;
+  min-height: 0;
+  padding: 10px 12px;
+}
+
+.connections-panel__tiles .mcp-connection__icon {
+  width: 32px;
+  height: 32px;
+}
+
+.connections-panel__tiles .mcp-connection__action {
+  grid-column: 2;
+  justify-content: flex-start;
+}
+
+.connections-panel__tiles .pwrsuite-tile__line {
+  white-space: normal;
+}
+
+.connections-panel__tiles:has(.mcp-connection) + .connections-panel__empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-view__connections.is-arriving,
+  .context-rail__tab.is-landing {
+    animation: none;
   }
 }
 
@@ -33769,6 +33881,23 @@ div.composer-error-row__toggle {
 .context-rail__tab.is-active {
   color: var(--accent-bright);
   background: var(--bg-row-active);
+}
+
+/* The Connections tab as the launchpad's cards land in it: one accent ring
+   that fades, so the eye follows the cards to their new home. */
+.context-rail__tab.is-landing {
+  animation: context-rail-tab-landing 900ms ease-out;
+}
+
+@keyframes context-rail-tab-landing {
+  0%,
+  30% {
+    border-color: var(--accent-border);
+    box-shadow:
+      0 0 0 2px var(--accent-border),
+      0 0 16px 4px var(--accent-shadow);
+    color: var(--accent-bright);
+  }
 }
 
 .context-rail__tab.is-active::after {
