@@ -616,11 +616,20 @@ function isProtectedBranch(branch?: string): boolean {
   return !branch || ["main", "master", "develop", "trunk"].includes(branch);
 }
 
+/**
+ * What a worktree starts from when the launchpad names no base branch.
+ * `current_branch` follows the source checkout, as the launchpad picker does.
+ * `default_branch` skips it: a source worktree's branch can hold another
+ * thread's unpublished work, which a standalone follow-up must not inherit.
+ */
+export type WorktreeBaseSource = "current_branch" | "default_branch";
+
 async function resolveVerifiedWorktreeBaseBranch(params: {
   repoRoot: string;
   sourceRoot?: string;
   requestedBranch?: string;
   requireLocalBranch?: boolean;
+  worktreeBase?: WorktreeBaseSource;
   gitEnv?: NodeJS.ProcessEnv;
   runGit?: GitCommandRunner;
 }): Promise<string | undefined> {
@@ -639,10 +648,13 @@ async function resolveVerifiedWorktreeBaseBranch(params: {
   }
 
   const sourceRoot = params.sourceRoot ?? params.repoRoot;
+  const followCurrentBranch = params.worktreeBase !== "default_branch";
   const [rawCurrentBranch, baseBranchesOutput, remoteHead] = await Promise.all([
-    runGit(sourceRoot, ["rev-parse", "--abbrev-ref", "HEAD"], params.gitEnv).catch(
-      () => "",
-    ),
+    followCurrentBranch
+      ? runGit(sourceRoot, ["rev-parse", "--abbrev-ref", "HEAD"], params.gitEnv).catch(
+        () => "",
+      )
+      : "",
     runGit(
       params.repoRoot,
       [
@@ -1197,6 +1209,7 @@ export class GitDirectoryService {
       Partial<Pick<NavigationLaunchpadDraft, "backend">> & {
         excludedWorktreePaths?: string[];
         worktreeBranchMode?: "attached" | "detached";
+        worktreeBase?: WorktreeBaseSource;
       },
   ): Promise<PreparedLaunchpadWorkspace> {
     const prepare = async (): Promise<PreparedLaunchpadWorkspace> =>
@@ -1255,6 +1268,7 @@ export class GitDirectoryService {
       Partial<Pick<NavigationLaunchpadDraft, "backend">> & {
         excludedWorktreePaths?: string[];
         worktreeBranchMode?: "attached" | "detached";
+        worktreeBase?: WorktreeBaseSource;
       },
   ): Promise<PreparedLaunchpadWorkspace> {
     if (launchpad.directoryKind === "workspace") {
@@ -1314,6 +1328,7 @@ export class GitDirectoryService {
       requireLocalBranch: launchpad.worktreeBranchMode === "attached",
       runGit: this.runGitCommand,
       sourceRoot,
+      worktreeBase: launchpad.worktreeBase,
     });
     if (!baseBranch) {
       return {

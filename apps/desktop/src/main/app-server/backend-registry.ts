@@ -659,6 +659,7 @@ import {
 import type {
   DirectoryGitStatusEntry,
   GitWorkspaceInspection,
+  WorktreeBaseSource,
 } from "./git-directory-service";
 import { GitWorkingStateService } from "./git-working-state-service";
 import type {
@@ -18821,6 +18822,8 @@ export class DesktopBackendRegistry {
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
     branchName?: string;
+    /** Base for a new worktree when `branchName` is unset. */
+    worktreeBase?: WorktreeBaseSource;
     requiredWorkMode?: NavigationLaunchpadDraft["workMode"];
     parentThreadId?: string;
     parentThreadBackend?: AppServerBackendKind;
@@ -18843,6 +18846,7 @@ export class DesktopBackendRegistry {
       linkedDirectories,
       workMode,
       branchName,
+      worktreeBase,
       requiredWorkMode,
       parentThreadId,
       parentThreadBackend,
@@ -18881,6 +18885,7 @@ export class DesktopBackendRegistry {
           directoryLabel: path.basename(request.cwd) || request.cwd,
           directoryPath: request.cwd,
           workMode: "worktree",
+          ...(worktreeBase ? { worktreeBase } : {}),
         });
       preparedWorkspaceRollback = preparedWorkspace.rollback;
       cwd = preparedWorkspace.cwd;
