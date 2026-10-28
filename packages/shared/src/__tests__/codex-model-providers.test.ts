@@ -9,6 +9,7 @@ import {
   formatModelOptionLabel,
   isLoopbackCodexBaseUrl,
   isValidCodexModelProviderId,
+  LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
   modelOptionsForThreadProvider,
   parseCodexProviderModelId,
   resolveModelOptionReference,
@@ -127,6 +128,23 @@ describe("buildCodexModelProviderConfigOverrides", () => {
     ]);
     expect(buildCodexModelProviderConfigOverrides([refuseless], new Set()).some((entry) => entry.includes("env_key")))
       .toBe(false);
+  });
+
+  it("lets a loopback provider stay silent through a long prefill, and only a loopback one", () => {
+    // Codex defaults to 300000 ms, which a long uncached llama.cpp prompt outlasts.
+    expect(LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS).toBe(900_000);
+    const local = { id: "flint", name: "Flint", baseUrl: "http://127.0.0.1:8080/v1" };
+    expect(buildCodexModelProviderConfigOverrides([local, refuseless], new Set())).toEqual([
+      "model_providers.flint.name=\"Flint\"",
+      "model_providers.flint.base_url=\"http://127.0.0.1:8080/v1\"",
+      "model_providers.flint.wire_api=\"responses\"",
+      "model_providers.flint.requires_openai_auth=false",
+      "model_providers.flint.stream_idle_timeout_ms=900000",
+      "model_providers.refuseless.name=\"Refuseless\"",
+      "model_providers.refuseless.base_url=\"https://api.refuseless.example/v1\"",
+      "model_providers.refuseless.wire_api=\"responses\"",
+      "model_providers.refuseless.requires_openai_auth=false",
+    ]);
   });
 });
 

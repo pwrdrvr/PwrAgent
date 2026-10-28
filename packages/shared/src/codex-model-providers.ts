@@ -344,6 +344,13 @@ export function validateCodexModelProviders(value: unknown): CodexModelProviderS
   });
 }
 
+/**
+ * Codex's `stream_idle_timeout_ms` for a provider on this machine. Codex's
+ * 300000 ms default ends the stream while llama-server silently processes a
+ * long uncached prompt. The value stays finite so a hung server still fails.
+ */
+export const LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS = 15 * 60_000;
+
 function tomlString(value: string): string {
   return JSON.stringify(value);
 }
@@ -364,6 +371,9 @@ export function buildCodexModelProviderConfigOverrides(
       `${prefix}.base_url=${tomlString(provider.baseUrl)}`,
       `${prefix}.wire_api="responses"`,
       `${prefix}.requires_openai_auth=false`,
+      ...(isLoopbackCodexBaseUrl(provider.baseUrl)
+        ? [`${prefix}.stream_idle_timeout_ms=${LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS}`]
+        : []),
       ...(providerIdsWithKeys.has(provider.id)
         ? [`${prefix}.env_key=${tomlString(codexModelProviderApiKeyEnv(provider.id))}`]
         : []),

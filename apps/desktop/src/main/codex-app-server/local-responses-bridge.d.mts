@@ -5,7 +5,9 @@ export type LocalModelCatalog = {
   [key: string]: unknown;
 };
 export function discoverModelCatalog(upstream: string, template: LocalModelCatalog, apiKey?: string): Promise<LocalModelCatalog>;
-export function startBridge(upstream: string, apiKey?: string): Promise<Server>;
+/** How long the bridge waits on a silent upstream socket. */
+export const DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS: number;
+export function startBridge(upstream: string, apiKey?: string, options?: { idleTimeoutMs?: number }): Promise<Server>;
 export function translateRequest(request: Record<string, unknown>): {
   body: Record<string, unknown>;
   names: Map<string, { name: string; namespace?: string }>;

@@ -1,6 +1,60 @@
 import { createHash } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { once } from "node:events";
+
+/**
+ * How long the bridge waits on a silent upstream socket. llama-server sends
+ * nothing while it processes an uncached prompt, which can take minutes deep
+ * into a long context. Codex's own `stream_idle_timeout_ms` should match.
+ */
+export const DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS = 15 * 60_000;
+
+class UpstreamIdleTimeoutError extends Error {
+  constructor(timeoutMs) {
+    super(`Local model sent nothing for ${timeoutMs} ms`);
+    this.status = 504;
+  }
+}
+
+/**
+ * POST without `fetch`: undici's default dispatcher ends a response after
+ * 300 s without headers or body bytes. Node's HTTP client has no response
+ * deadline, so the socket idle timer below is the only one.
+ */
+function postUpstream(url, headers, body, signal, idleTimeoutMs) {
+  return new Promise((resolve, reject) => {
+    let response;
+    const req = httpRequest(url, {
+      method: "POST",
+      agent: false,
+      signal,
+      timeout: idleTimeoutMs,
+      headers: { ...headers, "Content-Length": Buffer.byteLength(body) },
+    }, (res) => {
+      response = res;
+      if (res.statusCode >= 300 && res.statusCode < 400) {
+        res.resume();
+        reject(new Error("Local model upstream redirected"));
+        return;
+      }
+      resolve(res);
+    });
+    req.on("timeout", () => {
+      const error = new UpstreamIdleTimeoutError(idleTimeoutMs);
+      response?.destroy(error);
+      req.destroy(error);
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+async function readText(stream) {
+  const decoder = new TextDecoder();
+  let text = "";
+  for await (const chunk of stream) text += decoder.decode(chunk, { stream: true });
+  return text + decoder.decode();
+}
 
 function loopbackUpstream(upstream) {
   const target = new URL(upstream);
@@ -130,8 +184,11 @@ export function translateResponse(value, names) {
   return result;
 }
 
-export async function startBridge(upstream, apiKey) {
+export async function startBridge(upstream, apiKey, { idleTimeoutMs = DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS } = {}) {
   const target = loopbackUpstream(upstream);
+  if (!Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs <= 0) {
+    throw new Error("The upstream idle timeout must be a positive whole number of milliseconds");
+  }
   const server = createServer(async (req, res) => {
     const abort = new AbortController();
     res.on("close", () => abort.abort());
@@ -148,17 +205,17 @@ export async function startBridge(upstream, apiKey) {
         chunks.push(chunk);
       }
       const { body, names } = translateRequest(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-      const response = await fetch(`${target.href.replace(/\/$/, "")}/responses`, {
-        method: "POST",
-        redirect: "error",
-        headers: { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
-        body: JSON.stringify(body),
-        signal: abort.signal,
-      });
-      const contentType = response.headers.get("content-type") ?? "application/json";
-      res.writeHead(response.status, { "Content-Type": contentType, "Cache-Control": "no-cache" });
+      const response = await postUpstream(
+        `${target.href.replace(/\/$/, "")}/responses`,
+        { "Content-Type": "application/json", ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}) },
+        JSON.stringify(body),
+        abort.signal,
+        idleTimeoutMs,
+      );
+      const contentType = response.headers["content-type"] ?? "application/json";
+      res.writeHead(response.statusCode, { "Content-Type": contentType, "Cache-Control": "no-cache" });
       if (!contentType.includes("text/event-stream")) {
-        const text = await response.text();
+        const text = await readText(response);
         try { res.end(JSON.stringify(translateResponse(JSON.parse(text), names))); }
         catch { res.end(text); }
         return;
@@ -171,7 +228,7 @@ export async function startBridge(upstream, apiKey) {
         }
         if (!res.write(`${line}\n`)) await once(res, "drain", { signal: abort.signal });
       };
-      for await (const chunk of response.body) {
+      for await (const chunk of response) {
         pending += decoder.decode(chunk, { stream: true });
         let boundary;
         while ((boundary = pending.indexOf("\n")) >= 0) {
@@ -185,7 +242,7 @@ export async function startBridge(upstream, apiKey) {
     } catch (error) {
       if (abort.signal.aborted) return;
       if (res.headersSent) res.destroy(error);
-      else res.writeHead(400, { "Content-Type": "application/json" }).end(JSON.stringify({
+      else res.writeHead(error.status ?? 400, { "Content-Type": "application/json" }).end(JSON.stringify({
         error: { message: error.message, type: "local_responses_bridge_error" },
       }));
     }

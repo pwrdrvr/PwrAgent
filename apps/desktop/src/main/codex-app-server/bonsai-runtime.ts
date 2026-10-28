@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { CodexModelProviderSettings } from "@pwragent/shared";
+import { LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS, type CodexModelProviderSettings } from "@pwragent/shared";
 import { resolveActiveProfilePath } from "../profile";
 import { discoverModelCatalog, startBridge, type LocalModelCatalog } from "./local-responses-bridge.mjs";
 
@@ -84,7 +84,8 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
   try {
     const catalogPath = path.join(directory, "models.json");
     await writeFile(catalogPath, JSON.stringify(catalog), { mode: 0o600 });
-    bridge = await startBridge(provider.baseUrl, apiKey);
+    // Codex and the bridge wait the same time on a silent prefill.
+    bridge = await startBridge(provider.baseUrl, apiKey, { idleTimeoutMs: LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS });
     const address = bridge.address();
     if (!address || typeof address === "string") throw new Error("The Bonsai bridge has no loopback address.");
     return {
@@ -94,6 +95,7 @@ export async function prepareBonsaiRuntime(provider: CodexModelProviderSettings,
         `model_provider=${JSON.stringify(provider.id)}`,
         `model_providers.${provider.id}.base_url="http://127.0.0.1:${address.port}/v1"`,
         `model_providers.${provider.id}.supports_websockets=false`,
+        `model_providers.${provider.id}.stream_idle_timeout_ms=${LOCAL_CODEX_PROVIDER_STREAM_IDLE_TIMEOUT_MS}`,
         `model_catalog_json=${JSON.stringify(catalogPath)}`,
         "model_context_window=65536",
         "model_auto_compact_token_limit=49152",

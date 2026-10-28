@@ -8,7 +8,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { onTestFinished, test } from "vitest";
-import { discoverModelCatalog, startBridge, translateRequest, translateResponse } from "./codex-local-responses-bridge.mjs";
+import {
+  DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS,
+  discoverModelCatalog,
+  startBridge,
+  translateRequest,
+  translateResponse,
+} from "./codex-local-responses-bridge.mjs";
 
 const execFileAsync = promisify(execFile);
 const bridgePath = fileURLToPath(new URL("./codex-local-responses-bridge.mjs", import.meta.url));
@@ -121,13 +127,15 @@ test("launcher supplies a private discovered catalog and removes it after Codex 
     const fs = require("node:fs");
     const arg = process.argv.find((value) => value.startsWith("model_catalog_json="));
     const path = JSON.parse(arg.slice("model_catalog_json=".length));
-    console.log(JSON.stringify({ path, catalog: JSON.parse(fs.readFileSync(path, "utf8")) }));
+    const idle = process.argv.filter((value) => value.includes("stream_idle_timeout_ms"));
+    console.log(JSON.stringify({ path, idle, catalog: JSON.parse(fs.readFileSync(path, "utf8")) }));
   `);
   const { stdout } = await execFileAsync(process.execPath, [
     bridgePath, "--codex", process.execPath, "--upstream", upstream, "--provider", "local",
     "--model-catalog", template, "--", child,
   ]);
   const result = JSON.parse(stdout);
+  assert.deepEqual(result.idle, [`model_providers.local.stream_idle_timeout_ms=${DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS}`]);
   assert.deepEqual(result.catalog.models[0].input_modalities, ["text", "image"]);
   assert.deepEqual(JSON.parse(await readFile(template, "utf8")), catalogTemplate);
   await assert.rejects(stat(path.dirname(result.path)), { code: "ENOENT" });
@@ -223,4 +231,75 @@ test("streams fragmented SSE and restores tool namespaces", async () => {
   assert.equal(data.item.namespace, "files");
   assert.match(sse, /data: \[DONE\]/);
   assert.equal(received.input[0].role, "system");
+});
+
+/** Holds each phase of a streamed response back for `gapMs` of silence. */
+async function silentUpstream({ beforeHeadersMs = 0, midStreamMs = 0 }) {
+  const upstream = createServer(async (req, res) => {
+    for await (const _chunk of req);
+    await new Promise((resolve) => setTimeout(resolve, beforeHeadersMs));
+    if (res.destroyed) return;
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({ type: "response.created" })}\n\n`);
+    await new Promise((resolve) => setTimeout(resolve, midStreamMs));
+    if (res.destroyed) return;
+    res.end(`data: ${JSON.stringify({ type: "response.completed" })}\n\ndata: [DONE]\n\n`);
+  });
+  upstream.listen(0, "127.0.0.1");
+  await once(upstream, "listening");
+  onTestFinished(() => { upstream.closeAllConnections(); upstream.close(); });
+  return `http://127.0.0.1:${upstream.address().port}/v1`;
+}
+
+async function bridgeFor(upstream, idleTimeoutMs) {
+  const bridge = await startBridge(upstream, undefined, { idleTimeoutMs });
+  onTestFinished(() => { bridge.closeAllConnections(); bridge.close(); });
+  return (body = { input: [], stream: true }) => fetch(`http://127.0.0.1:${bridge.address().port}/v1/responses`, {
+    method: "POST", body: JSON.stringify(body),
+  });
+}
+
+test("waits far longer than undici's 300 s fetch default on a silent upstream, but not forever", () => {
+  assert.equal(DEFAULT_UPSTREAM_IDLE_TIMEOUT_MS, 15 * 60_000);
+});
+
+test.each([
+  { phase: "before headers", gap: { beforeHeadersMs: 400 } },
+  { phase: "mid-stream", gap: { midStreamMs: 400 } },
+])("streams through a silent prefill shorter than the idle timeout: $phase", async ({ gap }) => {
+  const post = await bridgeFor(await silentUpstream(gap), 5_000);
+  const response = await post();
+  assert.equal(response.status, 200);
+  const sse = await response.text();
+  assert.match(sse, /response\.created/);
+  assert.match(sse, /response\.completed/);
+  assert.match(sse, /data: \[DONE\]/);
+});
+
+test("answers 504 when the upstream stays silent past the idle timeout before headers", async () => {
+  const post = await bridgeFor(await silentUpstream({ beforeHeadersMs: 400 }), 100);
+  const response = await post();
+  assert.equal(response.status, 504);
+  assert.deepEqual(await response.json(), {
+    error: { message: "Local model sent nothing for 100 ms", type: "local_responses_bridge_error" },
+  });
+});
+
+test("drops the stream when the upstream goes silent past the idle timeout mid-stream", async () => {
+  const post = await bridgeFor(await silentUpstream({ midStreamMs: 400 }), 100);
+  const response = await post();
+  assert.equal(response.status, 200);
+  await assert.rejects(response.text());
+});
+
+test("rejects an unusable idle timeout and does not follow upstream redirects", async () => {
+  for (const idleTimeoutMs of [0, -1, 1.5, Number.NaN, Infinity]) {
+    await assert.rejects(startBridge("http://127.0.0.1:9/v1", undefined, { idleTimeoutMs }), /idle timeout/);
+  }
+  const destination = await metadataServer();
+  const source = await metadataServer({ redirect: `${destination.upstream}/responses` });
+  const response = await (await bridgeFor(source.upstream, 5_000))({ input: [] });
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).error.message, /redirected/);
+  assert.deepEqual(destination.requests, []);
 });
