@@ -1851,6 +1851,8 @@ function findUniqueTranscriptOrderSource(
   entry: AppServerThreadEntry,
   exactSourcesById: ReadonlyMap<string, AppServerThreadEntry>,
   logicalSourceIndex: LogicalTranscriptMatchIndex,
+  readDetailOwners: ReadonlyMap<string, AppServerThreadEntry>,
+  sourceDetailOwners: ReadonlyMap<string, ReadonlySet<AppServerThreadEntry>>,
 ): AppServerThreadEntry | undefined {
   const exactMatch = exactSourcesById.get(entry.id);
   if (exactMatch) {
@@ -1866,6 +1868,8 @@ function findUniqueTranscriptOrderSource(
       typeof source.createdAt === "number" &&
       source.id !== entry.id &&
       sameTurnOrUnknown(entry, source) &&
+      !sourceToolBelongsToAnotherRow(entry, source, readDetailOwners) &&
+      !entryToolHasAnotherSource(entry, source, sourceDetailOwners) &&
       transcriptEntriesMatch(entry, source),
   );
 }
@@ -1877,6 +1881,41 @@ function sameTurnOrUnknown(
   const entryTurnId = entry.turn?.id;
   const sourceTurnId = source.turn?.id;
   return !entryTurnId || !sourceTurnId || entryTurnId === sourceTurnId;
+}
+
+// A tool is one row in the read and one in the live ledger, and the tool id
+// ties them together. A repeated command still matches other rows by its
+// text, and taking such a row's time or place moves this row to where the
+// other run happened. So a content match is refused when the live row holds
+// a tool the read places in another row, or when this row's own tools sit in
+// another live row. A read row whose tool ids the ledger never saw (Codex
+// replays parsed commands under new ids) can still match by text.
+function sourceToolBelongsToAnotherRow(
+  entry: AppServerThreadEntry,
+  source: AppServerThreadEntry,
+  readDetailOwners: ReadonlyMap<string, AppServerThreadEntry>,
+): boolean {
+  if (source.type !== "activity") {
+    return false;
+  }
+  return source.details.some((detail) => {
+    const owner = readDetailOwners.get(detail.id);
+    return owner !== undefined && owner !== entry;
+  });
+}
+
+function entryToolHasAnotherSource(
+  entry: AppServerThreadEntry,
+  source: AppServerThreadEntry,
+  sourceDetailOwners: ReadonlyMap<string, ReadonlySet<AppServerThreadEntry>>,
+): boolean {
+  if (entry.type !== "activity") {
+    return false;
+  }
+  return entry.details.some((detail) => {
+    const owners = sourceDetailOwners.get(detail.id);
+    return owners !== undefined && !owners.has(source);
+  });
 }
 
 type HydratedEntryOrderMatch = {
@@ -1999,6 +2038,27 @@ function carryForwardTranscriptEntryOrder(
     }
   }
   const logicalSourceIndex = createLogicalTranscriptMatchIndex(logicalSources);
+  const readDetailOwners = new Map<string, AppServerThreadEntry>();
+  for (const entry of response.replay.entries) {
+    if (entry.type === "activity") {
+      for (const detail of entry.details) {
+        readDetailOwners.set(detail.id, entry);
+      }
+    }
+  }
+  const sourceDetailOwners = new Map<string, Set<AppServerThreadEntry>>();
+  for (const source of logicalSources) {
+    if (source.type === "activity") {
+      for (const detail of source.details) {
+        const owners = sourceDetailOwners.get(detail.id);
+        if (owners) {
+          owners.add(source);
+        } else {
+          sourceDetailOwners.set(detail.id, new Set([source]));
+        }
+      }
+    }
+  }
   const sourceByHydratedEntry = new Map<
     AppServerThreadEntry,
     AppServerThreadEntry
@@ -2008,6 +2068,8 @@ function carryForwardTranscriptEntryOrder(
       entry,
       exactSourcesById,
       logicalSourceIndex,
+      readDetailOwners,
+      sourceDetailOwners,
     )
   );
   const claimsBySource = new Map<AppServerThreadEntry, number>();
