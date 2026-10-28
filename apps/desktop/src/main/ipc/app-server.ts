@@ -1283,6 +1283,10 @@ type PrLookupRefreshParams = {
   lookupKey: string;
   lookupDirectoryPaths: string[];
   previousPrs: PrSummary[];
+  // When this thread's own overlay last answered this lookup. It counts
+  // toward this thread's refresh cooldown only and never enters the shared
+  // lookup registry.
+  threadLookupObservedAt?: number;
 };
 
 type PendingPrLookupRefresh = {
@@ -4589,17 +4593,18 @@ class DesktopAppServerService {
       request.directoryPaths,
     );
     const existingLookupMatches = existing?.prsRefreshKey === requestKey;
-    if (existingLookupMatches) {
-      this.rememberPrLookup({
-        lookupKey,
-        provider,
-        branch,
-        directoryPaths: lookupDirectoryPaths,
-        prs: existingPrs.filter((pr) => !pr.explicitlyAttached),
-        fetchedAt: existing?.prsFetchedAt ?? 0,
-      });
-    }
-    const lookupEntry = this.prLookupRegistry.get(lookupKey);
+    // The lookup registry is shared by every thread on this branch and
+    // checkout, so it holds only what a branch lookup returned. Never seed it
+    // from this thread's overlay: that list carries the thread's own history
+    // (PRs from earlier branches, detached PRs), and a seeded entry attached
+    // that history to every other thread in the same checkout.
+    // A claim leaves a placeholder entry (fetchedAt 0) until its lookup
+    // answers. Only an answered entry is a result; until then this thread's
+    // own matching overlay stands in for it.
+    const registryEntry = this.prLookupRegistry.get(lookupKey);
+    const lookupEntry = registryEntry && registryEntry.fetchedAt > 0
+      ? registryEntry
+      : undefined;
     const lookupPrs = lookupEntry
       ? this.canonicalizePrs(lookupEntry.prs)
       : existingLookupMatches
@@ -4640,7 +4645,9 @@ class DesktopAppServerService {
     const visibleKnownPrs = (): PrSummary[] =>
       filterDetachedPullRequests(knownPrs, existing?.detachedPrKeys);
     const statusFetchedAt = lookupEntry?.fetchedAt
-      ?? (existingPrs.length > 0 ? existing?.prsFetchedAt : undefined);
+      ?? (existingPrs.length > 0 || existingLookupMatches
+        ? existing?.prsFetchedAt
+        : undefined);
     const freshness = pullRequestStatusFreshness(statusFetchedAt, now);
     const fetcher = this.getPrFetcher();
     const providerAvailability = await fetcher.getProviderAvailability(
@@ -4696,7 +4703,7 @@ class DesktopAppServerService {
         ghAvailable: false,
       };
     }
-    if (lookupEntry && lookupEntry.fetchedAt > 0) {
+    if (lookupEntry) {
       knownPrs = await this.persistPullRequestLookupHit({
         backend,
         request,
@@ -4774,6 +4781,9 @@ class DesktopAppServerService {
       lookupKey,
       lookupDirectoryPaths,
       previousPrs: knownPrs,
+      ...(existingLookupMatches && existing?.prsFetchedAt
+        ? { threadLookupObservedAt: existing.prsFetchedAt }
+        : {}),
     });
 
     return {
@@ -4974,6 +4984,7 @@ class DesktopAppServerService {
           prKeys: params.previousPrs.map(getPrStatusKey),
           threadKeys: [buildThreadIdentityKey(params.backend, params.request.threadId)],
         },
+        params.threadLookupObservedAt,
       );
       if (claim.skippedReason) {
         // Not recorded as activity. A cooldown skip means the data is seconds
@@ -5320,6 +5331,7 @@ class DesktopAppServerService {
     provider: string,
     terminalOnly: boolean,
     activityContext?: { prKeys: string[]; threadKeys: string[] },
+    threadLookupObservedAt = 0,
   ): PrLookupRefreshClaim {
     const now = Date.now();
     const minInterval =
@@ -5338,6 +5350,7 @@ class DesktopAppServerService {
     const lastRequestedAt = Math.max(
       entry?.[timestampField] ?? 0,
       entry?.fetchedAt ?? 0,
+      threadLookupObservedAt,
     );
     const ageMs = now - lastRequestedAt;
     const slack = trigger === "scheduled" ? SCHEDULED_THREAD_PR_REFRESH_SLACK_MS : 0;
