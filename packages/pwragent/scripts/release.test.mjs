@@ -44,9 +44,12 @@ test("release validation permits only the pinned native PTY dependency and bundl
     { repository: { url: "https://example.com", directory: "packages/pwragent" } },
     { dependencies: { "@pwragent/federation": "workspace:*" } },
     { dependencies: {} }, { dependencies: undefined },
-    { dependencies: { "node-pty": "*" } },
+    { dependencies: { "node-pty": "*" } }, { dependencies: { "node-pty": "^1.2.0-beta.15" } },
     { dependencies: { "node-pty": "1.2.0-beta.14" } },
-    { dependencies: { ...pkg.dependencies, ws: "*" } },
+    { dependencies: { "node-pty": "1.2.0-beta.16" } },
+    { dependencies: { ...pkg.dependencies, ws: "8.22.0" } },
+    { bundleDependencies: undefined }, { bundleDependencies: [] },
+    { bundleDependencies: ["node-pty", "ws"] },
     { optionalDependencies: { ws: "*" } }, { peerDependencies: { ws: "*" } }]) {
     assert.throws(() => releaseMetadata({ ...pkg, ...change }));
   }

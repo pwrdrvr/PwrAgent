@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,21 @@ try {
   mkdirSync(output, { recursive: true });
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   releaseMetadata(pkg);
-  const [packed] = JSON.parse(run("npm", ["pack", "--json", "--foreground-scripts=false", "--pack-destination", temporary], { cwd: root }));
+  const require = createRequire(import.meta.url);
+  const ptyRequire = createRequire(require.resolve("node-pty/package.json"));
+  const nativePackages = [["node-pty", require], ["node-addon-api", ptyRequire]];
+  run(process.execPath, [path.join(root, "scripts/build.mjs")], { cwd: root });
+  // npm pack follows pnpm's external symlinks and can emit ../../.pnpm paths.
+  // Stage a flat dependency tree without mutating the checkout's node_modules.
+  const staging = path.join(temporary, "package");
+  mkdirSync(staging);
+  for (const file of ["package.json", "bin", "src", "examples", "README.md", "LICENSE", "dist", "licenses"]) {
+    cpSync(path.join(root, file), path.join(staging, file), { recursive: true, dereference: true });
+  }
+  for (const [name, resolver] of nativePackages) {
+    cpSync(path.dirname(resolver.resolve(`${name}/package.json`)), path.join(staging, "node_modules", name), { recursive: true, dereference: true });
+  }
+  const [packed] = JSON.parse(run("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", temporary], { cwd: staging }));
   const tarball = path.join(temporary, packed.filename);
   const files = new Set(packed.files.map((file) => file.path));
   for (const required of ["package.json", "bin/pwragent.js", "src/cli.js", "src/daemon.js",
@@ -27,18 +41,33 @@ try {
     assert.ok(files.has(required), `Missing packed file: ${required}`);
   }
   for (const file of files) {
-    assert.match(file, /^(package\.json|LICENSE|README\.md|bin\/[^/]+\.js|src\/[^/]+\.(js|ts)|examples\/[^/]+\.service|licenses\/xterm-LICENSE|dist\/(federation-core\.js|ws-LICENSE|THIRD_PARTY_LICENSES))$/,
+    assert.ok(!file.split("/").includes(".."), `Packed paths must stay inside the package: ${file}`);
+    assert.match(file, /^(package\.json|LICENSE|README\.md|bin\/[^/]+\.js|src\/[^/]+\.(js|ts)|examples\/[^/]+\.service|dist\/(federation-core\.js|ws-LICENSE|THIRD_PARTY_LICENSES)|licenses\/xterm-LICENSE|node_modules\/(node-pty|node-addon-api)\/(?!.*(?:^|\/)node_modules\/).+)$/,
       `Unexpected packed file: ${file}`);
   }
   const unpacked = (file) => run("tar", ["-xOf", tarball, `package/${file}`]);
   const packedPackage = JSON.parse(unpacked("package.json"));
   assert.deepEqual(releaseMetadata(packedPackage), releaseMetadata(pkg));
   assert.equal(unpacked("LICENSE"), readFileSync(path.join(root, "LICENSE"), "utf8"));
-  const require = createRequire(import.meta.url);
   const federationRequire = createRequire(require.resolve("@pwragent/federation/federation-transport"));
   const wsPackage = federationRequire.resolve("ws/package.json");
   assert.equal(JSON.parse(readFileSync(wsPackage, "utf8")).license, "MIT");
   assert.equal(unpacked("dist/ws-LICENSE"), readFileSync(path.join(path.dirname(wsPackage), "LICENSE"), "utf8"));
+  assert.deepEqual([...packed.bundled].sort(), ["node-addon-api", "node-pty"]);
+  for (const [name, resolver] of nativePackages) {
+    const sourcePackagePath = resolver.resolve(`${name}/package.json`);
+    const sourcePackage = JSON.parse(readFileSync(sourcePackagePath, "utf8"));
+    const bundledPackage = JSON.parse(unpacked(`node_modules/${name}/package.json`));
+    assert.equal(bundledPackage.name, name);
+    assert.equal(bundledPackage.version, sourcePackage.version);
+    assert.equal(bundledPackage.license, "MIT");
+    assert.deepEqual(bundledPackage.dependencies, sourcePackage.dependencies);
+    const licenseFiles = readdirSync(path.dirname(sourcePackagePath)).filter((file) => /^licen[cs]e(?:[.-]|$)/i.test(file));
+    assert.ok(licenseFiles.length > 0, `Missing native dependency license: ${name}`);
+    for (const file of licenseFiles) {
+      assert.equal(unpacked(`node_modules/${name}/${file}`), readFileSync(path.join(path.dirname(sourcePackagePath), file), "utf8"));
+    }
+  }
   assert.equal(unpacked("dist/THIRD_PARTY_LICENSES"), readFileSync(path.join(root, "dist/THIRD_PARTY_LICENSES"), "utf8"));
   assert.equal(unpacked("licenses/xterm-LICENSE"), readFileSync(path.join(root, "licenses/xterm-LICENSE"), "utf8"));
   assert.match(unpacked("bin/pwragent.js"), /^#!\/usr\/bin\/env node\n/);
@@ -50,16 +79,7 @@ try {
   const prefix = path.join(temporary, "install");
   const env = { ...process.env, HOME: home, NODE_PATH: "", NODE_OPTIONS: "",
     NPM_CONFIG_USERCONFIG: npmrc, NPM_CONFIG_CACHE: path.join(temporary, "cache") };
-  // Seed a new cache with only the declared native dependency and its npm
-  // dependencies. The installed CLI below must then work offline, without
-  // workspace links, lifecycle scripts or the operator's npm cache.
-  const dependencies = path.join(temporary, "runtime-dependencies");
-  mkdirSync(dependencies);
-  writeFileSync(path.join(dependencies, "package.json"), JSON.stringify({
-    private: true, license: "MIT", dependencies: packedPackage.dependencies,
-  }));
-  run("npm", ["install", "--prefix", dependencies, "--ignore-scripts", "--no-audit", "--no-fund", "--registry=https://registry.npmjs.org"],
-    { cwd: temporary, env });
+  // No workspace links, registry downloads, install scripts or ambient npm cache.
   run("npm", ["install", "--global", "--prefix", prefix, "--offline", "--ignore-scripts", "--no-audit", "--no-fund", tarball],
     { cwd: temporary, env });
   const fixture = path.join(temporary, "codex.mjs");

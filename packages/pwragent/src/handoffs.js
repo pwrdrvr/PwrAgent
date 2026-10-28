@@ -43,10 +43,17 @@ export function setupHandoffs(federation, directory) {
       return cwd;
     },
     assertTarget: (target) => {
-      const route = router.getConnection(target);
-      if (!route || !["thread_handoff", "turn_control", "environment_actions", "file_push"].every((capability) => route.capabilities.includes(capability))) {
+      const required = ["thread_handoff", "turn_control", "environment_actions", "file_push"];
+      const direct = router.getConnection(target);
+      const gateway = router.getConnection(federation.state.gateway?.gatewayInstanceId);
+      const relayed = !direct && gateway?.capabilities.includes("gateway_relay")
+        && required.every((capability) => gateway.capabilities.includes(capability))
+        ? federation.remotePeers.get(target) : undefined;
+      const destination = direct || (relayed?.status === "connected" ? relayed : undefined);
+      if (!destination || !required.every((capability) => destination.capabilities.includes(capability))) {
         throw new Error("The receiving peer must be connected and grant thread handoff, turn control, environment actions and file push");
       }
+      if (!direct && relayed.receiverPermissions?.filePush !== true) throw new Error("The receiving peer must allow incoming files");
     },
     push: (target, file) => pushFederationFile(federation.endpoint(target), file),
     remoteImport: (target, request) => federation.endpoint(target).request({ method: THREAD_HANDOFF_METHODS.import, params: request, timeoutMs: 120000 }),

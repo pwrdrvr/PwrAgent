@@ -162,6 +162,33 @@ describe("DesktopMessagingRuntime", () => {
     // regression there still fails fast instead of idling for the full 30s.
   }, process.platform === "win32" ? 30_000 : 15_000);
 
+  it("requires a source-bound file receipt and authenticates the caller before dispatching outpost files", async () => {
+    const { runtime } = await createRuntimeHarness();
+    const { getDesktopFederationRuntime } = await import("../federation/federation-runtime");
+    const federation = getDesktopFederationRuntime();
+    vi.spyOn(federation, "messagingSourceInstanceId").mockReturnValue("pwr_provider_owner");
+    const bytes = Buffer.from("%PDF-1.7 fixture");
+    const consume = vi.spyOn(federation, "consumeMessagingFile").mockResolvedValue(bytes);
+    const authorize = vi.spyOn(runtime, "authorizeRetainedTool").mockResolvedValue({ allowed: true });
+    const dispatch = vi.spyOn(runtime, "handlePwrAgentMessagingRequest").mockResolvedValue({ ok: true, data: { attachments: [] } });
+    const { handleFederationMessagingDestination: handle } = await import("../federation/federation-messaging-tools");
+    const context = { backend: "codex" as const, threadId: "outpost-thread", turnId: "outpost-turn", requestingInstanceId: "forged-caller",
+      causalMessagingSource: { ownerId: "profile-fixture", requestId: "request-fixture", instanceId: "pwr_provider_owner" } };
+    const request = { operation: "send_messaging_file" as const, context, args: { path: "/owner/secret.pdf", filename: "report.pdf" } };
+    expect(await handle({ kind: "request", request }, "pwr_outpost")).toMatchObject({ ok: false, error: { code: "forbidden" } });
+    expect(consume).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    const file = { path: "/receiver/acknowledged.bin", sizeBytes: bytes.length, sha256: "fixture-digest" };
+    expect(await handle({ kind: "request", request, file }, "pwr_outpost")).toMatchObject({ ok: true });
+    expect(consume).toHaveBeenCalledWith("pwr_outpost", file);
+    expect(dispatch).toHaveBeenCalledWith({ ...request, context: { ...context, requestingInstanceId: "pwr_outpost" }, args: { ...request.args, path: "" } }, bytes);
+    authorize.mockResolvedValue({ allowed: false });
+    expect(await handle({ kind: "request", request, file }, "pwr_outpost")).toMatchObject({ ok: false, error: { code: "forbidden" } });
+    expect(consume).toHaveBeenCalledTimes(1);
+    consume.mockRestore(); authorize.mockRestore(); dispatch.mockRestore();
+    vi.mocked(federation.messagingSourceInstanceId).mockRestore();
+  });
+
   it("reports history only for implemented native conversation scopes", async () => {
     const adapter = Object.assign(createAdapter("slack"), { fetchRecentMessages: vi.fn(async () => []) });
     const { runtime } = await createRuntimeHarness({ adapter });

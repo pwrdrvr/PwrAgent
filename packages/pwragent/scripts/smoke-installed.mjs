@@ -43,6 +43,7 @@ async function stop(daemon) { daemon.kill("SIGTERM"); assert.equal(await daemon.
 
 try {
   assert.match(await command(["--help"]), /PwrAgent Headless/);
+  // Exercise native input, resize and exit from the offline-installed tarball.
   const installedRequire = createRequire(realpathSync(cli));
   const terminal = installedRequire("node-pty").spawn("/bin/sh", [], { cwd: temporary, cols: 80, rows: 24 });
   let terminalExited = false;

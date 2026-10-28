@@ -19,7 +19,10 @@ export function releaseMetadata(pkg, { tag, confirmation } = {}) {
   assert.ok(!pkg.version.startsWith("0.0.0"), "The placeholder version cannot be released");
   const distTag = pkg.version.includes("-") ? "next" : "latest";
   assert.equal(pkg.publishConfig.tag, distTag, "publishConfig.tag must match the version channel");
-  assert.deepEqual(pkg.dependencies, nativeRuntimeDependencies, "Only the reviewed, pinned native PTY dependency may remain external");
+  // JavaScript services are bundled by esbuild. The pinned native PTY package
+  // must travel in the npm tarball, including its transitive native headers.
+  assert.deepEqual(pkg.dependencies, nativeRuntimeDependencies, "Only the pinned native PTY dependency may ship");
+  assert.deepEqual(pkg.bundleDependencies, ["node-pty"], "The native PTY dependency must be bundled in the tarball");
   for (const field of ["optionalDependencies", "peerDependencies"]) {
     assert.equal(Object.keys(pkg[field] || {}).length, 0, "Runtime dependencies must remain bundled");
   }

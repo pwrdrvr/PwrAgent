@@ -245,36 +245,40 @@ export type PushFederationFileOptions = {
 
 export async function pushFederationFile(
   rpc: Pick<FederationRpcEndpoint, "request">,
-  sourcePath: string,
+  sourcePath: string | Uint8Array,
   name?: string,
   options: PushFederationFileOptions = {},
 ): Promise<FilePushResult> {
   const { signal, onProgress } = options;
   signal?.throwIfAborted();
-  if (!path.isAbsolute(sourcePath)) throw new Error("The source file path must be absolute.");
-  if (!(await fs.stat(sourcePath)).isFile()) throw new Error("Select a regular file.");
-  const file = await fs.open(sourcePath, "r");
+  const bytes = typeof sourcePath === "string" ? undefined
+    : Buffer.from(sourcePath.buffer, sourcePath.byteOffset, sourcePath.byteLength);
+  if (typeof sourcePath === "string" && !path.isAbsolute(sourcePath)) throw new Error("The source file path must be absolute.");
+  // A FIFO must not block before descriptor validation; this also covers
+  // a regular path replaced by a pipe between selection and open.
+  const file = typeof sourcePath === "string" ? await fs.open(sourcePath, constants.O_RDONLY | constants.O_NONBLOCK) : undefined;
   let transferId: string | undefined;
   try {
-    const stat = await file.stat();
+    const stat = file ? await file.stat() : { size: bytes!.byteLength, mtimeMs: 0, isFile: () => true };
     if (!stat.isFile() || stat.size > FILE_PUSH_MAX_BYTES) throw new Error("Select a regular file of at most 512 MiB.");
-    const begin = await rpc.request<{ transferId: string }>({ method: FILE_PUSH_METHODS.begin, params: { name: filename(name ?? path.basename(sourcePath)), sizeBytes: stat.size } });
+    const begin = await rpc.request<{ transferId: string }>({ method: FILE_PUSH_METHODS.begin, params: { name: filename(name ?? (typeof sourcePath === "string" ? path.basename(sourcePath) : "file")), sizeBytes: stat.size } });
     transferId = begin.transferId;
     onProgress?.(0, stat.size);
     const hash = createHash("sha256");
-    const buffer = Buffer.alloc(FILE_PUSH_CHUNK_BYTES);
+    const buffer = bytes ? undefined : Buffer.alloc(FILE_PUSH_CHUNK_BYTES);
     let offset = 0;
     while (offset < stat.size) {
-      const { bytesRead } = await file.read(buffer, 0, Math.min(buffer.length, stat.size - offset), offset);
+      const bytesRead = bytes ? Math.min(FILE_PUSH_CHUNK_BYTES, stat.size - offset)
+        : (await file!.read(buffer!, 0, Math.min(buffer!.length, stat.size - offset), offset)).bytesRead;
       if (!bytesRead) throw new Error("Source file changed during transfer.");
-      const chunk = buffer.subarray(0, bytesRead);
+      const chunk = bytes ? bytes.subarray(offset, offset + bytesRead) : buffer!.subarray(0, bytesRead);
       hash.update(chunk);
       await rpc.request({ method: FILE_PUSH_METHODS.chunk, params: { transferId, offset, dataBase64: chunk.toString("base64") } });
       offset += bytesRead;
       onProgress?.(offset, stat.size);
       signal?.throwIfAborted();
     }
-    const after = await file.stat();
+    const after = file ? await file.stat() : stat;
     if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error("Source file changed during transfer.");
     signal?.throwIfAborted();
     // Finalization can copy the whole file on volumes that deny hard links.
@@ -286,6 +290,51 @@ export async function pushFederationFile(
     }
     throw error;
   } finally {
-    await file.close();
+    await file?.close();
+  }
+}
+
+/** Single-use receipts exist only in the receiver process that acknowledged the
+ * authenticated source. A path, hash, or a receipt from another peer is never
+ * enough authority to load provider-owner files. Restart drops this authority. */
+export class FederationFilePushReceipts {
+  private readonly receipts = new Map<string, { peerId: string; file: FilePushResult; expires: number }>();
+
+  record(peerId: string, file: FilePushResult): void {
+    if (this.receipts.size >= 128) this.receipts.delete(this.receipts.keys().next().value!);
+    this.receipts.set(file.path, { peerId, file: { ...file }, expires: Date.now() + 5 * 60_000 });
+  }
+
+  clear(): void { this.receipts.clear(); }
+
+  async consume(peerId: string, input: FilePushResult, maxBytes: number): Promise<Uint8Array> {
+    const receipt = input && this.receipts.get(input.path);
+    if (!receipt || receipt.peerId !== peerId || receipt.expires < Date.now()
+      || receipt.file.sizeBytes !== input.sizeBytes || receipt.file.sha256 !== input.sha256) {
+      throw new Error("No acknowledged file receipt belongs to this authenticated source.");
+    }
+    // Claim before awaiting disk I/O; overlapping requests cannot deliver twice.
+    this.receipts.delete(input.path);
+    if (input.sizeBytes <= 0 || input.sizeBytes > maxBytes) throw new Error("The received file exceeds the messaging upload limit.");
+    const handle = await fs.open(receipt.file.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const before = await handle.stat();
+      if (!before.isFile() || before.size !== input.sizeBytes) throw new Error("The received file changed after acknowledgement.");
+      const bytes = Buffer.alloc(input.sizeBytes);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
+        if (!bytesRead) break;
+        offset += bytesRead;
+      }
+      const after = await handle.stat();
+      if (offset !== bytes.length || before.size !== after.size || before.mtimeMs !== after.mtimeMs
+        || before.ctimeMs !== after.ctimeMs || createHash("sha256").update(bytes).digest("hex") !== input.sha256) {
+        throw new Error("The received file changed after acknowledgement.");
+      }
+      return bytes;
+    } finally {
+      await handle.close();
+    }
   }
 }

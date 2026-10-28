@@ -250,6 +250,17 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     };
   }
 
+  async supportsMessagingPdfTools(request: { backend: AppServerBackendKind; threadId: string; federationTarget?: FederationTarget }): Promise<boolean> {
+    if (request.backend !== "codex") return false;
+    if (request.federationTarget?.scope === "remote") {
+      const instanceId = request.federationTarget.instanceId;
+      const peer = this.federation?.connectedPeerTargets().find((peer) => peer.target.instanceId === instanceId);
+      if (!peer?.capabilities.includes("messaging_files") || !peer.capabilities.includes("messaging_route")) return false;
+      return await this.federation?.remoteBackend(peer.target).supportsMessagingPdfTools?.({ backend: request.backend, threadId: request.threadId }) ?? false;
+    }
+    return await this.registry.supportsMessagingPdfTools(request);
+  }
+
   async listNavigationOwners(): Promise<{ owners: Array<{ target?: FederationRemoteTarget; label: string }>; omitted: number }> {
     const peers = this.federation?.connectedPeerTargets().filter((peer) => peer.capabilities.includes("messaging_route")) ?? [];
     return { owners: [{ label: "This instance" }, ...peers.slice(0, 7).map((peer) => ({ target: peer.target, label: peer.label }))],

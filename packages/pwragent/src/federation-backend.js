@@ -6,6 +6,7 @@ import { ACTIVE, atomicJson, digest } from "./store.js";
 
 export const METHOD_CAPABILITIES = Object.fromEntries([
   ["backend.resolveThreadAdmissionState", "messaging_route"],
+  ["backend.supportsMessagingPdfTools", "messaging_route"],
   ...["getNavigationQueryPage", "getNavigationLaunchpadConfig", "getNavigationSelectedDetail", "getNavigationQueueProjection", "releaseNavigationAttentionView", "listThreads", "listBackends", "resolveThread", "markThreadSeen", "getProjectPage", "lookupArchivedThreads"].map((method) => [`backend.${method}`, "thread_navigation"]),
   ...["readThread", "readTurnAssistantReply", "listSkills", "listThreadMcpServers"].map((method) => [`backend.${method}`, "thread_detail"]),
   ...["startThread", "materializeDirectoryLaunchpad", "startTurn", "interruptTurn", "steerTurn", "controlActiveTurn", "renameThread", "setThreadModelSettings", "setThreadExecutionMode"].map((method) => [`backend.${method}`, "turn_control"]),
@@ -62,7 +63,7 @@ export class HeadlessBackend {
       if (!previous || previous.id === job.id || job.createdAt > previous.createdAt) this.latestJobs.set(job.threadId, job);
       if (this.threads.has(job.threadId)) continue;
       this.threads.set(job.threadId, { id: job.threadId, title: `Thread ${job.threadId.slice(0, 8)}`, titleSource: "fallback",
-        createdAt: Date.parse(job.createdAt), cwd: job.cwd || this.runtime.workspace, sandbox: job.sandbox, model: job.model });
+        createdAt: Date.parse(job.createdAt), messagingFileTools: job.messagingFileTools === true, cwd: job.cwd || this.runtime.workspace, sandbox: job.sandbox, model: job.model });
       changed = true;
     }
     if (changed) this.persist();
@@ -149,6 +150,7 @@ export class HeadlessBackend {
         return { message: messages.find((message) => params.itemId ? message.id === params.itemId : message.text === params.text) || null };
       }
       case "readThread": return this.readThread(params.threadId);
+      case "supportsMessagingPdfTools": return params.backend === "codex" && this.owned(params.threadId).messagingFileTools === true;
       case "startThread": return this.startThread(params);
       case "materializeDirectoryLaunchpad": return this.materializeLaunchpad(params, envelope);
       case "startTurn": return this.startTurn(params, envelope);
@@ -262,7 +264,7 @@ export class HeadlessBackend {
       const result = await this.runtime.codex.request("thread/start", { cwd, dynamicTools: this.runtime.messagingTools.buildDynamicToolSpecs(), approvalPolicy: "never", sandbox, ...(params.model ? { model: params.model } : {}), ephemeral: false });
       if (!result?.thread?.id || typeof result.thread.id !== "string" || result.thread.id.length > 256) throw new Error("Invalid thread/start response");
       this.runtime.loadedThreads.add(result.thread.id);
-      const thread = { id: result.thread.id, title: "New outpost thread", titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
+      const thread = { id: result.thread.id, messagingFileTools: true, title: "New outpost thread", titleSource: "fallback", createdAt: Date.now(), cwd, sandbox,
         model: params.model, reasoningEffort: params.reasoningEffort, serviceTier: params.serviceTier };
       this.threads.set(thread.id, thread);
       this.persist();

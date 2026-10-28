@@ -80,6 +80,7 @@ export async function processMessagingAttachments(params: {
   adapter: MessagingAdapter;
   attachments: MessagingAttachmentDescriptor[];
   policy?: Partial<MessagingAttachmentPolicy>;
+  deferSinglePagePdf?: boolean;
   pdfHandling?: "model_directed" | "render_initial_pages" | "pass_through";
   text?: string;
   dependencies?: Partial<MessagingAttachmentProcessingDependencies>;
@@ -205,7 +206,7 @@ export async function processMessagingAttachments(params: {
             // The managed PDF tool remains available as a fallback for
             // PDFs whose metadata cannot be probed at attachment time.
           }
-          if (inspection?.pageCount === 1) {
+          if (inspection?.pageCount === 1 && !params.deferSinglePagePdf) {
             const remainingPdfRenderLimits = remainingPdfRenderLimitsForBudget(
               renderedPdfBudget,
             );

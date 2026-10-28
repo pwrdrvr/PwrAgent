@@ -63,7 +63,7 @@ describe.skipIf(process.platform === "win32")("desktop client against the standa
         peerInstanceId: viewerId, role: "client", inviteToken: invite.token,
         gatewayInstanceId: invite.gatewayInstanceId, gatewayPublicKeyPem: invite.gatewayPublicKeyPem,
         gatewayNoisePublicKey: Buffer.from(invite.gatewayNoisePublicKey!, "base64"), noiseStatic: generateNoiseStaticKeyPair(),
-        capabilities: ["remote_window", "thread_navigation", "thread_detail", "turn_control", "messaging_route", "messaging_destinations", "environment_actions"], deferReceiving: true,
+        capabilities: ["remote_window", "thread_navigation", "thread_detail", "turn_control", "messaging_route", "messaging_destinations", "messaging_files", "environment_actions"], deferReceiving: true,
         onEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); },
       });
       const connected = connection;
@@ -77,6 +77,7 @@ describe.skipIf(process.platform === "win32")("desktop client against the standa
       expect(projects.directories[0].path).toBe(workspace);
       const created = await client.startThread({ backend: "codex", cwd: workspace, executionMode: "auto" });
       const ref = { backend: "codex" as const, threadId: created.threadId };
+      expect(await client.supportsMessagingPdfTools(ref)).toBe(true);
       const page = await client.getNavigationQueryPage({ protocol: 2, consumer: "remote-window", query: { kind: "directory", directoryKey: workspace } });
       expect(page.entries[0].row.ref).toEqual(ref);
       expect(page.selectionDirectory?.path).toBe(workspace);

@@ -1,7 +1,7 @@
 import { OutpostProjects } from "./projects.js";
 import path from "node:path";
 import { readFileSync, readdirSync } from "node:fs";
-import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMessagingDynamicToolCall } from "../dist/federation-core.js";
+import { AgentToolRouter, buildPwrAgentMessagingToolDefinitions, readPwrAgentMessagingDynamicToolCall, resolveMessagingOutboundFile, validateMessagingFileMetadata, FILE_PUSH_MAX_BYTES } from "../dist/federation-core.js";
 import { Codex } from "./codex.js";
 import { ACTIVE, atomicJson, digest, privateDirectory, validId } from "./store.js";
 
@@ -10,8 +10,9 @@ export class Runtime {
     this.store = store;
     this.workspace = workspace;
     this.projects = new OutpostProjects(path.dirname(store.directory), workspace);
-    this.messagingTools = new AgentToolRouter(buildPwrAgentMessagingToolDefinitions((request) => this.messagingRequest(request))
-      .filter((definition) => ["get_current_location", "get_current_messaging_surface", "send_private_response", "rename_current_messaging_conversation", "attach_thread_here", "list_messaging_surfaces", "attach_thread_to_surface"].includes(definition.name)));
+    this.messagingTools = new AgentToolRouter(buildPwrAgentMessagingToolDefinitions((request) => this.messagingRequest(request), { nativeDynamicPdfImages: true }));
+    this.fileAccess = { privateStorageRoots: [home, process.env.PWRAGENT_HOME].filter(Boolean),
+      deniedRoots: [home, path.dirname(store.directory)], denyHardLinks: true };
     this.toolLedgerDirectory = path.join(path.dirname(store.directory), "tool-calls");
     privateDirectory(this.toolLedgerDirectory);
     this.toolLedger = new Map();
@@ -131,7 +132,8 @@ export class Runtime {
       throw new Error("Codex returned an invalid thread ID");
     }
     this.loadedThreads.add(result.thread.id);
-    this.save({ ...this.store.get(job.id), threadId: result.thread.id });
+    this.save({ ...this.store.get(job.id), threadId: result.thread.id,
+      ...(!job.threadId ? { messagingFileTools: true } : {}) });
     const turn = await this.codex.request("turn/start", {
       threadId: result.thread.id,
       input: [{ type: "text", text: prompt, text_elements: [] }],
@@ -207,7 +209,24 @@ export class Runtime {
     const job = this.active && this.store.get(this.active);
     if (!job || job.threadId !== request.context.threadId || (job.turnId && job.turnId !== request.context.turnId)) return { ok: false, error: { code: "forbidden", message: "Messaging call does not belong to the active outpost turn" } };
     const origin = job.messageOrigin;
-    return await this.requestMessaging?.({ ...request, context: { ...request.context, causalMessagingSource: origin?.causalMessagingSource, causalMessagingAmbiguous: origin?.causalMessagingAmbiguous } })
+    const scoped = { ...request, context: { ...request.context, causalMessagingSource: origin?.causalMessagingSource,
+      causalMessagingAmbiguous: origin?.causalMessagingAmbiguous } };
+    const loadFile = request.operation === "send_messaging_file" ? async (capabilities) => {
+      const invalid = validateMessagingFileMetadata(request.args);
+      if (invalid) return invalid;
+      if (capabilities.maxUploadBytes !== undefined
+        && (!Number.isSafeInteger(capabilities.maxUploadBytes) || capabilities.maxUploadBytes < 1)) {
+        return { ok: false, code: "unsupported_operation", message: "The messaging owner supplied an invalid upload limit" };
+      }
+      // Git authentication may be explicitly selected from a workspace. Those
+      // files remain private even though their parent is an allowed project.
+      const gitAuth = this.projects.git.settings();
+      return await resolveMessagingOutboundFile(request.args, {
+        ...capabilities, maxUploadBytes: Math.min(capabilities.maxUploadBytes ?? FILE_PUSH_MAX_BYTES, FILE_PUSH_MAX_BYTES),
+      }, { ...this.fileAccess, allowedRoots: [this.projects.resolve(job.cwd || this.workspace)],
+        deniedRoots: [...this.fileAccess.deniedRoots, ...Object.values(gitAuth)] });
+    } : undefined;
+    return await this.requestMessaging?.(scoped, loadFile)
       || { ok: false, error: { code: "peer_unavailable", message: "The original messaging owner is unavailable" } };
   }
 
