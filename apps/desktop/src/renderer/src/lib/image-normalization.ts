@@ -3,6 +3,7 @@ import {
   DEFAULT_PASTED_IMAGE_MAX_PATCHES,
   IMAGE_UPLOAD_QUALITY_PROFILES,
   type ImageUploadQualityProfile,
+  type ImageUploadNormalizationTiming,
 } from "../../../shared/image-normalization";
 
 export const NORMALIZED_IMAGE_MAX_LONG_EDGE =
@@ -28,6 +29,7 @@ export type ImageFallbackResponse = {
 };
 
 export type NormalizedImage = {
+  timing?: ImageUploadNormalizationTiming;
   conversionPath: "renderer" | "heic-fallback";
   dataUrl: string;
   height: number;
@@ -173,6 +175,9 @@ export async function normalizeImageFile(
   file: File,
   options: NormalizeImageFileOptions = {},
 ): Promise<NormalizedImage> {
+  const startedAt = performance.now();
+  const timing = { decodeMs: 0, encodeCount: 0, encodeMs: 0, readMs: 0, totalMs: 0 };
+  const dependencies = { ...defaultImageNormalizationDependencies, ...options.dependencies };
   const profile =
     IMAGE_UPLOAD_QUALITY_PROFILES[
       options.qualityProfile ?? DEFAULT_IMAGE_UPLOAD_QUALITY_PROFILE
@@ -182,7 +187,7 @@ export async function normalizeImageFile(
     !file.type && originalMimeType
       ? new Blob([file], { type: originalMimeType })
       : file;
-  return await normalizeBlob({
+  const normalized = await normalizeBlob({
     blob,
     fallback: options.fallback,
     fileName: file.name || "pasted-image",
@@ -195,12 +200,38 @@ export async function normalizeImageFile(
     originalMimeType,
     originalSize: file.size,
     dependencies: {
-      ...defaultImageNormalizationDependencies,
-      ...options.dependencies,
+      ...dependencies,
+      decodeImage: async (blob) => {
+        const start = performance.now();
+        try {
+          return await dependencies.decodeImage(blob);
+        } finally {
+          timing.decodeMs += performance.now() - start;
+        }
+      },
+      encodeCanvas: async (canvas, mimeType, quality) => {
+        const start = performance.now();
+        timing.encodeCount++;
+        try {
+          return await dependencies.encodeCanvas(canvas, mimeType, quality);
+        } finally {
+          timing.encodeMs += performance.now() - start;
+        }
+      },
+      readBlobAsDataUrl: async (blob) => {
+        const start = performance.now();
+        try {
+          return await dependencies.readBlobAsDataUrl(blob);
+        } finally {
+          timing.readMs += performance.now() - start;
+        }
+      },
     },
     allowFallback: true,
     conversionPath: "renderer",
   });
+  timing.totalMs = performance.now() - startedAt;
+  return { ...normalized, timing };
 }
 
 async function normalizeBlob(params: {
@@ -273,27 +304,13 @@ async function normalizeBlob(params: {
       }
     }
 
-    let output = await encodeImageAtDimensions({
+    const output = await encodeImageAtDimensions({
       decoded,
       dependencies: params.dependencies,
       dimensions,
       jpegQuality: params.jpegQuality,
       sourceMimeType: params.originalMimeType,
-      sourceSize: params.blob.size,
     });
-    if (output.blob.size > params.blob.size) {
-      const smallerOutput = await encodeSmallerImageWithinSourceSize({
-        decoded,
-        dependencies: params.dependencies,
-        dimensions,
-        jpegQuality: params.jpegQuality,
-        sourceMimeType: params.originalMimeType,
-        sourceSize: params.blob.size,
-      });
-      if (smallerOutput) {
-        output = smallerOutput;
-      }
-    }
 
     return {
       conversionPath: params.conversionPath,
@@ -355,7 +372,6 @@ async function encodeImageAtDimensions(params: {
   dimensions: { height: number; width: number };
   jpegQuality: number;
   sourceMimeType: string;
-  sourceSize: number;
 }): Promise<EncodedImage> {
   const { canvas, context } = params.dependencies.createCanvas(
     params.dimensions.width,
@@ -375,13 +391,11 @@ async function encodeImageAtDimensions(params: {
     hasAlpha,
     sourceMimeType: params.sourceMimeType,
   });
-  const blob = await encodeNormalizedCanvas({
+  const blob = await params.dependencies.encodeCanvas(
     canvas,
-    dependencies: params.dependencies,
-    jpegQuality: params.jpegQuality,
     mimeType,
-    originalSize: params.sourceSize,
-  });
+    params.jpegQuality,
+  );
 
   return {
     blob,
@@ -389,41 +403,6 @@ async function encodeImageAtDimensions(params: {
     mimeType,
     width: params.dimensions.width,
   };
-}
-
-async function encodeSmallerImageWithinSourceSize(params: {
-  decoded: DecodedImage;
-  dependencies: ImageNormalizationDependencies;
-  dimensions: { height: number; width: number };
-  jpegQuality: number;
-  sourceMimeType: string;
-  sourceSize: number;
-}): Promise<EncodedImage | undefined> {
-  for (const scale of [0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.5]) {
-    const dimensions = {
-      width: Math.max(1, Math.floor(params.dimensions.width * scale)),
-      height: Math.max(1, Math.floor(params.dimensions.height * scale)),
-    };
-    if (
-      dimensions.width === params.dimensions.width &&
-      dimensions.height === params.dimensions.height
-    ) {
-      continue;
-    }
-
-    const output = await encodeImageAtDimensions({
-      decoded: params.decoded,
-      dependencies: params.dependencies,
-      dimensions,
-      jpegQuality: params.jpegQuality,
-      sourceMimeType: params.sourceMimeType,
-      sourceSize: params.sourceSize,
-    });
-    if (output.blob.size <= params.sourceSize) {
-      return output;
-    }
-  }
-  return undefined;
 }
 
 function canPreserveSourceBlob(
@@ -434,43 +413,6 @@ function canPreserveSourceBlob(
     (sourceMimeType === "image/jpeg" || sourceMimeType === "image/png") &&
     blobMimeType === sourceMimeType
   );
-}
-
-async function encodeNormalizedCanvas(params: {
-  canvas: HTMLCanvasElement;
-  dependencies: ImageNormalizationDependencies;
-  jpegQuality: number;
-  mimeType: NormalizedImageMimeType;
-  originalSize: number;
-}): Promise<Blob> {
-  const initial = await params.dependencies.encodeCanvas(
-    params.canvas,
-    params.mimeType,
-    params.jpegQuality,
-  );
-  if (params.mimeType !== "image/jpeg" || initial.size <= params.originalSize) {
-    return initial;
-  }
-
-  let smallest = initial;
-  const retryQualities = [0.88, 0.84, 0.8, 0.76, 0.72, 0.66, 0.6].filter(
-    (quality) => quality < params.jpegQuality,
-  );
-  for (const quality of retryQualities) {
-    const candidate = await params.dependencies.encodeCanvas(
-      params.canvas,
-      params.mimeType,
-      quality,
-    );
-    if (candidate.size < smallest.size) {
-      smallest = candidate;
-    }
-    if (candidate.size <= params.originalSize) {
-      return candidate;
-    }
-  }
-
-  return smallest;
 }
 
 function normalizeSourceMimeType(mimeType: string): string {

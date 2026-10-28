@@ -1,3 +1,4 @@
+import { ANIMATED_GIF_BASE64, ANIMATED_WEBP_BASE64 } from "../../../test/fixtures/animated-images";
 import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
@@ -835,6 +836,7 @@ describe("Composer", () => {
       clipboardData: { files: [file], items: [{ kind: "file", type: "image/png", getAsFile: () => file }] },
     });
     await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
     const thread: NavigationThreadSummary = {
       id: "materialized", source: "codex", title: "First message", titleSource: "explicit",
       linkedDirectories: [], inbox: { inInbox: false }, optimisticActiveTurn: { id: "first-turn" },
@@ -842,6 +844,7 @@ describe("Composer", () => {
     act(() => handoffLaunchpadComposer(store, `launchpad:${launchpad.directoryKey}`, thread));
     view.rerender(<Composer backends={[backendSummary("codex")]} thread={thread}
       activeTurnId="first-turn" draftStore={store} skills={[]} />);
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
     await act(async () => {
       normalization.resolve({
         dataUrl: "data:image/png;base64,AQID", height: 24, width: 24, size: 3,
@@ -851,6 +854,7 @@ describe("Composer", () => {
       await normalization.promise;
     });
     expect(await screen.findByAltText("follow-up.png")).toBeInTheDocument();
+    expect(screen.queryByText("Preparing image attachments…")).not.toBeInTheDocument();
     expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.imageAttachments).toHaveLength(1);
     expect(store.get(buildThreadComposerScopeKey("codex", "materialized"))?.draft).toBe("Follow-up image");
     expect(store.get(`launchpad:${launchpad.directoryKey}`)).toBeUndefined();
@@ -19689,6 +19693,8 @@ describe("Composer", () => {
       },
     });
 
+    await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledTimes(1));
+
     rerender(
       <Composer
         backends={[backendSummary("codex")]}
@@ -23954,14 +23960,51 @@ describe("Composer", () => {
     expect(await within(dialog).findByAltText("first.gif")).toBeInTheDocument();
   });
 
-  it("keeps dropped GIF images animated by preserving the original data URL", async () => {
+  it("shows pending image preparation and blocks both button and keyboard submission", async () => {
+    const normalization = createDeferred<Awaited<ReturnType<typeof normalizeImageFile>>>();
+    vi.mocked(normalizeImageFile).mockImplementationOnce(() => normalization.promise);
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const, threadId: "thread-1", turnId: "turn-1",
+    }));
+    render(<Composer
+      desktopApi={{ onAgentEvent: () => () => undefined, startTurn }}
+      disabled={false} skills={[]}
+      thread={{ id: "thread-1", title: "Test", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false } }}
+    />);
+    const reply = screen.getByLabelText("Reply");
+    fireEvent.change(reply, { target: { value: "Inspect this image" } });
+    const image = new File(["png"], "pending.png", { type: "image/png" });
+    fireEvent.paste(reply, {
+      clipboardData: { files: [image], items: [{ kind: "file", type: image.type, getAsFile: () => image }] },
+    });
+    await waitFor(() => expect(normalizeImageFile).toHaveBeenCalledOnce());
+    expect(screen.getByText("Preparing image attachments…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    fireEvent.keyDown(reply, { key: "Enter", metaKey: true });
+    expect(startTurn).not.toHaveBeenCalled();
+    await act(async () => normalization.resolve({
+      dataUrl: "data:image/png;base64,AQID", height: 24, width: 24, size: 3,
+      mimeType: "image/png", conversionPath: "renderer",
+      original: { height: 24, width: 24, size: 3, mimeType: image.type, name: image.name },
+    }));
+    await screen.findByAltText("pending.png");
+    expect(screen.queryByText("Preparing image attachments…")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it.each([
+    ["gif", ANIMATED_GIF_BASE64],
+    ["webp", ANIMATED_WEBP_BASE64],
+  ])("preserves dropped animated %s bytes through sending", async (extension, base64) => {
     const startTurn = vi.fn(async () => ({
       backend: "codex" as const,
       threadId: "thread-1",
       turnId: "turn-1",
     }));
-    const gifFile = new File([new Uint8Array([71, 73, 70, 56])], "demo.gif", {
-      type: "image/gif",
+    const mimeType = `image/${extension}`;
+    const url = `data:${mimeType};base64,${base64}`;
+    const image = new File([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], `demo.${extension}`, {
+      type: mimeType,
     });
 
     render(
@@ -23990,15 +24033,15 @@ describe("Composer", () => {
         items: [
           {
             kind: "file",
-            type: "image/gif",
-            getAsFile: () => gifFile,
+            type: mimeType,
+            getAsFile: () => image,
           },
         ],
       },
     });
 
-    const preview = await screen.findByAltText("demo.gif");
-    expect(preview).toHaveAttribute("src", expect.stringMatching(/^data:image\/gif;base64,/));
+    const preview = await screen.findByAltText(`demo.${extension}`);
+    expect(preview).toHaveAttribute("src", url);
     expect(normalizeImageFile).not.toHaveBeenCalled();
 
     await clickButton("Send");
@@ -24010,8 +24053,8 @@ describe("Composer", () => {
         input: [
           {
             type: "image",
-            name: "demo.gif",
-            url: expect.stringMatching(/^data:image\/gif;base64,/),
+            name: `demo.${extension}`,
+            url: url,
           },
         ],
       });
