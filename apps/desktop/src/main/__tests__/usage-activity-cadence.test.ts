@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -21,6 +21,12 @@ const scenarios = [
   { name: "terminal-burst", steps: 20, interval: 50, threads: 1, flushes: 20, terminalEach: true },
   { name: "steady-with-focus", steps: 600, interval: 100, threads: 1, flushes: 60, focus: true },
 ];
+// Six flush boundaries are enough to check ten-thread coalescing in the unit
+// suite. Keep all 6,000 observations in the opt-in performance measurement.
+const unitScenarios = scenarios.map((scenario) =>
+  !process.env.PWRAGENT_USAGE_CADENCE_DIR && scenario.name === "ten-turns-10hz"
+    ? { ...scenario, steps: 60, flushes: 6 }
+    : scenario);
 
 function usage(thread: string, turn: string, input: number): AgentEvent {
   return { backend: "codex", notification: { method: "thread/tokenUsage/updated", params: {
@@ -41,7 +47,7 @@ function cpuMs(before: NodeJS.CpuUsage): number {
   return (delta.user + delta.system) / 1000;
 }
 
-it.each(scenarios)("replays active and idle usage cadence: $name", async (scenario) => {
+async function replayCadence(scenario: typeof scenarios[number], signal: AbortSignal): Promise<void> {
   const directory = process.env.PWRAGENT_USAGE_CADENCE_DIR;
   const variant = process.env.PWRAGENT_USAGE_CADENCE_VARIANT ?? "revision";
   const repetitions = directory ? 5 : 1;
@@ -62,6 +68,7 @@ it.each(scenarios)("replays active and idle usage cadence: $name", async (scenar
     });
     try {
       await (registry as unknown as { usageTurnStartupRepair: Promise<void> }).usageTurnStartupRepair;
+      signal.throwIfAborted();
       db.raw.pragma("wal_autocheckpoint = 0");
       if (directory) {
         const insert = db.raw.prepare(`INSERT INTO thread_usage_lines
@@ -94,11 +101,13 @@ it.each(scenarios)("replays active and idle usage cadence: $name", async (scenar
       const active = await measureSqliteWrites(async () => {
         for (let step = 0; step < scenario.steps; step++) {
           for (let thread = 0; thread < scenario.threads; thread++) {
+            signal.throwIfAborted();
             const id = "terminalEach" in scenario ? `short-${step}` : `active-${thread}`;
             await emit(usage(id, id, "duplicate" in scenario ? 1000 : (step + 1) * 1000));
             if ("terminalEach" in scenario) await emit(terminal(id, id));
           }
           await vi.advanceTimersByTimeAsync(scenario.interval);
+          signal.throwIfAborted();
         }
         await vi.advanceTimersByTimeAsync(1000);
         if ("focus" in scenario) {
@@ -145,9 +154,36 @@ it.each(scenarios)("replays active and idle usage cadence: $name", async (scenar
         })}\n`);
       }
     } finally {
-      await registry.close();
-      db.close(); removeTempStateDbDir(temp.tempDir);
-      vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers();
+      try { await registry.close(); }
+      finally {
+        try { db.close(); removeTempStateDbDir(temp.tempDir); }
+        finally { vi.restoreAllMocks(); vi.unstubAllEnvs(); vi.useRealTimers(); }
+      }
     }
   }
+}
+
+it.each(unitScenarios)("replays active and idle usage cadence: $name", async (scenario) => {
+  const controller = new AbortController();
+  const replay = replayCadence(scenario, controller.signal);
+  // Vitest may time out the test before its async body settles. Own that body
+  // through teardown, so it cannot restore global timers during the next case.
+  onTestFinished(async () => {
+    controller.abort();
+    await replay.catch(() => {});
+  });
+  await replay;
 }, reportTimeout);
+
+it.skipIf(Boolean(process.env.PWRAGENT_USAGE_CADENCE_DIR))(
+  "drains an interrupted cadence replay before another case owns timers",
+  async () => {
+    const controller = new AbortController();
+    const replay = replayCadence(scenarios[0], controller.signal);
+    setTimeout(() => controller.abort(new Error("fixture interruption")), 100);
+    await expect(replay).rejects.toThrow("fixture interruption");
+    expect(vi.isFakeTimers()).toBe(false);
+    await replayCadence(scenarios[0], new AbortController().signal);
+    expect(vi.isFakeTimers()).toBe(false);
+  },
+);
